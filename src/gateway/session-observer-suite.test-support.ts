@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import {
   createHarness as createBaseHarness,
@@ -10,6 +10,7 @@ import {
 export type Harness = ReturnType<typeof createBaseHarness>;
 export type HarnessOptions = Parameters<typeof createBaseHarness>[0];
 export type EventRoute = { runId?: string; sessionKey?: string; agentId?: string };
+type DigestFields = Partial<SessionObserverDigest>;
 
 export function useObserverSuite() {
   const activeHarnesses = new Set<Harness>();
@@ -58,6 +59,14 @@ export function persistedDigest(harness: Harness, index = 0) {
   return harness.persistDigest.mock.calls.at(index)?.[0]?.digest as
     | SessionObserverDigest
     | undefined;
+}
+
+export function expectBroadcast(harness: Harness, fields: DigestFields, index = -1) {
+  expect(broadcastDigest(harness, index)).toMatchObject(fields);
+}
+
+export function expectPersisted(harness: Harness, fields: DigestFields, index = 0) {
+  expect(persistedDigest(harness, index)).toMatchObject(fields);
 }
 
 export function observerBroadcasts(harness: Harness) {

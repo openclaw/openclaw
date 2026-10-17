@@ -365,22 +365,19 @@ it.each([
       { assertCurrent() {}, assertReadable() {} },
     );
     const authority = { assertCurrent() {}, authorize() {} };
-    const readEntry = async () =>
+    const readEntry = () =>
       owner ? owner.readSession(scope.sessionKey, authority)?.entry : loadSessionEntry(scope);
-    const run = async () => {
+    try {
       const entry = { sessionId, repositoryWorkspaceId: repository.workspaceId };
       if (actor) {
-        expect(
-          (
-            await actor.storage!.mutate(
-              {
-                type: "session.entry.create",
-                input: { entry: { ...entry, updatedAt: Date.now(), incognito: true } },
-              },
-              authority,
-            )
-          ).kind,
-        ).toBe("committed");
+        const created = await actor.storage!.mutate(
+          {
+            type: "session.entry.create",
+            input: { entry: { ...entry, updatedAt: Date.now(), incognito: true } },
+          },
+          authority,
+        );
+        expect(created.kind).toBe("committed");
       } else {
         await upsertSessionEntryCore(scope, entry);
       }
@@ -415,7 +412,7 @@ it.each([
       });
       if (outcome === "revoked") {
         await expect(operation).rejects.toThrow("move authority revoked");
-        expect((await readEntry())?.repositoryWorkspaceId).toBe(repository.workspaceId);
+        expect(readEntry()?.repositoryWorkspaceId).toBe(repository.workspaceId);
         expect(await managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
       } else {
         if (outcome === "postcommit failure") {
@@ -423,7 +420,7 @@ it.each([
         } else {
           await operation;
         }
-        const materialized = (await readEntry())!;
+        const materialized = readEntry()!;
         const worktree = (await managedWorktrees.findLiveByOwner("session", scope.sessionKey))!;
         expect(materialized.repositoryWorkspaceId).toBeUndefined();
         expect(worktree.baseRef).toBe(outcome === "requested topic" ? "topic" : "HEAD");
@@ -468,9 +465,6 @@ it.each([
       expect(await repositories.get(repository.workspaceId)).toEqual(repository);
       expect(fs.existsSync(repositories.artifactPath(repository.workspaceId))).toBe(true);
       expect(await readFile(source, "edited.txt")).toBe("base\n");
-    };
-    try {
-      await run();
     } finally {
       await actor?.release();
     }

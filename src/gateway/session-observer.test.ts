@@ -5,6 +5,7 @@ import {
   advanceAndFlush as advance,
   broadcastDigest as lastDigest,
   emitEvent,
+  expectBroadcast,
   useObserverSuite,
   type Harness,
   type EventRoute,
@@ -70,15 +71,9 @@ it("keeps global observer streams scoped to their owning agents", async () => {
 });
 
 it("terminalizes a preamble-only digest without a utility model", async () => {
-  const harness = createHarness({
-    subscribe: false,
-    broadSubscribe: true,
-    utilityModelRef: null,
-  });
+  const harness = createHarness({ subscribe: false, broadSubscribe: true, utilityModelRef: null });
   preamble(harness, "**Running** [tests](https://example.com) [[reply_to_current]]");
-  expect(harness.broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({
-    headline: "Running tests",
-  });
+  expectBroadcast(harness, { headline: "Running tests" }, 0);
   expect(harness.completeModel).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(100);
   preamble(harness, "Wrapping up");
@@ -86,11 +81,7 @@ it("terminalizes a preamble-only digest without a utility model", async () => {
   await flushObserver();
 
   expect(harness.completeModel).not.toHaveBeenCalled();
-  expect(lastDigest(harness)).toMatchObject({
-    headline: "Wrapping up",
-    health: "done",
-    revision: 3,
-  });
+  expectBroadcast(harness, { headline: "Wrapping up", health: "done", revision: 3 });
   const terminalCount = harness.broadcastToConnIds.mock.calls.length;
   preamble(harness, "Late preamble");
   emitEvent(harness, "lifecycle", { phase: "end", startedAt: 0, endedAt: 40_001 });
@@ -116,11 +107,7 @@ it("synthesizes terminal health when the final model request becomes stale", asy
   model.resolve(modelMessage({ headline: "Stale final model", health: "done" }));
   await withinTest(terminalBroadcast.promise, signal);
 
-  expect(lastDigest(harness)).toMatchObject({
-    headline: "Running tests",
-    health: "done",
-    revision: 2,
-  });
+  expectBroadcast(harness, { headline: "Running tests", health: "done", revision: 2 });
 });
 
 it("omits tool result bodies while preserving summarized tool arguments", async () => {
@@ -192,7 +179,7 @@ it("coalesces live completions and cancels in-flight work for the terminal diges
     second.resolve(modelMessage({ headline: "Canceled live result", health: "on-track" }));
     await withinTest(terminalPublished.promise, signal);
     expect(completeModel).toHaveBeenCalledTimes(3);
-    expect(lastDigest(harness)).toMatchObject({ health: "done" });
+    expectBroadcast(harness, { health: "done" });
   } finally {
     first.resolve(modelMessage({ headline: "Cleanup", health: "on-track" }));
     second.resolve(modelMessage({ headline: "Cleanup", health: "on-track" }));
@@ -253,11 +240,7 @@ it("retries unparseable model JSON and enforces the accepted digest's string cap
     .fn()
     .mockResolvedValueOnce({ ...modelMessage({}), text: "nope" })
     .mockResolvedValueOnce(
-      modelMessage({
-        headline: "h".repeat(140),
-        assessment: "a".repeat(400),
-        health: "on-track",
-      }),
+      modelMessage({ headline: "h".repeat(140), assessment: "a".repeat(400), health: "on-track" }),
     );
   const harness = createHarness({ completeModel });
   startAndAddToolNotes(harness.observer);
@@ -265,10 +248,7 @@ it("retries unparseable model JSON and enforces the accepted digest's string cap
 
   expect(completeModel).toHaveBeenCalledTimes(2);
   expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
-  expect(harness.broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({
-    headline: "h".repeat(120),
-    assessment: "a".repeat(320),
-  });
+  expectBroadcast(harness, { headline: "h".repeat(120), assessment: "a".repeat(320) }, 0);
 });
 
 it("demotes the least recently active model while retaining preamble state", async () => {
@@ -278,10 +258,7 @@ it("demotes the least recently active model while retaining preamble state", asy
     harness.subscribers.subscribe(`conn-${index}`, sessionKey)?.commit();
     declareObserverVisibility(harness.observer, `conn-${index}`);
     vi.setSystemTime(index);
-    startAndAddToolNotes(harness.observer, {
-      runId: `run-${index}`,
-      sessionKey,
-    });
+    startAndAddToolNotes(harness.observer, { runId: `run-${index}`, sessionKey });
   }
 
   await advance(12_000);
@@ -341,9 +318,9 @@ it("accepts a model digest after the preamble generation advances", async () => 
   preamble(harness, "Running focused tests");
   model.resolve(modelMessage({ headline: "Stale model summary", health: "on-track" }));
   await flushObserver();
-  expect(lastDigest(harness)).toMatchObject({ headline: "Stale model summary" });
+  expectBroadcast(harness, { headline: "Stale model summary" });
   await vi.advanceTimersByTimeAsync(1_900);
-  expect(lastDigest(harness)).toMatchObject({ headline: "Stale model summary" });
+  expectBroadcast(harness, { headline: "Stale model summary" });
 });
 
 it("stops live model attempts at the budget when requests are superseded", async () => {
@@ -386,7 +363,7 @@ it("stops live model attempts at the budget when requests are superseded", async
   emitEvent(harness, "lifecycle", { phase: "end", startedAt: 0, endedAt: Date.now() });
   await flushObserver();
   expect(completeModel).toHaveBeenCalledTimes(40);
-  expect(lastDigest(harness)).toMatchObject({ health: "done" });
+  expectBroadcast(harness, { health: "done" });
 });
 
 it("disables model work when digest persistence reports a missing entry", async () => {

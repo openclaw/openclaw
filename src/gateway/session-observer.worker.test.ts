@@ -20,7 +20,10 @@ import {
   runOpenClawAgentWriteAdmission,
 } from "../state/openclaw-agent-write-admission.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import type { SessionObserverDeps } from "./session-observer-model.js";
 import * as observerWork from "./session-observer-work.js";
@@ -37,6 +40,11 @@ import * as sessionReads from "./session-utils-store-lookup.js";
 
 const key = "agent:main:session-1";
 const initialEntry = { sessionId: "session-id", lifecycleRevision: "life-a", updatedAt: 1 };
+const successorEntry = { ...initialEntry, lifecycleRevision: "life-b", updatedAt: 2 };
+const lifecycleUpdate =
+  "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRevision', 'life-b') WHERE session_key = ?";
+const preambleEvent = (progressText: string) =>
+  event({ stream: "item", data: { kind: "preamble", progressText } });
 
 function traceSql() {
   const trace = observeMainThreadSql();
@@ -86,96 +94,77 @@ function interceptNextEntryRead(storePath: string, afterRead: () => void | Promi
   return intercepted;
 }
 
-async function withObserver(
-  run: (fixture: {
-    observer: ReturnType<typeof createSessionObserver>;
-    broadcast: ReturnType<typeof vi.fn>;
-    persisted: ReturnType<typeof vi.fn>;
-    peer: DatabaseSync;
-    storePath: string;
-    replaceStore: () => Promise<void>;
-    rewriteLifecycle: () => void;
-    rewriteLifecycleWithoutPublication: () => void;
-    resetLifecycle: () => Promise<void>;
-    closeDatabase: () => ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync>;
-    advanceClock: () => void;
-    watch: (enabled: boolean) => void;
-  }) => Promise<void>,
+function observerFixture(
+  { env, path }: OpenClawTestState,
   persistDigests = false,
   useDefaultStore = false,
 ) {
-  await withOpenClawTestState({ label: "observer-worker" }, async ({ env, path }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    writeSessionEntry(database, key, initialEntry);
-    const peer = new DatabaseSync(database.path);
-    const subscribers = createSessionMessageSubscriberRegistry();
-    subscribers.subscribe("viewer", key)?.commit();
-    const broadcast = vi.fn();
-    const persisted = vi.fn<NonNullable<SessionObserverDeps["persistDigest"]>>(async () => true);
-    let now = 1_000;
-    const cfg = { session: { store: useDefaultStore ? undefined : database.path } };
-    const observer = createSessionObserver({
-      getConfig: () => cfg,
-      now: () => now,
-      subscribers,
-      broadcastToConnIds: broadcast,
-      ...(persistDigests ? {} : { persistDigest: persisted }),
-      resolveUtilityModelRef: () => undefined,
-      prepareModel: async () => preparedModel(),
-      completeModel: async () =>
-        modelMessage({ headline: "Completed observation", health: "done" }),
-    });
-    observer.setConnectionVisibility("viewer", true);
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  writeSessionEntry(database, key, initialEntry);
+  const peer = new DatabaseSync(database.path);
+  const subscribers = createSessionMessageSubscriberRegistry();
+  subscribers.subscribe("viewer", key)?.commit();
+  const broadcast = vi.fn();
+  const persisted = vi.fn<NonNullable<SessionObserverDeps["persistDigest"]>>(async () => true);
+  let now = 1_000;
+  const cfg = { session: { store: useDefaultStore ? undefined : database.path } };
+  const observer = createSessionObserver({
+    getConfig: () => cfg,
+    now: () => now,
+    subscribers,
+    broadcastToConnIds: broadcast,
+    ...(persistDigests ? {} : { persistDigest: persisted }),
+    resolveUtilityModelRef: () => undefined,
+    prepareModel: async () => preparedModel(),
+    completeModel: async () => modelMessage({ headline: "Completed observation", health: "done" }),
+  });
+  observer.setConnectionVisibility("viewer", true);
+  return {
+    observer,
+    broadcast,
+    persisted,
+    peer,
+    storePath: database.path,
+    rewriteLifecycle: () => writeSessionEntry(database, key, successorEntry),
+    rewriteLifecycleWithoutPublication: () => {
+      database.db.prepare(lifecycleUpdate).run(key);
+    },
+    resetLifecycle: () =>
+      replaceSessionEntry(
+        { agentId: "main", sessionKey: key, storePath: database.path, env },
+        successorEntry,
+      ),
+    closeDatabase: () => closeOpenClawAgentDatabaseByPathAsync(database.path),
+    advanceClock: () => {
+      now += 2_000;
+    },
+    watch: (enabled: boolean) => {
+      if (enabled) {
+        subscribers.subscribe("viewer", key)?.commit();
+      } else {
+        subscribers.unsubscribe("viewer", key);
+      }
+    },
+    replaceStore: async () => {
+      const storePath = path("replacement.sqlite");
+      await replaceSessionEntry({ agentId: "main", sessionKey: key, storePath, env }, initialEntry);
+      cfg.session.store = storePath;
+    },
+  };
+}
+
+async function withObserver(
+  run: (fixture: ReturnType<typeof observerFixture>) => Promise<void>,
+  persistDigests = false,
+  useDefaultStore = false,
+) {
+  await withOpenClawTestState({ label: "observer-worker" }, async (state) => {
+    const fixture = observerFixture(state, persistDigests, useDefaultStore);
     try {
-      await run({
-        observer,
-        broadcast,
-        persisted,
-        peer,
-        storePath: database.path,
-        rewriteLifecycle: () => {
-          writeSessionEntry(database, key, {
-            ...initialEntry,
-            lifecycleRevision: "life-b",
-            updatedAt: 2,
-          });
-        },
-        rewriteLifecycleWithoutPublication: () => {
-          database.db
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRevision', 'life-b') WHERE session_key = ?",
-            )
-            .run(key);
-        },
-        resetLifecycle: async () => {
-          await replaceSessionEntry(
-            { agentId: "main", sessionKey: key, storePath: database.path, env },
-            { ...initialEntry, lifecycleRevision: "life-b", updatedAt: 2 },
-          );
-        },
-        closeDatabase: () => closeOpenClawAgentDatabaseByPathAsync(database.path),
-        advanceClock: () => {
-          now += 2_000;
-        },
-        watch: (enabled) => {
-          if (enabled) {
-            subscribers.subscribe("viewer", key)?.commit();
-          } else {
-            subscribers.unsubscribe("viewer", key);
-          }
-        },
-        replaceStore: async () => {
-          const storePath = path("replacement.sqlite");
-          await replaceSessionEntry(
-            { agentId: "main", sessionKey: key, storePath, env },
-            initialEntry,
-          );
-          cfg.session.store = storePath;
-        },
-      });
+      await run(fixture);
     } finally {
-      await observer.disposeAsync();
-      peer.close();
+      await fixture.observer.disposeAsync();
+      fixture.peer.close();
       vi.restoreAllMocks();
     }
   });
@@ -231,8 +220,7 @@ it("moves observer admission, publication, terminal and companion reads off the 
         for (const delta of ["Checking ", "the implementation."]) {
           await send(observer, "assistant", { delta }, "worker-run");
         }
-        expect(inventories).toBe(0);
-        expect(entries).toBe(0);
+        expect({ inventories, entries }).toEqual({ inventories: 0, entries: 0 });
         const snapshot = await observer.getCompanionSnapshotAsync(key, "main");
         expect(snapshot.digest?.headline).toBe("Worker observation");
         expect(snapshot.notes).toContainEqual({
@@ -241,11 +229,7 @@ it("moves observer admission, publication, terminal and companion reads off the 
         });
         sql.expectIdle();
         sql.restore();
-        peer
-          .prepare(
-            "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRevision', 'life-b') WHERE session_key = ?",
-          )
-          .run(key);
+        peer.prepare(lifecycleUpdate).run(key);
         advanceClock();
         inventories = 0;
         entries = 0;
@@ -379,12 +363,7 @@ it("does not disclose a predecessor digest when the configured store changes wit
     );
     await replaceStore();
     advanceClock();
-    observer.handleEvent(
-      event({
-        stream: "item",
-        data: { kind: "preamble", progressText: "Unowned source" },
-      }),
-    );
+    observer.handleEvent(preambleEvent("Unowned source"));
     expect(await observer.getCompanionSnapshotAsync(key, "main")).toEqual({
       agentId: "main",
       notes: [],
@@ -412,14 +391,9 @@ it("does not write a dormant predecessor digest into a replacement store", async
 
 it("joins the worker-backed persistence of a legacy event adapter", async () => {
   await withObserver(async ({ observer, peer }) => {
-    observer.handleEvent(
-      event({ stream: "item", data: { kind: "preamble", progressText: "Legacy admission" } }),
-    );
+    observer.handleEvent(preambleEvent("Legacy admission"));
     const disposal = observer.disposeAsync();
-    const afterClose = event({
-      stream: "item",
-      data: { kind: "preamble", progressText: "Rejected after close" },
-    });
+    const afterClose = preambleEvent("Rejected after close");
     observer.handleEvent(afterClose);
     await expect(observer.handleEventAsync(afterClose)).rejects.toThrow(
       "Session observer is closed",
@@ -465,9 +439,7 @@ it("lets the publisher finish its nested write before persisting the background 
     let disposal: Promise<void> | undefined;
     try {
       await runOpenClawAgentWriteAdmission(options, async () => {
-        harness.observer.handleEvent(
-          event({ stream: "item", data: { kind: "preamble", progressText: "Reviewing" } }),
-        );
+        harness.observer.handleEvent(preambleEvent("Reviewing"));
         expect(persistDigest).toHaveBeenCalledOnce();
         expect(digestEntered).toBe(false);
         await runOpenClawAgentWorkerWrite(options, async () => {
@@ -547,11 +519,7 @@ it.for(["model", "failed model", "synthesized terminal"] as const)(
         harness = createHarness({
           config,
           utilityModelRef: kind === "synthesized terminal" ? null : "openai/gpt-test",
-          readSession: vi.fn(() => ({
-            sessionId: "session-id",
-            lifecycleRevision: "owned",
-            updatedAt: 1,
-          })),
+          readSession: vi.fn(() => ({ ...initialEntry, lifecycleRevision: "owned" })),
           prepareModel: vi.fn(async () => preparedModel()),
           completeModel: vi.fn(async () => {
             if (kind === "failed model") {

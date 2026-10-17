@@ -41,6 +41,7 @@ import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
 const mocked = vi.hoisted(() => ({ run: vi.fn(), timed: vi.fn() }));
+const readFile = (root: string, name: string) => fs.readFile(path.join(root, name), "utf8");
 vi.mock("../process/exec.js", async (original) => ({
   ...(await original<typeof import("../process/exec.js")>()),
   runCommandBuffered: mocked.run,
@@ -66,8 +67,8 @@ it.each([
   "shifted membership",
 ] as const)(
   "continues publication through the actual Gateway handoff: %s",
-  async (scenario) => {
-    await withOpenClawTestState({ label: "publication-handoff" }, async (state) => {
+  (scenario) =>
+    withOpenClawTestState({ label: "publication-handoff" }, async (state) => {
       const actual =
         await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
       mocked.run.mockImplementation(actual.runCommandBuffered);
@@ -336,7 +337,7 @@ it.each([
         await expect(move()).rejects.toThrow("move revoked");
         expect(loadSessionEntry(scope)?.repositoryWorkspaceId).toBe(repository.workspaceId);
         expect(await managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
-        expect(await fs.readFile(path.join(source, "file.txt"), "utf8")).toBe("base\n");
+        expect(await readFile(source, "file.txt")).toBe("base\n");
         return;
       }
       await move();
@@ -349,7 +350,7 @@ it.each([
       const worktree = (await managedWorktrees.findLiveByOwner("session", scope.sessionKey))!;
       const moveHead = git(worktree.path, "rev-parse", "HEAD");
       if (scenario === "shifted membership") {
-        expect(await fs.readFile(path.join(worktree.path, "published-only.ignored"), "utf8")).toBe(
+        expect(await readFile(worktree.path, "published-only.ignored")).toBe(
           "cloud publication only\n",
         );
         expect(git(worktree.path, "ls-files", "--", "published-only.ignored")).toBe("");
@@ -429,11 +430,8 @@ it.each([
       expect(creationBase).toBe(baseCommit);
       expect(git(worktree.path, "rev-parse", "HEAD^")).toBe(publishedHead);
       expect(git(bare, "rev-parse", "refs/heads/" + worktree.branch)).toBe(localHead);
-      expect(await fs.readFile(path.join(worktree.path, "later.txt"), "utf8")).toBe(
-        "accepted after publication\n",
-      );
-    });
-  },
+      expect(await readFile(worktree.path, "later.txt")).toBe("accepted after publication\n");
+    }),
   120000,
 );
 it("can hold publisher exclusion during an existing reclaim claim without taking repository admission", async () => {

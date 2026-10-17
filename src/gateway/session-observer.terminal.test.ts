@@ -9,8 +9,9 @@ import {
   advanceAndFlush,
   broadcastDigest,
   emitEvent,
+  expectBroadcast,
+  expectPersisted,
   observerBroadcasts,
-  persistedDigest,
   callCounts,
   useObserverSuite,
   type Harness,
@@ -60,8 +61,14 @@ async function createFailingTerminalHarness(options: HarnessOptions = {}, health
   return harness;
 }
 
-function lifecycleEvent(data: Record<string, unknown>, route: EventRoute = {}) {
-  return event({ ...route, stream: "lifecycle", data });
+function contextlessTerminal() {
+  const terminal = event({
+    stream: "lifecycle",
+    data: { phase: "end", startedAt: 0, endedAt: 30_000 },
+  });
+  delete terminal.sessionKey;
+  delete terminal.agentId;
+  return terminal;
 }
 
 async function handleLifecycle(
@@ -71,6 +78,13 @@ async function handleLifecycle(
 ): Promise<void> {
   emitEvent(harness, "lifecycle", data, route);
   await flushObserver();
+}
+
+async function longRunningHarness() {
+  const harness = createHarness();
+  emitEvent(harness, "lifecycle", { phase: "start", startedAt: 0 });
+  await vi.advanceTimersByTimeAsync(30_000);
+  return harness;
 }
 
 function nextPersistence(harness: Harness): Promise<void> {
@@ -114,20 +128,12 @@ function commitObserverSessionReset(harness: Harness, notify = true): void {
 it("accepts a routed terminal event after a contextless duplicate", async () => {
   vi.setSystemTime(30_000);
   const { harness } = createPersistedHarness({ subscribe: false });
-  const contextlessTerminal = lifecycleEvent({
-    phase: "end",
-    startedAt: 0,
-    endedAt: 30_000,
-  });
-  delete contextlessTerminal.sessionKey;
-  delete contextlessTerminal.agentId;
-
-  harness.observer.handleEvent(contextlessTerminal);
+  harness.observer.handleEvent(contextlessTerminal());
   emitEvent(harness, "lifecycle", { phase: "end", startedAt: 0, endedAt: 30_000 });
   await flushObserver();
 
   expect(harness.persistDigest).toHaveBeenCalledOnce();
-  expect(persistedDigest(harness)).toMatchObject({ health: "done" });
+  expectPersisted(harness, { health: "done" });
 });
 
 it.for([false, true])(
@@ -139,16 +145,14 @@ it.for([false, true])(
       harness.observer.removeConnection("conn-1");
     }
     vi.setSystemTime(30_000);
-    const terminal = lifecycleEvent({ phase: "end", startedAt: 0, endedAt: 30_000 });
-    delete terminal.sessionKey;
-    delete terminal.agentId;
+    const terminal = contextlessTerminal();
     const persisted = nextPersistence(harness);
     const published = createDeferred();
     harness.broadcastToConnIds.mockImplementationOnce(() => published.resolve());
     harness.observer.handleEvent(terminal);
     await withinTest(Promise.all([persisted, published.promise]), signal);
-    expect(broadcastDigest(harness, -1)).toMatchObject({ runId: "run-1", health: "done" });
-    expect(persistedDigest(harness)).toMatchObject({ runId: "run-1", health: "done" });
+    expectBroadcast(harness, { runId: "run-1", health: "done" });
+    expectPersisted(harness, { runId: "run-1", health: "done" });
     expect(harness.persistDigest).toHaveBeenCalledOnce();
   },
 );
@@ -163,8 +167,7 @@ it("synthesizes before dropping an in-flight terminal state", async () => {
   harness.subscribers.unsubscribe("conn-1", "agent:main:session-1");
   await flushObserver();
 
-  const synthesized = persistedDigest(harness);
-  expect(synthesized).toMatchObject({
+  expectPersisted(harness, {
     headline: storedDigest.headline,
     health: "done",
     revision: storedDigest.revision + 1,
@@ -174,9 +177,7 @@ it("synthesizes before dropping an in-flight terminal state", async () => {
 it("does not finalize a retryable attempt error before same-run fallback succeeds", async ({
   signal,
 }) => {
-  const harness = createHarness();
-  emitEvent(harness, "lifecycle", { phase: "start", startedAt: 0 });
-  await vi.advanceTimersByTimeAsync(30_000);
+  const harness = await longRunningHarness();
 
   emitEvent(harness, "lifecycle", {
     phase: "error",
@@ -201,9 +202,7 @@ it("does not finalize a retryable attempt error before same-run fallback succeed
 it("corrects an expired retryable failure after repeated same-run attempt errors", async ({
   signal,
 }) => {
-  const harness = createHarness();
-  emitEvent(harness, "lifecycle", { phase: "start", startedAt: 0 });
-  await vi.advanceTimersByTimeAsync(30_000);
+  const harness = await longRunningHarness();
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     emitEvent(harness, "lifecycle", {
@@ -214,21 +213,19 @@ it("corrects an expired retryable failure after repeated same-run attempt errors
     await advanceAndFlush(15_000);
   }
 
-  expect(broadcastDigest(harness, -1)).toMatchObject({ health: "failed" });
+  expectBroadcast(harness, { health: "failed" });
   const failureRevision = broadcastDigest(harness, -1)?.revision;
   const persisted = nextPersistence(harness);
   await handleLifecycle(harness, { phase: "end", endedAt: 70_000 });
   await withinTest(persisted, signal);
 
-  expect(broadcastDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-1" });
-  expect(persistedDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-1" });
+  expectBroadcast(harness, { health: "done", runId: "run-1" });
+  expectPersisted(harness, { health: "done", runId: "run-1" }, -1);
   expect(broadcastDigest(harness, -1)?.revision).toBeGreaterThan(failureRevision ?? 0);
 });
 
 it("does not let a provisional prior run evict the newer active session owner", async () => {
-  const harness = createHarness();
-  emitEvent(harness, "lifecycle", { phase: "start", startedAt: 0 });
-  await vi.advanceTimersByTimeAsync(30_000);
+  const harness = await longRunningHarness();
   emitEvent(harness, "lifecycle", {
     phase: "error",
     endedAt: 30_000,
@@ -246,7 +243,7 @@ it("does not let a provisional prior run evict the newer active session owner", 
       return digest.runId === "run-1" && digest.health === "done";
     }),
   ).toBe(false);
-  expect(broadcastDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-2" });
+  expectBroadcast(harness, { health: "done", runId: "run-2" });
 });
 
 it("does not replay terminal persistence after an unknown write outcome", async ({ signal }) => {
@@ -309,10 +306,7 @@ it.each([
 });
 
 it("discards a queued preamble from a reset lifecycle", async () => {
-  const readSession = sessionReader({
-    lifecycleRevision: "lifecycle-a",
-    updatedAt: 0,
-  });
+  const readSession = sessionReader({ lifecycleRevision: "lifecycle-a", updatedAt: 0 });
   const harness = createHarness({ readSession, utilityModelRef: null });
   emitEvent(harness, "item", { kind: "preamble", progressText: "Initial work" });
   await advanceAndFlush(100);
@@ -322,7 +316,7 @@ it("discards a queued preamble from a reset lifecycle", async () => {
 
   expect(observerBroadcasts(harness)).toHaveLength(1);
   emitEvent(harness, "item", { kind: "preamble", progressText: "Fresh work" }, { runId: "run-2" });
-  expect(broadcastDigest(harness, -1)).toMatchObject({
+  expectBroadcast(harness, {
     runId: "run-2",
     revision: 1,
     headline: "Fresh work",
@@ -398,7 +392,7 @@ it("catches up durable persistence when the live digest already carried terminal
   expect(observerBroadcasts(harness)).toHaveLength(1);
   emitEvent(harness, "lifecycle", { phase: "end", endedAt: 30_000 });
   await advanceAndFlush(0);
-  expect(persistedDigest(harness, -1)).toMatchObject({ health: "done", revision: 1 });
+  expectPersisted(harness, { health: "done", revision: 1 }, -1);
   expect(observerBroadcasts(harness)).toHaveLength(1);
 });
 
@@ -471,14 +465,10 @@ it("preserves the cause of a model failure", async () => {
   const lines: string[] = [];
   const capture = (line: unknown) => lines.push(String(line));
   const cause = new Error("model failed");
-  const harness = createHarness({
-    completeModel: vi.fn(async () => {
-      throw cause;
-    }),
-    persistDigest: vi.fn(async () => {
-      throw cause;
-    }),
-  });
+  const fail = async () => {
+    throw cause;
+  };
+  const harness = createHarness({ completeModel: vi.fn(fail), persistDigest: vi.fn(fail) });
   try {
     setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
     loggingState.rawConsole = { log: capture, info: capture, warn: capture, error: capture };
