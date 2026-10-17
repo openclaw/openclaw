@@ -173,6 +173,8 @@ describe("legacy main session node artifact handoff", () => {
       f.withDatabase(f.destination, ({ db }) => readSessionProgressCard(db, f.destination.key)),
     ).toBeNull();
     expect(readClaim(f.source)).toBeUndefined();
+    expect(await f.migrate()).toMatchObject({ complete: true, ledgerComplete: true });
+    expect(f.artifacts(f.destination)).toEqual(after);
   });
 
   it.each([

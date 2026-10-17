@@ -878,6 +878,7 @@ describe("qa-lab server", () => {
       text: "must not survive shutdown",
     });
     const slowInbound = httpRequest(new URL("/api/inbound/message", lab.listenUrl), {
+      method: "POST",
       headers: {
         "content-type": "application/json",
         "content-length": Buffer.byteLength(inboundBody),

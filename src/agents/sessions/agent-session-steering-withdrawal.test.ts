@@ -111,6 +111,7 @@ it.each(
     );
     const accepted = createDeferredCore();
     const active = session.prompt("active prompt");
+    let terminated = false;
     let outcome: Promise<unknown> | undefined;
     try {
       await awaitGateBeforeSettlement(streaming.promise, active, "Active prompt never streamed");
@@ -134,6 +135,7 @@ it.each(
       const failure = createAssistant(testModel, [], "error");
       held.response.push({ type: "error", reason: "error", error: failure });
       held.response.end();
+      terminated = true;
       await active;
       const result = await outcome;
       expect(session.getSteeringMessages()).toEqual([]);
@@ -143,7 +145,9 @@ it.each(
         surface === "registry" ? { status: "rejected" } : { queued: false },
       );
     } finally {
-      held.release();
+      if (!terminated) {
+        held.release();
+      }
       await Promise.allSettled([active, ...(outcome ? [outcome] : [])]);
       operation.complete();
     }

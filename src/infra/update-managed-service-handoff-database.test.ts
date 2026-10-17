@@ -231,26 +231,30 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
         .run(root, "warm-owner", "{}", 1),
     );
     const sql = observeHostDataSql();
-    withDatabase(true, (db) =>
-      withDatabase.transact(
-        db,
-        () =>
+    try {
+      withDatabase(true, (db) =>
+        withDatabase.transact(
+          db,
+          () =>
+            db
+              .prepare("UPDATE managed_update_handoffs SET updated_at=2 WHERE install_root=?")
+              .run(root),
+          {},
+        ),
+      );
+      expect(
+        withDatabase(false, (db) =>
           db
-            .prepare("UPDATE managed_update_handoffs SET updated_at=2 WHERE install_root=?")
-            .run(root),
-        {},
-      ),
-    );
-    expect(
-      withDatabase(false, (db) =>
-        db
-          .prepare("SELECT owner, updated_at FROM managed_update_handoffs WHERE install_root=?")
-          .all(root),
-      ),
-    ).toEqual([{ owner: "warm-owner", updated_at: 2 }]);
-    expect(
-      sql.queries.filter((query) => classifySqliteMutation(query, "batch").mainSchemaChange),
-    ).toEqual([]);
+            .prepare("SELECT owner, updated_at FROM managed_update_handoffs WHERE install_root=?")
+            .all(root),
+        ),
+      ).toEqual([{ owner: "warm-owner", updated_at: 2 }]);
+      expect(
+        sql.queries.filter((query) => classifySqliteMutation(query, "batch").mainSchemaChange),
+      ).toEqual([]);
+    } finally {
+      sql.restore();
+    }
   });
 
   // Node CI shards do not provision Bun. BUN_BIN opts into runtime qualification;
