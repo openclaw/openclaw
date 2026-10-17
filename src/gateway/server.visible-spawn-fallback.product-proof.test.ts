@@ -6,26 +6,14 @@ import { Socket } from "node:net";
 import path from "node:path";
 import { json } from "node:stream/consumers";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  describe,
-  expect,
-  it,
-  vi,
-  type MockInstance,
-} from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../agents/admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { upsertAuthProfileAsync } from "../agents/auth-profiles.js";
 import { buildCliMcpGrantContext } from "../agents/cli-runner/mcp-grant-context.js";
@@ -69,6 +57,7 @@ const PROFILE = "proof-primary:preferred";
 const WORKER = "SPAWN-FALLBACK-WORKER";
 const SUCCESS = "SPAWN-FALLBACK-SUCCESS";
 const INITIAL_SUCCESS = "SPAWN-INITIAL-SUCCESS";
+const primaryOverride = { modelOverride: "primary", providerOverride: "proof-primary" };
 type Receipt = { status: string; runId: string; childSessionKey: string };
 type History = {
   messages: Array<{
@@ -84,6 +73,7 @@ type ProviderRequest = {
 };
 type Scenario = {
   name: string;
+  cli?: boolean;
   inherited?: boolean;
   visible?: false;
   model?: string;
@@ -96,11 +86,7 @@ type Scenario = {
 };
 
 async function startProvider(scenario: Scenario) {
-  const requests: Array<{
-    model: string;
-    child: boolean;
-    authorization?: string;
-  }> = [];
+  const requests: Array<{ model: string; child: boolean; authorization?: string }> = [];
   const errors: unknown[] = [];
   let spawn: Receipt | undefined;
   let spawnRequested = false;
@@ -111,32 +97,21 @@ async function startProvider(scenario: Scenario) {
         response.writeHead(404).end();
         return;
       }
-      const body = (await json(request)) as ProviderRequest;
-      const child = JSON.stringify(body.input.filter((item) => item.role === "user")).includes(
-        WORKER,
-      );
+      const { model, input } = (await json(request)) as ProviderRequest;
+      const child = JSON.stringify(input.filter((item) => item.role === "user")).includes(WORKER);
       const title = JSON.stringify(
-        body.input.filter((item) => item.role === "developer" || item.role === "system"),
+        input.filter((item) => item.role === "developer" || item.role === "system"),
       ).includes("Generate a concise session title");
-      requests.push({
-        model: body.model,
-        child: child && !title,
-        authorization: request.headers.authorization,
-      });
-      if (child && !title && body.model === "primary" && primaryRateLimited) {
+      const { authorization } = request.headers;
+      requests.push({ model, child: child && !title, authorization });
+      if (child && !title && model === "primary" && primaryRateLimited) {
         response.writeHead(429, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
-            error: {
-              message: "Rate limit exceeded for primary",
-              type: "rate_limit_exceeded",
-              code: "rate_limit_exceeded",
-            },
-          }),
-        );
+        const type = "rate_limit_exceeded";
+        const error = { message: "Rate limit exceeded for primary", type, code: type };
+        response.end(JSON.stringify({ error }));
         return;
       }
-      const output = body.input.find(
+      const output = input.find(
         (item) => item.type === "function_call_output" && item.call_id === "call_qa_spawn",
       )?.output;
       if (output) {
@@ -248,21 +223,16 @@ function providerConfig(baseUrl: string, ids: string[]) {
 
 async function withProofGateway(
   scenario: Scenario,
-  prefix: string,
   verify: (fixture: {
     cfg: OpenClawConfig;
-    home: Awaited<ReturnType<typeof setupGatewayTempHome>>;
+    workspaceDir: string;
     provider: Awaited<ReturnType<typeof startProvider>>;
-    port: number;
-    start: (
-      options?: Pick<
-        Parameters<typeof startGatewayWithClient>[0],
-        "clientName" | "mode" | "origin" | "onEvent"
-      >,
-    ) => ReturnType<typeof startGatewayWithClient>;
+    client: GatewayClient;
+    onSessionChanged: (listener: (payload: unknown) => void) => void;
   }) => Promise<void>,
 ) {
   resetGatewayTestState();
+  const prefix = scenario.cli ? "openclaw-cli-model-inheritance-" : "openclaw-spawn-fallback-";
   const home = await setupGatewayTempHome({ prefix });
   let provider: Awaited<ReturnType<typeof startProvider>> | undefined;
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
@@ -272,20 +242,43 @@ async function withProofGateway(
       const token = randomUUID();
       setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
       const claim = await acquireGatewayE2ePortBlock();
+      const primary = scenario.configuredAlias
+        ? "proof-primary/fast"
+        : scenario.configuredProfile
+          ? `${PRIMARY}@${PROFILE}`
+          : PRIMARY;
+      const ladder = { primary, fallbacks: [BACKUP] };
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
             workspace: home.workspaceDir,
             skipBootstrap: true,
             heartbeat: { every: "0m" },
+            ...(scenario.cli
+              ? { model: CHILD_BACKUP }
+              : scenario.inherited
+                ? { model: ladder }
+                : {}),
             models: Object.fromEntries(
               [PRIMARY, BACKUP, CHILD_BACKUP].map((ref) => [
                 ref,
-                { params: { transport: "sse", openaiWsWarmup: false } },
+                {
+                  ...(scenario.configuredAlias && ref === PRIMARY ? { alias: "fast" } : {}),
+                  params: { transport: "sse", openaiWsWarmup: false },
+                },
               ]),
             ),
-            subagents: { allowAgents: ["*"] },
+            subagents: {
+              allowAgents: ["*"],
+              ...(!scenario.cli ? { maxConcurrent: 2 } : {}),
+              ...(scenario.inherited ||
+              scenario.emptyFallbacks ||
+              (scenario.directAgent && !scenario.cli)
+                ? { model: { fallbacks: scenario.emptyFallbacks ? [] : [CHILD_BACKUP] } }
+                : {}),
+            },
           },
+          ...(!scenario.cli && !scenario.inherited ? { entries: { main: { model: ladder } } } : {}),
         },
         models: {
           mode: "replace",
@@ -294,25 +287,58 @@ async function withProofGateway(
             "proof-backup": providerConfig(provider.baseUrl, ["backup", "child-backup"]),
           },
         },
-        tools: { profile: "coding" },
-        gateway: { auth: { mode: "token", token } },
+        tools: { profile: "coding", ...(!scenario.cli ? { toolSearch: false } : {}) },
+        gateway: { auth: { mode: "token", token }, ...(scenario.cli ? { port: claim.port } : {}) },
         hooks: { enabled: false },
       };
+      if (!scenario.cli) {
+        // Retry pacing has focused coverage; this fixture proves model fallback.
+        const agentDir = resolveAgentDir(cfg, "main");
+        await fs.mkdir(agentDir, { recursive: true });
+        await fs.writeFile(
+          path.join(agentDir, "settings.json"),
+          `${JSON.stringify({ retry: { provider: { maxRetries: 0 } } })}\n`,
+          "utf8",
+        );
+        if (scenario.configuredProfile || scenario.model?.includes("@")) {
+          await upsertAuthProfileAsync({
+            agentDir,
+            profileId: PROFILE,
+            credential: {
+              type: "api_key",
+              provider: "proof-primary",
+              key: "synthetic-profile-key",
+            },
+          });
+        }
+      }
+      let onSessionChanged = (_payload: unknown) => {};
+      gateway = await startGatewayWithClient({
+        cfg,
+        portClaim: claim,
+        token,
+        configPath: await createGatewayConfigPath(home.tempHome),
+        ...(!scenario.cli
+          ? {
+              clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              origin: `http://127.0.0.1:${claim.port}`,
+              onEvent: ({ event, payload }: { event?: string; payload?: unknown }) => {
+                if (event === "sessions.changed") {
+                  onSessionChanged(payload);
+                }
+              },
+            }
+          : {}),
+      });
+      await gateway.server.startupSettled;
       await verify({
         cfg,
-        home,
+        workspaceDir: home.workspaceDir,
         provider,
-        port: claim.port,
-        start: async (options = {}) => {
-          gateway = await startGatewayWithClient({
-            cfg,
-            portClaim: claim,
-            token,
-            configPath: await createGatewayConfigPath(home.tempHome),
-            ...options,
-          });
-          await gateway.server.startupSettled;
-          return gateway;
+        client: gateway.client,
+        onSessionChanged: (listener) => {
+          onSessionChanged = listener;
         },
       });
     },
@@ -354,21 +380,9 @@ const scenarios: Scenario[] = [
 ];
 
 const directAgentScenarios: Scenario[] = [
-  {
-    name: "direct agent distinct child ladder",
-    directAgent: true,
-    backup: "child-backup",
-  },
-  {
-    name: "direct agent empty child ladder",
-    directAgent: true,
-    emptyFallbacks: true,
-  },
-  {
-    name: "direct agent explicit model pin",
-    directAgent: true,
-    directModel: PRIMARY,
-  },
+  { name: "direct agent distinct child ladder", directAgent: true, backup: "child-backup" },
+  { name: "direct agent empty child ladder", directAgent: true, emptyFallbacks: true },
+  { name: "direct agent explicit model pin", directAgent: true, directModel: PRIMARY },
 ];
 
 function drainHeartbeatWakes() {
@@ -385,366 +399,177 @@ function drainHeartbeatWakes() {
 afterEach(() => resetSubagentRegistryForTests({ persist: false }));
 
 describe("sessions_spawn model fallback through the Gateway", () => {
-  let retrySleep: MockInstance<typeof backoff.sleepWithAbort>;
+  let restoreRetrySleep: () => void;
   beforeAll(() => {
     const sleepWithAbort = backoff.sleepWithAbort;
     // Exercise every retry, including abortable waits, without real provider backoff.
-    retrySleep = vi
+    const retrySleep = vi
       .spyOn(backoff, "sleepWithAbort")
       .mockImplementation((ms, signal, options) =>
         sleepWithAbort(Math.min(ms, 1), signal, options),
       );
+    restoreRetrySleep = () => retrySleep.mockRestore();
   });
   afterAll(() => {
-    retrySleep.mockRestore();
+    restoreRetrySleep();
     resetGatewayTestState();
   });
   it.each([...scenarios, ...directAgentScenarios])(
     "$name",
     async (scenario) => {
-      await withProofGateway(
-        scenario,
-        "openclaw-spawn-fallback-",
-        async ({ cfg, provider, start, port }) => {
-          const primary = scenario.configuredAlias
-            ? "proof-primary/fast"
-            : scenario.configuredProfile
-              ? `${PRIMARY}@${PROFILE}`
-              : PRIMARY;
-          const ladder = { primary, fallbacks: [BACKUP] };
-          const defaults = cfg.agents!.defaults!;
-          if (scenario.inherited) {
-            defaults.model = ladder;
-          } else {
-            cfg.agents!.entries = { main: { model: ladder } };
-          }
-          defaults.subagents = {
-            allowAgents: ["*"],
-            maxConcurrent: 2,
-            ...(scenario.inherited || scenario.emptyFallbacks || scenario.directAgent
-              ? { model: { fallbacks: scenario.emptyFallbacks ? [] : [CHILD_BACKUP] } }
-              : {}),
-          };
-          if (scenario.configuredAlias) {
-            defaults.models![PRIMARY]!.alias = "fast";
-          }
-          // Script a direct spawn to isolate the child's model fallback ladder.
-          cfg.tools!.toolSearch = false;
-          const agentDir = resolveAgentDir(cfg, "main");
-          await fs.mkdir(agentDir, { recursive: true });
-          // This proof owns model fallback, while transient retry pacing has focused coverage.
-          await fs.writeFile(
-            path.join(agentDir, "settings.json"),
-            `${JSON.stringify({ retry: { provider: { maxRetries: 0 } } })}\n`,
-            "utf8",
+      await withProofGateway(scenario, async ({ provider, client, onSessionChanged }) => {
+        const parentKey = `agent:main:proof-${randomUUID()}`;
+        const accepted = await client.request<{ runId: string; status: string }>(
+          "chat.send",
+          {
+            sessionKey: parentKey,
+            message: "Spawn one worker now.",
+            deliver: false,
+            idempotencyKey: randomUUID(),
+          },
+          { expectFinal: false },
+        );
+        expect(accepted.status).toBe("started");
+        const wait = (runId: string) => waitForRun(client, runId);
+        const parentTerminal = await wait(accepted.runId);
+        expect(
+          parentTerminal.status,
+          JSON.stringify({ parentTerminal, requests: provider.requests }),
+        ).toBe("ok");
+        if (scenario.configuredAlias) {
+          expect(provider.requests.filter((request) => !request.child)).toContainEqual(
+            expect.objectContaining({ model: "primary" }),
           );
-          if (scenario.configuredProfile || scenario.model?.includes("@")) {
-            await upsertAuthProfileAsync({
-              agentDir,
-              profileId: PROFILE,
-              credential: {
-                type: "api_key",
-                provider: "proof-primary",
-                key: "synthetic-profile-key",
-              },
-            });
-          }
-          let onSessionChanged: (payload: unknown) => void = () => {};
-          const { client } = await start({
-            clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-            origin: `http://127.0.0.1:${port}`,
-            onEvent: ({ event, payload }) => {
-              if (event === "sessions.changed") {
-                onSessionChanged(payload);
-              }
-            },
+          expect(provider.requests.some((request) => request.model === "fast")).toBe(false);
+        }
+        expect(provider.spawn).toMatchObject({
+          status: "accepted",
+          childSessionKey: expect.any(String),
+          runId: expect.any(String),
+        });
+        const spawn = provider.spawn;
+        if (!spawn) {
+          throw new Error("Parent did not receive the sessions_spawn result");
+        }
+        const { childSessionKey: childKey } = spawn;
+        let settledRunId = spawn.runId;
+        let terminal = await wait(settledRunId);
+        let requestOffset = 0;
+        let historyOffset = 0;
+        if (scenario.directAgent) {
+          expect(terminal.status).toBe("ok");
+          const initialHistory = await readHistory(client, childKey);
+          expect(assistantTexts(initialHistory.messages)).toEqual([INITIAL_SUCCESS]);
+          expect(
+            new Set(provider.requests.filter((request) => request.child).map(({ model }) => model)),
+          ).toEqual(new Set(["primary"]));
+          historyOffset = initialHistory.messages.length;
+          requestOffset = provider.requests.length;
+          provider.rateLimitPrimary();
+          const followupRunId = randomUUID();
+          const publishedIdle = createDeferred();
+          onSessionChanged((payload) => {
+            if (
+              isRecord(payload) &&
+              payload.sessionKey === childKey &&
+              payload.lastRunId === followupRunId &&
+              payload.hasActiveRun === false &&
+              Array.isArray(payload.activeRunIds) &&
+              payload.activeRunIds.length === 0
+            ) {
+              publishedIdle.resolve();
+            }
           });
-          const parentKey = `agent:main:proof-${randomUUID()}`;
-          const accepted = await client.request<{ runId: string; status: string }>(
-            "chat.send",
+          await client.request("sessions.subscribe", {});
+          const followup = await client.request<{ runId: string; status: string }>(
+            "agent",
             {
-              sessionKey: parentKey,
-              message: "Spawn one worker now.",
+              sessionKey: childKey,
+              message: `Return exactly ${SUCCESS}. ${WORKER}`,
               deliver: false,
-              idempotencyKey: randomUUID(),
+              idempotencyKey: followupRunId,
+              ...(scenario.directModel ? { model: scenario.directModel } : {}),
             },
             { expectFinal: false },
           );
-          expect(accepted.status).toBe("started");
-          const wait = (runId: string) => waitForRun(client, runId);
-          const parentTerminal = await wait(accepted.runId);
+          expect(followup).toMatchObject({ status: "accepted", runId: followupRunId });
+          settledRunId = followup.runId;
+          terminal = await wait(settledRunId);
+          await withTestTimeout(
+            publishedIdle.promise,
+            8_000,
+            "Gateway did not publish settled child ownership after the direct turn",
+          );
+        }
+        expect(childKey).toMatch(
+          scenario.visible === false ? /^agent:main:subagent:/ : /^agent:main:dashboard:/,
+        );
+        const { sessions } = await client.request<SessionsListResult>("sessions.list", {
+          agentId: "main",
+          limit: 100,
+        });
+        expect(sessions.find((entry) => entry.key === childKey)).toMatchObject({
+          hasActiveRun: false,
+          ...(scenario.visible !== false ? { parentSessionKey: parentKey } : {}),
+        });
+        const history = await readHistory(client, childKey);
+        const text = assistantTexts(history.messages.slice(historyOffset)).join("\n");
+        const entry = readEntry(childKey);
+        const childRequests = provider.requests
+          .slice(requestOffset)
+          .filter((request) => request.child);
+        expect(terminal.status, JSON.stringify({ terminal, requests: provider.requests })).toBe(
+          scenario.backup ? "ok" : "error",
+        );
+        expect(entry?.modelOverrideSource).toBe(scenario.model ? "user" : "auto");
+        if (!scenario.model && !scenario.inherited) {
+          expect(entry).toMatchObject({
+            modelOverrideFallbackOriginProvider: "proof-primary",
+            modelOverrideFallbackOriginModel: "primary",
+          });
+        }
+        expect(childRequests).toContainEqual(expect.objectContaining({ model: "primary" }));
+        expect(childRequests.filter((request) => request.model === "primary")).toHaveLength(1);
+        expect(provider.errors).toEqual([]);
+        if (scenario.backup) {
+          expect(childRequests.map((request) => request.model)).toContain(scenario.backup);
+          expect(text).toContain(SUCCESS);
+          if (scenario.inherited || scenario.directAgent) {
+            expect(childRequests.map((request) => request.model)).not.toContain("backup");
+          }
+        } else {
+          expect(childRequests.every((request) => request.model === "primary")).toBe(true);
+          expect(text).not.toContain(SUCCESS);
           expect(
-            parentTerminal.status,
-            JSON.stringify({ parentTerminal, requests: provider.requests }),
-          ).toBe("ok");
-          if (scenario.configuredAlias) {
-            expect(provider.requests.filter((request) => !request.child)).toContainEqual(
-              expect.objectContaining({ model: "primary" }),
-            );
-            expect(provider.requests.some((request) => request.model === "fast")).toBe(false);
-          }
-          expect(provider.spawn).toMatchObject({
-            status: "accepted",
-            childSessionKey: expect.any(String),
-            runId: expect.any(String),
-          });
-          const spawn = provider.spawn;
-          if (!spawn) {
-            throw new Error("Parent did not receive the sessions_spawn result");
-          }
-          let settledRunId = spawn.runId;
-          let terminal = await wait(settledRunId);
-          let requestOffset = 0;
-          let historyOffset = 0;
-          if (scenario.directAgent) {
-            expect(terminal.status).toBe("ok");
-            const initialHistory = await readHistory(client, spawn.childSessionKey);
-            expect(assistantTexts(initialHistory.messages)).toEqual([INITIAL_SUCCESS]);
-            expect(
-              new Set(
-                provider.requests.filter((request) => request.child).map(({ model }) => model),
-              ),
-            ).toEqual(new Set(["primary"]));
-            historyOffset = initialHistory.messages.length;
-            requestOffset = provider.requests.length;
-            provider.rateLimitPrimary();
-            const followupRunId = randomUUID();
-            const publishedIdle = createDeferred();
-            onSessionChanged = (payload) => {
-              if (
-                isRecord(payload) &&
-                payload.sessionKey === spawn.childSessionKey &&
-                payload.lastRunId === followupRunId &&
-                payload.hasActiveRun === false &&
-                Array.isArray(payload.activeRunIds) &&
-                payload.activeRunIds.length === 0
-              ) {
-                publishedIdle.resolve();
-              }
-            };
-            await client.request("sessions.subscribe", {});
-            const followup = await client.request<{ runId: string; status: string }>(
-              "agent",
-              {
-                sessionKey: spawn.childSessionKey,
-                message: `Return exactly ${SUCCESS}. ${WORKER}`,
-                deliver: false,
-                idempotencyKey: followupRunId,
-                ...(scenario.directModel ? { model: scenario.directModel } : {}),
-              },
-              { expectFinal: false },
-            );
-            expect(followup.status).toBe("accepted");
-            expect(followup.runId).toBe(followupRunId);
-            settledRunId = followup.runId;
-            terminal = await wait(settledRunId);
-            await withTestTimeout(
-              publishedIdle.promise,
-              8_000,
-              "Gateway did not publish settled child ownership after the direct turn",
-            );
-          }
-          expect(spawn.childSessionKey).toMatch(
-            scenario.visible === false ? /^agent:main:subagent:/ : /^agent:main:dashboard:/,
+            history.messages.filter((message) => message.openclawRunError?.runId === settledRunId),
+          ).toEqual([
+            expect.objectContaining({
+              role: "custom",
+              openclawRunError: { runId: settledRunId, summary: expect.stringMatching(/\S/) },
+            }),
+          ]);
+          expect(entry).toMatchObject(primaryOverride);
+        }
+        if (scenario.configuredProfile || scenario.model?.includes("@")) {
+          expect(childRequests).toContainEqual(
+            expect.objectContaining({
+              model: "primary",
+              authorization: "Bearer synthetic-profile-key",
+            }),
           );
-          const { sessions } = await client.request<SessionsListResult>("sessions.list", {
-            agentId: "main",
-            limit: 100,
-          });
-          const child = sessions.find((entry) => entry.key === spawn.childSessionKey);
-          expect(child).toMatchObject({ hasActiveRun: false });
-          if (scenario.visible !== false) {
-            expect(child).toMatchObject({ parentSessionKey: parentKey });
-          }
-          const history = await readHistory(client, spawn.childSessionKey);
-          const text = assistantTexts(history.messages.slice(historyOffset)).join("\n");
-          const entry = readEntry(spawn.childSessionKey);
-          const childRequests = provider.requests
-            .slice(requestOffset)
-            .filter((request) => request.child);
-          expect(terminal.status, JSON.stringify({ terminal, requests: provider.requests })).toBe(
-            scenario.backup ? "ok" : "error",
-          );
-          expect(entry?.modelOverrideSource).toBe(scenario.model ? "user" : "auto");
-          if (!scenario.model && !scenario.inherited) {
+          if (scenario.model) {
             expect(entry).toMatchObject({
-              modelOverrideFallbackOriginProvider: "proof-primary",
-              modelOverrideFallbackOriginModel: "primary",
+              authProfileOverride: PROFILE,
+              authProfileOverrideSource: "user",
             });
           }
-          expect(childRequests).toContainEqual(expect.objectContaining({ model: "primary" }));
-          expect(childRequests.filter((request) => request.model === "primary")).toHaveLength(1);
-          expect(provider.errors).toEqual([]);
-          if (scenario.backup) {
-            expect(childRequests.map((request) => request.model)).toContain(scenario.backup);
-            expect(text).toContain(SUCCESS);
-            if (scenario.inherited || scenario.directAgent) {
-              expect(childRequests.map((request) => request.model)).not.toContain("backup");
-            }
-          } else {
-            expect(childRequests.every((request) => request.model === "primary")).toBe(true);
-            expect(text).not.toContain(SUCCESS);
-            expect(
-              history.messages.filter(
-                (message) => message.openclawRunError?.runId === settledRunId,
-              ),
-            ).toEqual([
-              expect.objectContaining({
-                role: "custom",
-                openclawRunError: { runId: settledRunId, summary: expect.stringMatching(/\S/) },
-              }),
-            ]);
-            expect(entry).toMatchObject({
-              modelOverride: "primary",
-              providerOverride: "proof-primary",
-            });
-          }
-          if (scenario.configuredProfile || scenario.model?.includes("@")) {
-            expect(childRequests).toContainEqual(
-              expect.objectContaining({
-                model: "primary",
-                authorization: "Bearer synthetic-profile-key",
-              }),
-            );
-            if (scenario.model) {
-              expect(entry).toMatchObject({
-                authProfileOverride: PROFILE,
-                authProfileOverrideSource: "user",
-              });
-            }
-            expect(entry?.modelOverride).not.toContain("@");
-          }
-        },
-      );
+          expect(entry?.modelOverride).not.toContain("@");
+        }
+      });
     },
     600_000,
   );
 });
-
-async function withCliSpawnGrant(
-  params: {
-    cfg: OpenClawConfig;
-    parentKey: string;
-    parentSessionId: string;
-    workspaceDir: string;
-    nativeModel: string;
-    visible: boolean;
-  },
-  verify: (spawn: Receipt) => Promise<void>,
-) {
-  const runId = randomUUID();
-  const admission = prepareAgentRunAdmission({
-    cfg: params.cfg,
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "cli-model-inheritance-proof", state: "present" },
-    },
-  });
-  let grantToken: string | undefined;
-  try {
-    const admittedRunContext = await admission.admit("embedded");
-    const run = {
-      sessionId: params.parentSessionId,
-      sessionKey: params.parentKey,
-      sessionFile: path.join(params.workspaceDir, "cli-parent.jsonl"),
-      workspaceDir: params.workspaceDir,
-      provider: "claude-cli",
-      model: params.nativeModel,
-      requesterModel: { provider: "proof-primary", model: "primary" },
-      modelHasVision: false,
-      senderIsOwner: true,
-      runId,
-      prompt: "Spawn one child using this turn's selected model.",
-      timeoutMs: 240_000,
-    } satisfies RunCliAgentParams;
-    const grant = mintMcpLoopbackClientGrant({
-      context: buildCliMcpGrantContext({
-        run,
-        config: params.cfg,
-        requireExplicitMessageTarget: false,
-        agentId: "main",
-        modelProvider: "proof-primary",
-        modelId: params.nativeModel,
-        toolsAllow: ["read", "sessions_spawn"],
-      }),
-      runtimeOwnerToken: runId,
-      admittedRunContext,
-    });
-    grantToken = grant.token;
-    expect(
-      activateMcpLoopbackClientGrantCapture({
-        token: grant.token,
-        runtimeOwnerToken: runId,
-        captureKey: runId,
-      }),
-    ).toBeTruthy();
-    run.requesterModel.model = "later-input-mutation";
-    const currentGrant = resolveMcpLoopbackClientGrant({
-      token: grant.token,
-      runtimeOwnerToken: runId,
-      captureKey: runId,
-    });
-    if (!currentGrant) {
-      throw new Error("CLI proof grant is not active");
-    }
-    const request = new IncomingMessage(new Socket());
-    const context = resolveMcpRequestContext(request, params.cfg, {
-      senderIsOwner: true,
-      boundClientGrant: currentGrant,
-      boundGrantToken: grant.token,
-    });
-    request.destroy();
-    const scoped = await resolveMcpLoopbackScopedTools({
-      cfg: params.cfg,
-      context,
-      grantToken: grant.token,
-      isGrantCurrent: currentGrant.isCurrent,
-    });
-    const caller = createAdmittedGatewayToolCallerIdentity({
-      admittedRunContext: currentGrant.admittedRunContext,
-      receiptAuthority: currentGrant.isCurrent,
-      agentId: scoped.agentId,
-      sessionKey: context.sessionKey,
-    });
-    const response = await withGatewayToolCallerIdentity(caller, () =>
-      handleMcpJsonRpc({
-        message: {
-          jsonrpc: "2.0",
-          id: "cli-model-inheritance",
-          method: "tools/call",
-          params: {
-            name: "sessions_spawn",
-            arguments: {
-              task: `Return exactly ${INITIAL_SUCCESS}. ${WORKER}`,
-              label: "CLI child",
-              visible: params.visible,
-              expectsCompletionMessage: false,
-            },
-          },
-        },
-        tools: scoped.tools,
-        toolSchema: buildMcpToolSchema(scoped.tools),
-        hookContext: { config: params.cfg, agentId: "main", sessionKey: params.parentKey },
-        authorizeToolCall: currentGrant.isCurrent,
-      }),
-    );
-    expect(response, JSON.stringify(response)).toMatchObject({
-      result: { isError: false, content: [{ type: "text", text: expect.any(String) }] },
-    });
-    const payload = response as { result: { content: Array<{ type: string; text: string }> } };
-    const spawn = JSON.parse(payload.result.content[0]!.text) as Receipt;
-    expect(spawn).toMatchObject({ status: "accepted", runId: expect.any(String) });
-    await verify(spawn);
-  } finally {
-    if (grantToken) {
-      revokeMcpLoopbackClientGrant(grantToken);
-    }
-    admission.close();
-  }
-}
 
 describe("CLI model inheritance through MCP", () => {
   afterAll(resetGatewayTestState);
@@ -753,14 +578,10 @@ describe("CLI model inheritance through MCP", () => {
     { visible: true, nativeModel: "primary[1m]" },
   ])(
     "inherits the logical model with visible=$visible and native=$nativeModel",
-    async (scenario) => {
+    async ({ visible, nativeModel }) => {
       await withProofGateway(
-        { name: "CLI model inheritance", directAgent: true },
-        "openclaw-cli-model-inheritance-",
-        async ({ cfg, home, provider, start, port }) => {
-          cfg.agents!.defaults!.model = CHILD_BACKUP;
-          cfg.gateway!.port = port;
-          const { client } = await start();
+        { name: "CLI model inheritance", directAgent: true, cli: true },
+        async ({ cfg, workspaceDir, provider, client }) => {
           const parentKey = `agent:main:cli-model-proof:${randomUUID()}`;
           await client.request("sessions.patch", { key: parentKey, model: BACKUP });
           const parent = readEntry(parentKey);
@@ -773,37 +594,123 @@ describe("CLI model inheritance through MCP", () => {
             modelOverrideSource: "user",
           };
           expect(parent).toMatchObject(parentOverride);
-          const providerRequests = provider.requests;
-          await withCliSpawnGrant(
-            {
-              cfg,
-              parentKey,
-              parentSessionId: parent.sessionId,
-              workspaceDir: home.workspaceDir,
-              ...scenario,
-            },
-            async (spawn) => {
-              const terminal = await waitForRun(client, spawn.runId);
-              expect(terminal.status).toBe("ok");
-              const childRequests = providerRequests.filter((request) => request.child);
-              expect(childRequests.length).toBeGreaterThan(0);
-              expect(
-                childRequests.every((request) => request.model === "primary"),
-                JSON.stringify(childRequests),
-              ).toBe(true);
-              const child = readEntry(spawn.childSessionKey);
-              expect(child).toMatchObject({
-                providerOverride: "proof-primary",
-                modelOverride: "primary",
-                modelOverrideSource: "auto",
-                spawnedBy: parentKey,
-                spawnDepth: 1,
-              });
-              expect(readEntry(parentKey)).toMatchObject(parentOverride);
-              const transcript = await readHistory(client, spawn.childSessionKey);
-              expect(assistantTexts(transcript.messages)).toContain(INITIAL_SUCCESS);
-            },
+          const runId = randomUUID();
+          const admission = prepareSystemAgentRunAdmission(
+            cfg,
+            runId,
+            "main",
+            "cli-model-inheritance-proof",
           );
+          let grantToken: string | undefined;
+          try {
+            const admittedRunContext = await admission.admit("embedded");
+            const run = {
+              sessionId: parent.sessionId,
+              sessionKey: parentKey,
+              sessionFile: path.join(workspaceDir, "cli-parent.jsonl"),
+              workspaceDir,
+              provider: "claude-cli",
+              model: nativeModel,
+              requesterModel: { provider: "proof-primary", model: "primary" },
+              modelHasVision: false,
+              senderIsOwner: true,
+              runId,
+              prompt: "Spawn one child using this turn's selected model.",
+              timeoutMs: 240_000,
+            } satisfies RunCliAgentParams;
+            const grant = mintMcpLoopbackClientGrant({
+              context: buildCliMcpGrantContext({
+                run,
+                config: cfg,
+                requireExplicitMessageTarget: false,
+                agentId: "main",
+                modelProvider: "proof-primary",
+                modelId: nativeModel,
+                toolsAllow: ["read", "sessions_spawn"],
+              }),
+              runtimeOwnerToken: runId,
+              admittedRunContext,
+            });
+            grantToken = grant.token;
+            const capture = { token: grant.token, runtimeOwnerToken: runId, captureKey: runId };
+            expect(activateMcpLoopbackClientGrantCapture(capture)).toBeTruthy();
+            run.requesterModel.model = "later-input-mutation";
+            const currentGrant = resolveMcpLoopbackClientGrant(capture);
+            if (!currentGrant) {
+              throw new Error("CLI proof grant is not active");
+            }
+            const httpRequest = new IncomingMessage(new Socket());
+            const context = resolveMcpRequestContext(httpRequest, cfg, {
+              senderIsOwner: true,
+              boundClientGrant: currentGrant,
+              boundGrantToken: grant.token,
+            });
+            httpRequest.destroy();
+            const scoped = await resolveMcpLoopbackScopedTools({
+              cfg,
+              context,
+              grantToken: grant.token,
+              isGrantCurrent: currentGrant.isCurrent,
+            });
+            const caller = createAdmittedGatewayToolCallerIdentity({
+              admittedRunContext: currentGrant.admittedRunContext,
+              receiptAuthority: currentGrant.isCurrent,
+              agentId: scoped.agentId,
+              sessionKey: context.sessionKey,
+            });
+            const response = await withGatewayToolCallerIdentity(caller, () =>
+              handleMcpJsonRpc({
+                message: {
+                  jsonrpc: "2.0",
+                  id: "cli-model-inheritance",
+                  method: "tools/call",
+                  params: {
+                    name: "sessions_spawn",
+                    arguments: {
+                      task: `Return exactly ${INITIAL_SUCCESS}. ${WORKER}`,
+                      label: "CLI child",
+                      visible,
+                      expectsCompletionMessage: false,
+                    },
+                  },
+                },
+                tools: scoped.tools,
+                toolSchema: buildMcpToolSchema(scoped.tools),
+                hookContext: { config: cfg, agentId: "main", sessionKey: parentKey },
+                authorizeToolCall: currentGrant.isCurrent,
+              }),
+            );
+            expect(response, JSON.stringify(response)).toMatchObject({
+              result: { isError: false, content: [{ type: "text", text: expect.any(String) }] },
+            });
+            const payload = response as {
+              result: { content: Array<{ type: string; text: string }> };
+            };
+            const spawn = JSON.parse(payload.result.content[0]!.text) as Receipt;
+            expect(spawn).toMatchObject({ status: "accepted", runId: expect.any(String) });
+            const terminal = await waitForRun(client, spawn.runId);
+            expect(terminal.status).toBe("ok");
+            const childRequests = provider.requests.filter((request) => request.child);
+            expect(childRequests.length).toBeGreaterThan(0);
+            expect(
+              childRequests.every((request) => request.model === "primary"),
+              JSON.stringify(childRequests),
+            ).toBe(true);
+            expect(readEntry(spawn.childSessionKey)).toMatchObject({
+              ...primaryOverride,
+              modelOverrideSource: "auto",
+              spawnedBy: parentKey,
+              spawnDepth: 1,
+            });
+            expect(readEntry(parentKey)).toMatchObject(parentOverride);
+            const transcript = await readHistory(client, spawn.childSessionKey);
+            expect(assistantTexts(transcript.messages)).toContain(INITIAL_SUCCESS);
+          } finally {
+            if (grantToken) {
+              revokeMcpLoopbackClientGrant(grantToken);
+            }
+            admission.close();
+          }
           expect(provider.errors).toEqual([]);
         },
       );

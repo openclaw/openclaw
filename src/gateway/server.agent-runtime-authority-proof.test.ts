@@ -40,17 +40,6 @@ const resetDelivery = {
   to: "!proof:example.test",
 };
 
-function pause(signal: AbortSignal) {
-  const entered = createDeferred();
-  const release = createDeferred();
-  const unblock = () => release.resolve();
-  signal.addEventListener("abort", unblock, { once: true });
-  if (signal.aborted) {
-    unblock();
-  }
-  return { entered, release, dispose: () => signal.removeEventListener("abort", unblock) };
-}
-
 describe("agent RPC real delegated-authority effects", () => {
   const fixture = installAgentAuthorityProofFixture();
   type Fixture = Awaited<ReturnType<typeof fixture>>;
@@ -73,12 +62,70 @@ describe("agent RPC real delegated-authority effects", () => {
     lifecycle.reserve(f.sessionKey, "main");
     return lifecycle;
   }
-  const readEntry = async (f: Awaited<ReturnType<typeof fixture>>) =>
+  const readEntry = async (f: Fixture) =>
     (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry;
+  const transcript = (f: Fixture) => sessionAccessor.loadTranscriptEventsSync(f.scope);
+  const pendingCount = async (f: Fixture) => (await listSessionPendingInputs(f.scope)).total;
+  const expectAbsent = (file: string) =>
+    expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+  function expectInactive(response: Response, message = "authority is no longer active") {
+    expect(response).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining(message) },
+    });
+  }
+  function expectCached(retry: Response, response: Response) {
+    expect(retry).toMatchObject({ ok: response.ok, meta: { cached: true } });
+    expect(retry.error).toEqual(response.error);
+    expect(retry.payload).toEqual(response.payload);
+  }
+  async function expectReset(f: Fixture, before: SessionEntry | undefined) {
+    const committed = await readEntry(f);
+    expect(committed?.sessionId).toBe(f.sessionId);
+    expect(committed?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
+    return committed;
+  }
+  function expectResetReply(retry: Response, f: Fixture, text: unknown) {
+    expect(retry).toMatchObject({
+      ok: true,
+      meta: { cached: true },
+      payload: {
+        status: "ok",
+        result: { payloads: [{ text }], meta: { agentMeta: { sessionId: f.sessionId } } },
+      },
+    });
+  }
+  function pause(
+    f: Fixture,
+    signal: AbortSignal,
+    execution?: Awaited<ReturnType<typeof holdExecution>>,
+  ) {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const unblock = () => release.resolve();
+    signal.addEventListener("abort", unblock, { once: true });
+    if (signal.aborted) {
+      unblock();
+    }
+    const finish = async (
+      requests: (Promise<unknown> | undefined)[],
+      observers: { mockRestore: () => unknown }[] = [],
+      reservation?: ReturnType<typeof createAgentDedupeLifecycle>,
+    ) => {
+      release.resolve();
+      await execution?.cleanup();
+      await Promise.allSettled(requests);
+      reservation?.clearUnaccepted();
+      await f.cleanup();
+      observers.forEach((observer) => observer.mockRestore());
+      signal.removeEventListener("abort", unblock);
+    };
+    return { entered, release, finish };
+  }
 
   it("rejects a revoked caller before the real reset transaction", async ({ signal }) => {
     const f = await fixture();
-    const { entered, release, dispose } = pause(signal);
+    const { entered, release, finish } = pause(f, signal);
     let calls = 0;
     const hook = async (event: import("../hooks/internal-hooks.js").InternalHookEvent) => {
       if (event.sessionKey !== f.sessionKey) {
@@ -102,16 +149,12 @@ describe("agent RPC real delegated-authority effects", () => {
 
       expect(calls).toBe(1);
       expect(agentCommandMock).not.toHaveBeenCalled();
-      expect(result.ok).toBe(false);
-      expect(result.error?.message).toContain("authority is no longer active");
+      expectInactive(result);
       expect(await readEntry(f)).toEqual(before);
-      expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(f.before);
+      expect(transcript(f)).toEqual(f.before);
     } finally {
-      release.resolve();
-      await Promise.allSettled([request]);
-      await f.cleanup();
+      await finish([request]);
       unregisterInternalHook("command:reset", hook);
-      dispose();
     }
   });
 
@@ -119,7 +162,8 @@ describe("agent RPC real delegated-authority effects", () => {
     signal,
   }) => {
     const f = await fixture();
-    const { entered, release, dispose } = pause(signal);
+    const execution = await holdExecution(signal);
+    const { entered, release, finish } = pause(f, signal, execution);
     const before = await readEntry(f);
     const perform = resets.performGatewaySessionReset;
     const observer = vi
@@ -131,49 +175,31 @@ describe("agent RPC real delegated-authority effects", () => {
         await release.promise;
         return result;
       });
-    const execution = await holdExecution(signal);
     let request: Promise<Response> | undefined;
     try {
       const params = { message: "/reset continue with retained proof input" };
       request = f.dispatch(params);
       await reach(entered.promise, request);
-      const committed = await readEntry(f);
-      expect(committed?.sessionId).toBe(f.sessionId);
-      expect(committed?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
-      const transcript = sessionAccessor.loadTranscriptEventsSync(f.scope);
-      expect(transcript).not.toEqual(f.before);
+      const committed = await expectReset(f, before);
+      const resetTranscript = transcript(f);
+      expect(resetTranscript).not.toEqual(f.before);
       f.owner.revoke();
       release.resolve();
       const response = await request;
-      expect(response).toMatchObject({
-        ok: false,
-        error: { message: expect.stringContaining("authority is no longer active") },
-      });
+      expectInactive(response);
       await f.drain();
-      expect((await listSessionPendingInputs(f.scope)).total).toBe(0);
+      expect(await pendingCount(f)).toBe(0);
       expect(execution.observer).not.toHaveBeenCalled();
       const retry = await f.dispatch(params, await f.freshCaller());
       await f.drain();
-      expect(retry).toMatchObject({
-        ok: true,
-        meta: { cached: true },
-        payload: { status: "ok", result: { meta: { agentMeta: { sessionId: f.sessionId } } } },
-      });
-      expect(retry.payload).toMatchObject({
-        result: { payloads: [{ text: expect.stringContaining("before the follow-up ran") }] },
-      });
+      expectResetReply(retry, f, expect.stringContaining("before the follow-up ran"));
       expect(observer).toHaveBeenCalledOnce();
       expect(await readEntry(f)).toEqual(committed);
-      expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(transcript);
+      expect(transcript(f)).toEqual(resetTranscript);
       expect(agentCommandMock).not.toHaveBeenCalled();
       expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
     } finally {
-      release.resolve();
-      await execution.cleanup();
-      await Promise.allSettled([request]);
-      await f.cleanup();
-      observer.mockRestore();
-      dispose();
+      await finish([request], [observer]);
     }
   });
 
@@ -182,7 +208,7 @@ describe("agent RPC real delegated-authority effects", () => {
     async (mode, { signal }) => {
       const f = await fixture();
       const execution = await holdExecution(signal);
-      const { entered, release, dispose } = pause(signal);
+      const { entered, release, finish } = pause(f, signal, execution);
       let writer: Promise<unknown> | undefined;
       let replacement: ReturnType<typeof createAgentDedupeLifecycle> | undefined;
       let inputRecorded = false;
@@ -203,7 +229,7 @@ describe("agent RPC real delegated-authority effects", () => {
           const pending = stage(...args);
           entered.resolve();
           const result = await pending;
-          inputRecorded = (await listSessionPendingInputs(f.scope)).total > 0;
+          inputRecorded = (await pendingCount(f)) > 0;
           return result;
         });
       let request: Promise<Response> | undefined;
@@ -216,8 +242,8 @@ describe("agent RPC real delegated-authority effects", () => {
         };
         request = f.dispatch(params, mode === "ordinary raw input" ? null : f.owner);
         await reach(entered.promise, request);
-        expect((await listSessionPendingInputs(f.scope)).total).toBe(0);
-        const beforeInput = sessionAccessor.loadTranscriptEventsSync(f.scope);
+        expect(await pendingCount(f)).toBe(0);
+        const beforeInput = transcript(f);
         if (mode === "revoked") {
           f.owner.revoke();
         } else if (mode === "replaced after reset") {
@@ -227,12 +253,11 @@ describe("agent RPC real delegated-authority effects", () => {
         release.resolve();
         const result = await request;
         if (mode === "revoked" || mode === "replaced after reset") {
-          expect(result.ok).toBe(false);
-          expect(result.error?.message).toContain("is no longer active");
+          expectInactive(result, "is no longer active");
           expect(inputRecorded).toBe(false);
           expect(execution.observer).not.toHaveBeenCalled();
-          expect((await listSessionPendingInputs(f.scope)).total).toBe(0);
-          expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(beforeInput);
+          expect(await pendingCount(f)).toBe(0);
+          expect(transcript(f)).toEqual(beforeInput);
           expect(agentCommandMock).not.toHaveBeenCalled();
         } else {
           expect(result).toMatchObject({ ok: true, payload: { status: "accepted" } });
@@ -247,16 +272,13 @@ describe("agent RPC real delegated-authority effects", () => {
           expect(prepared.activeRunAbort.controller.signal.aborted).toBe(false);
           const recorder = prepared.userTurn.recorder!;
           const persisted = await recorder.withPendingInput!(() => recorder.persistApproved());
-          expect(persisted?.appended).toBe(true);
-          expect(persisted?.message.content).toBe(params.message);
-          expect((await listSessionPendingInputs(f.scope)).total).toBe(0);
-          expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                type: "message",
-                message: expect.objectContaining({ content: params.message }),
-              }),
-            ]),
+          expect(persisted).toMatchObject({ appended: true, message: { content: params.message } });
+          expect(await pendingCount(f)).toBe(0);
+          expect(transcript(f)).toContainEqual(
+            expect.objectContaining({
+              type: "message",
+              message: expect.objectContaining({ content: params.message }),
+            }),
           );
           const retry = await f.dispatch(
             params,
@@ -274,13 +296,7 @@ describe("agent RPC real delegated-authority effects", () => {
           expect(agentCommandMock).not.toHaveBeenCalled();
         }
       } finally {
-        release.resolve();
-        await execution.cleanup();
-        await Promise.allSettled([writer, request]);
-        replacement?.clearUnaccepted();
-        await f.cleanup();
-        observer.mockRestore();
-        dispose();
+        await finish([writer, request], [observer], replacement);
       }
     },
   );
@@ -292,7 +308,7 @@ describe("agent RPC real delegated-authority effects", () => {
       const execution = await holdExecution(signal);
       const entered =
         createDeferred<Awaited<ReturnType<typeof attachments.persistInboundImagesForTranscript>>>();
-      const { release, dispose } = pause(signal);
+      const { release, finish } = pause(f, signal, execution);
       const persist = attachments.persistInboundImagesForTranscript;
       const observer = vi
         .spyOn(attachments, "persistInboundImagesForTranscript")
@@ -320,11 +336,10 @@ describe("agent RPC real delegated-authority effects", () => {
         const result = await request;
 
         if (mode === "revoked") {
-          expect(result.ok).toBe(false);
-          expect(result.error?.message).toContain("authority is no longer active");
-          await expect(fs.stat(image.path)).rejects.toMatchObject({ code: "ENOENT" });
-          expect((await listSessionPendingInputs(f.scope)).total).toBe(0);
-          expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(f.before);
+          expectInactive(result);
+          await expectAbsent(image.path);
+          expect(await pendingCount(f)).toBe(0);
+          expect(transcript(f)).toEqual(f.before);
           expect(execution.observer).not.toHaveBeenCalled();
           expect(agentCommandMock).not.toHaveBeenCalled();
         } else {
@@ -333,18 +348,11 @@ describe("agent RPC real delegated-authority effects", () => {
           const recorder = prepared.userTurn.recorder!;
           const persisted = await recorder.withPendingInput!(() => recorder.persistApproved());
           expect(persisted?.appended).toBe(true);
-          expect(JSON.stringify(sessionAccessor.loadTranscriptEventsSync(f.scope))).toContain(
-            image.fact.url,
-          );
+          expect(JSON.stringify(transcript(f))).toContain(image.fact.url);
           expect(await fs.readFile(image.path)).toEqual(Buffer.from(PNG, "base64"));
         }
       } finally {
-        release.resolve();
-        await execution.cleanup();
-        await Promise.allSettled([request]);
-        await f.cleanup();
-        observer.mockRestore();
-        dispose();
+        await finish([request], [observer]);
       }
     },
   );
@@ -352,13 +360,13 @@ describe("agent RPC real delegated-authority effects", () => {
   it.for(["live", "revoked", "stopped", "replaced"] as const)(
     "delayed reset final delivery: %s caller",
     async (mode, { signal }) => {
-      const { entered, release, dispose } = pause(signal);
       const { f, sink, recordingAdapterRetained } = await createResetDeliveryFixture(fixture, {
         beforeSendAttempt: async () => {
           entered.resolve();
           await release.promise;
         },
       });
+      const { entered, release, finish } = pause(f, signal);
       const before = await readEntry(f);
       let request: Promise<Response> | undefined;
       let replacement: ReturnType<typeof createAgentDedupeLifecycle> | undefined;
@@ -367,10 +375,8 @@ describe("agent RPC real delegated-authority effects", () => {
         const params = resetDelivery;
         request = f.dispatch(params);
         await reach(entered.promise, request);
-        const committed = await readEntry(f);
-        expect(committed?.sessionId).toBe(f.sessionId);
-        expect(committed?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
-        await expect(fs.stat(sink)).rejects.toMatchObject({ code: "ENOENT" });
+        const committed = await expectReset(f, before);
+        await expectAbsent(sink);
         if (mode === "revoked") {
           f.owner.revoke();
         } else if (mode === "stopped") {
@@ -384,9 +390,8 @@ describe("agent RPC real delegated-authority effects", () => {
         await f.drain();
 
         if (mode !== "live") {
-          expect(result.ok).toBe(false);
-          expect(result.error?.message).toContain("is no longer active");
-          await expect(fs.stat(sink)).rejects.toMatchObject({ code: "ENOENT" });
+          expectInactive(result, "is no longer active");
+          await expectAbsent(sink);
         } else {
           expect(result.ok).toBe(true);
           expect(await fs.readFile(sink, "utf8")).toBe("✅ Session reset.\n");
@@ -402,13 +407,11 @@ describe("agent RPC real delegated-authority effects", () => {
             payload: { status: mode === "stopped" ? "timeout" : "in_flight" },
           });
         } else {
-          expect(retry).toMatchObject({ ok: result.ok, meta: { cached: true } });
-          expect(retry.payload).toEqual(result.payload);
-          expect(retry.error).toEqual(result.error);
+          expectCached(retry, result);
         }
         expect((await readEntry(f))?.lifecycleRevision).toBe(committed?.lifecycleRevision);
         if (mode !== "live") {
-          await expect(fs.stat(sink)).rejects.toMatchObject({ code: "ENOENT" });
+          await expectAbsent(sink);
           if (mode === "revoked") {
             expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
           }
@@ -417,11 +420,7 @@ describe("agent RPC real delegated-authority effects", () => {
         }
         expect(agentCommandMock).not.toHaveBeenCalled();
       } finally {
-        release.resolve();
-        await Promise.allSettled([request]);
-        replacement?.clearUnaccepted();
-        await f.cleanup();
-        dispose();
+        await finish([request], [], replacement);
       }
     },
   );
@@ -431,7 +430,8 @@ describe("agent RPC real delegated-authority effects", () => {
     async (mode, { signal }) => {
       const { f, sink, recordingAdapterRetained, attempts } =
         await createResetDeliveryFixture(fixture);
-      const { entered, release, dispose } = pause(signal);
+      const execution = await holdExecution(signal);
+      const { entered, release, finish } = pause(f, signal, execution);
       const cleanup = await import("../plugins/host-hook-cleanup.js");
       const performCleanup = cleanup.runPluginHostCleanup;
       const cleanupObserver = vi
@@ -448,7 +448,6 @@ describe("agent RPC real delegated-authority effects", () => {
           return result;
         });
       const resetObserver = vi.spyOn(resets, "performGatewaySessionReset");
-      const execution = await holdExecution(signal);
       const before = await readEntry(f);
       let request: Promise<Response> | undefined;
       try {
@@ -461,61 +460,40 @@ describe("agent RPC real delegated-authority effects", () => {
         request = f.dispatch(params);
         await reach(entered.promise, request);
         expect(await readEntry(f)).toEqual(before);
-        expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(f.before);
+        expect(transcript(f)).toEqual(f.before);
         expect(attempts()).toBe(0);
-        await expect(fs.stat(sink)).rejects.toMatchObject({ code: "ENOENT" });
+        await expectAbsent(sink);
         f.owner.revoke();
         release.resolve();
         const response = await request;
-        const committed = await readEntry(f);
-        const transcript = sessionAccessor.loadTranscriptEventsSync(f.scope);
-        expect(committed?.sessionId).toBe(f.sessionId);
-        expect(committed?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
-        expect(transcript).not.toEqual(f.before);
-        expect(response).toMatchObject({
-          ok: false,
-          error: { message: expect.stringContaining("authority is no longer active") },
-        });
-        expect((await listSessionPendingInputs(f.scope)).total).toBe(0);
+        const committed = await expectReset(f, before);
+        const resetTranscript = transcript(f);
+        expect(resetTranscript).not.toEqual(f.before);
+        expectInactive(response);
+        expect(await pendingCount(f)).toBe(0);
         expect(execution.observer).not.toHaveBeenCalled();
         expect(attempts()).toBe(0);
-        await expect(fs.stat(sink)).rejects.toMatchObject({ code: "ENOENT" });
+        await expectAbsent(sink);
         const retry = await f.dispatch(params, await f.freshCaller());
         await f.drain();
-        expect(retry).toMatchObject({
-          ok: true,
-          meta: { cached: true },
-          payload: {
-            status: "ok",
-            result: {
-              payloads: [
-                {
-                  text: followUpPending
-                    ? expect.stringContaining("before the follow-up ran")
-                    : "✅ Session reset.",
-                },
-              ],
-              meta: { agentMeta: { sessionId: f.sessionId } },
-            },
-          },
-        });
+        expectResetReply(
+          retry,
+          f,
+          followUpPending
+            ? expect.stringContaining("before the follow-up ran")
+            : "✅ Session reset.",
+        );
         expect(resetObserver).toHaveBeenCalledOnce();
         expect(await readEntry(f)).toEqual(committed);
-        expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(transcript);
-        expect((await listSessionPendingInputs(f.scope)).total).toBe(0);
+        expect(transcript(f)).toEqual(resetTranscript);
+        expect(await pendingCount(f)).toBe(0);
         expect(execution.observer).not.toHaveBeenCalled();
         expect(agentCommandMock).not.toHaveBeenCalled();
         expect(attempts()).toBe(0);
-        await expect(fs.stat(sink)).rejects.toMatchObject({ code: "ENOENT" });
+        await expectAbsent(sink);
         expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
       } finally {
-        release.resolve();
-        await execution.cleanup();
-        await Promise.allSettled([request]);
-        await f.cleanup();
-        resetObserver.mockRestore();
-        cleanupObserver.mockRestore();
-        dispose();
+        await finish([request], [resetObserver, cleanupObserver]);
       }
     },
   );
@@ -638,8 +616,8 @@ describe("agent RPC real delegated-authority effects", () => {
         const params = { ...resetDelivery, bestEffortDeliver: mode === "best effort" };
         const response = await f.dispatch(params, null);
         await f.drain();
-        const committed = await readEntry(f);
-        const transcript = sessionAccessor.loadTranscriptEventsSync(f.scope);
+        const committed = await expectReset(f, before);
+        const resetTranscript = transcript(f);
         if (mode !== "best effort") {
           expect(response).toMatchObject({
             ok: false,
@@ -654,9 +632,7 @@ describe("agent RPC real delegated-authority effects", () => {
             },
           });
         }
-        expect(committed?.sessionId).toBe(f.sessionId);
-        expect(committed?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
-        expect(transcript).not.toEqual(f.before);
+        expect(resetTranscript).not.toEqual(f.before);
         expect(attempts()).toBe(1);
         const delivered = await readEffectFile(sink);
         expect(delivered?.toString()).toBe(
@@ -664,14 +640,11 @@ describe("agent RPC real delegated-authority effects", () => {
         );
         const retry = await f.dispatch(params, null);
         await f.drain();
-        // Reset idempotency must not turn a strict send failure into RPC success.
-        expect(retry).toMatchObject({ ok: response.ok, meta: { cached: true } });
-        expect(retry.error).toEqual(response.error);
-        expect(retry.payload).toEqual(response.payload);
+        expectCached(retry, response);
         expect(resetObserver).toHaveBeenCalledOnce();
         expect(await readEntry(f)).toEqual(committed);
-        expect(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(transcript);
-        expect((await listSessionPendingInputs(f.scope)).total).toBe(0);
+        expect(transcript(f)).toEqual(resetTranscript);
+        expect(await pendingCount(f)).toBe(0);
         expect(attempts()).toBe(1);
         expect(await readEffectFile(sink)).toEqual(delivered);
         expect(agentCommandMock).not.toHaveBeenCalled();
