@@ -138,25 +138,51 @@ it.each(["snapshot", "port-only"])(
   },
 );
 
-it.each(["snapshot", "per-pid"])(
-  "terminates an installed-argv-attributed older-release coordinator holder without a row (%s)",
+it.each(["snapshot", "per-pid", "overdue"])(
+  "terminates an attributed unpublished coordinator holder (%s)",
   async (discovery) => {
     await withPreparedGatewayTask(async ({ env }) => {
       spawnSync.mockReturnValue(nativeResult());
       const databasePath = resolveOpenClawStateSqlitePath(env);
-      const legacy = acquireGatewayStateOwner({ databasePath });
+      const overdue = discovery === "overdue";
       let forced = false;
-      readWindowsProcessStartTime.mockImplementation(() =>
-        forced ? null : Date.parse("2026-09-27T00:00:00.000Z"),
-      );
+      if (overdue) {
+        vi.spyOn(pidAlive, "isPidAlive").mockImplementation((pid) => pid === 4242 && !forced);
+        readWindowsProcessStartTime.mockReturnValue(100);
+        inspectPortUsageMock.mockResolvedValue({
+          port: 18789,
+          status: "free",
+          listeners: [],
+          hints: [],
+        });
+      } else {
+        busyGateway(INSTALLED_GATEWAY_COMMAND_LINE);
+      }
+      const custody = acquireGatewayStateOwner({
+        databasePath,
+        payload: overdue
+          ? {
+              pid: 4242,
+              startTime: 100,
+              ownerId: "stuck-startup",
+              role: "gateway",
+              createdAt: new Date(-300_001).toISOString(),
+              configPath: "fixture-config",
+            }
+          : undefined,
+      });
+      if (!overdue) {
+        readWindowsProcessStartTime.mockImplementation(() =>
+          forced ? null : Date.parse("2026-09-27T00:00:00.000Z"),
+        );
+      }
       let firstSnapshot = true;
-      busyGateway(INSTALLED_GATEWAY_COMMAND_LINE);
       spawnSync.mockImplementation((command, args) => {
         const executable = command.toLowerCase();
         if (executable.endsWith("taskkill.exe")) {
           forced = args?.includes("/F") ?? false;
           if (forced) {
-            legacy.release();
+            custody.release();
           }
           return nativeResult();
         }
@@ -167,6 +193,9 @@ it.each(["snapshot", "per-pid"])(
         if (firstSnapshot && discovery === "per-pid") {
           firstSnapshot = false;
           return nativeResult("", 1);
+        }
+        if (overdue) {
+          return nativeResult("[]");
         }
         const output = JSON.stringify([
           ...(!forced ? [{ ProcessId: 4242, CommandLine: INSTALLED_GATEWAY_COMMAND_LINE }] : []),
@@ -180,56 +209,8 @@ it.each(["snapshot", "per-pid"])(
         const successor = acquireGatewayStateOwner({ databasePath });
         successor.release();
       } finally {
-        legacy.release();
+        custody.release();
       }
     });
   },
 );
-
-it("stops the exact overdue state holder before lease publication without a listener or task argv", async () => {
-  await withPreparedGatewayTask(async ({ env }) => {
-    let stopped = false;
-    vi.spyOn(pidAlive, "isPidAlive").mockImplementation((pid) => pid === 4242 && !stopped);
-    readWindowsProcessStartTime.mockReturnValue(100);
-    inspectPortUsageMock.mockResolvedValue({
-      port: 18789,
-      status: "free",
-      listeners: [],
-      hints: [],
-    });
-    const custody = acquireGatewayStateOwner({
-      databasePath: resolveOpenClawStateSqlitePath(env),
-      payload: {
-        pid: 4242,
-        startTime: 100,
-        ownerId: "stuck-startup",
-        role: "gateway",
-        createdAt: new Date(-300_001).toISOString(),
-        configPath: "fixture-config",
-      },
-    });
-    spawnSync.mockImplementation((command, args) => {
-      const executable = command.toLowerCase();
-      if (executable.endsWith("taskkill.exe") && args?.includes("/F")) {
-        stopped = true;
-        custody.release();
-      }
-      const output = executable.endsWith("tasklist.exe")
-        ? stopped
-          ? "No tasks"
-          : '"node.exe","4242","Console","1","1 K"'
-        : "[]";
-      return nativeResult(output);
-    });
-    try {
-      await expect(terminateScheduledTaskGatewayListeners(env)).resolves.toEqual([4242]);
-      expect(taskkillPids()).toEqual([4242, 4242]);
-      const successor = acquireGatewayStateOwner({
-        databasePath: resolveOpenClawStateSqlitePath(env),
-      });
-      successor.release();
-    } finally {
-      custody.release();
-    }
-  });
-});
