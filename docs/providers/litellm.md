@@ -22,6 +22,8 @@ spend limits, and backend failover without changing OpenClaw config.
     default, or enter your proxy's URL. After the API key, choose a model returned by the proxy's
     `/v1/models` endpoint. The first advertised model is selected by default; you can also enter a
     model ID manually. If discovery fails, onboarding shows the reason and asks for a manual ID.
+    If the configuration changes while credentials are being prepared, setup stops before
+    sending the discovery request. Rerun onboarding with the updated configuration.
 
     For non-interactive setup against a remote proxy, pass the proxy URL explicitly:
 
@@ -96,7 +98,8 @@ spend limits, and backend failover without changing OpenClaw config.
 ```
 
 Interactive onboarding saves the chosen model as `litellm/<model-id>` and keeps authored model
-settings when that ID is already configured. Non-interactive onboarding retains its
+settings when that ID is already configured. Re-authentication keeps an existing default model
+and makes the selected model available. Non-interactive onboarding retains its
 `litellm/claude-opus-4-6` default. To change it after setup:
 
 ```bash

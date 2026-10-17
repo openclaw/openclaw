@@ -118,6 +118,7 @@ async function promptLitellmModel(ctx: ProviderAuthContext, apiKey: string): Pro
     // Discovery is advisory; keep request errors and credentials out of the prompt.
   }
   ctx.signal?.throwIfAborted();
+  ctx.assertCurrent?.();
   if (modelIds.length > 0) {
     const selected = await ctx.prompter.select({
       message: "LiteLLM model",

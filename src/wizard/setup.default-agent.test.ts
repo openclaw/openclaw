@@ -2,12 +2,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { WizardPrompter } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
+  readAuthority: vi.fn(),
   readSnapshot: vi.fn(),
+  modelAuth: vi.fn(),
   writeConfig: vi.fn(),
   ensureWorkspaceAndSessions: vi.fn(),
   setupSkills: vi.fn(),
@@ -28,6 +32,7 @@ vi.mock("./setup.shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./setup.shared.js")>();
   return {
     ...actual,
+    readSetupConfigAuthority: mocks.readAuthority,
     readSetupConfigFileSnapshot: mocks.readSnapshot,
     readValidSetupConfigFile: vi.fn(),
     requireRiskAcknowledgement: async ({ config }: { config: OpenClawConfig }) => config,
@@ -49,11 +54,7 @@ vi.mock("./setup.migration-import.js", () => ({
 }));
 
 vi.mock("./setup.model-auth.js", () => ({
-  runSetupModelAuthStep: async ({ config }: { config: OpenClawConfig }) => ({
-    config,
-    authProfiles: [],
-    persistAuthProfiles: async () => {},
-  }),
+  runSetupModelAuthStep: mocks.modelAuth,
 }));
 
 vi.mock("./setup.workspace.js", () => ({
@@ -109,7 +110,8 @@ vi.mock("../commands/onboard-helpers.js", () => ({
 }));
 
 vi.mock("../commands/onboard-skills.js", () => ({ setupSkills: mocks.setupSkills }));
-vi.mock("../config/config.js", () => ({
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
   resolveGatewayPort: () => 18789,
   readConfigFileSnapshot: mocks.readSnapshot,
 }));
@@ -162,6 +164,15 @@ function runWizard(opts: OnboardOptions = {}) {
 describe("runSetupWizard default-agent ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.readAuthority.mockImplementation(async () => ({
+      snapshot: await mocks.readSnapshot(),
+      assertCurrent: () => {},
+    }));
+    mocks.modelAuth.mockImplementation(async ({ config }: { config: OpenClawConfig }) => ({
+      config,
+      authProfiles: [],
+      persistAuthProfiles: async () => {},
+    }));
     const config = {
       wizard: { securityAcknowledgedAt: "2026-07-01T00:00:00.000Z" },
       agents: {
@@ -200,6 +211,48 @@ describe("runSetupWizard default-agent ownership", () => {
       async ({ config: nextConfig }: { config: OpenClawConfig }) => nextConfig,
     );
     mocks.finalizeSetup.mockResolvedValue({ launchedTui: false });
+  });
+
+  it("revokes provider requests when config changes during an earlier setup prompt", async () => {
+    await withOpenClawTestState({ label: "setup-parent-authority" }, async (state) => {
+      const config: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        models: {
+          providers: {
+            litellm: { baseUrl: "http://127.0.0.1:19479/original/v1", models: [] },
+          },
+        },
+      };
+      await state.writeConfig(config);
+      const { readSetupConfigAuthority } =
+        await vi.importActual<typeof import("./setup.shared.js")>("./setup.shared.js");
+      mocks.readAuthority.mockImplementation(readSetupConfigAuthority);
+      vi.mocked(prompter.select).mockImplementationOnce(async () => {
+        await state.writeConfig({
+          ...config,
+          models: {
+            providers: {
+              litellm: { baseUrl: "http://127.0.0.1:19479/replacement/v1", models: [] },
+            },
+          },
+        });
+        return false;
+      });
+      const sendCredentialRequest = vi.fn();
+      mocks.modelAuth.mockImplementationOnce(
+        async ({ assertCurrent }: { assertCurrent?: () => void }) => {
+          assertCurrent?.();
+          sendCredentialRequest();
+          return { config, authProfiles: [], persistAuthProfiles: async () => {} };
+        },
+      );
+
+      await expect(runWizard({ authChoice: "litellm-api-key" })).rejects.toBeInstanceOf(
+        ConfigMutationConflictError,
+      );
+      expect(sendCredentialRequest).not.toHaveBeenCalled();
+      expect(mocks.writeConfig).not.toHaveBeenCalled();
+    });
   });
 
   it("keeps concurrent gateway settings while carrying the telemetry choice", async () => {

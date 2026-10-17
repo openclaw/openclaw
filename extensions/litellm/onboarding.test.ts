@@ -69,6 +69,7 @@ async function configure(
     prompter?: WizardPrompter;
     ref?: boolean;
     credentialOnly?: boolean;
+    assertCurrent?: () => void;
   } = {},
 ) {
   const config = params.config ?? {};
@@ -88,6 +89,7 @@ async function configure(
     prompter: params.prompter ?? createPrompter(),
     secretInputMode: params.ref ? "ref" : "plaintext",
     credentialOnly: params.credentialOnly,
+    assertCurrent: params.assertCurrent,
     isRemote: false,
     openUrl: async () => {
       throw new Error("Unexpected browser auth");
@@ -168,6 +170,31 @@ describe("LiteLLM discovery-backed onboarding", () => {
   it("propagates cancellation instead of applying the hosted default", async () => {
     await expect(configure({ prompter: createPrompter({ cancel: true }) })).rejects.toBeInstanceOf(
       WizardCancelledError,
+    );
+  });
+
+  it("propagates revoked authority instead of offering manual entry", async () => {
+    const revoked = new Error("Setup config changed; rerun setup.");
+    let current = true;
+    discoveryFetch.mockImplementation(async () => {
+      current = false;
+      throw revoked;
+    });
+    const prompter = createPrompter();
+
+    await expect(
+      configure({
+        prompter,
+        assertCurrent: () => {
+          if (!current) {
+            throw revoked;
+          }
+        },
+      }),
+    ).rejects.toBe(revoked);
+    expect(prompter.select).not.toHaveBeenCalled();
+    expect(prompter.text).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: "LiteLLM model ID" }),
     );
   });
 
