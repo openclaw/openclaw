@@ -15,12 +15,16 @@ import * as databaseContext from "./update-command-database-context.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as runtimeRecovery from "./update-command-node-runtime-resolution.js";
 import * as packageUpdate from "./update-command-package.js";
-import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
+import {
+  expectedRuntimeRecoverySteps,
+  stubNodeRuntime,
+} from "./update-command-runtime-recovery.test-support.js";
 import { updateCommand } from "./update-command.js";
 
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
 
 const { fixture } = installFreshUpdateFixture();
+const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
 beforeEach(() => {
   // This synthetic installation has no plugins to include in its recovery baseline.
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
@@ -64,25 +68,25 @@ it.each([
       .mockRejectedValue(new Error("A retained service runtime must not be provisioned"));
     vi.spyOn(shared, "resolveNodeRunner").mockReturnValue("/current/node");
     vi.spyOn(gatewaySupervision, "assertGatewayServiceMutationAllowed").mockReturnValue();
-    const service = createMockGatewayService({
-      isLoaded: async () => true,
-      readRuntime: async () => ({
-        status: running ? "running" : "stopped",
-        systemd: { managerUid: 2001 },
+    vi.spyOn(daemonService, "resolveGatewayService").mockReturnValue(
+      createMockGatewayService({
+        isLoaded: async () => true,
+        readRuntime: async () => ({
+          status: running ? "running" : "stopped",
+          systemd: { managerUid: 2001 },
+        }),
+        readCommand: async () =>
+          owned
+            ? {
+                programArguments: [
+                  "/service/node",
+                  path.join(fixture.root, "dist/index.mjs"),
+                  "gateway",
+                ],
+              }
+            : null,
       }),
-    });
-    vi.spyOn(service, "readCommand").mockResolvedValue(
-      owned
-        ? {
-            programArguments: [
-              "/service/node",
-              path.join(fixture.root, "dist/index.mjs"),
-              "gateway",
-            ],
-          }
-        : null,
     );
-    vi.spyOn(daemonService, "resolveGatewayService").mockReturnValue(service);
     vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockImplementation(async (node) => ({
       status: "supported",
       version: compatible || node === "/current/node" ? "26.1.0" : "24.16.0",
@@ -138,31 +142,13 @@ it.each([
     const notes = json ? JSON.stringify(preview) : log.mock.calls.flat().join("\n");
     const replacement = !compatible && restart && owned && (!current || (running && refresh));
     if (!compatible && !replacement) {
-      const recoverySteps = [
-        {
-          kind: "preserve-context",
-          instruction:
-            "Use the same service account and keep the existing OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH overrides throughout recovery.",
-        },
-        {
-          kind: "select-runtime",
-          instruction:
-            "Install and select Node 26.1.0 using your system package manager or https://nodejs.org/en/download.",
-        },
-        ...(current && (!running || !refresh)
-          ? [
-              {
-                kind: "select-runtime",
-                instruction:
-                  "The Gateway service still selects /service/node. Before continuing, have its deployment owner select Node 26.1.0 in the service definition while retaining its installation, service account, and state/config selectors. Switching the shell runtime alone does not update that service definition.",
-              },
-            ]
-          : []),
-        {
-          kind: "continue-update",
-          command: `node ${process.platform === "win32" ? quotePowerShellArg(path.join(fixture.root, "openclaw.mjs")) : quoteCliArg(path.join(fixture.root, "openclaw.mjs"))} update --tag 2026.9.2`,
-        },
-      ];
+      const recoverySteps = expectedRuntimeRecoverySteps(
+        "26.1.0",
+        fixture.root,
+        "2026.9.2",
+        undefined,
+        current && (!running || !refresh) ? "/service/node" : undefined,
+      );
       const message = [
         "Recovery:",
         ...recoverySteps.map(
@@ -223,7 +209,7 @@ it.each([
             steps: expect.arrayContaining([
               expect.objectContaining({
                 stderrTail: expect.stringContaining(
-                  `node ${process.platform === "win32" ? quotePowerShellArg(path.join(fixture.root, "openclaw.mjs")) : quoteCliArg(path.join(fixture.root, "openclaw.mjs"))} update --tag 2026.9.2`,
+                  `node ${quote(path.join(fixture.root, "openclaw.mjs"))} update --tag 2026.9.2`,
                 ),
                 failureFacts: expect.arrayContaining([
                   expect.objectContaining({

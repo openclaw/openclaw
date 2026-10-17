@@ -20,6 +20,48 @@ import { updateCommand } from "./update-command.js";
 
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
 const { fixture } = installFreshUpdateFixture();
+const packageRelative =
+  process.platform === "win32" ? "node_modules/openclaw" : "lib/node_modules/openclaw";
+const packageRoot = (prefix: string) => path.join(prefix, packageRelative);
+const binRoot = (prefix: string) =>
+  process.platform === "win32" ? prefix : path.join(prefix, "bin");
+const entrypoint = (root: string) => path.join(root, "openclaw.mjs");
+const contents = (root: string) => fs.readFile(entrypoint(root), "utf8");
+const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+const opts = { tag: "2026.9.2", json: true, yes: true };
+
+async function writePackage(root: string, version: string, label: string) {
+  await fs.mkdir(root, { recursive: true });
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "openclaw", version }),
+  );
+  await fs.writeFile(entrypoint(root), `// ${label} deployment\n`);
+}
+
+async function writeLauncher(prefix: string, root: string, foreign?: "missing" | "live") {
+  const bin = binRoot(prefix);
+  await fs.mkdir(bin, { recursive: true });
+  if (process.platform === "win32") {
+    await fs.writeFile(
+      path.join(bin, "openclaw.cmd"),
+      foreign === "missing"
+        ? '@"%~dp0\\unrelated-launcher" %*\n'
+        : foreign === "live"
+          ? '@"%~dp0\\..\\unrelated-launcher" %*\n'
+          : '@"%~dp0\\node_modules\\openclaw\\openclaw.mjs" %*\n',
+    );
+  } else {
+    await fs.symlink(
+      foreign ? path.join(path.dirname(prefix), "unrelated-launcher") : entrypoint(root),
+      path.join(bin, "openclaw"),
+    );
+  }
+}
+
+function expectRefusalMessage(result: unknown, message: string) {
+  expect(result).toHaveProperty("failedStep.stderrTail", expect.stringContaining(message));
+}
 
 it("keeps npm updates on the resolved installation when another npm prefix is occupied", async () => {
   vi.mocked(packageDestination.inspectNpmGlobalDestination).mockRestore();
@@ -27,30 +69,14 @@ it("keeps npm updates on the resolved installation when another npm prefix is oc
   const base = path.dirname(fixture.root);
   const originalPrefix = path.join(base, ".npm-global");
   const foreignPrefix = path.join(base, ".nvm", "versions", "node", "v24.21.0");
-  const packageRelative =
-    process.platform === "win32" ? "node_modules/openclaw" : "lib/node_modules/openclaw";
-  fixture.root = path.join(originalPrefix, packageRelative);
-  const foreignRoot = path.join(foreignPrefix, packageRelative);
-  for (const [prefix, root, contents] of [
-    [originalPrefix, fixture.root, "// original deployment\n"],
-    [foreignPrefix, foreignRoot, "// unrelated deployment\n"],
+  fixture.root = packageRoot(originalPrefix);
+  const foreignRoot = packageRoot(foreignPrefix);
+  for (const [prefix, root, label] of [
+    [originalPrefix, fixture.root, "original"],
+    [foreignPrefix, foreignRoot, "unrelated"],
   ] as const) {
-    await fs.mkdir(root, { recursive: true });
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
-    );
-    await fs.writeFile(path.join(root, "openclaw.mjs"), contents);
-    const bin = process.platform === "win32" ? prefix : path.join(prefix, "bin");
-    await fs.mkdir(bin, { recursive: true });
-    if (process.platform === "win32") {
-      await fs.writeFile(
-        path.join(bin, "openclaw.cmd"),
-        '@"%~dp0\\node_modules\\openclaw\\openclaw.mjs" %*\n',
-      );
-    } else {
-      await fs.symlink(path.join(root, "openclaw.mjs"), path.join(bin, "openclaw"));
-    }
+    await writePackage(root, "2026.9.3", label);
+    await writeLauncher(prefix, root);
   }
   vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) =>
     createCommandResult({
@@ -59,17 +85,13 @@ it("keeps npm updates on the resolved installation when another npm prefix is oc
   );
   vi.spyOn(plugins, "preflightConfiguredNpmPluginTargets").mockResolvedValue([]);
 
-  await updateCommand({ tag: "2026.9.2", json: true, yes: true, dryRun: true });
+  await updateCommand({ ...opts, dryRun: true });
 
   expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
     expect.objectContaining({ dryRun: true, root: fixture.root }),
   );
-  expect(await fs.readFile(path.join(fixture.root, "openclaw.mjs"), "utf8")).toBe(
-    "// original deployment\n",
-  );
-  expect(await fs.readFile(path.join(foreignRoot, "openclaw.mjs"), "utf8")).toBe(
-    "// unrelated deployment\n",
-  );
+  expect(await contents(fixture.root)).toBe("// original deployment\n");
+  expect(await contents(foreignRoot)).toBe("// unrelated deployment\n");
 });
 
 it.each([
@@ -96,27 +118,18 @@ it.each([
     const managedForeign = destination === "foreign-managed" || destination === "foreign-sealed";
     const selected = path.join(base, "selected");
     const prefixAlias = path.join(base, "selected-alias");
-    const newRoot = path.join(
-      selected,
-      process.platform === "win32" ? "node_modules" : "lib/node_modules",
-      "openclaw",
-    );
-    const bin = process.platform === "win32" ? selected : path.join(selected, "bin");
+    const newRoot = packageRoot(selected);
+    const bin = binRoot(selected);
     await fs.mkdir(path.dirname(newRoot), { recursive: true });
     await fs.mkdir(bin, { recursive: true });
     await fs.writeFile(path.join(oldRoot, "openclaw.mjs"), "// original deployment\n");
-    if (
+    const separatePackage =
       destination === "foreign" ||
       destination === "unverified" ||
       destination === "claimed" ||
-      managedForeign
-    ) {
-      await fs.mkdir(newRoot);
-      await fs.writeFile(
-        path.join(newRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.8.1" }),
-      );
-      await fs.writeFile(path.join(newRoot, "openclaw.mjs"), "// foreign deployment\n");
+      managedForeign;
+    if (separatePackage) {
+      await writePackage(newRoot, "2026.8.1", "foreign");
     } else if (
       destination === "prefix-alias" ||
       destination === "foreign-launcher" ||
@@ -137,23 +150,15 @@ it.each([
       await fs.writeFile(path.join(base, "unrelated-launcher"), "// unrelated launcher\n");
     }
     if (destination !== "empty" && !unknown) {
-      if (process.platform === "win32") {
-        await fs.writeFile(
-          path.join(bin, "openclaw.cmd"),
-          destination === "foreign-launcher"
-            ? '@"%~dp0\\unrelated-launcher" %*\n'
-            : destination === "foreign-live-launcher"
-              ? '@"%~dp0\\..\\unrelated-launcher" %*\n'
-              : '@"%~dp0\\node_modules\\openclaw\\openclaw.mjs" %*\n',
-        );
-      } else {
-        await fs.symlink(
-          destination === "foreign-launcher" || destination === "foreign-live-launcher"
-            ? path.join(base, "unrelated-launcher")
-            : path.join(newRoot, "openclaw.mjs"),
-          path.join(bin, "openclaw"),
-        );
-      }
+      await writeLauncher(
+        selected,
+        newRoot,
+        destination === "foreign-launcher"
+          ? "missing"
+          : destination === "foreign-live-launcher"
+            ? "live"
+            : undefined,
+      );
     }
     if (destination === "claimed" || destination === "unverified" || managedForeign) {
       mockSystemAccountHome();
@@ -190,7 +195,6 @@ it.each([
       destination === "unverified" ||
       destination === "foreign-launcher" ||
       destination === "foreign-live-launcher";
-    const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
 
     if (destination === "EACCES" || destination === "ENOTDIR") {
       const lstat = fs.lstat;
@@ -206,11 +210,7 @@ it.each([
       );
     }
     const selectedPrefix = destination === "prefix-alias" ? prefixAlias : selected;
-    const selectedRoot = path.join(
-      selectedPrefix,
-      process.platform === "win32" ? "node_modules" : "lib/node_modules",
-      "openclaw",
-    );
+    const selectedRoot = packageRoot(selectedPrefix);
     vi.mocked(updateGlobal.resolveGlobalInstallTarget).mockResolvedValue({
       manager: "npm",
       command: "npm",
@@ -220,7 +220,7 @@ it.each([
     });
     const writes = vi.spyOn(packageUpdate, "runPackageInstallUpdate");
     vi.spyOn(plugins, "preflightConfiguredNpmPluginTargets").mockResolvedValue([]);
-    const continuation = updateCommand({ tag: "2026.9.2", json: true, yes: true, dryRun: true });
+    const continuation = updateCommand({ ...opts, dryRun: true });
     if (foreign || unknown) {
       await expect(continuation).rejects.toMatchObject({
         result: { reason: "global-install-foreign-destination" },
@@ -267,13 +267,10 @@ it.each([
     if (destination === "foreign" || destination === "unverified") {
       const launcher = path.join(bin, process.platform === "win32" ? "openclaw.cmd" : "openclaw");
       const entry = await fs.realpath(path.join(newRoot, "openclaw.mjs"));
-      expect(result).toMatchObject({
-        failedStep: {
-          stderrTail: expect.stringContaining(
-            `Selected npm destination ${selected} is occupied by another OpenClaw installation: package ${newRoot}; launcher ${launcher} -> ${entry}. No selected managed service could be verified as owning this destination. No installation was attempted. Switch the runtime back and run \`node ${quote(path.join(oldRoot, "openclaw.mjs"))} update\`. Alternatively, ask the destination's deployment owner to resolve its package/launcher and select it for the intended service using their deployment procedure. Do not overwrite it.`,
-          ),
-        },
-      });
+      expectRefusalMessage(
+        result,
+        `Selected npm destination ${selected} is occupied by another OpenClaw installation: package ${newRoot}; launcher ${launcher} -> ${entry}. No selected managed service could be verified as owning this destination. No installation was attempted. Switch the runtime back and run \`node ${quote(path.join(oldRoot, "openclaw.mjs"))} update\`. Alternatively, ask the destination's deployment owner to resolve its package/launcher and select it for the intended service using their deployment procedure. Do not overwrite it.`,
+      );
     }
     if (managedForeign) {
       const launcher = path.join(bin, process.platform === "win32" ? "openclaw.cmd" : "openclaw");
@@ -282,41 +279,29 @@ it.each([
         destination === "foreign-sealed"
           ? "Alternatively, ask the destination's deployment owner to resolve its package/launcher and select it for the intended service using their deployment procedure. Do not overwrite it."
           : `Alternatively, if the destination's owner agrees to use it for this service, explicitly select it with \`node ${quote(entry)} gateway install --force --runtime-path ${quote(process.execPath)}\` and rerun the update. This changes the service binding; it does not grant ownership of another deployment's package.`;
-      expect(result).toMatchObject({
-        failedStep: {
-          stderrTail: expect.stringContaining(
-            `Selected npm destination ${selected} is occupied by another OpenClaw installation: package ${newRoot}; launcher ${launcher} -> ${entry}. The selected service (${path.join(base, "selected-gateway.service")}) uses ${path.join(oldRoot, "openclaw.mjs")}; it does not own this destination. No installation was attempted. Switch the runtime back and run \`node ${quote(path.join(oldRoot, "openclaw.mjs"))} update\`. ${alternative}`,
-          ),
-        },
-      });
+      expectRefusalMessage(
+        result,
+        `Selected npm destination ${selected} is occupied by another OpenClaw installation: package ${newRoot}; launcher ${launcher} -> ${entry}. The selected service (${path.join(base, "selected-gateway.service")}) uses ${path.join(oldRoot, "openclaw.mjs")}; it does not own this destination. No installation was attempted. Switch the runtime back and run \`node ${quote(path.join(oldRoot, "openclaw.mjs"))} update\`. ${alternative}`,
+      );
     }
     if (unknown) {
       const prefix = unresolved ? "(unresolved installation layout)" : selected;
-      expect(result).toMatchObject({
-        failedStep: {
-          stderrTail: expect.stringContaining(
-            `Selected npm destination ${prefix} could not be inspected (${unknownCause}); ownership is unknown. No installation was attempted. Fix inspection permissions on this prefix for the service account, or restore the selected package layout, then run \`node ${quote(path.join(oldRoot, "openclaw.mjs"))} update\`. Alternatively, ask the deployment owner to verify the layout and explicitly select the intended installation using its existing deployment procedure.`,
-          ),
-        },
-      });
+      expectRefusalMessage(
+        result,
+        `Selected npm destination ${prefix} could not be inspected (${unknownCause}); ownership is unknown. No installation was attempted. Fix inspection permissions on this prefix for the service account, or restore the selected package layout, then run \`node ${quote(path.join(oldRoot, "openclaw.mjs"))} update\`. Alternatively, ask the deployment owner to verify the layout and explicitly select the intended installation using its existing deployment procedure.`,
+      );
     }
     if (foreign || unknown) {
-      await expect(updateCommand({ tag: "2026.9.2", json: true, yes: true })).rejects.toEqual(
-        new ExitError(1),
-      );
+      await expect(updateCommand(opts)).rejects.toEqual(new ExitError(1));
       expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
         expect.objectContaining({ reason: "global-install-foreign-destination" }),
       );
     }
     expect(writes).not.toHaveBeenCalled();
     expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-    expect(await fs.readFile(path.join(oldRoot, "openclaw.mjs"), "utf8")).toBe(
-      "// original deployment\n",
-    );
+    expect(await contents(oldRoot)).toBe("// original deployment\n");
     if (destination === "foreign" || destination === "unverified" || managedForeign) {
-      expect(await fs.readFile(path.join(newRoot, "openclaw.mjs"), "utf8")).toBe(
-        "// foreign deployment\n",
-      );
+      expect(await contents(newRoot)).toBe("// foreign deployment\n");
     }
   },
 );

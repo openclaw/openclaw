@@ -33,6 +33,7 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 const versions = { state: 1, agent: 1 };
+const admittedSchemas = { packageSchemaPreflight: { incompatible: [], indeterminate: [] } };
 let root: string;
 let env: NodeJS.ProcessEnv;
 let source: string;
@@ -94,6 +95,16 @@ function runUpdate() {
   });
 }
 
+function expectPrimaryFailure(failure: unknown, primary: Error) {
+  expect(failure).toBeInstanceOf(AggregateError);
+  if (!(failure instanceof AggregateError)) {
+    throw failure;
+  }
+  expect(failure.cause).toBe(primary);
+  expect(failure.errors[0]).toBe(primary);
+  return failure;
+}
+
 it.each(["DELETE", "WAL"])(
   "admits online update without acquiring an unrelated snapshot (%s)",
   async (journalMode) => {
@@ -105,9 +116,7 @@ it.each(["DELETE", "WAL"])(
         expect(fs.statSync(`${source}-wal`).size).toBeGreaterThan(32);
         expect(fs.existsSync(`${source}-shm`)).toBe(true);
       }
-      await expect(runUpdate()).resolves.toMatchObject({
-        packageSchemaPreflight: { incompatible: [], indeterminate: [] },
-      });
+      await expect(runUpdate()).resolves.toMatchObject(admittedSchemas);
       expect(snapshots.prepareSqliteReadOnlyLocation).not.toHaveBeenCalled();
       expect(fs.existsSync(prepared.location)).toBe(true);
     } finally {
@@ -155,9 +164,7 @@ it.each(["reader", "removal", "rejection"] as const)(
     } finally {
       removal?.mockRestore();
     }
-    await expect(runUpdate()).resolves.toMatchObject({
-      packageSchemaPreflight: { incompatible: [], indeterminate: [] },
-    });
+    await expect(runUpdate()).resolves.toMatchObject(admittedSchemas);
     expect(fs.existsSync(prepared.location)).toBe(false);
     expect(fs.readFileSync(source)).toEqual(original);
   },
@@ -196,9 +203,7 @@ it("admits normal forward update only after snapshot cleanup has settled", async
       expect(await unrelated.cleanupAsync()).toBe(true);
     }
   }
-  await expect(update).resolves.toMatchObject({
-    packageSchemaPreflight: { incompatible: [], indeterminate: [] },
-  });
+  await expect(update).resolves.toMatchObject(admittedSchemas);
   expect(fs.existsSync(prepared.location)).toBe(false);
 });
 
@@ -228,13 +233,7 @@ it.each([false, true])(
     }
     const failure = await inspection.catch((error: unknown) => error);
     if (retained) {
-      expect(failure).toBeInstanceOf(AggregateError);
-      if (!(failure instanceof AggregateError)) {
-        throw failure;
-      }
-      expect(failure.cause).toBe(cancellation);
-      expect(failure.errors[0]).toBe(cancellation);
-      expect(failure.errors[1]).toMatchObject({
+      expect(expectPrimaryFailure(failure, cancellation).errors[1]).toMatchObject({
         message: expect.stringMatching(/snapshot cleanup failed/i),
       });
     } else {
@@ -266,14 +265,9 @@ it.each(["inspection", "close"] as const)(
         };
       },
     }).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(AggregateError);
-    if (!(failure instanceof AggregateError)) {
-      throw failure;
-    }
-    expect(failure.cause).toBe(primary);
-    expect(failure.errors).toEqual([primary, secondary]);
-    expect(failure.errors[0]).toBe(primary);
-    expect(failure.errors[1]).toBe(secondary);
+    const aggregate = expectPrimaryFailure(failure, primary);
+    expect(aggregate.errors).toEqual([primary, secondary]);
+    expect(aggregate.errors[1]).toBe(secondary);
     if (phase === "close") {
       expect(inspectedDatabase?.isOpen).toBe(false);
     }
