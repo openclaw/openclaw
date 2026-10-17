@@ -25,42 +25,36 @@ function setPackageRoot(root: string, name = "openclaw") {
   state.entries.set(abs(path.join(root, "package.json")), JSON.stringify({ name }));
 }
 
-const mockFsModule = () => {
-  const wrapped = {
-    ...actualFs,
-    readFileSync: (p: string, encoding?: BufferEncoding) => {
-      if (!isFixturePath(p)) {
-        return actualFs.readFileSync(p, { encoding });
-      }
-      const content = readFixture(p);
-      return encoding ? content : Buffer.from(content, "utf-8");
-    },
-    realpathSync: (p: string) =>
-      isFixturePath(p)
-        ? (() => {
-            const resolved = abs(p);
-            if (state.realpathErrors.has(resolved)) {
-              throw new Error(`ENOENT: no such file or directory, realpath '${p}'`);
-            }
-            return state.realpaths.get(resolved) ?? resolved;
-          })()
-        : actualFs.realpathSync(p),
-  };
-  return wrapped;
-};
+const mockFsModule = () => ({
+  ...actualFs,
+  readFileSync: (p: string, encoding?: BufferEncoding) => {
+    if (!isFixturePath(p)) {
+      return actualFs.readFileSync(p, { encoding });
+    }
+    const content = readFixture(p);
+    return encoding ? content : Buffer.from(content, "utf-8");
+  },
+  realpathSync: (p: string) => {
+    if (!isFixturePath(p)) {
+      return actualFs.realpathSync(p);
+    }
+    const resolved = abs(p);
+    if (state.realpathErrors.has(resolved)) {
+      throw new Error(`ENOENT: no such file or directory, realpath '${p}'`);
+    }
+    return state.realpaths.get(resolved) ?? resolved;
+  },
+});
 
-const mockFsPromisesModule = () => {
-  const wrapped = {
-    ...actualFsPromises,
-    readFile: async (p: string, encoding?: BufferEncoding) => {
-      if (!isFixturePath(p)) {
-        return await actualFsPromises.readFile(p, { encoding });
-      }
-      return readFixture(p);
-    },
-  };
-  return wrapped;
-};
+const mockFsPromisesModule = () => ({
+  ...actualFsPromises,
+  readFile: async (p: string, encoding?: BufferEncoding) => {
+    if (!isFixturePath(p)) {
+      return await actualFsPromises.readFile(p, { encoding });
+    }
+    return readFixture(p);
+  },
+});
 
 function readFixture(p: string) {
   const content = state.entries.get(abs(p));

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -32,9 +32,12 @@ beforeEach(async () => {
 afterEach(() => {
   __setFsSafeTestHooksForTest(undefined);
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 const writeLocal = (file = indexPath) => fs.writeFile(file, "export const local = true;\n", "utf8");
+const expectContent = (file: string, content: string) =>
+  expect(fs.readFile(file, "utf8")).resolves.toBe(content);
 async function capture() {
   const plan = await captureLocalPackageOverrides({ packageRoot });
   expect(plan).not.toBeNull();
@@ -48,6 +51,28 @@ function expectOutcome(
   applied = 0,
 ) {
   expect(result).toMatchObject({ status, applied });
+}
+function expectConflict(
+  result: Awaited<ReturnType<typeof reapply>>,
+  file: string,
+  reason = "target-inspection-failed",
+) {
+  expectOutcome(result, "conflict");
+  expect(result.conflicts).toEqual([{ path: file, reason }]);
+}
+async function prepareReplay(kind: "modified" | "deleted" | "added", file = indexPath) {
+  if (kind === "deleted") {
+    await fs.rm(file);
+  } else {
+    await writeLocal(file);
+  }
+  const plan = await capture();
+  await writePackageRoot(packageRoot, "2.0.0");
+  if (kind === "added") {
+    await fs.rm(file);
+    await writePackageDistInventory(packageRoot);
+  }
+  return plan;
 }
 
 function onDistInspection(action: () => Promise<void>, afterStaging = false) {
@@ -67,397 +92,309 @@ function onDistInspection(action: () => Promise<void>, afterStaging = false) {
   return () => expect(changed).toBe(true);
 }
 
-describe("local package overrides", () => {
-  it("rejects recovery roots inside the package being updated", async () => {
-    await writeLocal();
+it("rejects recovery roots inside the package being updated", async () => {
+  await writeLocal();
 
-    const priorStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = path.join(packageRoot, "state");
-    try {
-      await expect(captureLocalPackageOverrides({ packageRoot })).rejects.toThrow(
-        "local override recovery root must be outside package root",
-      );
-    } finally {
-      if (priorStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = priorStateDir;
-      }
-    }
-    await expectPathMissing(path.join(packageRoot, "state"));
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "does not capture override payloads through symlinked source ancestors",
-    async () => {
-      const preservedDistPath = path.join(packageRoot, "preserved-dist");
-      const outsideRoot = path.join(base, "outside");
-      const outsideIndexPath = path.join(outsideRoot, "index.js");
-      await writeLocal();
-      await fs.mkdir(outsideRoot);
-      await fs.writeFile(outsideIndexPath, "export const outside = true;\n", "utf8");
-
-      let ancestorChanged = false;
-      __setFsSafeTestHooksForTest({
-        afterPreOpenLstat: async (filePath) => {
-          if (!ancestorChanged && path.basename(filePath) === path.basename(indexPath)) {
-            ancestorChanged = true;
-            await fs.rename(distPath, preservedDistPath);
-            await fs.symlink(outsideRoot, distPath, "dir");
-          }
-        },
-      });
-
-      await expect(captureLocalPackageOverrides({ packageRoot })).rejects.toMatchObject({
-        code: expect.stringMatching(/outside-workspace|path-mismatch|symlink/),
-      });
-      expect(ancestorChanged).toBe(true);
-      await expect(fs.readFile(outsideIndexPath, "utf8")).resolves.toBe(
-        "export const outside = true;\n",
-      );
-    },
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(packageRoot, "state"));
+  await expect(captureLocalPackageOverrides({ packageRoot })).rejects.toThrow(
+    "local override recovery root must be outside package root",
   );
+  await expectPathMissing(path.join(packageRoot, "state"));
+});
 
-  it("does not classify baseline files replaced by directories as deletions", async () => {
-    await fs.rm(indexPath);
-    await fs.mkdir(indexPath);
+it("does not classify baseline files replaced by directories as deletions", async () => {
+  await fs.rm(indexPath);
+  await fs.mkdir(indexPath);
 
-    await expect(captureLocalPackageOverrides({ packageRoot })).rejects.toMatchObject({
-      code: "not-file",
+  await expect(captureLocalPackageOverrides({ packageRoot })).rejects.toMatchObject({
+    code: "not-file",
+  });
+  expect((await fs.stat(indexPath)).isDirectory()).toBe(true);
+});
+
+async function checkAddedTopology(phase: "preflight" | "publication" | "root") {
+  const relative = phase === "preflight" ? "dist/local/added.js" : "dist/local.js";
+  const added = path.join(packageRoot, relative);
+  const outside = path.join(base, "outside");
+  const preserved =
+    phase === "root" ? path.join(base, "preserved") : path.join(packageRoot, "preserved-dist");
+  await fs.mkdir(path.dirname(added), { recursive: true });
+  let plan: Awaited<ReturnType<typeof capture>>;
+  if (phase === "preflight") {
+    await writeLocal(added);
+    plan = await capture();
+  } else {
+    plan = await prepareReplay("added", added);
+  }
+  let expectSwap: (() => void) | undefined;
+  if (phase === "root") {
+    const replacement = path.join(base, "replacement");
+    await writePackageRoot(replacement, "2.0.0");
+    expectSwap = onDistInspection(async () => {
+      await fs.rename(packageRoot, preserved);
+      await fs.rename(replacement, packageRoot);
     });
-    expect((await fs.stat(indexPath)).isDirectory()).toBe(true);
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "does not reapply added overrides through symlinked target ancestors",
-    async () => {
-      const outsideRoot = path.join(base, "outside");
-      const localAddedPath = path.join(packageRoot, "dist", "local", "added.js");
-      await fs.mkdir(path.dirname(localAddedPath), { recursive: true });
-      await fs.writeFile(localAddedPath, "export const local = true;\n", "utf8");
-
-      const plan = await capture();
-      await fs.rm(path.join(packageRoot, "dist"), { recursive: true, force: true });
-      await fs.mkdir(outsideRoot, { recursive: true });
-      await fs.symlink(outsideRoot, path.join(packageRoot, "dist"), "dir");
-
-      const result = await reapply(plan);
-
-      expectOutcome(result, "conflict");
-      expect(result.conflicts).toEqual([
-        { path: "dist/local/added.js", reason: "target-inspection-failed" },
-      ]);
-      await expectPathMissing(path.join(outsideRoot, "local", "added.js"));
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "does not publish overrides when a target ancestor swaps at the final mutation boundary",
-    async () => {
-      const preservedDistPath = path.join(packageRoot, "preserved-dist");
-      const localAddedPath = path.join(distPath, "local.js");
-      const outsideRoot = path.join(base, "outside");
-      const outsideAddedPath = path.join(outsideRoot, "local.js");
-      await fs.writeFile(localAddedPath, "export const local = true;\n", "utf8");
-
-      const plan = await capture();
-      await writePackageRoot(packageRoot, "2.0.0");
-      await fs.rm(localAddedPath);
-      await writePackageDistInventory(packageRoot);
-      await fs.mkdir(outsideRoot);
-
-      const expectSwap = onDistInspection(async () => {
-        await fs.rename(distPath, preservedDistPath);
-        await fs.symlink(outsideRoot, distPath, "dir");
+  } else {
+    await fs.mkdir(outside, { recursive: true });
+    if (phase === "preflight") {
+      await fs.rm(distPath, { recursive: true, force: true });
+      await fs.symlink(outside, distPath, "dir");
+    } else {
+      expectSwap = onDistInspection(async () => {
+        await fs.rename(distPath, preserved);
+        await fs.symlink(outside, distPath, "dir");
       }, true);
+    }
+  }
+  const result = await reapply(plan);
+  expectSwap?.();
+  if (phase === "publication") {
+    expectOutcome(result, "error");
+  } else {
+    expectConflict(result, relative);
+  }
+  if (phase === "root") {
+    await expectPathMissing(added);
+    await expectPathMissing(path.join(preserved, relative));
+  } else {
+    await expectPathMissing(
+      path.join(outside, phase === "preflight" ? "local/added.js" : "local.js"),
+    );
+  }
+}
+it.runIf(process.platform !== "win32").each(["preflight", "publication"] as const)(
+  "refuses added override topology changes at %s",
+  checkAddedTopology,
+);
+it("refuses a changed package root for added overrides", () => checkAddedTopology("root"));
 
-      const result = await reapply(plan);
+it.runIf(process.platform !== "win32")(
+  "does not reapply deleted overrides after a target ancestor becomes an outside symlink",
+  async () => {
+    const redirectRoot = path.join(base, "outside");
+    const redirectIndexPath = path.join(redirectRoot, "index.js");
+    const redirectAddedPath = path.join(redirectRoot, "local.js");
+    const plan = await prepareReplay("deleted");
+    await fs.mkdir(redirectRoot, { recursive: true });
+    await fs.writeFile(redirectIndexPath, "export const redirect = true;\n", "utf8");
 
-      expectSwap();
-      expectOutcome(result, "error");
-      await expectPathMissing(outsideAddedPath);
-    },
-  );
-
-  it("does not reapply added overrides after the package root changes", async () => {
-    const replacementRoot = path.join(base, "replacement");
-    const preservedRoot = path.join(base, "preserved");
-    const addedPath = path.join(packageRoot, "dist", "local.js");
-    await fs.writeFile(addedPath, "export const local = true;\n", "utf8");
-
-    const plan = await capture();
-    await writePackageRoot(packageRoot, "2.0.0");
-    await fs.rm(addedPath);
-    await writePackageDistInventory(packageRoot);
-    await writePackageRoot(replacementRoot, "2.0.0");
-
-    const expectSwap = onDistInspection(async () => {
-      await fs.rename(packageRoot, preservedRoot);
-      await fs.rename(replacementRoot, packageRoot);
+    const realMkdtemp = fs.mkdtemp.bind(fs);
+    vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefixArg, options) => {
+      if (prefixArg.endsWith(`${path.sep}rollback-`)) {
+        await fs.rm(path.join(packageRoot, "dist"), { recursive: true, force: true });
+        await fs.symlink(redirectRoot, path.join(packageRoot, "dist"), "dir");
+      }
+      return await realMkdtemp(prefixArg, options);
     });
 
     const result = await reapply(plan);
 
-    expectSwap();
-    expectOutcome(result, "conflict");
-    expect(result.conflicts).toEqual([
-      { path: "dist/local.js", reason: "target-inspection-failed" },
-    ]);
-    await expectPathMissing(path.join(packageRoot, "dist", "local.js"));
-    await expectPathMissing(path.join(preservedRoot, "dist", "local.js"));
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "does not reapply deleted overrides after a target ancestor becomes an outside symlink",
-    async () => {
-      const redirectRoot = path.join(base, "outside");
-      const redirectIndexPath = path.join(redirectRoot, "index.js");
-      const redirectAddedPath = path.join(redirectRoot, "local.js");
-      await fs.rm(indexPath);
-
-      const plan = await capture();
-      await writePackageRoot(packageRoot, "2.0.0");
-      await fs.mkdir(redirectRoot, { recursive: true });
-      await fs.writeFile(redirectIndexPath, "export const redirect = true;\n", "utf8");
-
-      const realMkdtemp = fs.mkdtemp.bind(fs);
-      vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefixArg, options) => {
-        if (prefixArg.endsWith(`${path.sep}rollback-`)) {
-          await fs.rm(path.join(packageRoot, "dist"), { recursive: true, force: true });
-          await fs.symlink(redirectRoot, path.join(packageRoot, "dist"), "dir");
-        }
-        return await realMkdtemp(prefixArg, options);
-      });
-
-      const result = await reapply(plan);
-
-      expectOutcome(result, "error");
-      await expect(fs.readFile(redirectIndexPath, "utf8")).resolves.toBe(
-        "export const redirect = true;\n",
-      );
-      await expectPathMissing(redirectAddedPath);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "does not hash replay targets after they are replaced with symlinks",
-    async () => {
-      const outsidePath = path.join(base, "outside.js");
-      await writeLocal();
-
-      const plan = await capture();
-      await writePackageRoot(packageRoot, "2.0.0");
-      await fs.writeFile(outsidePath, "export const outside = true;\n", "utf8");
-      const realIndexPath = await fs.realpath(indexPath);
-
-      let targetReplaced = false;
-      __setFsSafeTestHooksForTest({
-        afterPreOpenLstat: async (filePath) => {
-          if (!targetReplaced && filePath === realIndexPath) {
-            targetReplaced = true;
-            await fs.rm(indexPath);
-            await fs.symlink(outsidePath, indexPath, "file");
-          }
-        },
-      });
-
-      const result = await reapply(plan);
-
-      expect(targetReplaced).toBe(true);
-      expectOutcome(result, "conflict");
-      expect(result.conflicts).toEqual([
-        { path: "dist/index.js", reason: "target-inspection-failed" },
-      ]);
-      await expect(fs.readFile(outsidePath, "utf8")).resolves.toBe(
-        "export const outside = true;\n",
-      );
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "does not reapply deleted overrides over upstream mode changes",
-    async () => {
-      await fs.chmod(indexPath, 0o644);
-      await writePackageDistInventory(packageRoot);
-      await fs.rm(indexPath);
-
-      const plan = await capture();
-      await fs.writeFile(indexPath, "export {};\n", "utf8");
-      await fs.chmod(indexPath, 0o755);
-      await writePackageDistInventory(packageRoot);
-
-      const result = await reapply(plan);
-
-      expectOutcome(result, "conflict");
-      expect(result.conflicts).toEqual([{ path: "dist/index.js", reason: "target-changed" }]);
-      await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export {};\n");
-      expect((await fs.stat(indexPath)).mode & 0o777).toBe(0o755);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "ignores non-executable mode normalization during capture",
-    async () => {
-      await fs.chmod(indexPath, 0o644);
-      await writePackageDistInventory(packageRoot);
-      await fs.chmod(indexPath, 0o600);
-
-      await expect(captureLocalPackageOverrides({ packageRoot })).resolves.toBeNull();
-    },
-  );
-
-  it("captures and reapplies locally added files excluded from package files", async () => {
-    const localFiles = new Map([
-      ["dist/index.js.map", '{"version":3,"sources":["index.ts"]}\n'],
-      ["dist/local-runtime.js", "export const local = true;\n"],
-      ["dist/local-assets/theme.css", "body {}\n"],
-      ["dist/local-assets/runtime.wasm", "local wasm\n"],
-      ["dist/local-assets/settings.json", '{"local":true}\n'],
-    ]);
-    const writePackageJson = async (version: string) => {
-      await fs.writeFile(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({
-          name: "openclaw",
-          version,
-          files: ["dist/", "!dist/**/*.map", "!dist/local-runtime.js", "!dist/local-assets/**"],
-        }),
-        "utf8",
-      );
-    };
-    await writePackageJson("1.0.0");
-    await writePackageDistInventory(packageRoot);
-    for (const [relativePath, content] of localFiles) {
-      const filePath = path.join(packageRoot, relativePath);
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, content, "utf8");
-    }
-
-    const plan = await capture();
-    expect(plan?.result.added).toBe(localFiles.size);
-
-    await writePackageRoot(packageRoot, "2.0.0");
-    await writePackageJson("2.0.0");
-    for (const relativePath of localFiles.keys()) {
-      await fs.rm(path.join(packageRoot, relativePath));
-    }
-    await writePackageDistInventory(packageRoot);
-
-    const result = await reapply(plan);
-
-    expectOutcome(result, "applied", localFiles.size);
-    for (const [relativePath, content] of localFiles) {
-      await expect(fs.readFile(path.join(packageRoot, relativePath), "utf8")).resolves.toBe(
-        content,
-      );
-    }
-  });
-
-  it("does not reapply modified overrides after an unrecorded installed byte change", async () => {
-    await writeLocal();
-
-    const plan = await capture();
-    await fs.writeFile(indexPath, "export {};\n", "utf8");
-    await writePackageDistInventory(packageRoot);
-    await fs.writeFile(indexPath, "export const changedAfterVerify = true;\n", "utf8");
-
-    const result = await reapply(plan);
-
-    expectOutcome(result, "conflict");
-    expect(result.conflicts).toEqual([{ path: "dist/index.js", reason: "target-changed" }]);
-    await expect(fs.readFile(indexPath, "utf8")).resolves.toBe(
-      "export const changedAfterVerify = true;\n",
-    );
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "does not overwrite a modified target changed after replay preflight",
-    async () => {
-      await writeLocal();
-
-      const plan = await capture();
-      await writePackageRoot(packageRoot, "2.0.0");
-
-      const realMkdtemp = fs.mkdtemp.bind(fs);
-      let targetChanged = false;
-      vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefixArg, options) => {
-        const result = await realMkdtemp(prefixArg, options);
-        if (!targetChanged && prefixArg.endsWith(`${path.sep}rollback-`)) {
-          targetChanged = true;
-          await fs.writeFile(indexPath, "export const concurrent = true;\n", "utf8");
-        }
-        return result;
-      });
-
-      const result = await reapply(plan);
-
-      expect(targetChanged).toBe(true);
-      expectOutcome(result, "error");
-      await expect(fs.readFile(indexPath, "utf8")).resolves.toBe(
-        "export const concurrent = true;\n",
-      );
-    },
-  );
-
-  it("does not overwrite a target created at the final replacement boundary", async () => {
-    await writeLocal();
-
-    const plan = await capture();
-    await writePackageRoot(packageRoot, "2.0.0");
-
-    const expectChange = onDistInspection(async () => {
-      await fs.writeFile(indexPath, "export const concurrent = true;\n", "utf8");
-    }, true);
-
-    const result = await reapply(plan);
-
-    expectChange();
     expectOutcome(result, "error");
-    await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export const concurrent = true;\n");
-    expect(
-      (await fs.readdir(distPath)).filter((entry) => entry.startsWith(".openclaw-override-")),
-    ).toEqual([]);
-  });
+    await expectContent(redirectIndexPath, "export const redirect = true;\n");
+    await expectPathMissing(redirectAddedPath);
+  },
+);
 
-  it("does not report a deletion applied when the target is recreated during cleanup", async () => {
-    await fs.rm(indexPath);
-
-    const plan = await capture();
-    await writePackageRoot(packageRoot, "2.0.0");
-
-    let targetRecreated = false;
+it.runIf(process.platform !== "win32").each(["source-ancestor", "replay-target"] as const)(
+  "does not follow a swapped %s symlink",
+  async (boundary) => {
+    const outside = path.join(base, "outside");
+    const outsideIndex = path.join(outside, "index.js");
+    const preserved = path.join(packageRoot, "preserved-dist");
+    await writeLocal();
+    await fs.mkdir(outside);
+    await fs.writeFile(outsideIndex, "export const outside = true;\n", "utf8");
+    const plan = boundary === "replay-target" ? await capture() : null;
+    if (plan) {
+      await writePackageRoot(packageRoot, "2.0.0");
+    }
+    const realIndex = await fs.realpath(indexPath);
+    let changed = false;
     __setFsSafeTestHooksForTest({
-      beforeRootFallbackMutation: async (operation, targetPath) => {
-        if (
-          !targetRecreated &&
-          operation === "remove" &&
-          path.basename(targetPath).startsWith(".openclaw-override-previous-")
-        ) {
-          targetRecreated = true;
-          await fs.writeFile(indexPath, "export const concurrent = true;\n", "utf8");
+      afterPreOpenLstat: async (file) => {
+        const targeted =
+          boundary === "source-ancestor"
+            ? path.basename(file) === path.basename(indexPath)
+            : file === realIndex;
+        if (!changed && targeted) {
+          changed = true;
+          if (boundary === "source-ancestor") {
+            await fs.rename(distPath, preserved);
+            await fs.symlink(outside, distPath, "dir");
+          } else {
+            await fs.rm(indexPath);
+            await fs.symlink(outsideIndex, indexPath, "file");
+          }
         }
       },
     });
+    if (boundary === "source-ancestor") {
+      await expect(captureLocalPackageOverrides({ packageRoot })).rejects.toMatchObject({
+        code: expect.stringMatching(/outside-workspace|path-mismatch|symlink/),
+      });
+    } else {
+      const result = await reapply(plan);
+      expectConflict(result, "dist/index.js");
+    }
+    expect(changed).toBe(true);
+    await expectContent(outsideIndex, "export const outside = true;\n");
+  },
+);
 
-    const result = await reapply(plan);
-
-    expect(targetRecreated).toBe(true);
-    expectOutcome(result, "error");
-    await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("export const concurrent = true;\n");
-  });
-
-  it("treats deletions already satisfied by the updated package as a no-op", async () => {
+it.runIf(process.platform !== "win32")(
+  "does not reapply deleted overrides over upstream mode changes",
+  async () => {
+    await fs.chmod(indexPath, 0o644);
+    await writePackageDistInventory(packageRoot);
     await fs.rm(indexPath);
 
     const plan = await capture();
-    await writePackageRoot(packageRoot, "2.0.0");
-    await fs.rm(indexPath);
+    await fs.writeFile(indexPath, "export {};\n", "utf8");
+    await fs.chmod(indexPath, 0o755);
     await writePackageDistInventory(packageRoot);
 
     const result = await reapply(plan);
 
-    expectOutcome(result, "applied");
-    expect(result.conflicts).toEqual([]);
-    await expectPathMissing(indexPath);
+    expectConflict(result, "dist/index.js", "target-changed");
+    await expectContent(indexPath, "export {};\n");
+    expect((await fs.stat(indexPath)).mode & 0o777).toBe(0o755);
+  },
+);
+
+it.runIf(process.platform !== "win32")(
+  "ignores non-executable mode normalization during capture",
+  async () => {
+    await fs.chmod(indexPath, 0o644);
+    await writePackageDistInventory(packageRoot);
+    await fs.chmod(indexPath, 0o600);
+
+    await expect(captureLocalPackageOverrides({ packageRoot })).resolves.toBeNull();
+  },
+);
+
+it("captures and reapplies locally added files excluded from package files", async () => {
+  const localFiles = new Map([
+    ["dist/index.js.map", '{"version":3,"sources":["index.ts"]}\n'],
+    ["dist/local-runtime.js", "export const local = true;\n"],
+    ["dist/local-assets/theme.css", "body {}\n"],
+    ["dist/local-assets/runtime.wasm", "local wasm\n"],
+    ["dist/local-assets/settings.json", '{"local":true}\n'],
+  ]);
+  const writePackageJson = async (version: string) => {
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version,
+        files: ["dist/", "!dist/**/*.map", "!dist/local-runtime.js", "!dist/local-assets/**"],
+      }),
+      "utf8",
+    );
+  };
+  await writePackageJson("1.0.0");
+  await writePackageDistInventory(packageRoot);
+  for (const [relativePath, content] of localFiles) {
+    const filePath = path.join(packageRoot, relativePath);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, content, "utf8");
+  }
+
+  const plan = await capture();
+  expect(plan?.result.added).toBe(localFiles.size);
+
+  await writePackageRoot(packageRoot, "2.0.0");
+  await writePackageJson("2.0.0");
+  for (const relativePath of localFiles.keys()) {
+    await fs.rm(path.join(packageRoot, relativePath));
+  }
+  await writePackageDistInventory(packageRoot);
+
+  const result = await reapply(plan);
+
+  expectOutcome(result, "applied", localFiles.size);
+  for (const [relativePath, content] of localFiles) {
+    await expect(fs.readFile(path.join(packageRoot, relativePath), "utf8")).resolves.toBe(content);
+  }
+});
+
+async function checkConcurrentChange(
+  phase: "unrecorded" | "preflight" | "replacement" | "deletion-cleanup",
+) {
+  if (phase === "deletion-cleanup") {
+    await fs.rm(indexPath);
+  } else {
+    await writeLocal();
+  }
+  const plan = await capture();
+  if (phase === "unrecorded") {
+    await fs.writeFile(indexPath, "export {};\n", "utf8");
+    await writePackageDistInventory(packageRoot);
+  } else {
+    await writePackageRoot(packageRoot, "2.0.0");
+  }
+  const bytes =
+    phase === "unrecorded"
+      ? "export const changedAfterVerify = true;\n"
+      : "export const concurrent = true;\n";
+  const change = vi.fn(async () => {
+    await fs.writeFile(indexPath, bytes, "utf8");
   });
+  if (phase === "unrecorded") {
+    await change();
+  } else if (phase === "preflight") {
+    const mkdtemp = fs.mkdtemp.bind(fs);
+    vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
+      const result = await mkdtemp(prefix, options);
+      if (!change.mock.calls.length && prefix.endsWith(`${path.sep}rollback-`)) {
+        await change();
+      }
+      return result;
+    });
+  } else if (phase === "replacement") {
+    onDistInspection(change, true);
+  } else {
+    __setFsSafeTestHooksForTest({
+      beforeRootFallbackMutation: async (operation, target) => {
+        if (
+          !change.mock.calls.length &&
+          operation === "remove" &&
+          path.basename(target).startsWith(".openclaw-override-previous-")
+        ) {
+          await change();
+        }
+      },
+    });
+  }
+  const result = await reapply(plan);
+  expect(change).toHaveBeenCalledOnce();
+  if (phase === "unrecorded") {
+    expectConflict(result, "dist/index.js", "target-changed");
+  } else {
+    expectOutcome(result, "error");
+  }
+  await expectContent(indexPath, bytes);
+  if (phase === "replacement") {
+    expect(
+      (await fs.readdir(distPath)).filter((entry) => entry.startsWith(".openclaw-override-")),
+    ).toEqual([]);
+  }
+}
+it.each(["unrecorded", "replacement", "deletion-cleanup"] as const)(
+  "preserves concurrent bytes during %s",
+  checkConcurrentChange,
+);
+it.runIf(process.platform !== "win32")("preserves concurrent bytes after preflight", () =>
+  checkConcurrentChange("preflight"),
+);
+
+it("treats deletions already satisfied by the updated package as a no-op", async () => {
+  const plan = await prepareReplay("deleted");
+  await fs.rm(indexPath);
+  await writePackageDistInventory(packageRoot);
+
+  const result = await reapply(plan);
+
+  expectOutcome(result, "applied");
+  expect(result.conflicts).toEqual([]);
+  await expectPathMissing(indexPath);
 });

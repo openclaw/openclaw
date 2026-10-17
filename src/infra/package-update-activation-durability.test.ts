@@ -27,8 +27,10 @@ import { createPackageSwapFixture } from "./package-update-swap.test-support.js"
 
 const fixture = createPackageActivationLifetimeFixture();
 let root: string;
+let anchor: string;
 beforeEach(() => {
   ({ root } = fixture.setup());
+  anchor = "";
 });
 afterEach(async () => {
   try {
@@ -38,16 +40,32 @@ afterEach(async () => {
   }
 });
 
-async function recover(anchor: string) {
-  const { operationId } = openPackageActivationJournal(anchor).read().descriptor;
-  await expect(runPackageActivationRecovery(anchor, "repair", operationId)).resolves.toMatchObject({
+const prepare = (custody?: (retained: boolean) => void) =>
+  fixture.prepare((value) => {
+    anchor = value;
+  }, custody);
+const readJournal = (location = anchor) => openPackageActivationJournal(location).read();
+function expectHelperUnlink(location: string) {
+  const record = readJournal(location);
+  expect(record).toMatchObject({
+    phase: "anchor-retired",
+    intent: { kind: "unlink-helper", identity: record.descriptor.helperIdentity },
+  });
+}
+async function recover(location: string) {
+  const { operationId } = openPackageActivationJournal(location).read().descriptor;
+  await expect(
+    runPackageActivationRecovery(location, "repair", operationId),
+  ).resolves.toMatchObject({
     phase: "aborted",
   });
-  await expect(runPackageActivationRecovery(anchor, "retire", operationId)).resolves.toMatchObject({
+  await expect(
+    runPackageActivationRecovery(location, "retire", operationId),
+  ).resolves.toMatchObject({
     phase: "complete",
   });
-  expect(fs.existsSync(anchor)).toBe(false);
-  expect(fs.existsSync(resolvePackageActivationHelper(anchor))).toBe(false);
+  expect(fs.existsSync(location)).toBe(false);
+  expect(fs.existsSync(resolvePackageActivationHelper(location))).toBe(false);
 }
 
 describe.skipIf(process.platform === "win32")("package preparation durability", () => {
@@ -80,7 +98,7 @@ describe.skipIf(process.platform === "win32")("package preparation durability", 
           nodeSharedSqlite: false,
         };
       });
-      const anchor = resolvePackageActivationAnchor(f.packageRoot);
+      anchor = resolvePackageActivationAnchor(f.packageRoot);
       const onPrepared = vi.fn();
       const onCustody = vi.fn();
       const reader = createPackageIntegrityReader();
@@ -124,131 +142,113 @@ describe.skipIf(process.platform === "win32")("package preparation durability", 
   ])("recovers the exact %s terminal cut", async (cut) => {
     const f = await fixture.prepare();
     await runPackageActivationRecovery(f.anchor, "repair", f.operationId);
+    const helper = resolvePackageActivationHelper(f.anchor);
+    const read = () => readJournal(f.anchor);
+    const retire = () => runPackageActivationRecovery(f.anchor, "retire", f.operationId);
+    const status = () => readPackageActivationStatus(f.anchor, f.operationId);
+    const complete = (result: ReturnType<typeof retire>) =>
+      expect(result).resolves.toMatchObject({ phase: "complete" });
     const failure = new Error(cut);
-    const removeAnchor = fsp.rmdir.bind(fsp);
-    const unlink = fsp.unlink.bind(fsp);
-    const sync = durability.syncDirectory;
-    let interrupted = false;
-    let refuseSync = true;
-    let anchorSyncRefusals = 0;
+    const rmdir = fsp.rmdir.bind(fsp),
+      unlink = fsp.unlink.bind(fsp);
+    let refuseSync = true,
+      anchorSyncRefusals = 0;
     let helperSync: durability.DirectorySyncOutcome | undefined;
-    vi.spyOn(fsp, "rmdir").mockImplementation(async (file, ...args) => {
-      if (file === f.anchor && (cut === "anchor-before" || cut === "anchor-after")) {
-        interrupted = true;
-        if (cut === "anchor-after") {
-          await removeAnchor(file, ...args);
-        }
-        throw failure;
-      }
-      await removeAnchor(file, ...args);
-    });
-    vi.spyOn(fsp, "unlink").mockImplementation(async (file) => {
+    const remove = async (
+      kind: "anchor" | "helper",
+      file: unknown,
+      effect: () => Promise<void>,
+    ) => {
       if (
-        file === resolvePackageActivationHelper(f.anchor) &&
-        (cut === "helper-before" || cut === "helper-after")
+        file === (kind === "anchor" ? f.anchor : helper) &&
+        (cut === `${kind}-before` || cut === `${kind}-after`)
       ) {
-        const record = openPackageActivationJournal(f.anchor).read();
-        expect(record.phase).toBe("anchor-retired");
-        expect(record.intent).toMatchObject({
-          kind: "unlink-helper",
-          identity: record.descriptor.helperIdentity,
-        });
-        interrupted = true;
-        if (cut === "helper-after") {
-          await unlink(file);
+        if (kind === "helper") {
+          expectHelperUnlink(f.anchor);
+        }
+        if (cut.endsWith("-after")) {
+          await effect();
         }
         throw failure;
       }
-      await unlink(file);
-    });
+      await effect();
+    };
+    vi.spyOn(fsp, "rmdir").mockImplementation((file, ...args) =>
+      remove("anchor", file, () => rmdir(file, ...args)),
+    );
+    vi.spyOn(fsp, "unlink").mockImplementation((file) =>
+      remove("helper", file, () => unlink(file)),
+    );
+    const sync = durability.syncDirectory;
     const syncSpy = vi.spyOn(durability, "syncDirectory").mockImplementation(async (directory) => {
-      const helper = resolvePackageActivationHelper(f.anchor);
-      if (
-        cut === "anchor-sync" &&
-        directory === path.dirname(f.anchor) &&
-        !fs.existsSync(f.anchor)
-      ) {
-        expect(openPackageActivationJournal(f.anchor).read()).toMatchObject({
-          phase: "retiring",
-          intent: { kind: "remove-anchor", selected: "previous" },
-        });
-        interrupted = true;
-        if (refuseSync) {
-          anchorSyncRefusals++;
-          throw failure;
+      const anchorCut =
+        cut === "anchor-sync" && directory === path.dirname(f.anchor) && !fs.existsSync(f.anchor);
+      const helperCut =
+        cut === "helper-sync" && directory === path.dirname(helper) && !fs.existsSync(helper);
+      if (anchorCut || helperCut) {
+        if (anchorCut) {
+          expect(read()).toMatchObject({
+            phase: "retiring",
+            intent: { kind: "remove-anchor", selected: "previous" },
+          });
+        } else {
+          expectHelperUnlink(f.anchor);
         }
-      }
-      if (cut === "helper-sync" && directory === path.dirname(helper) && !fs.existsSync(helper)) {
-        const record = openPackageActivationJournal(f.anchor).read();
-        expect(record.phase).toBe("anchor-retired");
-        expect(record.intent).toMatchObject({
-          kind: "unlink-helper",
-          identity: record.descriptor.helperIdentity,
-        });
-        interrupted = true;
         if (refuseSync) {
-          throw Object.assign(failure, { code: "EIO" });
+          if (anchorCut) {
+            anchorSyncRefusals++;
+          }
+          throw helperCut ? Object.assign(failure, { code: "EIO" }) : failure;
         }
-        helperSync = await sync(directory);
-        return helperSync;
+        const result = await sync(directory);
+        if (helperCut) {
+          helperSync = result;
+        }
+        return result;
       }
       return sync(directory);
     });
-    await expect(runPackageActivationRecovery(f.anchor, "retire", f.operationId)).rejects.toBe(
-      failure,
-    );
-    expect(interrupted).toBe(true);
+    await expect(retire()).rejects.toBe(failure);
     vi.mocked(fsp.rmdir).mockRestore();
     vi.mocked(fsp.unlink).mockRestore();
     if (cut === "helper-sync" || cut === "anchor-sync") {
-      const pending = openPackageActivationJournal(f.anchor).read();
+      const pending = read();
       if (cut === "anchor-sync") {
         expect(fs.existsSync(f.anchor)).toBe(false);
-        expect(fs.existsSync(resolvePackageActivationHelper(f.anchor))).toBe(true);
+        expect(fs.existsSync(helper)).toBe(true);
       }
-      await expect(runPackageActivationRecovery(f.anchor, "retire", f.operationId)).rejects.toBe(
-        failure,
-      );
+      await expect(retire()).rejects.toBe(failure);
       if (cut === "helper-sync") {
-        await expect(readPackageActivationStatus(f.anchor, f.operationId)).resolves.toMatchObject({
-          phase: "complete",
-        });
+        await complete(status());
       } else {
         expect(anchorSyncRefusals).toBe(2);
       }
-      expect(openPackageActivationJournal(f.anchor).read()).toEqual(pending);
+      expect(read()).toEqual(pending);
       refuseSync = false;
     }
-    await expect(
-      runPackageActivationRecovery(f.anchor, "retire", f.operationId),
-    ).resolves.toMatchObject({
-      phase: "complete",
-    });
+    await complete(retire());
     if (cut === "helper-sync") {
       expect(helperSync).toEqual({ status: "synced" });
     } else if (cut === "anchor-sync") {
-      expect(fs.existsSync(resolvePackageActivationHelper(f.anchor))).toBe(false);
+      expect(fs.existsSync(helper)).toBe(false);
       expect(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).toContain(
         '"version":"1.0.0"',
       );
     }
     syncSpy.mockRestore();
-    await expect(readPackageActivationStatus(f.anchor, f.operationId)).resolves.toMatchObject({
-      phase: "complete",
-    });
+    await complete(status());
     expect(fs.existsSync(f.anchor)).toBe(false);
   });
 
   it.each(["source", "destination"] as const)(
     "retains and retries custody when the %s parent cannot be persisted",
     async (side) => {
-      let anchor = "";
       const failure = new Error("directory persistence failed");
       const sync = durability.syncDirectory;
       let refused = 0;
       const spy = vi.spyOn(durability, "syncDirectory").mockImplementation(async (directory) => {
         if (anchor && fs.existsSync(path.join(anchor, "candidate"))) {
-          const record = openPackageActivationJournal(anchor).read();
+          const record = readJournal();
           const candidate = record.descriptor.preparation.find(
             (entry) => entry.name === "candidate",
           )!;
@@ -266,11 +266,7 @@ describe.skipIf(process.platform === "win32")("package preparation durability", 
         }
         return sync(directory);
       });
-      await expect(
-        fixture.prepare((value) => {
-          anchor = value;
-        }),
-      ).rejects.toBe(failure);
+      await expect(prepare()).rejects.toBe(failure);
       const journal = openPackageActivationJournal(anchor);
       const before = journal.read();
       expect(before.phase).toBe("preparing");
@@ -293,11 +289,9 @@ describe.skipIf(process.platform === "win32")("package preparation durability", 
   it.each(["private", "published"] as const)(
     "retains safe cleanup custody after %s control directory sync failure",
     async (cut) => {
-      let anchor = "";
       const failure = new Error("control persistence failed");
       const custody = vi.fn();
       const sync = durability.syncDirectorySync;
-      let refused = false;
       const spy = vi.spyOn(durability, "syncDirectorySync").mockImplementation((directory) => {
         if (
           anchor &&
@@ -308,24 +302,18 @@ describe.skipIf(process.platform === "win32")("package preparation durability", 
               directory === path.dirname(anchor) &&
               fs.existsSync(resolvePackageActivationControl(anchor))))
         ) {
-          refused = true;
           throw failure;
         }
         return sync(directory);
       });
-      await expect(
-        fixture.prepare((value) => {
-          anchor = value;
-        }, custody),
-      ).rejects.toBe(failure);
-      expect(refused).toBe(true);
+      await expect(prepare(custody)).rejects.toBe(failure);
       spy.mockRestore();
       if (cut === "private") {
         expect(custody).not.toHaveBeenCalled();
         expect(fs.existsSync(resolvePackageActivationControl(anchor))).toBe(false);
       } else {
         expect(custody.mock.calls).toEqual([[true]]);
-        expect(openPackageActivationJournal(anchor).read().phase).toBe("preparing");
+        expect(readJournal().phase).toBe("preparing");
         await recover(anchor);
       }
     },
@@ -342,7 +330,6 @@ describe.skipIf(process.platform === "win32")("package preparation durability", 
       const previousReceipt = first
         ? fs.readFileSync(resolvePackageActivationJournalPath(first.anchor))
         : undefined;
-      let anchor = "";
       let helperFd: number | undefined;
       let helperIdentity: fs.BigIntStats | undefined;
       const open = fs.openSync;
