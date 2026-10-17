@@ -523,14 +523,10 @@ describe("auditGatewayServiceConfig systemd", () => {
       );
     try {
       const result = await auditUnit();
-      expect(result.issues.find((entry) => entry.code === codes.systemdUnitBackupUnsafe)).toEqual({
-        code: codes.systemdUnitBackupUnsafe,
-        message:
-          "Systemd service backup could not be inspected; check the path and retry the service audit.",
-        detail: backupPath,
-        level: "recommended",
-      });
-      expect(result.ok).toBe(false);
+      expect(result.definitionDriftError).toBe(
+        `Systemd service backup could not be inspected; check ${backupPath} and retry the service audit.`,
+      );
+      expect(systemdCodes(result)).toEqual([]);
     } finally {
       inspection.mockRestore();
     }

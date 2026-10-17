@@ -122,13 +122,13 @@ export async function auditSystemdUnit(
   inspectRewrite = false,
 ) {
   const unitPath = resolveSystemdUnitPath(env);
+  const backupInspectionError = await auditSystemdUnitBackup(unitPath, issues);
   let definitionDriftError =
     definitionDrift &&
     command?.sourcePath &&
     path.resolve(command.sourcePath) !== path.resolve(unitPath)
       ? "Systemd definition inspection skipped: the selected service is outside the managed user-unit path."
-      : undefined;
-  await auditSystemdUnitBackup(unitPath, issues);
+      : backupInspectionError;
   let content;
   try {
     content = await fs.readFile(unitPath, "utf8");
@@ -355,13 +355,7 @@ async function auditSystemdUnitBackup(unitPath: string, issues: ServiceConfigIss
     stat = await fs.lstat(backupPath);
   } catch (error) {
     if (!hasErrnoCode(error, "ENOENT")) {
-      issues.push({
-        code: SYSTEMD_SERVICE_AUDIT_CODES.systemdUnitBackupUnsafe,
-        message:
-          "Systemd service backup could not be inspected; check the path and retry the service audit.",
-        detail: backupPath,
-        level: "recommended",
-      });
+      return `Systemd service backup could not be inspected; check ${backupPath} and retry the service audit.`;
     }
     return;
   }
