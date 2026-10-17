@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
@@ -116,27 +115,19 @@ it("persists real chat, greeting, and reset flows through the audit owner", asyn
     };
 
     const sql: string[] = [];
-    let sqlMs = 0;
     const observers = (["get", "all", "run", "iterate"] as const).map((method) => {
       const original = StatementSync.prototype[method];
       return vi.spyOn(StatementSync.prototype, method).mockImplementation(
         new Proxy(original, {
           apply(target, receiver: StatementSync, args) {
-            const measured = /\bdiagnostic_events\b/.test(receiver.sourceSQL);
-            const started = performance.now();
-            try {
-              return Reflect.apply(target, receiver, args);
-            } finally {
-              if (measured) {
-                sql.push(receiver.sourceSQL);
-                sqlMs += performance.now() - started;
-              }
+            if (/\bdiagnostic_events\b/.test(receiver.sourceSQL)) {
+              sql.push(receiver.sourceSQL);
             }
+            return Reflect.apply(target, receiver, args);
           },
         }),
       );
     });
-    const started = performance.now();
     try {
       await callChat({ sessionId: "conversation", message: "Record this turn" });
       expect(engines[0]?.seedHistory).toHaveBeenCalledWith([
@@ -157,13 +148,6 @@ it("persists real chat, greeting, and reset flows through the audit owner", asyn
         "Recorded answer",
       ]);
       expect(await readTranscriptTailAsync(30, { afterLastReset: true })).toEqual([]);
-      console.log(
-        JSON.stringify({
-          auditMainStatements: sql.length,
-          auditMainSqlMs: sqlMs,
-          wallMs: performance.now() - started,
-        }),
-      );
       expect(sql).toEqual([]);
     } finally {
       observers.forEach((observer) => observer.mockRestore());

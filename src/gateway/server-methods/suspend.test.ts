@@ -20,25 +20,24 @@ vi.mock("../server-active-work.js", () => ({
   createGatewayServerActiveWorkInspectors: vi.fn(() => ({ getChatRuns: vi.fn(() => 0) })),
 }));
 
-function invoke(method: keyof typeof suspendHandlers, params: unknown) {
+async function invoke(method: keyof typeof suspendHandlers, params: unknown) {
   const respond = vi.fn();
   const pauseScheduling = vi.fn();
   const resumeScheduling = vi.fn();
   const warn = vi.fn();
   const info = vi.fn();
   const handler = expectDefined(suspendHandlers[method], "suspendHandlers[method] test invariant");
-  return Promise.resolve(
-    handler({
-      params,
-      respond,
-      context: {
-        cron: { pauseScheduling, resumeScheduling },
-        logGateway: { warn, info },
-        chatAbortControllers: new Map(),
-        chatQueuedTurns: new Map(),
-      },
-    } as unknown as Parameters<typeof handler>[0]),
-  ).then(() => ({ respond, pauseScheduling, resumeScheduling, info }));
+  await handler({
+    params,
+    respond,
+    context: {
+      cron: { pauseScheduling, resumeScheduling },
+      logGateway: { warn, info },
+      chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
+    },
+  } as unknown as Parameters<typeof handler>[0]);
+  return { respond, pauseScheduling, resumeScheduling, info };
 }
 
 beforeEach(() => {

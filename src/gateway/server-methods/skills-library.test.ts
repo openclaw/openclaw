@@ -62,6 +62,17 @@ const image = {
   encoding: "base64" as const,
 };
 
+const libraryError = (code: string, details = {}) => [
+  false,
+  undefined,
+  expect.objectContaining({ details: { code, ...details } }),
+];
+
+async function expectNoImage(root: string) {
+  const files = await fs.readdir(root, { recursive: true, withFileTypes: true });
+  expect(files.filter((entry) => entry.isFile() && entry.name === "pixel.png")).toEqual([]);
+}
+
 function retainedFilesHarness() {
   const root = temps.make();
   currentStateDir = root;
@@ -109,12 +120,14 @@ function retainedFilesHarness() {
     });
     return respond.mock.calls[0]!;
   };
-  return { alice, bob, actor, cfg, call, root };
+  const create = (slug: string, files: Parameters<typeof saveSkillLibrary>[1]["files"] = [image]) =>
+    call("skills.library.save", { slug, content, expectedRevision: null, files });
+  return { alice, bob, actor, cfg, call, create, root };
 }
 
 describe("skill library retained support files", () => {
   it("rejects client file creation at the real filesystem mutation admission", async () => {
-    const { call, cfg, root } = retainedFilesHarness();
+    const { create, cfg, root } = retainedFilesHarness();
     const openRoot = fsSafe.root;
     let admissionReached = false;
     let imageCreated = false;
@@ -130,15 +143,15 @@ describe("skill library retained support files", () => {
           defaults?.assertBeforeMutation?.();
         },
       });
-      const create = opened.create.bind(opened);
+      const createFile = opened.create.bind(opened);
       opened.create = async (relativePath, data, options) => {
         creatingImage = relativePath.endsWith("pixel.png");
         try {
           // Keep the byte/string and streaming overloads intact in this pass-through.
           if (typeof data === "string" || Buffer.isBuffer(data)) {
-            await create(relativePath, data, options);
+            await createFile(relativePath, data, options);
           } else {
-            await create(relativePath, data, options);
+            await createFile(relativePath, data, options);
           }
           if (creatingImage) {
             imageCreated = true;
@@ -149,12 +162,7 @@ describe("skill library retained support files", () => {
       };
       return opened;
     });
-    const result = await call("skills.library.save", {
-      slug: "file-policy",
-      content,
-      expectedRevision: null,
-      files: [image],
-    });
+    const result = await create("file-policy");
     expect.soft(result[0]).toBe(false);
     expect
       .soft(result[2])
@@ -163,12 +171,11 @@ describe("skill library retained support files", () => {
     expect(admissionReached).toBe(true);
     // A later denial and cleanup must not hide an earlier successful file creation.
     expect(imageCreated).toBe(false);
-    const files = await fs.readdir(root, { recursive: true, withFileTypes: true });
-    expect(files.filter((entry) => entry.isFile() && entry.name === "pixel.png")).toEqual([]);
+    await expectNoImage(root);
   });
 
   it("does not publish client files when uploads turn off after real bundle staging", async () => {
-    const { call, cfg, root } = retainedFilesHarness();
+    const { create, cfg, root } = retainedFilesHarness();
     const stage = libraryBundle.stageSkillLibraryBundle;
     using staged = vi
       .spyOn(libraryBundle, "stageSkillLibraryBundle")
@@ -177,30 +184,19 @@ describe("skill library retained support files", () => {
         cfg.gateway.uploads.enabled = false;
         return result;
       });
-    const result = await call("skills.library.save", {
-      slug: "late-policy",
-      content,
-      expectedRevision: null,
-      files: [image],
-    });
+    const result = await create("late-policy");
     expect.soft(result[0]).toBe(false);
     expect
       .soft(result[2])
       .toMatchObject({ code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } });
     expect(staged).toHaveBeenCalledOnce();
-    const files = await fs.readdir(root, { recursive: true, withFileTypes: true });
-    expect(files.filter((entry) => entry.isFile() && entry.name === "pixel.png")).toEqual([]);
+    await expectNoImage(root);
   });
 
   it("edits SKILL.md with uploads disabled while retaining exact image bytes and CAS", async () => {
-    const { call, cfg } = retainedFilesHarness();
+    const { call, create, cfg } = retainedFilesHarness();
     const executable = { path: "scripts/example.sh", content: "echo example\n", executable: true };
-    const created = await call("skills.library.save", {
-      slug: "retained-files",
-      content,
-      expectedRevision: null,
-      files: [image, executable],
-    });
+    const created = await create("retained-files", [image, executable]);
     expect(created[0]).toBe(true);
     const entry = (created[1] as SkillsLibraryReceipt).entry;
     cfg.gateway.uploads.enabled = false;
@@ -225,26 +221,14 @@ describe("skill library retained support files", () => {
       Buffer.from(image.content, "base64"),
     );
     const stale = await call("skills.library.save", params);
-    expect(stale).toEqual([
-      false,
-      undefined,
-      expect.objectContaining({
-        details: { code: "SKILL_LIBRARY_CONFLICT", currentRevision: revision },
-      }),
-    ]);
+    expect(stale).toEqual(libraryError("SKILL_LIBRARY_CONFLICT", { currentRevision: revision }));
     const upload = await call("skills.library.save", {
       ...params,
       expectedRevision: revision,
       retainFiles: [image.path],
       files: [{ ...executable, content: "echo changed\n" }],
     });
-    expect(upload).toEqual([
-      false,
-      undefined,
-      expect.objectContaining({
-        details: { code: "UPLOADS_DISABLED" },
-      }),
-    ]);
+    expect(upload).toEqual(libraryError("UPLOADS_DISABLED"));
     const unchanged = await call("skills.library.read", { skillId: entry.skillId });
     expect(unchanged[1]).toEqual(read[1]);
 
@@ -269,13 +253,8 @@ describe("skill library retained support files", () => {
   });
 
   it("rejects unbound, missing, duplicate, and excessive retained references without a write", async () => {
-    const { call, cfg } = retainedFilesHarness();
-    const created = await call("skills.library.save", {
-      slug: "retained-files",
-      content,
-      expectedRevision: null,
-      files: [image],
-    });
+    const { call, create, cfg } = retainedFilesHarness();
+    const created = await create("retained-files");
     expect(created[0]).toBe(true);
     const entry = (created[1] as SkillsLibraryReceipt).entry;
     const params = {
@@ -293,13 +272,9 @@ describe("skill library retained support files", () => {
       { ...params, retainFiles: ["SKILL.md"] },
       { ...params, retainFiles: [image.path, image.path] },
     ]) {
-      expect(await call("skills.library.save", invalid)).toEqual([
-        false,
-        undefined,
-        expect.objectContaining({
-          details: { code: "SKILL_LIBRARY_INVALID_BUNDLE" },
-        }),
-      ]);
+      expect(await call("skills.library.save", invalid)).toEqual(
+        libraryError("SKILL_LIBRARY_INVALID_BUNDLE"),
+      );
     }
     const excessive = await call("skills.library.save", {
       ...params,
@@ -309,13 +284,7 @@ describe("skill library retained support files", () => {
     expect(excessive[2]?.code).toBe("INVALID_REQUEST");
     cfg.gateway.uploads.enabled = true;
     const overlap = await call("skills.library.save", { ...params, files: [image] });
-    expect(overlap).toEqual([
-      false,
-      undefined,
-      expect.objectContaining({
-        details: { code: "SKILL_LIBRARY_INVALID_BUNDLE" },
-      }),
-    ]);
+    expect(overlap).toEqual(libraryError("SKILL_LIBRARY_INVALID_BUNDLE"));
     const read = await call("skills.library.read", { skillId: entry.skillId });
     expect((read[1] as SkillsLibraryReadResult).entry.revision).toBe(entry.revision);
   });
@@ -336,25 +305,17 @@ describe("skill library retained support files", () => {
       content: content + "Unauthorized edit.\n",
       retainFiles: [image.path],
     };
-    expect(await call("skills.library.save", params, bob.id)).toEqual([
-      false,
-      undefined,
-      expect.objectContaining({
-        details: { code: "SKILL_LIBRARY_NOT_FOUND" },
-      }),
-    ]);
+    expect(await call("skills.library.save", params, bob.id)).toEqual(
+      libraryError("SKILL_LIBRARY_NOT_FOUND"),
+    );
     await mutateSkillLibrary(actor(alice.id), {
       skillId: saved.entry.skillId,
       expectedRevision: saved.entry.revision,
       action: "share",
     });
-    expect(await call("skills.library.save", params, bob.id)).toEqual([
-      false,
-      undefined,
-      expect.objectContaining({
-        details: { code: "SKILL_LIBRARY_FORBIDDEN" },
-      }),
-    ]);
+    expect(await call("skills.library.save", params, bob.id)).toEqual(
+      libraryError("SKILL_LIBRARY_FORBIDDEN"),
+    );
     const read = await call("skills.library.read", { skillId: saved.entry.skillId });
     expect((read[1] as SkillsLibraryReadResult).content).toBe(content);
     expect((read[1] as SkillsLibraryReadResult).entry.revision).toBe(saved.entry.revision);
