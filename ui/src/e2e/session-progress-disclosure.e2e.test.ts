@@ -16,6 +16,12 @@ import {
 import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const viewport = { width: 1440, height: 900 };
+
+function disclosure(scope: Page | Locator, placement: "details" | "composer") {
+  const card = scope.locator(`[data-progress-card-placement="${placement}"]`);
+  return { card, open: () => card.evaluate((element) => (element as HTMLDetailsElement).open) };
+}
 
 async function scrollTranscriptUp(page: Page, thread: Locator, distance: number) {
   const before = await thread.evaluate((element) => element.scrollTop);
@@ -92,13 +98,12 @@ async function installProgressGateway(page: Page, sessionKey: string, canonicalK
 
 suite.define(() => {
   it("keeps Details choices through transcript input, reconnect, navigation, and scope reset", () =>
-    suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+    suite.withPage({ viewport }, async ({ page }) => {
       const sessionKey = "agent:main:main";
       const gateway = await installProgressGateway(page, sessionKey);
-      const card = page.locator('[data-progress-card-placement="details"]');
+      const { card, open } = disclosure(page, "details");
       const panel = page.locator(".chat-details:popover-open");
       const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-      const open = () => card.evaluate((element) => (element as HTMLDetailsElement).open);
       const sidebar = page.locator("openclaw-app-sidebar");
       const openSettings = async () => {
         await sidebar.locator(".sidebar-identity-card").click();
@@ -197,7 +202,7 @@ suite.define(() => {
     "keeps a manually %s Details card after resolving a stored short-name pane through reconnect",
     async (choice) => {
       const artifactDir = createControlUiE2eArtifactDir("session-progress-reconnect-" + choice);
-      const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 900 } });
+      const context = await suite.newBrowserContext({ viewport });
       await context.addInitScript((settingsKey) => {
         localStorage.setItem(
           settingsKey,
@@ -223,21 +228,16 @@ suite.define(() => {
         .locator(".chat-split-view__cell")
         .nth(1)
         .locator('openclaw-chat-pane[aria-hidden="false"]');
-      const card = pane.locator('[data-progress-card-placement="details"]');
-      const open = () => card.evaluate((element) => (element as HTMLDetailsElement).open);
+      const { card, open } = disclosure(pane, "details");
+      const paneKey = () =>
+        pane.evaluate((element) => (element as HTMLElement & { sessionKey: string }).sessionKey);
       try {
         await page.goto(suite.server.baseUrl + "chat");
         await card.waitFor({ state: "attached" });
         // Activate the seeded pane before opening Details: activation resolves its
         // short key, and that identity change intentionally closes an open popover.
         await pane.locator(".agent-chat__composer-combobox textarea").click();
-        await expect
-          .poll(() =>
-            pane.evaluate(
-              (element) => (element as HTMLElement & { sessionKey: string }).sessionKey,
-            ),
-          )
-          .toBe("agent:main:notes");
+        await expect.poll(paneKey).toBe("agent:main:notes");
         await openChatDetails(pane);
         const retainedCard = await card.elementHandle();
         await gateway.setOnline(false);
@@ -266,11 +266,7 @@ suite.define(() => {
         await openChatDetails(pane);
         await page.screenshot({ path: path.join(artifactDir, "reconnected.png") });
         expect(await open()).toBe(choice === "open");
-        expect(
-          await pane.evaluate(
-            (element) => (element as HTMLElement & { sessionKey: string }).sessionKey,
-          ),
-        ).toBe("agent:main:notes");
+        expect(await paneKey()).toBe("agent:main:notes");
         await retainedCard!.dispose();
       } finally {
         await suite.closeBrowserContext(context);
@@ -280,13 +276,12 @@ suite.define(() => {
 
   it("retains automatic collapse, escalating reopen, and pinning in the compact Home dock", async () => {
     const artifactDir = createControlUiE2eArtifactDir("session-progress-home-disclosure");
-    const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 900 } });
+    const context = await suite.newBrowserContext({ viewport });
     const page = await context.newPage();
     const gateway = await installProgressGateway(page, "agent:main:main");
     const home = page.locator("openclaw-home-session");
-    const card = home.locator('[data-progress-card-placement="composer"]');
+    const { card, open } = disclosure(home, "composer");
     const thread = home.locator(".chat-thread");
-    const open = () => card.evaluate((element) => (element as HTMLDetailsElement).open);
     const offsets: Array<{ requested: number; before: number; after: number }> = [];
     const gestures = async (count: number, distance: number) => {
       await thread.hover();

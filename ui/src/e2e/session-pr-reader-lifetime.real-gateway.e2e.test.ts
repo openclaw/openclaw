@@ -54,6 +54,9 @@ type Repository = {
   checkName?: string;
 };
 type Delivery = { number: number; repo: string; branch: string; additions?: number };
+function expectedDelivery({ number, repo, branch, additions }: Repository): Delivery {
+  return { number, repo, branch, additions };
+}
 
 async function createRepository(
   state: OpenClawTestState,
@@ -173,6 +176,8 @@ suite.define(() => {
     await suite.runScenario(test, {
       retainedState: () => state?.root,
       async run(signal) {
+        const waitFor = <T>(deferred: { promise: Promise<T> }) =>
+          racePromiseWithAbortSignal(deferred.promise, signal);
         state = await createOpenClawTestState({
           label: "session-pr-reader-lifetime",
           layout: "home",
@@ -380,9 +385,7 @@ suite.define(() => {
           },
         });
         retiringReader.start();
-        expect(await racePromiseWithAbortSignal(connected.promise, signal)).toEqual([
-          "operator.read",
-        ]);
+        expect(await waitFor(connected)).toEqual(["operator.read"]);
         const reader = retiringReader;
         const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
         const artifacts = capture ? suite.artifactDir : undefined;
@@ -466,12 +469,7 @@ suite.define(() => {
               .getByRole("button", { name: `Switch to ${browserGatewayUrl.host}`, exact: true })
               .click();
             // Finish this browser's initial subscription load before timing the rendered PR state.
-            expect(await racePromiseWithAbortSignal(initialDelivery.promise, signal)).toEqual({
-              number: original.number,
-              repo: original.repo,
-              branch: original.branch,
-              additions: original.additions,
-            });
+            expect(await waitFor(initialDelivery)).toEqual(expectedDelivery(original));
             const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
             await openDetailsPullRequests(pane);
             const chip = pane.locator(".chat-pr").first();
@@ -517,7 +515,7 @@ suite.define(() => {
               sessionKeys: [sessionKey],
               refreshSessionKeys: [sessionKey],
             });
-            await racePromiseWithAbortSignal(providerEntered.promise, signal);
+            await waitFor(providerEntered);
             await reader.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, { sessionKeys: [] });
             const retiredCount = retiredDeliveries.length;
             await cue("Replace the workspace while the earlier GitHub refresh is held");
@@ -533,7 +531,7 @@ suite.define(() => {
             );
             expect(await refreshFromBrowser(page)).toEqual(["operator.read"]);
             releaseProvider.resolve();
-            const settled = await racePromiseWithAbortSignal(changedDelivery.promise, signal);
+            const settled = await waitFor(changedDelivery);
             // PR delivery does not reconcile the pane after the fixture's direct database write.
             await evaluateControlUiContext(page, async (context) => {
               await context.sessions.refresh({ agentId: "main", force: true });
@@ -551,12 +549,7 @@ suite.define(() => {
               // Capture the real settled value before judging it: the baseline must retain its failure.
               await cue("Earlier refresh settled after workspace replacement");
               await screenshot("02-replacement-settled.png");
-              expect(settled).toEqual({
-                number: replacement.number,
-                repo: replacement.repo,
-                branch: replacement.branch,
-                additions: replacement.additions,
-              });
+              expect(settled).toEqual(expectedDelivery(replacement));
               expect(retiredDeliveries).toHaveLength(retiredCount);
               expect(await chip.locator(".chat-pr__link").getAttribute("href")).toBe(
                 `https://github.com/synthetic/${replacement.repo}/pull/${replacement.number}`,
@@ -571,14 +564,9 @@ suite.define(() => {
               replacement.checkName = "replacement-workspace current-reader check";
               expect(await refreshFromBrowser(page)).toEqual(["operator.read"]);
               // The subscription acknowledgement precedes the owner's paced refresh.
-              expect(
-                await racePromiseWithAbortSignal(replacementSummaryDelivery.promise, signal),
-              ).toEqual({
-                number: replacement.number,
-                repo: replacement.repo,
-                branch: replacement.branch,
-                additions: replacement.additions,
-              });
+              expect(await waitFor(replacementSummaryDelivery)).toEqual(
+                expectedDelivery(replacement),
+              );
               // A later roster read must not dismiss Details for the already adopted incarnation.
               await evaluateControlUiContext(page, async (context) => {
                 await context.sessions.refresh({ agentId: "main", force: true });
@@ -622,14 +610,14 @@ suite.define(() => {
                   retiringCheckResponses.push(result);
                   return result;
                 });
-              await racePromiseWithAbortSignal(checksEntered.promise, signal);
+              await waitFor(checksEntered);
               holdSnapshot = true;
               replacement.additions = 5;
               await reader.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
                 sessionKeys: [sessionKey],
                 refreshSessionKeys: [sessionKey],
               });
-              await racePromiseWithAbortSignal(snapshotEntered.promise, signal);
+              await waitFor(snapshotEntered);
               await cue("Reassign the retiring reader while its PR and CI reads are held");
               linkEmail(retiringEmail, viewer.id);
               identityReassigned = readResidentUserProfileId(retiring.id) === viewer.id;
@@ -637,10 +625,7 @@ suite.define(() => {
 
               expect(await refreshFromBrowser(page)).toEqual(["operator.read"]);
               releaseIdentityReads.resolve();
-              const current = await racePromiseWithAbortSignal(
-                currentReaderDelivery.promise,
-                signal,
-              );
+              const current = await waitFor(currentReaderDelivery);
               await pendingChecks;
               await chip.locator(".chat-pr__checks-pill").click();
               await pane.getByText(replacement.checkName, { exact: true }).waitFor();
@@ -648,12 +633,7 @@ suite.define(() => {
               await reader.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, { sessionKeys: [] });
               await cue("Current reader received PR and CI results after identity reassignment");
               await screenshot("04-current-reader-after-reassignment.png");
-              expect(current).toEqual({
-                number: 203,
-                repo: replacement.repo,
-                branch: replacement.branch,
-                additions: 5,
-              });
+              expect(current).toEqual(expectedDelivery(replacement));
               expect(isGatewayProtocolResponseError(rejectedChecks)).toBe(true);
               expect(rejectedChecks).toMatchObject({
                 code: "UNAVAILABLE",

@@ -15,6 +15,19 @@ import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 const suite = createChatFlowE2eSuite();
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const runnerOfflineProofName = process.env.OPENCLAW_RUNNER_OFFLINE_SCREENSHOT;
+const sessionKey = "agent:main:placement-move";
+const expectedSource = { generation: 4, environmentId: "worker:source", ownerEpoch: 7 };
+const moveMethods = ["chat.startup", "environments.list", "sessions.move"];
+function textMessage(role: string, text: string, timestamp: number) {
+  return { role, content: [{ text, type: "text" }], timestamp };
+}
+function runnerSession(status: "offline" | "available") {
+  const session = activeSession();
+  return { ...session, placement: { ...session.placement, runner: { kind: "device", status } } };
+}
+function installPlacementGateway(page: Page, options: Parameters<typeof installMockGateway>[1]) {
+  return installMockGateway(page, { sessionKey, ...options });
+}
 
 async function capture(page: Page, name: string): Promise<void> {
   if (captureProof) {
@@ -69,7 +82,7 @@ function activeSession(placementMove?: {
   };
 }) {
   return {
-    key: "agent:main:placement-move",
+    key: sessionKey,
     sessionId: "session-placement-move",
     kind: "direct" as const,
     label: "Move proof",
@@ -110,55 +123,51 @@ function observedRunnerStatus(page: Page, key: string) {
 
 suite.define(() => {
   it("shows authoritative device targets to writers and moves through the exact-source RPC", async () => {
-    const context = await suite.newBrowserContext(contextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.startup", "environments.list", "sessions.move"],
-      operatorScopes: ["operator.read", "operator.write"],
-      historyMessages: [{ role: "assistant", content: "Placement move proof." }],
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([activeSession()]),
-        "environments.list": {
-          profiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
-          environments: [
-            {
-              id: "node:writer-runner",
-              type: "node",
-              label: "Writer runner",
-              status: "available",
-              sessionHost: true,
-              workerSlots: { total: 1, available: 1 },
-            },
-            {
-              id: "node:saturated",
-              type: "node",
-              label: "Busy runner",
-              status: "available",
-              sessionHost: true,
-              workerSlots: { total: 2, available: 0 },
-            },
-            {
-              id: "node:offline",
-              type: "node",
-              label: "Offline runner",
-              status: "unavailable",
-              sessionHost: true,
-            },
-            {
-              id: "node:nonhost",
-              type: "node",
-              label: "Hosting disabled",
-              status: "available",
-              sessionHost: false,
-            },
-          ],
+    return suite.withPage(contextOptions(), async ({ page }) => {
+      const gateway = await installPlacementGateway(page, {
+        featureMethods: moveMethods,
+        operatorScopes: ["operator.read", "operator.write"],
+        historyMessages: [{ role: "assistant", content: "Placement move proof." }],
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([activeSession()]),
+          "environments.list": {
+            profiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
+            environments: [
+              {
+                id: "node:writer-runner",
+                type: "node",
+                label: "Writer runner",
+                status: "available",
+                sessionHost: true,
+                workerSlots: { total: 1, available: 1 },
+              },
+              {
+                id: "node:saturated",
+                type: "node",
+                label: "Busy runner",
+                status: "available",
+                sessionHost: true,
+                workerSlots: { total: 2, available: 0 },
+              },
+              {
+                id: "node:offline",
+                type: "node",
+                label: "Offline runner",
+                status: "unavailable",
+                sessionHost: true,
+              },
+              {
+                id: "node:nonhost",
+                type: "node",
+                label: "Hosting disabled",
+                status: "available",
+                sessionHost: false,
+              },
+            ],
+          },
         },
-      },
-      sessionKey: "agent:main:placement-move",
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.deferNext("sessions.move");
       await page.getByRole("button", { name: "Runs on Cloud" }).click();
       await page.getByRole("menuitem", { name: "Move session…", exact: true }).click();
@@ -178,9 +187,9 @@ suite.define(() => {
       await page.getByRole("button", { name: "Move session", exact: true }).click();
       const request = await gateway.waitForRequest("sessions.move");
       expect(request.params).toEqual({
-        key: "agent:main:placement-move",
+        key: sessionKey,
         agentId: "main",
-        expected: { generation: 4, environmentId: "worker:source", ownerEpoch: 7 },
+        expected: expectedSource,
         target: { kind: "device", deviceId: "writer-runner" },
       });
       await page.getByRole("button", { name: "Moving session…" }).waitFor();
@@ -188,36 +197,26 @@ suite.define(() => {
 
       await gateway.resolveDeferred("sessions.move", {
         ok: true,
-        key: "agent:main:placement-move",
+        key: sessionKey,
         sessionId: "session-placement-move",
         placement: { state: "active", generation: 10 },
       });
       await capture(page, "04-moved.png");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("waits for an offline device or explicitly continues from Gateway-synced state", async () => {
-    const context = await suite.newBrowserContext(contextOptions());
-    const page = await context.newPage();
-    const session = activeSession();
-    session.placement = {
-      ...session.placement,
-      runner: { kind: "device", status: "offline" },
-    } as typeof session.placement;
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.startup", "sessions.move"],
-      operatorScopes: ["operator.read", "operator.write"],
-      historyMessages: [{ role: "assistant", content: "Offline device recovery proof." }],
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([session]),
-      },
-      sessionKey: "agent:main:placement-move",
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
+    return suite.withPage(contextOptions(), async ({ page }) => {
+      const session = runnerSession("offline");
+      const gateway = await installPlacementGateway(page, {
+        featureMethods: ["chat.startup", "sessions.move"],
+        operatorScopes: ["operator.read", "operator.write"],
+        historyMessages: [{ role: "assistant", content: "Offline device recovery proof." }],
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([session]),
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.locator(".chat-pane__placement-chip").waitFor();
       await page.getByRole("button", { name: "Device offline" }).waitFor();
       await page.locator(".chat-pane__placement-chip").click();
@@ -260,9 +259,9 @@ suite.define(() => {
 
       const request = await gateway.waitForRequest("sessions.move");
       expect(request.params).toEqual({
-        key: "agent:main:placement-move",
+        key: sessionKey,
         agentId: "main",
-        expected: { generation: 4, environmentId: "worker:source", ownerEpoch: 7 },
+        expected: expectedSource,
         target: { kind: "gateway" },
         abandonSource: true,
       });
@@ -282,7 +281,7 @@ suite.define(() => {
       await gateway.setSessionsListResponse(chatSessionListResponse([localSession]));
       await gateway.resolveDeferred("sessions.move", {
         ok: true,
-        key: "agent:main:placement-move",
+        key: sessionKey,
         sessionId: "session-placement-move",
         placement: localSession.placement,
       });
@@ -290,63 +289,51 @@ suite.define(() => {
       await capture(page, "06-abandonment-local.png");
       expect(await page.getByRole("button", { name: "Move failed" }).count()).toBe(0);
       expect(await page.getByText("Continue on Gateway…", { exact: true }).count()).toBe(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("preserves an abandoned partial and one owned local final in both panes", async () => {
-    const context = await suite.newBrowserContext(contextOptions());
-    const page = await context.newPage();
-    const sessionKey = "agent:main:placement-move";
-    const abandonedRunId = "abandoned-placement-run";
-    const partialText = "Gateway-synced device response.";
-    const finalText = "Exactly one local Gateway response.";
-    const session = {
-      ...activeSession(),
-      activeRunIds: [abandonedRunId],
-      placement: {
-        ...activeSession().placement,
-        runner: { kind: "device", status: "offline" },
-      },
-      status: "running",
-    };
-    const originalPrompt = {
-      __openclaw: {
-        id: "placement-user",
-        idempotencyKey: `${abandonedRunId}:user`,
-        seq: 1,
-      },
-      content: [{ text: "Continue interrupted work.", type: "text" }],
-      role: "user",
-      timestamp: 1_700_000_000_000,
-    };
-    const abandonedPartialIdentity = {
-      id: "placement-aborted-assistant",
-      seq: 2,
-    };
-    const abandonedPartial = {
-      __openclaw: abandonedPartialIdentity,
-      content: [{ text: partialText, type: "text" }],
-      idempotencyKey: `${abandonedRunId}:assistant`,
-      openclawAbort: { aborted: true, origin: "placement-abandon", runId: abandonedRunId },
-      role: "assistant",
-      stopReason: "stop",
-      timestamp: 1_700_000_000_001,
-    };
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.startup", "sessions.move"],
-      historyMessages: [originalPrompt],
-      inFlightRun: { runId: abandonedRunId, text: partialText },
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([session]),
-      },
-      operatorScopes: ["operator.read", "operator.write"],
-      sessionInfo: session,
-      sessionKey,
-    });
-
-    try {
+    return suite.withPage(contextOptions(), async ({ page }) => {
+      const abandonedRunId = "abandoned-placement-run";
+      const partialText = "Gateway-synced device response.";
+      const finalText = "Exactly one local Gateway response.";
+      const session = {
+        ...runnerSession("offline"),
+        activeRunIds: [abandonedRunId],
+        status: "running",
+      };
+      const originalPrompt = {
+        __openclaw: {
+          id: "placement-user",
+          idempotencyKey: `${abandonedRunId}:user`,
+          seq: 1,
+        },
+        ...textMessage("user", "Continue interrupted work.", 1_700_000_000_000),
+      };
+      const abandonedPartialIdentity = {
+        id: "placement-aborted-assistant",
+        seq: 2,
+      };
+      const abandonedPartial = {
+        __openclaw: abandonedPartialIdentity,
+        content: [{ text: partialText, type: "text" }],
+        idempotencyKey: `${abandonedRunId}:assistant`,
+        openclawAbort: { aborted: true, origin: "placement-abandon", runId: abandonedRunId },
+        role: "assistant",
+        stopReason: "stop",
+        timestamp: 1_700_000_000_001,
+      };
+      const gateway = await installPlacementGateway(page, {
+        featureMethods: ["chat.startup", "sessions.move"],
+        historyMessages: [originalPrompt],
+        inFlightRun: { runId: abandonedRunId, text: partialText },
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([session]),
+        },
+        operatorScopes: ["operator.read", "operator.write"],
+        sessionInfo: session,
+        sessionKey,
+      });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.getByRole("button", { name: "Device offline" }).waitFor();
       await selectChatLayoutAction(page, "Open split view");
@@ -371,7 +358,7 @@ suite.define(() => {
       expect(move.params).toEqual({
         abandonSource: true,
         agentId: "main",
-        expected: { generation: 4, environmentId: "worker:source", ownerEpoch: 7 },
+        expected: expectedSource,
         key: sessionKey,
         target: { kind: "gateway" },
       });
@@ -388,11 +375,7 @@ suite.define(() => {
         sessionKey,
       });
       await gateway.emitGatewayEvent("chat", {
-        message: {
-          content: [{ text: partialText, type: "text" }],
-          role: "assistant",
-          timestamp: 1_700_000_000_001,
-        },
+        message: textMessage("assistant", partialText, 1_700_000_000_001),
         runId: abandonedRunId,
         seq: 8,
         sessionKey,
@@ -443,24 +426,16 @@ suite.define(() => {
           idempotencyKey: `${localRunId}:user`,
           seq: 3,
         },
-        content: [{ text: "Resume locally.", type: "text" }],
-        role: "user",
-        timestamp: 1_700_000_000_002,
+        ...textMessage("user", "Resume locally.", 1_700_000_000_002),
       };
       const localFinalIdentity = { id: "placement-local-final", seq: 4, runId: localRunId };
       const localFinal = {
         __openclaw: localFinalIdentity,
-        content: [{ text: finalText, type: "text" }],
-        role: "assistant",
-        timestamp: 1_700_000_000_003,
+        ...textMessage("assistant", finalText, 1_700_000_000_003),
       };
       await gateway.emitGatewayEvent("chat", {
         deltaText: finalText,
-        message: {
-          content: [{ text: finalText, type: "text" }],
-          role: "assistant",
-          timestamp: 1_700_000_000_003,
-        },
+        message: textMessage("assistant", finalText, 1_700_000_000_003),
         runId: localRunId,
         seq: 5,
         sessionKey,
@@ -539,63 +514,49 @@ suite.define(() => {
         await assertSettledPane(pane);
       }
       await capture(page, "09-reloaded-split-abandoned-partial-local-final.png");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("keeps a rapid offline publication over stale deferred startup hydration", async () => {
-    const context = await suite.newBrowserContext(contextOptions());
-    const page = await context.newPage();
-    const parent = {
-      key: "agent:main:placement-parent",
-      sessionId: "session:agent:main:placement-parent",
-      kind: "direct" as const,
-      label: "Placement parent",
-      updatedAt: 1,
-      childSessions: ["agent:main:placement-move"],
-    };
-    const available = { ...activeSession(), parentSessionKey: parent.key };
-    available.placement = {
-      ...available.placement,
-      runner: { kind: "device", status: "available" },
-    } as typeof available.placement;
-    const offline = { ...activeSession(), parentSessionKey: parent.key };
-    offline.placement = {
-      ...offline.placement,
-      runner: { kind: "device", status: "offline" },
-    } as typeof offline.placement;
-    const historyMessages = [
-      { role: "assistant", content: "Deferred available startup transcript settled." },
-    ];
-    const models = [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }];
-    const staleStartup = {
-      sessionId: available.sessionId,
-      sessionInfo: { ...available, archived: false, pinned: false },
-      messages: historyMessages,
-      thinkingLevel: null,
-      metadata: { models },
-    };
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["chat.startup"],
-      featureMethods: ["chat.startup", "sessions.move"],
-      historyMessages,
-      models,
-      methodResponses: {
-        "sessions.list": {
-          cases: [
-            { match: { spawnedBy: parent.key }, response: chatSessionListResponse([available]) },
-            { response: chatSessionListResponse([parent, available]) },
-          ],
+    return suite.withPage(contextOptions(), async ({ page }) => {
+      const parent = {
+        key: "agent:main:placement-parent",
+        sessionId: "session:agent:main:placement-parent",
+        kind: "direct" as const,
+        label: "Placement parent",
+        updatedAt: 1,
+        childSessions: ["agent:main:placement-move"],
+      };
+      const available = { ...runnerSession("available"), parentSessionKey: parent.key };
+      const offline = { ...runnerSession("offline"), parentSessionKey: parent.key };
+      const historyMessages = [
+        { role: "assistant", content: "Deferred available startup transcript settled." },
+      ];
+      const models = [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }];
+      const staleStartup = {
+        sessionId: available.sessionId,
+        sessionInfo: { ...available, archived: false, pinned: false },
+        messages: historyMessages,
+        thinkingLevel: null,
+        metadata: { models },
+      };
+      const gateway = await installPlacementGateway(page, {
+        deferredMethods: ["chat.startup"],
+        featureMethods: ["chat.startup", "sessions.move"],
+        historyMessages,
+        models,
+        methodResponses: {
+          "sessions.list": {
+            cases: [
+              { match: { spawnedBy: parent.key }, response: chatSessionListResponse([available]) },
+              { response: chatSessionListResponse([parent, available]) },
+            ],
+          },
         },
-      },
-      sessionInfo: available,
-      sessions: [parent, available],
-      sessionKey: "agent:main:placement-move",
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
+        sessionInfo: available,
+        sessions: [parent, available],
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("chat.startup");
       await page.getByRole("button", { name: "Runs on device" }).waitFor();
       await expect.poll(() => observedRunnerStatus(page, available.key)).toBe("available");
@@ -720,9 +681,7 @@ suite.define(() => {
         .getByText("Waiting for device to reconnect; retry after it returns", { exact: false })
         .waitFor();
       await capture(page, "07-stale-startup-keeps-offline.png");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it.each([
@@ -731,38 +690,34 @@ suite.define(() => {
   ])(
     "moves to a cloud profile with machine $machineId",
     async ({ machineId, expectedMachineClass }) => {
-      const context = await suite.newBrowserContext(contextOptions());
-      const page = await context.newPage();
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["chat.startup", "environments.list", "sessions.move"],
-        operatorScopes: ["operator.admin", "operator.read", "operator.write"],
-        historyMessages: [{ role: "assistant", content: "Placement machine proof." }],
-        methodResponses: {
-          "sessions.list": chatSessionListResponse([activeSession()]),
-          "environments.list": {
-            profiles: [
-              {
-                id: "aws",
-                providerId: "crabbox",
-                trust: "disposable",
-                ...(machineId
-                  ? {
-                      machines: [
-                        { id: "standard", label: "Standard", default: true },
-                        { id: "fast", label: "Fast" },
-                      ],
-                    }
-                  : {}),
-              },
-            ],
-            environments: [],
+      return suite.withPage(contextOptions(), async ({ page }) => {
+        const gateway = await installPlacementGateway(page, {
+          featureMethods: moveMethods,
+          operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+          historyMessages: [{ role: "assistant", content: "Placement machine proof." }],
+          methodResponses: {
+            "sessions.list": chatSessionListResponse([activeSession()]),
+            "environments.list": {
+              profiles: [
+                {
+                  id: "aws",
+                  providerId: "crabbox",
+                  trust: "disposable",
+                  ...(machineId
+                    ? {
+                        machines: [
+                          { id: "standard", label: "Standard", default: true },
+                          { id: "fast", label: "Fast" },
+                        ],
+                      }
+                    : {}),
+                },
+              ],
+              environments: [],
+            },
           },
-        },
-        sessionKey: "agent:main:placement-move",
-      });
-
-      try {
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await gateway.deferNext("sessions.move");
         await page.getByRole("button", { name: "Runs on Cloud" }).click();
         await page.getByRole("menuitem", { name: "Move session…", exact: true }).click();
@@ -781,9 +736,9 @@ suite.define(() => {
 
         const request = await gateway.waitForRequest("sessions.move");
         expect(request.params).toEqual({
-          key: "agent:main:placement-move",
+          key: sessionKey,
           agentId: "main",
-          expected: { generation: 4, environmentId: "worker:source", ownerEpoch: 7 },
+          expected: expectedSource,
           target: {
             kind: "profile",
             profileId: "aws",
@@ -792,49 +747,41 @@ suite.define(() => {
         });
         await gateway.resolveDeferred("sessions.move", {
           ok: true,
-          key: "agent:main:placement-move",
+          key: sessionKey,
           sessionId: "session-placement-move",
           placement: { state: "active", generation: 10 },
         });
-      } finally {
-        await suite.closeBrowserContext(context);
-      }
+      });
     },
   );
 
   it("keeps a move failure visible and retryable", async () => {
-    const context = await suite.newBrowserContext(contextOptions());
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      featureMethods: ["chat.startup", "environments.list", "sessions.move"],
-      historyMessages: [{ role: "assistant", content: "Placement failure proof." }],
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([
-          {
-            ...activeSession({
-              target: { kind: "gateway" },
-              updatedAtMs: 3,
-              error: "Destination device is offline.",
-              retry: {
-                expected: { generation: 4, environmentId: "worker:source", ownerEpoch: 7 },
+    return suite.withPage(contextOptions(), async ({ page }) => {
+      await installPlacementGateway(page, {
+        featureMethods: moveMethods,
+        historyMessages: [{ role: "assistant", content: "Placement failure proof." }],
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([
+            {
+              ...activeSession({
                 target: { kind: "gateway" },
-              },
-            }),
-            placement: { ...activeSession().placement, state: "draining", generation: 5 },
-          },
-        ]),
-      },
-      sessionKey: "agent:main:placement-move",
-    });
-
-    try {
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:placement-move"));
+                updatedAtMs: 3,
+                error: "Destination device is offline.",
+                retry: {
+                  expected: expectedSource,
+                  target: { kind: "gateway" },
+                },
+              }),
+              placement: { ...activeSession().placement, state: "draining", generation: 5 },
+            },
+          ]),
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.getByRole("button", { name: "Move failed" }).click();
       await page.getByText("Destination device is offline.", { exact: true }).waitFor();
       await page.getByRole("menuitem", { name: "Retry move", exact: true }).waitFor();
       await capture(page, "05-error.png");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 });

@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Locator } from "playwright";
 import { describe, expect, it } from "vitest";
 import { buildGatewaySessionSnapshot } from "../../../src/gateway/session-event-payload.ts";
 import type { GatewaySessionRow } from "../../../src/gateway/session-utils.types.ts";
@@ -39,6 +40,21 @@ export function defineSessionPlacementModuleBoundaryTests(
   suite: ReturnType<typeof createControlUiE2eSuite>,
   moduleRequest: (sourcePath: string) => RegExp,
 ) {
+  const timing = (generation: number, updatedAtMs = generation) => ({
+    generation,
+    createdAtMs: 1,
+    updatedAtMs,
+    stateChangedAtMs: updatedAtMs,
+  });
+  const worker = { environmentId: "worker-1", workerBundleHash: "a".repeat(64) };
+  const workspace = { workspaceBaseManifestRef: "manifest-1", remoteWorkspaceDir: "/workspace" };
+  const activePlacement = {
+    state: "active" as const,
+    ...timing(5),
+    ...worker,
+    ...workspace,
+    activeOwnerEpoch: 1,
+  };
   describe("placement startup module loading", () => {
     it("dispatches a cloud target before sending its first turn and shows placement", async () => {
       if (captureUiProofEnabled) {
@@ -60,6 +76,14 @@ export function defineSessionPlacementModuleBoundaryTests(
           : {}),
       });
       const page = await context.newPage();
+      const capture = async (name: string, surface: Locator, content: Locator[]) => {
+        if (captureUiProofEnabled) {
+          await writeFile(
+            path.join(suite.artifactDir, "cloud-profile-refresh-retention", name),
+            await takeControlUiViewportScreenshot(page, surface, content),
+          );
+        }
+      };
       await page.clock.install();
       const runtimeLoad = createDeferred();
       let runtimeRequested = false;
@@ -80,13 +104,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         contextTokens: undefined,
         sessionId: "session-cloud-e2e",
         updatedAt: Date.now(),
-        placement: {
-          state: "requested",
-          generation: 1,
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          stateChangedAtMs: 1,
-        },
+        placement: { state: "requested", ...timing(1) },
       } satisfies GatewaySessionRow;
       const gateway = await installMockGateway(page, {
         sessions: [initialSession],
@@ -152,18 +170,7 @@ export function defineSessionPlacementModuleBoundaryTests(
             ok: true,
             key: sessionKey,
             sessionId: "session-cloud-e2e",
-            placement: {
-              state: "active",
-              generation: 1,
-              createdAtMs: 1,
-              updatedAtMs: 2,
-              stateChangedAtMs: 2,
-              environmentId: "worker-1",
-              activeOwnerEpoch: 1,
-              workerBundleHash: "a".repeat(64),
-              workspaceBaseManifestRef: "manifest-1",
-              remoteWorkspaceDir: "/workspace",
-            },
+            placement: { ...activePlacement, ...timing(1, 2) },
           },
           "sessions.delete": { ok: true, deleted: true },
           "sessions.reclaim": { ok: true },
@@ -331,16 +338,9 @@ export function defineSessionPlacementModuleBoundaryTests(
 
         if (captureUiProofEnabled) {
           await trigger.click();
-          await writeFile(
-            path.join(
-              suite.artifactDir,
-              "cloud-profile-refresh-retention",
-              "01-before-refresh.png",
-            ),
-            await takeControlUiViewportScreenshot(page, place, [
-              place.locator('[data-value="cloud:aws"]'),
-            ]),
-          );
+          await capture("01-before-refresh.png", place, [
+            place.locator('[data-value="cloud:aws"]'),
+          ]);
           await page.keyboard.press("Escape");
         }
 
@@ -358,14 +358,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         });
         await expect.poll(() => startButton.isDisabled()).toBe(true);
         if (captureUiProofEnabled) {
-          await writeFile(
-            path.join(
-              suite.artifactDir,
-              "cloud-profile-refresh-retention",
-              "02-refresh-pending.png",
-            ),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [startButton]),
-          );
+          await capture("02-refresh-pending.png", page.locator(".shell"), [startButton]);
         }
         // Hold each retry's deadline until the next deferred response is installed.
         await pauseVirtualClock(page);
@@ -400,17 +393,10 @@ export function defineSessionPlacementModuleBoundaryTests(
         await expect.poll(() => retainedMachine.isVisible()).toBe(true);
         expect(await retainedMachine.getAttribute("aria-pressed")).toBe("true");
         if (captureUiProofEnabled) {
-          await writeFile(
-            path.join(
-              suite.artifactDir,
-              "cloud-profile-refresh-retention",
-              "03-after-retry-exhaustion.png",
-            ),
-            await takeControlUiViewportScreenshot(
-              page,
-              place.locator(".new-session-page__cloud-configuration"),
-              [retainedCloudProfile, place.locator('[data-value="machine:fast"]')],
-            ),
+          await capture(
+            "03-after-retry-exhaustion.png",
+            place.locator(".new-session-page__cloud-configuration"),
+            [retainedCloudProfile, place.locator('[data-value="machine:fast"]')],
           );
         }
         await page.keyboard.press("Escape");
@@ -450,14 +436,7 @@ export function defineSessionPlacementModuleBoundaryTests(
           machineClass: "fast",
         });
         if (captureUiProofEnabled) {
-          await writeFile(
-            path.join(
-              suite.artifactDir,
-              "cloud-profile-refresh-retention",
-              "04-session-dispatch.png",
-            ),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [startupStatus]),
-          );
+          await capture("04-session-dispatch.png", page.locator(".shell"), [startupStatus]);
         }
         await gateway.waitForRequest("sessions.describe", { match: { key: sessionKey } });
         await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
@@ -471,25 +450,12 @@ export function defineSessionPlacementModuleBoundaryTests(
           label: string,
           includeNeutral = false,
         ) => {
-          const timing = {
-            generation,
-            createdAtMs: 1,
-            updatedAtMs: generation,
-            stateChangedAtMs: generation,
-          };
-          const worker = { environmentId: "worker-1", workerBundleHash: "a".repeat(64) };
           const placement =
             state === "provisioning"
-              ? { state, ...timing }
+              ? { state, ...timing(generation) }
               : state === "syncing"
-                ? { state, ...timing, ...worker }
-                : {
-                    state,
-                    ...timing,
-                    ...worker,
-                    workspaceBaseManifestRef: "manifest-1",
-                    remoteWorkspaceDir: "/workspace",
-                  };
+                ? { state, ...timing(generation), ...worker }
+                : { state, ...timing(generation), ...worker, ...workspace };
           const now = await page.evaluate(() => Date.now());
           const session = {
             ...initialSession,
@@ -572,18 +538,7 @@ export function defineSessionPlacementModuleBoundaryTests(
           ok: true,
           key: sessionKey,
           sessionId: "session-cloud-e2e",
-          placement: {
-            state: "active",
-            generation: 5,
-            createdAtMs: 1,
-            updatedAtMs: 5,
-            stateChangedAtMs: 5,
-            environmentId: "worker-1",
-            activeOwnerEpoch: 1,
-            workerBundleHash: "a".repeat(64),
-            workspaceBaseManifestRef: "manifest-1",
-            remoteWorkspaceDir: "/workspace",
-          },
+          placement: activePlacement,
         });
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
         expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);
@@ -616,18 +571,7 @@ export function defineSessionPlacementModuleBoundaryTests(
               status: "running",
               updatedAt: Date.now(),
               worktree: { id: "worktree-1", branch: "openclaw/cloud-e2e", repoRoot: WORKSPACE },
-              placement: {
-                state: "active",
-                generation: 5,
-                createdAtMs: 1,
-                updatedAtMs: 5,
-                stateChangedAtMs: 5,
-                environmentId: "worker-1",
-                activeOwnerEpoch: 1,
-                workerBundleHash: "a".repeat(64),
-                workspaceBaseManifestRef: "manifest-1",
-                remoteWorkspaceDir: "/workspace",
-              },
+              placement: activePlacement,
             },
             {
               key: "agent:cloud:managed-e2e",
