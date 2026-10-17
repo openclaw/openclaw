@@ -5,6 +5,7 @@ import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runti
 import { expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../../extensions/workboard/api.js";
 import plugin from "../../extensions/workboard/index.js";
+import { lifecycleSession } from "../../extensions/workboard/src/lifecycle-sync-fixtures.test-support.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -151,14 +152,7 @@ it.each(["agent_end", "subagent_ended"] as const)(
       respond(true, await cron.enqueueRun(job.id, "if-enabled"));
     const describeSession: GatewayRequestHandler = ({ respond }) => {
       expect(getGatewayToolCallerIdentity()).toBeUndefined();
-      respond(true, {
-        session: {
-          key: sessionKey,
-          status: "done",
-          hasActiveRun: false,
-          updatedAt: Date.now(),
-        },
-      });
+      respond(true, { session: lifecycleSession(sessionKey, "done", Date.now()) });
     };
     gatewayContext.getGatewayMethodRegistry = () =>
       createGatewayMethodRegistry([

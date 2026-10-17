@@ -35,6 +35,8 @@ import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.
 import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 
+const reportRoute = { pluginId: "team-reports", path: "/reports", match: "prefix" as const };
+
 async function get(baseUrl: string, path: string, cookie?: string) {
   const response = await fetch(`${baseUrl}${path}`, {
     headers: cookie ? { cookie } : {},
@@ -156,9 +158,7 @@ async function withReports(
           registry: createGatewayTestRegistry({
             httpRoutes: [
               {
-                pluginId: "team-reports",
-                path: "/reports",
-                match: "prefix",
+                ...reportRoute,
                 auth: "gateway",
                 gatewayMethodDispatchAllowed: true,
                 handler: createTeamReportsHttpHandler({
@@ -192,25 +192,14 @@ async function withReports(
           try {
             // The fixture issues synthetic identity cookies through the real signer.
             if (req.url === "/fixture-cookie") {
-              setControlUiPluginAuthCookie(
-                res,
-                [
-                  {
-                    pluginId: "team-reports",
-                    path: "/reports",
-                    match: "prefix",
-                    scopes: ["operator.read"],
-                  },
-                ],
-                {
-                  generation: resolveControlUiPluginAuthCookieGeneration(
-                    resolveSharedGatewaySessionGeneration(auth),
-                    cfg,
-                  ),
-                  profileId: reader.id,
-                  nowMs: issuedAt,
-                },
-              );
+              setControlUiPluginAuthCookie(res, [{ ...reportRoute, scopes: ["operator.read"] }], {
+                generation: resolveControlUiPluginAuthCookieGeneration(
+                  resolveSharedGatewaySessionGeneration(auth),
+                  cfg,
+                ),
+                profileId: reader.id,
+                nowMs: issuedAt,
+              });
               res.end();
               return;
             }

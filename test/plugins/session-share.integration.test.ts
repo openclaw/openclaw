@@ -51,15 +51,9 @@ function registerSessionShare(runtime: PluginRuntime, config: OpenClawConfig = {
   const api = createTestPluginApi({
     runtime,
     config,
-    registerNodeHostCommand: (command) => {
-      nodeCommands.push(command);
-    },
-    registerSessionCatalog: (catalog) => {
-      catalogs.push(catalog);
-    },
-    registerService: (service) => {
-      services.push(service);
-    },
+    registerNodeHostCommand: (command) => nodeCommands.push(command),
+    registerSessionCatalog: (catalog) => catalogs.push(catalog),
+    registerService: (service) => services.push(service),
   });
   sessionSharePlugin.register(api);
   const catalog = catalogs.find((entry) => entry.id === "openclaw");
@@ -136,6 +130,19 @@ function withCommands(run: (fixture: ReturnType<typeof commandFixture>) => Promi
 
 function expectSingleItem(items: unknown, shape: unknown) {
   expect(items).toMatchObject([shape]);
+}
+
+function sqlCounter(
+  db: Parameters<typeof requireNativeSqliteDatabase>[0],
+  rules: Record<string, RegExp[]>,
+) {
+  return trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(db),
+    Object.keys(rules),
+    (sql) =>
+      Object.entries(rules).find(([, patterns]) => patterns.every((re) => re.test(sql)))?.[0] ??
+      null,
+  );
 }
 
 function commandFixture(groups: string[] = ["Team"]) {
@@ -272,11 +279,7 @@ async function withCatalogFixture(
       await run(fixture);
     } finally {
       // Stop all publishers before the fixture closes its private databases and environment.
-      try {
-        await fixture.stop();
-      } finally {
-        vi.useRealTimers();
-      }
+      await fixture.stop().finally(() => vi.useRealTimers());
     }
   });
 }
@@ -295,18 +298,12 @@ describe("session-share node commands", () => {
       await replaceSessionEntry(scope, entry);
       expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
       const { db } = openOpenClawAgentDatabase({ agentId: "main" });
-      const reads = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(db),
-        ["inventory"],
-        (sql) =>
-          sql.includes('from "session_nodes" order by "session_key"') &&
-          sql.includes('"entry_json"')
-            ? "inventory"
-            : null,
-      );
+      const counter = sqlCounter(db, {
+        inventory: [/from "session_nodes" order by "session_key"/, /"entry_json"/],
+      });
       try {
         expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
-        expect(reads.counts.inventory).toBe(0);
+        expect(counter.counts.inventory).toBe(0);
         await replaceSessionEntry(scope, { ...entry, label: "Renamed" });
         expect((await source.list()).sessions).toMatchObject([{ name: "Renamed" }]);
         await replaceSessionEntry(scope, { ...entry, category: "Private" });
@@ -314,7 +311,7 @@ describe("session-share node commands", () => {
         await replaceSessionEntry(scope, { ...entry, sessionId: "replacement" });
         expect((await source.list()).sessions).toMatchObject([{ name: "Original" }]);
       } finally {
-        reads.restore();
+        counter.restore();
       }
     });
   });
@@ -346,16 +343,10 @@ describe("session-share node commands", () => {
       }
       await writeSession("named", { updatedAt: recency + 1, label: "Named session" });
       const { db } = openOpenClawAgentDatabase({ agentId: "main" });
-      const counter = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(db),
-        ["transcript", "participants"],
-        (sql) =>
-          /\bfrom\s+"?session_participants\b/i.test(sql)
-            ? "participants"
-            : /\btranscript_events\b/.test(sql)
-              ? "transcript"
-              : null,
-      );
+      const counter = sqlCounter(db, {
+        participants: [/\bfrom\s+"?session_participants\b/i],
+        transcript: [/\btranscript_events\b/],
+      });
       try {
         expectSingleItem((await source.list({ limit: 1 })).sessions, named);
         expect.soft(counter.counts).toMatchObject({ transcript: 0, participants: 0 });
@@ -580,16 +571,10 @@ describe("session-share node commands", () => {
           createdActor,
         });
       }
-      const counter = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
-        ["identities", "profiles"],
-        (sql) =>
-          /\bfrom\s+"?user_profile_identities\b/i.test(sql)
-            ? "identities"
-            : /\bfrom\s+"?user_profiles\b/i.test(sql)
-              ? "profiles"
-              : null,
-      );
+      const counter = sqlCounter(openOpenClawStateDatabase().db, {
+        identities: [/\bfrom\s+"?user_profile_identities\b/i],
+        profiles: [/\bfrom\s+"?user_profiles\b/i],
+      });
       let first: SessionPage;
       try {
         first = await fixture.list();
@@ -837,22 +822,25 @@ describe("session-share receiver identity integration", () => {
           ?.identity,
       ).toEqual(namespacedIdentity);
       expect(fullIdentityScans()).toBe(0);
-      for (const owner of [`profile:${profile.id}`, "github:CATALOG-PERSON"]) {
-        fixture.setConfig(nodeConfig({ [nodeId]: { owner } }));
+      for (const identityConfig of [
+        { owner: `profile:${profile.id}` },
+        { owner: "github:CATALOG-PERSON" },
+        { linkGitHubIdentities: true },
+      ]) {
+        const linksHumans = "linkGitHubIdentities" in identityConfig;
+        fixture.setConfig(nodeConfig({ [nodeId]: identityConfig }));
         await fixture.hydrate();
+        if (linksHumans) {
+          identityReads.mockClear();
+        }
         const rows = (await fixture.catalog.list({}))[0]!.sessions;
-        expect(rows[0]).toEqual(namespacedHuman);
-        expect(rows[1]?.createdActor).toMatchObject(linkedActor(profile.id));
+        expect(rows[linksHumans ? 0 : 1]?.createdActor).toMatchObject(linkedActor(profile.id));
+        expect(rows[linksHumans ? 1 : 0]).toEqual(linksHumans ? agent : namespacedHuman);
         expect(rows[2]).toEqual(namespacedUnmatched);
+        if (linksHumans) {
+          expect.soft(fullIdentityScans()).toBe(0);
+        }
       }
-      fixture.setConfig(nodeConfig({ [nodeId]: { linkGitHubIdentities: true } }));
-      await fixture.hydrate();
-      identityReads.mockClear();
-      const linked = (await fixture.catalog.list({}))[0]!.sessions;
-      expect.soft(fullIdentityScans()).toBe(0);
-      expect(linked[0]?.createdActor).toMatchObject(linkedActor(profile.id));
-      expect(linked[1]).toEqual(agent);
-      expect(linked[2]).toEqual(namespacedUnmatched);
       identityReads.mockClear();
       const page = await fixture.catalog.read({ hostId, threadId: nativeSession.threadId });
       expect.soft(fullIdentityScans()).toBe(0);
