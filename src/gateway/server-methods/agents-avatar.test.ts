@@ -118,7 +118,8 @@ describe("agents.avatar.generate", () => {
       undefined,
       expect.objectContaining({
         code: "UNAVAILABLE",
-        message: "Could not generate a valid Blobster with the selected model.",
+        message:
+          "Could not generate a valid Blobster with the selected model. Try a shorter description or another configured model.",
       }),
     );
   });

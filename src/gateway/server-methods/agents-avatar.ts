@@ -75,7 +75,7 @@ export const agentAvatarGenerateHandler = defineValidatedGatewayMethod(
     }
     return errorShape(
       ErrorCodes.UNAVAILABLE,
-      "Could not generate a valid Blobster with the selected model.",
+      "Could not generate a valid Blobster with the selected model. Try a shorter description or another configured model.",
     );
   },
 );
