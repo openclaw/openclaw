@@ -1,3 +1,5 @@
+import type { SessionLogEntry } from "./types.ts";
+
 export function formatIsoDate(date: Date, timeZone: "local" | "utc" = "local"): string {
   const year = timeZone === "utc" ? date.getUTCFullYear() : date.getFullYear();
   const month = (timeZone === "utc" ? date.getUTCMonth() : date.getMonth()) + 1;
@@ -67,3 +69,10 @@ export function parseToolSummary(content: string) {
     cleanContent: nonToolLines.join("\n").trim(),
   };
 }
+
+export function parseSessionLog(log: SessionLogEntry) {
+  const toolInfo = parseToolSummary(log.content);
+  return { log, toolInfo, cleanContent: toolInfo.cleanContent || log.content };
+}
+
+export type ParsedSessionLog = ReturnType<typeof parseSessionLog>;

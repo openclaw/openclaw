@@ -279,6 +279,32 @@ describe("renderSessionDetailPanel filtered usage", () => {
     }
   });
 
+  it("keeps interval header totals on the timeline's selected days", () => {
+    const start = Date.parse("2026-05-13T12:00:00Z");
+    const end = Date.parse("2026-05-15T12:00:00Z");
+    const container = mount(
+      [
+        point({ timestamp: start, totalTokens: 100, cost: 0.1 }),
+        point({ timestamp: Date.parse("2026-05-14T12:00:00Z"), totalTokens: 900, cost: 9 }),
+        point({ timestamp: end, totalTokens: 200, cost: 0.2 }),
+      ],
+      start,
+      end,
+      "total",
+      {
+        startDate: "2026-05-13",
+        endDate: "2026-05-15",
+        selectedDays: ["2026-05-13", "2026-05-15"],
+        timeZone: "utc",
+      },
+    );
+
+    expect(container.querySelectorAll(".ts-bar")).toHaveLength(2);
+    expect(container.querySelector(".timeseries-summary")?.textContent).toContain("$0.30");
+    expect(container.querySelector(".session-detail-stats")?.textContent).toContain("300 tokens");
+    expect(container.querySelector(".session-detail-stats")?.textContent).toContain("$0.30");
+  });
+
   it("aggregates selected tokens while counting actual loaded message roles", () => {
     const start = Date.parse("2026-08-20T12:00:00Z");
     const end = start + 1000;
@@ -619,6 +645,60 @@ describe("renderSessionDetailPanel filtered usage", () => {
       await restoreI18n();
     }
   });
+
+  it.each([false, true])(
+    "counts embedded context once with an unverified native file: %s",
+    (nativeFile) => {
+      const contextWeight: NonNullable<UsageSessionEntry["contextWeight"]> = {
+        source: "run",
+        generatedAt: 0,
+        systemPrompt: { chars: 1000, projectContextChars: 200, nonProjectContextChars: 800 },
+        skills: { promptChars: 200, entries: [{ name: "synthetic-skill", blockChars: 200 }] },
+        tools: {
+          listChars: 100,
+          schemaChars: 300,
+          entries: [{ name: "synthetic-tool", summaryChars: 100, schemaChars: 300 }],
+        },
+        injectedWorkspaceFiles: [
+          {
+            name: "known.md",
+            path: "/synthetic/known.md",
+            missing: false,
+            rawChars: 200,
+            injectedChars: 200,
+            truncated: false,
+          },
+        ],
+      };
+      if (nativeFile) {
+        contextWeight.injectedWorkspaceFiles.push({
+          name: "AGENTS.md",
+          path: "/synthetic/AGENTS.md",
+          missing: false,
+          rawChars: 900,
+          injectionStatus: "native_unverified",
+          injectedChars: null,
+          truncated: null,
+        });
+      }
+      const container = mount([], null, null, "total", {}, { contextWeight });
+
+      expect(container.querySelector(".context-total")?.textContent).toContain("325");
+      expect(
+        [...container.querySelectorAll(".context-legend .legend-item")].map((item) =>
+          item.textContent?.replaceAll(/\s+/g, " ").trim(),
+        ),
+      ).toEqual(["Sys ~125", "Skills ~50", "Tools ~100", "Files ~50"]);
+      const fileRows = container.querySelectorAll(
+        ".context-breakdown-card:last-child .context-breakdown-item",
+      );
+      expect(fileRows).toHaveLength(nativeFile ? 2 : 1);
+      if (nativeFile) {
+        expect(fileRows[1]?.textContent).toContain("AGENTS.md");
+        expect(fileRows[1]?.querySelector(".muted")?.textContent).toBe("unknown");
+      }
+    },
+  );
 
   it("preserves context-category order, sorted cards, expansion, and callbacks", () => {
     const contextWeight: NonNullable<UsageSessionEntry["contextWeight"]> = {
