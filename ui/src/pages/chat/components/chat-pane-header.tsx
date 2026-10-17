@@ -117,6 +117,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   onMenuOpenChange: (open: boolean) => void;
   onMenuAction: (action: ChatPaneHeaderAction) => void;
   onOpenParentSession: (sessionKey: string) => void;
+  onOpenAgentSettings?: (agentId: string) => void;
   onBranchSelect: (leafEntryId: string) => void;
 };
 
@@ -236,6 +237,15 @@ function AgentCrumb(
           </Popover>
         )}
       </Show>
+      <button
+        class="chat-pane__agent-settings"
+        type="button"
+        title={t("agentChip.namedSettings", { name: props.agent.name })}
+        aria-label={t("agentChip.namedSettings", { name: props.agent.name })}
+        onClick={() => props.onOpenAgentSettings?.(props.agent.id)}
+      >
+        <Icon name="settings" />
+      </button>
     </div>
   );
 }
@@ -416,6 +426,7 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
           "chat-pane__header",
           {
             "chat-pane__header--mobile": props.mergedChrome,
+            "chat-pane__header--agent": Boolean(props.agent),
             "chat-pane__header--closable": props.onClosePane !== undefined,
             "chat-pane__header--stacked-status":
               props.narrow && (props.runningSubagentCount ?? 0) > 0,
@@ -462,8 +473,8 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
               </button>
             </openclaw-tooltip>
           </Show>
-          <Show when={props.agent} fallback={<IdentityCrumbs {...props} />}>
-            {(agent) => <AgentCrumb {...props} agent={agent()} />}
+          <Show when={!props.agent}>
+            <IdentityCrumbs {...props} />
           </Show>
           <Show when={props.publicAccessIndicator}>
             {(indicator) => <ChatSessionPublicIndicator {...indicator()} />}
@@ -508,6 +519,13 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
             </Show>
           </Show>
         </div>
+        <Show when={props.agent}>
+          {(agent) => (
+            <div class="chat-pane__header-agent">
+              <AgentCrumb {...props} agent={agent()} />
+            </div>
+          )}
+        </Show>
         <div class="chat-pane__header-trailing">
           <Show when={props.onToggleConversation}>
             <button

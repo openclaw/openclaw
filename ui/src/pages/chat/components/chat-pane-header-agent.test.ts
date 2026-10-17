@@ -17,6 +17,8 @@ function fixture() {
   const { pane, state } = createTestChatPane({
     client: createTestGatewayClient(request),
   });
+  const navigate = vi.fn();
+  pane.context.navigate = navigate;
   state.settings = { ...state.settings, sidebarAgentsMode: "roster" };
   pane.context.agents.state.agentsList = {
     defaultId: "main",
@@ -43,7 +45,7 @@ function fixture() {
       container,
     );
   };
-  return { pane, state, container, draw, request };
+  return { pane, state, container, draw, request, navigate };
 }
 
 describe("agent-first chat header", () => {
@@ -105,33 +107,51 @@ describe("agent-first chat header", () => {
     );
   });
 
+  it("opens the current agent settings from a separate header control", () => {
+    const { container, props } = mountChatPaneHeader(containers, {
+      agent: { id: "research", name: "Research lead", textAvatar: "🔬" },
+    });
+    const settings = container.querySelector<HTMLButtonElement>(".chat-pane__agent-settings")!;
+    expect(settings.getAttribute("aria-label")).toBe("Research lead settings");
+    settings.click();
+    expect(props.onOpenAgentSettings).toHaveBeenCalledWith("research");
+    expect(container.querySelector("[role=dialog]")?.matches(":popover-open")).not.toBe(true);
+  });
+
   it("uses the pane agent on direct navigation and retained agent switches, only in roster mode", () => {
-    const { state, container, draw } = fixture();
+    const { state, container, draw, navigate } = fixture();
     state.sessionKey = "agent:research:main";
     state.assistantAgentId = "main";
     state.assistantName = "Stale assistant";
     draw();
     const leading = () => container.querySelector(".chat-pane__header-leading")!;
-    expect(leading().textContent).toContain("Research lead");
+    const centered = () => container.querySelector(".chat-pane__header-agent");
+    expect(centered()?.textContent).toContain("Research lead");
     expect(leading().textContent).not.toContain("What can you do?");
     expect(leading().textContent).not.toContain("workspace-research");
-    expect(leading().querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🔬");
+    expect(centered()?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🔬");
+    container.querySelector<HTMLButtonElement>(".chat-pane__agent-settings")!.click();
+    expect(navigate).toHaveBeenCalledWith("agents", {
+      pathname: "/settings/agents/research",
+    });
 
     state.sessionKey = "global";
     state.assistantAgentId = "main";
     draw();
-    expect(leading().textContent).toContain("Chief of Staff");
-    expect(leading().textContent).not.toContain("Research lead");
-    expect(leading().querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦊");
+    expect(centered()?.textContent).toContain("Chief of Staff");
+    expect(centered()?.textContent).not.toContain("Research lead");
+    expect(centered()?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦊");
 
     state.settings = { ...state.settings, sidebarAgentsMode: "chip" };
     draw();
     expect(leading().textContent).toContain("workspace-research");
     expect(leading().textContent).toContain("What can you do?");
+    expect(centered()).toBeNull();
     expect(leading().querySelector(".chat-pane__agent-identity")).toBeNull();
 
     state.settings = { ...state.settings, sidebarAgentsMode: "roster" };
     draw(true);
+    expect(centered()).toBeNull();
     expect(leading().querySelector(".chat-pane__agent-identity")).toBeNull();
     expect(leading().querySelector(".chat-pane__session-title")).not.toBeNull();
   });

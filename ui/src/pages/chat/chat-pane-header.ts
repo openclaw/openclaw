@@ -1,5 +1,6 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionVisibility } from "../../api/types.ts";
+import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
@@ -669,14 +670,13 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           void this.loadHeaderMenuData(row, agentWorkspace, workspaceGit);
         }
       },
-      onMenuAction: (action) => {
-        if (row) {
-          this.handleHeaderMenuAction(action, row, workspace.root, branch);
-        }
-      },
-      onOpenParentSession: (sessionKey) => {
-        this.onPaneSessionChange?.(this.paneId, sessionKey);
-      },
+      onMenuAction: (action) =>
+        row && this.handleHeaderMenuAction(action, row, workspace.root, branch),
+      onOpenParentSession: (sessionKey) => this.onPaneSessionChange?.(this.paneId, sessionKey),
+      onOpenAgentSettings: (agentId) =>
+        this.context.navigate("agents", {
+          pathname: pathForAgentPanel(agentId, null, this.context.basePath),
+        }),
       onBranchSelect: (leafEntryId) => {
         const access = readChatSessionActionAccess(
           this.context.gateway.snapshot,

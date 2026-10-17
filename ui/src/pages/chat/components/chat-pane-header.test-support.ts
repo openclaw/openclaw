@@ -152,6 +152,7 @@ export function mountChatPaneHeader(
     onMenuOpenChange: vi.fn(),
     onMenuAction: vi.fn(),
     onOpenParentSession: vi.fn(),
+    onOpenAgentSettings: vi.fn(),
     onBranchSelect: vi.fn(),
     ...patch,
   };
