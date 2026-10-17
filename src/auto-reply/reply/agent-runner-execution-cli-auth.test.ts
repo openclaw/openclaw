@@ -20,7 +20,7 @@ import {
   type FallbackRunnerParams,
 } from "./agent-runner-execution.test-support.js";
 import * as agentRunnerUtils from "./agent-runner-utils.js";
-import { createModelSelectionState } from "./model-selection.js";
+import { createInitialState } from "./model-selection.inputs.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 const managedProfile = "claude-cli:managed";
@@ -65,39 +65,27 @@ describe("executeAgentTurn: CLI credential selection", () => {
       name: "selects ordered CLI credentials after an automatic cross-provider fallback",
       selected: primaryProfile,
       source: "auto",
-      primary: "openai",
-      profiles: [primaryProfile, managedProfile],
       expected: managedProfile,
     },
     {
       name: "rejects an incompatible explicit account before CLI execution",
       selected: primaryProfile,
-      source: "user",
-      primary: "openai",
-      profiles: [primaryProfile, managedProfile],
       error: 'cannot use auth profile "openai:primary"',
     },
     {
       name: "forwards explicitly selected canonical credentials",
       selected: canonicalProfile,
-      source: "user",
-      primary: "anthropic",
-      profiles: [canonicalProfile, managedProfile],
       expected: canonicalProfile,
     },
     {
       name: "preserves a selected native login even when a managed account exists",
       selected: nativeProfile,
-      source: "user",
-      primary: "claude-cli",
-      profiles: [nativeProfile, managedProfile],
       expected: undefined,
     },
     {
       name: "uses the executing Google candidate for canonical API-key fallback",
       selected: primaryProfile,
       source: "auto",
-      primary: "openai",
       provider: "google",
       backend: "google-gemini-cli",
       profiles: [primaryProfile, googleProfile],
@@ -106,19 +94,23 @@ describe("executeAgentTurn: CLI credential selection", () => {
     {
       name: "retains existing scoped forwarding for a custom CLI backend",
       selected: customProfile,
-      source: "user",
-      primary: "custom-cli",
       provider: "custom-cli",
       backend: "custom-cli",
       profiles: [customProfile],
       expected: customProfile,
     },
   ] as const)("$name", async (scenario) => {
-    const testCase = { provider: "claude-cli", backend: "claude-cli", ...scenario };
+    const testCase = {
+      provider: "claude-cli",
+      backend: "claude-cli",
+      source: "user" as const,
+      profiles: [scenario.selected, managedProfile],
+      ...scenario,
+    };
     const followupRun = createScopedFollowupRun();
 
     const model = "test-model";
-    followupRun.run.provider = testCase.primary;
+    followupRun.run.provider = credentials[testCase.selected].provider;
     followupRun.run.model = model;
     followupRun.run.authProfileId = testCase.selected;
     followupRun.run.authProfileIdSource = testCase.source;
@@ -185,14 +177,12 @@ describe("executeAgentTurn: CLI credential selection", () => {
       const actualAgentScope = await vi.importActual<typeof agentScope>(
         "../../agents/agent-scope.js",
       );
-      const resolveFallbackAvailability = actualAgentScope.resolveModelFallbackAvailability;
-      const projectFallbackOverride = actualAgentScope.modelFallbackOverrideFromAvailability;
       const availability = vi
         .spyOn(agentScope, "resolveModelFallbackAvailability")
-        .mockImplementation(resolveFallbackAvailability);
+        .mockImplementation(actualAgentScope.resolveModelFallbackAvailability);
       const fallbackOverride = vi
         .spyOn(agentScope, "modelFallbackOverrideFromAvailability")
-        .mockImplementation(projectFallbackOverride);
+        .mockImplementation(actualAgentScope.modelFallbackOverrideFromAvailability);
       onTestFinished(() => {
         availability.mockRestore();
         fallbackOverride.mockRestore();
@@ -235,48 +225,37 @@ describe("executeAgentTurn: CLI credential selection", () => {
       registerBackends([[runtime, provider, provider, runtime]]);
       state.isCliProviderMock.mockImplementation((candidate) => candidate === runtime);
       const candidatePlans: Array<Array<{ provider: string; model: string }>> = [];
-      let candidateError: unknown;
       state.runWithModelFallbackMock.mockImplementation(
         async (params: FallbackRunnerParams & Parameters<typeof resolveModelCandidateChain>[0]) => {
           candidatePlans.push(
-            resolveModelCandidateChain({ ...params, manifestPlugins: [] }).map((candidate) => ({
-              provider: candidate.provider,
-              model: candidate.model,
-            })),
+            resolveModelCandidateChain({ ...params, manifestPlugins: [] }).map(
+              ({ provider: candidateProvider, model: candidateModel }) => ({
+                provider: candidateProvider,
+                model: candidateModel,
+              }),
+            ),
           );
-          try {
-            return {
-              result: await params.run(
-                params.provider,
-                params.model,
-                initialFallbackAttemptOptions(params),
-              ),
-              provider: params.provider,
-              model: params.model,
-              attempts: [],
-            };
-          } catch (error) {
-            candidateError = error;
-            throw error;
-          }
+          return {
+            result: await params.run(
+              params.provider,
+              params.model,
+              initialFallbackAttemptOptions(params),
+            ),
+            provider: params.provider,
+            model: params.model,
+            attempts: [],
+          };
         },
       );
       state.runCliAgentMock.mockResolvedValue({ payloads: [{ text: "native reply" }], meta: {} });
       state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "API reply" }], meta: {} });
       const executeAgentTurn = await getExecuteAgentTurnForTest();
       const runTurn = async () => {
-        const selected = await createModelSelectionState({
+        const selected = await createInitialState(followupRun.run.config, provider, model, {
           agentId: followupRun.run.agentId,
-          cfg: followupRun.run.config,
-          agentCfg: followupRun.run.config.agents?.defaults,
           sessionEntry: entry,
           sessionStore: { main: entry },
           sessionKey: "main",
-          defaultProvider: provider,
-          defaultModel: model,
-          provider,
-          model,
-          hasModelDirective: false,
           preparedModelCatalog: { entries: catalog, routeVariants: catalog, authoritative: true },
         });
         followupRun.run.provider = selected.provider;
@@ -288,17 +267,15 @@ describe("executeAgentTurn: CLI credential selection", () => {
         });
       };
 
-      const firstTurn = await runTurn();
-      expect(
-        firstTurn,
-        `${JSON.stringify(firstTurn)}; candidate error: ${String(candidateError)}`,
-      ).toMatchObject({ kind: "success", runResult: { payloads: [{ text: "native reply" }] } });
+      await expect(runTurn()).resolves.toMatchObject({
+        kind: "success",
+        runResult: { payloads: [{ text: "native reply" }] },
+      });
       entry.cliSessionBindings = { [runtime]: { sessionId: "native-resume-session" } };
-      const resumedTurn = await runTurn();
-      expect(
-        resumedTurn,
-        `${JSON.stringify(resumedTurn)}; candidate error: ${String(candidateError)}`,
-      ).toMatchObject({ kind: "success", runResult: { payloads: [{ text: "native reply" }] } });
+      await expect(runTurn()).resolves.toMatchObject({
+        kind: "success",
+        runResult: { payloads: [{ text: "native reply" }] },
+      });
       state.runCliAgentMock.mockRejectedValueOnce(
         Object.assign(new Error("native executable unavailable"), { code: "ENOENT" }),
       );
@@ -318,11 +295,10 @@ describe("executeAgentTurn: CLI credential selection", () => {
       ]);
 
       applyModelOverrideToSessionEntry({ entry, selection: { provider, model } });
-      const apiTurn = await runTurn();
-      expect(
-        apiTurn,
-        `${JSON.stringify(apiTurn)}; candidate error: ${String(candidateError)}`,
-      ).toMatchObject({ kind: "success", runResult: { payloads: [{ text: "API reply" }] } });
+      await expect(runTurn()).resolves.toMatchObject({
+        kind: "success",
+        runResult: { payloads: [{ text: "API reply" }] },
+      });
       expect(state.runCliAgentMock).toHaveBeenCalledTimes(3);
       expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     },

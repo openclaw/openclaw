@@ -62,6 +62,14 @@ async function createFixture(withUsage = false) {
   return fixture;
 }
 
+function invalidate(fixture: Awaited<ReturnType<typeof createFixture>>) {
+  sessionChanges.invalidate({
+    sessionKey: fixture.context.sessionKey!,
+    storePath,
+    factsInvalidated: true,
+  });
+}
+
 function observeCommands(...args: Parameters<typeof observeCompletionCommands>) {
   const observer = observeCompletionCommands(...args);
   onTestFinished(() => observer.restore());
@@ -153,9 +161,7 @@ it.for(["ready", "late", "abandoned"] as const)(
           text: "done",
         });
         expect(fixture.read()).toMatchObject({ inputTokens: 120, outputTokens: 8 });
-        expect(
-          observer.commands.filter((command) => command === "session.actor.completeTurn"),
-        ).toHaveLength(1);
+        expectCompletions(observer);
       }
       completion.release();
       finishModel();
@@ -185,18 +191,12 @@ it.each([
   "preserves the completed reply after $count cache-only invalidations during the $stage read",
   async ({ stage, count }) => {
     const fixture = await createFixture(true);
-    const invalidate = () =>
-      sessionChanges.invalidate({
-        sessionKey: fixture.context.sessionKey!,
-        storePath,
-        factsInvalidated: true,
-      });
     let armed = stage === "initial";
     let invalidations = 0;
     const normalize = vi.fn<typeof fixture.context.replyMediaContext.normalizePayload>(
       async (payload) => {
         if (stage === "refresh") {
-          invalidate();
+          invalidate(fixture);
           armed = true;
         }
         return payload;
@@ -213,7 +213,7 @@ it.each([
           // Cache-only invalidation does not revoke the unchanged scoped write token.
           for (let index = 0; index < count; index += 1) {
             invalidations += 1;
-            invalidate();
+            invalidate(fixture);
           }
         }
       },
@@ -259,11 +259,7 @@ it.each(["unrelated-error", "writer-replaced"] as const)(
           );
         }
         if (reads === 1) {
-          sessionChanges.invalidate({
-            sessionKey: fixture.context.sessionKey!,
-            storePath,
-            factsInvalidated: true,
-          });
+          invalidate(fixture);
         }
       },
     });
@@ -306,21 +302,28 @@ it.each(["publication-failure", "unknown-commit"] as const)(
   },
 );
 
-it.each(["usage-only", "with-final-custody"] as const)(
-  "preserves %s failure semantics after a proven worker rollback",
+it.each(["usage-only", "with-final-custody", "operation-closed"] as const)(
+  "preserves stored state when %s completion fails at the commit boundary",
   async (kind) => {
-    const fixture = await createFixture(true);
-    const meta = fixture.context.execution.result.meta.agentMeta!;
+    const fixture = await createFixture(kind !== "operation-closed");
     const before = fixture.read();
     const beforeCommit = vi.fn(() => {
-      throw new Error("synthetic completion refusal");
+      if (kind === "operation-closed") {
+        fixture.context.replyOperation.complete();
+      } else {
+        throw new Error("synthetic completion refusal");
+      }
     });
     const observer = observeCommands({ beforeCommit });
     if (kind === "usage-only") {
-      await expect(fixture.account("ordinary", meta)).resolves.toBeUndefined();
+      await expect(
+        fixture.account("ordinary", fixture.context.execution.result.meta.agentMeta!),
+      ).resolves.toBeUndefined();
     } else {
       await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
-        "synthetic completion refusal",
+        kind === "operation-closed"
+          ? "Terminal accounting lost its reply operation"
+          : "synthetic completion refusal",
       );
     }
     expectCompletions(observer);
@@ -328,18 +331,3 @@ it.each(["usage-only", "with-final-custody"] as const)(
     expect(fixture.read()).toEqual(before);
   },
 );
-
-it("rechecks the live reply operation at the final commit boundary", async () => {
-  const fixture = await createFixture();
-  const before = fixture.read();
-  const beforeCommit = vi.fn(() => {
-    fixture.context.replyOperation.complete();
-  });
-  const observer = observeCommands({ beforeCommit });
-  await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
-    "Terminal accounting lost its reply operation",
-  );
-  expectCompletions(observer);
-  expect(beforeCommit).toHaveBeenCalledOnce();
-  expect(fixture.read()).toEqual(before);
-});

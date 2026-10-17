@@ -11,7 +11,6 @@ import {
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.test-fixtures.js";
@@ -23,22 +22,18 @@ const tempDirs = createTempDirTracker();
 let rootDir: string;
 
 function registerCliBackendsForTest(): void {
-  const backends = [
-    {
-      id: "claude-cli",
-      modelProvider: "anthropic",
-      pluginId: "anthropic",
-      config: { command: "claude" },
-      bundleMcp: false,
-    },
-    {
-      id: "google-gemini-cli",
-      modelProvider: "google",
-      pluginId: "google",
-      config: { command: "gemini" },
-      bundleMcp: false,
-    },
-  ] as const;
+  const backends = (
+    [
+      ["claude-cli", "anthropic", "claude"],
+      ["google-gemini-cli", "google", "gemini"],
+    ] as const
+  ).map(([id, provider, command]) => ({
+    id,
+    modelProvider: provider,
+    pluginId: provider,
+    config: { command },
+    bundleMcp: false,
+  }));
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: ({ backend }) => {
       const resolved = backends.find((entry) => entry.id === backend);
@@ -59,8 +54,6 @@ const runEmbeddedAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
 const runtimeErrorMock = vi.fn();
-const abortEmbeddedAgentRunMock = vi.fn();
-const refreshQueuedFollowupSessionMock = vi.fn();
 const compactState = vi.hoisted(() => ({
   compactEmbeddedAgentSessionMock: vi.fn(),
 }));
@@ -82,42 +75,24 @@ vi.mock("../../agents/model-auth.js", () => ({
   resolveModelAuthModeAsync: () => "api-key",
 }));
 
-vi.mock("../../agents/embedded-agent.js", () => {
-  return {
-    compactEmbeddedAgentSession: (
-      ...args: Parameters<
-        typeof import("../../agents/embedded-agent.js").compactEmbeddedAgentSession
-      >
-    ) => compactState.compactEmbeddedAgentSessionMock(...args),
-    runEmbeddedAgent: (params: unknown) => runEmbeddedAgentMock(params),
-    abortEmbeddedAgentRun: (sessionId: string) => {
-      abortEmbeddedAgentRunMock(sessionId);
-      return abortEmbeddedAgentRun(sessionId);
-    },
-    isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActive(sessionId),
-  };
-});
+vi.mock("../../agents/embedded-agent.js", () => ({
+  compactEmbeddedAgentSession: (
+    ...args: Parameters<typeof import("../../agents/embedded-agent.js").compactEmbeddedAgentSession>
+  ) => compactState.compactEmbeddedAgentSessionMock(...args),
+  runEmbeddedAgent: (params: unknown) => runEmbeddedAgentMock(params),
+  abortEmbeddedAgentRun: (sessionId: string) => abortEmbeddedAgentRun(sessionId),
+  isEmbeddedAgentRunActive,
+}));
 
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),
 }));
 
-vi.mock("../../agents/model-selection.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/model-selection.js")>(
-    "../../agents/model-selection.js",
-  );
-  return {
-    ...actual,
-    isCliProvider: (provider: string, _cfg?: OpenClawConfig) => {
-      const normalized = provider.trim().toLowerCase();
-      return (
-        normalized === "claude-cli" ||
-        normalized === "google-gemini-cli" ||
-        normalized === "codex-cli"
-      );
-    },
-  };
-});
+vi.mock("../../agents/model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-selection.js")>()),
+  isCliProvider: (provider: string) =>
+    ["claude-cli", "google-gemini-cli", "codex-cli"].includes(provider.trim().toLowerCase()),
+}));
 
 vi.mock("../../agents/thinking-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/thinking-runtime.js")>();
@@ -131,15 +106,13 @@ vi.mock("../../agents/thinking-runtime.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../runtime.js", () => {
-  return {
-    defaultRuntime: {
-      log: vi.fn(),
-      error: (...args: unknown[]) => runtimeErrorMock(...args),
-      exit: vi.fn(),
-    },
-  };
-});
+vi.mock("../../runtime.js", () => ({
+  defaultRuntime: {
+    log: vi.fn(),
+    error: (...args: unknown[]) => runtimeErrorMock(...args),
+    exit: vi.fn(),
+  },
+}));
 
 // mock-isolation: Keep the process-wide followup queue and drain registry outside runner cases.
 vi.mock("./queue.js", async () => {
@@ -156,7 +129,7 @@ vi.mock("./queue.js", async () => {
     })),
     resolveFollowupAbortSignal,
     scheduleFollowupDrain: vi.fn(),
-    refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
+    refreshQueuedFollowupSession: async () => undefined,
   };
 });
 
@@ -205,15 +178,13 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
   }),
 }));
 
-vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../agents/subagents/registry/subagent-registry.js")>();
-  return {
-    ...actual,
-    getSwarmRunByLaunchReplayKey: async () => undefined,
-    markSubagentRunTerminated: () => 0,
-  };
-});
+vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../agents/subagents/registry/subagent-registry.js")
+  >()),
+  getSwarmRunByLaunchReplayKey: async () => undefined,
+  markSubagentRunTerminated: () => 0,
+}));
 vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("../../agents/subagents/registry/subagent-registry-read.js")
@@ -221,15 +192,12 @@ vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (impo
   getLatestSubagentRunByChildSessionKey: async () => null,
 }));
 
-// #85714: keep the real private-final decision but spy the WARN emitter so we
-// can assert it fires only through the substantive text suppression branch.
+// #85714: exercise real suppression, spying only its WARN emitter.
 const warnPrivateFinalSpy = vi.hoisted(() => vi.fn());
-vi.mock("./private-message-tool-final.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./private-message-tool-final.js")>();
-  return { ...actual, warnPrivateMessageToolFinal: warnPrivateFinalSpy };
-});
-
-type RunWithModelFallbackParams = TestModelFallbackRunnerParams;
+vi.mock("./private-message-tool-final.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./private-message-tool-final.js")>()),
+  warnPrivateMessageToolFinal: warnPrivateFinalSpy,
+}));
 
 function setupAgentRunnerMocks(): void {
   rootDir = tempDirs.make("openclaw-run-reply-agent-");
@@ -246,22 +214,16 @@ function setupAgentRunnerMocks(): void {
   runCliAgentMock.mockReset();
   runWithModelFallbackMock.mockReset();
   runtimeErrorMock.mockReset();
-  abortEmbeddedAgentRunMock.mockClear();
-  compactState.compactEmbeddedAgentSessionMock.mockReset();
-  compactState.compactEmbeddedAgentSessionMock.mockResolvedValue({
+  compactState.compactEmbeddedAgentSessionMock.mockReset().mockResolvedValue({
     compacted: false,
     reason: "test-preflight-disabled",
   });
-  refreshQueuedFollowupSessionMock.mockReset();
-  refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
   vi.mocked(enqueueFollowupRun).mockReset();
   vi.mocked(scheduleFollowupDrain).mockReset();
-  loadCronStoreMock.mockReset();
-  // Default: no cron jobs in store.
-  loadCronStoreMock.mockResolvedValue({ version: 1, jobs: [] });
+  loadCronStoreMock.mockReset().mockResolvedValue({ version: 1, jobs: [] });
 
   // Default: no provider switch; execute the chosen provider+model.
-  runWithModelFallbackMock.mockImplementation(async (params: RunWithModelFallbackParams) => ({
+  runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
     result: await runInitialModelFallbackAttempt(params),
     provider: params.provider,
     model: params.model,

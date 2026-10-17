@@ -180,9 +180,6 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(payload.text).toBe(
       "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
     );
-    expect(payload.text).not.toContain("openai:private");
-    expect(payload.text).not.toContain("arbitrary plugin detail");
-    expect(payload.text).not.toContain("/login");
     expect(payload.presentation).toBeUndefined();
   });
 
