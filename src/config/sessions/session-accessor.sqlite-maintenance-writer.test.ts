@@ -69,14 +69,43 @@ afterEach(() => {
   archiveMaterializationHook.beforeMaterialize = undefined;
 });
 
-function createPlannerStore(entryCount: number, updatedAt?: number) {
-  const tempDir = sessionDirs.make();
-  const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+const day = 24 * 60 * 60 * 1_000;
+type MaintenanceOptions = Parameters<typeof maintenance.applySessionEntryMaintenance>[1];
+type PlanOptions = Omit<Partial<MaintenanceOptions>, "maintenanceConfig"> & {
+  maintenanceConfig?: Partial<MaintenanceOptions["maintenanceConfig"]>;
+};
+
+function freezeTime() {
+  const now = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  return now;
+}
+
+function preserveKeys(capture: () => string[]) {
+  const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+    capture,
+    dispose() {},
+  }));
+  onTestFinished(unregister);
+  return unregister;
+}
+
+function makeStorePath() {
+  return path.join(sessionDirs.make(), "agents", "main", "sessions", "sessions.json");
+}
+
+function createPlannerStore(entryCount = 0, updatedAt?: number) {
+  const storePath = makeStorePath();
+  const key = (index: number) => `agent:main:planner-${index}`;
+  const scope = (index: number) => ({ sessionKey: key(index), storePath });
+  const set = (index: number, entry: Partial<SessionEntry>) =>
+    replaceSessionEntrySync(scope(index), {
+      sessionId: `planner-${index}`,
+      updatedAt: 1,
+      ...entry,
+    });
   for (let index = 0; index < entryCount; index += 1) {
-    replaceSessionEntrySync(
-      { sessionKey: `agent:main:planner-${index}`, storePath },
-      { sessionId: `planner-${index}`, updatedAt: updatedAt ?? index + 1 },
-    );
+    set(index, { updatedAt: updatedAt ?? index + 1 });
   }
   const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
     agentId: "main",
@@ -86,95 +115,98 @@ function createPlannerStore(entryCount: number, updatedAt?: number) {
   }
   const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
   database.db.exec("ANALYZE; PRAGMA analysis_limit = 37;");
-  return { database, storePath };
+  const load = (index: number) => loadSessionEntry(scope(index));
+  const prepare = async () => {
+    const preservation = await prepareSessionMaintenancePreservation(storePath);
+    onTestFinished(preservation.dispose);
+    return ({ maintenanceConfig, ...options }: PlanOptions = {}) =>
+      runOpenClawAgentWriteTransaction(
+        (owner) =>
+          maintenance.applySessionEntryMaintenance(owner, {
+            archiveDirectory: path.join(path.dirname(database.path), "archives"),
+            storePath,
+            preservation: preservation.capture,
+            ...options,
+            maintenanceConfig: { ...resolveMaintenanceConfigFromInput(), ...maintenanceConfig },
+          }),
+        { agentId: "main", path: database.path },
+      );
+  };
+  const statistics = () =>
+    database.db
+      .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
+      .get("idx_agent_session_nodes_updated_at");
+  return { database, storePath, key, scope, set, load, prepare, statistics };
 }
 
-function applyMaintenance(
+function trackReads(
   database: ReturnType<typeof openOpenClawAgentDatabase>,
-  storePath: string,
-  options: Pick<Parameters<typeof maintenance.applySessionEntryMaintenance>[1], "preservation"> &
-    Partial<Parameters<typeof maintenance.applySessionEntryMaintenance>[1]>,
+  name: string,
+  matches: (sql: string) => boolean,
 ) {
-  return runOpenClawAgentWriteTransaction(
-    (owner) =>
-      maintenance.applySessionEntryMaintenance(owner, {
-        archiveDirectory: path.join(path.dirname(database.path), "archives"),
-        maintenanceConfig: resolveMaintenanceConfigFromInput(),
-        storePath,
-        ...options,
-      }),
-    { agentId: "main", path: database.path },
+  const tracker = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    [name],
+    (sql) => (matches(sql) ? name : null),
   );
+  onTestFinished(tracker.restore);
+  return tracker;
 }
 
 function trackProtection(database: ReturnType<typeof openOpenClawAgentDatabase>) {
-  return trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(database.db),
-    ["protection"],
-    (sql) =>
-      sql.includes(
-        'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
-      )
-        ? "protection"
-        : null,
+  return trackReads(database, "protection", (sql) =>
+    sql.includes(
+      'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
+    ),
   );
 }
 
+function expectUnarchived(entry: SessionEntry | undefined, expected: Partial<SessionEntry> = {}) {
+  expect(entry).toMatchObject(expected);
+  expect(entry?.archivedAt).toBeUndefined();
+}
+
 it("returns bounded finalization outcomes while preserving conflicts and duplicate plan entries", async () => {
-  const { database, storePath } = createPlannerStore(0);
+  const { database, storePath, key, scope, set, load } = createPlannerStore();
   const options = { agentId: "main", path: database.path, env: process.env };
   const entries = [0, 1, 2].map((index) => {
-    const sessionKey = `agent:main:finalization-${index}`;
-    replaceSessionEntrySync(
-      { sessionKey, storePath },
-      {
-        sessionId: `finalization-${index}`,
-        updatedAt: 1,
-        skillsSnapshot: { prompt: "retained snapshot".repeat(1024), skills: [] },
-      },
-    );
-    return { sessionKey, expectedEntry: loadSessionEntry({ sessionKey, storePath })! };
+    set(index, {
+      skillsSnapshot: { prompt: "retained snapshot".repeat(1024), skills: [] },
+    });
+    return { sessionKey: key(index), expectedEntry: load(index)! };
   });
   const changed = entries[2]!;
   entries.push({
     sessionKey: entries[0]!.sessionKey,
     expectedEntry: { ...entries[0]!.expectedEntry, label: "stale duplicate" },
   });
-  replaceSessionEntrySync(
-    { sessionKey: changed.sessionKey, storePath },
-    { ...changed.expectedEntry, label: "newer" },
+  replaceSessionEntrySync(scope(2), { ...changed.expectedEntry, label: "newer" });
+  const snapshots = trackReads(
+    database,
+    "snapshot",
+    (sql) => /^select\b/i.test(sql) && /\bsession_entry_snapshots\b/i.test(sql),
   );
-  const snapshots = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(database.db),
-    ["snapshot"],
-    (sql) =>
-      /^select\b/i.test(sql) && /\bsession_entry_snapshots\b/i.test(sql) ? "snapshot" : null,
+  const result = await withSqliteSessionDeletions(
+    options,
+    entries.map(({ sessionKey, expectedEntry }) => ({ sessionKey, entry: expectedEntry })),
+    async () =>
+      runSqliteSessionDeletionTransaction(
+        (current) =>
+          finalizeSessionMaintenanceInDatabase(current, {
+            kind: "maintenance-finalize",
+            agentId: options.agentId,
+            databaseOptions: options,
+            entries,
+            materializedPlans: [],
+          }),
+        options,
+      ),
   );
-  try {
-    const result = await withSqliteSessionDeletions(
-      options,
-      entries.map(({ sessionKey, expectedEntry }) => ({ sessionKey, entry: expectedEntry })),
-      async () =>
-        runSqliteSessionDeletionTransaction(
-          (current) =>
-            finalizeSessionMaintenanceInDatabase(current, {
-              kind: "maintenance-finalize",
-              agentId: options.agentId,
-              databaseOptions: options,
-              entries,
-              materializedPlans: [],
-            }),
-          options,
-        ),
-    );
-    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(1024);
-    expect(result.value.committedEntryIndices).toEqual([0, 1]);
-    expect(snapshots.rowCounts.snapshot).toBeLessThanOrEqual(
-      entries.length + result.value.committedEntryIndices.length,
-    );
-  } finally {
-    snapshots.restore();
-  }
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(1024);
+  expect(result.value.committedEntryIndices).toEqual([0, 1]);
+  expect(snapshots.rowCounts.snapshot).toBeLessThanOrEqual(
+    entries.length + result.value.committedEntryIndices.length,
+  );
   for (const { sessionKey } of entries.slice(0, 2)) {
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
   }
@@ -186,80 +218,52 @@ it("returns bounded finalization outcomes while preserving conflicts and duplica
 });
 
 it("avoids inventory projection for sequential writes with no retention candidates", async () => {
-  const { database, storePath } = createPlannerStore(32, Date.now());
-  const target = { sessionKey: "agent:main:planner-0", storePath };
-  const preservation = await prepareSessionMaintenancePreservation(storePath);
-  onTestFinished(preservation.dispose);
+  const { database, scope, load, prepare } = createPlannerStore(32, Date.now());
+  const target = scope(0);
+  const maintain = await prepare();
   const inventory = trackProtection(database);
-  try {
-    for (let index = 0; index < 3; index += 1) {
-      await patchSessionEntryCore(target, () => ({ label: `updated-${index}` }), {
-        skipMaintenance: true,
-      });
-      const plan = applyMaintenance(database, storePath, {
-        preservation: preservation.capture,
-        activeSessionKey: target.sessionKey,
-      });
-      expect(plan).toMatchObject({ archived: 0, capped: 0, pruned: 0, entryRemovals: [] });
-    }
-    expect(loadSessionEntry(target)?.label).toBe("updated-2");
-    expect(inventory.rowCounts.protection).toBe(0);
-  } finally {
-    inventory.restore();
+  for (let index = 0; index < 3; index += 1) {
+    await patchSessionEntryCore(target, () => ({ label: `updated-${index}` }), {
+      skipMaintenance: true,
+    });
+    const plan = maintain({ activeSessionKey: target.sessionKey });
+    expect(plan).toMatchObject({ archived: 0, capped: 0, pruned: 0, entryRemovals: [] });
   }
+  expect(load(0)?.label).toBe("updated-2");
+  expect(inventory.rowCounts.protection).toBe(0);
 });
 
 it("preserves current provider keys without loading unrelated protection rows", async () => {
-  const now = Date.now();
-  vi.spyOn(Date, "now").mockReturnValue(now);
-  const expired = now - 40 * 24 * 60 * 60 * 1_000;
-  const { database, storePath } = createPlannerStore(3, expired);
-  const scope = (index: number) => ({ sessionKey: `agent:main:planner-${index}`, storePath });
-  replaceSessionEntrySync(scope(2), { sessionId: "planner-2", updatedAt: now });
+  const now = freezeTime();
+  const expired = now - 40 * day;
+  const { database, scope, set, load, prepare } = createPlannerStore(3, expired);
+  set(2, { updatedAt: now });
   let protectedKey = scope(0).sessionKey;
-  const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
-    capture: () => [protectedKey],
-    dispose() {},
-  }));
-  onTestFinished(unregister);
-  const preservation = await prepareSessionMaintenancePreservation(storePath);
-  onTestFinished(preservation.dispose);
+  preserveKeys(() => [protectedKey]);
+  const maintain = await prepare();
   const inventory = trackProtection(database);
-  const maintain = () =>
-    applyMaintenance(database, storePath, {
-      preservation: preservation.capture,
-      forceMaintenance: true,
-    });
-  try {
-    expect(maintain().archivedEntries).toEqual([
-      { sessionKey: scope(1).sessionKey, sessionId: "planner-1" },
-    ]);
-    expect(loadSessionEntry(scope(0))).toMatchObject({ sessionId: "planner-0" });
-    expect(loadSessionEntry(scope(0))?.archivedAt).toBeUndefined();
+  expect(maintain({ forceMaintenance: true }).archivedEntries).toEqual([
+    { sessionKey: scope(1).sessionKey, sessionId: "planner-1" },
+  ]);
+  expectUnarchived(load(0), { sessionId: "planner-0" });
 
-    protectedKey = scope(2).sessionKey;
-    replaceSessionEntrySync(scope(2), { sessionId: "planner-2", updatedAt: expired });
-    expect(maintain().archivedEntries).toEqual([
-      { sessionKey: scope(0).sessionKey, sessionId: "planner-0" },
-    ]);
-    expect(loadSessionEntry(scope(2))).toMatchObject({
-      sessionId: "planner-2",
-      updatedAt: expired,
-    });
-    expect(loadSessionEntry(scope(2))?.archivedAt).toBeUndefined();
-    expect(inventory.rowCounts.protection).toBe(0);
-  } finally {
-    inventory.restore();
-  }
+  protectedKey = scope(2).sessionKey;
+  set(2, { updatedAt: expired });
+  expect(maintain({ forceMaintenance: true }).archivedEntries).toEqual([
+    { sessionKey: scope(0).sessionKey, sessionId: "planner-0" },
+  ]);
+  expectUnarchived(load(2), {
+    sessionId: "planner-2",
+    updatedAt: expired,
+  });
+  expect(inventory.rowCounts.protection).toBe(0);
 });
 
 it.each([false, true])(
   "loads only age-due maintenance candidates while preserving recent dashboard activity (forced capacity=%s)",
   async (forceMaintenance) => {
-    const now = Date.now();
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    const day = 24 * 60 * 60 * 1_000;
-    const { database, storePath } = createPlannerStore(0);
+    const now = freezeTime();
+    const { database, storePath, prepare } = createPlannerStore();
     const key = (name: string) => `agent:main:${name}`;
     const oldModel = key("explicit:model-run-00000000-0000-0000-0000-000000000001");
     const pressureModel = key("explicit:model-run-00000000-0000-0000-0000-000000000002");
@@ -278,129 +282,85 @@ it.each([false, true])(
         { sessionId: `age-candidate-${index}`, updatedAt: now - ageDays * day, ...entry },
       );
     }
-    const preservation = await prepareSessionMaintenancePreservation(storePath);
-    onTestFinished(preservation.dispose);
-    const candidates = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["candidates"],
-      (sql) =>
-        sql.includes("json_group_object") && sql.includes('"session_nodes"') ? "candidates" : null,
+    const maintain = await prepare();
+    const candidates = trackReads(
+      database,
+      "candidates",
+      (sql) => sql.includes("json_group_object") && sql.includes('"session_nodes"'),
     );
-    try {
-      const plan = applyMaintenance(database, storePath, {
-        preservation: preservation.capture,
-        forceMaintenance,
-        maintenanceConfig: {
-          ...resolveMaintenanceConfigFromInput(),
-          maxEntries: forceMaintenance ? 5 : 5_000,
-        },
-      });
-      expect(plan.archivedEntries.map(({ sessionKey }) => sessionKey).toSorted()).toEqual([
-        key("dashboard:expired"),
-        key("normal-expired"),
-      ]);
-      expect(plan.entryRemovals.map(({ sessionKey }) => sessionKey).toSorted()).toEqual(
-        forceMaintenance ? [oldModel, pressureModel] : [oldModel],
-      );
-      for (const name of ["normal-not-due", "dashboard:not-due", "dashboard:recent-activity"]) {
-        const entry = loadSessionEntry({ sessionKey: key(name), storePath });
-        expect(entry).toBeDefined();
-        expect(entry?.archivedAt).toBeUndefined();
-      }
-      expect(
-        loadSessionEntry({ sessionKey: key("dashboard:recent-activity"), storePath }),
-      ).toMatchObject({ lastActivityAt: now });
-      expect(candidates.rowCounts.candidates).toBe(forceMaintenance ? 5 : 4);
-    } finally {
-      candidates.restore();
+    const plan = maintain({
+      forceMaintenance,
+      maintenanceConfig: { maxEntries: forceMaintenance ? 5 : 5_000 },
+    });
+    expect(plan.archivedEntries.map(({ sessionKey }) => sessionKey).toSorted()).toEqual([
+      key("dashboard:expired"),
+      key("normal-expired"),
+    ]);
+    expect(plan.entryRemovals.map(({ sessionKey }) => sessionKey).toSorted()).toEqual(
+      forceMaintenance ? [oldModel, pressureModel] : [oldModel],
+    );
+    for (const name of ["normal-not-due", "dashboard:not-due", "dashboard:recent-activity"]) {
+      expectUnarchived(loadSessionEntry({ sessionKey: key(name), storePath }));
     }
+    expect(
+      loadSessionEntry({ sessionKey: key("dashboard:recent-activity"), storePath }),
+    ).toMatchObject({ lastActivityAt: now });
+    expect(candidates.rowCounts.candidates).toBe(forceMaintenance ? 5 : 4);
   },
 );
 
 it("limits protection reads to active ancestry and preserves cyclic or missing parents", async () => {
-  const now = Date.now();
-  vi.spyOn(Date, "now").mockReturnValue(now);
-  const { database, storePath } = createPlannerStore(32, now);
-  const key = (index: number) => `agent:main:planner-${index}`;
-  const expired = now - 40 * 24 * 60 * 60 * 1_000;
+  const now = freezeTime();
+  const { database, key, set, load, prepare } = createPlannerStore(32, now);
+  const expired = now - 40 * day;
   // Root 0; child 1 -> 2; cycle 3 <-> 4; child 5 -> absent 32; unrelated victim 6.
   const parents = [undefined, 2, undefined, 4, 3, 32, undefined];
   for (const [index, parent] of parents.entries()) {
-    replaceSessionEntrySync(
-      { sessionKey: key(index), storePath },
-      {
-        sessionId: `planner-${index}`,
-        updatedAt: expired,
-        ...(parent === undefined ? {} : { parentSessionKey: key(parent) }),
-      },
-    );
-  }
-  const preservation = await prepareSessionMaintenancePreservation(storePath);
-  onTestFinished(preservation.dispose);
-  const inventory = trackProtection(database);
-  try {
-    const plan = applyMaintenance(database, storePath, {
-      preservation: preservation.capture,
-      activeSessionKeys: [key(0), key(1), key(3), key(5)],
+    set(index, {
+      updatedAt: expired,
+      ...(parent === undefined ? {} : { parentSessionKey: key(parent) }),
     });
-    expect(plan.archivedEntries).toEqual([{ sessionKey: key(6), sessionId: "planner-6" }]);
-    for (const index of [0, 1, 2, 3, 4, 5]) {
-      const entry = loadSessionEntry({ sessionKey: key(index), storePath });
-      expect(entry).toMatchObject({ sessionId: `planner-${index}` });
-      expect(entry?.archivedAt).toBeUndefined();
-    }
-    expect(inventory.rowCounts.protection).toBe(6);
-  } finally {
-    inventory.restore();
   }
+  const maintain = await prepare();
+  const inventory = trackProtection(database);
+  const plan = maintain({
+    activeSessionKeys: [key(0), key(1), key(3), key(5)],
+  });
+  expect(plan.archivedEntries).toEqual([{ sessionKey: key(6), sessionId: "planner-6" }]);
+  for (const index of [0, 1, 2, 3, 4, 5]) {
+    expectUnarchived(load(index), { sessionId: `planner-${index}` });
+  }
+  expect(inventory.rowCounts.protection).toBe(6);
 });
 
 it("resolves protection once before capping aged candidates", async () => {
-  const { database, storePath } = createPlannerStore(6, Date.now());
-  const key = (index: number) => `agent:main:planner-${index}`;
-  const scope = (index: number) => ({ sessionKey: key(index), storePath });
-  replaceSessionEntrySync(scope(3), {
-    sessionId: "planner-3",
-    parentSessionKey: key(5),
-    updatedAt: Date.now(),
-  });
-  replaceSessionEntrySync(scope(2), {
-    sessionId: "planner-2",
-    updatedAt: Date.now() - 8 * 24 * 60 * 60 * 1000,
-  });
+  const { storePath, key, set, load, prepare } = createPlannerStore(6, Date.now());
+  set(3, { parentSessionKey: key(5), updatedAt: Date.now() });
+  set(2, { updatedAt: Date.now() - 8 * day });
   const admission = await beginSessionWorkAdmission({
     scope: storePath,
     identities: ["planner-0"],
     assertAllowed: () => {},
   });
   const provider = vi.fn(() => [key(2)]);
-  const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
-    capture: provider,
-    dispose() {},
-  }));
+  const unregister = preserveKeys(provider);
   try {
     await runExclusiveSessionLifecycleMutation("archive", {
       scope: storePath,
       identities: [key(1)],
       run: async () => {
-        const preservation = await prepareSessionMaintenancePreservation(storePath);
-        onTestFinished(preservation.dispose);
-        const plan = applyMaintenance(database, storePath, {
-          preservation: preservation.capture,
+        const maintain = await prepare();
+        const plan = maintain({
           activeSessionKey: key(3),
-          maintenanceConfig: {
-            ...resolveMaintenanceConfigFromInput(),
-            maxEntries: 1,
-          },
+          maintenanceConfig: { maxEntries: 1 },
         });
         expect(plan).toMatchObject({ archived: 1, capArchived: 1, capped: 1 });
-        expect(loadSessionEntry(scope(4))).toMatchObject({
+        expect(load(4)).toMatchObject({
           archivedAt: expect.any(Number),
           archiveReason: "active-session-cap",
         });
         for (const index of [0, 1, 2, 3, 5]) {
-          expect(loadSessionEntry(scope(index))).toMatchObject({ sessionId: `planner-${index}` });
-          expect(loadSessionEntry(scope(index))?.archivedAt).toBeUndefined();
+          expectUnarchived(load(index), { sessionId: `planner-${index}` });
         }
         expect(provider).toHaveBeenCalledTimes(1);
       },
@@ -412,10 +372,9 @@ it("resolves protection once before capping aged candidates", async () => {
 });
 
 it("caps only the oldest eligible activity ties without decoding unrelated payloads", async () => {
-  const { database, storePath } = createPlannerStore(0);
-  const now = Date.now();
-  vi.spyOn(Date, "now").mockReturnValue(now);
-  const old = now - 10 * 24 * 60 * 60 * 1_000;
+  const { storePath, prepare } = createPlannerStore();
+  const now = freezeTime();
+  const old = now - 10 * day;
   const key = (name: string) => `agent:main:bounded-${name}`;
   const untouchedPayload = "unselected-maintenance-payload".repeat(1_000);
   const fixtures: Array<[string, Partial<SessionEntry>]> = [
@@ -450,19 +409,12 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
       },
     );
   }
-  const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
-    capture: () => [key("live")],
-    dispose() {},
-  }));
-  onTestFinished(unregister);
-  const preservation = await prepareSessionMaintenancePreservation(storePath);
-  onTestFinished(preservation.dispose);
+  const unregister = preserveKeys(() => [key("live")]);
+  const maintain = await prepare();
   const parse = vi.spyOn(JSON, "parse");
   try {
-    const plan = applyMaintenance(database, storePath, {
-      preservation: preservation.capture,
+    const plan = maintain({
       maintenanceConfig: {
-        ...resolveMaintenanceConfigFromInput(),
         archiveDashboardAfterMs: null,
         preserveRecentMs: 1_000,
         maxEntries: fixtures.length - victims.length,
@@ -490,19 +442,13 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
 it.each(["session-key", "session-id"] as const)(
   "preserves aged sessions during a lifecycle mutation and resumes retention afterward (%s)",
   async (identityKind) => {
-    const { database, storePath } = createPlannerStore(2);
-    const target = { sessionKey: "agent:main:planner-0", sessionId: "planner-0", storePath };
-    const sibling = { sessionKey: "agent:main:planner-1", storePath };
+    const { database, storePath, scope, prepare } = createPlannerStore(2);
+    const target = { ...scope(0), sessionId: "planner-0" };
+    const sibling = scope(1);
     const transcript = [{ type: "session", id: target.sessionId, content: "retained history" }];
     replaceTranscriptEventsSync(target, transcript);
     const before = readSessionStateDeleteSnapshot(database.db, target.sessionId);
-    const preservation = await prepareSessionMaintenancePreservation(storePath);
-    onTestFinished(preservation.dispose);
-    const maintain = (forceMaintenance = false) =>
-      applyMaintenance(database, storePath, {
-        preservation: preservation.capture,
-        forceMaintenance,
-      });
+    const maintain = await prepare();
     const identity = identityKind === "session-key" ? target.sessionKey : target.sessionId;
 
     await runExclusiveSessionLifecycleMutation("archive", {
@@ -526,7 +472,7 @@ it.each(["session-key", "session-id"] as const)(
     });
 
     expect(isSessionLifecycleMutationActive(storePath, [identity])).toBe(false);
-    expect(maintain(true).archived).toBe(1);
+    expect(maintain({ forceMaintenance: true }).archived).toBe(1);
     expect(loadSessionEntry(target)).toMatchObject({
       archivedAt: expect.any(Number),
       archiveReason: "age-retention",
@@ -536,8 +482,8 @@ it.each(["session-key", "session-id"] as const)(
 );
 
 it("does not rescan unrelated rows when a requested lifecycle removal does not match", async () => {
-  const { storePath } = createPlannerStore(2);
-  const retained = { sessionKey: "agent:main:planner-1", sessionId: "planner-1", storePath };
+  const { storePath, scope, load } = createPlannerStore(2);
+  const retained = { ...scope(1), sessionId: "planner-1" };
   const transcript = [{ type: "session", id: retained.sessionId, content: "retained" }];
   replaceTranscriptEventsSync(retained, transcript);
   const parseSpy = vi.spyOn(JSON, "parse");
@@ -564,9 +510,7 @@ it("does not rescan unrelated rows when a requested lifecycle removal does not m
     parseSpy.mock.calls.filter(([serialized]) => serialized.includes('"planner-1"')).length,
   ).toBeLessThanOrEqual(3);
   parseSpy.mockRestore();
-  expect(loadSessionEntry({ sessionKey: "agent:main:planner-0", storePath })?.label).toBe(
-    "updated",
-  );
+  expect(load(0)?.label).toBe("updated");
   expect(loadSessionEntry(retained)?.sessionId).toBe(retained.sessionId);
   expect(loadTranscriptEventsSync(retained)).toEqual(transcript);
 });
@@ -574,10 +518,14 @@ it("does not rescan unrelated rows when a requested lifecycle removal does not m
 it.for(["channel recording", "reply initialization"] as const)(
   "does not hold %s behind automatic session maintenance",
   async (operation, { signal }) => {
-    const tempDir = sessionDirs.make();
-    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-    const staleSessionKey = "agent:main:subagent:maintenance-ingress-stale";
-    const laterStaleSessionKey = "agent:main:subagent:maintenance-ingress-later-stale";
+    const storePath = makeStorePath();
+    const seedStale = (suffix: string) => {
+      const sessionId = `maintenance-ingress${suffix}-stale`;
+      const sessionKey = `agent:main:subagent:${sessionId}`;
+      replaceSessionEntrySync({ sessionKey, storePath }, { sessionId, updatedAt: 1 });
+      return sessionKey;
+    };
+    const laterKey = "agent:main:subagent:maintenance-ingress-later-stale";
     const finalized = createDeferredCore();
     void finalized.promise.catch(() => {});
     const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
@@ -586,25 +534,18 @@ it.for(["channel recording", "reply initialization"] as const)(
       "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort",
     ).mockImplementation(async (...args) => {
       const includesLaterEntry = args[1].some((plan) =>
-        plan.entryRemovals.some(({ sessionKey }) => sessionKey === laterStaleSessionKey),
+        plan.entryRemovals.some(({ sessionKey }) => sessionKey === laterKey),
       );
-      try {
-        const result = await finalize(...args);
-        if (includesLaterEntry) {
-          finalized.resolve();
-        }
-        return result;
-      } catch (error) {
-        if (includesLaterEntry) {
-          finalized.reject(error);
-        }
-        throw error;
+      const result = finalize(...args);
+      if (includesLaterEntry) {
+        void result.then(
+          () => finalized.resolve(),
+          (error) => finalized.reject(error),
+        );
       }
+      return result;
     });
-    replaceSessionEntrySync(
-      { sessionKey: staleSessionKey, storePath },
-      { sessionId: "maintenance-ingress-stale", updatedAt: 1 },
-    );
+    const staleKey = seedStale("");
 
     const materializationStarted = createDeferredCore();
     const materializationReleased = createDeferredCore();
@@ -614,7 +555,8 @@ it.for(["channel recording", "reply initialization"] as const)(
     };
 
     const write = async (suffix: string) => {
-      const sessionKey = `agent:main:discord:direct:maintenance-ingress${suffix}`;
+      const sessionId = `maintenance-ingress${suffix}`;
+      const sessionKey = `agent:main:discord:direct:${sessionId}`;
       if (operation === "reply initialization") {
         const target = { agentId: "main", storePath, sessionKey };
         const snapshot = await loadReplySessionInitializationSnapshot(target);
@@ -622,11 +564,11 @@ it.for(["channel recording", "reply initialization"] as const)(
           ...target,
           activeSessionKey: sessionKey,
           expectedRevision: snapshot.revision,
-          sessionEntry: { sessionId: `maintenance-ingress${suffix}`, updatedAt: Date.now() },
+          sessionEntry: { sessionId, updatedAt: Date.now() },
           maintenanceConfig: resolveMaintenanceConfigFromInput(),
         });
         expect(result.ok).toBe(true);
-        expect(loadSessionEntry(target)?.sessionId).toBe(`maintenance-ingress${suffix}`);
+        expect(loadSessionEntry(target)?.sessionId).toBe(sessionId);
         return;
       }
       await recordInboundSession({
@@ -635,16 +577,16 @@ it.for(["channel recording", "reply initialization"] as const)(
         ctx: {
           Body: "maintenance ingress proof",
           ChatType: "direct",
-          From: `discord:maintenance-ingress${suffix}`,
+          From: `discord:${sessionId}`,
           Provider: "discord",
-          SenderId: `maintenance-ingress${suffix}`,
+          SenderId: sessionId,
           To: "discord:bot",
         },
         updateLastRoute: {
           accountId: "default",
           channel: "discord",
           sessionKey,
-          to: `user:maintenance-ingress${suffix}`,
+          to: `user:${sessionId}`,
         },
         onRecordError(error) {
           throw error;
@@ -658,10 +600,7 @@ it.for(["channel recording", "reply initialization"] as const)(
     ]);
     if (firstCompleted === "entry-write") {
       await materializationStarted.promise;
-      replaceSessionEntrySync(
-        { sessionKey: laterStaleSessionKey, storePath },
-        { sessionId: "maintenance-ingress-later-stale", updatedAt: 1 },
-      );
+      seedStale("-later");
       await write("-later");
     }
     materializationReleased.resolve();
@@ -670,18 +609,14 @@ it.for(["channel recording", "reply initialization"] as const)(
     expect(firstCompleted).toBe("entry-write");
     // Join the second cleanup before inspecting its writes; worker startup can exceed polling deadlines.
     await racePromiseWithAbortSignal(finalized.promise, signal);
-    expect(loadSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
-    expect(loadSessionEntry({ sessionKey: laterStaleSessionKey, storePath })).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: staleKey, storePath })).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: laterKey, storePath })).toBeUndefined();
   },
 );
 
 it("refreshes planner statistics after bulk lifecycle cleanup", async () => {
-  const { database, storePath } = createPlannerStore(66);
-  expect(
-    database.db
-      .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
-      .get("idx_agent_session_nodes_updated_at"),
-  ).toEqual({ stat: expect.stringMatching(/^66\b/u) });
+  const { database, storePath, statistics } = createPlannerStore(66);
+  expect(statistics()).toEqual({ stat: expect.stringMatching(/^66\b/u) });
 
   await expect(
     applySessionEntryLifecycleMutation({
@@ -693,16 +628,12 @@ it("refreshes planner statistics after bulk lifecycle cleanup", async () => {
     }),
   ).resolves.toMatchObject({ afterCount: 1, removedEntries: 65 });
 
-  expect(
-    database.db
-      .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
-      .get("idx_agent_session_nodes_updated_at"),
-  ).toEqual({ stat: expect.stringMatching(/^1\b/u) });
+  expect(statistics()).toEqual({ stat: expect.stringMatching(/^1\b/u) });
   expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
 });
 
 it("rolls back planner statistics when maintenance ownership is revoked before commit", async () => {
-  const { database } = createPlannerStore(66);
+  const { database, statistics } = createPlannerStore(66);
   const scope = { agentId: "main", path: database.path };
   runOpenClawAgentWriteTransaction((current) => {
     for (let index = 1; index < 66; index += 1) {
@@ -712,10 +643,6 @@ it("rolls back planner statistics when maintenance ownership is revoked before c
   expect(database.db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()).toEqual({
     count: 1,
   });
-  const readStatistics = () =>
-    database.db
-      .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
-      .get("idx_agent_session_nodes_updated_at");
   let current = true;
   let reachedCommit = false;
   const authorization = probe.admission(workerAdmission, (request, grant, callback) => {
@@ -730,12 +657,12 @@ it("rolls back planner statistics when maintenance ownership is revoked before c
     isCurrent: () => current,
   });
   expect(reachedCommit).toBe(true);
-  expect(readStatistics()).toEqual({ stat: expect.stringMatching(/^66\b/u) });
+  expect(statistics()).toEqual({ stat: expect.stringMatching(/^66\b/u) });
   authorization.mockRestore();
   current = true;
   await maintenance.refreshSqliteSessionPlannerStatisticsBestEffort(scope, 65, {
     isCurrent: () => current,
   });
-  expect(readStatistics()).toEqual({ stat: expect.stringMatching(/^1\b/u) });
+  expect(statistics()).toEqual({ stat: expect.stringMatching(/^1\b/u) });
   expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
 });

@@ -53,6 +53,17 @@ const event = (type: string, id: string, fields: Record<string, unknown>) => ({
   id,
   ...fields,
 });
+const messageEvent = (
+  id: string,
+  parentId: string | null | undefined,
+  role: string,
+  content: unknown,
+) =>
+  event("message", id, {
+    ...(parentId === undefined ? {} : { parentId }),
+    timestamp: "2026-06-15T00:00:01.000Z",
+    message: { role, content },
+  });
 const childEvents = async (storePath: string, sessionId: string) =>
   (await loadTranscriptEvents({
     agentId: "main",
@@ -75,6 +86,16 @@ async function seedParentTranscript(params: {
     },
     (transcript) => transcript.replaceEvents(params.events),
   );
+}
+
+async function createParent(parentSessionId: string, events: Record<string, unknown>[]) {
+  const { root, storePath } = await createStore();
+  await seedParentTranscript({
+    storePath,
+    parentSessionId,
+    events: [header(parentSessionId, root), ...events],
+  });
+  return { storePath };
 }
 
 async function forkChildTranscript(
@@ -123,11 +144,7 @@ describe("forkSessionFromParentTranscript", () => {
       parentSessionId,
       events: [
         header(parentSessionId, root, "2026-08-18T00:00:00.000Z"),
-        event("message", "private-message", {
-          parentId: null,
-          timestamp: "2026-08-18T00:00:01.000Z",
-          message: { role: "user", content: "private context" },
-        }),
+        messageEvent("private-message", null, "user", "private context"),
       ],
     });
 
@@ -185,35 +202,15 @@ describe("forkSessionFromParentTranscript", () => {
         timestamp: "2026-05-01T00:00:00.000Z",
         cwd,
       },
-      event("message", "user-1", {
-        parentId: null,
-        timestamp: "2026-05-01T00:00:01.000Z",
-        message: { role: "user", content: "hello" },
-      }),
-      event("message", "assistant-1", {
-        parentId: "user-1",
-        timestamp: "2026-05-01T00:00:02.000Z",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "hi" }],
-          api: "openai-responses",
-          provider: "openai",
-          model: "gpt-5.4",
-          stopReason: "stop",
-          timestamp: 2,
-        },
-      }),
+      messageEvent("user-1", null, "user", "hello"),
+      messageEvent("assistant-1", "user-1", "assistant", [{ type: "text", text: "hi" }]),
       event("label", "label-1", {
         parentId: "assistant-1",
         timestamp: "2026-05-01T00:00:03.000Z",
         targetId: "user-1",
         label: "start",
       }),
-      event("message", "delivery-side-branch", {
-        parentId: "label-1",
-        timestamp: "2026-05-01T00:00:04.000Z",
-        message: { role: "assistant", content: "side delivery" },
-      }),
+      messageEvent("delivery-side-branch", "label-1", "assistant", "side delivery"),
       event("leaf", "active-leaf", {
         parentId: "delivery-side-branch",
         timestamp: "2026-05-01T00:00:05.000Z",
@@ -265,22 +262,14 @@ describe("forkSessionFromParentTranscript", () => {
     const parentSessionId = "parent-opaque";
     const entries: Record<string, unknown>[] = [
       header(parentSessionId, root),
-      event("message", "active-root", {
-        parentId: null,
-        timestamp: "2026-06-15T00:00:01.000Z",
-        message: { role: "assistant", content: [{ type: "text", text: "active root" }] },
-      }),
+      messageEvent("active-root", null, "assistant", [{ type: "text", text: "active root" }]),
       event("label", "active-label", {
         parentId: "active-root",
         timestamp: "2026-06-15T00:00:01.500Z",
         targetId: "active-root",
         label: "selected",
       }),
-      event("message", "side-delivery", {
-        parentId: "active-root",
-        timestamp: "2026-06-15T00:00:02.000Z",
-        message: { role: "assistant", content: "side delivery" },
-      }),
+      messageEvent("side-delivery", "active-root", "assistant", "side delivery"),
       event("metadata", "plugin-metadata", {
         parentId: "side-delivery",
         payload: { source: "plugin" },
@@ -330,29 +319,19 @@ describe("forkSessionFromParentTranscript", () => {
   });
 
   it("keeps an explicit empty visible branch separate from its opaque append parent", async () => {
-    const { root, storePath } = await createStore();
-    await seedParentTranscript({
-      storePath,
-      parentSessionId: "parent-empty-opaque",
-      events: [
-        header("parent-empty-opaque", root),
-        event("message", "inactive-root", {
-          parentId: null,
-          timestamp: "2026-06-15T00:00:01.000Z",
-          message: { role: "user", content: "inactive history" },
-        }),
-        event("leaf", "empty-leaf", {
-          parentId: "inactive-root",
-          timestamp: "2026-06-15T00:00:02.000Z",
-          targetId: null,
-          appendParentId: null,
-        }),
-        event("metadata", "plugin-metadata", {
-          parentId: "inactive-root",
-          payload: { source: "plugin" },
-        }),
-      ],
-    });
+    const { storePath } = await createParent("parent-empty-opaque", [
+      messageEvent("inactive-root", null, "user", "inactive history"),
+      event("leaf", "empty-leaf", {
+        parentId: "inactive-root",
+        timestamp: "2026-06-15T00:00:02.000Z",
+        targetId: null,
+        appendParentId: null,
+      }),
+      event("metadata", "plugin-metadata", {
+        parentId: "inactive-root",
+        payload: { source: "plugin" },
+      }),
+    ]);
 
     const fork = await forkChildTranscript(storePath, "parent-empty-opaque");
     const reopened = await openForkedChildSession(storePath, fork);
@@ -379,19 +358,9 @@ describe("forkSessionFromParentTranscript", () => {
   });
 
   it("keeps a reachable branch suffix when an older parent is missing", async () => {
-    const { root, storePath } = await createStore();
-    await seedParentTranscript({
-      storePath,
-      parentSessionId: "parent-missing-ancestor",
-      events: [
-        header("parent-missing-ancestor", root),
-        event("message", "reachable-tail", {
-          parentId: "missing-parent",
-          timestamp: "2026-06-15T00:00:01.000Z",
-          message: { role: "assistant", content: "reachable tail" },
-        }),
-      ],
-    });
+    const { storePath } = await createParent("parent-missing-ancestor", [
+      messageEvent("reachable-tail", "missing-parent", "assistant", "reachable tail"),
+    ]);
 
     const fork = await forkChildTranscript(storePath, "parent-missing-ancestor");
     const records = await childEvents(storePath, fork.sessionId);
@@ -401,25 +370,15 @@ describe("forkSessionFromParentTranscript", () => {
   });
 
   it("keeps visible history when the next append explicitly starts a root branch", async () => {
-    const { root, storePath } = await createStore();
-    await seedParentTranscript({
-      storePath,
-      parentSessionId: "parent-root-append",
-      events: [
-        header("parent-root-append", root),
-        event("message", "visible-root", {
-          parentId: null,
-          timestamp: "2026-06-15T00:00:01.000Z",
-          message: { role: "assistant", content: "visible history" },
-        }),
-        event("leaf", "root-append-control", {
-          parentId: "inactive-tail",
-          timestamp: "2026-06-15T00:00:02.000Z",
-          targetId: "visible-root",
-          appendParentId: null,
-        }),
-      ],
-    });
+    const { storePath } = await createParent("parent-root-append", [
+      messageEvent("visible-root", null, "assistant", "visible history"),
+      event("leaf", "root-append-control", {
+        parentId: "inactive-tail",
+        timestamp: "2026-06-15T00:00:02.000Z",
+        targetId: "visible-root",
+        appendParentId: null,
+      }),
+    ]);
 
     const fork = await forkChildTranscript(storePath, "parent-root-append");
     const reopened = await openForkedChildSession(storePath, fork);
@@ -429,50 +388,30 @@ describe("forkSessionFromParentTranscript", () => {
     expect(records.at(-1)).toMatchObject({ type: "message", parentId: null });
   });
 
-  it("preserves supported current-version linear transcripts", async ({ onTestFailed }) => {
-    let phase = "create-fixture";
-    onTestFailed(() => console.error(JSON.stringify({ test: "parent-linear", phase })));
-    const { root, storePath } = await createStore();
-    phase = "seed-parent";
-    await seedParentTranscript({
-      storePath,
-      parentSessionId: "parent-linear",
-      events: [
-        header("parent-linear", root),
-        event("message", "linear-user", {
-          timestamp: "2026-06-15T00:00:01.000Z",
-          message: { role: "user", content: "hello" },
-        }),
-        event("message", "linear-assistant", {
-          timestamp: "2026-06-15T00:00:02.000Z",
-          message: { role: "assistant", content: "hi" },
-        }),
-        event("metadata", "linear-metadata", {
-          parentId: "linear-assistant",
-          payload: { source: "plugin" },
-        }),
-      ],
-    });
+  it("preserves supported current-version linear transcripts", async () => {
+    const { storePath } = await createParent("parent-linear", [
+      messageEvent("linear-user", undefined, "user", "hello"),
+      messageEvent("linear-assistant", undefined, "assistant", "hi"),
+      event("metadata", "linear-metadata", {
+        parentId: "linear-assistant",
+        payload: { source: "plugin" },
+      }),
+    ]);
 
-    phase = "fork";
     const fork = await forkChildTranscript(storePath, "parent-linear");
-    phase = "read-child";
     const records = await childEvents(storePath, fork.sessionId);
     expect(records.slice(1)).toMatchObject([
       { id: "linear-user", parentId: null },
       { id: "linear-assistant", parentId: "linear-user" },
       { id: "linear-metadata", parentId: "linear-assistant" },
     ]);
-    phase = "open-child";
     const reopened = await openForkedChildSession(storePath, fork);
     expect(reopened.buildSessionContext().messages).toHaveLength(2);
-    phase = "append";
     await reopened.appendMessageAsync({
       role: "user",
       content: "continued",
       timestamp: Date.now(),
     });
-    phase = "read-continued";
     const continuedRecords = await childEvents(storePath, fork.sessionId);
     expect(continuedRecords.at(-1)).toMatchObject({
       type: "message",

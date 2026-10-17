@@ -3,6 +3,7 @@ import { symlink } from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
@@ -47,27 +48,59 @@ afterEach(() => {
 
 const body = "synthetic report content ".repeat(400);
 const scope = { agentId: "main", sessionKey: "agent:main:reports", sessionId: "reports" };
-const assistant = {
-  role: "assistant",
+const assistant = makeAgentAssistantMessage({
   content: [{ type: "text", text: body }],
-  api: "openai-responses",
-  provider: "openai",
   model: "synthetic",
   responseId: "response",
-  usage: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  },
-  stopReason: "stop",
   timestamp: 1,
-} satisfies AssistantMessage;
+});
 const selected = { customType: "status", content: body, details: { selected: true } };
+const header = { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION };
+const messageEvent = (id: string, parentId: string | null, message: unknown) => ({
+  type: "message",
+  id,
+  parentId,
+  message,
+});
+const statusReport = (content: string) => ({ customType: "status", content, display: true });
+const agentDatabase = () => openOpenClawAgentDatabase({ agentId: scope.agentId });
+const nativeDatabase = () => requireNativeSqliteDatabase(agentDatabase().db);
+const row = (db: DatabaseSync, sql: string) => db.prepare(sql).get(scope.sessionId);
+const textContent = (text: string, textSignature?: string) => [
+  {
+    type: "text" as const,
+    text,
+    ...(textSignature ? { textSignature } : {}),
+  },
+];
+const partition = (
+  name: string,
+  message: Partial<AssistantMessage> & Record<string, unknown> = {},
+  skipped = false,
+) => ({ name, message, skipped });
+const insertEvent = (db: DatabaseSync, seq: number, event: unknown) =>
+  createTranscriptEventInserter(
+    db,
+    scope.sessionId,
+  )({
+    seq,
+    eventJson: JSON.stringify(event),
+    createdAt: 1,
+  });
+const assertNoHostTransaction = (calls: [string][]) =>
+  expect(calls.some(([sql]) => /^BEGIN\s+IMMEDIATE/i.test(sql))).toBe(false);
+const abortPartial = (
+  runId: string,
+  overrides: Partial<Parameters<typeof appendAbortedSessionTranscriptPartial>[1]> = {},
+) =>
+  appendAbortedSessionTranscriptPartial(scope, {
+    runId,
+    message: { ...assistant, idempotencyKey: `${runId}:assistant` },
+    expectedLifecycleRevision: "current-lifecycle",
+    ...overrides,
+  });
 
-const withReportState = (run: (state: OpenClawTestState) => Promise<void>) =>
+const withReportState = (run: (state: OpenClawTestState) => Promise<void>) => () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot({});
     await run(state);
@@ -91,41 +124,24 @@ async function blockWriter() {
   return { release, blocker };
 }
 
-async function seedReports(stopReason: AssistantMessage["stopReason"] = assistant.stopReason) {
-  setRuntimeConfigSnapshot({});
+async function seedEvents(events: unknown[]) {
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  await replaceTranscriptEvents(scope, [
-    { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
-    { type: "message", id: "root", parentId: null, message: { role: "user", content: body } },
-    {
-      type: "custom_message",
-      id: "old",
-      parentId: "root",
-      customType: "status",
-      content: body,
-      display: true,
-    },
+  await replaceTranscriptEvents(scope, [header, ...events]);
+  return nativeDatabase();
+}
+async function seedReports() {
+  const db = await seedEvents([
+    messageEvent("root", null, { role: "user", content: body }),
+    { type: "custom_message", id: "old", parentId: "root", ...statusReport(body) },
     { type: "custom_message", id: "selected", parentId: "old", ...selected, display: true },
-    {
-      type: "message",
-      id: "assistant",
-      parentId: "selected",
-      message: { ...assistant, stopReason, __openclaw: { runId: "run" } },
-    },
-    {
-      type: "message",
-      id: "tail",
-      parentId: "assistant",
-      message: { role: "user", content: body },
-    },
+    messageEvent("assistant", "selected", { ...assistant, __openclaw: { runId: "run" } }),
+    messageEvent("tail", "assistant", { role: "user", content: body }),
   ]);
-  const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: scope.agentId }).db);
   expect(
-    db
-      .prepare(
-        "SELECT count(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
-      )
-      .get(scope.sessionId),
+    row(
+      db,
+      "SELECT count(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
+    ),
   ).toEqual({ count: 5 });
   return db;
 }
@@ -135,15 +151,14 @@ function transcriptSnapshot(db: DatabaseSync) {
     events: db
       .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
       .all(scope.sessionId),
-    watermark: db
-      .prepare("SELECT * FROM transcript_rewrite_watermarks WHERE session_id = ?")
-      .get(scope.sessionId),
+    watermark: row(db, "SELECT * FROM transcript_rewrite_watermarks WHERE session_id = ?"),
   };
 }
 
 describe("SQLite report payload selection", () => {
-  it("reserves a report with its original identity and environment before later writes", async () => {
-    await withReportState(async (state) => {
+  it(
+    "reserves report identity, environment, and queue order",
+    withReportState(async (state) => {
       await seedReports();
       const options = { agentId: scope.agentId };
       const { release, blocker } = await blockWriter();
@@ -154,7 +169,7 @@ describe("SQLite report payload selection", () => {
         customTypes: ["status"],
         selectReport: () => {
           order.push("report");
-          return { customType: "status", content: "queued report", display: true };
+          return statusReport("queued report");
         },
       });
       target.sessionId = "successor";
@@ -170,21 +185,22 @@ describe("SQLite report payload selection", () => {
         type: "custom_message",
         content: "queued report",
       });
-    });
-  });
+    }),
+  );
 
-  it("rejects a queued report after the original file is replaced with identical bytes", async () => {
-    await withReportState(async (state) => {
+  it(
+    "rejects byte-identical file replacement while queued",
+    withReportState(async (state) => {
       const db = await seedReports();
       db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-      const { path: databasePath } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+      const { path: databasePath } = agentDatabase();
       await closeOpenClawAgentDatabaseByPathAsync(databasePath);
       const replacement = state.path("same-report.sqlite");
       const retired = state.path("retired-report.sqlite");
       copyFileSync(databasePath, replacement);
       expect(readFileSync(replacement)).toEqual(readFileSync(databasePath));
       const { release, blocker } = await blockWriter();
-      const selectReport = vi.fn(() => ({ customType: "status", content: "stale", display: true }));
+      const selectReport = vi.fn(() => statusReport("stale"));
       const report = appendSessionTranscriptReport(scope, custom(selectReport));
       const rejected = expect(report).rejects.toThrow(/target changed|identity|physical file/i);
       renameSync(databasePath, retired);
@@ -198,18 +214,17 @@ describe("SQLite report payload selection", () => {
         release.resolve();
         await Promise.allSettled([blocker, report]);
       }
-    });
-  });
+    }),
+  );
 
-  it("cannot redirect a report to another store containing the same session key", async () => {
-    await withReportState(async (state) => {
+  it(
+    "rejects redirection to another store with the same key",
+    withReportState(async (state) => {
       const requested = { ...scope, storePath: state.path("requested.sqlite") };
       const other = { ...scope, storePath: state.path("other.sqlite") };
       for (const target of [requested, other]) {
         await upsertSessionEntryCore(target, { sessionId: scope.sessionId, updatedAt: 1 });
-        await replaceTranscriptEvents(target, [
-          { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
-        ]);
+        await replaceTranscriptEvents(target, [header]);
       }
       const before = await Promise.all(
         [requested, other].map((target) => loadTranscriptEvents(target)),
@@ -221,15 +236,7 @@ describe("SQLite report payload selection", () => {
       await expect(
         appendSessionTranscriptReport(
           requested,
-          {
-            kind: "custom",
-            customTypes: ["status"],
-            selectReport: () => ({
-              customType: "status",
-              content: "must stay in requested store",
-              display: true,
-            }),
-          },
+          custom(() => statusReport("must stay in requested store")),
           {
             sessionEntryCurrent: {
               source: {
@@ -251,11 +258,12 @@ describe("SQLite report payload selection", () => {
       expect(
         await Promise.all([requested, other].map((target) => loadTranscriptEvents(target))),
       ).toEqual(before);
-    });
-  });
+    }),
+  );
 
-  it("fences worker abort fallbacks and preserves each run's authoritative answer", async () => {
-    await withReportState(async () => {
+  it(
+    "fences abort fallbacks and preserves authoritative answers",
+    withReportState(async () => {
       const db = await seedReports();
       await upsertSessionEntryCore(scope, {
         sessionId: scope.sessionId,
@@ -284,18 +292,12 @@ describe("SQLite report payload selection", () => {
       onTestFinished(onInternalSessionTranscriptUpdate(onUpdate));
       for (const expectedLifecycleRevision of [null, "previous-lifecycle"]) {
         await expect(
-          appendAbortedSessionTranscriptPartial(scope, {
-            ...partial,
-            expectedLifecycleRevision,
-          }),
+          abortPartial(partial.runId, { ...partial, expectedLifecycleRevision }),
         ).rejects.toThrow("session writer claim changed before transcript persistence");
         expect(transcriptSnapshot(db)).toEqual(before);
         expect(onUpdate).not.toHaveBeenCalled();
       }
-      const result = await appendAbortedSessionTranscriptPartial(scope, {
-        ...partial,
-        expectedLifecycleRevision: "current-lifecycle",
-      });
+      const result = await abortPartial(partial.runId, partial);
       expect(result).toMatchObject({
         ok: true,
         value: {
@@ -335,16 +337,9 @@ describe("SQLite report payload selection", () => {
         }),
       );
       onUpdate.mockClear();
-      await expect(
-        appendAbortedSessionTranscriptPartial(scope, {
-          ...partial,
-          expectedLifecycleRevision: "current-lifecycle",
-        }),
-      ).resolves.toMatchObject({ ok: true });
+      await expect(abortPartial(partial.runId, partial)).resolves.toMatchObject({ ok: true });
       expect(onUpdate).not.toHaveBeenCalled();
-      expect(hostTransactions.mock.calls.some(([sql]) => /^BEGIN\s+IMMEDIATE/i.test(sql))).toBe(
-        false,
-      );
+      assertNoHostTransaction(hostTransactions.mock.calls);
       const events = await loadTranscriptEvents(scope);
       expect(events).toHaveLength(7);
       expect(events.at(-1)).toMatchObject({
@@ -353,90 +348,57 @@ describe("SQLite report payload selection", () => {
         message: { idempotencyKey: "stopped-run:assistant", __openclaw: { runId: "stopped-run" } },
       });
 
-      const partitions: Array<{
-        name: string;
-        skipped: boolean;
-        terminal?: boolean;
-        otherRun?: boolean;
-        message?: Partial<AssistantMessage> & Record<string, unknown>;
-      }> = [
-        {
-          name: "success",
-          skipped: true,
-          message: {
-            content: [{ type: "text", text: "Final answer completed after the snapshot" }],
-          },
-        },
-        { name: "error-partial", skipped: true, message: { stopReason: "error" } },
-        { name: "empty-success", skipped: false, message: { content: [] } },
-        {
-          name: "empty-error",
-          skipped: false,
-          message: { content: [], stopReason: "error", errorMessage: "Synthetic failure" },
-        },
-        {
-          name: "commentary",
-          skipped: false,
-          message: {
-            content: [
-              {
-                type: "text",
-                text: body,
-                textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
-              },
-            ],
-          },
-        },
-        {
-          name: "media-only",
-          skipped: false,
-          message: {
-            content: [],
-            openclawDisplayContent: [{ type: "image", mimeType: "image/png", data: "synthetic" }],
-          },
-        },
-        { name: "nonterminal", skipped: false, terminal: false },
-        { name: "same-text-other-run", skipped: false, otherRun: true },
+      const partitions = [
+        partition("success", { content: textContent("Final answer") }, true),
+        partition("error-partial", { stopReason: "error" }, true),
+        partition("empty-success", { content: [] }),
+        partition("empty-error", { content: [], stopReason: "error", errorMessage: "Failure" }),
+        partition("commentary", {
+          content: textContent(
+            body,
+            JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
+          ),
+        }),
+        partition("media-only", {
+          content: [],
+          openclawDisplayContent: [{ type: "image", mimeType: "image/png", data: "synthetic" }],
+        }),
+        partition("nonterminal"),
+        partition("same-text-other-run"),
       ];
-      for (const partition of partitions) {
-        const runId = `stopped-${partition.name}`;
+      for (const { name, skipped, message } of partitions) {
+        const runId = `stopped-${name}`;
         const nativeMessage = {
           ...assistant,
-          ...partition.message,
-          responseId: `response-${partition.name}`,
-          idempotencyKey: `native-${partition.name}:assistant`,
+          ...message,
+          responseId: `response-${name}`,
+          idempotencyKey: `native-${name}:assistant`,
           __openclaw: {
-            runId: partition.otherRun ? `other-${runId}` : runId,
+            runId: name === "same-text-other-run" ? `other-${runId}` : runId,
             mirrorOrigin: "codex-app-server",
-            ...(partition.terminal !== false ? { runTerminal: true } : {}),
+            ...(name !== "nonterminal" ? { runTerminal: true } : {}),
           },
         };
         await expect(appendAssistant(nativeMessage)).resolves.toMatchObject({ ok: true });
         const committed = transcriptSnapshot(db);
         onUpdate.mockClear();
-        const settled = await appendAbortedSessionTranscriptPartial(scope, {
-          runId,
-          message: { ...assistant, idempotencyKey: `${runId}:assistant` },
-          expectedLifecycleRevision: "current-lifecycle",
-        });
-        expect(settled, partition.name).toMatchObject({
+        const settled = await abortPartial(runId);
+        expect(settled, name).toMatchObject({
           ok: true,
-          value: partition.skipped
+          value: skipped
             ? { skipped: true }
             : { skipped: false, append: { appended: true, message: { __openclaw: { runId } } } },
         });
         const after = transcriptSnapshot(db);
-        expect(onUpdate, partition.name).toHaveBeenCalledTimes(partition.skipped ? 0 : 1);
-        if (partition.skipped) {
-          expect(after, partition.name).toEqual(committed);
+        expect(onUpdate, name).toHaveBeenCalledTimes(skipped ? 0 : 1);
+        if (skipped) {
+          expect(after, name).toEqual(committed);
         } else {
-          expect(after.events, partition.name).toHaveLength(committed.events.length + 1);
-          expect(after.events.slice(0, -1), partition.name).toEqual(committed.events);
+          expect(after.events, name).toHaveLength(committed.events.length + 1);
+          expect(after.events.slice(0, -1), name).toEqual(committed.events);
         }
       }
-      expect(hostTransactions.mock.calls.some(([sql]) => /^BEGIN\s+IMMEDIATE/i.test(sql))).toBe(
-        false,
-      );
+      assertNoHostTransaction(hostTransactions.mock.calls);
       await upsertSessionEntryCore(scope, {
         sessionId: scope.sessionId,
         lifecycleRevision: "current-lifecycle",
@@ -446,27 +408,18 @@ describe("SQLite report payload selection", () => {
       hostTransactions.mockClear();
       onUpdate.mockClear();
       const beforeSuccessorFallback = transcriptSnapshot(db);
-      await expect(
-        appendAbortedSessionTranscriptPartial(scope, {
-          runId: "superseded-without-answer",
-          message: { ...assistant, idempotencyKey: "superseded-without-answer:assistant" },
-          expectedLifecycleRevision: "current-lifecycle",
-        }),
-      ).rejects.toThrow("session writer claim changed before transcript persistence");
-      await expect(
-        appendAbortedSessionTranscriptPartial(scope, {
-          runId: "stopped-success",
-          message: { ...assistant, idempotencyKey: "stopped-success:assistant" },
-          expectedLifecycleRevision: "current-lifecycle",
-        }),
-      ).resolves.toEqual({ ok: true, value: { skipped: true } });
+      await expect(abortPartial("superseded-without-answer")).rejects.toThrow(
+        "session writer claim changed before transcript persistence",
+      );
+      await expect(abortPartial("stopped-success")).resolves.toEqual({
+        ok: true,
+        value: { skipped: true },
+      });
       expect(transcriptSnapshot(db)).toEqual(beforeSuccessorFallback);
       expect(onUpdate).not.toHaveBeenCalled();
-      expect(hostTransactions.mock.calls.some(([sql]) => /^BEGIN\s+IMMEDIATE/i.test(sql))).toBe(
-        false,
-      );
-    });
-  });
+      assertNoHostTransaction(hostTransactions.mock.calls);
+    }),
+  );
 
   it.each(["custom", "response"] as const)(
     "keeps %s reporting independent of unselected compressed bodies",
@@ -493,58 +446,48 @@ describe("SQLite report payload selection", () => {
         } else {
           expect(selectReport).not.toHaveBeenCalled();
         }
-      });
+      })();
     },
   );
 
-  it("reselects through an alias after another connection changes the report branch before commit", async () => {
-    await withReportState(async (state) => {
+  it(
+    "reselects an alias after a competing branch commit",
+    withReportState(async (state) => {
       const db = await seedReports();
       const hostTransactions = vi.spyOn(db, "exec");
-      const { path: databasePath } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+      const { path: databasePath } = agentDatabase();
       const alias = state.path("report-alias");
       await symlink(path.dirname(databasePath), alias, "junction");
       const aliasedScope = { ...scope, storePath: path.join(alias, path.basename(databasePath)) };
-      const other = openNodeSqliteDatabase(databasePath);
-      admitSqliteSchema(other);
       const competitor = {
         customType: "status",
         content: "concurrent report",
         details: { revision: 2 },
       };
-      const selectReport = vi.fn((latest: { content: unknown } | undefined) => {
-        if (selectReport.mock.calls.length === 1) {
-          // Force the actual selection-to-commit race without a timer or worker test hook.
-          createTranscriptEventInserter(
-            other,
-            scope.sessionId,
-          )({
-            seq: 6,
-            eventJson: JSON.stringify({
+      {
+        using other = openNodeSqliteDatabase(databasePath);
+        admitSqliteSchema(other);
+        const selectReport = vi.fn((latest: { content: unknown } | undefined) => {
+          if (selectReport.mock.calls.length === 1) {
+            // Force the actual selection-to-commit race without a timer or worker test hook.
+            insertEvent(other, 6, {
               type: "custom_message",
               id: "competitor",
               parentId: "tail",
               ...competitor,
               display: true,
-            }),
-            createdAt: 1,
-          });
-        }
-        return { customType: "status", content: String(latest?.content), display: true };
-      });
-      try {
+            });
+          }
+          return statusReport(String(latest?.content));
+        });
         await expect(
           appendSessionTranscriptReport(aliasedScope, custom(selectReport)),
         ).resolves.toEqual({ ok: true, value: undefined });
-      } finally {
-        other.close();
+        expect(selectReport).toHaveBeenNthCalledWith(1, selected);
+        expect(selectReport).toHaveBeenNthCalledWith(2, competitor);
+        expect(selectReport).toHaveBeenCalledTimes(2);
       }
-      expect(selectReport).toHaveBeenNthCalledWith(1, selected);
-      expect(selectReport).toHaveBeenNthCalledWith(2, competitor);
-      expect(selectReport).toHaveBeenCalledTimes(2);
-      expect(hostTransactions.mock.calls.some(([sql]) => /^BEGIN\s+IMMEDIATE/i.test(sql))).toBe(
-        false,
-      );
+      assertNoHostTransaction(hostTransactions.mock.calls);
       const events = await loadTranscriptEvents(scope);
       expect(events).toHaveLength(8);
       expect(events[7]).toMatchObject({
@@ -552,11 +495,12 @@ describe("SQLite report payload selection", () => {
         parentId: "competitor",
         content: competitor.content,
       });
-    });
-  });
+    }),
+  );
 
-  it("preserves custom report JSON serialization before worker transfer", async () => {
-    await withReportState(async () => {
+  it(
+    "serializes custom reports before worker transfer",
+    withReportState(async () => {
       await seedReports();
       const serializedKeys: string[] = [];
       class NestedDetails {
@@ -572,20 +516,17 @@ describe("SQLite report payload selection", () => {
         },
       };
       await expect(
-        appendSessionTranscriptReport(scope, {
-          kind: "custom",
-          customTypes: ["status"],
-          selectReport: () => ({
-            customType: "status",
-            content: "serialized report",
-            display: true,
+        appendSessionTranscriptReport(
+          scope,
+          custom(() => ({
+            ...statusReport("serialized report"),
             details,
             toJSON(key: string): unknown {
               serializedKeys.push(key);
               return { ...this, toJSON: undefined };
             },
-          }),
-        }),
+          })),
+        ),
       ).resolves.toEqual({ ok: true, value: undefined });
       expect(serializedKeys).toEqual(["", "details", "nested"]);
       const events = await loadTranscriptEvents(scope);
@@ -596,8 +537,8 @@ describe("SQLite report payload selection", () => {
         details: { nested: { revision: 3 } },
       });
       expect(JSON.stringify(events.at(-1))).not.toContain("omitted");
-    });
-  });
+    }),
+  );
 
   it.each(["compressed facts", "later header"] as const)(
     "refuses malformed %s before selecting or appending a report",
@@ -619,14 +560,7 @@ describe("SQLite report payload selection", () => {
             scope.sessionId,
           );
         } else {
-          createTranscriptEventInserter(
-            db,
-            scope.sessionId,
-          )({
-            seq: 6,
-            eventJson: JSON.stringify({ type: "session", id: "later", version: 1 }),
-            createdAt: 1,
-          });
+          insertEvent(db, 6, { type: "session", id: "later", version: 1 });
           await expect(appendSessionTranscriptReport(scope, report)).resolves.toMatchObject({
             ok: true,
           });
@@ -642,13 +576,13 @@ describe("SQLite report payload selection", () => {
         );
         expect(selectReport).not.toHaveBeenCalled();
         expect(transcriptSnapshot(db)).toEqual(before);
-      });
+      })();
     },
   );
 
-  it("does not let an unreadable compressed assistant suppress a real response", async () => {
-    await withReportState(async () => {
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  it(
+    "does not suppress responses for unreadable assistants",
+    withReportState(async () => {
       const unreadable = {
         type: "message",
         id: "unreadable",
@@ -656,19 +590,12 @@ describe("SQLite report payload selection", () => {
         message: { role: "assistant", content: null, responseId: assistant.responseId },
         padding: body,
       };
-      await replaceTranscriptEvents(scope, [
-        { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
-        unreadable,
-      ]);
-      const db = requireNativeSqliteDatabase(
-        openOpenClawAgentDatabase({ agentId: scope.agentId }).db,
-      );
+      const db = await seedEvents([unreadable]);
       expect(
-        db
-          .prepare(
-            "SELECT event_json IS NULL AS encoded FROM transcript_events WHERE session_id = ? AND seq = 1",
-          )
-          .get(scope.sessionId),
+        row(
+          db,
+          "SELECT event_json IS NULL AS encoded FROM transcript_events WHERE session_id = ? AND seq = 1",
+        ),
       ).toEqual({ encoded: 1 });
       const secret = "synthetic-report-redaction-registered-value";
       registerSecretValueForRedaction(secret);
@@ -688,22 +615,16 @@ describe("SQLite report payload selection", () => {
           content: [{ type: "text", text: `${body}${secret}` }],
         },
       });
-    });
-  });
+    }),
+  );
 
-  it("uses the last original duplicate member for response suppression", async () => {
-    await withReportState(async () => {
+  it(
+    "suppresses by the last original duplicate member",
+    withReportState(async () => {
       const raw = `{"type":"message","id":"duplicate","parentId":null,
         "message":{"role":"assistant","content":${JSON.stringify(body)},"responseId":"first"},
         "message":{"role":"assistant","content":${JSON.stringify(body)},"responseId":"discarded","responseId":"last"}}`;
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      await replaceTranscriptEvents(scope, [
-        { type: "session", id: scope.sessionId, version: CURRENT_SESSION_VERSION },
-        JSON.parse(raw),
-      ]);
-      const db = requireNativeSqliteDatabase(
-        openOpenClawAgentDatabase({ agentId: scope.agentId }).db,
-      );
+      const db = await seedEvents([JSON.parse(raw)]);
       const payload = prepareTranscriptPayload(db, raw);
       expect(payload.event_zstd).not.toBeNull();
       createTranscriptPayloadUpdater(db, scope.sessionId)({ ...payload, seq: 1 });
@@ -724,6 +645,6 @@ describe("SQLite report payload selection", () => {
         message: { responseId: "first" },
       });
       expect(transcriptSnapshot(db).events[1]).toEqual(before.events[1]);
-    });
-  });
+    }),
+  );
 });
