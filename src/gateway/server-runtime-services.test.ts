@@ -1,6 +1,3 @@
-/**
- * Gateway runtime service lifecycle tests.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -80,20 +77,10 @@ describe("server-runtime-services", () => {
     cfgAtStart: Parameters<typeof activateGatewayScheduledServices>[0]["cfgAtStart"],
   ) {
     vi.useFakeTimers();
-    const warn = vi.fn();
-    activateGatewayScheduledServices({
-      scheduler: createTestGatewayScheduler(),
-      minimalTestGateway: false,
-      cfgAtStart,
-      deps: {} as never,
-      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cronEnabled: false,
-      log: {
-        child: vi.fn(() => ({ info: vi.fn(), warn, error: vi.fn() })),
-        error: vi.fn(),
-      },
-    });
-    return warn;
+    const log = createLog();
+    log.child.mockReturnValue(log);
+    activateScheduledServicesForTest({ cfgAtStart, cronEnabled: false, log });
+    return log.warn;
   }
 
   it("warns when cron is disabled but scheduled heartbeats remain enabled", () => {
@@ -240,13 +227,8 @@ describe("server-runtime-services", () => {
 
   it("warns but holds shutdown until outbound recovery settles", async () => {
     vi.useFakeTimers();
-    let resolveDrain: (() => void) | undefined;
-    hoisted.drainPendingDeliveries.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveDrain = resolve;
-        }),
-    );
+    const drain = createDeferredCore();
+    hoisted.drainPendingDeliveries.mockReturnValueOnce(drain.promise);
     const log = createLog();
     const { services } = activateScheduledServicesForTest({ log });
     await vi.dynamicImportSettled();
@@ -280,10 +262,7 @@ describe("server-runtime-services", () => {
     expect(secondStopped).toBe(false);
     expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledOnce();
 
-    if (!resolveDrain) {
-      throw new Error("Expected outbound retry drain resolver to be initialized");
-    }
-    resolveDrain();
+    drain.resolve();
     await Promise.all([firstStop, secondStop]);
     expect(firstStopped).toBe(true);
     expect(secondStopped).toBe(true);
@@ -582,13 +561,8 @@ describe("server-runtime-services", () => {
 
   it("never overlaps outbound retry drains or admits work between timer firings", async () => {
     vi.useFakeTimers();
-    let finishDrain: (() => void) | undefined;
-    hoisted.drainPendingDeliveries.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          finishDrain = resolve;
-        }),
-    );
+    const drain = createDeferredCore();
+    hoisted.drainPendingDeliveries.mockReturnValueOnce(drain.promise);
     const { services } = activateScheduledServicesForTest();
     await vi.dynamicImportSettled();
     notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
@@ -607,10 +581,7 @@ describe("server-runtime-services", () => {
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
     expect(getActiveGatewayRootWorkCount()).toBe(1);
 
-    if (!finishDrain) {
-      throw new Error("Expected the outbound retry drain to be pending");
-    }
-    finishDrain();
+    drain.resolve();
     await vi.advanceTimersByTimeAsync(0);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
 
@@ -716,15 +687,7 @@ describe("server-runtime-services", () => {
   );
 
   it("keeps scheduled services disabled for minimal test gateways", () => {
-    const services = activateGatewayScheduledServices({
-      scheduler: createTestGatewayScheduler(),
-      minimalTestGateway: true,
-      cfgAtStart: {} as never,
-      deps: {} as never,
-      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-      cronEnabled: true,
-      log: createLog(),
-    });
+    const { services } = activateScheduledServicesForTest({ minimalTestGateway: true });
 
     expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
     expect(hoisted.recoverPendingDeliveries).not.toHaveBeenCalled();

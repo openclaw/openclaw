@@ -33,10 +33,29 @@ beforeEach(() => {
 });
 afterEach(resetGatewayWorkAdmission);
 
+function createMaintenanceTest(withConnection = false) {
+  const clock = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const connectionWork = new GatewayConnectionWork();
+  const schedule = (
+    overrides: Partial<Parameters<typeof createPostReadyMaintenanceScheduleParams>[0]> = {},
+  ) =>
+    scheduleGatewayPostReadyMaintenance(
+      createPostReadyMaintenanceScheduleParams({
+        scheduler,
+        ...(withConnection && {
+          signal: connectionWork.signal,
+          isClosing: () => connectionWork.signal.aborted,
+        }),
+        ...overrides,
+      }),
+    );
+  return { clock, scheduler, connectionWork, schedule };
+}
+
 describe("post-ready maintenance scheduling", () => {
   it("defers optional database work during recovery without delaying cron or timers", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
+    const { clock, scheduler, schedule } = createMaintenanceTest();
     const ready = createDeferredCore();
     const finishRecovery = createDeferredCore();
     let recovery: Promise<void> | undefined;
@@ -44,14 +63,11 @@ describe("post-ready maintenance scheduling", () => {
     const cron = { start: vi.fn(async () => undefined) };
     const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
     vi.mocked(runGatewayPostReadyStartupMaintenance).mockClear();
-    scheduleGatewayPostReadyMaintenance(
-      createPostReadyMaintenanceScheduleParams({
-        scheduler,
-        waitForPostReadyWork: () => ready.promise,
-        startMaintenance,
-        cronState: createTestCronState(cron),
-      }),
-    );
+    schedule({
+      waitForPostReadyWork: () => ready.promise,
+      startMaintenance,
+      cronState: createTestCronState(cron),
+    });
     try {
       const pending = clock.advanceBy(1);
       await Promise.resolve();
@@ -79,18 +95,11 @@ describe("post-ready maintenance scheduling", () => {
   it.skipIf(process.platform !== "linux")(
     "warms after readiness, repeats, and cancels with its Gateway",
     async () => {
-      const clock = createGatewaySchedulerClock();
-      const scheduler = createTestGatewayScheduler(clock.clock);
+      const { clock, scheduler, connectionWork, schedule } = createMaintenanceTest(true);
       const ready = createDeferredCore();
-      const connectionWork = new GatewayConnectionWork();
-      scheduleGatewayPostReadyMaintenance(
-        createPostReadyMaintenanceScheduleParams({
-          scheduler,
-          signal: connectionWork.signal,
-          isClosing: () => connectionWork.signal.aborted,
-          waitForPostReadyWork: () => ready.promise,
-        }),
-      );
+      schedule({
+        waitForPostReadyWork: () => ready.promise,
+      });
       const pending = clock.advanceBy(1);
       await Promise.resolve();
       expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
@@ -109,23 +118,19 @@ describe("post-ready maintenance scheduling", () => {
   );
 
   it("starts cron and records memory when post-ready maintenance fails", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
+    const { clock, schedule } = createMaintenanceTest();
     const cron = { start: vi.fn(async () => undefined) };
     const log = createLog();
     const recordPostReadyMemory = vi.fn();
 
-    scheduleGatewayPostReadyMaintenance(
-      createPostReadyMaintenanceScheduleParams({
-        scheduler,
-        startMaintenance: vi.fn(async () => {
-          throw new Error("timers unavailable");
-        }),
-        cronState: createTestCronState(cron),
-        log,
-        recordPostReadyMemory,
+    schedule({
+      startMaintenance: vi.fn(async () => {
+        throw new Error("timers unavailable");
       }),
-    );
+      cronState: createTestCronState(cron),
+      log,
+      recordPostReadyMemory,
+    });
     await clock.advanceBy(1);
 
     expect(log.warn).toHaveBeenCalledWith(
@@ -136,9 +141,7 @@ describe("post-ready maintenance scheduling", () => {
   });
 
   it("clears delayed maintenance handles when close starts during maintenance startup", async () => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const connectionWork = new GatewayConnectionWork();
+    const { clock, scheduler, connectionWork, schedule } = createMaintenanceTest(true);
     const started = createDeferredCore();
     const pendingMaintenance = createDeferredCore<ReturnType<typeof createMaintenanceHandles>>();
     const startMaintenance = vi.fn(() => {
@@ -149,18 +152,13 @@ describe("post-ready maintenance scheduling", () => {
     const cron = { start: vi.fn(async () => undefined) };
     const recordPostReadyMemory = vi.fn();
 
-    scheduleGatewayPostReadyMaintenance(
-      createPostReadyMaintenanceScheduleParams({
-        scheduler,
-        signal: connectionWork.signal,
-        delayMs: 25,
-        isClosing: () => connectionWork.signal.aborted,
-        startMaintenance,
-        applyMaintenance,
-        cronState: createTestCronState(cron),
-        recordPostReadyMemory,
-      }),
-    );
+    schedule({
+      delayMs: 25,
+      startMaintenance,
+      applyMaintenance,
+      cronState: createTestCronState(cron),
+      recordPostReadyMemory,
+    });
 
     const pendingWake = clock.advanceBy(25);
     await started.promise;
@@ -188,24 +186,17 @@ describe("post-ready maintenance scheduling", () => {
   it("cancels unadmitted maintenance without reopening the suspension fence", async ({
     signal,
   }) => {
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const connectionWork = new GatewayConnectionWork();
+    const { clock, scheduler, connectionWork, schedule } = createMaintenanceTest(true);
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
     const release = () => suspension?.release();
     signal.addEventListener("abort", release, { once: true });
     const startMaintenance = vi.fn(async () => null);
     const log = createLog();
-    scheduleGatewayPostReadyMaintenance(
-      createPostReadyMaintenanceScheduleParams({
-        scheduler,
-        signal: connectionWork.signal,
-        isClosing: () => connectionWork.signal.aborted,
-        startMaintenance,
-        log,
-      }),
-    );
+    schedule({
+      startMaintenance,
+      log,
+    });
     const pendingWake = clock.advanceBy(1);
     try {
       expect(getActiveGatewayRootWorkCount()).toBe(0);
