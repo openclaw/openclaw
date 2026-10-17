@@ -43,12 +43,15 @@ vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
 }));
 
 let harness: SendHarness;
+let caller: AbortController;
 
 beforeEach(() => {
   harness = createSendHarness();
+  caller = new AbortController();
 });
 
 afterEach(async () => {
+  effectGate.prepare = undefined;
   await harness.close();
 });
 
@@ -58,7 +61,6 @@ describe("Zalouser registered send handoff", () => {
     async (retired) => {
       const preparation = harness.gate();
       const response = harness.gate();
-      const caller = new AbortController();
       effectGate.prepare = preparation.wait;
       harness.response = async () => {
         await response.wait();
@@ -68,43 +70,36 @@ describe("Zalouser registered send handoff", () => {
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
-      try {
-        await Promise.race([
-          preparation.entered.promise,
-          response.entered.promise.then(() => {
-            throw new Error("dispatched before preparation");
-          }),
-          sending.then(() => {
-            throw new Error("settled before preparation");
-          }),
-        ]);
-        expect(harness.requests).toEqual([]);
-        if (retired) {
-          caller.abort(new Error("caller retired during effect preparation"));
-        }
-        preparation.release.resolve();
-        if (!retired) {
-          await response.entered.promise;
-          caller.abort(new Error("caller retired after dispatch"));
-        }
-        response.release.resolve();
-        expect(await sending).toMatchObject(
-          retired
-            ? { error: { message: "caller retired during effect preparation" } }
-            : {
-                value: {
-                  messageId: "prepared-send",
-                  receipt: { platformMessageIds: ["prepared-send"] },
-                },
-              },
-        );
-        expect(harness.requests).toHaveLength(retired ? 0 : 1);
-      } finally {
-        preparation.release.resolve();
-        response.release.resolve();
-        await sending;
-        effectGate.prepare = undefined;
+      await Promise.race([
+        preparation.entered.promise,
+        response.entered.promise.then(() => {
+          throw new Error("dispatched before preparation");
+        }),
+        sending.then(() => {
+          throw new Error("settled before preparation");
+        }),
+      ]);
+      expect(harness.requests).toEqual([]);
+      if (retired) {
+        caller.abort(new Error("caller retired during effect preparation"));
       }
+      preparation.release.resolve();
+      if (!retired) {
+        await response.entered.promise;
+        caller.abort(new Error("caller retired after dispatch"));
+      }
+      response.release.resolve();
+      expect(await sending).toMatchObject(
+        retired
+          ? { error: { message: "caller retired during effect preparation" } }
+          : {
+              value: {
+                messageId: "prepared-send",
+                receipt: { platformMessageIds: ["prepared-send"] },
+              },
+            },
+      );
+      expect(harness.requests).toHaveLength(retired ? 0 : 1);
     },
   );
 
@@ -112,7 +107,6 @@ describe("Zalouser registered send handoff", () => {
     "stops a retired caller after %s",
     async (stage) => {
       const wait = stage === "dispatch notification" ? harness.gate() : harness.holdCookie();
-      const caller = new AbortController();
       let current = true;
       const send = harness.send(stage === "payload cancellation" ? "sendPayload" : "message.text", {
         ...(stage === "payload cancellation" ? { mediaUrl: imageUrl, signal: caller.signal } : {}),
@@ -146,7 +140,6 @@ describe("Zalouser registered send handoff", () => {
 
   it("sendPayload preserves chunk progress and stops after its awaited callback", async () => {
     const progress = harness.gate();
-    const caller = new AbortController();
     const ids: Array<string | undefined> = [];
     const send = harness.send("sendPayload", {
       text: "a".repeat(2001),
@@ -169,7 +162,6 @@ describe("Zalouser registered send handoff", () => {
     const api = harness.api;
     harness.requests.length = 0;
     const cookie = harness.holdCookie();
-    const caller = new AbortController();
     const canceled = harness.send("message.text", {
       to: "user:201",
       text: "canceled A",
@@ -203,7 +195,6 @@ describe("Zalouser registered send handoff", () => {
 
   it.each([false, true])("rechecks SDK redirects when canceled=%s", async (canceled) => {
     const cookie = harness.gate();
-    const caller = new AbortController();
     harness.response = (request) => {
       if (request.path === "/api/message/sms") {
         harness.cookieWaits.push(cookie);
@@ -222,14 +213,17 @@ describe("Zalouser registered send handoff", () => {
     cookie.release.resolve();
     if (canceled) {
       await expect(send).rejects.toThrow("caller canceled");
-      expect(harness.requests.map(({ path }) => path)).toEqual(["/api/message/sms"]);
     } else {
       expect((await send).messageId).toBe("redirect-accepted");
-      expect(harness.requests.map(({ method, path }) => [method, path])).toEqual([
-        ["POST", "/api/message/sms"],
-        ["GET", "/redirected-send"],
-      ]);
     }
+    expect(harness.requests.map(({ method, path }) => [method, path])).toEqual(
+      canceled
+        ? [["POST", "/api/message/sms"]]
+        : [
+            ["POST", "/api/message/sms"],
+            ["GET", "/redirected-send"],
+          ],
+    );
   });
 
   it.each(["image upload", "upload completion", "voice HEAD"] as const)(
@@ -239,7 +233,6 @@ describe("Zalouser registered send handoff", () => {
         useMediaFixture("audio");
       }
       const wait = harness.gate();
-      const caller = new AbortController();
       let visibleDispatch = false;
       if (stage === "upload completion") {
         harness.uploadWait = wait;
@@ -332,7 +325,6 @@ describe("Zalouser registered send handoff", () => {
     "the optional tool preserves cancellation=%s at the SDK wait",
     async (canceled) => {
       const cookie = harness.holdCookie();
-      const caller = new AbortController();
       const tool = createZalouserTool({ config: harness.cfg });
       const send = harness.track(
         tool.execute(
@@ -347,13 +339,12 @@ describe("Zalouser registered send handoff", () => {
       }
       cookie.release.resolve();
       const result = await send;
-      if (canceled) {
-        expect(result.details).toEqual({ error: "tool caller canceled" });
-        expect(harness.requests).toEqual([]);
-      } else {
-        expect(result.details).toEqual({ success: true, messageId: "message-1" });
-        expect(harness.requests.map(({ params }) => params.message)).toEqual(["tool hello"]);
-      }
+      expect(result.details).toEqual(
+        canceled ? { error: "tool caller canceled" } : { success: true, messageId: "message-1" },
+      );
+      expect(harness.requests.map(({ params }) => params.message)).toEqual(
+        canceled ? [] : ["tool hello"],
+      );
     },
   );
 });

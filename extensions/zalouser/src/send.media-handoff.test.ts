@@ -1,4 +1,5 @@
 import type { LookupAddress } from "node:dns";
+import { promisify } from "node:util";
 import type { DispatcherAwareRequestInit } from "openclaw/plugin-sdk/runtime-fetch";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSendHarness, type SendHarness } from "./send.handoff.test-support.js";
@@ -109,15 +110,7 @@ beforeEach(() => {
         throw new Error("Expected pinned DNS on the runtime dispatcher");
       }
       const addresses = pinnedLookup
-        ? await new Promise<LookupAddress[]>((resolve, reject) => {
-            pinnedLookup(url.hostname, { all: true }, (error, resolved) => {
-              if (error) {
-                reject(error);
-              } else {
-                resolve(resolved);
-              }
-            });
-          })
+        ? await promisify(pinnedLookup)(url.hostname, { all: true })
         : [];
       dispatcher.dispatch(
         { origin: url.origin, path: url.pathname + url.search, method: init?.method ?? "GET" },

@@ -252,27 +252,18 @@ export class SendHarness {
     const media = { ...ctx, mediaUrl: input.mediaUrl ?? imageUrl };
     const message = zalouserPlugin.message?.send;
     const outbound = zalouserPlugin.outbound;
-    switch (route) {
-      case "message.text":
-        return this.track(required(message?.text)(ctx));
-      case "message.media":
-        return this.track(required(message?.media)(media));
-      case "sendText":
-        return this.track(required(outbound?.sendText)(ctx));
-      case "sendMedia":
-        return this.track(required(outbound?.sendMedia)(media));
-      case "sendPayload":
-        return this.track(
-          required(outbound?.sendPayload)({
-            ...ctx,
-            payload: { text: ctx.text, ...(input.mediaUrl ? { mediaUrl: input.mediaUrl } : {}) },
-          }),
-        );
-      default: {
-        const unexpectedRoute: never = route;
-        throw new Error("Unsupported send route", { cause: unexpectedRoute });
-      }
-    }
+    const senders = {
+      "message.text": () => required(message?.text)(ctx),
+      "message.media": () => required(message?.media)(media),
+      sendText: () => required(outbound?.sendText)(ctx),
+      sendMedia: () => required(outbound?.sendMedia)(media),
+      sendPayload: () =>
+        required(outbound?.sendPayload)({
+          ...ctx,
+          payload: { text: ctx.text, ...(input.mediaUrl ? { mediaUrl: input.mediaUrl } : {}) },
+        }),
+    };
+    return this.track(senders[route]());
   }
 
   async close() {

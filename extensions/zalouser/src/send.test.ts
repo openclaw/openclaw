@@ -121,63 +121,41 @@ describe("zalouser send helpers", () => {
     expect(mockSendText).toHaveBeenCalledOnce();
   });
 
-  it("preserves formatted text and styles when newline chunk mode splits after parsing", async () => {
-    const text = `**${"a".repeat(1995)}**\n\nsecond paragraph`;
-    const formatted = parseZalouserTextStyles(text);
-    mockSendText
-      .mockResolvedValueOnce(sendResult("mid-2d-3", "thread-2d-2"))
-      .mockResolvedValueOnce(sendResult("mid-2d-4", "thread-2d-2"));
+  it.each(["newline", "media caption"] as const)(
+    "preserves formatted %s across two sends",
+    async (mode) => {
+      const newline = mode === "newline";
+      const text = newline
+        ? `**${"a".repeat(1995)}**\n\nsecond paragraph`
+        : "\t".repeat(500) + "a".repeat(1500);
+      const options = {
+        ...imageOptions,
+        ...(newline ? { textChunkMode: "newline" as const } : {}),
+      };
+      mockSendText
+        .mockResolvedValueOnce(sendResult("first"))
+        .mockResolvedValueOnce(sendResult("last"));
+      const result = newline
+        ? await sendMessageZalouser("thread", text, options)
+        : await sendImageZalouser("thread", imageUrl, { ...options, caption: text });
 
-    const result = await sendMessageZalouser("thread-2d-2", text, {
-      profile: "p2d-2",
-      isGroup: false,
-      textMode: "markdown",
-      textChunkMode: "newline",
-    });
-
-    expect(mockSendText).toHaveBeenCalledTimes(2);
-    expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(formatted.text);
-    expectTextCall(0, "thread-2d-2", `${"a".repeat(1995)}\n\n`, {
-      profile: "p2d-2",
-      isGroup: false,
-      textMode: "markdown",
-      textChunkMode: "newline",
-      textStyles: [{ start: 0, len: 1995, st: TextStyle.Bold }],
-    });
-    expectTextCall(1, "thread-2d-2", "second paragraph", {
-      profile: "p2d-2",
-      isGroup: false,
-      textMode: "markdown",
-      textChunkMode: "newline",
-      textStyles: undefined,
-    });
-    expect(result).toMatchObject({ messageId: "mid-2d-4" });
-  });
-
-  it("sends overflow markdown captions as follow-up text after the media message", async () => {
-    const caption = "\t".repeat(500) + "a".repeat(1500);
-    const formatted = parseZalouserTextStyles(caption);
-    mockSendText
-      .mockResolvedValueOnce(sendResult("mid-2e-1", "thread-2e"))
-      .mockResolvedValueOnce(sendResult("mid-2e-2", "thread-2e"));
-
-    const result = await sendImageZalouser("thread-2e", "https://example.com/long.png", {
-      profile: "p2e",
-      caption,
-      isGroup: false,
-      textMode: "markdown",
-    });
-
-    expect(mockSendText).toHaveBeenCalledTimes(2);
-    expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(formatted.text);
-    expectTextCall(0, "thread-2e", expect.any(String), {
-      profile: "p2e",
-      caption: undefined,
-      isGroup: false,
-      mediaUrl: "https://example.com/long.png",
-      textMode: "markdown",
-    });
-    expectTextCall(1, "thread-2e", expect.any(String), { mediaUrl: undefined });
-    expect(result).toMatchObject({ messageId: "mid-2e-2" });
-  });
+      expect(mockSendText).toHaveBeenCalledTimes(2);
+      expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(
+        parseZalouserTextStyles(text).text,
+      );
+      expectTextCall(0, "thread", newline ? `${"a".repeat(1995)}\n\n` : expect.any(String), {
+        ...options,
+        ...(newline
+          ? { textStyles: [{ start: 0, len: 1995, st: TextStyle.Bold }] }
+          : { caption: undefined, mediaUrl: imageUrl }),
+      });
+      expectTextCall(
+        1,
+        "thread",
+        newline ? "second paragraph" : expect.any(String),
+        newline ? { ...options, textStyles: undefined } : { mediaUrl: undefined },
+      );
+      expect(result).toMatchObject({ messageId: "last" });
+    },
+  );
 });
