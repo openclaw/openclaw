@@ -353,7 +353,16 @@ async function auditSystemdUnitBackup(unitPath: string, issues: ServiceConfigIss
   let stat;
   try {
     stat = await fs.lstat(backupPath);
-  } catch {
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      issues.push({
+        code: SYSTEMD_SERVICE_AUDIT_CODES.systemdUnitBackupUnsafe,
+        message:
+          "Systemd service backup could not be inspected; check the path and retry the service audit.",
+        detail: backupPath,
+        level: "recommended",
+      });
+    }
     return;
   }
   const mode = stat.mode & 0o777;

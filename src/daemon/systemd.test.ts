@@ -2259,6 +2259,38 @@ describe("isSystemUnitActiveAndEnabled", () => {
 });
 
 describe("uninstallLegacySystemdUnits", () => {
+  it.each([
+    ["", "EACCES"],
+    ["", "EIO"],
+    [".bak", "EACCES"],
+    [".bak", "EIO"],
+  ])("reports legacy %s inspection failure %s before cleanup", async (suffix, code) => {
+    const env = { HOME: tempDirs.make("openclaw-legacy-inspection-") };
+    const unitPath = path.join(env.HOME, ".config/systemd/user/clawdbot-gateway.service");
+    const inspectedPath = `${unitPath}${suffix}`;
+    const definition = "[Unit]\nDescription=Legacy inspection fixture\n";
+    await writeUnitFixture(inspectedPath, definition);
+    const inspectionError = Object.assign(new Error("legacy inspection failed"), { code });
+    vi.spyOn(fs, "access").mockImplementation(async (pathname, mode) => {
+      if (pathLikeToString(pathname) === inspectedPath) {
+        throw inspectionError;
+      }
+      return access(pathname, mode);
+    });
+    execFileMock.mockImplementation((_command, args, _options, callback) => {
+      if (args[0] === "--version") {
+        callback(null, "systemd 252", "");
+      } else {
+        callback(createExecFileError("disabled"), "disabled", "");
+      }
+    });
+    const { write, stdout } = createWritableStreamMock();
+
+    await expect(uninstallLegacySystemdUnits({ env, stdout })).rejects.toBe(inspectionError);
+    await expect(fs.readFile(inspectedPath, "utf8")).resolves.toBe(definition);
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it("preserves legacy files after interrupted discovery and refused disable", async () => {
     const tempHomeRoot = tempDirs.make("openclaw-legacy-unit-");
     const env = { HOME: path.join(tempHomeRoot, "home") };
