@@ -5,6 +5,11 @@ import {
   recordMcpLoopbackToolCallResult,
   updateMcpLoopbackToolCallCapture,
 } from "../../gateway/mcp-http.loopback-runtime.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
 
@@ -47,6 +52,72 @@ function startQuestion(tracking: Tracking, toolCallId: string, timeoutSeconds?: 
   updateMcpLoopbackToolCallCapture(capture, { toolName: "ask_user", args });
   return capture;
 }
+
+describe("CLI top-level Slack delivery evidence", () => {
+  afterEach(() => setActivePluginRegistry(createTestRegistry()));
+
+  it("keeps an unsuffixed bound thread off-source when its admitted fact is unavailable", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" }),
+            messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+          },
+        },
+      ]),
+    );
+    const context = buildPreparedCliRunContext();
+    Object.assign(context.params, {
+      config: {},
+      sourceReplyDeliveryMode: "message_tool_only",
+      messageChannel: "slack",
+      currentChannelId: "c1",
+      currentThreadTs: "171.222",
+      sessionKey: "agent:main:slack:channel:c1",
+    });
+    const tracking = createCliToolTracking(context);
+    const args = {
+      action: "send",
+      channel: "slack",
+      target: "c1",
+      topLevel: true,
+      message: "parent-channel reply",
+    };
+    tracking.handleCliToolUseStart({
+      toolCallId: "top-level-send",
+      name: "mcp__openclaw__message",
+      kind: "mcp_tool_use",
+      args,
+    });
+    tracking.handleCliToolResult({
+      toolCallId: "top-level-send",
+      name: "mcp__openclaw__message",
+      isError: false,
+      result: {
+        details: {
+          ok: true,
+          messageId: "171.333",
+          channelId: "c1",
+          messageDelivery: {
+            status: "settled",
+            partialDelivery: false,
+            createdThreadIds: [],
+            primaryPlatformMessageId: "171.333",
+          },
+        },
+      },
+    });
+    const output = tracking.withExecutionEvidence({ text: "" });
+    expect(output.didSendViaMessagingTool).toBe(true);
+    expect(output.messagingToolSentTargets).toHaveLength(1);
+    expect(output.messagingToolSentTargets?.[0]?.threadSuppressed).toBe(true);
+    expect(output.messagingToolSentTargets?.[0]?.sourceReplyFinal).toBeUndefined();
+    expect(output.didDeliverSourceReplyViaMessageTool).toBeUndefined();
+  });
+});
 
 describe("CLI loopback ask_user deadline tracking", () => {
   beforeEach(() => {

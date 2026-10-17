@@ -1,9 +1,14 @@
 import { isAnthropicOAuthApiKey, isDirectAnthropicModel } from "@openclaw/ai/internal/anthropic";
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
+import {
+  readChannelSourceTurnId,
+  readChannelSourceTurnSameThreadRequired,
+} from "../../../auto-reply/reply/source-turn-id.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { getOwnedSessionTranscriptReader } from "../../../config/sessions/transcript-write-context.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { resolveMessageActionTurnCapability } from "../../../gateway/message-action-turn-capability.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -239,6 +244,19 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const markSourceReplyDelivered = () => {
     didDeliverSourceReplyViaMessageTool = true;
   };
+  const messageActionTurnContext = resolveMessageActionTurnCapability({
+    token: attempt.messageActionTurnCapability,
+    agentId: input.sessionAgentId,
+    runId: attempt.runId,
+    sessionKey:
+      input.clientToolPreparation.sandboxSessionKey ?? attempt.sessionKey ?? attempt.sessionId,
+    sessionId: attempt.sessionId,
+  });
+  const sameChannelThreadRequired =
+    messageActionTurnContext?.toolContext?.sameChannelThreadRequired ??
+    (readChannelSourceTurnId(attempt)
+      ? readChannelSourceTurnSameThreadRequired(attempt)
+      : undefined);
   installMessageToolTerminalHook({
     agent: activeSession.agent,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
@@ -249,6 +267,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     currentChannelId: attempt.currentChannelId,
     currentMessagingTarget: attempt.currentMessagingTarget,
     currentThreadId: attempt.currentThreadTs,
+    sameChannelThreadRequired,
     currentMessageId: attempt.currentMessageId,
     replyToMode: attempt.replyToMode,
     hasRepliedRef: attempt.hasRepliedRef,
@@ -264,6 +283,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     hasDeliveredSourceReply: () => didDeliverSourceReplyViaMessageTool,
     hookRunner,
     markSourceReplyDelivered,
+    sameChannelThreadRequired,
     setActiveSessionSystemPrompt,
     settingsManager,
     refreshTools: () => {
