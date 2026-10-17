@@ -28,13 +28,14 @@ function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnmountTar
 
 /** Keeps rendered DOM and owner state together until one coalesced MCP teardown completes. */
 export function createMcpAppUnmountGate<Value = unknown>(
-  invalidate: () => void,
+  invalidate?: () => void,
   afterCommit?: () => Promise<void>,
 ) {
   let renderedKey: McpAppUnmountKey | null = null;
   let renderedValue: Value;
   let pending = false;
   let restartTargets: McpAppUnmountTarget[] | null = null;
+  const listeners = new Set<() => void>();
 
   function apply(key: McpAppUnmountKey, renderValue: () => Value): Value {
     renderedValue = renderValue();
@@ -86,13 +87,20 @@ export function createMcpAppUnmountGate<Value = unknown>(
     void Promise.allSettled(targets.map((target) => target.teardown())).then(() => {
       pending = false;
       restartTargets = targets;
-      invalidate();
+      invalidate?.();
+      for (const listener of listeners) {
+        listener();
+      }
     });
     return renderedValue;
   }
 
   return {
     render,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     get retiring() {
       return pending || restartTargets !== null;
     },

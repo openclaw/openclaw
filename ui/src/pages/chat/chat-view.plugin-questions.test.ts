@@ -94,7 +94,7 @@ function createPluginChat(replacement: ControlUiReplacement<"composer">) {
     props.transcript.update();
     flush();
   }
-  return { provider, render, refresh: () => render(current), reportError };
+  return { provider, render, reportError };
 }
 
 it.each([
@@ -104,7 +104,7 @@ it.each([
 ] as const)(
   "keeps one usable async question with a $mode plugin composer",
   async ({ mode, action }) => {
-    const { provider, render, refresh, reportError } = createPluginChat({
+    const { provider, render, reportError } = createPluginChat({
       id: "custom-draft",
       label: "Custom draft",
       surface: "composer",
@@ -138,7 +138,6 @@ it.each([
           },
         ],
         onAsyncQuestionSubmit: submit,
-        onRequestUpdate: refresh,
       }),
     );
     await waitForSolid(async () => {
@@ -185,7 +184,7 @@ it.each([
 );
 
 it("keeps one actionable local queue row with a nondelegating plugin composer", async () => {
-  const { provider, render, refresh } = createPluginChat({
+  const { provider, render } = createPluginChat({
     id: "custom-queue",
     label: "Custom queue",
     surface: "composer",
@@ -210,7 +209,6 @@ it("keeps one actionable local queue row with a nondelegating plugin composer", 
         },
       ],
       onQueueRemove,
-      onRequestUpdate: refresh,
     }),
   );
   flush();

@@ -67,7 +67,7 @@ function mountTranscriptPane(props: ChatThreadProps) {
   const [presented, setPresented] = createSignal(true);
   let root: ReturnType<typeof mountSolid> | undefined;
   const renderPane = () => {
-    setCurrent({ ...props, mediaOwner: renderPane, onRequestUpdate: renderPane });
+    setCurrent({ ...props, mediaOwner: renderPane });
     flush();
     root ??= mountSolid(
       () => (
