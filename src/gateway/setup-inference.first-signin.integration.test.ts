@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { createAnthropicResponse } from "../../packages/ai/src/provider-transport-parity.test-support.js";
 import type { WizardNextResult } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
@@ -35,13 +36,9 @@ vi.mock(
       >();
     return {
       ...actual,
-      handleGatewayRequest: async (...args: Parameters<typeof actual.handleGatewayRequest>) => {
+      handleGatewayRequest: (...args: Parameters<typeof actual.handleGatewayRequest>) => {
         const settled = observation.settled;
-        try {
-          return await actual.handleGatewayRequest(...args);
-        } finally {
-          settled(args[0]);
-        }
+        return actual.handleGatewayRequest(...args).finally(() => settled(args[0]));
       },
     };
   },
@@ -57,6 +54,7 @@ it(
   "replaces same-owner device sign-in, preserves other owners, and fences revoked retries through WebSocket",
   { timeout: 90_000 },
   async ({ signal }) => {
+    const join = <T>(work: PromiseLike<T>) => withinTest(work, signal);
     const requests: string[] = [];
     // Inventory refresh runs in another thread; the setup probe owns this test's transport.
     vi.spyOn(catalogRefresh, "refreshCommittedProviderCatalogs").mockImplementation(() => {});
@@ -78,14 +76,8 @@ it(
         data: [
           {
             id: "claude-sonnet-5",
-            name: "Synthetic chat model",
-            vendor: "Anthropic",
             model_picker_enabled: true,
-            capabilities: {
-              type: "chat",
-              limits: { max_context_window_tokens: 128_000, max_output_tokens: 4096 },
-              supports: { tool_calls: true },
-            },
+            capabilities: { supports: { tool_calls: true } },
           },
         ],
       },
@@ -117,12 +109,7 @@ it(
           },
           { type: "message_stop" },
         ];
-        return new Response(
-          events
-            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-            .join(""),
-          { headers: { "content-type": "text/event-stream" } },
-        );
+        return createAnthropicResponse(events);
       }
       throw new Error(`Unexpected setup request: ${endpoint}`);
     });
@@ -168,20 +155,15 @@ it(
         try {
           await server.startupSettled;
           const identity = loadOrCreateDeviceIdentity({ path: state.path("setup-owner.sqlite") });
+          const device = { deviceId: identity.deviceId, role: "operator", scopes };
           const pending = await requestDevicePairing({
-            deviceId: identity.deviceId,
+            ...device,
             publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
             clientId: "test",
             clientMode: "backend",
-            role: "operator",
-            scopes,
           });
           await approveDevicePairing(pending.request.requestId, { callerScopes: scopes });
-          const rotated = await rotateDeviceToken({
-            deviceId: identity.deviceId,
-            role: "operator",
-            scopes,
-          });
+          const rotated = await rotateDeviceToken(device);
           if (!rotated.ok) {
             throw new Error("Expected setup owner device token");
           }
@@ -201,17 +183,19 @@ it(
           const readProfiles = () =>
             loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles;
           const setupOwner = owner;
+          const start = (sessionId: string, actor = setupOwner) =>
+            actor.request("openclaw.setup.auth.start", { ...auth, sessionId });
           const startSignIn = async (sessionId: string) => {
-            await setupOwner.request("openclaw.setup.auth.start", { ...auth, sessionId });
+            await start(sessionId);
             return await setupOwner.request<WizardNextResult>("wizard.next", { sessionId });
           };
           const expectPending = (result: WizardNextResult) =>
             expect(result).toMatchObject({ done: false, step: { id: expect.any(String) } });
           const abandoned = await startSignIn("abandoned-signin");
           expectPending(abandoned);
-          await expect(
-            client.request("openclaw.setup.auth.start", { ...auth, sessionId: "different-owner" }),
-          ).rejects.toThrow("OpenClaw setup is already in progress");
+          await expect(start("different-owner", client)).rejects.toThrow(
+            "OpenClaw setup is already in progress",
+          );
           expect(await owner.request("wizard.next", { sessionId: "abandoned-signin" })).toEqual(
             abandoned,
           );
@@ -276,27 +260,24 @@ it(
               finished.resolve([...options.context.wizardSessions.keys()]);
             }
           };
-          const reply = owner
-            .request("openclaw.setup.auth.start", { ...auth, sessionId: "revoked-retry" })
-            .then(
-              (value) => ({ result: value }),
-              (error: unknown) => ({ error }),
-            );
+          const reply = start("revoked-retry").then(
+            (value) => ({ result: value }),
+            (error: unknown) => ({ error }),
+          );
           try {
-            await withinTest(
+            await join(
               awaitGateBeforeSettlement(
                 reached.promise,
                 finished.promise,
                 "Retry finished before settlement barrier",
               ),
-              signal,
             );
             await client.request("device.token.revoke", {
-              deviceId: identity.deviceId,
-              role: "operator",
+              deviceId: device.deviceId,
+              role: device.role,
             });
             release.resolve();
-            const sessions = await withinTest(finished.promise, signal);
+            const sessions = await join(finished.promise);
             expect(await reply).toHaveProperty("error");
             expect(sessions).not.toContain("revoked-retry");
             expect(requests).toEqual(beforeRevocation);
@@ -304,7 +285,7 @@ it(
             expectActivation();
           } finally {
             release.resolve();
-            await withinTest(Promise.all([finished.promise, reply]), signal);
+            await join(Promise.all([finished.promise, reply]));
           }
         } finally {
           if (owner) {

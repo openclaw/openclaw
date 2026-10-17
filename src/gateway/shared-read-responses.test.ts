@@ -153,18 +153,19 @@ function readBarrier(count = 1) {
 function generationHarness(blockFirst = false, prepare = () => {}) {
   let generation = 0;
   const barrier = readBarrier();
-  const produce = vi.fn(async (respond: RespondFn) => {
+  const produce = vi.fn(async (config: OpenClawConfig, respond: RespondFn) => {
     const current = ++generation;
     if (blockFirst && current === 1) {
       barrier.prepare();
       await barrier.pause();
     }
-    respond(true, { generation: current });
+    respond(true, { generation: current, port: config.gateway?.port });
   });
   const harness = createReadHarness(
-    createPreparedReadHandler(() => {
+    createPreparedReadHandler(({ context }) => {
       prepare();
-      return { run: produce };
+      const config = context.getRuntimeConfig();
+      return { run: (respond) => produce(config, respond) };
     }),
   );
   return { harness, produce, barrier };
@@ -222,28 +223,6 @@ describe("shared read response dispatch", () => {
     await evicted.done;
     expectPayload(evicted, { value: "bounded" });
     expect(produce).toHaveBeenCalledTimes(21);
-  });
-
-  it("does not certify a pending response against a replacement config", async () => {
-    const barrier = readBarrier();
-    const produce = vi.fn(async (config: OpenClawConfig, respond: RespondFn) => {
-      barrier.prepare();
-      await barrier.pause();
-      respond(true, { port: config.gateway?.port });
-    });
-    const harness = createReadHarness(
-      createPreparedReadHandler(({ context }) => {
-        const config = context.getRuntimeConfig();
-        return { run: (respond) => produce(config, respond) };
-      }),
-    );
-    const original = harness.request("original-config");
-    await barrier.hold(original.done, () => {
-      harness.setConfig({ gateway: { port: 18790 } });
-    });
-    expectPayload(original, {});
-    await read(harness, "current-config", { port: 18790 });
-    expect(produce).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes runner status before its asynchronous session change event is published", async () => {
@@ -400,21 +379,29 @@ describe("shared read response dispatch", () => {
     },
   );
 
-  it("does not let a pre-invalidation completion replace the new shared result", async () => {
-    const { harness, produce, barrier } = generationHarness(true);
-    const first = harness.request("before");
-    let second: ReturnType<typeof harness.request> | undefined;
-    await barrier.hold(first.done, async () => {
-      harness.invalidate("chat.metadata.changed");
-      second = harness.request("after");
-      await second.done;
-    });
-    await read(harness, "after-old-completed", { generation: 2 });
+  it.each(["config replacement", "invalidation"])(
+    "keeps old completions out after %s",
+    async (cause) => {
+      const { harness, produce, barrier } = generationHarness(true);
+      const first = harness.request("before");
+      let second: ReturnType<typeof harness.request> | undefined;
+      const current = { generation: 2, ...(cause === "config replacement" ? { port: 18790 } : {}) };
+      await barrier.hold(first.done, async () => {
+        if (cause === "config replacement") {
+          harness.setConfig({ gateway: { port: 18790 } });
+        } else {
+          harness.invalidate("chat.metadata.changed");
+        }
+        second = harness.request("after");
+        await second.done;
+      });
+      await read(harness, "after-old-completed", current);
 
-    expect(produce).toHaveBeenCalledTimes(2);
-    expectPayload(first, { generation: 1 });
-    expectPayload(second!, { generation: 2 });
-  });
+      expect(produce).toHaveBeenCalledTimes(2);
+      expectPayload(first, { generation: 1 });
+      expectPayload(second!, current);
+    },
+  );
 
   it("expires a response at the absolute ceiling even when recent readers used it", async () => {
     vi.setSystemTime(1_000);

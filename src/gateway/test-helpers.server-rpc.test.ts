@@ -73,6 +73,8 @@ let ws: WebSocket;
 installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
 });
+const listAgents = () =>
+  rpcReq<{ agents: Array<{ id: string; name?: string }> }>(ws, "agents.list", {});
 
 function storeFixture(name: string, dir = tempDirs.make(`openclaw-gw-${name}-`)) {
   const storePath = path.join(dir, "openclaw-agent.sqlite");
@@ -238,10 +240,7 @@ describe("Gateway RPC fixture session writes", () => {
         } else {
           release.resolve();
           await removing;
-          expect(identities.map((pathname) => isOpenClawStateDatabaseOpen(pathname))).toEqual([
-            false,
-            false,
-          ]);
+          expect(identities.map(isOpenClawStateDatabaseOpen)).toEqual([false, false]);
           await expect(fs.access(dir)).rejects.toMatchObject({ code: "ENOENT" });
         }
         expect(isOpenClawStateDatabaseOpen(sibling)).toBe(true);
@@ -439,7 +438,7 @@ describe("Gateway fixture config publication", () => {
         const admission =
           boundary === "reply preparation"
             ? prepareGatewayReplyRuntimeForTest({ force: true })
-            : rpcReq(ws, "agents.list", {});
+            : listAgents();
         // Real maintenance/finalizer callbacks can read config while admission
         // yields for imports or model preparation, before the RPC is sent.
         const duringAdmission = actual.getRuntimeConfig();
@@ -451,7 +450,7 @@ describe("Gateway fixture config publication", () => {
         }
         expect(listAgentIds(actual.getRuntimeConfig())).toEqual(expectedAgents);
         expect(getRuntimeConfig()).toEqual(actual.getRuntimeConfig());
-        const response = await rpcReq<{ agents: Array<{ id: string }> }>(ws, "agents.list", {});
+        const response = await listAgents();
         expect(response.ok, JSON.stringify(response)).toBe(true);
         expect(response.payload?.agents.map((agent) => agent.id)).toEqual(expectedAgents);
       }
@@ -483,11 +482,7 @@ describe("Gateway fixture config publication", () => {
       expectedEntries: NonNullable<AgentsConfig["entries"]>,
       timeoutSeconds: number,
     ) => {
-      const request = rpcReq<{ agents: Array<{ id: string; name?: string }> }>(
-        ws,
-        "agents.list",
-        {},
-      );
+      const request = listAgents();
       try {
         const realConfig = actual.getRuntimeConfig();
         expect(realConfig.agents?.entries).toEqual(expectedEntries);

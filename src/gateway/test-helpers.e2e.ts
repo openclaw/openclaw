@@ -13,6 +13,7 @@ import { WebSocket, type RawData } from "../../packages/gateway-client/src/webso
 import {
   type HelloOk,
   type ModelCatalogTarget,
+  type ResponseFrame,
   PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
@@ -133,12 +134,7 @@ export async function disconnectGatewayClient(client: GatewayClient): Promise<vo
   await client.stopAndWait();
 }
 
-type DeviceAuthConnectResponse = {
-  type: "res";
-  id: string;
-  ok: boolean;
-  error?: { message?: string };
-};
+type DeviceAuthConnectResponse = Pick<ResponseFrame, "type" | "id" | "ok" | "error">;
 
 function waitForDeviceAuthMessage<T>(
   ws: WebSocket,
