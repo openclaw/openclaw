@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import { readText as text } from "./package-update-activation-fixtures.test-support.js";
 import {
   openPackageActivationJournal,
   resolvePackageActivationAnchor,
@@ -37,7 +38,6 @@ afterEach(async () => {
   }
 });
 
-const text = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
 const version = (packageRoot: string) => JSON.parse(text(packageRoot, "package.json")).version;
 const assertAdmitted = (packageRoot: string) =>
   expect(() => assertNoPendingPackageActivation(packageRoot)).not.toThrow();
@@ -149,25 +149,28 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
     },
   );
 
-  it.each(["previous root", "helper", "unknown artifact"])(
-    "preserves changed %s without blocking after verified transaction completion",
+  it.each(["previous root", "helper", "unknown artifact", "archive failure"])(
+    "preserves changed %s after verified completion",
     async (changed) => {
       const f = await createPackageSwapFixture(root);
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(f.packageRoot);
         const transaction = await swap(f, fence);
+        const complete = (activationVerified: boolean) =>
+          transaction.complete({ activationVerified }, fence.assertCurrent);
         const anchor = resolvePackageActivationAnchor(f.packageRoot);
         const record = openPackageActivationJournal(anchor).read();
-        let preserved: string;
+        const retained = `${anchor}.superseded-${record.descriptor.operationId}`;
+        const preserved =
+          changed === "previous root"
+            ? "previous/foreign.txt"
+            : changed === "helper"
+              ? "control/recovery.mjs"
+              : "operator-note.txt";
         if (changed === "previous root") {
           fs.renameSync(path.join(anchor, "previous"), path.join(root, "original-previous"));
           fs.mkdirSync(path.join(anchor, "previous"));
-          preserved = "previous/foreign.txt";
-        } else if (changed === "helper") {
-          preserved = "control/recovery.mjs";
-        } else {
-          preserved = "operator-note.txt";
         }
         fs.writeFileSync(
           changed === "helper"
@@ -175,61 +178,36 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
             : path.join(anchor, preserved),
           "preserved bytes",
         );
-        expect(
-          await transaction.complete({ activationVerified: false }, fence.assertCurrent),
-        ).toMatchObject({ exitCode: 1 });
-        expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow();
-        const completion = await transaction.complete(
-          { activationVerified: true },
-          fence.assertCurrent,
-        );
-        expect(completion).toMatchObject({
-          name: "package-backup-retention",
-          advisory: { kind: "recoverable-maintenance" },
-        });
-        const retained = `${anchor}.superseded-${record.descriptor.operationId}`;
-        expect(text(retained, preserved)).toBe("preserved bytes");
+        if (changed === "archive failure") {
+          const rename = fs.renameSync.bind(fs);
+          vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+            if (from === resolvePackageActivationControl(anchor)) {
+              throw Object.assign(new Error("control archive denied"), { code: "EACCES" });
+            }
+            return rename(from, to);
+          });
+        } else {
+          expect(await complete(false)).toMatchObject({ exitCode: 1 });
+          expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow();
+        }
+        const completion = await complete(true);
+        expect(completion).toMatchObject({ advisory: { kind: "recoverable-maintenance" } });
         assertAdmitted(f.packageRoot);
-        expect(text(f.launcher)).toBe("candidate launcher\n");
-        expect(await transaction.complete({ activationVerified: true }, fence.assertCurrent)).toBe(
-          completion,
-        );
+        if (changed === "archive failure") {
+          await writePackageRoot(f.params.stage.packageRoot, "3.0.0");
+          await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+          const next = await swap(f, fence);
+          await next.complete({ activationVerified: true }, fence.assertCurrent);
+          expect(version(f.packageRoot)).toBe("3.0.0");
+          assertAdmitted(f.packageRoot);
+          expect(text(retained, preserved)).toBe("preserved bytes");
+        } else {
+          expect(completion).toMatchObject({ name: "package-backup-retention" });
+          expect(text(retained, preserved)).toBe("preserved bytes");
+          expect(text(f.launcher)).toBe("candidate launcher\n");
+          expect(await complete(true)).toBe(completion);
+        }
       });
     },
   );
-
-  it("allows another real swap when closed evidence cannot be archived", async () => {
-    const f = await createPackageSwapFixture(root);
-    await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(f.packageRoot);
-      const transaction = await swap(f, fence);
-      const anchor = resolvePackageActivationAnchor(f.packageRoot);
-      const record = openPackageActivationJournal(anchor).read();
-      fs.writeFileSync(path.join(anchor, "operator-note.txt"), "retained note");
-      const rename = fs.renameSync.bind(fs);
-      vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
-        if (from === resolvePackageActivationControl(anchor)) {
-          throw Object.assign(new Error("control archive denied"), { code: "EACCES" });
-        }
-        return rename(from, to);
-      });
-      expect(
-        await transaction.complete({ activationVerified: true }, fence.assertCurrent),
-      ).toMatchObject({ advisory: { kind: "recoverable-maintenance" } });
-      assertAdmitted(f.packageRoot);
-      await writePackageRoot(f.params.stage.packageRoot, "3.0.0");
-      await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
-      const next = await swap(f, fence);
-      await next.complete({ activationVerified: true }, fence.assertCurrent);
-      expect(version(f.packageRoot)).toBe("3.0.0");
-      expect(
-        fs.readFileSync(
-          `${anchor}.superseded-${record.descriptor.operationId}/operator-note.txt`,
-          "utf8",
-        ),
-      ).toBe("retained note");
-      assertAdmitted(f.packageRoot);
-    });
-  });
 });

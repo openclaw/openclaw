@@ -1,10 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  fileIdentity as identity,
+  immutableDescriptor,
+  ownImmutableFixture,
+  withDatabase,
+} from "./package-update-activation-fixtures.test-support.js";
 import {
   publishImmutablePointer,
   reconcileImmutablePointer,
@@ -17,11 +22,14 @@ import {
   updateImmutableInstallRecord,
 } from "./package-update-activation-immutable.js";
 import {
-  packageActivationRuntimeIdentity,
   resolvePackageActivationAnchor,
   resolvePackageActivationControl,
   resolvePackageActivationJournalPath,
 } from "./package-update-activation-paths.js";
+import {
+  syntheticActivationCustody,
+  syntheticImmutableProtection,
+} from "./update-immutable-activation.test-support.js";
 import { readImmutableInstallRecord } from "./update-immutable-install-record.js";
 import type {
   ImmutableActivationOperation,
@@ -38,10 +46,6 @@ let parent: string;
 let root: string;
 let descriptor: ImmutableInstallDescriptor;
 let prepared: ImmutablePreparedGeneration;
-const identity = (file: string) => {
-  const stat = fs.lstatSync(file, { bigint: true });
-  return `${stat.dev}:${stat.ino}`;
-};
 const controlPath = () => resolvePackageActivationControl(resolvePackageActivationAnchor(root));
 const journalPath = () => resolvePackageActivationJournalPath(resolvePackageActivationAnchor(root));
 const currentPointer = () => path.join(root, "current");
@@ -56,6 +60,16 @@ const prepare = (record: ImmutableInstallRecord, generation = prepared) =>
 const publish = (record: ImmutableInstallRecord, target: "candidate" | "previous") =>
   publishImmutablePointer(record, target, () => {});
 const reconcile = (record: ImmutableInstallRecord) => reconcileImmutablePointer(record, () => {});
+function retentionDescriptor(
+  pins: NonNullable<ImmutableInstallDescriptor["releaseRetention"]>["pins"] = [],
+): ImmutableInstallDescriptor {
+  return {
+    ...descriptor,
+    version: 3,
+    activationEnabled: true,
+    releaseRetention: { version: 1, mode: "inspect", keepVerifiedGenerations: 3, pins },
+  };
+}
 const read = () =>
   immutableInstallReadOperations["immutableInstall.read"](
     { root },
@@ -85,46 +99,15 @@ beforeEach(() => {
   fs.mkdirSync(current, { recursive: true, mode: 0o755 });
   fs.mkdirSync(candidate, { mode: 0o755 });
   fs.symlinkSync(`releases/${sha}`, currentPointer());
-  // Simulate root-owned release fixtures on unprivileged CI; SQLite and physical
-  // inode, pointer, permission, and transaction behavior remain real.
-  const lstat = fs.lstatSync;
-  vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
-    const stat = lstat(...args);
-    if (
-      stat &&
-      (String(args[0]) === parent || String(args[0]).startsWith(`${parent}${path.sep}`))
-    ) {
-      Object.defineProperty(stat, "uid", { value: typeof stat.uid === "bigint" ? 0n : 0 });
-    }
-    return stat;
+  ownImmutableFixture(parent, true);
+  descriptor = immutableDescriptor(root, sha, "1".repeat(64), {
+    unit: "openclaw-fixture.service",
+    scope: "system",
+    account: "openclaw-fixture",
+    stateDir: path.join(parent, "state"),
+    configPath: path.join(parent, "state", "openclaw.json"),
+    profile: null,
   });
-  descriptor = {
-    version: 1,
-    kind: "immutable",
-    root,
-    rootIdentity: identity(root),
-    releasesIdentity: identity(path.join(root, "releases")),
-    current: {
-      sha,
-      path: current,
-      identity: identity(current),
-      pointerIdentity: identity(currentPointer()),
-      buildDigest: "1".repeat(64),
-    },
-    service: {
-      unit: "openclaw-fixture.service",
-      scope: "system",
-      account: "openclaw-fixture",
-      stateDir: path.join(parent, "state"),
-      configPath: path.join(parent, "state", "openclaw.json"),
-      profile: null,
-    },
-    runtime: {
-      path: fs.realpathSync(process.execPath),
-      identity: packageActivationRuntimeIdentity(fs.realpathSync(process.execPath)),
-    },
-    source: "https://github.com/openclaw/openclaw.git",
-  };
   prepared = {
     sha: candidateSha,
     path: candidate,
@@ -138,83 +121,32 @@ afterEach(() => vi.restoreAllMocks());
 
 function beginActivation(): ImmutableInstallRecord {
   const adopted = adopt();
-  fs.mkdirSync(descriptor.service.stateDir, { mode: 0o700 });
-  const statePath = path.join(descriptor.service.stateDir, "openclaw.db");
-  fs.writeFileSync(statePath, "synthetic state identity", { mode: 0o600 });
-  fs.writeFileSync(descriptor.service.configPath, "{}", { mode: 0o600 });
-  const fileIdentity = (file: string) => {
-    const stat = fs.lstatSync(file);
-    return {
-      dev: String(stat.dev),
-      ino: String(stat.ino),
-      mode: stat.mode,
-      nlink: 1 as const,
-      uid: stat.uid,
-      gid: stat.gid,
-    };
-  };
+  const custody = syntheticActivationCustody(descriptor, ["1:9", "1:10"]);
+  custody.authority.owner = randomUUID();
   const operation: ImmutableActivationOperation = {
     version: 1,
     operationId: randomUUID(),
-    authority: {
-      databasePath: journalPath(),
-      databaseIdentity: identity(journalPath()),
-      parentIdentity: identity(controlPath()),
-      installKey: root,
-      owner: randomUUID(),
-    },
+    ...custody,
     phase: "publishing",
     previous: descriptor.current,
     candidate: prepared,
     serviceDigest: "3".repeat(64),
-    recovery: {
-      root,
-      path: path.join(controlPath(), `recovery-${sha}`),
-      sha,
-      identity: "1:9",
-      buildDigest: descriptor.current.buildDigest,
-      helperPath: path.join(controlPath(), "recovery.mjs"),
-      helperIdentity: "1:10",
-      helperDigest: "6".repeat(64),
-    },
-    protection: {
-      capturedAtMs: 1,
-      auditBoundary: null,
-      state: {
-        path: statePath,
-        identity: fileIdentity(statePath),
-        pathProof: { targetPath: statePath, entries: [] },
-        key: "synthetic-state-key",
-      },
-      config: [
-        {
-          path: descriptor.service.configPath,
-          identity: fileIdentity(descriptor.service.configPath),
-          pathProof: { targetPath: descriptor.service.configPath, entries: [] },
-          hash: "4".repeat(64),
-          fingerprint: {},
-          policyFingerprint: "5".repeat(64),
-        },
-      ],
-    },
+    protection: syntheticImmutableProtection(descriptor, {
+      key: "synthetic-state-key",
+      hash: "4".repeat(64),
+      policyFingerprint: "5".repeat(64),
+    }),
     startedAtMs: 2,
   };
-  return updateImmutableInstallRecord(
-    adopted,
-    {
-      descriptor: { ...descriptor, version: 2, activationEnabled: true },
-      prepared,
-      activation: { operation },
-    },
-    () => {},
-  );
+  return update(adopted, {
+    descriptor: { ...descriptor, version: 2, activationEnabled: true },
+    prepared,
+    activation: { operation },
+  });
 }
 
 function retainUnpublishedIntent(record: ImmutableInstallRecord) {
-  const operation = record.activation?.operation;
-  if (!operation) {
-    throw new Error("Missing fixture activation");
-  }
+  const operation = record.activation!.operation!;
   const temporary = path.join(root, `.openclaw-current-${operation.operationId}`);
   fs.symlinkSync(`releases/${candidateSha}`, temporary);
   return update(record, {
@@ -307,7 +239,7 @@ it.each([
       verifiedAtMs: 1000,
       ...(gateway ? { gateway } : {}),
     };
-    updateImmutableInstallRecord(record, { ...record, activation: { lastResult } }, () => {});
+    update(record, { ...record, activation: { lastResult } });
     const projection = projectImmutableInstall(read());
     expect(projection.lastActivation).toEqual(lastResult);
     expect(projection).not.toHaveProperty("activation");
@@ -316,24 +248,10 @@ it.each([
 it("retains publication provenance across preparations without backfilling older releases", () => {
   const adopted = adopt();
   const legacy = prepare(adopted, prepared);
-  const enabled = updateImmutableInstallRecord(
-    legacy,
-    {
-      ...legacy,
-      descriptor: {
-        ...descriptor,
-        version: 3,
-        activationEnabled: true,
-        releaseRetention: {
-          version: 1,
-          mode: "inspect",
-          keepVerifiedGenerations: 3,
-          pins: [{ sha, identity: descriptor.current.identity }],
-        },
-      },
-    },
-    () => {},
-  );
+  const enabled = update(legacy, {
+    ...legacy,
+    descriptor: retentionDescriptor([{ sha, identity: descriptor.current.identity }]),
+  });
   expect(enabled.releases).toEqual([]);
   const publishGeneration = (previous: ImmutableInstallRecord, nextSha: string) => {
     const nextPath = path.join(root, "releases", nextSha);
@@ -366,20 +284,12 @@ it("retains publication provenance across preparations without backfilling older
 });
 
 it("rolls back inventory publication with a failed preparation receipt", () => {
-  const adopted = adopt({
-    ...descriptor,
-    version: 3,
-    activationEnabled: true,
-    releaseRetention: { version: 1, mode: "inspect", keepVerifiedGenerations: 3, pins: [] },
-  });
-  const db = new DatabaseSync(journalPath());
-  try {
+  const adopted = adopt(retentionDescriptor());
+  withDatabase(journalPath(), (db) => {
     db.exec(
       "CREATE TRIGGER fail_receipt BEFORE UPDATE ON immutable_installation BEGIN SELECT RAISE(ABORT, 'synthetic receipt failure'); END",
     );
-  } finally {
-    db.close();
-  }
+  });
   expect(() => prepare(adopted, prepared)).toThrow("synthetic receipt failure");
   expect(read()).toEqual(adopted);
   expect(read().releases).toEqual([]);
@@ -387,12 +297,7 @@ it("rolls back inventory publication with a failed preparation receipt", () => {
 });
 
 it("refuses conflicting publication identities instead of rewriting owned provenance", () => {
-  const adopted = adopt({
-    ...descriptor,
-    version: 3,
-    activationEnabled: true,
-    releaseRetention: { version: 1, mode: "inspect", keepVerifiedGenerations: 3, pins: [] },
-  });
+  const adopted = adopt(retentionDescriptor());
   const published = prepare(adopted, prepared);
   expect(() =>
     prepare(published, {
@@ -435,11 +340,11 @@ it("rolls back a preparation when executor authority is lost before commit", () 
 
 it("preserves existing package journals for their original recovery owner", () => {
   fs.mkdirSync(controlPath(), { mode: 0o755 });
-  const db = new DatabaseSync(journalPath());
-  db.exec(
-    "CREATE TABLE package_activation (phase TEXT); INSERT INTO package_activation VALUES ('publishing')",
+  withDatabase(journalPath(), (db) =>
+    db.exec(
+      "CREATE TABLE package_activation (phase TEXT); INSERT INTO package_activation VALUES ('publishing')",
+    ),
   );
-  db.close();
   fs.chmodSync(journalPath(), 0o644);
   const digest = () => createHash("sha256").update(fs.readFileSync(journalPath())).digest("hex");
   const before = digest();
@@ -461,33 +366,26 @@ it("rejects a replacement installation and writable control without mutation", (
 
 it("refuses a prepared receipt outside its adopted release root", () => {
   const adopted = adopt();
-  expect(() =>
-    recordImmutablePreparedGeneration(
-      adopted,
-      {
-        ...prepared,
-        path: path.join(parent, candidateSha),
-      },
-      () => {},
-    ),
-  ).toThrow("outside its recorded release root");
+  expect(() => prepare(adopted, { ...prepared, path: path.join(parent, candidateSha) })).toThrow(
+    "outside its recorded release root",
+  );
   expect(read()).toEqual(adopted);
 });
 
 it("upgrades a slice-1 control in place only with explicit activation consent", () => {
   fs.mkdirSync(controlPath(), { mode: 0o755 });
-  const db = new DatabaseSync(journalPath());
-  db.exec(`CREATE TABLE immutable_installation (
+  withDatabase(journalPath(), (db) => {
+    db.exec(`CREATE TABLE immutable_installation (
     slot INTEGER PRIMARY KEY NOT NULL CHECK (slot = 1),
     revision INTEGER NOT NULL,
     descriptor_json TEXT NOT NULL,
     prepared_json TEXT NOT NULL
   ) STRICT`);
-  db.prepare("INSERT INTO immutable_installation VALUES (1, 0, ?, ?)").run(
-    JSON.stringify(descriptor),
-    JSON.stringify(prepared),
-  );
-  db.close();
+    db.prepare("INSERT INTO immutable_installation VALUES (1, 0, ?, ?)").run(
+      JSON.stringify(descriptor),
+      JSON.stringify(prepared),
+    );
+  });
   fs.chmodSync(journalPath(), 0o644);
   const journalIdentity = identity(journalPath());
   const original = read();

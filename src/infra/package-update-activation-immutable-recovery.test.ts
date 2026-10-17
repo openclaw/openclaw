@@ -6,11 +6,16 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import {
+  fileIdentity as identity,
+  immutableDescriptor,
+  ownImmutableFixture,
+  readText as text,
+} from "./package-update-activation-fixtures.test-support.js";
+import {
   prepareImmutableRecoveryRuntime,
   verifyImmutableRecoveryRuntime,
 } from "./package-update-activation-immutable-recovery.js";
 import {
-  packageActivationRuntimeIdentity,
   resolvePackageActivationAnchor,
   resolvePackageActivationControl,
 } from "./package-update-activation-paths.js";
@@ -30,10 +35,6 @@ vi.mock("./update-immutable-generation.js", async (importOriginal) => ({
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const sha = "a".repeat(40);
-const identity = (file: string) => {
-  const stat = fs.lstatSync(file);
-  return `${stat.dev}:${stat.ino}`;
-};
 let record: ImmutableInstallRecord;
 let source: string;
 let control: string;
@@ -46,7 +47,6 @@ const assertCurrent = () => {
 const prepare = () => prepareImmutableRecoveryRuntime({ record, assertCurrent });
 const verify = (reference: Awaited<ReturnType<typeof prepare>>) =>
   verifyImmutableRecoveryRuntime({ reference, descriptor: record.descriptor, assertCurrent });
-const text = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -77,16 +77,7 @@ import { createRequire } from 'node:module';
 console.log(JSON.stringify({ args: process.argv.slice(2), dependency: createRequire(import.meta.url)('./node_modules/absolute/index.cjs'), worker: fs.readFileSync(new URL('./dist/worker.js', import.meta.url), 'utf8') }));
 `,
   );
-  // Permissions and object identities stay real; only synthetic root ownership
-  // is substituted so this contract also runs in unprivileged Testbox workers.
-  const lstat = fs.lstatSync;
-  vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
-    const stat = lstat(...args);
-    if (stat && String(args[0]).startsWith(`${parent}${path.sep}`)) {
-      Object.defineProperty(stat, "uid", { value: typeof stat.uid === "bigint" ? 0n : 0 });
-    }
-    return stat;
-  });
+  ownImmutableFixture(parent);
   vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(source);
   vi.mocked(verifyImmutableGeneration).mockImplementation(async (directory, expectedSha) => {
     expect(expectedSha).toBe(sha);
@@ -97,35 +88,27 @@ console.log(JSON.stringify({ args: process.argv.slice(2), dependency: createRequ
         .digest("hex"),
     };
   });
-  const runtime = fs.realpathSync(process.execPath);
   record = {
     revision: 1,
+    prepared: null,
     descriptor: {
+      ...immutableDescriptor(
+        root,
+        sha,
+        createHash("sha256").update("built runtime").digest("hex"),
+        {
+          scope: "system",
+          unit: "fixture.service",
+          account: "fixture",
+          stateDir: "/fixture/state",
+          configPath: "/fixture/state/openclaw.json",
+          profile: null,
+        },
+        "1:2",
+      ),
       version: 2,
       activationEnabled: true,
-      kind: "immutable",
-      root,
-      rootIdentity: identity(root),
-      releasesIdentity: identity(path.join(root, "releases")),
-      current: {
-        sha,
-        path: source,
-        identity: identity(source),
-        pointerIdentity: "1:2",
-        buildDigest: createHash("sha256").update("built runtime").digest("hex"),
-      },
-      service: {
-        scope: "system",
-        unit: "fixture.service",
-        account: "fixture",
-        stateDir: "/fixture/state",
-        configPath: "/fixture/state/openclaw.json",
-        profile: null,
-      },
-      runtime: { path: runtime, identity: packageActivationRuntimeIdentity(runtime) },
-      source: "https://github.com/openclaw/openclaw.git",
     },
-    prepared: null,
   };
 });
 afterEach(() => vi.restoreAllMocks());

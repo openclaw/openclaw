@@ -15,13 +15,14 @@ import {
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import { withDatabase } from "./package-update-activation-fixtures.test-support.js";
 import {
   createPackageActivationJournal,
   openPackageActivationJournal,
   resolvePackageActivationJournalPath,
   resolvePackageActivationHelper,
   resolvePackageActivationControl,
-  packageActivationIdentity,
+  packageActivationIdentity as identity,
   resolvePackageActivationAnchor,
   type PackageActivationDescriptor,
   type PackageActivationIntent,
@@ -38,14 +39,6 @@ import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const openDatabase = nodeSqlite.openNodeSqliteDatabase;
-function withDatabase<T>(file: string, body: (db: DatabaseSync) => T, readOnly = false): T {
-  const db = new DatabaseSync(file, { readOnly });
-  try {
-    return body(db);
-  } finally {
-    db.close();
-  }
-}
 let root: string;
 let assertDatabasePath: (path: string) => void;
 let childGuardEnv: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
@@ -154,14 +147,21 @@ function preparation(
   name: PackageActivationDescriptor["preparation"][number]["name"],
   source: string,
   parent = path.dirname(source),
-  identity = packageActivationIdentity(source, true),
+  sourceIdentity = identity(source, true),
 ) {
-  return { name, source, sourceParentIdentity: packageActivationIdentity(parent, true), identity };
+  return { name, source, sourceParentIdentity: identity(parent, true), identity: sourceIdentity };
 }
 
 async function fixture() {
   const packages = await createPackageSwapFixture(root);
-  const anchor = resolvePackageActivationAnchor(packages.packageRoot);
+  const {
+    packageRoot,
+    launcher,
+    params: { stage },
+  } = packages;
+  const anchor = resolvePackageActivationAnchor(packageRoot);
+  const stageRoot = stage.packageRoot;
+  const stagedBin = stage.layout.binDir;
   const stagedAnchor = `${anchor}.staged`;
   const launcherRoot = path.join(stagedAnchor, "launchers");
   fs.mkdirSync(stagedAnchor, { mode: 0o700 });
@@ -169,53 +169,46 @@ async function fixture() {
   const stagedControl = resolvePackageActivationControl(stagedAnchor);
   fs.mkdirSync(stagedControl, { mode: 0o700 });
   const helperBytes = Buffer.from("// sealed helper fixture\n");
-  fs.writeFileSync(resolvePackageActivationHelper(stagedAnchor), helperBytes, { mode: 0o600 });
+  const stagedHelper = resolvePackageActivationHelper(stagedAnchor);
+  fs.writeFileSync(stagedHelper, helperBytes, { mode: 0o600 });
   const initial = await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-    const fence = await executor.enter(packages.packageRoot);
+    const fence = await executor.enter(packageRoot);
     const authority = captureUpdateCommandExecutorAuthority(fence);
     const descriptor: Omit<PackageActivationDescriptor, "journalIdentity"> = {
       version: 1,
       layout: "external-helper",
       recoveryNodePath: fs.realpathSync(process.execPath),
-      helperIdentity: packageActivationIdentity(
-        resolvePackageActivationHelper(stagedAnchor),
-        false,
-      ),
+      helperIdentity: identity(stagedHelper, false),
       preparation: [
         preparation("anchor", stagedAnchor),
         preparation(
           "helper",
           resolvePackageActivationHelper(anchor),
           stagedControl,
-          packageActivationIdentity(resolvePackageActivationHelper(stagedAnchor), false),
+          identity(stagedHelper, false),
         ),
-        preparation("candidate", packages.params.stage.packageRoot),
-        preparation(
-          "launchers",
-          packages.params.stage.layout.binDir,
-          path.dirname(packages.params.stage.layout.binDir),
-          packageActivationIdentity(launcherRoot, true),
-        ),
+        preparation("candidate", stageRoot),
+        preparation("launchers", stagedBin, path.dirname(stagedBin), identity(launcherRoot, true)),
       ],
       operationId: randomUUID(),
       authority,
-      anchorIdentity: packageActivationIdentity(stagedAnchor, true),
-      parentIdentity: packageActivationIdentity(path.dirname(anchor), true),
-      journalParentIdentity: packageActivationIdentity(stagedControl, true),
-      binDir: path.dirname(packages.launcher),
-      binIdentity: packageActivationIdentity(path.dirname(packages.launcher), true),
-      originalStageRoot: packages.params.stage.packageRoot,
+      anchorIdentity: identity(stagedAnchor, true),
+      parentIdentity: identity(path.dirname(anchor), true),
+      journalParentIdentity: identity(stagedControl, true),
+      binDir: path.dirname(launcher),
+      binIdentity: identity(path.dirname(launcher), true),
+      originalStageRoot: stageRoot,
       previous: {
         digest: "a".repeat(64),
-        identity: packageActivationIdentity(packages.packageRoot, true),
+        identity: identity(packageRoot, true),
         version: "1.0.0",
       },
       candidate: {
         digest: "b".repeat(64),
-        identity: packageActivationIdentity(packages.params.stage.packageRoot, true),
+        identity: identity(stageRoot, true),
         version: "2.0.0",
       },
-      launcherRootIdentity: packageActivationIdentity(launcherRoot, true),
+      launcherRootIdentity: identity(launcherRoot, true),
       previousLauncherRootIdentity: null,
       helperDigest: createHash("sha256").update(helperBytes).digest("hex"),
       launchers: [
@@ -223,11 +216,8 @@ async function fixture() {
           name: "openclaw",
           previous: "old launcher\n",
           candidate: "candidate launcher\n",
-          previousIdentity: packageActivationIdentity(packages.launcher, "launcher"),
-          candidateIdentity: packageActivationIdentity(
-            path.join(packages.params.stage.layout.binDir, "openclaw"),
-            "launcher",
-          ),
+          previousIdentity: identity(launcher, "launcher"),
+          candidateIdentity: identity(path.join(stagedBin, "openclaw"), "launcher"),
         },
       ],
     };
@@ -253,7 +243,7 @@ async function fixture() {
     withUpdateCommandExecutor(
       randomUUID(),
       async (executor) => {
-        const fence = await executor.enter(packages.packageRoot);
+        const fence = await executor.enter(packageRoot);
         return initial.journal.transition(record, phase, intent, fence.assertCurrent);
       },
       { existingAuthority: initial.authority },
@@ -639,8 +629,7 @@ function byteBoundsFixture(oversized: (typeof jsonColumns)[number]) {
   fs.mkdirSync(anchor, { mode: 0o700 });
   fs.mkdirSync(resolvePackageActivationControl(anchor), { mode: 0o700 });
   const file = resolvePackageActivationJournalPath(anchor);
-  const db = new DatabaseSync(file);
-  try {
+  withDatabase(file, (db) => {
     db.exec(
       "CREATE TABLE package_activation (slot INTEGER, revision INTEGER, phase TEXT, descriptor_json TEXT, intent_json TEXT, publications_json TEXT)",
     );
@@ -652,9 +641,7 @@ function byteBoundsFixture(oversized: (typeof jsonColumns)[number]) {
       row.intent_json,
       row.publications_json,
     );
-  } finally {
-    db.close();
-  }
+  });
   fs.chmodSync(file, 0o600);
   const snapshot = () => {
     const stat = fs.statSync(file);

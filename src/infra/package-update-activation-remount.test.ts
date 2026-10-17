@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import * as durability from "./directory-durability.js";
+import {
+  readBytes as bytes,
+  historicalJson,
+  withDatabase,
+} from "./package-update-activation-fixtures.test-support.js";
 import * as journalModule from "./package-update-activation-journal.js";
 import {
   openPackageActivationJournal,
@@ -24,12 +28,23 @@ import {
 } from "./package-update-activation.js";
 import { legacyPackageFingerprint } from "./package-update-legacy.test-support.js";
 
-const bytes = (...parts: string[]) => fs.readFileSync(path.join(...parts));
 const settle = (f: { packageRoot: string; operationId: string }, operationId = f.operationId) =>
   settlePendingPackageActivation(f.packageRoot, undefined, undefined, { operationId });
-const { setup, prepare, lifetime } = createPackageActivationLifetimeFixture();
+const fixture = createPackageActivationLifetimeFixture();
+const { setup, prepare, lifetime } = fixture;
+let root: string;
+function afterLauncherSync(launcher: string, effect: () => void) {
+  const sync = durability.syncDirectory;
+  vi.spyOn(durability, "syncDirectory").mockImplementation(async (directory) => {
+    const result = await sync(directory);
+    if (directory === path.dirname(launcher)) {
+      effect();
+    }
+    return result;
+  });
+}
 beforeEach(() => {
-  setup();
+  ({ root } = setup());
 });
 afterEach(async () => {
   try {
@@ -105,22 +120,12 @@ describe.skipIf(process.platform === "win32")("completed package receipt history
       fs.rmSync(first.anchor, { recursive: true });
       fs.unlinkSync(resolvePackageActivationHelper(first.anchor));
     }
-    const historical = (value: unknown) =>
-      JSON.stringify(value, (_key, entry: unknown) => {
-        if (typeof entry !== "string" || !/^\d+:\d+$/u.test(entry)) {
-          return entry;
-        }
-        return entry.replace(/^\d+/u, (device) => String(BigInt(device) + 1n));
-      });
     const journalPath = resolvePackageActivationJournalPath(first.anchor);
-    const database = new DatabaseSync(journalPath);
-    try {
+    withDatabase(journalPath, (database) => {
       database
         .prepare("UPDATE package_activation SET descriptor_json = ?, intent_json = ?")
-        .run(historical(record.descriptor), historical(record.intent));
-    } finally {
-      database.close();
-    }
+        .run(historicalJson(record.descriptor), historicalJson(record.intent));
+    });
     const before = fs.readFileSync(journalPath);
     const platform = vi
       .spyOn(process, "platform", "get")
@@ -165,11 +170,6 @@ describe.skipIf(process.platform === "win32")("completed package receipt history
 });
 
 describe.skipIf(process.platform === "win32")("unfinished remounted publication settlement", () => {
-  const fixture = createPackageActivationLifetimeFixture();
-  afterEach(async () => {
-    await fixture.lifetime.cleanup();
-  });
-
   it.each([
     "prepared",
     "candidate",
@@ -178,7 +178,6 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     "publishing-intent",
     "publishing-launcher",
   ] as const)("settles only verified remounted preparation: %s", async (scenario) => {
-    const { root } = fixture.setup();
     const f = await prepareRemountedPublication(
       fixture,
       root,
@@ -193,8 +192,7 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     } else if (scenario === "launcher") {
       fs.appendFileSync(f.launcher, "changed");
     } else if (scenario.startsWith("publishing")) {
-      const database = new DatabaseSync(f.journalPath);
-      try {
+      withDatabase(f.journalPath, (database) => {
         database
           .prepare(
             "UPDATE package_activation SET phase = 'publishing', intent_json = ?, publications_json = ?",
@@ -207,9 +205,7 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
                 ])
               : "[]",
           );
-      } finally {
-        database.close();
-      }
+      });
     }
     const liveTree = legacyPackageFingerprint(f.packageRoot);
     const launcher = fs.readFileSync(f.launcher);
@@ -237,7 +233,6 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
   });
 
   it("refuses separate-helper settlement without a remount", async () => {
-    fixture.setup();
     const f = await fixture.prepare();
     const journalPath = resolvePackageActivationJournalPath(f.anchor);
     const before = fs.readFileSync(journalPath);
@@ -249,7 +244,6 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
   it.each(["settle", "archive-interrupted", "journal-mode"] as const)(
     "verifies and preserves the installed candidate: %s",
     async (scenario) => {
-      const { root } = fixture.setup();
       const f = await prepareRemountedPublication(fixture, root);
       if (scenario === "journal-mode") {
         fs.chmodSync(f.journalPath, 0o644);
@@ -318,20 +312,19 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
         await settlePendingPackageActivation(f.packageRoot, undefined, closed);
       }
       const retained = `${f.anchor}.superseded-${f.operationId}`;
-      const db = new DatabaseSync(path.join(retained, "control/operation.sqlite"), {
-        readOnly: true,
-      });
-      try {
-        const row = db.prepare("SELECT * FROM package_activation").get()!;
-        expect(row.phase).toBe("superseded");
-        expect(JSON.parse(String(row.intent_json))).toMatchObject({
-          kind: "publication-settled-external-change",
-          settled: true,
-        });
-        expect(JSON.parse(String(row.descriptor_json))).toEqual(f.historical);
-      } finally {
-        db.close();
-      }
+      withDatabase(
+        path.join(retained, "control/operation.sqlite"),
+        (db) => {
+          const row = db.prepare("SELECT * FROM package_activation").get()!;
+          expect(row.phase).toBe("superseded");
+          expect(JSON.parse(String(row.intent_json))).toMatchObject({
+            kind: "publication-settled-external-change",
+            settled: true,
+          });
+          expect(JSON.parse(String(row.descriptor_json))).toEqual(f.historical);
+        },
+        true,
+      );
       expect(legacyPackageFingerprint(f.packageRoot)).toEqual(liveTree);
       expect(legacyPackageFingerprint(path.join(retained, "previous"))).toEqual(previousTree);
       expect(bytes(f.packageRoot, "package.json")).toEqual(liveBytes);
@@ -347,30 +340,19 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
   it.each(["before-commit", "before-archive"] as const)(
     "refuses settlement after ownership reassignment: %s",
     async (scenario) => {
-      const { root } = fixture.setup();
       const f = await prepareRemountedPublication(fixture, root);
       const before = fs.readFileSync(f.journalPath);
       const reassign = () => {
-        const lease = new DatabaseSync(f.historical.authority.databasePath);
-        try {
+        withDatabase(f.historical.authority.databasePath, (lease) => {
           const { changes } = lease
             .prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?")
             .run(randomUUID(), f.packageRoot);
           expect(changes).toBe(1);
-        } finally {
-          lease.close();
-        }
+        });
       };
       if (scenario === "before-commit") {
         // Reassign after the full-tree verification, at the launcher sync before the close.
-        const sync = durability.syncDirectory;
-        vi.spyOn(durability, "syncDirectory").mockImplementation(async (directory) => {
-          const result = await sync(directory);
-          if (directory === path.dirname(f.launcher)) {
-            reassign();
-          }
-          return result;
-        });
+        afterLauncherSync(f.launcher, reassign);
       } else {
         // Reassign after the durable close, immediately before evidence archival.
         const open = journalModule.openPackageActivationSettlementJournal;
@@ -427,7 +409,6 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     "active-lease",
     "rollback",
   ] as const)("refuses %s without closing or replacing anything", async (scenario) => {
-    const { root } = fixture.setup();
     const f = await prepareRemountedPublication(
       fixture,
       root,
@@ -447,13 +428,8 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
       fs.chmodSync(target, (fs.statSync(target).mode & 0o777) ^ 0o100);
     }
     if (scenario === "after-verification") {
-      const sync = durability.syncDirectory;
-      vi.spyOn(durability, "syncDirectory").mockImplementation(async (directory) => {
-        const result = await sync(directory);
-        if (directory === path.dirname(f.launcher)) {
-          fs.appendFileSync(path.join(f.packageRoot, "openclaw.mjs"), "changed after verification");
-        }
-        return result;
+      afterLauncherSync(f.launcher, () => {
+        fs.appendFileSync(path.join(f.packageRoot, "openclaw.mjs"), "changed after verification");
       });
     }
     if (scenario === "launcher") {
@@ -470,27 +446,17 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
       ["inode", "device-map", "journal-inode", "journal-device-map", "rollback"].includes(scenario)
     ) {
       const d = structuredClone(f.historical);
-      if (scenario === "inode") {
-        d.binIdentity = d.binIdentity.replace(/\d+$/u, (n) => String(BigInt(n) + 1n));
+      if (scenario !== "rollback") {
+        const field = scenario.startsWith("journal-") ? "journalIdentity" : "binIdentity";
+        const part = scenario.endsWith("inode") ? /\d+$/u : /^\d+/u;
+        d[field] = d[field].replace(part, (value) => String(BigInt(value) + 1n));
       }
-      if (scenario === "device-map") {
-        d.binIdentity = d.binIdentity.replace(/^\d+/u, (n) => String(BigInt(n) + 1n));
-      }
-      if (scenario === "journal-inode") {
-        d.journalIdentity = d.journalIdentity.replace(/\d+$/u, (n) => String(BigInt(n) + 1n));
-      }
-      if (scenario === "journal-device-map") {
-        d.journalIdentity = d.journalIdentity.replace(/^\d+/u, (n) => String(BigInt(n) + 1n));
-      }
-      const db = new DatabaseSync(f.journalPath);
-      try {
+      withDatabase(f.journalPath, (db) => {
         db.prepare("UPDATE package_activation SET descriptor_json = ?, phase = ?").run(
           JSON.stringify(d),
           scenario === "rollback" ? "rollback-in-progress" : "publishing",
         );
-      } finally {
-        db.close();
-      }
+      });
     }
     const before = fs.readFileSync(f.journalPath);
     const refuse = () =>
