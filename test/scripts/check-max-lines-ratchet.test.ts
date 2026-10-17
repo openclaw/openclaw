@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -10,45 +9,33 @@ import {
   main,
 } from "../../scripts/check-max-lines-ratchet.mts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
-import { createTempDirTracker } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
 const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
-const tempDirs = createTempDirTracker();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => vi.stubEnv("GITHUB_ACTIONS", ""));
-const nestedGitEnvKeys = (
-  "ALTERNATE_OBJECT_DIRECTORIES COMMON_DIR CONFIG CONFIG_COUNT CONFIG_PARAMETERS DIR " +
-  "GRAFT_FILE IMPLICIT_WORK_TREE INDEX_FILE NAMESPACE NO_REPLACE_OBJECTS OBJECT_DIRECTORY " +
-  "PREFIX QUARANTINE_PATH REPLACE_REF_BASE SHALLOW_FILE WORK_TREE"
-)
-  .split(" ")
-  .map((key) => `GIT_${key}`);
-
-function fixtureEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-  };
-  for (const key of nestedGitEnvKeys) {
-    delete env[key];
-  }
-  return env;
-}
+const nestedGitEnvKeys = new Set(
+  (
+    "ALTERNATE_OBJECT_DIRECTORIES COMMON_DIR CONFIG CONFIG_COUNT CONFIG_PARAMETERS DIR " +
+    "GRAFT_FILE IMPLICIT_WORK_TREE INDEX_FILE NAMESPACE NO_REPLACE_OBJECTS OBJECT_DIRECTORY " +
+    "PREFIX QUARANTINE_PATH REPLACE_REF_BASE SHALLOW_FILE WORK_TREE"
+  )
+    .split(" ")
+    .map((key) => `GIT_${key}`),
+);
 
 function git(cwd: string, args: string[]): void {
+  const env = Object.fromEntries(
+    Object.entries(createNestedGitEnv()).filter(([key]) => !nestedGitEnvKeys.has(key)),
+  );
   execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args], {
     cwd,
-    env: fixtureEnv(),
+    env,
     stdio: "ignore",
   });
-}
-
-function commitFixture(root: string, message = "base"): void {
-  for (const args of [["init"], ["add", "."], ["commit", "-m", message]]) {
-    git(root, args);
-  }
 }
 
 const baselinePath = "config/max-lines-baseline.txt";
@@ -60,69 +47,55 @@ function write(root: string, file: string, source: string) {
 }
 
 function makeRepo(entries: string[], files: Record<string, string> = {}, message = "base") {
-  const root = tempDirs.make("openclaw-max-lines-", os.tmpdir());
+  const root = tempDirs.make("openclaw-max-lines-");
   write(root, baselinePath, entries.map((file) => `${file}\n`).join(""));
-  for (const file of entries) {
-    write(root, file, suppression);
-  }
-  for (const [file, source] of Object.entries(files)) {
-    write(root, file, source);
-  }
-  commitFixture(root, message);
+  entries.forEach((file) => write(root, file, suppression));
+  Object.entries(files).forEach(([file, source]) => write(root, file, source));
+  [["init"], ["add", "."], ["commit", "-m", message]].forEach((args) => git(root, args));
   return root;
 }
 
-function directives(source: string) {
-  return collectLintDisableDirectives(source, "file.ts", parser.parseSourceFile("file.ts", source));
-}
+const directives = (source: string) =>
+  collectLintDisableDirectives(source, "file.ts", parser.parseSourceFile("file.ts", source));
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  tempDirs.cleanup();
 });
 
-it.each(["\r\n"])("preserves directive discovery with %j line endings", (newline) => {
+it("preserves directive discovery with CRLF line endings", () => {
   const source = [
-    'const text = "\u{1f680} /* oxlint-disable max-lines */";',
-    "const template = `// eslint-disable max-lines`;",
-    "function example() {",
-    "  /* oxlint-disable no-console */",
-    "} // eslint-disable no-debugger",
-    "consume(",
-    "  1",
-    "  // oxlint-disable no-console",
+    'const text = "\u{1f680} /* oxlint-disable max-lines */"; const template = `// eslint-disable max-lines`;',
+    "function example() { /* oxlint-disable no-console */ } // eslint-disable no-debugger",
+    "consume(1 // oxlint-disable no-console",
     ");",
     "// eslint-disable max-lines, eqeqeq",
-  ].join(newline);
+  ].join("\r\n");
 
-  expect(directives(source)).toEqual([
-    ["no-console"],
-    ["no-debugger"],
-    ["no-console"],
-    ["max-lines", "eqeqeq"],
-  ]);
+  const noLog = ["no-console"];
+  expect(directives(source)).toEqual([noLog, ["no-debugger"], noLog, ["max-lines", "eqeqeq"]]);
 });
 
 it("does not match directive examples in prose", () => {
   expect(directives("// Example: oxlint-disable max-lines\n")).toEqual([]);
 });
 
-it("limits source roots and excludes generated output", () => {
-  expect(isGovernedSourcePath("src/runtime.ts")).toBe(true);
-  expect(isGovernedSourcePath("extensions/demo/index.mjs")).toBe(true);
-  expect(isGovernedSourcePath("scripts/tool.mjs")).toBe(false);
-  expect(isGovernedSourcePath("packages/api/protocol-gen/types.ts")).toBe(false);
-  expect(isGovernedSourcePath("ui/src/i18n/locales/en.ts")).toBe(false);
-  expect(isGovernedSourcePath("src/wizard/i18n/locales/en.ts")).toBe(false);
-  expect(isGovernedSourcePath("src/schema.generated.ts")).toBe(false);
+it.each([
+  ["src/runtime.ts", true],
+  ["extensions/demo/index.mjs", true],
+  ["scripts/tool.mjs", false],
+  ["packages/api/protocol-gen/types.ts", false],
+  ["ui/src/i18n/locales/en.ts", false],
+  ["src/wizard/i18n/locales/en.ts", false],
+  ["src/schema.generated.ts", false],
+] as const)("governs %s: %s", (file, governed) => {
+  expect(isGovernedSourcePath(file)).toBe(governed);
 });
 
 it("reports baseline growth as an advisory in GitHub Actions even when listed", () => {
-  const source = "/* oxlint-disable max-lines -- TODO: split. */\n";
-  const root = makeRepo(["src/a.ts"], { "src/a.ts": source });
+  const root = makeRepo(["src/a.ts"]);
   write(root, baselinePath, "src/a.ts\nsrc/b.ts\n");
-  write(root, "src/b.ts", source);
+  write(root, "src/b.ts", suppression);
   git(root, ["add", "."]);
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.stubEnv("GITHUB_ACTIONS", "true");
@@ -191,12 +164,8 @@ it("checks staged content instead of unstaged worktree edits", () => {
 });
 
 it.skipIf(process.platform === "win32")("keeps staged filenames NUL-framed", () => {
-  const root = tempDirs.make("openclaw-max-lines-nul-", os.tmpdir());
-  fs.mkdirSync(path.join(root, "src"), { recursive: true });
-  git(root, ["init"]);
   const filePath = "src/newline\nname.ts";
-  fs.writeFileSync(path.join(root, filePath), "/* oxlint-disable max-lines */\n");
-  git(root, ["add", "."]);
+  const root = makeRepo([filePath]);
 
   expect(collectCurrentSuppressionState(root, { staged: true }).explicit).toEqual([filePath]);
 });

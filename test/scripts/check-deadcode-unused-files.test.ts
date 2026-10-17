@@ -17,16 +17,10 @@ import { isProcessAlive } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 
-const KNIP_UNUSED_FILE_ARGS = [
-  "--config",
-  "config/knip.config.ts",
-  "--production",
-  "--no-progress",
-  "--reporter",
-  "compact",
-  "--files",
-  "--no-config-hints",
-];
+const KNIP_UNUSED_FILE_ARGS =
+  "--config config/knip.config.ts --production --no-progress --reporter compact --files --no-config-hints".split(
+    " ",
+  );
 const KNIP_UNUSED_FILE_SCAN_NAME = "production unused-file scan";
 const FAKE_KNIP_KILL_GRACE_MS = 50;
 
@@ -140,14 +134,7 @@ it("accepts an empty compact report with zero unused files", () => {
 });
 
 it("rejects a nonzero Knip exit even when no unused files were printed", () => {
-  expect(
-    checkKnipUnusedFileScanResult({
-      errorCode: undefined,
-      output: "",
-      signal: null,
-      status: 2,
-    }),
-  ).toStrictEqual({
+  expect(checkKnipUnusedFileScanResult(knipResult({ status: 2 }))).toStrictEqual({
     failureReason: "exit status 2",
     message: "",
     ok: false,
@@ -167,50 +154,39 @@ Delete the files or model their real entrypoints in Knip.`,
   });
 });
 
-it("runs Knip through a process-group-aware subprocess", async () => {
-  const calls: unknown[] = [];
+it("runs Knip through a process-group-aware subprocess", async ({ onTestFinished }) => {
   const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-knip-runner-"));
+  onTestFinished(() => rmSync(root, { recursive: true, force: true }));
   const pnpmExecPath = path.join(root, "pnpm.cjs");
   writeFileSync(pnpmExecPath, "console.log('pnpm');\n", "utf8");
+  const child = new FakeKnipProcess();
+  const spawnCommand = vi.fn(() => child);
+  const resultPromise = runFakeKnip(child, {
+    nodeExecPath: "/test-node",
+    npmExecPath: pnpmExecPath,
+    spawnCommand,
+  });
+  child.stdout.emit("data", "partial stdout");
+  child.stderr.emit("data", "partial stderr");
+  finishFakeProcess(child, 0, null);
 
-  try {
-    const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
-      nodeExecPath: "/test-node",
-      npmExecPath: pnpmExecPath,
-      spawnCommand(command: string, args: string[], options: unknown) {
-        calls.push({ args, command, options });
-        const child = new FakeKnipProcess();
-        queueMicrotask(() => {
-          child.stdout.emit("data", "partial stdout");
-          child.stderr.emit("data", "partial stderr");
-          finishFakeProcess(child, 0, null);
-        });
-        return child;
-      },
-      writeStatus: () => {},
-    });
-
-    const result = await resultPromise;
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({
-      args: [
-        pnpmExecPath,
-        ..."dlx --package knip@6.40.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --files --no-config-hints".split(
-          " ",
-        ),
-      ],
-      command: "/test-node",
-      options: {
-        detached: process.platform !== "win32",
-        shell: false,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    });
-    expect(result).toStrictEqual(knipResult({ output: "partial stdoutpartial stderr" }));
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  expect(spawnCommand).toHaveBeenCalledExactlyOnceWith(
+    "/test-node",
+    [
+      pnpmExecPath,
+      ..."dlx --package knip@6.40.0 knip --config config/knip.config.ts --production --no-progress --reporter compact --files --no-config-hints".split(
+        " ",
+      ),
+    ],
+    expect.objectContaining({
+      detached: process.platform !== "win32",
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
+  await expect(resultPromise).resolves.toStrictEqual(
+    knipResult({ output: "partial stdoutpartial stderr" }),
+  );
 });
 
 it.each([
@@ -252,13 +228,16 @@ it.each([
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "waits for timed-out Knip process groups after the wrapper exits",
-  async ({ signal }) => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-knip-timeout-"));
+it.skipIf(process.platform === "win32").each(["timeout", "parent SIGTERM"])(
+  "cleans Knip descendants after %s",
+  async (mode, { signal }) => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-knip-group-"));
     const childPidPath = path.join(root, "child.pid");
+    const scriptUrl = pathToFileURL(path.resolve("scripts/deadcode-knip-runner.mts")).href;
     let childPid = 0;
+    let runner: ReturnType<typeof spawn> | undefined;
     const ready = createDeferred<number>();
+    let operation!: Promise<unknown>;
     let releaseAndWait: (() => ReturnType<typeof runKnip>) | undefined;
 
     try {
@@ -271,126 +250,80 @@ it.skipIf(process.platform === "win32")(
         "const { spawn } = require('node:child_process');",
         "const fs = require('node:fs');",
         `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
-        "child.once('message', (pid) => { fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(pid)); process.send(pid); });",
+        `child.once('message', (pid) => { fs.writeFileSync(${JSON.stringify(childPidPath)}, String(pid)); process.send(pid); });`,
         "process.on('SIGTERM', () => process.exit(0));",
         "setInterval(() => {}, 1000);",
       ].join("");
-
-      let resultPromise!: ReturnType<typeof runKnip>;
-      releaseAndWait = startProcessWatchdogFixture(() => {
-        resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
-          env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
-          killGraceMs: 50,
-          spawnCommand(_command, _args, options) {
-            const parent = spawn(process.execPath, ["-e", parentScript], {
-              ...options,
-              stdio: ["ignore", "pipe", "pipe", "ipc"],
-              env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
-            });
-            parent.once("message", (message: unknown) => {
-              if (typeof message === "number") {
-                ready.resolve(message);
-              }
-            });
-            return parent;
-          },
-          timeoutMs: 100,
-          writeStatus: () => {},
+      if (mode === "timeout") {
+        releaseAndWait = startProcessWatchdogFixture(() => {
+          const result = runKnip(KNIP_UNUSED_FILE_ARGS, {
+            killGraceMs: 50,
+            timeoutMs: 100,
+            writeStatus: () => {},
+            spawnCommand(_command, _args, options) {
+              const parent = spawn(process.execPath, ["-e", parentScript], {
+                ...options,
+                stdio: ["ignore", "pipe", "pipe", "ipc"],
+              });
+              parent.once("message", (pid: number) => ready.resolve(pid));
+              return parent;
+            },
+          });
+          operation = result;
+          return result;
         });
-        return resultPromise;
-      });
+      } else {
+        const runnerScript = [
+          "import { spawn } from 'node:child_process';",
+          `import { runKnip } from ${JSON.stringify(scriptUrl)};`,
+          `await runKnip(${JSON.stringify(KNIP_UNUSED_FILE_ARGS)}, {`,
+          "  spawnCommand(_command, _args, options) {",
+          `    const parent = spawn(process.execPath, ['-e', ${JSON.stringify(parentScript)}], { ...options, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });`,
+          "    parent.once('message', (pid) => process.send(pid));",
+          "    return parent;",
+          "  },",
+          "  timeoutMs: 60_000,",
+          "  writeStatus: () => {},",
+          "});",
+        ].join("\n");
 
+        runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
+          cwd: process.cwd(),
+          stdio: ["ignore", "ignore", "pipe", "ipc"],
+        });
+        operation = once(runner, "close");
+        runner.once("message", (pid: number) => ready.resolve(pid));
+      }
       childPid = await withinTest(
         awaitGateBeforeSettlement(
           ready.promise,
-          resultPromise,
+          operation,
           `timeout waiting for pid in ${childPidPath}`,
         ),
         signal,
       );
       expect(isProcessAlive(childPid)).toBe(true);
-
-      await expect(withinTest(releaseAndWait(), signal)).resolves.toMatchObject({
-        errorCode: "ETIMEDOUT",
-      });
-      // runKnip joins its timeout teardown before resolving the result.
-      expect(isProcessAlive(childPid)).toBe(false);
+      if (releaseAndWait) {
+        await expect(withinTest(releaseAndWait(), signal)).resolves.toMatchObject({
+          errorCode: "ETIMEDOUT",
+        });
+        // Timeout teardown must finish before runKnip resolves.
+        expect(isProcessAlive(childPid)).toBe(false);
+      } else {
+        runner?.kill("SIGTERM");
+        await expect(withinTest(operation, signal)).resolves.toEqual([null, "SIGTERM"]);
+        await waitForDescendantExit(childPid, signal);
+      }
     } finally {
+      if (runner?.pid && isProcessAlive(runner.pid)) {
+        runner.kill("SIGTERM");
+      }
       await releaseAndWait?.();
       if (!childPid && existsSync(childPidPath)) {
         childPid = Number(readFileSync(childPidPath, "utf8"));
       }
       killPidIfAlive(childPid || undefined);
-      rmSync(root, { recursive: true, force: true });
-    }
-  },
-);
-
-it.skipIf(process.platform === "win32")(
-  "cleans active Knip descendants before forwarding parent SIGTERM",
-  async ({ signal }) => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-knip-parent-signal-"));
-    const childPidPath = path.join(root, "child.pid");
-    const scriptUrl = pathToFileURL(path.resolve("scripts/deadcode-knip-runner.mts")).href;
-    let childPid = 0;
-    let runner: ReturnType<typeof spawn> | undefined;
-    let closed: Promise<unknown[]> | undefined;
-
-    try {
-      const childScript = [
-        "const fs = require('node:fs');",
-        "process.on('SIGTERM', () => {});",
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-        "process.send(process.pid);",
-        "setInterval(() => {}, 1000);",
-      ].join("");
-      const parentScript = [
-        "const { spawn } = require('node:child_process');",
-        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
-        "child.once('message', (pid) => process.send(pid));",
-        "process.on('SIGTERM', () => process.exit(0));",
-        "setInterval(() => {}, 1000);",
-      ].join("");
-      const runnerScript = [
-        "import { spawn } from 'node:child_process';",
-        `import { runKnip } from ${JSON.stringify(scriptUrl)};`,
-        `await runKnip(${JSON.stringify(KNIP_UNUSED_FILE_ARGS)}, {`,
-        "  spawnCommand(_command, _args, options) {",
-        `    const parent = spawn(process.execPath, ['-e', ${JSON.stringify(parentScript)}], { ...options, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });`,
-        "    parent.once('message', (pid) => process.send(pid));",
-        "    return parent;",
-        "  },",
-        "  timeoutMs: 60_000,",
-        "  writeStatus: () => {},",
-        "});",
-      ].join("\n");
-
-      runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
-        cwd: process.cwd(),
-        stdio: ["ignore", "ignore", "pipe", "ipc"],
-      });
-      closed = once(runner, "close");
-      const ready = once(runner, "message");
-      const [pid] = await withinTest(
-        awaitGateBeforeSettlement(ready, closed, `timeout waiting for pid in ${childPidPath}`),
-        signal,
-      );
-      childPid = Number(pid);
-      expect(isProcessAlive(childPid)).toBe(true);
-
-      runner.kill("SIGTERM");
-
-      await expect(withinTest(closed, signal)).resolves.toEqual([null, "SIGTERM"]);
-      await waitForDescendantExit(childPid, signal);
-    } finally {
-      if (runner?.pid && isProcessAlive(runner.pid)) {
-        runner.kill("SIGTERM");
-      }
-      if (!childPid && existsSync(childPidPath)) {
-        childPid = Number(readFileSync(childPidPath, "utf8"));
-      }
-      killPidIfAlive(childPid || undefined);
-      await closed;
+      await operation;
       rmSync(root, { recursive: true, force: true });
     }
   },
@@ -410,67 +343,41 @@ it("keeps output delivered after process exit but before stdio close", async () 
   );
 });
 
-it.each([1])("preserves split UTF-8 for interleaved Knip streams at byte %i", async (split) => {
+it.each([
+  ["interleaved UTF-8", 8, "🦞", "📦", 1, undefined, "🦞📦"],
+  ["UTF-8 cut by byte cap", 4, "ab🦞", "", 4, "ENOBUFS", "ab"],
+] as const)("preserves %s", async (_name, maxBufferBytes, out, err, split, errorCode, output) => {
   const child = new FakeKnipProcess();
   child.pid = 0;
-  const resultPromise = runFakeKnip(child, { maxBufferBytes: 8 });
-  const stdout = Buffer.from("🦞");
-  const stderr = Buffer.from("📦");
-  child.stdout.emit("data", stdout.subarray(0, split));
-  child.stderr.emit("data", stderr.subarray(0, split));
-  child.stdout.emit("data", stdout.subarray(split));
-  child.stderr.emit("data", stderr.subarray(split));
-  finishFakeProcess(child, 0, null);
-
-  await expect(resultPromise).resolves.toMatchObject({
-    errorCode: undefined,
-    output: "🦞📦",
-    signal: null,
-    status: 0,
-  });
-});
-
-it("does not flush a UTF-8 character cut by the Knip output byte cap", async () => {
-  const child = new FakeKnipProcess();
-  // This output-only child owns no OS process; the existing cap test covers signal delivery.
-  child.pid = 0;
-  const resultPromise = runFakeKnip(child, { maxBufferBytes: 4 });
-  const character = Buffer.from("🦞");
-  child.stdout.emit("data", "ab");
-  child.stdout.emit("data", character.subarray(0, 2));
-  child.stdout.emit("data", character.subarray(2));
-  finishFakeProcess(child, null, "SIGTERM");
-
-  await expect(resultPromise).resolves.toMatchObject({
-    errorCode: "ENOBUFS",
-    output: "ab",
-    signal: "SIGTERM",
-    status: null,
-  });
+  const resultPromise = runFakeKnip(child, { maxBufferBytes });
+  const streams = [
+    [child.stdout, Buffer.from(out)],
+    [child.stderr, Buffer.from(err)],
+  ] as const;
+  for (const first of [true, false]) {
+    for (const [stream, bytes] of streams) {
+      if (bytes.length) {
+        stream.emit("data", first ? bytes.subarray(0, split) : bytes.subarray(split));
+      }
+    }
+  }
+  const status = errorCode ? null : 0;
+  const signal = errorCode ? "SIGTERM" : null;
+  finishFakeProcess(child, status, signal);
+  await expect(resultPromise).resolves.toMatchObject({ errorCode, output, signal, status });
 });
 
 it("reports spawn errors", async () => {
-  const resultPromise = runKnip(KNIP_UNUSED_FILE_ARGS, {
-    spawnCommand: () => {
-      const child = new FakeKnipProcess();
-      queueMicrotask(() =>
-        child.emit(
-          "error",
-          Object.assign(new Error("spawn pnpm ENOENT"), {
-            code: "ENOENT",
-          }),
-        ),
-      );
-      return child;
-    },
-    writeStatus: () => {},
-  });
+  const child = new FakeKnipProcess();
+  const resultPromise = runFakeKnip(child);
+  queueMicrotask(() =>
+    child.emit("error", Object.assign(new Error("spawn pnpm ENOENT"), { code: "ENOENT" })),
+  );
 
   await expect(resultPromise).resolves.toStrictEqual(
     knipResult({
       errorCode: "ENOENT",
       errorMessage: "spawn pnpm ENOENT",
-      signal: null,
       status: null,
     }),
   );

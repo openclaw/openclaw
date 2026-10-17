@@ -13,38 +13,30 @@ import { withTempDir } from "../../src/test-utils/temp-dir.js";
 const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
-function parseFixture(content: string, fileName = "source.ts") {
-  return [fileName, parser.parseSourceFile(fileName, content)] as const;
+function exportsOf(content: string, fileName = "source.ts") {
+  return collectModuleExportNames(fileName, parser.parseSourceFile(fileName, content));
 }
 
 function definitions(content: string, fileName = "src/runtime-facade.ts") {
-  return [...collectModuleExportNames(...parseFixture(content, fileName)).definitions];
+  return [...exportsOf(content, fileName).definitions];
 }
 
-async function writeSources(root: string, files: Record<string, string>) {
-  await Promise.all(
-    Object.entries(files).map(async ([file, source]) => {
-      const target = path.join(root, file);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, source);
-    }),
-  );
+function sources(files: Record<string, string>) {
+  return Object.entries(files).map(([file, content]) => ({ path: file, content }));
+}
+
+function collisions(files: Record<string, string>) {
+  return findExportNameCollisions(sources(files));
 }
 
 it("finds exported function and const definitions across modules", () => {
   expect(
-    findExportNameCollisions([
-      { path: "src/alpha.ts", content: "export function sharedBehavior() {}" },
-      { path: "src/beta.ts", content: "export const sharedBehavior = () => {};" },
-      {
-        path: "src/gamma.ts",
-        content: "async function listedBehavior() {}\nexport { listedBehavior };",
-      },
-      {
-        path: "src/delta.mts",
-        content: "export async function listedBehavior() {}",
-      },
-    ]),
+    collisions({
+      "src/alpha.ts": "export function sharedBehavior() {}",
+      "src/beta.ts": "export const sharedBehavior = () => {};",
+      "src/gamma.ts": "async function listedBehavior() {}\nexport { listedBehavior };",
+      "src/delta.mts": "export async function listedBehavior() {}",
+    }),
   ).toEqual([
     { name: "listedBehavior", files: ["src/delta.mts", "src/gamma.ts"] },
     { name: "sharedBehavior", files: ["src/alpha.ts", "src/beta.ts"] },
@@ -52,8 +44,7 @@ it("finds exported function and const definitions across modules", () => {
 });
 
 it("ignores types, pure re-exports, imports exported locally, and renamed exports", () => {
-  const result = collectModuleExportNames(
-    ...parseFixture(`
+  const result = exportsOf(`
       import { importedValue } from "./other.js";
       interface LocalShape {}
       type LocalType = string;
@@ -63,32 +54,31 @@ it("ignores types, pure re-exports, imports exported locally, and renamed export
       export * from "./barrel.js";
       export interface ExportedShape {}
       export type ExportedType = string;
-    `),
-  );
+    `);
   expect([...result.definitions]).toEqual([]);
   expect([...result.exportedNames]).toEqual(["importedValue", "remoteValue"]);
 });
 
 it.each([
-  {
-    name: "loadFreeBsdProcessIdentityNative",
-    other: "otherBehavior",
-    extra: "src/extra.ts",
-    paths: [
+  [
+    "loadFreeBsdProcessIdentityNative",
+    "otherBehavior",
+    "src/extra.ts",
+    [
       "src/infra/package-update-activation-native-loader.ts",
       "src/infra/update-managed-service-handoff-native-loader.ts",
       "src/shared/freebsd-process-identity-native.ts",
     ],
-  },
-  {
-    name: "openExistingSqliteWorkerBackend",
-    other: "bindSqliteWorkerBackend",
-    extra: "src/unrelated/extra.worker.ts",
-    paths: ["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"],
-  },
-])(
-  "limits $name exemptions to the exact approved modules",
-  ({ name, other, extra: extraPath, paths }) => {
+  ],
+  [
+    "openExistingSqliteWorkerBackend",
+    "bindSqliteWorkerBackend",
+    "src/unrelated/extra.worker.ts",
+    ["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"],
+  ],
+] as const)(
+  "limits %s exemptions to the exact approved modules",
+  (name, other, extraPath, paths) => {
     const content = `export function ${name}() {}`;
     const modules = paths.map((modulePath) => ({ path: modulePath, content }));
     expect(findExportNameCollisions(modules)).toEqual([]);
@@ -116,25 +106,18 @@ it.each([
 it("reports direct aliasing re-exports only outside the Plugin SDK", () => {
   expect(
     findAliasingReExports([
-      {
-        path: "src/alias.ts",
-        content: `
+      ...sources({
+        "src/alias.ts": `
             export { original } from "./source.js";
             export type { OriginalType as RenamedType } from "./source.js";
             export { original as renamed } from "./source.js";
           `,
-      },
-      {
-        path: "src/local-alias.ts",
-        content: `
+        "src/local-alias.ts": `
             import { original } from "./source.js";
             export { original as locallyRenamed };
           `,
-      },
-      {
-        path: "src/plugin-sdk/alias.ts",
-        content: 'export { original as sanctioned } from "../source.js";',
-      },
+        "src/plugin-sdk/alias.ts": 'export { original as sanctioned } from "../source.js";',
+      }),
       {
         path: "packages/support.ts",
         content: 'export { original as packageAlias } from "./source.js";',
@@ -153,23 +136,17 @@ it("reports direct aliasing re-exports only outside the Plugin SDK", () => {
 });
 
 it("exempts exact function and const same-name forwarders", () => {
-  const imported = (declaration: string) =>
-    `import { resolveThing as resolveThingImpl } from "./thing.js"; ${declaration}`;
-  const runtimeFunction = (body: string) =>
-    `export async function runThing(...args: unknown[]) { ${body} }`;
+  const imported = (body: string) => `import { f as impl } from "./f.js"; ${body}`;
+  const runtime = (body: string) => `export async function f(...args: unknown[]) { ${body} }`;
   const forwarders = [
-    imported(
-      "export function resolveThing(first: string, second?: number) { return resolveThingImpl(first, second); }",
-    ),
-    imported("export const resolveThing = resolveThingImpl;"),
-    imported(
-      "export const resolveThing = (first: string, second?: number) => resolveThingImpl(first, second);",
-    ),
-    "export const runThing = async (...args: unknown[]) => { const runtime = await loadRuntime(); return runtime.runThing(...args); };",
-    runtimeFunction("return (await loadRuntime()).runThing(...args);"),
-    runtimeFunction("const runtime = await loadRuntime(); return runtime.runThing(...args);"),
-    'import { createLazyRuntimeMethodBinder as createBinder } from "./shared/lazy-runtime.js"; const bind = createBinder(loadRuntime); export const runThing = bind((runtime) => runtime.runThing);',
-    'import { createLazyRuntimeMethod } from "openclaw/plugin-sdk/lazy-runtime"; export const runThing = createLazyRuntimeMethod(loadRuntime, (runtime) => runtime.runThing);',
+    imported("export function f(a: string, b?: number) { return impl(a, b); }"),
+    imported("export const f = impl;"),
+    imported("export const f = (a: string, b?: number) => impl(a, b);"),
+    "export const f = async (...args: unknown[]) => { const r = await load(); return r.f(...args); };",
+    runtime("return (await load()).f(...args);"),
+    runtime("const r = await load(); return r.f(...args);"),
+    'import { createLazyRuntimeMethodBinder as bind } from "./shared/lazy-runtime.js"; const b = bind(load); export const f = b((r) => r.f);',
+    'import { createLazyRuntimeMethod } from "openclaw/plugin-sdk/lazy-runtime"; export const f = createLazyRuntimeMethod(load, (r) => r.f);',
   ];
   for (const content of forwarders) {
     expect(definitions(content)).toEqual([]);
@@ -177,30 +154,22 @@ it("exempts exact function and const same-name forwarders", () => {
 });
 
 it.each([
-  ["computed import", "const runtime = await import(target); return runtime.runThing(...args);"],
-  [
-    "added argument",
-    'const runtime = await import("./runtime.js"); return runtime.runThing(...args, fallback);',
-  ],
-  [
-    "changed member",
-    'const runtime = await import("./runtime.js"); return runtime.otherThing(...args);',
-  ],
+  ["computed import", "const r = await import(target); return r.f(...args);"],
+  ["added argument", 'const r = await import("./runtime.js"); return r.f(...args, fallback);'],
+  ["changed member", 'const r = await import("./runtime.js"); return r.other(...args);'],
 ])("keeps a dynamic-import wrapper with %s as a collision", (_name, body) => {
   expect(
-    findExportNameCollisions([
-      { path: "src/facade.ts", content: `export async function runThing(...args) { ${body} }` },
-      { path: "src/runtime.ts", content: "export function runThing() {}" },
-    ]),
-  ).toEqual([{ name: "runThing", files: ["src/facade.ts", "src/runtime.ts"] }]);
+    collisions({
+      "src/facade.ts": `export async function f(...args) { ${body} }`,
+      "src/runtime.ts": "export function f() {}",
+    }),
+  ).toEqual([{ name: "f", files: ["src/facade.ts", "src/runtime.ts"] }]);
 });
 
 it("records a type-asserted namespace element alias as a re-export instead of a value definition", () => {
-  const result = collectModuleExportNames(
-    ...parseFixture(
-      'import * as runtime from "./inner.js";\nexport const runTask = (runtime["runTask"] as () => string);',
-      "src/facade.ts",
-    ),
+  const result = exportsOf(
+    'import * as runtime from "./inner.js";\nexport const runTask = (runtime["runTask"] as () => string);',
+    "src/facade.ts",
   );
 
   expect([...result.exportedNames]).toEqual(["runTask"]);
@@ -211,52 +180,48 @@ it("records a type-asserted namespace element alias as a re-export instead of a 
   ]);
 });
 
-it("keeps lazy binders with a selector block as definitions", () => {
-  const content = `
+it.each([
+  [
+    "lazy binders with a selector block",
+    "runThing",
+    `
       import { createLazyRuntimeMethodBinder } from "./shared/lazy-runtime.js";
       const bind = createLazyRuntimeMethodBinder(loadRuntime);
       export const runThing = bind(runtime => { prepare(); return runtime.runThing; });
-    `;
-  expect(definitions(content)).toEqual(["runThing"]);
-});
-
-it("keeps extra call wrappers as real definitions", () => {
-  expect(
-    definitions(
-      `
+    `,
+  ],
+  [
+    "extra call wrappers",
+    "resolveThing",
+    `
       import { resolveThing as resolveThingImpl } from "./thing.js";
       export function resolveThing(...args: unknown[]) {
         prepare();
         return resolveThingImpl(...args);
       }
     `,
-      "source.ts",
-    ),
-  ).toEqual(["resolveThing"]);
+  ],
+])("keeps %s as real definitions", (_label, name, content) => {
+  expect(definitions(content, "source.ts")).toEqual([name]);
 });
 
 it("deduplicates overloads inside one module", () => {
   expect(
-    findExportNameCollisions([
-      {
-        path: "src/overloads.ts",
-        content: `
+    collisions({
+      "src/overloads.ts": `
             export function convert(value: string): string;
             export function convert(value: number): number;
             export function convert(value: string | number) { return value; }
           `,
-      },
-    ]),
+    }),
   ).toEqual([]);
 });
 
 it.each<{
-  name: string;
   files: Record<string, string>;
   expected: { name: string; files: string[]; sdk?: boolean };
 }>([
   {
-    name: "JavaScript sources",
     files: {
       "src/alpha.js": "export const sharedValue = 1;\n",
       "src/beta.mjs": "export const sharedValue = 2;\n",
@@ -264,7 +229,6 @@ it.each<{
     expected: { name: "sharedValue", files: ["src/alpha.js", "src/beta.mjs"] },
   },
   {
-    name: "package-backed Plugin SDK",
     files: {
       "src/one.ts": "export const publicCollision = 1;\n",
       "src/two.ts": "export function publicCollision() {}\n",
@@ -274,9 +238,13 @@ it.each<{
     },
     expected: { name: "publicCollision", files: ["src/one.ts", "src/two.ts"], sdk: true },
   },
-])("discovers collisions through $name", async ({ files, expected }) => {
+])("discovers $expected.name collisions", async ({ files, expected }) => {
   await withTempDir("openclaw-export-collisions-sdk-", async (repoRoot) => {
-    await writeSources(repoRoot, files);
+    for (const [file, source] of Object.entries(files)) {
+      const target = path.join(repoRoot, file);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, source);
+    }
     expect(await collectRepositoryCollisions(repoRoot)).toEqual([expected]);
   });
 });

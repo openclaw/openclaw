@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { testing } from "../../scripts/check-gateway-cpu-scenarios.mts";
 
 const tempRoots: string[] = [];
+const qaFlags = ["--skip-startup", "--qa-scenario", "channel-chat-baseline"];
 
 function makeTempRoot(): string {
   const artifactRoot = path.join(process.cwd(), ".artifacts");
@@ -14,30 +15,14 @@ function makeTempRoot(): string {
   return root;
 }
 
-function runCli(...args: string[]) {
-  return spawnSync(
-    process.execPath,
-    ["--import", "tsx", "scripts/check-gateway-cpu-scenarios.mts", ...args],
-    {
-      cwd: path.resolve("."),
-      encoding: "utf8",
-    },
-  );
-}
-
-function expectNoNodeStack(stderr: string) {
-  expect(stderr).not.toContain("Node.js");
-  expect(stderr).not.toContain("\n    at ");
-}
-
 type RunParams = NonNullable<Parameters<typeof testing.runGatewayCpuScenarios>[1]>;
 async function runScenario(
-  outputDir: string,
   flags: string[],
   fixture: Omit<RunParams, "spawnSync"> & {
-    reports?: Record<string, () => void>;
+    reports?: { startup?: unknown; concurrency?: unknown; qa?: unknown };
     spawnResult?: ReturnType<NonNullable<RunParams["spawnSync"]>>;
   },
+  outputDir = makeTempRoot(),
 ) {
   const { reports = {}, spawnResult = { status: 0 }, ...params } = fixture;
   const calls: { args: string[]; env?: NodeJS.ProcessEnv }[] = [];
@@ -48,52 +33,47 @@ async function runScenario(
       ...params,
       spawnSync: (_command, args, options) => {
         calls.push({ args, env: options.env });
-        for (const [entry, write] of Object.entries(reports)) {
-          if (entry.split(" ").every((arg) => args.includes(arg))) {
-            write();
+        for (const [key, entry, file] of [
+          ["startup", "scripts/bench-gateway-startup.ts", "gateway-startup-bench.json"],
+          ["concurrency", "scripts/bench-gateway-concurrency.ts", "gateway-concurrency-bench.json"],
+          ["qa", "openclaw qa", "qa-suite/qa-suite-summary.json"],
+        ] as const) {
+          if (key in reports && entry.split(" ").every((arg) => args.includes(arg))) {
+            const target = path.join(outputDir, file);
+            mkdirSync(path.dirname(target), { recursive: true });
+            writeFileSync(target, `${JSON.stringify(reports[key])}\n`);
           }
         }
         return spawnResult;
       },
     },
   );
-  return { ...result, calls };
+  return { ...result, calls, outputDir };
 }
 
-function writeReport(outputDir: string, file: string, report: unknown) {
-  writeFileSync(path.join(outputDir, file), `${JSON.stringify(report)}\n`);
-}
-
-function writeQaSuiteSummary(
-  outputDir: string,
-  counts: { failed: number; passed: number; total: number } = { failed: 0, passed: 1, total: 1 },
-): void {
-  const qaOutputDir = path.join(outputDir, "qa-suite");
-  mkdirSync(qaOutputDir, { recursive: true });
-  writeReport(qaOutputDir, "qa-suite-summary.json", {
-    counts,
+function qaSummary(failed = 0) {
+  return {
+    counts: { failed, passed: 1 - failed, total: 1 },
     metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
     run: { status: "completed" },
     scenarios: [
       {
-        status: counts.failed > 0 ? "fail" : "pass",
-        ...(counts.failed > 0 ? {} : { steps: [{}] }),
+        status: failed > 0 ? "fail" : "pass",
+        ...(failed > 0 ? {} : { steps: [{}] }),
       },
     ],
-  });
+  };
 }
 
-function writeConcurrencyReport(outputDir: string): void {
-  writeReport(outputDir, "gateway-concurrency-bench.json", {
-    mode: "mock-streaming-agent",
-    runs: [{}],
-    summary: {
-      eventLoopDelayP99Ms: { max: 20 },
-      sessionsListLatencyMs: { p99: 30 },
-      controlUiLatencyMs: { p99: 25 },
-    },
-  });
-}
+const concurrencyReport = {
+  mode: "mock-streaming-agent",
+  runs: [{}],
+  summary: {
+    eventLoopDelayP99Ms: { max: 20 },
+    sessionsListLatencyMs: { p99: 30 },
+    controlUiLatencyMs: { p99: 25 },
+  },
+};
 
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
@@ -102,17 +82,15 @@ afterEach(() => {
 });
 
 it("rejects runs with every scenario family skipped", () => {
-  expect(() =>
-    testing.parseArgs(["--output-dir", makeTempRoot(), "--skip-startup", "--skip-qa"]),
-  ).toThrow("--skip-startup and --skip-qa cannot be used together");
+  expect(() => testing.parseArgs(["--skip-startup", "--skip-qa"])).toThrow(
+    "--skip-startup and --skip-qa cannot be used together",
+  );
 });
 
 it("accepts package-manager argument separators before script options", () => {
   expect(
     testing.parseArgs([
       "--",
-      "--output-dir",
-      makeTempRoot(),
       "--startup-case",
       "default",
       "--qa-scenario",
@@ -127,16 +105,12 @@ it("accepts package-manager argument separators before script options", () => {
   });
 });
 
-it("rejects non-decimal numeric options", () => {
-  expect(() => testing.parseArgs(["--output-dir", makeTempRoot(), "--runs", "1e3"])).toThrow(
-    "--runs must be a positive integer",
-  );
-  expect(() => testing.parseArgs(["--output-dir", makeTempRoot(), "--warmup", "0x10"])).toThrow(
-    "--warmup must be a non-negative integer",
-  );
-  expect(() =>
-    testing.parseArgs(["--output-dir", makeTempRoot(), "--cpu-core-warn", "1e3"]),
-  ).toThrow("--cpu-core-warn must be a positive number");
+it.each([
+  ["--runs", "1e3", "a positive integer"],
+  ["--warmup", "0x10", "a non-negative integer"],
+  ["--cpu-core-warn", "1e3", "a positive number"],
+])("rejects non-decimal %s", (flag, value, requirement) => {
+  expect(() => testing.parseArgs([flag, value])).toThrow(`${flag} must be ${requirement}`);
 });
 
 it("rejects missing valued options instead of consuming the next flag", () => {
@@ -156,65 +130,63 @@ it("rejects missing valued options instead of consuming the next flag", () => {
 });
 
 it("rejects duplicate single-value controls before running scenarios", () => {
-  expect(() =>
-    testing.parseArgs(["--output-dir", makeTempRoot(), "--output-dir", makeTempRoot()]),
-  ).toThrow("--output-dir was provided more than once");
+  expect(() => testing.parseArgs(["--output-dir", "first", "--output-dir", "second"])).toThrow(
+    "--output-dir was provided more than once",
+  );
 
-  const result = runCli("--runs", "1", "--runs", "2");
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/check-gateway-cpu-scenarios.mts", "--runs", "1", "--runs", "2"],
+    { cwd: path.resolve("."), encoding: "utf8" },
+  );
 
-  expect(result.status).toBe(1);
-  expect(result.stdout).toBe("");
+  expect(result).toMatchObject({ status: 1, stdout: "" });
   expect(result.stderr.trim()).toBe("--runs was provided more than once");
-  expectNoNodeStack(result.stderr);
+  expect(result.stderr).not.toContain("Node.js");
+  expect(result.stderr).not.toContain("\n    at ");
 });
 
 it("prepares CLI startup artifacts before running the startup bench", async () => {
-  const outputDir = makeTempRoot();
-  const result = await runScenario(outputDir, ["--runs", "1", "--warmup", "0", "--skip-qa"], {
+  const result = await runScenario(["--skip-qa"], {
     env: { ...process.env, PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "install" },
     reports: {
-      "scripts/bench-gateway-startup.ts": () =>
-        writeReport(outputDir, "gateway-startup-bench.json", { results: [{ id: "default" }] }),
-      "scripts/bench-gateway-concurrency.ts": () => writeConcurrencyReport(outputDir),
+      startup: { results: [{ id: "default" }] },
+      concurrency: concurrencyReport,
     },
   });
-  const { calls } = result;
-
   expect(result.exitCode).toBe(0);
-  expect(calls.map((call) => call.args[0])).toEqual(["--import", "--import", "--import"]);
-  expect(calls.map((call) => call.args[2])).toEqual([
-    "scripts/ensure-cli-startup-build.mts",
-    "scripts/bench-gateway-startup.ts",
-    "scripts/bench-gateway-concurrency.ts",
-  ]);
-  expect(calls.map((call) => call.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN)).toEqual([
-    "false",
-    "false",
-    "false",
-  ]);
+  expect(
+    result.calls.map(({ args, env }) => [
+      args[0],
+      args[2],
+      env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN,
+    ]),
+  ).toEqual(
+    [
+      "ensure-cli-startup-build.mts",
+      "bench-gateway-startup.ts",
+      "bench-gateway-concurrency.ts",
+    ].map((script) => ["--import", `scripts/${script}`, "false"]),
+  );
 });
 
 it("fails successful startup benches that write malformed reports", async () => {
-  const outputDir = makeTempRoot();
-  const startupOutput = path.join(outputDir, "gateway-startup-bench.json");
-  const result = await runScenario(outputDir, ["--runs", "1", "--warmup", "0", "--skip-qa"], {
-    reports: {
-      "scripts/bench-gateway-startup.ts": () =>
-        writeReport(outputDir, "gateway-startup-bench.json", { results: [] }),
-    },
+  const result = await runScenario(["--skip-qa"], {
+    reports: { startup: { results: [] } },
   });
 
-  expect(result.exitCode).toBe(1);
-  expect(result.summary).toMatchObject({
-    startupOutput,
-    startupReportFailure: "startup-report-invalid",
-    startupReportFailureDetail: "startup report has no measured results",
+  expect(result).toMatchObject({
+    exitCode: 1,
+    summary: {
+      startupOutput: path.join(result.outputDir, "gateway-startup-bench.json"),
+      startupReportFailure: "startup-report-invalid",
+      startupReportFailureDetail: "startup report has no measured results",
+    },
   });
 });
 
 it("fails startup build spawn errors and skips the startup bench", async () => {
-  const outputDir = makeTempRoot();
-  const result = await runScenario(outputDir, ["--skip-qa"], {
+  const result = await runScenario(["--skip-qa"], {
     spawnResult: {
       error: Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }),
       signal: null,
@@ -241,8 +213,7 @@ it("does not prebuild private QA dist when the required entries already exist", 
   writeFileSync(path.join(pluginSdkDist, "qa-lab.js"), "export {};\n");
   writeFileSync(path.join(pluginSdkDist, "qa-runtime.js"), "export {};\n");
   const result = await runScenario(
-    outputDir,
-    ["--skip-startup", "--qa-scenario", "channel-chat-baseline"],
+    qaFlags,
     {
       cwd,
       env: {
@@ -251,8 +222,9 @@ it("does not prebuild private QA dist when the required entries already exist", 
         OPENCLAW_HOME: "/real/user/home",
         OPENCLAW_STATE_DIR: "/real/user/.openclaw",
       },
-      reports: { "openclaw qa": () => writeQaSuiteSummary(outputDir) },
+      reports: { qa: qaSummary() },
     },
+    outputDir,
   );
   const { calls } = result;
 
@@ -274,16 +246,7 @@ it("does not prebuild private QA dist when the required entries already exist", 
 });
 
 it("fails successful QA commands that report failed scenarios", async () => {
-  const outputDir = makeTempRoot();
-  const result = await runScenario(
-    outputDir,
-    ["--skip-startup", "--qa-scenario", "channel-chat-baseline"],
-    {
-      reports: {
-        "openclaw qa": () => writeQaSuiteSummary(outputDir, { failed: 1, passed: 0, total: 1 }),
-      },
-    },
-  );
+  const result = await runScenario(qaFlags, { reports: { qa: qaSummary(1) } });
 
   expect(result.exitCode).toBe(1);
   expect(result.summary).toMatchObject({
@@ -293,21 +256,17 @@ it("fails successful QA commands that report failed scenarios", async () => {
 });
 
 it("fails when completed runs report hot gateway CPU observations", async () => {
-  const outputDir = makeTempRoot();
   const result = await runScenario(
-    outputDir,
     ["--skip-qa", "--cpu-core-warn", "0.9", "--hot-wall-warn-ms", "30000"],
     {
       reports: {
-        "scripts/bench-gateway-startup.ts": () => {
-          writeReport(outputDir, "gateway-startup-bench.json", {
-            results: [
-              {
-                id: "default",
-                summary: { cpuCoreRatio: { max: 1.15 }, readyzMs: { max: 45_000 } },
-              },
-            ],
-          });
+        startup: {
+          results: [
+            {
+              id: "default",
+              summary: { cpuCoreRatio: { max: 1.15 }, readyzMs: { max: 45_000 } },
+            },
+          ],
         },
       },
     },

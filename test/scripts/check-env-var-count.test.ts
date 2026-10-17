@@ -8,50 +8,39 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const budgetPath = "config/env-var-count-budget.txt";
+const gitIdentity = ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local"];
 beforeEach(() => vi.stubEnv("GITHUB_ACTIONS", ""));
 afterEach(() => vi.unstubAllEnvs());
 
-const envNames = (count: number, prefix = "NEXT") =>
-  Array.from({ length: count }, (_, index) => `OPENCLAW_${prefix}_${index}`).join("\n");
-
-function createRepo(files: Record<string, string> = {}) {
+function createRepo(files: Record<string, string> = {}, initialCount?: number) {
   const root = tempDirs.make("openclaw-env-count-");
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", ...args],
-      { cwd: root, stdio: "ignore" },
-    );
+  const git = (args: string[], input?: string) =>
+    execFileSync("git", [...gitIdentity, ...args], { cwd: root, input }).toString();
   const write = (file: string, source: string) => {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.writeFileSync(path.join(root, file), source);
   };
-  git("init");
-  for (const [file, source] of Object.entries(files)) {
-    write(file, source);
-  }
+  git(["init"]);
+  Object.entries(files).forEach(([file, source]) => write(file, source));
   const commit = (message = "base") => {
-    git("add", ".");
-    git("commit", "-m", message);
+    git(["add", "."]);
+    git(["commit", "-m", message]);
   };
-  const check = (...args: string[]) => main(args, root);
-  const collect = (staged = false) => collectEnvVarNames(root, { staged });
   const setCount = (count: number, budget = count) => {
     write(budgetPath, `${budget}\n`);
-    write("src/runtime.ts", envNames(count));
+    write("src/runtime.ts", Array.from({ length: count }, (_, i) => `OPENCLAW_N${i}`).join("\n"));
   };
-  return { root, git, write, commit, check, collect, setCount };
-}
-
-function budgetRepo(count: number) {
-  const repo = createRepo();
-  repo.setCount(count);
-  repo.commit();
-  return repo;
+  if (initialCount !== undefined) {
+    setCount(initialCount);
+    commit();
+  }
+  const check = (...args: string[]) => main(args, root);
+  const collect = (staged = false) => collectEnvVarNames(root, { staged });
+  return { root, git, write, commit, setCount, check, collect };
 }
 
 it("warns on CI count growth while malformed budgets stay blocking", () => {
-  const { root, check, write } = budgetRepo(0);
+  const { root, check, write } = createRepo({}, 0);
   write("src/runtime.ts", "process.env.OPENCLAW_CANARY;\n");
   expect(() => check("--base", "HEAD")).toThrow(/exceeds budget/u);
   vi.stubEnv("GITHUB_ACTIONS", "true");
@@ -66,11 +55,15 @@ it("keeps an empty index separate from untracked worktree sources", () => {
   const { collect, write } = createRepo();
   expect(collect(true)).toEqual([]);
   write("src/runtime.ts", "OPENCLAW_UNTRACKED");
-  expect(collect(true)).toEqual([]);
-  expect(collect()).toEqual(["OPENCLAW_UNTRACKED"]);
+  expect([collect(true), collect()]).toEqual([[], ["OPENCLAW_UNTRACKED"]]);
 });
 
 it("collects distinct names from the whole selected snapshot without crossing file boundaries", () => {
+  const excludedPaths = [
+    "src/runtime.test.ts src/__tests__/index.ts packages/api/test/index.ts",
+    "extensions/demo/index.spec.ts extensions/qa-lab/index.ts extensions/test-support/index.ts",
+    "src/runtime.json ui/src/runtime.ts",
+  ].flatMap((paths) => paths.split(" "));
   const { root, git, write, commit, collect } = createRepo({
     ".gitignore": "src/ignored.ts\n",
     "src/partial.ts": "OPENCLAW_HEAD",
@@ -83,59 +76,40 @@ it("collects distinct names from the whole selected snapshot without crossing fi
     "src/unchanged.ts": "é 🦞 東京\nOPENCLAW_SHARED\0OPENCLAW_UNICODE",
     "packages/api/index.mts": "OPENCLAW_SHARED OPENCLAW_SHARED",
     "extensions/demo/index.cjs": "OPENCLAW_PLUGIN",
-    "src/runtime.test.ts": "OPENCLAW_EXCLUDED",
-    "src/__tests__/index.ts": "OPENCLAW_EXCLUDED",
-    "packages/api/test/index.ts": "OPENCLAW_EXCLUDED",
-    "extensions/demo/index.spec.ts": "OPENCLAW_EXCLUDED",
-    "extensions/qa-lab/index.ts": "OPENCLAW_EXCLUDED",
-    "extensions/test-support/index.ts": "OPENCLAW_EXCLUDED",
-    "src/runtime.json": "OPENCLAW_EXCLUDED",
-    "ui/src/runtime.ts": "OPENCLAW_EXCLUDED",
+    ...Object.fromEntries(excludedPaths.map((file) => [file, "OPENCLAW_EXCLUDED"])),
   });
   commit();
   write("src/partial.ts", "OPENCLAW_INDEX");
   write("src/modified.ts", "OPENCLAW_MODIFIED");
   write("src/added.ts", "OPENCLAW_ADDED");
-  git("add", ".");
+  git(["add", "."]);
   write("src/partial.ts", "OPENCLAW_WORKTREE");
   write("src/added.ts", "OPENCLAW_UNSTAGED_ADDITION");
-  git("rm", "--cached", "src/removed.ts");
+  git(["rm", "--cached", "src/removed.ts"]);
   fs.rmSync(path.join(root, "src/gone.ts"));
   write("src/untracked.ts", "OPENCLAW_UNTRACKED");
   write("src/ignored.ts", "OPENCLAW_IGNORED");
 
-  const shared = ["OPENCLAW_MODIFIED", "OPENCLAW_PLUGIN", "OPENCLAW_SHARED", "OPENCLAW_UNICODE"];
-  expect(collect(true)).toEqual(
-    [...shared, "OPENCLAW_ADDED", "OPENCLAW_GONE", "OPENCLAW_INDEX"].toSorted(),
-  );
+  const names = (...keys: string[]) => keys.map((key) => `OPENCLAW_${key}`).toSorted();
+  const shared = ["MODIFIED", "PLUGIN", "SHARED", "UNICODE"];
+  expect(collect(true)).toEqual(names(...shared, "ADDED", "GONE", "INDEX"));
   expect(collect()).toEqual(
-    [
-      ...shared,
-      "OPENCLAW_REMOVED",
-      "OPENCLAW_UNSTAGED_ADDITION",
-      "OPENCLAW_UNTRACKED",
-      "OPENCLAW_WORKTREE",
-    ].toSorted(),
+    names(...shared, "REMOVED", "UNSTAGED_ADDITION", "UNTRACKED", "WORKTREE"),
   );
 });
 
 it("uses a constant number of Git processes as the staged source set grows", () => {
   const counts = [8, 16].map((fileCount) => {
     const names = Array.from({ length: fileCount }, (_, index) => `OPENCLAW_N${index}`);
-    const { root, git } = createRepo(
+    const { root, git, collect } = createRepo(
       Object.fromEntries(names.map((name, index) => [`src/file-${index}.ts`, name])),
     );
-    git("add", ".");
+    git(["add", "."]);
     const traceFile = path.join(root, "git-trace.jsonl");
-    const collected = withEnv({ GIT_TRACE2_EVENT: traceFile }, () =>
-      collectEnvVarNames(root, { staged: true }),
-    );
+    const collected = withEnv({ GIT_TRACE2_EVENT: traceFile }, () => collect(true));
     expect(collected).toEqual(names.toSorted());
-    return fs
-      .readFileSync(traceFile, "utf8")
-      .trim()
-      .split("\n")
-      .filter((line) => JSON.parse(line).event === "start").length;
+    const events = fs.readFileSync(traceFile, "utf8").trim().split("\n");
+    return events.filter((event) => JSON.parse(event).event === "start").length;
   });
   expect(Math.min(...counts)).toBeGreaterThan(0);
   expect(Math.max(...counts)).toBeLessThanOrEqual(2);
@@ -144,17 +118,13 @@ it("uses a constant number of Git processes as the staged source set grows", () 
 
 it("rejects an unresolved stage-zero source", () => {
   const file = "src/conflict.ts";
-  const { root } = createRepo({ [file]: "OPENCLAW_WORKTREE" });
-  const oid = execFileSync("git", ["hash-object", "-w", "--stdin"], {
-    cwd: root,
-    input: "OPENCLAW_CONFLICT",
-    encoding: "utf8",
-  }).trim();
-  execFileSync("git", ["update-index", "-z", "--index-info"], {
-    cwd: root,
-    input: [1, 2, 3].map((stage) => `100644 ${oid} ${stage}\t${file}\0`).join(""),
-  });
-  expect(() => collectEnvVarNames(root, { staged: true })).toThrow();
+  const { git, collect } = createRepo({ [file]: "OPENCLAW_WORKTREE" });
+  const oid = git(["hash-object", "-w", "--stdin"], "OPENCLAW_CONFLICT").trim();
+  git(
+    ["update-index", "-z", "--index-info"],
+    [1, 2, 3].map((stage) => `100644 ${oid} ${stage}\t${file}\0`).join(""),
+  );
+  expect(() => collect(true)).toThrow();
 });
 
 it("fails closed when the base ref cannot be resolved", () => {
@@ -163,10 +133,10 @@ it("fails closed when the base ref cannot be resolved", () => {
 });
 
 it("rejects missing ancestry instead of skipping budget growth", () => {
-  const { check, git, setCount, commit } = budgetRepo(1);
+  const { check, git, setCount, commit } = createRepo({}, 1);
   // Name the base explicitly; init.defaultBranch varies by environment.
-  git("branch", "-M", "severed-base");
-  git("checkout", "--orphan", "severed");
+  git(["branch", "-M", "severed-base"]);
+  git(["checkout", "--orphan", "severed"]);
   commit("severed history");
   expect(() => check("--base", "severed-base")).toThrow(/Could not resolve ratchet merge base/u);
   expect(check("--base", "severed-base", "--no-merge-base")).toBe(1);
@@ -184,18 +154,18 @@ it("allows the initial budget only when its file is absent at a valid base", () 
 });
 
 it("compares against the fork budget when the base branch later shrinks", () => {
-  const { check, git, setCount, commit } = budgetRepo(2);
-  git("branch", "release");
+  const { check, git, setCount, commit } = createRepo({}, 2);
+  git(["branch", "release"]);
   setCount(1);
   commit("shrink main");
-  git("branch", "moving-main");
-  git("checkout", "release");
+  git(["branch", "moving-main"]);
+  git(["checkout", "release"]);
   expect(() => check("--base", "moving-main")).not.toThrow();
 });
 
 it("compares staged budgets to the origin/main fork rather than local HEAD", () => {
-  const { check, git, setCount, commit } = budgetRepo(1);
-  git("update-ref", "refs/remotes/origin/main", "HEAD");
+  const { check, git, setCount, commit } = createRepo({}, 1);
+  git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
   setCount(2);
   commit("local budget increase");
   expect(() => check("--staged")).toThrow(/budget grew/u);
@@ -203,18 +173,12 @@ it("compares staged budgets to the origin/main fork rather than local HEAD", () 
 });
 
 it.each([
-  { name: "stale headroom", base: 2, budget: 2, count: 1, error: /is below budget/u },
-  {
-    name: "retired 502 to 503 increase",
-    base: 502,
-    budget: 503,
-    count: 503,
-    error: /budget grew/u,
-  },
-])("checks $name", ({ base, budget, count, error }) => {
-  const { check, git, setCount } = budgetRepo(base);
+  ["stale headroom", 2, 2, 1, /is below budget/u],
+  ["retired 502 to 503 increase", 502, 503, 503, /budget grew/u],
+] as const)("checks %s", (_name, base, budget, count, error) => {
+  const { check, git, setCount } = createRepo({}, base);
   setCount(count, budget);
-  git("add", ".");
+  git(["add", "."]);
   setCount(0);
   expect(() => check("--staged", "--base", "HEAD")).toThrow(error);
 });
