@@ -11,6 +11,7 @@ import {
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
+import { isSqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -429,6 +430,13 @@ class AgentDatabaseStartupAdmission {
               readSqliteIntegrityFileIdentity(witness.pathname, witness.identity);
             }
           };
+          const capacityRetry = {
+            attempts: 4,
+            minDelayMs: 500,
+            maxDelayMs: 8000,
+            jitter: 0.2,
+            sleep: (ms: number) => sleepWithAbort(ms, this.signal),
+          };
           const assertNotDeleted = async () => {
             const deletion = await retryAsync(
               async () => {
@@ -445,11 +453,7 @@ class AgentDatabaseStartupAdmission {
                 }
               },
               {
-                attempts: 4,
-                minDelayMs: 500,
-                maxDelayMs: 8000,
-                jitter: 0.2,
-                sleep: (ms) => sleepWithAbort(ms, this.signal),
+                ...capacityRetry,
                 // Other producers can still saturate the shared pool after our permit wait.
                 shouldRetry: (error) =>
                   error instanceof WorkerTaskError && error.code === "overloaded",
@@ -494,15 +498,23 @@ class AgentDatabaseStartupAdmission {
                   assertCurrent,
                   phase,
                 };
-                phase("open-wait");
-                const release = await this.opening.acquire({ signal: this.signal });
-                try {
-                  assertCurrent();
-                  phase("open");
-                  await activation.openAgent(input);
-                } finally {
-                  release?.();
-                }
+                await retryAsync(
+                  async () => {
+                    phase("open-wait");
+                    const release = await this.opening.acquire({ signal: this.signal });
+                    try {
+                      assertCurrent();
+                      phase("open");
+                      await activation.openAgent(input);
+                    } finally {
+                      release?.();
+                    }
+                  },
+                  {
+                    ...capacityRetry,
+                    shouldRetry: (error) => isSqliteWorkerError(error, "overloaded"),
+                  },
+                );
                 phase("migration-wait");
                 const releaseMigration = await this.migrating.acquire({ signal: this.signal });
                 try {
