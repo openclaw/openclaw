@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import { getAiTransportHost } from "@openclaw/ai";
@@ -27,8 +28,8 @@ import {
 
 it.each(["overlap", "cancel-drain", "route-drift"] as const)(
   "retains verified approval completion resources through %s",
-  async (mode) => {
-    await withOpenClawTestState(
+  (mode) =>
+    withOpenClawTestState(
       { label: "approval-owner", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
         const pluginRoot = state.path("provider");
@@ -76,9 +77,7 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
         let drainage: Promise<void> | undefined;
         try {
           const address = server.address();
-          if (!address || typeof address === "string") {
-            throw new Error("Approval fixture has no TCP port");
-          }
+          assert(address && typeof address !== "string", "Approval fixture has no TCP port");
           const profileId = `${fixture.providerId}:verified`;
           const writeCredentials = (key: string) =>
             state.writeAuthProfiles({
@@ -101,17 +100,7 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
                 [fixture.providerId]: {
                   api: "openai-completions",
                   baseUrl: `http://127.0.0.1:${address.port}/v1`,
-                  models: [
-                    {
-                      id: "approval-model",
-                      name: "Approval model",
-                      reasoning: false,
-                      input: ["text"],
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                      contextWindow: 8192,
-                      maxTokens: 1024,
-                    },
-                  ],
+                  models: [{ id: "approval-model", name: "Approval model", reasoning: false }],
                 },
               },
             },
@@ -126,22 +115,17 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
           const authDatabase = await writeCredentials("synthetic-approval-key");
           expect(fs.existsSync(authDatabase)).toBe(true);
           const snapshot = await readConfigFileSnapshot();
-          if (!snapshot.valid) {
-            throw new Error("Approval fixture config is invalid");
-          }
+          assert(snapshot.valid, "Approval fixture config is invalid");
           const route = await resolveSystemAgentConfiguredRouteFromConfig(
             snapshot.runtimeConfig ?? snapshot.config,
             undefined,
             {},
             snapshot,
           );
-          if (
-            !route ||
-            route.runner !== "embedded" ||
-            route.agentHarnessRuntimeOverride !== "openclaw"
-          ) {
-            throw new Error("Approval fixture did not select the embedded OpenClaw route");
-          }
+          assert(
+            route?.runner === "embedded" && route.agentHarnessRuntimeOverride === "openclaw",
+            "Approval fixture did not select the embedded OpenClaw route",
+          );
           const probe = await acquireSimpleCompletionModelForAgent({
             cfg: route.runConfig,
             agentId: route.agentId,
@@ -150,9 +134,7 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
             preferredProfile: profileId,
             bindAuthOwner: true,
           });
-          if ("error" in probe) {
-            throw new Error(probe.error);
-          }
+          assert(!("error" in probe), "Approval fixture could not acquire a model");
           let verifiedInference: SystemAgentVerifiedInferenceBinding;
           try {
             const response = await completeWithPreparedSimpleCompletionModel({
@@ -166,9 +148,7 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
             expect(
               response.content.some((part) => part.type === "text" && part.text === "approve"),
             ).toBe(true);
-            if (!probe.sourceAuthFingerprint) {
-              throw new Error("Probe has no bound auth fingerprint");
-            }
+            assert(probe.sourceAuthFingerprint, "Probe has no bound auth fingerprint");
             verifiedInference = await createSystemAgentVerifiedInferenceBinding({
               configuredRoute: route,
               executionRoute: route,
@@ -218,9 +198,7 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
                 }
                 wrapped = true;
                 const reader = response.body?.getReader();
-                if (!reader) {
-                  throw new Error("Approval response has no body");
-                }
+                assert(reader, "Approval response has no body");
                 return new Response(
                   new ReadableStream<Uint8Array>({
                     async pull(controller) {
@@ -318,6 +296,5 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
           });
         }
       },
-    );
-  },
+    ),
 );

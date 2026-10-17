@@ -17,6 +17,7 @@ import {
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.js";
 import type { ChatWizardHostDependencies } from "./chat-wizard-host.js";
+import { configSnapshot as makeConfigSnapshot } from "./configured-inference.test-support.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl,
   type SystemAgentConfiguredRoute,
@@ -125,29 +126,28 @@ export const sharedVerifiedInferenceConfig = {
 } satisfies OpenClawConfig;
 
 export let sharedVerifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
-let sharedVerifiedInferenceDeps: SystemAgentVerifiedInferenceDeps | undefined;
+let sharedFixture: Awaited<ReturnType<typeof createSystemAgentVerifiedInferenceTestFixtureImpl>>;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
-const resolveSystemAgentConfiguredRouteFromConfig: typeof resolveSystemAgentConfiguredRouteFromConfigImpl =
-  (...args) =>
-    pluginMetadataSnapshot!.run(
-      () => resolveSystemAgentConfiguredRouteFromConfigImpl(...args),
-      args[0],
-    );
+function scoped<Args extends unknown[], Result>(
+  run: (...args: Args) => Result,
+  config?: (args: Args) => OpenClawConfig,
+) {
+  return (...args: Args) => pluginMetadataSnapshot!.run(() => run(...args), config?.(args));
+}
 
-const createSystemAgentVerifiedInferenceTestFixture: typeof createSystemAgentVerifiedInferenceTestFixtureImpl =
-  (...args) =>
-    pluginMetadataSnapshot!.run(
-      () => createSystemAgentVerifiedInferenceTestFixtureImpl(...args),
-      args[0],
-    );
-
-const createSystemAgentVerifiedInferenceBinding: typeof createSystemAgentVerifiedInferenceBindingImpl =
-  (...args) =>
-    pluginMetadataSnapshot!.run(() => createSystemAgentVerifiedInferenceBindingImpl(...args));
-
-export const runSystemAgentTurnWithDeps: typeof runSystemAgentTurnWithDepsImpl = (...args) =>
-  pluginMetadataSnapshot!.run(() => runSystemAgentTurnWithDepsImpl(...args));
+const resolveSystemAgentConfiguredRouteFromConfig = scoped(
+  resolveSystemAgentConfiguredRouteFromConfigImpl,
+  ([config]) => config,
+);
+const createSystemAgentVerifiedInferenceTestFixture = scoped(
+  createSystemAgentVerifiedInferenceTestFixtureImpl,
+  ([config]) => config,
+);
+const createSystemAgentVerifiedInferenceBinding = scoped(
+  createSystemAgentVerifiedInferenceBindingImpl,
+);
+export const runSystemAgentTurnWithDeps = scoped(runSystemAgentTurnWithDepsImpl);
 
 export { createSystemAgentVerifiedInferenceTestFixture };
 
@@ -159,21 +159,7 @@ export function useTempStateDir(): string {
 }
 
 export function configSnapshot(config: OpenClawConfig): ConfigFileSnapshot {
-  return {
-    exists: true,
-    valid: true,
-    path: "/tmp/openclaw.json",
-    hash: "h",
-    raw: null,
-    parsed: config,
-    config,
-    runtimeConfig: config,
-    sourceConfig: config,
-    resolved: config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  };
+  return makeConfigSnapshot(config, { hash: "h", raw: null });
 }
 
 function testHarnessBinding(route: SystemAgentConfiguredRoute) {
@@ -300,81 +286,33 @@ type TestSystemAgentChatEngineOptions = Omit<SystemAgentChatEngineOptions, "veri
 
 /** Every ordinary engine test starts from a real, live-gate-shaped authority grant. */
 export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
-  override answerWizard(...args: Parameters<RuntimeSystemAgentChatEngine["answerWizard"]>) {
-    return pluginMetadataSnapshot!.run(() => super.answerWizard(...args));
-  }
-
-  override cancelWizard(...args: Parameters<RuntimeSystemAgentChatEngine["cancelWizard"]>) {
-    return pluginMetadataSnapshot!.run(() => super.cancelWizard(...args));
-  }
-
-  override resolveOperatorApproval(
-    ...args: Parameters<RuntimeSystemAgentChatEngine["resolveOperatorApproval"]>
-  ) {
-    return pluginMetadataSnapshot!.run(() => super.resolveOperatorApproval(...args));
-  }
-
-  override loadOverview(...args: Parameters<RuntimeSystemAgentChatEngine["loadOverview"]>) {
-    return pluginMetadataSnapshot!.run(() => super.loadOverview(...args));
-  }
-
-  override planGreeting(...args: Parameters<RuntimeSystemAgentChatEngine["planGreeting"]>) {
-    return pluginMetadataSnapshot!.run(() => super.planGreeting(...args));
-  }
-
-  override seedHistory(...args: Parameters<RuntimeSystemAgentChatEngine["seedHistory"]>) {
-    return pluginMetadataSnapshot!.run(() => super.seedHistory(...args));
-  }
-
-  override propose(...args: Parameters<RuntimeSystemAgentChatEngine["propose"]>) {
-    return pluginMetadataSnapshot!.run(() => super.propose(...args));
-  }
-
-  override handle(...args: Parameters<RuntimeSystemAgentChatEngine["handle"]>) {
-    return pluginMetadataSnapshot!.run(() => super.handle(...args));
-  }
+  override answerWizard = scoped(super.answerWizard.bind(this));
+  override cancelWizard = scoped(super.cancelWizard.bind(this));
+  override resolveOperatorApproval = scoped(super.resolveOperatorApproval.bind(this));
+  override loadOverview = scoped(super.loadOverview.bind(this));
+  override planGreeting = scoped(super.planGreeting.bind(this));
+  override seedHistory = scoped(super.seedHistory.bind(this));
+  override propose = scoped(super.propose.bind(this));
+  override handle = scoped(super.handle.bind(this));
 
   constructor(opts: TestSystemAgentChatEngineOptions = {}) {
-    const {
-      runChannelSetupWizard,
-      runSkillsSetupWizard,
-      runSearchSetupWizard,
-      runGatewaySetupWizard,
-      runMemoryImportWizard,
-      appendAuditEntry,
-      executeOperation,
-      ...engineOptions
-    } = opts;
+    const { executeOperation, ...engineOptions } = opts;
     const explicitBinding = engineOptions.verifiedInference;
-    const verifiedInference = explicitBinding ?? sharedVerifiedInference;
-    if (!verifiedInference) {
-      throw new Error("shared verified inference fixture was not initialized");
-    }
-    if (!sharedVerifiedInferenceDeps) {
-      throw new Error("shared verified inference dependencies were not initialized");
-    }
     super(
       {
         ...engineOptions,
-        verifiedInference,
+        verifiedInference: explicitBinding ?? sharedFixture.binding,
         deps: {
           ...(explicitBinding
             ? { validateAgentHarnessRuntimeArtifact: async () => true }
-            : sharedVerifiedInferenceDeps),
+            : sharedFixture.deps),
           readConfigFileSnapshot: async () =>
             configSnapshot(structuredClone(sharedVerifiedInferenceConfig)),
           ...engineOptions.deps,
         },
       },
       {
-        wizardDependencies: {
-          ...(runChannelSetupWizard ? { runChannelSetupWizard } : {}),
-          ...(runSkillsSetupWizard ? { runSkillsSetupWizard } : {}),
-          ...(runSearchSetupWizard ? { runSearchSetupWizard } : {}),
-          ...(runGatewaySetupWizard ? { runGatewaySetupWizard } : {}),
-          ...(runMemoryImportWizard ? { runMemoryImportWizard } : {}),
-          ...(appendAuditEntry ? { appendAuditEntry } : {}),
-        },
+        wizardDependencies: opts,
         ...(executeOperation ? { executeOperation } : {}),
       },
     );
@@ -396,12 +334,11 @@ beforeAll(async () => {
   pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(
     sharedVerifiedInferenceConfig,
   );
-  const fixture = await createSystemAgentVerifiedInferenceTestFixture(
+  sharedFixture = await createSystemAgentVerifiedInferenceTestFixture(
     sharedVerifiedInferenceConfig,
   );
-  sharedVerifiedInference = fixture.binding;
-  mocks.sharedVerifiedInference = fixture.binding;
-  sharedVerifiedInferenceDeps = fixture.deps;
+  sharedVerifiedInference = sharedFixture.binding;
+  mocks.sharedVerifiedInference = sharedFixture.binding;
   mocks.readConfigFileSnapshot.mockResolvedValue(
     configSnapshot(structuredClone(sharedVerifiedInferenceConfig)) as never,
   );

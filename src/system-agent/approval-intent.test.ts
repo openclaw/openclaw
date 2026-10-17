@@ -51,11 +51,7 @@ let sharedVerifiedInference: SystemAgentVerifiedInferenceBinding;
 let restoreCliBackendFixture: (() => void) | undefined;
 let cliPluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
-const classify = (
-  binding: SystemAgentVerifiedInferenceBinding,
-  message = "alright then",
-  proposal?: string,
-) =>
+const classify = (binding = sharedVerifiedInference, message = "alright then", proposal?: string) =>
   cliPluginMetadataSnapshot!.run(() =>
     classifySystemAgentApprovalIntentImpl({ message, proposal, verifiedInference: binding }),
   );
@@ -71,9 +67,7 @@ beforeAll(async () => {
   );
 });
 
-afterAll(() => {
-  restoreCliBackendFixture?.();
-});
+afterAll(() => restoreCliBackendFixture?.());
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -97,7 +91,7 @@ function preparedModel(
   } as never;
 }
 
-function completionDeps(replyText: string, binding: SystemAgentVerifiedInferenceBinding) {
+function completionDeps(replyText = "approve", binding = sharedVerifiedInference) {
   return {
     resolveRoute: vi
       .spyOn(verifiedInference, "resolveSystemAgentVerifiedInferenceRoute")
@@ -112,30 +106,21 @@ function completionDeps(replyText: string, binding: SystemAgentVerifiedInference
 }
 
 describe("classifySystemAgentApprovalText", () => {
-  it("accepts natural affirmatives regardless of case and punctuation", () => {
-    for (const text of ["yes", "Yes.", "sure", "ok!", "Okay,", "go ahead", "yes please", "do it"]) {
-      expect(classifySystemAgentApprovalText(text)).toBe("approve");
-    }
-  });
-
-  it("treats clear rejections as declines", () => {
-    for (const text of ["no", "no thanks", "not now", "cancel", "don't", "nah, later"]) {
-      expect(classifySystemAgentApprovalText(text)).toBe("decline");
-    }
-  });
-
-  it("keeps everything ambiguous as other", () => {
-    for (const text of ["maybe", "what does that change?", "yes but use gpt instead", ""]) {
-      expect(classifySystemAgentApprovalText(text)).toBe("other");
+  it.each([
+    ["approve", ["yes", "Yes.", "sure", "ok!", "Okay,", "go ahead", "yes please", "do it"]],
+    ["decline", ["no", "no thanks", "not now", "cancel", "don't", "nah, later"]],
+    ["other", ["maybe", "what does that change?", "yes but use gpt instead", ""]],
+  ] as const)("classifies %s phrases", (intent, phrases) => {
+    for (const text of phrases) {
+      expect(classifySystemAgentApprovalText(text)).toBe(intent);
     }
   });
 });
 
 describe("classifySystemAgentApprovalIntent", () => {
   it("short-circuits closed-list answers without a model call", async () => {
-    const binding = sharedVerifiedInference;
-    const deps = completionDeps("approve", binding);
-    await expect(classify(binding, "yes")).resolves.toBe("approve");
+    const deps = completionDeps();
+    await expect(classify(sharedVerifiedInference, "yes")).resolves.toBe("approve");
     expect(deps.resolveRoute).not.toHaveBeenCalled();
     expect(deps.complete).not.toHaveBeenCalled();
   });
@@ -157,31 +142,29 @@ describe("classifySystemAgentApprovalIntent", () => {
   });
 
   it("fails closed to other on unexpected model output", async () => {
-    const binding = sharedVerifiedInference;
-    completionDeps("I think the user probably agrees", binding);
-    await expect(classify(binding, "hmm alright I guess?")).resolves.toBe("other");
+    completionDeps("I think the user probably agrees");
+    await expect(classify(sharedVerifiedInference, "hmm alright I guess?")).resolves.toBe("other");
   });
 
   it("fails closed to other when no model is usable", async () => {
-    const binding = sharedVerifiedInference;
-    const deps = completionDeps("approve", binding);
+    const deps = completionDeps();
     deps.acquire.mockResolvedValueOnce({ error: "no model" });
-    await expect(classify(binding)).resolves.toBe("other");
+    await expect(classify(sharedVerifiedInference)).resolves.toBe("other");
   });
 
   it("rejects a prepared auth owner that differs from the verified profile", async () => {
-    const binding = sharedVerifiedInference;
-    const deps = completionDeps("approve", binding);
-    deps.acquire.mockResolvedValueOnce(preparedModel(binding, "openai:p1"));
-    await expect(classify(binding)).resolves.toBe("other");
+    const deps = completionDeps();
+    deps.acquire.mockResolvedValueOnce(preparedModel(sharedVerifiedInference, "openai:p1"));
+    await expect(classify()).resolves.toBe("other");
     expect(deps.complete).not.toHaveBeenCalled();
   });
 
   it("rejects a same-profile credential rotation during preparation", async () => {
-    const binding = sharedVerifiedInference;
-    const deps = completionDeps("approve", binding);
-    deps.acquire.mockResolvedValueOnce(preparedModel(binding, "openai:p2", "different-p2-owner"));
-    await expect(classify(binding)).resolves.toBe("other");
+    const deps = completionDeps();
+    deps.acquire.mockResolvedValueOnce(
+      preparedModel(sharedVerifiedInference, "openai:p2", "different-p2-owner"),
+    );
+    await expect(classify()).resolves.toBe("other");
     expect(deps.complete).not.toHaveBeenCalled();
   });
 
