@@ -17,7 +17,7 @@ import { gatewayHealthResponse } from "../../gateway/health-response.test-suppor
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import { captureEnv } from "../../test-utils/env.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as runtimeUtils from "../../utils.js";
@@ -542,45 +542,40 @@ describe("preserved update activation with real version guards", () => {
         "OPENCLAW_UPDATE_IN_PROGRESS",
         "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR",
       ];
-      const snapshot = captureEnv(inheritedKeys);
-      if (typeof options === "object") {
-        for (const key of inheritedKeys) {
-          const value = options.env?.[key];
-          if (value !== undefined) {
-            process.env[key] = value;
+      const env = typeof options === "object" ? options.env : undefined;
+      const inherited = Object.fromEntries<string | undefined>(
+        inheritedKeys.map((key) => [key, env?.[key] ?? process.env[key]] as const),
+      );
+      return withEnvAsync(inherited, async () => {
+        let stderr = "";
+        const program = new Command().exitOverride().configureOutput({
+          writeErr: (text) => {
+            stderr += text;
+          },
+        });
+        // A target without this option must reject before its normal restart action.
+        program
+          .command("gateway")
+          .command("restart")
+          .option("--json")
+          .action(async (opts: { json?: boolean }) => {
+            await runDaemonRestart(opts);
+          });
+        try {
+          await program.parseAsync(args.slice(2), { from: "user" });
+          return commandResult({
+            stderr,
+          });
+        } catch (error) {
+          if (!(error instanceof Error) || !error.message.includes("unknown option")) {
+            throw error;
           }
+          return commandResult({
+            code: 1,
+            stderr,
+          });
         }
-      }
-      let stderr = "";
-      const program = new Command().exitOverride().configureOutput({
-        writeErr: (text) => {
-          stderr += text;
-        },
       });
-      // A target without this option must reject before its normal restart action.
-      program
-        .command("gateway")
-        .command("restart")
-        .option("--json")
-        .action(async (opts: { json?: boolean }) => {
-          await runDaemonRestart(opts);
-        });
-      try {
-        await program.parseAsync(args.slice(2), { from: "user" });
-        return commandResult({
-          stderr,
-        });
-      } catch (error) {
-        if (!(error instanceof Error) || !error.message.includes("unknown option")) {
-          throw error;
-        }
-        return commandResult({
-          code: 1,
-          stderr,
-        });
-      } finally {
-        snapshot.restore();
-      }
     });
     const activated = await activate({
       serviceUpdateVerdict: before.serviceUpdateVerdict,

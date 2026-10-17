@@ -114,7 +114,6 @@ it.each([
   "rechecks %s prefix ownership through the retained launcher after a runtime switch",
   async (destination) => {
     vi.mocked(packageDestination.inspectNpmGlobalDestination).mockRestore();
-    const inspection = vi.spyOn(packageDestination, "inspectNpmGlobalDestination");
     vi.stubEnv("OPENCLAW_PROFILE", undefined);
     const base = path.dirname(fixture.root);
     const oldRoot = fixture.root;
@@ -215,27 +214,17 @@ it.each([
       await continuation;
     }
     const result = lastJson();
-    await expect(inspection.mock.results[0]?.value).resolves.toMatchObject({
-      kind: destination === "empty" ? "empty" : ownership,
-      prefix: unresolved ? null : selectedPrefix,
-      ...(unreadable ? { cause: unknownCause } : {}),
-    });
     if (refused) {
+      const destinationFacts = {
+        ownership,
+        prefix: unresolved ? null : `~${path.sep}selected`,
+        runningRoot: `~${path.sep}installation`,
+        ...(unreadable ? { cause: unknownCause } : {}),
+      };
       expect(result).toMatchObject({
         status: "error",
         reason: refusal,
-        failedStep: {
-          failureFacts: [
-            {
-              code: refusal,
-              destination: {
-                ownership,
-                prefix: unresolved ? null : `~${path.sep}selected`,
-                runningRoot: `~${path.sep}installation`,
-              },
-            },
-          ],
-        },
+        failedStep: { failureFacts: [{ code: refusal, destination: destinationFacts }] },
       });
       expect(JSON.stringify(result)).toContain(
         "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",

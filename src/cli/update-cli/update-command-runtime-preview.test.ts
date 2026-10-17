@@ -32,7 +32,6 @@ function expectUnstaged() {
   expect(fs.existsSync(fixture.databasePath)).toBe(false);
 }
 beforeEach(() => {
-  // This synthetic installation has no plugins to include in its recovery baseline.
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
 });
 it.each([
@@ -188,8 +187,7 @@ it.each([
       expect(notes).toContain("/current/node");
       expect(notes).toContain("Would replace");
     } else {
-      expect(notes).not.toContain("Would refuse");
-      expect(notes).not.toContain("Would replace");
+      expect(notes).not.toMatch(/Would (?:refuse|replace)/);
     }
     if (json && (compatible || replacement)) {
       expect(preview).not.toHaveProperty("failures");

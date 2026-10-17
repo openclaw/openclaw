@@ -85,24 +85,22 @@ export function expectedRuntimeRecoverySteps(
   pinnedServiceNode?: string,
 ): UpdateRecoveryStep[] {
   const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
-  return [
+  const steps: (UpdateRecoveryStep | undefined)[] = [
     instruction(
       "preserve-context",
       "Use the same service account and keep the existing OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH overrides throughout recovery.",
     ),
-    ...(context ? [{ kind: "preserve-context" as const, command: context }] : []),
+    context ? { kind: "preserve-context", command: context } : undefined,
     instruction(
       "select-runtime",
       `Install and select Node ${node} using your system package manager or https://nodejs.org/en/download.`,
     ),
-    ...(pinnedServiceNode
-      ? [
-          instruction(
-            "select-runtime",
-            `The Gateway service still selects ${pinnedServiceNode}. Before continuing, have its deployment owner select Node ${node} in the service definition while retaining its installation, service account, and state/config selectors. Switching the shell runtime alone does not update that service definition.`,
-          ),
-        ]
-      : []),
+    pinnedServiceNode
+      ? instruction(
+          "select-runtime",
+          `The Gateway service still selects ${pinnedServiceNode}. Before continuing, have its deployment owner select Node ${node} in the service definition while retaining its installation, service account, and state/config selectors. Switching the shell runtime alone does not update that service definition.`,
+        )
+      : undefined,
     root
       ? {
           kind: "continue-update",
@@ -113,6 +111,7 @@ export function expectedRuntimeRecoverySteps(
           "Run this installation's absolute openclaw.mjs launcher with the selected Node and the update command to recheck package and service ownership before installation.",
         ),
   ];
+  return steps.filter((step): step is UpdateRecoveryStep => step !== undefined);
 }
 
 export function expectedPlainRecovery(

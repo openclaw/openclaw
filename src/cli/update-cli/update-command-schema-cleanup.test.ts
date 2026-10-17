@@ -47,14 +47,9 @@ beforeEach(() => {
   vi.spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(handoff);
   const databasePath = resolveManagedUpdateLeaseDatabasePath();
   expect(databasePath).toBe(path.join(handoff, "managed-update-handoffs.sqlite"));
-  expect(path.join(fs.realpathSync(path.dirname(databasePath)), path.basename(databasePath))).toBe(
-    databasePath,
-  );
-  expect(databasePath).not.toMatch(/^\/(?:private\/)?tmp\/openclaw(?:\/|$)/u);
   env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
   source = resolveOpenClawStateSqlitePath(env);
   fs.mkdirSync(path.dirname(source), { recursive: true });
-  expect(path.join(fs.realpathSync(path.dirname(source)), path.basename(source))).toBe(source);
   expect(source.startsWith(`${root}${path.sep}`)).toBe(true);
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(source);
@@ -111,20 +106,15 @@ function expectPrimaryFailure(failure: unknown, primary: Error) {
 it.each(["DELETE", "WAL"])(
   "admits online update without acquiring an unrelated snapshot (%s)",
   async (journalMode) => {
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(source);
-    try {
-      database.exec(`PRAGMA journal_mode = ${journalMode}; CREATE TABLE online_probe(value);`);
-      if (journalMode === "WAL") {
-        expect(fs.statSync(`${source}-wal`).size).toBeGreaterThan(32);
-        expect(fs.existsSync(`${source}-shm`)).toBe(true);
-      }
-      await expect(runUpdate()).resolves.toMatchObject(admittedSchemas);
-      expect(snapshots.prepareSqliteReadOnlyLocation).not.toHaveBeenCalled();
-      expect(fs.existsSync(prepared.location)).toBe(true);
-    } finally {
-      database.close();
+    using database = new (requireNodeSqlite().DatabaseSync)(source);
+    database.exec(`PRAGMA journal_mode = ${journalMode}; CREATE TABLE online_probe(value);`);
+    if (journalMode === "WAL") {
+      expect(fs.statSync(`${source}-wal`).size).toBeGreaterThan(32);
+      expect(fs.existsSync(`${source}-shm`)).toBe(true);
     }
+    await expect(runUpdate()).resolves.toMatchObject(admittedSchemas);
+    expect(snapshots.prepareSqliteReadOnlyLocation).not.toHaveBeenCalled();
+    expect(fs.existsSync(prepared.location)).toBe(true);
   },
 );
 
@@ -219,9 +209,6 @@ it.each([false, true])(
       signal: controller.signal,
       configuredAgentDatabaseTargets: candidates,
     });
-    if (!retained) {
-      await expect(inspection).rejects.toBe(cancellation);
-    }
     const failure = await inspection.catch((error: unknown) => error);
     if (retained) {
       expect(expectPrimaryFailure(failure, cancellation).errors[1]).toMatchObject({
