@@ -74,6 +74,7 @@ import { buildSkillsSection } from "./system-prompt-skills.js";
 import {
   buildSystemPromptToolLines,
   buildSystemPromptToolingSection,
+  type McpServerInstruction,
 } from "./system-prompt-tool-list.js";
 import type {
   PromptMode,
@@ -328,6 +329,8 @@ export function buildAgentSystemPrompt(params: {
   runtimeInfo?: SystemPromptRuntimeInfo;
   messageToolHints?: string[];
   toolSchemaDirectoryPrompt?: string;
+  /** Guidance published by the MCP servers backing this prompt's visible tools. */
+  mcpServerInstructions?: readonly McpServerInstruction[];
   messageTool?: Parameters<typeof buildUiPresentationPrompt>[0]["messageTool"];
   sandboxInfo?: EmbeddedSandboxInfo;
   /** Whether read/write/edit/apply_patch are restricted to the workspace root. */
@@ -660,6 +663,7 @@ export function buildAgentSystemPrompt(params: {
       promptSurface,
       availableTools,
       webSearchUnconfigured: params.webSearchUnconfigured,
+      mcpServerInstructions: params.mcpServerInstructions,
     }),
     !hasSeparateRuntimeCwd && workspaceGuidance,
     renderOpenClawToolWorkflowHints && [

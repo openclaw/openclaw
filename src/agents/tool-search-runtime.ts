@@ -73,10 +73,14 @@ type ToolSearchExactCallOptions = Pick<
 >;
 
 function describeEntry(entry: ToolSearchCatalogEntry) {
+  const { mcp, ...descriptor } = compactToolSearchCatalogEntry(entry, {
+    fullInstructions: true,
+  });
   return {
-    ...compactToolSearchCatalogEntry(entry),
+    ...descriptor,
     parameters: entry.parameters ?? {},
     ...(entry.outputSchema ? { outputSchema: entry.outputSchema } : {}),
+    ...(mcp ? { mcp } : {}),
   };
 }
 
@@ -283,7 +287,9 @@ export class ToolSearchRuntime {
   };
 
   all = (options?: CatalogVisibilityOptions) =>
-    visibleCatalogEntries(resolveCatalog(this.ctx), options).map(compactToolSearchCatalogEntry);
+    visibleCatalogEntries(resolveCatalog(this.ctx), options).map((entry) =>
+      compactToolSearchCatalogEntry(entry),
+    );
 
   namespaceEntries = () =>
     // Snapshot host metadata without rendering hints or retaining the executable tool.

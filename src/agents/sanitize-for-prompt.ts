@@ -19,6 +19,18 @@ export function sanitizeForPromptLiteral(value: string): string {
   return value.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "");
 }
 
+/**
+ * Prevent external text from opening or closing application-owned prompt regions.
+ *
+ * Prompt refresh and cache splitting are driven by HTML-comment delimiters emitted by
+ * OpenClaw, not by the model. Escaping the opener makes an injected `<!--` harmless so
+ * external prose cannot terminate an owned region early (for example with
+ * `<!-- /openclaw:attempt:DYNAMIC -->`).
+ */
+export function neutralizePromptControlMarkers(value: string): string {
+  return value.replaceAll("<!--", "&lt;!--");
+}
+
 /** True when the shared prompt sanitizer would strip any character. */
 export function hasPromptUnsafeControlCharacter(value: string): boolean {
   return sanitizeForPromptLiteral(value) !== value;

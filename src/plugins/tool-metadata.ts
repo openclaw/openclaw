@@ -13,6 +13,8 @@ export type PluginToolMcpMeta = {
   operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
   excludedFromOpenClawCatalog?: true;
   deniedBySession?: true;
+  /** Server-level instructions advertised by this tool's MCP server, if any. */
+  instructions?: string;
   /** Trusted requester OAuth sign-in bootstrap; exempt from per-call MCP approval. */
   oauthConnectBootstrap?: true;
   codexApproval?: {
@@ -47,6 +49,18 @@ export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): voi
 /** Reads plugin ownership metadata for a concrete agent tool instance. */
 export function getPluginToolMeta(tool: AnyAgentTool): PluginToolMeta | undefined {
   return pluginToolMeta.get(tool);
+}
+
+/**
+ * Reads plugin ownership metadata from a prompt tool descriptor. Prompt inputs only carry the
+ * name/schema pair, while the metadata itself stays keyed by the concrete tool instance.
+ */
+export function getPluginToolMetaForPromptTool(tool: {
+  name: string;
+  parameters: unknown;
+}): PluginToolMeta | undefined {
+  // SAFETY: this is a read-only WeakMap lookup; a non-tool descriptor simply misses.
+  return pluginToolMeta.get(tool as AnyAgentTool);
 }
 
 /** Copies plugin ownership metadata when wrappers replace a tool object. */

@@ -132,12 +132,23 @@ function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandid
   if (mcp) {
     remaining -= mcpChars;
   }
+  // Batch discovery only needs callable identity. Full server guidance remains
+  // available through tool_describe, so attacker-sized text cannot evict the
+  // candidate while the response budget is being fitted.
+  const batchMcp = mcp
+    ? {
+        serverName: mcp.serverName,
+        safeServerName: mcp.safeServerName,
+        toolName: mcp.toolName,
+        operation: mcp.operation,
+      }
+    : undefined;
   const output = retain(candidate.output);
   return {
     ...compactBatchCandidateDescription(candidate),
     sourceName,
     label,
-    mcp,
+    mcp: batchMcp,
     output,
   };
 }

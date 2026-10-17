@@ -7,9 +7,11 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { logWarn } from "../logger.js";
+import { sanitizeModelSpecialTokens } from "../security/external-content.js";
 import {
   projectBundleMcpCatalogTools,
   projectBundleMcpCatalogFailure,
@@ -54,6 +56,7 @@ import { isMcpToolAllowed, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
 import { normalizeMcpToolCatalog, type McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
+import { neutralizePromptControlMarkers } from "./sanitize-for-prompt.js";
 
 type BundleMcpSession = {
   serverName: string;
@@ -706,6 +709,10 @@ function createServerMcpRuntime(
         );
         session.toolMetadata = normalizedTools.metadata;
         const exposedTools = normalizedTools.tools;
+        const rawServerInstructions = normalizeOptionalString(session.client.getInstructions());
+        const serverInstructions = rawServerInstructions
+          ? sanitizeModelSpecialTokens(neutralizePromptControlMarkers(rawServerInstructions))
+          : undefined;
         const serverEntry: McpServerCatalog = {
           serverName,
           safeServerName,
@@ -714,6 +721,7 @@ function createServerMcpRuntime(
           title: session.client.getServerVersion()?.title,
           icons: readMcpAppIcons(session.client.getServerVersion()?.icons),
           settings: readMcpAppSettingsCapability(session.client.getServerCapabilities()),
+          ...(serverInstructions ? { instructions: serverInstructions } : {}),
           toolCount: exposedTools.length,
           requestTimeoutMs: resolved.requestTimeoutMs,
           supportsParallelToolCalls: resolved.supportsParallelToolCalls,

@@ -324,6 +324,7 @@ function createMcpNamespaceModel(
         doc: {
           identifier: serverIdentifier,
           serverName: mcp.serverName,
+          ...(mcp.instructions ? { instructions: mcp.instructions } : {}),
           tools: [],
         },
       };
