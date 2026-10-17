@@ -16,6 +16,7 @@ import {
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import * as discovery from "./discovery.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
+import { projectInstalledPluginIndexPolicy } from "./installed-plugin-index.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -458,12 +459,15 @@ describe("capability loading from a Gateway generation", () => {
         }),
       });
       snapshot.index.installRecords = installed;
-      snapshot.index.plugins = buildInstalledPluginIndexRecords({
+      snapshot.index.plugins = projectInstalledPluginIndexPolicy({
+        plugins: buildInstalledPluginIndexRecords({
+          registry: snapshot.manifestRegistry,
+          candidates: discovered.candidates,
+          installRecords: installed,
+          diagnostics: [],
+        }),
         config: fixture.config,
-        registry: snapshot.manifestRegistry,
-        candidates: discovered.candidates,
-        installRecords: installed,
-        diagnostics: [],
+        env: process.env,
       });
       expect(snapshot.byPluginId.get(id)?.rootDir).toBe(installedDir);
       setCurrentPluginMetadataSnapshot(snapshot, {

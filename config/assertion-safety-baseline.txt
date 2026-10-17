@@ -550,7 +550,6 @@ extensions/msteams/src/feedback-invoke.ts	2
 extensions/msteams/src/file-consent.ts	1
 extensions/msteams/src/graph.ts	2
 extensions/msteams/src/inbound.ts	1
-extensions/msteams/src/monitor-handler/inbound-dispatch.ts	1
 extensions/msteams/src/monitor-handler/inbound-facts.ts	1
 extensions/msteams/src/monitor.ts	5
 extensions/msteams/src/msteams-ingress.ts	1
@@ -1156,7 +1155,7 @@ src/agents/cli-runner/cli-run-transcript.ts	1
 src/agents/cli-runner/execute-node-claude.ts	5
 src/agents/cli-runner/execute.ts	2
 src/agents/cli-runner/prepare.ts	1
-src/agents/cli-runner/session-history.ts	3
+src/agents/cli-runner/session-history.ts	1
 src/agents/code-mode-runtime.ts	2
 src/agents/code-mode-script-syntax.ts	1
 src/agents/code-mode.ts	2
@@ -1245,7 +1244,7 @@ src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.update.ts	2
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	1
-src/agents/embedded-agent-subscribe.handlers.tools.start.ts	5
+src/agents/embedded-agent-subscribe.handlers.tools.start.ts	2
 src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
 src/agents/embedded-agent-tool-media.ts	5
 src/agents/embedded-agent-tool-results.ts	7
@@ -1655,7 +1654,7 @@ src/commands/doctor-session-canonical-keys.ts	1
 src/commands/doctor-session-incognito-key-repair-state.ts	4
 src/commands/doctor-session-snapshots.ts	3
 src/commands/doctor-session-sqlite-recover-report.ts	1
-src/commands/doctor-session-transcript-headers.ts	4
+src/commands/doctor-session-transcript-headers.ts	2
 src/commands/doctor-session-transcript-labels.ts	1
 src/commands/doctor-session-transcripts.ts	1
 src/commands/doctor-skills.ts	1
@@ -1687,7 +1686,7 @@ src/commands/doctor/shared/open-policy-allowfrom.ts	1
 src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	1
 src/commands/doctor/shared/stale-agent-model-ref-repair.ts	2
 src/commands/doctor/shared/stale-auth-order-store.ts	2
-src/commands/doctor/shared/stale-auth-order.ts	4
+src/commands/doctor/shared/stale-auth-order.ts	3
 src/commands/gateway-health-auth-diagnostic.ts	1
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11
@@ -2188,7 +2187,7 @@ src/node-host/invoke-agent-cli-claude-params.ts	1
 src/node-host/invoke-agent-cli-claude.ts	1
 src/node-host/invoke-payload.ts	3
 src/node-host/invoke.ts	1
-src/node-host/mcp.ts	2
+src/node-host/mcp.ts	1
 src/node-host/node-worker-transfer-client.ts	1
 src/node-host/node-worker-transfer-http.ts	1
 src/node-host/node-worker-tree-control.ts	2
@@ -2547,7 +2546,7 @@ ui/src/components/markdown-assistant-transcript.ts	1
 ui/src/components/markdown-code-blocks.ts	1
 ui/src/components/markdown-parser.ts	1
 ui/src/components/mcp-app-theme.ts	1
-ui/src/components/session-data-controller.ts	1
+ui/src/components/session-data.ts	1
 ui/src/components/session-organizer-controller.ts	5
 ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-controller-lifecycle.ts	1
@@ -2569,12 +2568,11 @@ ui/src/lib/config-form-utils.ts	1
 ui/src/lib/config/config-draft-model.ts	2
 ui/src/lib/keyboard-shortcuts.ts	1
 ui/src/lib/nodes/index.ts	2
-ui/src/lib/nodes/inventory.ts	1
 ui/src/lib/session-pull-requests.ts	2
 ui/src/lib/sessions/custom-groups.ts	5
 ui/src/lib/sessions/grouping.ts	4
 ui/src/lib/sessions/index.ts	1
-ui/src/lib/sessions/session-key.ts	4
+ui/src/lib/sessions/session-key.ts	3
 ui/src/lib/subscriptions-controller.ts	1
 ui/src/local-storage.ts	2
 ui/src/main.ts	1
@@ -2611,6 +2609,5 @@ ui/src/pages/config/settings-search.ts	1
 ui/src/pages/config/view-diff.ts	2
 ui/src/pages/custodian/session-lifecycle.ts	1
 ui/src/pages/labs/labs-registry.ts	4
-ui/src/pages/new-session/draft-place-browser.ts	1
 ui/src/pages/new-session/preferences.ts	1
 ui/src/pages/portals/portal-reachability.ts	1

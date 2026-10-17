@@ -283,6 +283,7 @@ vi.mock("../internal/discord.js", async () => {
   }
   class Client {
     listeners: unknown[];
+    plugins: NonNullable<ConstructorParameters<typeof actual.Client>[2]>;
     rest: {
       options: { timeout: number };
       get: ReturnType<typeof vi.fn>;
@@ -292,9 +293,14 @@ vi.mock("../internal/discord.js", async () => {
       delete: ReturnType<typeof vi.fn>;
     };
     options: unknown;
-    constructor(options: unknown, handlers: { listeners?: unknown[] }) {
+    constructor(
+      options: unknown,
+      handlers: { listeners?: unknown[] },
+      plugins: ConstructorParameters<typeof actual.Client>[2] = [],
+    ) {
       this.options = options;
       this.listeners = handlers.listeners ?? [];
+      this.plugins = [...plugins];
       this.rest = {
         options: { timeout: 15_000 },
         get: vi.fn(async () => undefined),
@@ -312,7 +318,7 @@ vi.mock("../internal/discord.js", async () => {
       return await clientFetchUserMock(target);
     }
     getPlugin(name: string) {
-      return clientGetPluginMock(name);
+      return clientGetPluginMock(name) ?? this.plugins.find((plugin) => plugin.id === name);
     }
   }
   return { ...actual, Client, RateLimitError };
@@ -539,4 +545,8 @@ vi.mock(buildDiscordSourceModuleId("monitor/thread-bindings.js"), () => ({
   createThreadBindingManager: createThreadBindingManagerMock,
   reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,
   resolveThreadBindingIdleTimeoutMs: vi.fn(() => 24 * 60 * 60 * 1000),
+}));
+
+vi.mock(buildDiscordSourceModuleId("monitor/thread-bindings.manager.js"), () => ({
+  createThreadBindingManager: createThreadBindingManagerMock,
 }));

@@ -12,6 +12,7 @@ import {
   untrack,
 } from "solid-js";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
@@ -19,6 +20,10 @@ import { PluginView } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import { createSessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
+import {
+  loadStoredHiddenSessionCatalogIds,
+  SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
+} from "./app-sidebar-session-types.ts";
 import { createSessionAttention } from "./session-attention.ts";
 import { createSessionOwnerFilterQuery } from "./session-owner-filter.ts";
 import { createSidebarScroll } from "./sidebar-context-controller.ts";
@@ -68,7 +73,24 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
   const scroll = createSidebarScroll(owner);
   const projection = projectSource(owner, {
     read: (current) => current,
-    subscribe: (current, notify) => current.subscribe(notify),
+    subscribe: (current, notify) => {
+      current.catalogRendererImport.schedule();
+      const stops = [
+        current.subscribe(notify),
+        listen(window, SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT, () => {
+          current.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
+          current.requestUpdate();
+        }),
+        listen(window, "openclaw:native-gateways-changed", () => {
+          if (current.isConnected) {
+            current.sidebarMenus.closeSessionMenu();
+            notify();
+          }
+        }),
+        current.catalogRendererImport.dispose,
+      ];
+      return () => stops.forEach((stop) => stop());
+    },
     equality: "revision",
   });
   const snapshot = owner.snapshot;
@@ -90,6 +112,7 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
       // Synchronous owners release boot snapshots and restore query state before row consumers read.
       snapshot.synchronize();
       owner.prepareRender();
+      owner.sessionData.synchronize();
       owner.pinnedSessions.synchronize();
       return owner;
     },
@@ -122,13 +145,8 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     return proxy;
   };
   const hostView = observe(owner);
-  [
-    owner.sidebarMenus,
-    owner.sidebarMenus.catalogMenu,
-    owner.sessionData,
-    owner.sessionOrganizer,
-    owner.people,
-  ].forEach(observe);
+  owner.sidebarMenus.catalogMenuView = owner.sidebarMenus.catalogMenu.createView(hostView);
+  [owner.sidebarMenus, owner.sessionData, owner.sessionOrganizer, owner.people].forEach(observe);
   owner.sessionPullRequests = createSessionPullRequestIndicators({
     getConnected: () => prepared().isConnected && props.connected,
     getPresented: () => props.navigationVisible,
@@ -182,6 +200,7 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     },
     () =>
       untrack(() => {
+        owner.sessionData.refreshPresentation();
         owner.commitRender();
         snapshot.capture();
         people.syncRendered();
@@ -205,11 +224,16 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     sidebarOwners.set(host, owner);
     if (host.isConnected && !owner.isConnected) {
       owner.attach();
+    } else {
+      owner.sessionData.connect();
     }
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => owner.classList.add("sidebar-r"));
     });
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      owner.sessionData.disconnect(owner.isConnected);
+    };
   });
   onCleanup(() => disconnectSidebarOwner(host));
   return content;

@@ -309,7 +309,7 @@ suite.define(() => {
         Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: false });
       });
       await panel.evaluate((element) =>
-        (element as HTMLElement & { requestUpdate(): void }).requestUpdate(),
+        (element as HTMLElement & { invalidate(): void }).invalidate(),
       );
       await expect
         .poll(() => button.getAttribute("aria-label"))

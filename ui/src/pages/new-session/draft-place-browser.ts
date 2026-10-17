@@ -18,6 +18,7 @@ import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
 import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
 
 type DraftPickerKind = "where" | "project" | "checkout";
+export type ProjectBrowserFocus = Partial<Record<"browse" | "path", HTMLElement>>;
 
 type DraftPlaceBrowserSnapshot = Readonly<{
   context: ApplicationContext | undefined;
@@ -32,16 +33,14 @@ type DraftProjectSelection =
 type DraftPlaceBrowserCallbacks = {
   changed: () => void;
   updateComplete: () => Promise<unknown>;
-  pickerIdPrefix?: string;
   onProjectMissing: () => void;
   onSelectProject: (projectId: string) => void;
   onApprovedListing: (listing: FsListDirResult) => void;
-  querySelector: (selector: string) => Element | null;
   activeElement: () => Element | null;
-  body: () => HTMLElement | null;
 };
 
 export class DraftPlaceBrowser {
+  readonly projectFocus: ProjectBrowserFocus = {};
   private projectCatalog: ProjectCatalog | undefined;
   private projectCatalogCleanup: (() => void) | undefined;
   private projectCatalogGateway: ApplicationContext["gateway"] | undefined;
@@ -286,7 +285,7 @@ export class DraftPlaceBrowser {
       popoverOpen: this.popoverOpen(kind),
       onPopoverShow: () => this.transitionPopover(kind, true),
       onPopoverHide: () => this.transitionPopover(kind, false),
-      onPopoverAfterHide: () => this.onPopoverAfterHide(kind),
+      onPopoverAfterHide: this.callbacks.changed,
     };
   }
 
@@ -427,7 +426,7 @@ export class DraftPlaceBrowser {
     const wasBrowsing = this.browserOpenValue;
     this.resetBrowser(false);
     if (wasBrowsing) {
-      this.focusProjectView('[data-value="browse"]');
+      this.focusProjectView("browse");
     }
   }
 
@@ -444,7 +443,7 @@ export class DraftPlaceBrowser {
     this.browserNodeIdValue = nodeId;
     this.browserProjectPathValue = null;
     void this.browser.navigate(path && isAbsolutePath(path) ? path : undefined, "initial");
-    this.focusProjectView(".new-session-page__browser-path");
+    this.focusProjectView("path");
   }
 
   async registerBrowserProject(path: string) {
@@ -509,17 +508,6 @@ export class DraftPlaceBrowser {
     }
   }
 
-  onPopoverAfterHide(kind: DraftPickerKind) {
-    const id = `${this.callbacks.pickerIdPrefix ?? "new-session"}-${kind}-trigger`;
-    const active = this.callbacks.activeElement();
-    const popover = this.callbacks.querySelector(`.new-session-page__${kind}-popover`);
-    const body = this.callbacks.body();
-    if (!active || active === body || popover?.contains(active)) {
-      (this.callbacks.querySelector(`#${id}`) as HTMLButtonElement | null)?.focus();
-    }
-    this.callbacks.changed();
-  }
-
   disconnect() {
     this.focusRequestId += 1;
     this.environmentQueryValue = "";
@@ -550,7 +538,7 @@ export class DraftPlaceBrowser {
     this.projectSearchTimer = undefined;
   }
 
-  private focusProjectView(selector: string) {
+  private focusProjectView(kind: keyof ProjectBrowserFocus) {
     const requestId = ++this.focusRequestId;
     const origin = this.callbacks.activeElement();
     void this.callbacks.updateComplete().then(() => {
@@ -558,13 +546,11 @@ export class DraftPlaceBrowser {
         return;
       }
       const active = this.callbacks.activeElement();
-      if (active && active !== origin && active !== this.callbacks.body()) {
-        return;
-      }
-      const target = this.callbacks
-        .querySelector(".new-session-page__project-popover")
-        ?.querySelector<HTMLElement>(selector);
-      if (target?.isConnected) {
+      const target = this.projectFocus[kind];
+      if (
+        target?.isConnected &&
+        (!active || active === origin || active === active.ownerDocument.body)
+      ) {
         target.focus({ preventScroll: true });
       }
     });

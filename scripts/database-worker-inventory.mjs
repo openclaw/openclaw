@@ -725,7 +725,13 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["selectProgressCard", "writePreparedSessionProgressCard.write"],
         evidence:
-          "session-transcript.worker.ts owns card reads; progress-card-store.worker.ts owns writes and their fallback reads. Gateway references are type uses; other writeSessionProgressCard callers are fixtures. clearProgressCardInTransaction remains mixed because native lifecycle reset calls its separate clearer.",
+          "session-transcript.worker.ts owns card reads; progress-card-store.worker.ts owns writes and their fallback reads. Gateway references are type uses; other writeSessionProgressCard callers are fixtures.",
+      },
+      {
+        tier: "T3",
+        operations: ["clearProgressCardInTransaction"],
+        evidence:
+          "Durable single and batched resets run through the agent worker and clear the card in the reset transaction. Native lifecycle and canonical-repair callers require maintenance authority; incognito uses the memory actor. progress-card-store.worker.ts also invokes this clearer for conditional card writes.",
       },
     ],
   ],
@@ -1201,6 +1207,18 @@ const reviewedOperations = new Map([
         ],
         evidence:
           "SQL readers execute only through gatewayBootReadOperations in the shared-state read worker or gatewayBootOperations begin/recover in the shared-state writer. Host lifecycle APIs dispatch these operations; remaining host imports from this kernel are pure helpers and constants.",
+      },
+    ],
+  ],
+  [
+    "src/infra/gateway-owner-lease.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["acquireGatewayOwnerLease"],
+        binding: "acquired",
+        evidence:
+          "gateway-lock.ts calls acquisition only after obtaining physical Gateway state custody. This conditional upsert is the process-lock claim; the previous owner is checked in the same transaction. Runtime renewal uses the state lease worker.",
       },
     ],
   ],
@@ -3403,6 +3421,7 @@ const workerModules = new Set([
   "extensions/memory-core/src/memory-forget-kernel.ts", // Memory origin worker forget mark and purge commands only.
   "extensions/memory-core/src/standing-intents-kernel.ts", // Standing-intent worker command dispatcher only.
 
+  "extensions/memory-core/src/memory/manager-index-metadata.ts", // Only the SQLite/PostgreSQL publication worker adapters write metadata and promote legacy cache identities.
   "extensions/memory-core/src/memory/manager-embedding-cache.ts", // Cache SQL, including iterator reads, is called only by manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-chunk-writer.ts", // Only manager-source-index-kernel.ts calls this writer, from manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.

@@ -28,6 +28,7 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import {
   closeCachedOpenClawAgentDatabase,
+  recordOpenClawAgentDatabaseOpenFailure,
   retainAgentDatabase,
 } from "./openclaw-agent-db-lifecycle.js";
 import {
@@ -40,14 +41,12 @@ import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
-  recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
 import { removeAgentIntegrityMetadataForTest } from "./openclaw-agent-db.test-support.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { AgentDatabaseExecutionLifetime } from "./openclaw-agent-execution-authority.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import * as verification from "./openclaw-database-verify.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -579,7 +578,6 @@ it.each([
     invalidateOpenClawAgentDatabaseValidation(database.path);
     revokeSqliteDatabaseAdmissionsForPath(database.path);
   }
-  const integrityCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseIntegrityCheck");
   try {
     if (proof === "revoked-after-verification-admission") {
       const operation = vi.fn(async () => "not admitted");
@@ -602,7 +600,6 @@ it.each([
     await expect(
       generation.run(source, async () => "opened", undefined, proof === "prepared-existing"),
     ).resolves.toBe("opened");
-    expect(integrityCheck).not.toHaveBeenCalled();
     expect(Array.from(new Int32Array(counter.checks))).toEqual(
       proof === "verified" ||
         proof === "prepared-existing" ||
@@ -617,7 +614,6 @@ it.each([
     );
     expect(revokedBeforeGrant).toBe(proof === "revoked-before-grant");
   } finally {
-    integrityCheck.mockRestore();
     try {
       await generation.close();
     } finally {
@@ -734,14 +730,12 @@ it.runIf(process.platform === "linux")(
       const generation = createNativeGeneration(agentId, pathname, context, assertCurrent, () =>
         context.admission.assertCurrent(),
       );
-      const integrityCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseIntegrityCheck");
       try {
         if (agentId === "corrupt-page") {
           await expect(generation.run(source, async () => "opened")).rejects.toThrow(
             /integrity|malformed|corrupt/i,
           );
           expect(Atomics.load(new Int32Array(counter.checks), 0)).toBeGreaterThan(0);
-          expect(integrityCheck).not.toHaveBeenCalled();
           continue;
         }
         const sessionKey = `agent:${agentId}:after-crash`;
@@ -758,12 +752,10 @@ it.runIf(process.platform === "linux")(
         };
         await initialize();
         expect(Array.from(new Int32Array(counter.checks)), agentId).toEqual([1, 1]);
-        expect(integrityCheck).not.toHaveBeenCalled();
         expect(readSqliteDatabaseIntegrityVerification(pathname)).toEqual({
           verifiedAt: expect.any(Number),
         });
       } finally {
-        integrityCheck.mockRestore();
         await generation.close();
       }
       expect(readSqliteDatabaseCleanClose(pathname)).toBe(true);

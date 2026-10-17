@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { parseExecApprovalData } from "./approval-custom-id.js";
 import { buildDiscordActivityCustomId } from "./component-custom-id.js";
 import { buildDiscordComponentMessage } from "./components.js";
-import { parseCustomId } from "./internal/discord.js";
+import { parseCustomId } from "./internal/components.base.js";
 import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,

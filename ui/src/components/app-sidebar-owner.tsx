@@ -39,9 +39,7 @@ import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-naviga
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
 import {
-  loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarCatalogGrouping,
-  SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
   SIDEBAR_SESSION_PAGE_SIZE,
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
@@ -62,7 +60,6 @@ import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
 import { Icon } from "./solid/icon.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
-import { SessionTitlePlaceholder } from "./solid/session-title-placeholder.tsx";
 import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
@@ -225,18 +222,10 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     return snapshot && Array.isArray(snapshot.gateways) ? snapshot : null;
   }
 
-  private readonly nativeGatewaysChanged = () => {
-    this.sidebarMenus.closeSessionMenu();
-    this.requestUpdate();
-  };
-  private readonly hiddenSessionCatalogsChanged = () => {
-    this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
-    this.requestUpdate();
-  };
   // Catalog rows are non-startup content. Load their renderer through the same
   // idle boundary as other sidebar chrome, then repaint when the chunk arrives.
   private catalogRenderer: SessionCatalogGroupsRenderer | null = null;
-  private readonly catalogRendererImport = createIdleImport(
+  readonly catalogRendererImport = createIdleImport(
     () => import("./app-sidebar-session-catalog-render.tsx"),
     (module) => {
       this.catalogRenderer = module.renderSessionCatalogGroups;
@@ -253,14 +242,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   override disconnectedCallback() {
+    this.sessionData.disconnect();
     this.peopleView?.dismiss();
-    window.removeEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
-    window.removeEventListener(
-      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
-      this.hiddenSessionCatalogsChanged,
-    );
     this.narration?.disconnect();
-    this.catalogRendererImport.dispose();
     super.disconnectedCallback();
     this.snapshot.disconnect();
   }
@@ -346,15 +330,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   override connectedCallback() {
+    this.sessionData.connect();
     this.snapshot.connect();
     super.connectedCallback();
-    window.addEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
-    this.hiddenSessionCatalogsChanged();
-    window.addEventListener(
-      SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
-      this.hiddenSessionCatalogsChanged,
-    );
-    this.catalogRendererImport.schedule();
   }
 
   toggleSessionPin(session: SidebarRecentSession): void {
@@ -494,36 +472,19 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       />
     );
     return (
-      <>
-        <Show when={host().pendingSessionCreate()}>
-          {(pending) => (
-            <div class="sidebar-recent-session sidebar-recent-session--single-line sidebar-recent-session--active sidebar-recent-session--creating">
-              <div class="sidebar-recent-session__link" aria-current="page" aria-busy="true">
-                <span class="sidebar-recent-session__text">
-                  <span class="sidebar-recent-session__title-row">
-                    <Show when={pending().displayName} fallback={<SessionTitlePlaceholder />}>
-                      {(name) => <span class="sidebar-recent-session__name">{name()}</span>}
-                    </Show>
-                  </span>
-                </span>
-              </div>
-            </div>
-          )}
-        </Show>
-        <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
-          <SidebarAgentRoster
-            host={host()}
-            active={
-              host().navigationVisible &&
-              host().navigationView === "sessions" &&
-              !host().contextualSidebar
-            }
-            sections={sections()}
-            empty={visibleSessions().length === 0}
-            involvingMe={host().sessionInvolvingMeFilterActive}
-          />
-        </Show>
-      </>
+      <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
+        <SidebarAgentRoster
+          host={host()}
+          active={
+            host().navigationVisible &&
+            host().navigationView === "sessions" &&
+            !host().contextualSidebar
+          }
+          sections={sections()}
+          empty={visibleSessions().length === 0}
+          involvingMe={host().sessionInvolvingMeFilterActive}
+        />
+      </Show>
     );
   }
 

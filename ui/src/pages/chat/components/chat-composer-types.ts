@@ -1,6 +1,6 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import type { StoreSetter } from "solid-js";
+import type { Signal, StoreSetter } from "solid-js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -21,6 +21,7 @@ import type {
   ChatReplyTarget,
   HumanMention,
 } from "../../../lib/chat/chat-types.ts";
+import type { ComposerDraftSource } from "../../../lib/chat/composer-draft-changes.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import type { PresentationBinding } from "../../../lib/presentation.ts";
@@ -41,10 +42,7 @@ import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
 import type { HumanMentionDirectory, HumanMentionMenu } from "./chat-composer-mention-menu.tsx";
-import type {
-  ChatComposerCapabilityMenuProps,
-  ChatComposerPlusMenuView,
-} from "./chat-composer-plus-menu.types.ts";
+import type { ChatComposerCapabilityMenuProps } from "./chat-composer-plus-menu.types.ts";
 import type { SkillMenu } from "./chat-composer-skill-menu.tsx";
 import type { SlashMenu } from "./chat-composer-slash-menu.tsx";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
@@ -73,7 +71,7 @@ export type ChatComposerDisabledBanner = {
   disabledReason?: string;
 } & ({ actionLabel: string; onAction: () => void } | { actionLabel?: never; onAction?: never });
 
-export type ChatComposerProps = ChatAttachmentControlsProps & {
+export type ChatComposerProps = Omit<ChatAttachmentControlsProps, "onRequestUpdate"> & {
   paneId: string;
   sessionKey: string;
   currentAgentId: string;
@@ -118,6 +116,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   stream: string | null;
   queue: ChatQueueItem[];
   draft: string;
+  draftSource?: ComposerDraftSource;
   composerPredictions?: {
     enabled: boolean;
     active: boolean;
@@ -212,15 +211,16 @@ export type ChatComposerState = {
   skillMenu: SkillMenu;
   slashMenu: SlashMenu;
   slashCommandDispatchConnected: boolean;
+  goalPending: Signal<ChatGoalDraftMode | null>;
   composerComposing: boolean;
   editRevision: number;
   mentionMenu: HumanMentionMenu;
   emojiMenu: ComposerEmojiMenu;
   mentionInput?: HumanMentionInput;
-  composingDraft: ScopedComposerDraft | null;
   composerInputIntentKey: string | null;
   pendingClearedSubmittedDraft: ScopedComposerDraft | null;
   presentation: {
+    dictationError: string | null;
     goalExpandedId: string | null;
     activeQuestionKey: string | null;
     gatewayQuestionIds: Set<string>;
@@ -228,20 +228,15 @@ export type ChatComposerState = {
     questionCollapsed: boolean;
   };
   updatePresentation: StoreSetter<ChatComposerState["presentation"]>;
-  goalComposer: (ChatGoalDraftMode & { key: string; pending: boolean }) | null;
   questionTakeoverActive: boolean;
   restoreComposerFocus: boolean;
   composerInput: HTMLElement | null;
   composerTextarea: HTMLTextAreaElement | null;
   microphonePicker: ComposerMicrophoneOwner | null;
-  capabilityMenuOpen: boolean;
-  capabilityMenuView: ChatComposerPlusMenuView;
-  // Stable Lit refs: inline arrows would change identity per render and force
-  // layout observers to detach and reconnect on every chat update.
+  // Stable refs keep layout observers attached across frame updates.
   composerInputRef: ((element?: Element) => void) | null;
   textareaRef: ((element?: Element) => void) | null;
   dictation: ComposerDictationOwner | null;
   composerDraftScope: { key: string } | null;
-  dictationError: string | null;
   dictationSelection: { start: number; end: number; value: string } | null;
 };

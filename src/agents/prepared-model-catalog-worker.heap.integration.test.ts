@@ -194,6 +194,7 @@ async function createNativeCatalogFixture(options: {
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
       id: PLUGIN_ID,
+      providers: [PROVIDER_ID],
       configSchema: {
         type: "object",
         properties: { revision: { type: "number" } },

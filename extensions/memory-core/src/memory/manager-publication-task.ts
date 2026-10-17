@@ -61,6 +61,10 @@ export type MemoryPublicationOperations = {
     output: MemoryPublicationResult<{ extensionPath: string; retiredLegacy: boolean }>;
   };
   "index.facts": { input: undefined; output: MemoryDatabaseFacts };
+  "index.upgradeProviderKey": {
+    input: { meta: MemoryIndexMeta; providerKey: string };
+    output: MemoryPublicationResult<boolean>;
+  };
   "index.writeMetadata": { input: MemoryIndexMeta; output: MemoryPublicationResult<void> };
   "schema.admit": {
     input: Pick<

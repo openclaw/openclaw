@@ -73,6 +73,8 @@ Sessions are owned by the gateway, not by clients.
 
 Multiple devices/channels can map to the same session, but history is not fully synced back to every client. Use one primary device for long conversations to avoid divergent context. The Control UI and TUI always show the gateway-backed session transcript, so they are the source of truth.
 
+If publishing a live transcript update fails after an agent message is saved, OpenClaw keeps the saved message and logs a warning. Reload the session to refresh its transcript; the failed notification is not replayed automatically.
+
 If a run fails or times out before an assistant reply is saved, its transcript receives one visible failure notice. Nested runs retain their own failure notices even after the requesting turn has ended.
 
 Failure notices remain in chat history without becoming user instructions in later model requests. This also applies to notices saved by earlier versions; stored transcript bytes remain unchanged.

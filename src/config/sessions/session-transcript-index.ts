@@ -288,7 +288,7 @@ function deleteActiveEventRows(db: EngineConnection, sessionId: string): void {
 export function createTranscriptIndexAppenderInTransaction(
   db: EngineConnection,
   sessionId: string,
-): (params: TranscriptIndexAppend) => boolean {
+): { append: (params: TranscriptIndexAppend) => boolean; flush: () => void } {
   const actor = readSessionActorTransactionState({ db }, { sessionId });
   const initial = readSessionTranscriptProjectionState(db, sessionId);
   let watermark: SessionTranscriptProjectionState | undefined = initial;
@@ -296,7 +296,20 @@ export function createTranscriptIndexAppenderInTransaction(
   let insertActiveEvent: ReturnType<typeof createActiveEventInserter> | undefined;
   let insertFts: ReturnType<typeof createSessionTranscriptFtsInserter> | undefined;
   let updateWatermark: ReturnType<typeof createWatermarkWriter> | undefined;
-  return (params) => {
+  let persisted = initial !== undefined;
+  let pendingUpdatedAt: number | undefined;
+  const markDirty = (current: SessionTranscriptProjectionState) => {
+    watermark = { ...current, needsRebuild: true };
+    pendingUpdatedAt = Date.now();
+    if (actor) {
+      actor.transcript.contextStats = undefined;
+      actor.transcript.projection = {
+        ...watermark,
+        hasUnclassifiedEvents: hasUnclassifiedEvents ?? false,
+      };
+    }
+  };
+  const appendEvent = (params: TranscriptIndexAppend) => {
     // Existing unindexed rows need a rebuild; only sequence zero initializes a projection.
     if ((!watermark && params.seq !== 0) || watermark?.needsRebuild) {
       return true;
@@ -307,7 +320,7 @@ export function createTranscriptIndexAppenderInTransaction(
     ) {
       // Out-of-band or older writers left incomplete projection facts. Once checked,
       // this batch's own forward rows all carry an explicit context classification.
-      watermark = markSessionTranscriptIndexDirtyInTransaction(db, sessionId);
+      markDirty(watermark);
       return true;
     }
     const append = prepareSessionTranscriptProjectionAppend({
@@ -323,7 +336,7 @@ export function createTranscriptIndexAppenderInTransaction(
       // Out-of-band writes, branch changes, and legacy/canonical transitions
       // need the full visible-tree resolver rather than append-time inference.
       if (watermark) {
-        watermark = markSessionTranscriptIndexDirtyInTransaction(db, sessionId);
+        markDirty(watermark);
       }
       return true;
     }
@@ -350,16 +363,26 @@ export function createTranscriptIndexAppenderInTransaction(
       needsRebuild: false,
       updatedAt: params.createdAt,
     };
-    // Initialization still upserts; this synchronous batch owns all subsequent updates.
-    const write = watermark
-      ? (updateWatermark ??= createWatermarkWriter(db, sessionId, true))
-      : createWatermarkWriter(db, sessionId);
-    write(nextWatermark);
     watermark = nextWatermark;
+    pendingUpdatedAt = params.createdAt;
     if (actor) {
       actor.transcript.projection = { ...nextWatermark, hasUnclassifiedEvents: false };
     }
     return false;
+  };
+  return {
+    append: appendEvent,
+    flush() {
+      if (pendingUpdatedAt === undefined || !watermark) {
+        return;
+      }
+      const write = persisted
+        ? (updateWatermark ??= createWatermarkWriter(db, sessionId, true))
+        : createWatermarkWriter(db, sessionId);
+      write({ ...watermark, updatedAt: pendingUpdatedAt });
+      persisted = true;
+      pendingUpdatedAt = undefined;
+    },
   };
 }
 

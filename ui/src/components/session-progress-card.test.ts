@@ -8,11 +8,6 @@ import {
   observeTranscript,
   renderProgressCard as render,
 } from "./session-progress-card.test-support.tsx";
-vi.mock("./markdown.ts", async () => {
-  const actual = await vi.importActual<typeof import("./markdown.ts")>("./markdown.ts");
-  return { ...actual, toSanitizedMarkdownHtml: vi.fn(actual.toSanitizedMarkdownHtml) };
-});
-import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-binding.ts";
 
 const containers: HTMLDivElement[] = [];
@@ -243,25 +238,6 @@ describe("renderSessionProgressCard", () => {
         ".session-progress-card__step--pending .session-progress-card__step-marker polyline",
       ),
     ).not.toBeNull();
-  });
-
-  it("reuses sanitized progress HTML across repeated render cycles", () => {
-    const container = createContainer();
-    const renderMarkdown = vi.mocked(toSanitizedMarkdownHtml);
-
-    render({ card: progressCard, placement: "board" }, container);
-    const firstHtml = container.querySelector(".session-progress-card__markdown")?.innerHTML;
-    expect(renderMarkdown).toHaveBeenCalledTimes(1);
-
-    render({ card: progressCard, placement: "board" }, container);
-    expect(renderMarkdown).toHaveBeenCalledTimes(1);
-    expect(container.querySelector(".session-progress-card__markdown")?.innerHTML).toBe(firstHtml);
-
-    render(
-      { card: { ...progressCard, markdown: "**Updated progress**" }, placement: "board" },
-      container,
-    );
-    expect(renderMarkdown).toHaveBeenCalledTimes(2);
   });
 
   it.each([

@@ -466,6 +466,7 @@ describe("chat pane retained presentation lifecycle", () => {
         }
         await pane.updateComplete;
         const lightbox = pane.querySelector("openclaw-image-lightbox");
+        await vi.dynamicImportSettled();
         await lightbox?.updateComplete;
         const modal =
           lightbox?.shadowRoot?.querySelector("openclaw-modal-dialog") ??

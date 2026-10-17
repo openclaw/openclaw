@@ -147,6 +147,7 @@ export function buildGatewaySessionSnapshot(params: {
     verboseLevel: sessionRow.verboseLevel,
     traceLevel: sessionRow.traceLevel,
     reasoningLevel: sessionRow.reasoningLevel,
+    reasoningDefault: sessionRow.reasoningDefault,
     elevatedLevel: sessionRow.elevatedLevel,
     sendPolicy: sessionRow.sendPolicy,
     systemSent: sessionRow.systemSent,

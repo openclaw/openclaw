@@ -3,6 +3,7 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { notifyListeners } from "../../../../src/shared/listeners.js";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { readOfflineStorageScope, type OfflineStorageClient } from "../../app/boot-record.ts";
 import {
   normalizeAgentId,
@@ -44,7 +45,7 @@ export type ChatComposerScope = {
   settings?: { gatewayUrl?: string | null };
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; mainKey?: string | null; scope?: string | null } | null;
-  hello?: { snapshot?: unknown } | null;
+  hello?: Pick<GatewayHelloOk, "snapshot"> | null;
 };
 
 /** Sidebar draft presence for a tab row; attachments exist only in durable drafts. */

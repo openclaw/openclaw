@@ -60,6 +60,33 @@ it.each([
   expect(processedCharacters).toBeLessThan(source.length * 8);
 });
 
+it("keeps marker probes and checkpoint deltas bounded after stripping a trace", () => {
+  const answer = "<article>Array<string>: a < b and c > d.</article>\n".repeat(96) + "Done.";
+  const source = "tool call: hidden\n" + answer;
+  const stream = createAssistantVisibleStreamText("final_answer");
+  const comparisons = vi.spyOn(String.prototype, "startsWith");
+  let comparedCharacters = 0;
+  let delivered = "";
+  try {
+    for (let offset = 0; offset < source.length; offset += 4) {
+      const result = stream.append(source.slice(offset, offset + 4));
+      delivered = result.delta === null ? result.text : delivered + result.delta;
+    }
+    comparedCharacters = comparisons.mock.calls.reduce((sum, [text]) => sum + text.length, 0);
+  } finally {
+    comparisons.mockRestore();
+  }
+  const processedCharacters = [...reasoning.mock.calls, ...final.mock.calls].reduce(
+    (sum, [text]) => sum + text.length,
+    0,
+  );
+  expect(stream.text).toBe(answer);
+  expect(delivered).toBe(answer);
+  expect(comparedCharacters).toBeGreaterThan(0);
+  expect(comparedCharacters).toBeLessThan(source.length * 64);
+  expect(processedCharacters).toBeLessThan(source.length * 4);
+});
+
 describe("streamed marker projection", () => {
   it.each([
     [

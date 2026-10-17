@@ -508,7 +508,8 @@ it.each([
     const unrecordedLoss = mode === "self-disposal with unrecorded binding loss";
     const retiresDuringStop = mode === "self-disposal during wake cancellation" || unrecordedLoss;
     const selfDisposal = mode === "self-disposal" || retiresDuringStop;
-    const completed = mode === "completed" || (selfDisposal && !unrecordedLoss);
+    const completed =
+      mode === "completed" || mode === "controller replaced" || (selfDisposal && !unrecordedLoss);
     if (retiresDuringStop) {
       fixture.wake.mockResolvedValue(false);
     }

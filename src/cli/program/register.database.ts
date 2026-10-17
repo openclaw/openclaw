@@ -93,14 +93,23 @@ async function runDatabaseOwnership(
 export function registerDatabaseCommand(program: Command): void {
   const database = program
     .command("database")
-    .description("Inspect database compatibility, manage ownership, and port workboard stores")
+    .description("Inspect database compatibility, manage ownership, and port database stores")
     .addHelpText("after", `\nDocs: ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}\n`);
 
   database
     .command("port")
-    .description("Port all existing workboard stores offline between SQLite and PostgreSQL")
+    .description("Port existing database stores offline between SQLite and PostgreSQL")
     .addOption(
       new Option("--to <postgres|sqlite>", "destination engine").choices(["postgres", "sqlite"]),
+    )
+    .addOption(
+      new Option("--family <family>", "port one database family").choices([
+        "state",
+        "agent",
+        "workboard",
+        "logbook",
+        "team-reports",
+      ]),
     )
     .option("--dry-run", "inspect prerequisites without creating port artifacts", false)
     .option("--json", "emit machine-readable JSON", false)
@@ -109,13 +118,14 @@ export function registerDatabaseCommand(program: Command): void {
         "rollback",
         "to",
         "dryRun",
+        "family",
       ]),
     )
     .addOption(
       new Option(
         "--rollback <manifest>",
         "restore an interrupted port's complete original set",
-      ).conflicts(["to", "dryRun"]),
+      ).conflicts(["to", "dryRun", "family"]),
     )
     .hook("preAction", (command) => {
       const { to, resume, rollback } = command.opts();
@@ -132,7 +142,7 @@ export function registerDatabaseCommand(program: Command): void {
         } else {
           writeRuntimeStdout(
             defaultRuntime,
-            `Database port: ${result.phase} (${result.engine}${"to" in result ? ` → ${result.to}` : ""}); ${result.stores.length} workboard stores.\n${"remainingSqlite" in result ? `${result.remainingSqlite.length} other stores remain on SQLite.\n` : ""}${"backup" in result ? `Original backup: ${result.backup}\n${result.restart}\n` : ""}${"verification" in result ? `${result.verification}\n` : ""}`,
+            `Database port: ${result.phase} (${result.engine}${"to" in result ? ` → ${result.to}` : ""}); ${result.stores.length} database stores.\n${"remainingSqlite" in result ? `${result.remainingSqlite.length} other stores remain on SQLite.\n` : ""}${"backup" in result ? `Original backup: ${result.backup}\n${result.restart}\n` : ""}${"verification" in result ? `${result.verification}\n` : ""}`,
           );
         }
       } catch (error) {

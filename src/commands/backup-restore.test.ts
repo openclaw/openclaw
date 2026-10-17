@@ -127,31 +127,18 @@ async function writeUnextractableArchive(archivePath: string) {
 }
 
 describe("backupRestoreCommand", () => {
-  it("refuses a mixed-engine installation before preparing the restore target", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-backup-restore-mixed-", scenario: "minimal" },
-      async (state) => {
-        await state.writeConfig({
-          database: { families: { workboard: { engine: "postgres" } } },
-        });
-        const targetPath = state.path("restored");
-        await expect(
-          backupRestoreCommand(createTestRuntime(), {
-            archive: state.path("backup.tar.gz"),
-            target: targetPath,
-          }),
-        ).rejects.toThrow(
-          "restore for mixed-engine installs is not supported yet; use a single engine",
-        );
-        await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-      },
-    );
-  });
-
-  it("restores verified root-relative hardlinks", async () => {
+  it.each([false, true])("restores verified root-relative hardlinks (mixed: %s)", async (mixed) => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-backup-restore-hardlink-", scenario: "minimal" },
       async (state) => {
+        if (mixed) {
+          await state.writeConfig({
+            database: {
+              families: { workboard: { engine: "postgres" } },
+              postgres: { connection: "postgresql://fixture" },
+            },
+          });
+        }
         const archivePath = state.path("backup.tar.gz");
         const targetPath = state.path("restored");
         const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";

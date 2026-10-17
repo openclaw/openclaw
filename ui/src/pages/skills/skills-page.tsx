@@ -152,6 +152,7 @@ export function SkillsPage(props: SkillsPageProps) {
           ensureInitialData();
         }
       };
+      // Retarget request custody on every selection receipt, including same-id intent.
       const cleanup = selection.subscribe(sync);
       sync();
       return cleanup;

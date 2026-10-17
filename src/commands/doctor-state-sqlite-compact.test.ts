@@ -4,8 +4,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
-import { readPersistedQuarantineRow } from "../state/openclaw-quarantine-store.test-support.js";
+import {
+  readPersistedQuarantineRow,
+  seedOpenClawDatabaseQuarantine,
+} from "../state/openclaw-quarantine-store.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabase,
@@ -140,14 +142,12 @@ describe("runDoctorStateSqliteCompact", () => {
   it("clears authoritative quarantine after compaction", async () => {
     const env = createStateEnv();
     const sqlitePath = seedStateDatabase({ env, withBloat: true });
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env,
-        kind: "state",
-        path: sqlitePath,
-        reason: "corrupt index",
-      }),
-    ).toBe(true);
+    seedOpenClawDatabaseQuarantine({
+      env,
+      kind: "state",
+      path: sqlitePath,
+      reason: "corrupt index",
+    });
 
     await runDoctorStateSqliteCompact({ env });
 
@@ -190,14 +190,12 @@ describe("runDoctorStateSqliteCompact", () => {
   it("treats a busy truncating checkpoint as failure", async () => {
     const env = createStateEnv();
     const sqlitePath = seedStateDatabase({ env });
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env,
-        kind: "state",
-        path: sqlitePath,
-        reason: "busy checkpoint",
-      }),
-    ).toBe(true);
+    seedOpenClawDatabaseQuarantine({
+      env,
+      kind: "state",
+      path: sqlitePath,
+      reason: "busy checkpoint",
+    });
     const sqlite = requireNodeSqlite();
     const reader = new sqlite.DatabaseSync(sqlitePath);
     const writer = new sqlite.DatabaseSync(sqlitePath);

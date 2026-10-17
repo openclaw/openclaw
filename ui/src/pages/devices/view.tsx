@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { createMemo, For } from "solid-js";
-import { parseNodeList } from "../../../../src/shared/node-list-parse.js";
 import { resolveNodeIdFromCandidates } from "../../../../src/shared/node-match.js";
 import { SettingsRow, SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
@@ -52,7 +51,7 @@ function resolveBindingsState(input: DevicesProps) {
       input.configSaving ||
       input.configFormMode === "raw",
     nodes: resolveNodeTargets(input.nodes, ["system.run"]),
-    inventory: parseNodeList({ nodes: input.nodes }),
+    inventory: input.nodes,
   };
 }
 

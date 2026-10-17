@@ -1010,7 +1010,6 @@
      it must not collapse the normal bottom breathing room. */
   .agent-chat__composer-shell {
     grid-template-columns: minmax(0, 1fr);
-    gap: 0;
   }
 }
 

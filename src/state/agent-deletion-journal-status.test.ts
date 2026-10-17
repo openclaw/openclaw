@@ -8,7 +8,11 @@ import {
   closeAgentWorkAdmissions,
 } from "../sessions/session-lifecycle-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { invalidateAgentDeletionJournalStatus } from "./agent-deletion-journal-status.js";
+import {
+  getPreparedAgentDeletionDiscovery,
+  invalidateAgentDeletionJournalStatus,
+  seedAgentDeletionDiscovery,
+} from "./agent-deletion-journal-status.js";
 import {
   beginAgentDeletionJournalInDatabase,
   completeAgentDeletionJournalInDatabase,
@@ -119,7 +123,14 @@ it("publishes completion and recreation only on commit and reloads a discarded t
     }, options);
     expect(await read()).toBe("complete");
     expect(isAgentDeletionBlocked(input.agentId, options)).toBe(true);
-    invalidateAgentDeletionJournalStatus(openOpenClawStateDatabase(options).db, input.agentId);
+    const stateDatabase = openOpenClawStateDatabase(options);
+    invalidateAgentDeletionJournalStatus(stateDatabase.db, input.agentId);
+    seedAgentDeletionDiscovery(stateDatabase.path, {
+      status: "unavailable",
+      cause: "unreadable",
+      reason: "synthetic unavailable read",
+    });
+    expect(getPreparedAgentDeletionDiscovery(stateDatabase.path)).toBeUndefined();
     expect(await read()).toBe("complete");
     expect(() =>
       runOpenClawStateWriteTransaction((database) => {

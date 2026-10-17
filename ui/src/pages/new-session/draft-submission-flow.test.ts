@@ -38,6 +38,30 @@ async function readyChatRoute() {
 }
 
 describe("DraftSubmissionFlow", () => {
+  it("publishes complete restored drafts and attachment-read changes", () => {
+    const { flow } = createDraftFixture();
+    const snapshots: ReturnType<typeof flow.composerDraft.read>[] = [];
+    const stop = flow.composerDraft.subscribe(() => snapshots.push(flow.composerDraft.read()));
+    try {
+      const mentions = [{ profileId: "alex", start: 0, end: 5 }];
+      flow.restoreDraftState({
+        message: "@Alex restored",
+        mentions,
+        attachments: [],
+        visibility: "normal",
+      });
+      expect(snapshots.at(-1)).toMatchObject({ draft: "@Alex restored", mentions });
+      flow.restoreMessage("A replacement");
+      expect(snapshots.at(-1)).toMatchObject({ draft: "A replacement", mentions: [] });
+      const signal = flow.attachmentDraft.reads.readSignal;
+      flow.attachmentDraft.reads.updatePending(signal, 1);
+      expect(snapshots.at(-1)?.pendingAttachmentReads).toBe(1);
+    } finally {
+      stop();
+      flow.disconnect();
+    }
+  });
+
   it.each(["available", "unavailable before create", "unavailable after create"] as const)(
     "preserves the runtime through Auto placement when recovery storage is %s",
     async (storage) => {

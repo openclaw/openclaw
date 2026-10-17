@@ -2,8 +2,8 @@ import type { EnvironmentSummary, WorkerDesktopAppId } from "@openclaw/gateway-p
 import type { JSX } from "@solidjs/web";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { DesktopFullscreen } from "../desktop-fullscreen.ts";
-import type { DockLayoutController } from "../dock-layout-controller.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
+import type { DockLayout } from "../dock-layout.ts";
 import { FullscreenButton } from "../fullscreen-solid.tsx";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
 import type { DesktopAudio } from "./desktop-audio.ts";
@@ -46,7 +46,7 @@ type DesktopPresentationOptions = {
   mobileKeyboard: DesktopMobileKeyboard;
   pictureInPicture: DesktopPictureInPicture;
   audio: DesktopAudio;
-  dockLayout: DockLayoutController<"bottom" | "right">;
+  dockLayout: DockLayout<"bottom" | "right">;
   fullscreenMode: DesktopFullscreen;
   onControlToggle: () => void;
   onTakeControl: () => void;

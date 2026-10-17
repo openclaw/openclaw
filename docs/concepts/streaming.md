@@ -120,6 +120,9 @@ Shared text filtering skips repeated reasoning/final-tag scans for marker-free
 HTML, generic types, and comparisons. Recognized or ambiguous marker heads use
 the existing tag handling, including tags split across provider chunks.
 
+Answers containing only whitespace or invisible formatting characters stay empty,
+including when a character is split across provider chunks.
+
 Provider plugins should omit `openclawDelivery.textPhaseRequiresTerminal`.
 This field, shipped in `v2026.10.1`, is now ignored. Its optional SDK type remains
 source-compatible until the next Plugin SDK major; removal also requires explicit
