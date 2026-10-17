@@ -1,5 +1,5 @@
-// SQLite reliability proof tests cover CLI safety and one real snapshot round trip.
 import { fork, spawnSync, type ChildProcess } from "node:child_process";
+import { on, once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -31,6 +31,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const makeRoot = () => tempDirs.make("openclaw-sqlite-reliability-test-");
 const nodeExecutable = resolveTestNodeExecPath();
 const nodeArgs = resolveVitestNodeArgs();
 // Windows repeats ACL checks and crash/restore copies throughout the full proof.
@@ -80,52 +81,17 @@ function payload(rows: number) {
 }
 
 async function waitForChildReady(child: ChildProcess): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const onMessage = (message: unknown) => {
-      if (message && typeof message === "object" && "kind" in message && message.kind === "ready") {
-        cleanup();
-        resolve();
-      }
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onExit = () => {
-      cleanup();
-      reject(new Error("writer child exited before ready"));
-    };
-    const cleanup = () => {
-      child.off("message", onMessage);
-      child.off("error", onError);
-      child.off("exit", onExit);
-    };
-    child.on("message", onMessage);
-    child.on("error", onError);
-    child.on("exit", onExit);
-  });
+  for await (const args of on(child, "message", { close: ["exit"] })) {
+    const message: unknown = args[0];
+    if (message && typeof message === "object" && "kind" in message && message.kind === "ready") {
+      return;
+    }
+  }
+  throw new Error("writer child exited before ready");
 }
 
-async function waitForChildExit(child: ChildProcess): Promise<{
-  code: number | null;
-  signal: NodeJS.Signals | null;
-}> {
-  return await new Promise((resolve, reject) => {
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      resolve({ code, signal });
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const cleanup = () => {
-      child.off("exit", onExit);
-      child.off("error", onError);
-    };
-    child.on("exit", onExit);
-    child.on("error", onError);
-  });
+function waitForChildExit(child: ChildProcess): Promise<Parameters<typeof expectExited>[0]> {
+  return once(child, "exit").then(([code, signal]) => ({ code, signal }));
 }
 
 describe("scripts/bench-sqlite-reliability", () => {
@@ -141,10 +107,7 @@ describe("scripts/bench-sqlite-reliability", () => {
   });
 
   it("detects a transient WAL overrun before the file shrinks", async () => {
-    const walPath = path.join(
-      tempDirs.make("openclaw-sqlite-reliability-test-"),
-      "database.sqlite-wal",
-    );
+    const walPath = path.join(makeRoot(), "database.sqlite-wal");
     let stopRequests = 0;
 
     await expect(
@@ -170,8 +133,7 @@ describe("scripts/bench-sqlite-reliability", () => {
 
   it("rejects malformed arguments before creating state", () => {
     const unknown = runProof(["--wat"]);
-    expect(unknown.status).toBe(2);
-    expect(unknown.stdout).toBe("");
+    expect(unknown).toMatchObject({ status: 2, stdout: "" });
     expect(unknown.stderr.trim()).toBe("error: Unknown argument: --wat");
 
     expect(() => parseSqliteReliabilityCli(["--profile", "smoke", "--profile", "large"])).toThrow(
@@ -186,12 +148,10 @@ describe("scripts/bench-sqlite-reliability", () => {
   });
 
   reliabilitySmokeTest("proves snapshot reliability while safely reusing state", () => {
-    const stateDir = tempDirs.make("openclaw-sqlite-reliability-test-");
+    const stateDir = makeRoot();
     const previousSyncedRepository = path.join(
       stateDir,
-      "sqlite-reliability-runs",
-      "previous-run",
-      "synced-snapshots",
+      "sqlite-reliability-runs/previous-run/synced-snapshots",
     );
     const previousArtifact = path.join(previousSyncedRepository, "previous-artifact");
     fs.mkdirSync(previousSyncedRepository, { recursive: true, mode: 0o700 });
@@ -256,8 +216,7 @@ if (isMainThread && !process.execArgv.includes("--no-concurrent-sparkplug")) {
         postCompact,
       },
     } = firstReport;
-    expect(firstReport.concurrentRestoresVerified).toBe(2);
-    expect(firstReport.restoresVerified).toBe(5);
+    expect(firstReport).toMatchObject({ concurrentRestoresVerified: 2, restoresVerified: 5 });
     expectExited(crash.exit);
     expect(crash.stateAfterRecovery).toEqual(crash.stateBeforeKill);
     expectInterrupted(publication.beforePublish, {
@@ -272,18 +231,15 @@ if (isMainThread && !process.execArgv.includes("--no-concurrent-sparkplug")) {
       targetVerifiedAfterCrash: true,
       targetVisibleAfterCrash: true,
     });
-    expect(indexRepair.rollbackJournal).toMatchObject({
-      recoveryVerified: true,
-      repairedIndexes: ["idx_openclaw_reliability_records_identity"],
-    });
+    for (const proof of [indexRepair.rollbackJournal, indexRepair.wal]) {
+      expect(proof).toMatchObject({
+        recoveryVerified: true,
+        repairedIndexes: ["idx_openclaw_reliability_records_identity"],
+      });
+      expectExited(proof.exit);
+    }
     expect(indexRepair.rollbackJournal.journalBytesObserved).toBeGreaterThan(0);
-    expectExited(indexRepair.rollbackJournal.exit);
-    expect(indexRepair.wal).toMatchObject({
-      recoveryVerified: true,
-      repairedIndexes: ["idx_openclaw_reliability_records_identity"],
-    });
     expect(indexRepair.wal.walBytesObserved).toBeGreaterThan(0);
-    expectExited(indexRepair.wal.exit);
     expect(transaction.committedWalSentinel).toBe(true);
     expect(transaction.heldRows).toBeGreaterThan(0);
     expect(transaction.visibleAfterRestore).toBe(false);
@@ -373,8 +329,8 @@ if (isMainThread && !process.execArgv.includes("--no-concurrent-sparkplug")) {
   });
 
   it("matches crash barriers across filesystem path aliases", () => {
-    const realRoot = tempDirs.make("openclaw-sqlite-reliability-test-");
-    const aliasRoot = path.join(tempDirs.make("openclaw-sqlite-reliability-test-"), "alias");
+    const realRoot = makeRoot();
+    const aliasRoot = path.join(makeRoot(), "alias");
     fs.symlinkSync(realRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
     const repositoryPath = path.join(realRoot, "snapshots");
     const snapshotPath = path.join(repositoryPath, "snapshot");
@@ -399,10 +355,7 @@ if (isMainThread && !process.execArgv.includes("--no-concurrent-sparkplug")) {
   });
 
   it("stops the writer when its parent IPC channel disconnects", async ({ signal }) => {
-    const databasePath = path.join(
-      tempDirs.make("openclaw-sqlite-reliability-test-"),
-      "writer.sqlite",
-    );
+    const databasePath = path.join(makeRoot(), "writer.sqlite");
     const writerUrl = resolveRuntimeWorkerUrl(toolingTsEntrypoints.sqliteReliabilityWriter);
     const child = fork(
       fileURLToPath(writerUrl),

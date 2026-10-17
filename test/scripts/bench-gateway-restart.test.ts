@@ -1,11 +1,10 @@
 // Bench Gateway Restart tests cover bench gateway restart script behavior.
 import fs from "node:fs";
 import { createServer } from "node:http";
-import { createServer as createNetServer, type Socket } from "node:net";
-import os from "node:os";
+import { createServer as createNetServer, type Server, type Socket } from "node:net";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/bench-gateway-restart.ts";
 import * as gatewayBenchProbes from "../../scripts/lib/gateway-bench-probes.ts";
 import { parseProcessRssKb, requestProbeStatus } from "../../scripts/lib/gateway-bench-probes.ts";
@@ -14,12 +13,56 @@ import {
   parseNonNegativeInt,
   parsePositiveInt,
 } from "../../scripts/lib/gateway-bench-runtime.ts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 type RestartSampleFixture = Parameters<typeof testing.summarizeCase>[1][number];
 type ProbeFixture = RestartSampleFixture["initialHealthz"];
+type Iteration = RestartSampleFixture["iterations"][number];
 
 const wallClockSetTimeout = setTimeout;
 const wallClockClearTimeout = clearTimeout;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const benchCase = { config: {}, id: "demo", name: "demo" };
+
+async function withServer(
+  server: Server,
+  run: (port: number) => Promise<void>,
+  cleanup = () => {},
+) {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected TCP listener");
+    }
+    await run(address.port);
+  } finally {
+    cleanup();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
+
+function iteration(overrides: Partial<Iteration> = {}): Iteration {
+  return {
+    ...testing.createRestartIteration(1),
+    gatewayReadyLogLine: "[gateway] ready",
+    gatewayReadyLogMs: 40,
+    httpListenLogLine: "[gateway] http server listening (0 plugins)",
+    httpListenLogMs: 20,
+    healthz: createProbeFixture(30),
+    readyz: createProbeFixture(42),
+    ...overrides,
+  };
+}
+
+function summarize(overrides: Partial<RestartSampleFixture>) {
+  return testing.summarizeCase(benchCase, [createRestartSampleFixture(overrides)]);
+}
 
 function createProbeFixture(
   ms: ProbeFixture["ms"],
@@ -93,7 +136,20 @@ async function withWallClockDeadline<T>(
 
 describe("gateway restart benchmark script", () => {
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
-    expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
+    for (const [args, message] of [
+      [["--wat"], "Unknown argument: --wat"],
+      [["--output", "--case", "skipChannels"], "--output requires a value"],
+      [
+        ["--output", "first.json", "--output", "second.json"],
+        "--output was provided more than once",
+      ],
+      [["--case"], "--case requires a value"],
+      [["--case", "skipChannels", "--case", "skipChannels"], 'Duplicate --case "skipChannels"'],
+      [["--restarts", "--runs", "1"], "--restarts requires a value"],
+      [["--entry", " --inspect"], /must be a file path/u],
+    ] satisfies [string[], string | RegExp][]) {
+      expect(() => testing.parseOptions(args)).toThrow(message);
+    }
     expect(parsePositiveInt("5", 1, "--restarts")).toBe(5);
     expect(parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
     expect(
@@ -115,20 +171,6 @@ describe("gateway restart benchmark script", () => {
     expect(() => parsePositiveInt("2abc", 1, "--restarts")).toThrow(
       /--restarts must be an integer/u,
     );
-    expect(() => testing.parseOptions(["--output", "--case", "skipChannels"])).toThrow(
-      "--output requires a value",
-    );
-    expect(() =>
-      testing.parseOptions(["--output", "first.json", "--output", "second.json"]),
-    ).toThrow("--output was provided more than once");
-    expect(() => testing.parseOptions(["--case"])).toThrow("--case requires a value");
-    expect(() =>
-      testing.parseOptions(["--case", "skipChannels", "--case", "skipChannels"]),
-    ).toThrow('Duplicate --case "skipChannels"');
-    expect(() => testing.parseOptions(["--restarts", "--runs", "1"])).toThrow(
-      "--restarts requires a value",
-    );
-    expect(() => testing.parseOptions(["--entry", " --inspect"])).toThrow(/must be a file path/u);
   });
 
   it("guards the SIGUSR2 restart benchmark on Windows", () => {
@@ -183,33 +225,21 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       response.writeHead(200, { "content-type": "application/json" });
       response.flushHeaders();
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      // Freeze the probe deadline while real HTTP delivers headers; the watchdog stays on wall time.
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("test server did not bind to a TCP port");
-      }
-
-      await expect(
-        withWallClockDeadline(
-          requestProbeStatus(address.port, "/healthz"),
-          750,
-          "healthy-header probe",
-        ),
-      ).resolves.toEqual({ errorKind: null, status: 200 });
-      expect(requestMethod).toBe("HEAD");
-    } finally {
-      vi.useRealTimers();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+    await withServer(
+      server,
+      async (port) => {
+        // Freeze the probe deadline while real HTTP delivers headers; the watchdog stays on wall time.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        await expect(
+          withWallClockDeadline(requestProbeStatus(port, "/healthz"), 750, "healthy-header probe"),
+        ).resolves.toEqual({ errorKind: null, status: 200 });
+        expect(requestMethod).toBe("HEAD");
+      },
+      () => {
+        vi.useRealTimers();
+        server.closeAllConnections();
+      },
+    );
   });
 
   it("bounds probes by a wall-clock deadline before response headers arrive", async () => {
@@ -231,30 +261,22 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
         });
       });
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("test server did not bind to a TCP port");
-      }
-
-      await expect(
-        withWallClockDeadline(requestProbeStatus(address.port, "/readyz"), 750, "headerless probe"),
-      ).resolves.toEqual({ errorKind: "timeout", status: null });
-    } finally {
-      for (const interval of intervals) {
-        clearInterval(interval);
-      }
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+    await withServer(
+      server,
+      async (port) => {
+        await expect(
+          withWallClockDeadline(requestProbeStatus(port, "/readyz"), 750, "headerless probe"),
+        ).resolves.toEqual({ errorKind: "timeout", status: null });
+      },
+      () => {
+        for (const interval of intervals) {
+          clearInterval(interval);
+        }
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+      },
+    );
   });
 
   it("enables both startup and restart trace in the child gateway environment", () => {
@@ -264,132 +286,57 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       name: "gateway restart, skip channels",
     });
 
-    expect(env.OPENCLAW_GATEWAY_STARTUP_TRACE).toBe("1");
-    expect(env.OPENCLAW_GATEWAY_RESTART_TRACE).toBe("1");
-    expect(env.OPENCLAW_NO_RESPAWN).toBe("1");
+    expect(env).toMatchObject({
+      OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+      OPENCLAW_GATEWAY_RESTART_TRACE: "1",
+      OPENCLAW_NO_RESPAWN: "1",
+    });
     expect(env.OPENCLAW_LOCAL_CHECK).toBeUndefined();
   });
 
   it("requires initial ready logs before restart attribution", () => {
-    expect(
-      testing.hasInitialReadyLogs({
-        initialGatewayReadyLogMs: 20,
-        initialHttpListenLogMs: 10,
-      }),
-    ).toBe(true);
-    expect(
-      testing.hasInitialReadyLogs({
-        initialGatewayReadyLogMs: 20,
-        initialHttpListenLogMs: null,
-      }),
-    ).toBe(false);
+    for (const initialHttpListenLogMs of [10, null]) {
+      expect(
+        testing.hasInitialReadyLogs({ initialGatewayReadyLogMs: 20, initialHttpListenLogMs }),
+      ).toBe(initialHttpListenLogMs !== null);
+    }
   });
 
   it("marks clean and signaled pre-teardown child exits as benchmark failures", () => {
-    expect(
-      testing.resolveSampleExitFailure({
-        exitedBeforeTeardown: true,
-        exitCode: 0,
-        signal: null,
-      }),
-    ).toBe("restart_child_exited");
-    expect(
-      testing.resolveSampleExitFailure({
-        exitedBeforeTeardown: true,
-        exitCode: null,
-        signal: "SIGSEGV",
-      }),
-    ).toBe("restart_child_exited");
-    expect(
-      testing.resolveSampleExitFailure({
-        exitedBeforeTeardown: true,
-        exitCode: 9,
-        signal: null,
-      }),
-    ).toBe("child_nonzero_exit");
-    expect(
-      testing.resolveSampleExitFailure({
-        exitedBeforeTeardown: false,
-        exitCode: null,
-        signal: "SIGTERM",
-      }),
-    ).toBeNull();
+    for (const [exitedBeforeTeardown, exitCode, signal, expected] of [
+      [true, 0, null, "restart_child_exited"],
+      [true, null, "SIGSEGV", "restart_child_exited"],
+      [true, 9, null, "child_nonzero_exit"],
+      [false, null, "SIGTERM", null],
+    ] as const) {
+      expect(testing.resolveSampleExitFailure({ exitedBeforeTeardown, exitCode, signal })).toBe(
+        expected,
+      );
+    }
   });
 
   it("summarizes failure rate, restart.ready totals, and resource slope", () => {
     const samples: Parameters<typeof testing.summarizeCase>[1] = [
       createRestartSampleFixture({
-        childExitCode: null,
-        childSignal: "SIGTERM",
-        initialHealthz: createProbeFixture(10, {
-          firstErrorKind: "econnrefused",
-          firstRecoveryMs: 10,
-        }),
-        initialReadyz: createProbeFixture(12, {
-          firstErrorKind: "http-503",
-          firstRecoveryMs: 12,
-        }),
         iterations: [
-          {
-            cpuCoreRatio: null,
-            cpuMs: null,
-            failureCode: null,
-            gatewayReadyLogLine: "[gateway] ready",
-            gatewayReadyLogMs: 40,
-            healthz: createProbeFixture(30, {
-              downtimeMs: 10,
-              firstErrorKind: "econnreset",
-              firstRecoveryMs: 30,
-              unavailableMs: 20,
-            }),
-            httpListenLogLine: "[gateway] http server listening (0 plugins)",
-            httpListenLogMs: 20,
-            index: 1,
-            readyz: createProbeFixture(42, {
-              downtimeMs: 12,
-              firstErrorKind: "http-503",
-              firstRecoveryMs: 42,
-              unavailableMs: 30,
-            }),
-            resourceSnapshots: [],
+          iteration({
+            readyz: createProbeFixture(42, { downtimeMs: 12 }),
             restartTrace: {
               "restart.ready": 12,
               "restart.ready.total": 50,
               "restart.ready.heapUsedMb": 100,
               "restart.ready.rssMb": 200,
             },
-            signalSentMs: 100,
-            startupTrace: {},
-          },
-          {
-            cpuCoreRatio: null,
-            cpuMs: null,
+          }),
+          iteration({
             failureCode: "trace_missing",
-            gatewayReadyLogLine: "[gateway] ready",
-            gatewayReadyLogMs: 45,
-            healthz: createProbeFixture(35, {
-              downtimeMs: 10,
-              firstErrorKind: "econnreset",
-              firstRecoveryMs: 35,
-              unavailableMs: 25,
-            }),
-            httpListenLogLine: "[gateway] http server listening (0 plugins)",
-            httpListenLogMs: 25,
-            index: 2,
-            readyz: createProbeFixture(50, {
-              downtimeMs: 15,
-              firstErrorKind: "http-503",
-              firstRecoveryMs: 50,
-              unavailableMs: 35,
-            }),
-            resourceSnapshots: [],
+            healthz: createProbeFixture(35),
+            readyz: createProbeFixture(50, { downtimeMs: 15 }),
             restartTrace: {
               "restart.ready.heapUsedMb": 104,
               "restart.ready.rssMb": 206,
             },
-            signalSentMs: 200,
-            startupTrace: {},
-          },
+          }),
         ],
         resourceSlope: {
           activeHandlesCountPerRestart: null,
@@ -401,14 +348,15 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
         },
       }),
     ];
-    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, samples);
+    const result = testing.summarizeCase(benchCase, samples);
 
     expect(result.samples).toBe(samples);
-    expect(result.summary.failureRate).toBe(0.5);
-    expect(result.summary.firstFailureCode).toBe("trace_missing");
-    expect(result.summary.restartReadyTotalMs?.p50).toBe(50);
-    expect(result.summary.resourceSlope.heapUsedMbPerRestart?.p50).toBe(4);
-    expect(result.summary.resourceSlope.rssMbPerRestart?.p50).toBe(6);
+    expect(result.summary).toMatchObject({
+      failureRate: 0.5,
+      firstFailureCode: "trace_missing",
+      restartReadyTotalMs: { p50: 50 },
+      resourceSlope: { heapUsedMbPerRestart: { p50: 4 }, rssMbPerRestart: { p50: 6 } },
+    });
     expect(Object.keys(result.summary.restartTrace)).toEqual([
       "restart.ready",
       "restart.ready.heapUsedMb",
@@ -424,21 +372,14 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   });
 
   it("counts sample failures that happen before restart iterations", () => {
-    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
-      createRestartSampleFixture({
-        childExitCode: null,
-        exitedBeforeTeardown: true,
-        failureCode: "initial_readyz_timeout",
-        initialReadyz: createProbeFixture(null, {
-          firstErrorKind: "http-503",
-          status: 503,
-        }),
-        iterations: [],
-      }),
-    ]);
+    const result = summarize({
+      failureCode: "initial_readyz_timeout",
+    });
 
-    expect(result.summary.failureRate).toBe(1);
-    expect(result.summary.firstFailureCode).toBe("initial_readyz_timeout");
+    expect(result.summary).toMatchObject({
+      failureRate: 1,
+      firstFailureCode: "initial_readyz_timeout",
+    });
     expect(result.summary.restartTrace).toEqual({});
     expect(testing.hasBenchmarkFailures([result])).toBe(true);
     expect(testing.shouldFailBenchmark([result], { allowFailures: false })).toBe(true);
@@ -446,35 +387,28 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   });
 
   it("does not mark failure-free benchmark summaries as failed", () => {
-    const iteration = testing.createRestartIteration(1);
-    iteration.gatewayReadyLogLine = "[gateway] ready";
-    iteration.gatewayReadyLogMs = 40;
-    iteration.healthz = createProbeFixture(30);
-    iteration.httpListenLogLine = "[gateway] http server listening (0 plugins)";
-    iteration.httpListenLogMs = 20;
-    iteration.readyz = createProbeFixture(42);
-    iteration.resourceSnapshots = [
-      {
-        activeHandlesCount: 8,
-        activeRequestsCount: 0,
-        activeTimersCount: 2,
-        fdCount: 31,
-        ms: 45,
-        phase: "restart.ready",
-        rssMb: 220,
+    const readyIteration = iteration({
+      resourceSnapshots: [
+        {
+          activeHandlesCount: 8,
+          activeRequestsCount: 0,
+          activeTimersCount: 2,
+          fdCount: 31,
+          ms: 45,
+          phase: "restart.ready",
+          rssMb: 220,
+        },
+      ],
+      restartTrace: {
+        "restart.ready": 12,
+        "restart.ready.total": 50,
+        "restart.ready.rssMb": 220,
       },
-    ];
-    iteration.restartTrace = {
-      "restart.ready": 12,
-      "restart.ready.total": 50,
-      "restart.ready.rssMb": 220,
-    };
+    });
 
-    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
-      createRestartSampleFixture({
-        iterations: [iteration],
-      }),
-    ]);
+    const result = summarize({
+      iterations: [readyIteration],
+    });
 
     expect(testing.hasBenchmarkFailures([result])).toBe(false);
     expect(testing.hasInvalidBenchmarkEvidence([result])).toBe(false);
@@ -482,12 +416,10 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   });
 
   it("fails successful benchmark summaries without measured restart resource evidence", () => {
-    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
-      createRestartSampleFixture({
-        iterations: [],
-        maxRssMb: null,
-      }),
-    ]);
+    const result = summarize({
+      iterations: [],
+      maxRssMb: null,
+    });
 
     expect(testing.hasBenchmarkFailures([result])).toBe(false);
     expect(testing.collectBenchmarkEvidenceFailures([result])).toEqual([
@@ -522,12 +454,14 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
         signalSentAt: sampleStartAt,
       });
 
-      expect(result.status).toBe(200);
+      expect(result).toMatchObject({
+        status: 200,
+        downtimeMs: null,
+        unavailableMs: null,
+        firstErrorKind: null,
+      });
       expect(result.ms).not.toBeNull();
       expect(result.ms ?? 0).toBeLessThan(1_000);
-      expect(result.downtimeMs).toBeNull();
-      expect(result.unavailableMs).toBeNull();
-      expect(result.firstErrorKind).toBeNull();
       expect(probe).toHaveBeenCalledOnce();
     } finally {
       probe.mockRestore();
@@ -541,15 +475,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       res.statusCode = requests === 1 ? 503 : 200;
       res.end(requests === 1 ? "warming" : "ok");
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("test server did not bind to a TCP port");
-      }
+    await withServer(server, async (port) => {
       const sampleStartAt = performance.now();
       const result = await testing.waitForRestartProbe({
         deadlineAt: sampleStartAt + 2_000,
@@ -557,7 +483,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
         isDone: () => requests >= 1,
         iteration: 1,
         path: "/readyz",
-        port: address.port,
+        port,
         sampleStartAt,
         signalSentAt: sampleStartAt,
       });
@@ -567,38 +493,30 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       expect(result.unavailableMs).not.toBeNull();
       expect(result.downtimeMs).not.toBeNull();
       expect(requests).toBeGreaterThanOrEqual(2);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+    });
   });
 
   it("writes plugin fixtures as a parent load path with explicit startup activation", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-bench-config-test-"));
-    try {
-      const configPath = testing.writeConfig(root, {
-        config: {},
-        id: "fiftyPlugins",
-        name: "gateway restart, 50 manifest plugins",
-        pluginActivationOnStartup: true,
-        pluginCount: 2,
-      });
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
-        plugins?: { allow?: string[]; load?: { paths?: string[] } };
-      };
+    const root = tempDirs.make("openclaw-restart-bench-config-test-");
+    const configPath = testing.writeConfig(root, {
+      config: {},
+      id: "fiftyPlugins",
+      name: "gateway restart, 50 manifest plugins",
+      pluginActivationOnStartup: true,
+      pluginCount: 2,
+    });
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+      plugins?: { allow?: string[]; load?: { paths?: string[] } };
+    };
 
-      expect(config.plugins?.load?.paths).toEqual([path.join(root, "plugins")]);
-      expect(config.plugins?.allow).toEqual(["bench-plugin-01", "bench-plugin-02"]);
-      const manifest = JSON.parse(
-        fs.readFileSync(
-          path.join(root, "plugins", "bench-plugin-01", "openclaw.plugin.json"),
-          "utf8",
-        ),
-      ) as { activation?: { onStartup?: boolean } };
-      expect(manifest.activation?.onStartup).toBe(true);
-    } finally {
-      fs.rmSync(root, { force: true, recursive: true });
-    }
+    expect(config.plugins?.load?.paths).toEqual([path.join(root, "plugins")]);
+    expect(config.plugins?.allow).toEqual(["bench-plugin-01", "bench-plugin-02"]);
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(root, "plugins", "bench-plugin-01", "openclaw.plugin.json"),
+        "utf8",
+      ),
+    ) as { activation?: { onStartup?: boolean } };
+    expect(manifest.activation?.onStartup).toBe(true);
   });
 });

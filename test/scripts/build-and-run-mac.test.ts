@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path, { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,7 +7,27 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const scriptPath = "scripts/build-and-run-mac.sh";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function runStopExistingLocalApp(params: { fakeLsof?: string; fakePgrep: string }) {
+function runShell(
+  shell: string,
+  args: string[],
+  options: Pick<SpawnSyncOptions, "cwd" | "env" | "timeout"> = {},
+) {
+  return spawnSync(shell, args, { ...options, encoding: "utf8" });
+}
+
+function modernBashes(includeSystem = false) {
+  const candidates = ["/opt/homebrew/bin/bash", "/usr/local/bin/bash"];
+  if (includeSystem) {
+    candidates.unshift("/bin/bash");
+  }
+  return candidates.filter(existsSync).filter((shell) => {
+    const version = runShell(shell, ["-c", "printf '%s' \"$BASH_VERSION\""]);
+    const [major = 0, minor = 0] = version.stdout.split(".").map(Number);
+    return shell === "/bin/bash" || major > 5 || (major === 5 && minor >= 3);
+  });
+}
+
+function runStopExistingLocalApp(fakePgrep: string) {
   const root = tempDirs.make("openclaw-build-run-mac-test-");
   const binDir = join(root, "bin");
   const killCallsPath = join(root, "kill-calls.txt");
@@ -15,38 +35,14 @@ function runStopExistingLocalApp(params: { fakeLsof?: string; fakePgrep: string 
   mkdirSync(binDir);
 
   for (const [name, body] of [
-    ["pgrep", params.fakePgrep],
-    [
-      "lsof",
-      params.fakeLsof ??
-        `#!/usr/bin/env bash
-pid=''
-while [[ $# -gt 0 ]]; do
-  if [[ "$1" == "-p" ]]; then pid="$2"; shift 2; continue; fi
-  shift
-done
-printf "p%s\\n" "$pid"
-printf "n/worktree/apps/macos\\n"
-exit 0`,
-    ],
-    [
-      "sed",
-      `#!/usr/bin/env bash
-if [[ "$1" == "-n" && "$2" == "s/^n//p" ]]; then
-  /usr/bin/sed -n 's/^n//p'
-else
-  /usr/bin/sed "$@"
-fi`,
-    ],
-    [
-      "head",
-      `#!/usr/bin/env bash
-exec /usr/bin/head "$@"`,
-    ],
-    ["sleep", "#!/usr/bin/env bash\nexit 0\n"],
+    ["pgrep", fakePgrep],
+    ["lsof", 'printf "n/worktree/apps/macos\\n"'],
+    ["sed", 'exec /usr/bin/sed "$@"'],
+    ["head", 'exec /usr/bin/head "$@"'],
+    ["sleep", "exit 0\n"],
   ] as const) {
     const toolPath = join(binDir, name);
-    writeFileSync(toolPath, body);
+    writeFileSync(toolPath, `#!/usr/bin/env bash\n${body}`);
     chmodSync(toolPath, 0o755);
   }
 
@@ -58,25 +54,22 @@ exec /usr/bin/head "$@"`,
   const harnessPath = join(root, "stop-existing-local-app.sh");
   writeFileSync(
     harnessPath,
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      'BIN_ABS="/worktree/apps/macos/.build-local/debug/OpenClaw"',
-      'BIN=".build-local/debug/OpenClaw"',
-      'APP_CWD="/worktree/apps/macos"',
-      "kill() {",
-      '  printf "%s\\n" "$*" >> "$OPENCLAW_TEST_KILL_CALLS"',
-      '  touch "$OPENCLAW_TEST_KILLED_MARKER"',
-      "  return 0",
-      "}",
-      stopFunction,
-      "stop_existing_local_app",
-    ].join("\n"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+BIN_ABS="/worktree/apps/macos/.build-local/debug/OpenClaw"
+BIN=".build-local/debug/OpenClaw"
+APP_CWD="/worktree/apps/macos"
+kill() {
+  printf "%s\\n" "$*" >> "$OPENCLAW_TEST_KILL_CALLS"
+  touch "$OPENCLAW_TEST_KILLED_MARKER"
+  return 0
+}
+${stopFunction}
+stop_existing_local_app`,
   );
   chmodSync(harnessPath, 0o755);
 
-  const result = spawnSync("/bin/bash", [harnessPath], {
-    encoding: "utf8",
+  const result = runShell("/bin/bash", [harnessPath], {
     env: {
       ...process.env,
       OPENCLAW_TEST_KILLED_MARKER: join(root, "killed"),
@@ -93,13 +86,9 @@ exec /usr/bin/head "$@"`,
 
 describe("scripts/build-and-run-mac.sh", () => {
   it("rejects unknown options before build or launch side effects", () => {
-    const result = spawnSync("/bin/bash", [scriptPath, "--wat"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = runShell("/bin/bash", [scriptPath, "--wat"]);
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
+    expect(result).toMatchObject({ status: 1, stdout: "" });
     expect(result.stderr.trim()).toBe("ERROR: Unknown build-and-run-mac option: --wat");
   });
 
@@ -117,16 +106,14 @@ describe("scripts/build-and-run-mac.sh", () => {
 
   it("stops only the local debug app binary before relaunching", () => {
     const script = readFileSync(scriptPath, "utf8");
-    const { killCalls, pgrepCalls, result } = runStopExistingLocalApp({
-      fakePgrep: `#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "$OPENCLAW_TEST_PGREP_CALLS"
+    const { killCalls, pgrepCalls, result } =
+      runStopExistingLocalApp(`printf '%s\\n' "$*" >> "$OPENCLAW_TEST_PGREP_CALLS"
 count="$(cat "$OPENCLAW_TEST_PGREP_COUNT" 2>/dev/null || echo 0)"
 next="$((count + 1))"
 printf "%s\\n" "$next" > "$OPENCLAW_TEST_PGREP_COUNT"
 if [[ "$2" == "/worktree/apps/macos/.build-local/debug/OpenClaw" ]]; then exit 1; fi
 if [[ "$2" == ".build-local/debug/OpenClaw" && "$count" == "1" ]]; then echo 321; exit 0; fi
-exit 1`,
-    });
+exit 1`);
 
     expect(result.status).toBe(0);
     expect(killCalls).toBe("321\n");
@@ -141,11 +128,9 @@ exit 1`,
   });
 
   it("fails when the scoped local app process survives cleanup", () => {
-    const { result } = runStopExistingLocalApp({
-      fakePgrep: `#!/usr/bin/env bash
-if [[ "$2" == ".build-local/debug/OpenClaw" ]]; then echo 321; exit 0; fi
-exit 1`,
-    });
+    const { result } =
+      runStopExistingLocalApp(`if [[ "$2" == ".build-local/debug/OpenClaw" ]]; then echo 321; exit 0; fi
+exit 1`);
 
     expect(result.status).toBe(1);
   });
@@ -330,22 +315,14 @@ describe("macOS Bash selection", () => {
       const root = tempDirs.make("openclaw-bash-guard-");
       const script = path.join(root, "script with [glob] spaces.sh");
       writeFileSync(script, `#!/usr/bin/env bash\n${guard}printf '%s\n' "$BASH" "$@"\n`);
-      for (const shell of ["/bin/bash", "/opt/homebrew/bin/bash", "/usr/local/bin/bash"].filter(
-        existsSync,
-      )) {
-        const version = spawnSync(shell, ["-c", "printf '%s' \"$BASH_VERSION\""], {
-          encoding: "utf8",
-        });
-        const [major = 0, minor = 0] = version.stdout.split(".").map(Number);
-        if (shell !== "/bin/bash" && !(major > 5 || (major === 5 && minor >= 3))) {
-          continue;
-        }
-        const result = spawnSync(shell, [script, "argument with spaces", "", "*[literal]"], {
-          encoding: "utf8",
+      for (const shell of modernBashes(true)) {
+        const result = runShell(shell, [script, "argument with spaces", "", "*[literal]"], {
           timeout: 5000,
         });
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toBe("/bin/bash\nargument with spaces\n\n*[literal]\n");
+        expect(result, result.stderr).toMatchObject({
+          status: 0,
+          stdout: "/bin/bash\nargument with spaces\n\n*[literal]\n",
+        });
       }
     },
   );
@@ -358,28 +335,17 @@ describe("macOS Bash selection", () => {
       const source = readFileSync(path.join("scripts", filename), "utf8");
       const prelude = source.slice(0, source.indexOf("set -euo pipefail"));
       expect(prelude).toContain('exec /bin/bash "$0" "$@"');
-      const probe = `${prelude}printf '%s\n' "$BASH" "$@"\n`;
-      writeFileSync(script, probe);
-      for (const shell of ["/opt/homebrew/bin/bash", "/usr/local/bin/bash"].filter(existsSync)) {
-        const version = spawnSync(shell, ["-c", "printf '%s' \"$BASH_VERSION\""], {
-          encoding: "utf8",
+      writeFileSync(script, `${prelude}printf '%s\n' "$BASH" "$@"\n`);
+      for (const shell of modernBashes()) {
+        const direct = runShell(shell, [script, "kept argument"], { timeout: 5000 });
+        expect(direct, direct.stderr).toMatchObject({
+          status: 0,
+          stdout: "/bin/bash\nkept argument\n",
         });
-        const [major = 0, minor = 0] = version.stdout.split(".").map(Number);
-        if (!(major > 5 || (major === 5 && minor >= 3))) {
-          continue;
-        }
-        const direct = spawnSync(shell, [script, "kept argument"], {
-          encoding: "utf8",
+        const sourced = runShell(shell, ["-c", 'source "$1"', "installer-source", script], {
           timeout: 5000,
         });
-        expect(direct.status, direct.stderr).toBe(0);
-        expect(direct.stdout).toBe("/bin/bash\nkept argument\n");
-        const sourced = spawnSync(shell, ["-c", 'source "$1"', "installer-source", script], {
-          encoding: "utf8",
-          timeout: 5000,
-        });
-        expect(sourced.status).toBe(1);
-        expect(sourced.stdout).toBe("");
+        expect(sourced).toMatchObject({ status: 1, stdout: "" });
         expect(sourced.stderr).toContain("Run this installer with /bin/bash on macOS");
       }
     },
