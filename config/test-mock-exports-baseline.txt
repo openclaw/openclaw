@@ -7421,7 +7421,6 @@
 ["src/gateway/session-resource-tool-policy.test.ts","../agents/harness/registry.js","f2ae679b3eb14030502b36cbb9ac370d2e2bf2a834bfdd1c4f3fa2ff017e0133",1]
 ["src/gateway/session-resource-tool-policy.test.ts","../config/sessions/session-accessor.js","31223e045f8be2a3697260335a85f3db74a987dcdbd43e12bc788016fb9c1e4b",1]
 ["src/gateway/session-resource-tool-policy.test.ts","../plugins/current-plugin-metadata-state.js","257ac96fee5dedc4ead190dfaf17d28693c7fcbcb2f74090032775ae0d496d43",1]
-["src/gateway/session-row-projection.config-commits.test.ts","../plugins/plugin-lifecycle-lease.js","546d8e454a8352077177d12eb1beabe9f0e169dc245ac6f1cb9acc6a9957f31a",1]
 ["src/gateway/session-row-transcript-backfill.test.ts","../agents/utility-model.js","af3ed8cbac409c68e3cb12b0a6fc3cb3d7708d1e09e2f404d704994e88024444",1]
 ["src/gateway/session-row-transcript-backfill.test.ts","../auto-reply/reply/conversation-label-generator.js","a35bfa59b34a78f8ecebb4b2e7337c6adbd8366f29a2abacfa626813299bcb57",1]
 ["src/gateway/session-subagent-reactivation.test.ts","../agents/subagents/registry/subagent-registry.js","cb28fd3175a191b7e486cef1a26c359b64647b843d1812a892fcb5c5a6cad052",1]
