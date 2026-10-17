@@ -1,6 +1,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -32,27 +33,21 @@ function browserCases(
   address: Record<string, unknown> = {},
   tabs: BrowserTab[] = [tab],
 ) {
+  const result = { cssWidth: 100, cssHeight: 100, title: tab.title, url: tab.url };
   return [
     browserCase("/tabs", { running: true, tabs }, address),
     browserCase("/screenshot", screenshot, address),
-    browserCase(
-      "/act",
-      { result: { cssWidth: 100, cssHeight: 100, title: tab.title, url: tab.url } },
-      address,
-    ),
+    browserCase("/act", { result }, address),
   ];
 }
-async function routeMedia(page: Page) {
-  await page.route("**/__openclaw__/assistant-media**", (route) =>
+const png = createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 });
+const routeMedia = (page: Page) =>
+  page.route("**/__openclaw__/assistant-media**", (route) =>
     route.fulfill({
       contentType: "image/png",
-      body: Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
-        "base64",
-      ),
+      body: png,
     }),
   );
-}
 
 suite.define(() => {
   it("embeds only the requested existing browser tab and retains its identity across resize", async () => {
@@ -232,15 +227,6 @@ suite.define(() => {
           expect.assert(typeof runId === "string");
           await page.getByRole("button", { name: "Stop generating" }).waitFor();
           let seq = 0;
-          const emitTool = (data: Record<string, unknown>) =>
-            gateway.emitGatewayEvent("agent", {
-              runId,
-              seq: ++seq,
-              stream: "tool",
-              ts: Date.now(),
-              sessionKey: "main",
-              data,
-            });
           const emitResult = async (
             toolCallId: string,
             name: string | undefined,
@@ -248,24 +234,34 @@ suite.define(() => {
             resultDetails: Record<string, unknown> = details,
             resultName = name,
           ) => {
-            await emitTool({ phase: "start", toolCallId, name, args: {} });
-            await emitTool({
-              phase: "result",
-              toolCallId,
-              name: resultName,
-              result: {
-                content: [{ type: "text", text }],
-                details: resultDetails,
+            for (const data of [
+              { phase: "start", toolCallId, name, args: {} },
+              {
+                phase: "result",
+                toolCallId,
+                name: resultName,
+                result: {
+                  content: [{ type: "text", text }],
+                  details: resultDetails,
+                },
               },
-            });
+            ]) {
+              await gateway.emitGatewayEvent("agent", {
+                runId,
+                seq: ++seq,
+                stream: "tool",
+                ts: Date.now(),
+                sessionKey: "main",
+                data,
+              });
+            }
           };
           for (const [index, name] of ["read", undefined].entries()) {
             await emitResult(`live-${index}`, name, `Live ordinary output ${index}`);
           }
           const liveTurn = page.locator(`.chat-group[data-chat-row-key*="${runId}"]`);
           const expectToolOutput = async (toolCallId: string, text: string) => {
-            // Keep the former poll's overall budget; every native action owns only
-            // the remaining time. Never pass zero: Playwright treats it as unlimited.
+            // Share one deadline; Playwright treats a zero timeout as unlimited.
             const deadline = performance.now() + 15_000;
             const remainingTimeout = () => {
               const remaining = deadline - performance.now();
@@ -274,8 +270,7 @@ suite.define(() => {
               }
               return { timeout: remaining };
             };
-            // Live calls can regroup and unmount individual rows on the next frame.
-            // Wait for this run's disclosure, then act on the exact tool identity.
+            // Rows can regroup and unmount; act through this run's exact tool identity.
             const tool = liveTurn.locator(`[data-message-id^="tool:assistant:${toolCallId}:"]`);
             const activity = liveTurn.locator(".chat-activity-group__summary");
             await activity.waitFor(remainingTimeout());

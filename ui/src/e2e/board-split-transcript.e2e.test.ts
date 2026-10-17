@@ -1,35 +1,20 @@
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
 import { openChatLayoutMenu, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import {
-  canRunPlaywrightChromium,
-  controlUiBundledSettingsStorageKey,
-  controlUiSessionUrl,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createBoardE2eSuite } from "./board-browser.test-support.ts";
 import {
   focusChatSidePanel,
   openChatSidePanelType,
   restoreChatAsMain,
 } from "./chat-side-panel.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const sessionKey = "agent:main:board-split-transcript";
-let browser: Browser;
-let controlUi: ControlUiE2eServer;
-const contexts = new Set<BrowserContext>();
+const suite = createBoardE2eSuite("Board split transcript restore", { sandbox: false });
 const viewport = { width: 1400, height: 900 };
 
 async function newPage(size = viewport) {
-  const context = await browser.newContext({ viewport: size });
-  contexts.add(context);
-  return { page: await context.newPage() };
+  return { page: await suite.newPage({ viewport: size }) };
 }
 
 async function retainDashboard(page: Page) {
@@ -132,22 +117,6 @@ async function firstSidebarResizeFrame(page: Page, resize: () => Promise<void>) 
   return await firstFrame;
 }
 
-async function showDashboard(page: Page) {
-  const settingsKey = controlUiBundledSettingsStorageKey(controlUi.baseUrl);
-  await page.addInitScript(
-    ({ key, storageKey }) => {
-      const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
-        string,
-        unknown
-      >;
-      settings.boardSessionViews = { [key]: { activeTabId: "main" } };
-      localStorage.setItem(storageKey, JSON.stringify(settings));
-    },
-    { key: sessionKey, storageKey: settingsKey },
-  );
-  await page.goto(controlUiSessionUrl(controlUi.baseUrl, sessionKey, "dashboard"));
-}
-
 async function expectSidePanelTabs(page: Page, expected: string[], visible = true) {
   const labels = page.locator('[data-region-header="side"] .tabstrip-tab__label');
   await expect
@@ -180,20 +149,7 @@ async function expectMinimizedDashboard(page: Page) {
   expect(await page.getByRole("separator", { name: "Resize side panel" }).count()).toBe(0);
 }
 
-describeControlUiE2e("Board split transcript restore", () => {
-  beforeAll(async () => {
-    controlUi = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  }, 120_000);
-
-  afterAll(async () => {
-    for (const context of contexts) {
-      await context.close();
-    }
-    await browser?.close();
-    await controlUi?.close();
-  });
-
+suite.define(() => {
   it("repaints the transcript after expanded -> split", async () => {
     const { page } = await newPage();
     const now = Date.now();
@@ -205,7 +161,7 @@ describeControlUiE2e("Board split transcript restore", () => {
       })),
     });
 
-    await showDashboard(page);
+    await suite.openDashboard(page, sessionKey, false);
     await page.locator(".board-session-surface").waitFor();
     await page.getByText("Message number 39:").first().waitFor({ timeout: 15_000 });
 
@@ -251,7 +207,7 @@ describeControlUiE2e("Board split transcript restore", () => {
       ],
     });
 
-    await showDashboard(page);
+    await suite.openDashboard(page, sessionKey, false);
     const sidePanel = page.locator('[data-panel-slot="dashboard"]');
     await page.getByText("Source: project-board.html", { exact: false }).waitFor();
     await page.getByText("Please use the existing work board feature.").waitFor();
@@ -286,7 +242,7 @@ describeControlUiE2e("Board split transcript restore", () => {
         },
       },
     });
-    await showDashboard(page);
+    await suite.openDashboard(page, sessionKey, false);
     await page.locator('[data-region-header="side"]').waitFor();
     await openChatSidePanelType(page, "Browser");
     await openChatSidePanelType(page, "Terminal");
@@ -341,7 +297,7 @@ describeControlUiE2e("Board split transcript restore", () => {
       ],
     });
 
-    await showDashboard(page);
+    await suite.openDashboard(page, sessionKey, false);
     const sidePanel = page.locator(".side-panel");
     await sidePanel.locator('[data-region-header="side"]').waitFor();
     await openChatSidePanelType(page, "Side chat");
@@ -366,7 +322,7 @@ describeControlUiE2e("Board split transcript restore", () => {
       },
     });
 
-    await showDashboard(page);
+    await suite.openDashboard(page, sessionKey, false);
     const sidePanel = page.locator(".side-panel");
     await sidePanel.locator('[data-region-header="side"]').waitFor();
     await expect
@@ -385,7 +341,7 @@ describeControlUiE2e("Board split transcript restore", () => {
   it("retains a sole Dashboard when minimized and reopened from Layout", async () => {
     const { page } = await newPage();
     const gateway = await installBoard(page);
-    await showDashboard(page);
+    await suite.openDashboard(page, sessionKey, false);
 
     const sidePanel = page.locator(".side-panel");
     await sidePanel.locator('[data-region-header="side"]').waitFor();

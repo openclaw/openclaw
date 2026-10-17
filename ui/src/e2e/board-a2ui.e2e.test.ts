@@ -1,30 +1,16 @@
-// Dashboard A2UI E2E covers the real renderer, sandbox proxy, and tier-1 board bridge.
 import { execFileSync } from "node:child_process";
+import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { createServer, type Server as HttpServer } from "node:http";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Frame } from "playwright";
+import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
-import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
-import type { TestPortClaim } from "../../../src/test-utils/port-claims.js";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
-import {
-  canRunPlaywrightChromium,
-  controlUiBundledSettingsStorageKey,
-  controlUiSessionUrl,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { closeBoardTestServer, createBoardE2eSuite } from "./board-browser.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const sessionKey = "agent:main:board-a2ui";
 const bundleDirectory = path.resolve(
   process.env.OPENCLAW_A2UI_BUNDLE_DIR?.trim() || "extensions/canvas/src/host/a2ui",
@@ -35,14 +21,8 @@ const bundleFiles = {
 } as const;
 const basicCatalog = "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json";
 
-let browser: Browser;
-let controlUi: ControlUiE2eServer;
-let sandboxServer: HttpServer;
-let sandboxPort: number;
-let sandboxPortClaim: TestPortClaim | undefined;
 let rendererServer: HttpServer;
 let rendererOrigin: string;
-const contexts = new Set<BrowserContext>();
 type Protocol = keyof typeof bundleFiles;
 
 function textComponent(version: Protocol, id: string, text: string) {
@@ -95,37 +75,9 @@ function buildInitialMessages(version: Protocol) {
     : [{ version, createSurface: { surfaceId: "main", catalogId: basicCatalog } }, update];
 }
 
-async function closeServer(server: HttpServer | undefined) {
-  if (server) {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  }
-}
-
-async function openDashboard(page: Page): Promise<void> {
-  const settingsKey = controlUiBundledSettingsStorageKey(controlUi.baseUrl);
-  await page.addInitScript(
-    ({ key, storageKey }) => {
-      // Init scripts also run in opaque widget frames; only the dashboard owns settings.
-      if (window !== window.top) {
-        return;
-      }
-      const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
-        string,
-        unknown
-      >;
-      settings.boardSessionViews = { [key]: { activeTabId: "main" } };
-      localStorage.setItem(storageKey, JSON.stringify(settings));
-    },
-    { key: sessionKey, storageKey: settingsKey },
-  );
-  await page.goto(controlUiSessionUrl(controlUi.baseUrl, sessionKey, "dashboard"));
-  await page.locator(".board-session-surface").waitFor();
-}
-
-describeControlUiE2e("Control UI dashboard A2UI", () => {
-  beforeAll(async () => {
+const suite = createBoardE2eSuite("Control UI dashboard A2UI", {
+  browserLaunchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] },
+  beforeStart: async () => {
     if (!process.env.OPENCLAW_A2UI_BUNDLE_DIR?.trim()) {
       execFileSync(process.execPath, ["--import", "./scripts/tsx.mjs", "scripts/bundle-a2ui.mts"], {
         cwd: process.cwd(),
@@ -143,51 +95,25 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
       const bundle = rendererBundles.get(
         path.posix.basename(new URL(request.url ?? "/", "http://localhost").pathname),
       );
-      if (!bundle) {
-        response.statusCode = 404;
-        response.end("not found");
-        return;
-      }
-      response.statusCode = 200;
-      response.setHeader("Content-Type", "text/javascript; charset=utf-8");
-      response.end(bundle);
+      response.writeHead(
+        bundle ? 200 : 404,
+        bundle ? { "Content-Type": "text/javascript; charset=utf-8" } : {},
+      );
+      response.end(bundle ?? "not found");
     });
-    await new Promise<void>((resolve) => {
-      rendererServer.listen(0, "127.0.0.1", resolve);
-    });
+    rendererServer.listen(0, "127.0.0.1");
+    await once(rendererServer, "listening");
     const rendererAddress = rendererServer.address();
     if (!rendererAddress || typeof rendererAddress === "string") {
       throw new Error("A2UI renderer server did not bind");
     }
     rendererOrigin = `http://127.0.0.1:${rendererAddress.port}`;
-    controlUi = await startControlUiE2eServer();
-    sandboxPortClaim = await acquireGatewayE2ePortBlock();
-    sandboxPort = sandboxPortClaim.port;
-    sandboxServer = createSandboxHostHttpServer();
-    await new Promise<void>((resolve) => {
-      sandboxServer.listen(sandboxPort, "127.0.0.1", resolve);
-    });
-    browser = await chromium.launch({
-      executablePath: chromiumExecutablePath,
-      ignoreDefaultArgs: ["--hide-scrollbars"],
-    });
-  }, 120_000);
-
-  afterAll(async () => {
-    for (const context of contexts) {
-      await context.close();
-    }
-    await browser?.close();
-    await closeServer(sandboxServer);
-    await sandboxPortClaim?.release();
-    await closeServer(rendererServer);
-    await controlUi?.close();
-  });
-
+  },
+  afterSandboxClose: () => closeBoardTestServer(rendererServer),
+});
+suite.define(() => {
   it("sends each v0.8 action once after the host reconnects", async () => {
-    const context = await browser.newContext();
-    contexts.add(context);
-    const page = await context.newPage();
+    const page = await suite.newPage();
     await page.addScriptTag({
       path: path.join(bundleDirectory, bundleFiles["v0.8"]),
       type: "module",
@@ -252,20 +178,18 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
     },
   ]) {
     it(name, async () => {
-      const context = await browser.newContext({
+      const page = await suite.newPage({
         colorScheme,
         permissions: ["local-network-access"],
         viewport: { width: 1280, height: 800 },
       });
-      contexts.add(context);
-      const page = await context.newPage();
       const pageErrors: string[] = [];
       page.on("pageerror", (error) => {
         if (pageErrors.length < 8) {
           pageErrors.push(error.message.slice(0, 512));
         }
       });
-      const origin = new URL(controlUi.baseUrl).origin;
+      const origin = new URL(suite.baseUrl).origin;
       const rendererUrl = `${rendererOrigin}/__openclaw__/cap/canvas-proof/__openclaw__/a2ui/${bundleFiles[version]}`;
       const messages = buildInitialMessages(version);
       const boot = JSON.stringify({ messages, actionTier: "state" }).replaceAll("<", "\\u003c");
@@ -309,7 +233,7 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
                   grantState: "none",
                   resourceOrigins: [rendererOrigin],
                 }),
-                sandboxPort,
+                sandboxPort: suite.sandboxPort,
               },
             ],
           },
@@ -317,7 +241,7 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
         },
       });
 
-      await openDashboard(page);
+      await suite.openDashboard(page, sessionKey);
       const outer = page.locator(".board-widget__frame");
       await outer.waitFor();
       const outerFrame = await outer.elementHandle().then((handle) => handle?.contentFrame());

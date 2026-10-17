@@ -16,6 +16,10 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const renewedCookie = "synthetic_app_session=renewed; Path=/; HttpOnly; SameSite=None; Secure";
 const image = createSolidPngBuffer(640, 320, { r: 229, g: 246, b: 238 });
 const text = (value: string) => ({ type: "text", text: value });
+const message = (role: "user" | "assistant", ...content: Record<string, unknown>[]) => ({
+  role,
+  content,
+});
 const imageContent = (url: string, alt: string, extra: Record<string, unknown> = {}) => ({
   type: "image",
   url,
@@ -25,8 +29,7 @@ const imageContent = (url: string, alt: string, extra: Record<string, unknown> =
 let signInUrl: string;
 let callbackUrl: string;
 const forwardedCredentials: boolean[] = [];
-// Redirected navigation requests are not intercepted again by Playwright.
-// A real HTTP exchange proves browser cookie delivery across the two sites.
+// Redirects bypass Playwright interception; real HTTP proves cross-site cookie delivery.
 const accessServer = createServer((request, response) => {
   forwardedCredentials.push(Boolean(request.headers.authorization));
   if (
@@ -50,17 +53,13 @@ const suite = createControlUiE2eSuite({
         accessServer.listen(0, "127.0.0.1", resolve);
       });
       const address = accessServer.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing synthetic Access listener");
-      }
+      expect.assert(address && typeof address !== "string");
       signInUrl = `http://localhost:${address.port}/login`;
       callbackUrl = `http://127.0.0.1:${address.port}/authorized`;
     },
     close: async () => {
       accessServer.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        accessServer.close((error) => (error ? reject(error) : resolve()));
-      });
+      await accessServer[Symbol.asyncDispose]();
     },
   },
 });
@@ -90,28 +89,24 @@ suite.define(() => {
           const gateway = await installMockGateway(page, {
             deviceToken: "synthetic-recovery-device-token",
             historyMessages: [
-              {
-                role: "user",
-                content: [
-                  imageContent("media://inbound/sign-in-proof.png", "Synthetic attachment"),
-                  imageContent(
-                    "media://inbound/second-sign-in-proof.png",
-                    "Second synthetic attachment",
-                  ),
-                  text("Please compare these two synthetic screenshots."),
-                ],
-              },
-              {
-                role: "assistant",
-                content: [
-                  imageContent(
-                    "/api/chat/media/outgoing/agent%3Amain%3Amain/sign-in-proof/full",
-                    "Synthetic generated image",
-                    { mimeType: "image/png", width: 640, height: 320 },
-                  ),
-                  text("The conversation stays connected while website access is renewed."),
-                ],
-              },
+              message(
+                "user",
+                imageContent("media://inbound/sign-in-proof.png", "Synthetic attachment"),
+                imageContent(
+                  "media://inbound/second-sign-in-proof.png",
+                  "Second synthetic attachment",
+                ),
+                text("Please compare these two synthetic screenshots."),
+              ),
+              message(
+                "assistant",
+                imageContent(
+                  "/api/chat/media/outgoing/agent%3Amain%3Amain/sign-in-proof/full",
+                  "Synthetic generated image",
+                  { mimeType: "image/png", width: 640, height: 320 },
+                ),
+                text("The conversation stays connected while website access is renewed."),
+              ),
             ],
           });
           const routeProbe = async (route: Route) => {
@@ -119,8 +114,7 @@ suite.define(() => {
             const frameNavigation =
               request.isNavigationRequest() && request.frame() !== page.mainFrame();
             if (request.method() !== "HEAD" && !frameNavigation) {
-              await route.fallback();
-              return;
+              return route.fallback();
             }
             if (frameNavigation) {
               renewals += 1;
@@ -140,8 +134,6 @@ suite.define(() => {
           };
           await context.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, routeProbe);
           await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, routeProbe);
-          // Cross-origin redirects really pass through Chromium's fetch/CORS
-          // behavior; the fixture never calls the recovery owner's event API.
           if (renewal === "automatic") {
             await context.addCookies([
               {
@@ -174,28 +166,22 @@ suite.define(() => {
           });
           await context.route("**/__openclaw__/assistant-media?**", (route) => {
             const metadata = new URL(route.request().url()).searchParams.get("meta") === "1";
-            if (metadata) {
-              metadataRequests += 1;
-            }
+            metadataRequests += Number(metadata);
             return serveMedia(route, metadata);
           });
           const rootUrl = new URL("/", suite.server.baseUrl).href;
-          await context.route(rootUrl, (route) =>
-            route.fulfill({
-              contentType: "text/html",
-              body: '<!doctype html><title>Synthetic sign-in</title><h1>Website sign-in</h1><a href="/sign-in-complete">Complete sign-in</a>',
-            }),
+          const routeHtml = (url: string, body: string, headers?: Record<string, string>) =>
+            context.route(url, (route) =>
+              route.fulfill({ contentType: "text/html", body, headers }),
+            );
+          await routeHtml(rootUrl, '<a href="/sign-in-complete">Complete sign-in</a>');
+          await routeHtml(
+            new URL("/sign-in-complete", rootUrl).href,
+            "Signed in. Return to your conversation.",
+            { "set-cookie": renewedCookie },
           );
-          await context.route(new URL("/sign-in-complete", rootUrl).href, async (route) => {
-            await route.fulfill({
-              contentType: "text/html",
-              headers: { "set-cookie": renewedCookie },
-              body: "Signed in. Return to your conversation.",
-            });
-          });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
-          // Apply the shipped policy after Vite boot; renewal must work without
-          // adding the identity provider to connect-src or enabling frame scripts.
+          // Apply shipped CSP after Vite boot without relaxing frames or IdP access.
           await page.evaluate((policy) => {
             const meta = document.createElement("meta");
             meta.httpEquiv = "Content-Security-Policy";
@@ -231,8 +217,7 @@ suite.define(() => {
           if (renewal === "interactive") {
             await modal.waitFor();
             expect(await modal.count()).toBe(1);
-            expect(probes).toBe(2);
-            expect(metadataRequests).toBe(2);
+            expect({ probes, metadataRequests }).toEqual({ probes: 2, metadataRequests: 2 });
             await expectConversationRetained();
             const expectDialogToFit = async () => {
               expect(
@@ -240,19 +225,18 @@ suite.define(() => {
                   const card = element.querySelector(".exec-approval-card")!;
                   const description = element.querySelector(".exec-approval-sub")!;
                   const bounds = card.getBoundingClientRect();
-                  return {
-                    descriptionOverflows: description.scrollWidth > description.clientWidth,
-                    outsideViewport: bounds.left < 0 || bounds.right > window.innerWidth,
-                  };
+                  return [
+                    description.scrollWidth > description.clientWidth,
+                    bounds.left < 0 || bounds.right > window.innerWidth,
+                  ];
                 }),
-              ).toEqual({ descriptionOverflows: false, outsideViewport: false });
+              ).toEqual([false, false]);
             };
             await expectDialogToFit();
             await page.setViewportSize({ width: 390, height: 844 });
             await expectDialogToFit();
             await page.setViewportSize({ width: 1280, height: 900 });
-            // Let the generated preview exhaust its single automatic retry before
-            // signing in; restoration must wake that existing failed resource.
+            // Exhaust the automatic retry; restoration must wake the failed resource.
             await expect.poll(() => outgoingRequests).toBe(2);
             await expect.poll(() => metadataRequests).toBe(4);
             const popupPromise = context.waitForEvent("page");
@@ -262,8 +246,7 @@ suite.define(() => {
             expect(await signIn.evaluate(() => window.opener === null)).toBe(true);
             await signIn.getByRole("link", { name: "Complete sign-in" }).click();
             await signIn.getByText("Signed in. Return to your conversation.").waitFor();
-            // Playwright emulates every document as focused; the explicit action
-            // exercises browser recovery without inventing a foreground event.
+            // Playwright focuses every document; Check again exercises real recovery.
             await modal.getByRole("button", { name: "Check again", exact: true }).click();
             await modal.waitFor({ state: "detached" });
           }

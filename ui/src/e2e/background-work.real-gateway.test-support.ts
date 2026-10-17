@@ -285,7 +285,7 @@ export type BackgroundWorkRpc = { request: RequestFrame; response: ResponseFrame
 export function observeBackgroundWorkRpc(page: Page, signal: AbortSignal) {
   const pending = new Map<string, RequestFrame>();
   const completed: BackgroundWorkRpc[] = [];
-  const changed = new Set<() => void>();
+  let changed = createDeferred();
   const methods = new Set([
     "chat.send",
     "chat.history",
@@ -314,9 +314,9 @@ export function observeBackgroundWorkRpc(page: Page, signal: AbortSignal) {
       }
       pending.delete(frame.id);
       completed.push({ request, response: frame });
-      for (const notify of changed) {
-        notify();
-      }
+      const received = changed;
+      changed = createDeferred();
+      received.resolve();
     });
   });
   return {
@@ -330,19 +330,13 @@ export function observeBackgroundWorkRpc(page: Page, signal: AbortSignal) {
       })),
     }),
     async waitFor(matches: (rpc: BackgroundWorkRpc) => boolean, after = 0) {
-      const found = createDeferred<BackgroundWorkRpc>();
-      const check = () => {
+      while (true) {
+        const next = changed.promise;
         const rpc = completed.slice(after).find(matches);
         if (rpc) {
-          found.resolve(rpc);
+          return rpc;
         }
-      };
-      changed.add(check);
-      check();
-      try {
-        return await withinTest(found.promise, signal);
-      } finally {
-        changed.delete(check);
+        await withinTest(next, signal);
       }
     },
   };
