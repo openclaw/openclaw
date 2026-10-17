@@ -155,7 +155,7 @@ export function beginModelCatalogSnapshot(
   };
   // Failed bootstrap replies are unsolicited responses. A missing snapshot must
   // fall back to the ordinary read, without waiting its full RPC timeout.
-  const timer = setTimeout(release, 1_000);
+  const timer = setTimeout(resolve, 1_000);
   const snapshot = { ...read, promise, release };
   read.cache.snapshot?.release();
   read.cache.snapshot = snapshot;
@@ -214,6 +214,12 @@ export function publishModelCatalogResult(
       return false;
     }
   }
+  const snapshot = cache.snapshot;
+  // A completed fallback owns this projection, but an unsettled read can still use bootstrap.
+  if (snapshot && snapshot.signal === read.signal && cache.entries.has(key)) {
+    snapshot.release();
+    return false;
+  }
   const entry: ModelCatalogEntry = cache.entries.get(key) ?? { scope: params };
   const discoverySucceeded = !result.refreshFailed;
   if (params.refresh && discoverySucceeded) {
@@ -235,7 +241,6 @@ export function publishModelCatalogResult(
   cache.entries.delete(key);
   cache.entries.set(key, entry);
   cache.requiresSnapshot = result.modelSelectionPolicy?.restricted === true;
-  const snapshot = cache.snapshot;
   if (snapshot && snapshot.signal === read.signal) {
     snapshot.release();
   }

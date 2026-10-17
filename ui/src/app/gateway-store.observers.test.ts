@@ -63,9 +63,10 @@ describe("createApplicationGateway connection ownership", () => {
     current().opts.onHello?.(HELLO);
   }
 
-  it.each(["session", "agent", "short"])(
+  it.each(["session", "agent", "short", "late"])(
     "shares the connect %s catalog across cold readers and returns",
     async (kind) => {
+      vi.useFakeTimers();
       const scope = {
         agentId: "main",
         ...(kind !== "agent"
@@ -80,6 +81,9 @@ describe("createApplicationGateway connection ownership", () => {
       expect(current().opts.modelCatalog).toEqual(target);
       current().opts.onHello?.(HELLO);
       current().request.mockResolvedValue(catalog);
+      if (kind === "late") {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
       const client = gateway.snapshot.client!;
       const first = loadModelCatalog(client, scope);
       const shared = loadModelCatalog(client, scope);
