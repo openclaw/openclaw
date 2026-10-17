@@ -188,10 +188,8 @@ function receivingDoctor(keepAlive = false) {
 }
 
 async function expectChildExited(pid: number | undefined) {
-  expect(pid).toBeTypeOf("number");
-  if (pid !== undefined) {
-    expect(await waitForPidToExit(pid)).toBe(true);
-  }
+  assert(typeof pid === "number", "Doctor child must have spawned");
+  expect(await waitForPidToExit(pid)).toBe(true);
 }
 
 function expectUnchangedInput() {
@@ -543,6 +541,12 @@ it.skipIf(process.platform === "win32").for([
       if (identityAvailable) {
         expect(readCommandClaims()).toEqual([]);
         expect(readHandoffClaims().find((claim) => claim.install_root === root)).toBeUndefined();
+        if (frozen) {
+          expect(error).toMatchObject({ message: original.message, cause: original });
+        } else {
+          expect(error).toBe(original);
+        }
+        expectSettlement(steps);
       } else {
         expectRetainedCommandClaims(writer.pid, [root]);
         const anchor = readHandoffClaims().find((claim) => claim.install_root === root);
@@ -554,15 +558,6 @@ it.skipIf(process.platform === "win32").for([
           executor: { pid: doctorPid },
           action: { kind: "update" },
         });
-      }
-      if (identityAvailable) {
-        if (frozen) {
-          expect(error).toMatchObject({ message: original.message, cause: original });
-        } else {
-          expect(error).toBe(original);
-        }
-        expectSettlement(steps);
-      } else {
         expect(error).toMatchObject({ cause: original });
         expectSettlement(steps, writer.pid);
       }

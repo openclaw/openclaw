@@ -342,13 +342,13 @@ it("defers the published parent-owned continuation before preparing an older sch
 });
 
 it.each([
-  "parent-admission",
-  "fresh-doctor",
-  "post-plugin-doctor",
-  "incomplete-migration",
+  { boundary: "parent-admission", repairs: 0 },
+  { boundary: "fresh-doctor", repairs: 1 },
+  { boundary: "post-plugin-doctor", repairs: 2 },
+  { boundary: "incomplete-migration", repairs: 0 },
 ] as const)(
-  "settles the published parent's %s maintenance outcome before publication",
-  async (boundary) => {
+  "settles the published parent's $boundary maintenance outcome before publication",
+  async ({ boundary, repairs }) => {
     const run = createResumingRun({ before: { version: "2026.9.5" } });
     expect(adoptUpdateRun(run.runId).origin.driver?.pid).toBe(process.pid);
     const readResult = captureResult("maintenance-result.json");
@@ -366,17 +366,14 @@ it.each([
       }
       return maintenance;
     });
-    if (boundary === "post-plugin-doctor") {
+    if (repairs === 2) {
       mocks.plugins.mockResolvedValue({ ...pluginUpdate, changed: true });
     }
     const dispatch = mocks.runExec.getMockImplementation()!;
     let doctorPass = 0;
     mocks.runExec.mockImplementation(async (command, args, options) => {
       const result = await dispatch(command, args, options);
-      if (
-        args.includes("--repair") &&
-        ++doctorPass === (boundary === "post-plugin-doctor" ? 2 : 1)
-      ) {
+      if (args.includes("--repair") && ++doctorPass === (repairs || 1)) {
         await writeUpdatePostInstallDoctorResult({
           resultPath: options.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
           result: {
@@ -399,7 +396,7 @@ it.each([
       await pending;
       expect(await readResult()).toMatchObject({
         status: "warning",
-        changed: boundary === "post-plugin-doctor",
+        changed: repairs === 2,
         warnings: [{ reason: "doctor-advisory", message: refusal.message }],
       });
       expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
@@ -414,17 +411,9 @@ it.each([
         }),
       );
     }
-    expect(dispatched).toEqual(
-      boundary === "fresh-doctor"
-        ? ["repair"]
-        : boundary === "post-plugin-doctor"
-          ? ["repair", "repair"]
-          : [],
-    );
-    expect(mocks.plugins).toHaveBeenCalledTimes(boundary === "post-plugin-doctor" ? 1 : 0);
-    expect(maintenance.finish).toHaveBeenCalledTimes(
-      boundary === "fresh-doctor" || boundary === "post-plugin-doctor" ? 1 : 0,
-    );
+    expect(dispatched).toEqual(Array<string>(repairs).fill("repair"));
+    expect(mocks.plugins).toHaveBeenCalledTimes(repairs === 2 ? 1 : 0);
+    expect(maintenance.finish).toHaveBeenCalledTimes(repairs > 0 ? 1 : 0);
   },
 );
 

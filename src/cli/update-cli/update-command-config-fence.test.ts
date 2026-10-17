@@ -467,8 +467,7 @@ it.each([
   async ({ revoked, included, late }) => {
     vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
     const env = { ...process.env, ...fixtureEnv };
-    const options = { env };
-    const run = createUpdateRun({ trigger: "cli" }, options);
+    const run = createUpdateRun({ trigger: "cli" }, { env });
     const includePath = path.join(stateDir, "includes", "gateway.json");
     const includedRaw = '{"mode":"local","port":18789}\n';
     const original = included
