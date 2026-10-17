@@ -1,6 +1,6 @@
 /** Tests connected node-hosted plugin tool materialization. */
 
-import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolResultSchema } from "@modelcontextprotocol/core";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";

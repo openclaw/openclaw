@@ -5,7 +5,7 @@ import fs from "node:fs";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import { registerHooks } from "node:module";
 import path from "node:path";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { FetchLike } from "@modelcontextprotocol/client";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AuthProfileStore, OAuthCredential } from "./auth-profiles/types.js";
 
@@ -381,9 +381,7 @@ async function runRefreshScenario(root: string): Promise<void> {
   const { loadPersistedAuthProfileStore } = await import("./auth-profiles/persisted.js");
   const { resolveMcpBearerBundleConfig, withMcpAuthProfileBearer } =
     await import("./mcp-auth-profile.js");
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-  const { StreamableHTTPClientTransport } =
-    await import("@modelcontextprotocol/sdk/client/streamableHttp.js");
+  const { Client, StreamableHTTPClientTransport } = await import("@modelcontextprotocol/client");
   const endpoint = await createHttpFixture();
   const fixture = writeProvider(root, "refresh", endpoint.tokenUrl);
   const expired: OAuthCredential = {
@@ -425,7 +423,10 @@ async function runRefreshScenario(root: string): Promise<void> {
     fetch: wrapped,
     requestInit: { headers: { "X-Request": "keep", Authorization: "Bearer stale-sdk-not-real" } },
   });
-  const client = new Client({ name: "mcp-auth-proof", version: "1.0.0" });
+  const client = new Client(
+    { name: "mcp-auth-proof", version: "1.0.0" },
+    { versionNegotiation: { mode: "legacy" } },
+  );
   // Optional SSE GETs are independent of the ordered RPC POSTs under test.
   const mcpPosts = () => endpoint.requests.filter((request) => request.method === "POST");
   try {

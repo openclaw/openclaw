@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { OAuthDiscoveryState } from "@modelcontextprotocol/client";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
@@ -340,7 +340,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       });
     }
 
-    it("fences the real transport TypeError headerless fallback after revocation", async () => {
+    it("surfaces a real discovery TypeError without a headerless retry after revocation", async () => {
       const target = "/.well-known/oauth-protected-resource/mcp";
       const attempts: Array<{ pathname: string; protocol: string | null }> = [];
       let wireRequests = 0;
@@ -368,14 +368,14 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         },
       });
       const before = await stored();
-      await finishError(await start());
+      const result = await finishError(await start());
+      expect(result.error).toContain("Sign-in did not finish");
+      expect(result.error).toContain("try again");
       expect(await stored()).toEqual(before);
       expect(wireRequests).toBe(1);
       expect(transportFailures).toBe(1);
       const resourceAttempts = attempts.filter((attempt) => attempt.pathname === target);
-      expect(resourceAttempts).toHaveLength(2);
-      expect(resourceAttempts[0]?.protocol).toBeTruthy();
-      expect(resourceAttempts[1]?.protocol).toBeNull();
+      expect(resourceAttempts).toEqual([{ pathname: target, protocol: "2025-11-25" }]);
     });
 
     const refreshCells = [

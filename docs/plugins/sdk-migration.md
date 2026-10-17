@@ -18,6 +18,54 @@ guide](/plugins/sdk-migration/sqlite-async). The final compatibility day is
 a Plugin SDK major version. The tables cover every affected member and its
 awaited or prepared replacement.
 
+## MCP result compatibility window
+
+OpenClaw's session and node MCP clients use the split MCP SDK v2 packages while
+continuing to negotiate legacy MCP. The published plugin boundary retains its
+MCP SDK v1 result shapes for one stable-release window: the first stable release
+containing this migration. Replacing those shapes with v2 types is scheduled for
+the following stable release; no calendar date is assigned yet.
+
+The affected contracts are `SessionMcpRuntime.callTool`, `listTools`,
+`listResourceTemplates`, and `getPrompt` from
+`openclaw/plugin-sdk/agent-harness-runtime`, its
+`prepareHarnessNativeMcpAppPreview.toolResult` input, and the runtime accepted by
+`openclaw/plugin-sdk/codex-mcp-projection`. Keep the existing v1 types when
+implementing these adapters during the compatibility window. Ordinary plugins
+that register tools or MCP connection resolvers do not need a new dependency.
+
+Host results cross this boundary losslessly. An incompatible result throws an
+error with `code: "MCP_SDK_RESULT_UNREPRESENTABLE"` and the MCP method name rather
+than dropping fields. This includes non-object `structuredContent` (arrays,
+scalars, or null), output schemas without `type: "object"`, non-object
+`properties` or non-string-array `required` in an output schema, scalar or null
+values in a tool's input/output schema `properties`, and nested fields that the
+v1 result schemas would discard.
+Metadata, resource content, prompt messages, and pagination cursors are preserved
+when representable.
+
+When the next stable release adopts v2 result types, import result and client
+types from `@modelcontextprotocol/client`, schema validators from
+`@modelcontextprotocol/core`, and the AJV adapter from
+`@modelcontextprotocol/client/validators/ajv`. Treat `structuredContent` as
+`unknown` and narrow it before reading properties; preserve JSON Schema values
+without assuming every property schema is an object. For example:
+
+```ts
+import type { CallToolResult } from "@modelcontextprotocol/client";
+
+function readSummary(result: CallToolResult): string | undefined {
+  const value = result.structuredContent;
+  if (value && typeof value === "object" && "summary" in value) {
+    return typeof value.summary === "string" ? value.summary : undefined;
+  }
+  return undefined;
+}
+```
+
+The compatibility window does not enable modern protocol serving or change MCP
+server configuration.
+
 ## What changed
 
 Several wide-open import surfaces used to let plugins reach almost anything

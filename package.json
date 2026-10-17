@@ -2344,6 +2344,7 @@
     "esbuild": "0.28.2",
     "execa": "10.1.0",
     "express": "5.3.0",
+    "fast-uri": "4.2.1",
     "file-type": "22.1.1",
     "grammy": "1.46.0",
     "highlight.js": "11.12.0",

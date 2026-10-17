@@ -1,12 +1,7 @@
 import { randomUUID } from "node:crypto";
 import http from "node:http";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  ReadResourceRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { Server } from "@modelcontextprotocol/server";
 import { Type } from "typebox";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -553,7 +548,7 @@ it("revalidates a cached App grant after HTTP transport preparation before writi
   );
   let toolCalls = 0;
   let posts = 0;
-  mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
+  mcp.setRequestHandler("tools/list", async () => ({
     tools: [
       {
         name: "search",
@@ -562,16 +557,16 @@ it("revalidates a cached App grant after HTTP transport preparation before writi
       },
     ],
   }));
-  mcp.setRequestHandler(ReadResourceRequestSchema, async ({ params }) => ({
+  mcp.setRequestHandler("resources/read", async ({ params }) => ({
     contents: [
       { uri: params.uri, mimeType: "text/html;profile=mcp-app", text: "<html>Parts search</html>" },
     ],
   }));
-  mcp.setRequestHandler(CallToolRequestSchema, async () => {
+  mcp.setRequestHandler("tools/call", async () => {
     toolCalls += 1;
     return { content: [{ type: "text", text: "search" }] };
   });
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID });
+  const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: randomUUID });
   await mcp.connect(transport);
   const listener = await reserveTestPortListener({
     offsets: [0],

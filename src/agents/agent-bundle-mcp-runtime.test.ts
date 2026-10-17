@@ -575,6 +575,107 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("rejects unrepresentable nested wire fields before SDK result parsing can strip them", async () => {
+    let includeExtension = false;
+    let omitContent = false;
+    const extension = () => (includeExtension ? { "fixture/extension": "must not disappear" } : {});
+    const results = (): Record<string, unknown> => ({
+      "tools/list": {
+        tools: [{ name: "probe", inputSchema: { type: "object" }, annotations: extension() }],
+      },
+      "tools/call": omitContent
+        ? { isError: false }
+        : { content: [{ type: "text", text: "answer", ...extension() }] },
+      "resources/templates/list": {
+        resourceTemplates: [
+          {
+            name: "memo",
+            uriTemplate: "memo://{id}",
+            icons: [{ src: "https://example.com/icon.png", ...extension() }],
+          },
+        ],
+      },
+      "prompts/get": {
+        messages: [{ role: "user", content: { type: "text", text: "prompt", ...extension() } }],
+      },
+    });
+    const server = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        http.createServer((request, response) => {
+          void (async () => {
+            if (request.method !== "POST") {
+              response.writeHead(405).end();
+              return;
+            }
+            let body = "";
+            for await (const chunk of request) {
+              body += chunk;
+            }
+            const message: { id?: number; method: string } = JSON.parse(body);
+            if (message.id === undefined) {
+              response.writeHead(202).end();
+              return;
+            }
+            const values = results();
+            const result =
+              message.method === "initialize"
+                ? {
+                    protocolVersion: "2025-11-25",
+                    capabilities: { tools: {}, resources: {}, prompts: {} },
+                    serverInfo: { name: "wire-proof", version: "1" },
+                  }
+                : values[message.method];
+            // Raw JSON keeps server-side SDK parsing from hiding the client regression.
+            response
+              .writeHead(200, { "content-type": "application/json" })
+              .end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+          })().catch(() => response.destroy());
+        }),
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-lossless-wire",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            lab: { transport: "streamable-http", url: `http://127.0.0.1:${server.claim.port}/mcp` },
+          },
+        },
+      },
+    });
+    try {
+      await runtime.getCatalog();
+      const operations = [
+        () => runtime.callTool("lab", "probe", {}),
+        () => expectDefined(runtime.listTools, "listTools")("lab"),
+        () => expectDefined(runtime.listResourceTemplates, "listResourceTemplates")("lab"),
+        () => expectDefined(runtime.getPrompt, "getPrompt")("lab", "memo"),
+      ];
+      expect(await Promise.all(operations.map((operation) => operation()))).toEqual([
+        results()["tools/call"],
+        results()["tools/list"],
+        results()["resources/templates/list"],
+        results()["prompts/get"],
+      ]);
+      omitContent = true;
+      expect(await runtime.callTool("lab", "probe", {})).toEqual({ content: [], isError: false });
+      omitContent = false;
+      includeExtension = true;
+      const outcomes = await Promise.allSettled(operations.map((operation) => operation()));
+      expect(outcomes).toEqual(
+        ["tools/call", "tools/list", "resources/templates/list", "prompts/get"].map((method) => ({
+          status: "rejected",
+          reason: expect.objectContaining({ code: "MCP_SDK_RESULT_UNREPRESENTABLE", method }),
+        })),
+      );
+    } finally {
+      await runtime.dispose();
+      await server.releaseListener();
+      await server.claim.release();
+    }
+  });
+
   it("redacts credentials from MCP catalog diagnostics", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-diagnostic-redaction-"));
     const serverPath = path.join(tempDir, "diagnostic-redaction.mjs");
