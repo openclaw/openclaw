@@ -201,8 +201,8 @@ describe("importSessionCatalogHistory", () => {
       { id: "a-1", type: "agentMessage", text: "hi" },
     ];
 
-    await importHistory(items).result;
-    await importHistory(items).result;
+    await importHistory(items);
+    await importHistory(items);
 
     expect(transcript.lockCalls).toBe(2);
     expect(transcript.messages).toHaveLength(2);
@@ -215,8 +215,8 @@ describe("importSessionCatalogHistory", () => {
       text: `message-${String(index)}`,
     }));
 
-    const { read, result } = importHistory(items);
-    await result;
+    const read = catalogReader(items);
+    await importHistory(items, { read });
 
     expect(read).toHaveBeenCalledTimes(4);
     expect(transcript.messages).toHaveLength(200);
