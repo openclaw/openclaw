@@ -106,10 +106,58 @@ async function createFixture(selected = diagnostic) {
     shouldInjectGroupIntro: false,
     storePath,
   };
+  const scope = { agentId: "main", storePath, sessionKey, sessionId: entry.sessionId };
   return {
     context,
     read: () => loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
     replace: (next: InternalSessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
+    persist: (
+      route: { provider: string; model: string },
+      {
+        runId = context.runId,
+        text = "done",
+        stopReason = "stop",
+        display,
+      }: {
+        runId?: string;
+        text?: string;
+        stopReason?: "stop" | "length";
+        display?: boolean;
+      } = {},
+    ) =>
+      persistSessionTranscriptTurn(scope, {
+        config: context.cfg,
+        expectedSessionId: entry.sessionId,
+        runId,
+        messages: [
+          {
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              ...route,
+              stopReason,
+              ...(display === undefined ? {} : { display }),
+            },
+          },
+        ],
+        ...(display === false
+          ? {}
+          : { sessionLifecyclePatch: { status: "done", lastRunId: runId } }),
+      }),
+    project: (
+      rowEntry: InternalSessionEntry,
+      terminalModel?: Awaited<ReturnType<typeof readSessionFallbackModelAsync>> | null,
+    ) =>
+      buildGatewaySessionRow({
+        cfg: context.cfg,
+        agentId: "main",
+        lightweightListRow: true,
+        storePath,
+        store: { [sessionKey]: rowEntry },
+        key: sessionKey,
+        entry: rowEntry,
+        ...(terminalModel === undefined ? {} : { terminalModel }),
+      }),
     account: async (route: { provider: string; model: string }) => {
       context.execution.result.meta.agentMeta = {
         sessionId: entry.sessionId,
@@ -157,38 +205,9 @@ it("does not persist or project a fallback for the selected model's wire identit
     fallbackCleared: false,
   });
   expect(fixture.read()?.fallbackNotice).toBeUndefined();
-  await persistSessionTranscriptTurn(
-    { agentId: "main", storePath, sessionKey: context.sessionKey!, sessionId: entry.sessionId },
-    {
-      config: context.cfg,
-      expectedSessionId: entry.sessionId,
-      runId: context.runId,
-      messages: [
-        {
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "done" }],
-            provider: "arcee",
-            model: "arcee-ai/trinity-large-preview",
-            stopReason: "stop",
-          },
-        },
-      ],
-      sessionLifecyclePatch: { status: "done", lastRunId: context.runId },
-    },
-  );
+  await fixture.persist({ provider: "arcee", model: "arcee-ai/trinity-large-preview" });
   const stored = fixture.read()!;
-  expect(
-    buildGatewaySessionRow({
-      cfg: context.cfg,
-      agentId: "main",
-      lightweightListRow: true,
-      storePath,
-      store: { [context.sessionKey!]: stored },
-      key: context.sessionKey!,
-      entry: stored,
-    }),
-  ).toMatchObject({
+  expect(fixture.project(stored)).toMatchObject({
     modelProvider: "arcee",
     model: "trinity-large-preview",
     activeModelProvider: undefined,
@@ -222,26 +241,7 @@ it.each([false, true])(
     ];
 
     await fixture.account({ provider: "fallback-fixture", model: "plain" });
-    await persistSessionTranscriptTurn(
-      { agentId: "main", storePath, sessionKey: context.sessionKey!, sessionId: entry.sessionId },
-      {
-        config: context.cfg,
-        expectedSessionId: entry.sessionId,
-        runId: context.runId,
-        messages: [
-          {
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "done" }],
-              provider: "fallback-fixture",
-              model: "plain",
-              stopReason: "stop",
-            },
-          },
-        ],
-        sessionLifecyclePatch: { status: "done", lastRunId: context.runId },
-      },
-    );
+    await fixture.persist({ provider: "fallback-fixture", model: "plain" });
 
     const stored = fixture.read()!;
     expect(stored.fallbackNotice).toMatchObject({
@@ -249,23 +249,16 @@ it.each([false, true])(
       activeModel: "fallback-fixture/plain",
     });
     const project = async (rowEntry: InternalSessionEntry) =>
-      buildGatewaySessionRow({
-        cfg: context.cfg,
-        agentId: "main",
-        lightweightListRow: true,
-        storePath,
-        store: { [context.sessionKey!]: rowEntry },
-        key: context.sessionKey!,
-        entry: rowEntry,
-        terminalModel:
-          (await readSessionFallbackModelAsync({
-            config: context.cfg,
-            selectedProvider: diagnostic.provider,
-            selectedModel: diagnostic.model,
-            sessionEntry: rowEntry,
-            sessionScope: { agentId: "main", storePath, sessionKey: context.sessionKey! },
-          })) ?? null,
-      });
+      fixture.project(
+        rowEntry,
+        (await readSessionFallbackModelAsync({
+          config: context.cfg,
+          selectedProvider: diagnostic.provider,
+          selectedModel: diagnostic.model,
+          sessionEntry: rowEntry,
+          sessionScope: { agentId: "main", storePath, sessionKey: context.sessionKey! },
+        })) ?? null,
+      );
     expect(await project(stored)).toMatchObject({
       modelProvider: diagnostic.provider,
       model: diagnostic.model,
@@ -298,47 +291,16 @@ it.each([false, true])(
     }
 
     const recoveryRunId = `${context.runId}-recovery`;
-    await persistSessionTranscriptTurn(
-      { agentId: "main", storePath, sessionKey: context.sessionKey!, sessionId: entry.sessionId },
-      {
-        config: context.cfg,
-        expectedSessionId: entry.sessionId,
-        runId: context.runId,
-        messages: [
-          {
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "hidden answer" }],
-              display: false,
-              provider: "fallback-fixture",
-              model: "plain",
-              stopReason: "stop",
-            },
-          },
-        ],
-      },
+    await fixture.persist(
+      { provider: "fallback-fixture", model: "plain" },
+      { text: "hidden answer", display: false },
     );
     expect((await project(fixture.read()!)).activeModel).toBeUndefined();
-    await persistSessionTranscriptTurn(
-      { agentId: "main", storePath, sessionKey: context.sessionKey!, sessionId: entry.sessionId },
-      {
-        config: context.cfg,
-        expectedSessionId: entry.sessionId,
-        runId: recoveryRunId,
-        messages: [
-          {
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "recovered" }],
-              provider: diagnostic.provider,
-              model: diagnostic.model,
-              stopReason: "length",
-            },
-          },
-        ],
-        sessionLifecyclePatch: { status: "done", lastRunId: recoveryRunId },
-      },
-    );
+    await fixture.persist(diagnostic, {
+      runId: recoveryRunId,
+      text: "recovered",
+      stopReason: "length",
+    });
     // The newer completed primary answer rejects the old notice even before accounting clears it.
     const recovered = fixture.read()!;
     expect(recovered.fallbackNotice).toEqual(stored.fallbackNotice);

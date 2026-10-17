@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
@@ -51,12 +51,28 @@ const priorInputTokens = 45_000;
 const providerText = (content: unknown) =>
   extractTextFromChatContent(content, { joinWith: "\n", normalizeText: (text) => text }) ?? "";
 
+function writeChunk(
+  response: ServerResponse,
+  choice: { delta: object; finish_reason: string | null },
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number },
+) {
+  response.write(
+    `data: ${JSON.stringify({
+      id: "synthetic-completion",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "test-model",
+      choices: [{ index: 0, ...choice }],
+      ...(usage ? { usage } : {}),
+    })}\n\n`,
+  );
+}
+
 describe("required maintenance with restart-safe admitted input", () => {
   it.each(["one archive", "two archives"] as const)(
     "keeps the approved user current through preflight maintenance (%s)",
     async (history) => {
       await withOpenClawTestState({ label: "required-maintenance-pending" }, async (state) => {
-        const requests: ModelRequest[] = [];
         const runtimeContext = "Synthetic current runtime fact for the approved request.";
         const approved =
           "Approved current request: preserve ünicode 🦞 and exact newlines.\n" +
@@ -74,8 +90,7 @@ describe("required maintenance with restart-safe admitted input", () => {
             body += chunk;
           });
           request.on("end", () => {
-            requests.push(JSON.parse(body) as ModelRequest);
-            const received = requests.at(-1)!;
+            const received = JSON.parse(body) as ModelRequest;
             const lastUser = received.messages.findLast(
               (message) => message.role === "user" && !isModelRuntimeContextCarrier(message),
             );
@@ -100,15 +115,6 @@ describe("required maintenance with restart-safe admitted input", () => {
             if (writeCheckpoint) {
               advertisedWrite =
                 received.tools?.some((tool) => tool.function?.name === "write") === true;
-              if (!advertisedWrite) {
-                response.writeHead(500, { "content-type": "application/json" });
-                response.end(
-                  JSON.stringify({
-                    error: { message: "Checkpoint write tool was not advertised" },
-                  }),
-                );
-                return;
-              }
             }
             if (foreground) {
               foregroundRequests.push(received);
@@ -120,54 +126,36 @@ describe("required maintenance with restart-safe admitted input", () => {
                 ? "NO_REPLY"
                 : "## Decisions\nKeep documentation clear.\n## Open TODOs\nRespond to the current user.\n## Constraints/Rules\nPreserve approved input.\n## Pending user asks\nContinue the current task.\n## Exact identifiers\narchive-marker";
             response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
-            response.write(
-              `data: ${JSON.stringify({
-                id: "synthetic-completion",
-                object: "chat.completion.chunk",
-                created: 1,
-                model: "test-model",
-                choices: [
-                  {
-                    index: 0,
-                    delta: writeCheckpoint
-                      ? {
-                          role: "assistant",
-                          tool_calls: [
-                            {
-                              index: 0,
-                              id: "checkpoint-write",
-                              type: "function",
-                              function: {
-                                name: "write",
-                                arguments: JSON.stringify({
-                                  path: "memory/checkpoint.md",
-                                  content: checkpointText,
-                                }),
-                              },
-                            },
-                          ],
-                        }
-                      : { role: "assistant", content: text },
-                    finish_reason: null,
-                  },
-                ],
-              })}\n\n`,
-            );
-            response.write(
-              `data: ${JSON.stringify({
-                id: "synthetic-completion",
-                object: "chat.completion.chunk",
-                created: 1,
-                model: "test-model",
-                choices: [
-                  { index: 0, delta: {}, finish_reason: writeCheckpoint ? "tool_calls" : "stop" },
-                ],
-                usage: {
-                  prompt_tokens: foreground ? 18_000 : 22_000,
-                  completion_tokens: 50,
-                  total_tokens: foreground ? 18_050 : 22_050,
-                },
-              })}\n\n`,
+            writeChunk(response, {
+              delta: writeCheckpoint
+                ? {
+                    role: "assistant",
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: "checkpoint-write",
+                        type: "function",
+                        function: {
+                          name: "write",
+                          arguments: JSON.stringify({
+                            path: "memory/checkpoint.md",
+                            content: checkpointText,
+                          }),
+                        },
+                      },
+                    ],
+                  }
+                : { role: "assistant", content: text },
+              finish_reason: null,
+            });
+            writeChunk(
+              response,
+              { delta: {}, finish_reason: writeCheckpoint ? "tool_calls" : "stop" },
+              {
+                prompt_tokens: foreground ? 18_000 : 22_000,
+                completion_tokens: 50,
+                total_tokens: foreground ? 18_050 : 22_050,
+              },
             );
             response.end("data: [DONE]\n\n");
           });
@@ -403,19 +391,7 @@ describe("required maintenance with restart-safe admitted input", () => {
           expect(events.filter((event) => event?.type === "compaction")).toHaveLength(
             expectedCompactions,
           );
-          const diagnostic = events.map((event) => {
-            const message = asOptionalRecord(event?.message);
-            return {
-              type: event?.type,
-              id: event?.id,
-              parentId: event?.parentId,
-              role: message?.role,
-              errorMessage: message?.errorMessage,
-            };
-          });
-          expect
-            .soft(result, JSON.stringify(diagnostic))
-            .toMatchObject({ text: "FOREGROUND_READY" });
+          expect.soft(result).toMatchObject({ text: "FOREGROUND_READY" });
           expect(foregroundRequests).toHaveLength(1);
           const foregroundMessages = foregroundRequests[0]!.messages;
           const userIndex = foregroundMessages.findLastIndex(
