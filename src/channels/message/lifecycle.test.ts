@@ -486,7 +486,7 @@ describe("message lifecycle primitives", () => {
   });
 
   it("coalesces overlapping nack callbacks and retains the first error", async () => {
-    const pendingNack = createDeferred<void>();
+    const pendingNack = createDeferred();
     const onNack = vi.fn(() => pendingNack.promise);
     const ctx = receiveContext({ onNack });
     const firstError = new Error("first failure");

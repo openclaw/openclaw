@@ -107,12 +107,8 @@ for (const [suffix, name] of [
       | undefined;
     let responseSettled = false;
     let acceptedKillIntent: SubagentRunRecord["killIntent"];
-    const rpc = <T extends Record<string, unknown>>(
-      method: string,
-      params: Record<string, unknown>,
-    ) => fixture.rpcReq<T>(socket, method, params);
     const expectResponse = (
-      response: Awaited<ReturnType<typeof rpc>>,
+      response: Awaited<ReturnType<typeof fixture.rpcReq>>,
       shape: Record<string, unknown>,
     ) => expect(response, JSON.stringify(response.error)).toMatchObject(shape);
     const runtimeKey = (runId: string) => getSubagentRunRuntimeKey(subagentRuns.get(runId)!);
@@ -121,7 +117,7 @@ for (const [suffix, name] of [
       sessionId: string,
       fields: Record<string, unknown> = {},
     ) => {
-      const response = await rpc("sessions.describe", { key, agentId: "main" });
+      const response = await fixture.rpcReq(socket, "sessions.describe", { key, agentId: "main" });
       expectResponse(response, {
         ok: true,
         payload: { session: { key, sessionId, ...fields } },
@@ -138,10 +134,14 @@ for (const [suffix, name] of [
           prePairDevice: true,
         });
         if (!fault && !replaceParent) {
-          const created = await rpc<{ key: string; sessionId: string }>("sessions.create", {
-            agentId: "main",
-            key: parentKey,
-          });
+          const created = await fixture.rpcReq<{ key: string; sessionId: string }>(
+            socket,
+            "sessions.create",
+            {
+              agentId: "main",
+              key: parentKey,
+            },
+          );
           expectResponse(created, {
             ok: true,
             payload: { key: parentKey },
@@ -157,7 +157,7 @@ for (const [suffix, name] of [
           await parentFinish.promise;
           command.abortSignal!.throwIfAborted();
         });
-        const accepted = await rpc("agent", {
+        const accepted = await fixture.rpcReq(socket, "agent", {
           sessionKey: parentKey,
           message: "Keep this synthetic parent active until Stop",
           idempotencyKey: parentRunId,
@@ -235,16 +235,16 @@ for (const [suffix, name] of [
         expect(start).not.toHaveBeenCalled();
 
         if (replaceParent) {
-          const history = await rpc<{
+          const history = await fixture.rpcReq<{
             sessionId: string;
             sessionInfo: { activeLeafEntryId: string | null };
-          }>("chat.history", { sessionKey: parentKey });
+          }>(socket, "chat.history", { sessionKey: parentKey });
           expect(history.ok).toBe(true);
           const payload = expectDefined(history.payload, "parent history");
           expect(payload.sessionId).toBe(parentSessionId);
           expect(payload.sessionInfo).toHaveProperty("activeLeafEntryId");
           fixture.embeddedRunMock.activeIds.add(`${firstRunId}-session`);
-          abortResponse = rpc("chat.send", {
+          abortResponse = fixture.rpcReq(socket, "chat.send", {
             sessionKey: parentKey,
             message: "/stop",
             sessionId: parentSessionId,
@@ -252,7 +252,7 @@ for (const [suffix, name] of [
             idempotencyKey: "stop-parent-replaced-during-drain",
           });
         } else {
-          abortResponse = rpc("chat.abort", {
+          abortResponse = fixture.rpcReq(socket, "chat.abort", {
             sessionKey: parentKey,
             agentId: "main",
             runId: parentRunId,

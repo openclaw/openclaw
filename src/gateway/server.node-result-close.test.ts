@@ -92,7 +92,9 @@ function connect(url: string, role: "operator" | "node", options: Partial<Client
 const request = <T = unknown>(client: Client, method: string, params: unknown = {}) =>
   client.request<T>(method, params, { timeoutMs: 10_000 });
 const stopClients = (...clients: Array<Client | undefined>) =>
-  Promise.allSettled(clients.map((client) => client?.stopAndWait({ timeoutMs: 1_000 })));
+  Promise.allSettled(
+    clients.flatMap((client) => (client ? [client.stopAndWait({ timeoutMs: 1_000 })] : [])),
+  );
 const inventory = (environmentSession?: number) => ({
   protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
   workerHost: { enabled: true, capacity: { total: 1, available: 1 }, environmentSession },
@@ -239,8 +241,8 @@ test.each([
       "node.invoke settled without sending a node request",
     );
 
-    pairingRead.blocked = createDeferred<void>();
-    const pairingReadStarted = createDeferred<void>();
+    pairingRead.blocked = createDeferred();
+    const pairingReadStarted = createDeferred();
     pairingRead.onBlocked = pairingReadStarted.resolve;
     const drainSpy = vi.spyOn(GatewayNodeLifecycleDispatchTracker.prototype, "drain");
     const resultAck = request(node, "node.invoke.result", {
