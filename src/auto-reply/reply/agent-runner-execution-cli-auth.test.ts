@@ -50,6 +50,23 @@ function registerBackends(backends: Array<[string, string, string, string]>) {
   });
 }
 
+async function restoreProductionFallbacks() {
+  const actual = await vi.importActual<typeof agentRunnerUtils>("./agent-runner-utils.js");
+  const scope = await vi.importActual<typeof agentScope>("../../agents/agent-scope.js");
+  const spies = [
+    vi
+      .spyOn(agentRunnerUtils, "resolveModelFallbackOptions")
+      .mockImplementation(actual.resolveModelFallbackOptions),
+    vi
+      .spyOn(agentScope, "resolveModelFallbackAvailability")
+      .mockImplementation(scope.resolveModelFallbackAvailability),
+    vi
+      .spyOn(agentScope, "modelFallbackOverrideFromAvailability")
+      .mockImplementation(scope.modelFallbackOverrideFromAvailability),
+  ];
+  onTestFinished(() => spies.forEach((spy) => spy.mockRestore()));
+}
+
 const credentials = {
   [managedProfile]: { type: "token", provider: "claude-cli", token: "synthetic-managed-token" },
   [canonicalProfile]: { type: "token", provider: "anthropic", token: "synthetic-canonical-token" },
@@ -61,29 +78,11 @@ const credentials = {
 
 describe("executeAgentTurn: CLI credential selection", () => {
   it.each([
+    { selected: primaryProfile, source: "auto", expected: managedProfile },
+    { selected: primaryProfile, error: true },
+    { selected: canonicalProfile, expected: canonicalProfile },
+    { selected: nativeProfile, expected: undefined },
     {
-      name: "selects ordered CLI credentials after an automatic cross-provider fallback",
-      selected: primaryProfile,
-      source: "auto",
-      expected: managedProfile,
-    },
-    {
-      name: "rejects an incompatible explicit account before CLI execution",
-      selected: primaryProfile,
-      error: 'cannot use auth profile "openai:primary"',
-    },
-    {
-      name: "forwards explicitly selected canonical credentials",
-      selected: canonicalProfile,
-      expected: canonicalProfile,
-    },
-    {
-      name: "preserves a selected native login even when a managed account exists",
-      selected: nativeProfile,
-      expected: undefined,
-    },
-    {
-      name: "uses the executing Google candidate for canonical API-key fallback",
       selected: primaryProfile,
       source: "auto",
       provider: "google",
@@ -92,14 +91,13 @@ describe("executeAgentTurn: CLI credential selection", () => {
       expected: googleProfile,
     },
     {
-      name: "retains existing scoped forwarding for a custom CLI backend",
       selected: customProfile,
       provider: "custom-cli",
       backend: "custom-cli",
       profiles: [customProfile],
       expected: customProfile,
     },
-  ] as const)("$name", async (scenario) => {
+  ] as const)("$selected → $expected ($source/$backend)", async (scenario) => {
     const testCase = {
       provider: "claude-cli",
       backend: "claude-cli",
@@ -122,7 +120,9 @@ describe("executeAgentTurn: CLI credential selection", () => {
       },
       agents: {
         defaults: {
-          models: { [`${testCase.provider}/${model}`]: { agentRuntime: { id: testCase.backend } } },
+          models: {
+            [`${testCase.provider}/${model}`]: { agentRuntime: { id: testCase.backend } },
+          },
         },
       },
     };
@@ -169,25 +169,7 @@ describe("executeAgentTurn: CLI credential selection", () => {
     "keeps $runtime native after resume binding and fails closed with API credentials available",
     async ({ runtime, provider }) => {
       await useProductionEmbeddedRunExecutionParamsForTest();
-      const { resolveModelFallbackOptions } =
-        await vi.importActual<typeof agentRunnerUtils>("./agent-runner-utils.js");
-      const fallbackOptions = vi
-        .spyOn(agentRunnerUtils, "resolveModelFallbackOptions")
-        .mockImplementation(resolveModelFallbackOptions);
-      const actualAgentScope = await vi.importActual<typeof agentScope>(
-        "../../agents/agent-scope.js",
-      );
-      const availability = vi
-        .spyOn(agentScope, "resolveModelFallbackAvailability")
-        .mockImplementation(actualAgentScope.resolveModelFallbackAvailability);
-      const fallbackOverride = vi
-        .spyOn(agentScope, "modelFallbackOverrideFromAvailability")
-        .mockImplementation(actualAgentScope.modelFallbackOverrideFromAvailability);
-      onTestFinished(() => {
-        availability.mockRestore();
-        fallbackOverride.mockRestore();
-        fallbackOptions.mockRestore();
-      });
+      await restoreProductionFallbacks();
       const followupRun = createScopedFollowupRun();
 
       const model = "native-test-model";
@@ -224,17 +206,10 @@ describe("executeAgentTurn: CLI credential selection", () => {
       applyModelOverrideToSessionEntry({ entry, selection: { provider: runtime, model } });
       registerBackends([[runtime, provider, provider, runtime]]);
       state.isCliProviderMock.mockImplementation((candidate) => candidate === runtime);
-      const candidatePlans: Array<Array<{ provider: string; model: string }>> = [];
+      const candidatePlans: ReturnType<typeof resolveModelCandidateChain>[] = [];
       state.runWithModelFallbackMock.mockImplementation(
         async (params: FallbackRunnerParams & Parameters<typeof resolveModelCandidateChain>[0]) => {
-          candidatePlans.push(
-            resolveModelCandidateChain({ ...params, manifestPlugins: [] }).map(
-              ({ provider: candidateProvider, model: candidateModel }) => ({
-                provider: candidateProvider,
-                model: candidateModel,
-              }),
-            ),
-          );
+          candidatePlans.push(resolveModelCandidateChain({ ...params, manifestPlugins: [] }));
           return {
             result: await params.run(
               params.provider,
@@ -267,15 +242,13 @@ describe("executeAgentTurn: CLI credential selection", () => {
         });
       };
 
-      await expect(runTurn()).resolves.toMatchObject({
+      const nativeReply = {
         kind: "success",
         runResult: { payloads: [{ text: "native reply" }] },
-      });
+      };
+      await expect(runTurn()).resolves.toMatchObject(nativeReply);
       entry.cliSessionBindings = { [runtime]: { sessionId: "native-resume-session" } };
-      await expect(runTurn()).resolves.toMatchObject({
-        kind: "success",
-        runResult: { payloads: [{ text: "native reply" }] },
-      });
+      await expect(runTurn()).resolves.toMatchObject(nativeReply);
       state.runCliAgentMock.mockRejectedValueOnce(
         Object.assign(new Error("native executable unavailable"), { code: "ENOENT" }),
       );
@@ -288,11 +261,9 @@ describe("executeAgentTurn: CLI credential selection", () => {
         ).toBe(false);
       }
       // A user pin must not acquire the configured API fallback or appended primary.
-      expect(candidatePlans).toEqual([
-        [{ provider: runtime, model }],
-        [{ provider: runtime, model }],
-        [{ provider: runtime, model }],
-      ]);
+      expect(candidatePlans).toMatchObject(
+        Array.from({ length: 3 }, () => [{ provider: runtime, model }]),
+      );
 
       applyModelOverrideToSessionEntry({ entry, selection: { provider, model } });
       await expect(runTurn()).resolves.toMatchObject({

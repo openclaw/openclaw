@@ -9,6 +9,7 @@ import { createChatSendLateFollowupDisposition } from "../../gateway/server-meth
 import { createChatSendLateReplyFinalizer } from "../../gateway/server-methods/chat-send-source-finalization.js";
 import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
 import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
+import { waitForAbortSignal } from "../../infra/abort-signal.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   createSqliteTranscriptTarget,
@@ -16,6 +17,7 @@ import {
 } from "../../sessions/user-turn-transcript.test-support.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import type * as AgentRunnerExecution from "./agent-runner-execution.js";
+import { createReplyParams } from "./agent-runner-reply-params.test-support.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import {
@@ -33,7 +35,6 @@ import {
 import { createReplyOperation } from "./reply-run-registry.js";
 import { expireStaleReplyOperation } from "./reply-run-registry.state.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
-import { createMockTypingController } from "./test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   executeAgentTurn: vi.fn(),
@@ -124,35 +125,26 @@ function createStalledRun(options: StalledOptions = {}) {
   });
   operation.setPhase("running");
   const runState: ReplyOperationRunState = {};
-  const run = runReplyAgent({
-    commandBody: "what is good at the hotel restaurant?",
-    followupRun,
-    queueKey,
-    resolvedQueue: settings,
-    shouldSteer: false,
-    shouldFollowup: false,
-    isActive: false,
-    replyOperation: operation,
-    opts: {
-      [REPLY_OPERATION_RUN_STATE]: runState,
-      ...(options.isHeartbeat ? { isHeartbeat: true } : {}),
-    },
-    typing: createMockTypingController(),
-    sessionCtx: {
-      Provider: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "12345",
-      ChatType: "direct",
-      MessageSid: "msg-stalled",
-    },
-    defaultModel: "anthropic/claude",
-    resolvedVerboseLevel: "off",
-    isNewSession: false,
-    blockStreamingEnabled: false,
-    resolvedBlockStreamingBreak: "message_end",
-    shouldInjectGroupIntro: false,
-    typingMode: "instant",
-  });
+  const run = runReplyAgent(
+    createReplyParams({
+      commandBody: "what is good at the hotel restaurant?",
+      followupRun,
+      queueKey,
+      resolvedQueue: settings,
+      replyOperation: operation,
+      opts: {
+        [REPLY_OPERATION_RUN_STATE]: runState,
+        ...(options.isHeartbeat ? { isHeartbeat: true } : {}),
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "12345",
+        ChatType: "direct",
+        MessageSid: "msg-stalled",
+      },
+    }),
+  );
   return { operation, run, runState, recorder, transcriptTarget };
 }
 
@@ -204,11 +196,7 @@ describe("runReplyAgent stalled turn continuation", () => {
       .mockReset()
       .mockImplementation(async (params: { replyOperation: { abortSignal: AbortSignal } }) => {
         executionStarted.resolve();
-        await new Promise<void>((resolve) => {
-          params.replyOperation.abortSignal.addEventListener("abort", () => resolve(), {
-            once: true,
-          });
-        });
+        await waitForAbortSignal(params.replyOperation.abortSignal);
         return { runId: "stalled-run", outcome: { kind: "aborted", reason: "user" } };
       });
   });
@@ -340,9 +328,7 @@ describe("runReplyAgent stalled turn continuation", () => {
     const preflightStarted = createDeferred();
     mocks.preflight.mockImplementationOnce(async ({ abortSignal }) => {
       preflightStarted.resolve();
-      await new Promise<void>((resolve) => {
-        abortSignal.addEventListener("abort", () => resolve(), { once: true });
-      });
+      await waitForAbortSignal(abortSignal);
       abortSignal.throwIfAborted();
       return undefined;
     });

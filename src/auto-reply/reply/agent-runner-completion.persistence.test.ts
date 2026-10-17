@@ -1,11 +1,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.transcript-turn.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { createSessionActivitySummaries } from "../../gateway/session-activity-summaries.js";
+import {
+  activityRecapResult,
+  preparedActivityRecapModel,
+} from "../../gateway/session-activity-summaries.test-support.js";
 import type { defaultCompleteModel } from "../../gateway/session-observer-model.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
@@ -21,22 +25,15 @@ import {
   observeCompletionCommands,
 } from "./agent-runner-result-accounting.persistence.test-support.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 
 let root: string;
 let storePath: string;
 let sequence = 0;
-const operations: ReplyOperation[] = [];
 beforeAll(() => {
   // openclaw-temp-dir: allow suite database root drains before removal
   root = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), "openclaw-completion-"));
   storePath = path.join(root, "openclaw-agent.sqlite");
   openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-});
-afterEach(() => {
-  for (const operation of operations.splice(0)) {
-    operation.complete();
-  }
 });
 afterAll(async () => {
   await drainSessionStoreWriterQueuesForTest();
@@ -49,7 +46,7 @@ async function createFixture(withUsage = false) {
     storePath,
     root,
     fixtureId: ++sequence,
-    registerOperation: (operation) => operations.push(operation),
+    registerOperation: (operation) => onTestFinished(() => operation.complete()),
   });
   if (withUsage) {
     fixture.context.execution.result.meta.agentMeta = {
@@ -76,10 +73,12 @@ function observeCommands(...args: Parameters<typeof observeCompletionCommands>) 
   return observer;
 }
 
-function expectCompletions(observer: ReturnType<typeof observeCompletionCommands>) {
-  expect(
-    observer.commands.filter((command) => command === "session.actor.completeTurn"),
-  ).toHaveLength(1);
+function expectCommands(
+  observer: ReturnType<typeof observeCompletionCommands>,
+  command = "session.actor.completeTurn",
+  count = 1,
+) {
+  expect(observer.commands.filter((entry) => entry === command)).toHaveLength(count);
 }
 
 it.for(["ready", "late", "abandoned"] as const)(
@@ -110,27 +109,16 @@ it.for(["ready", "late", "abandoned"] as const)(
         }
       },
       prepareModel: async () => ({
+        ...preparedActivityRecapModel,
         config: cfg,
-        authProfileId: undefined,
-        provider: "test",
-        model: "utility",
-        agentId: "main",
         agentDir: root,
-        outputTextPolicy: "strict-visible",
-        thinkLevel: "off",
       }),
       completeModel: async () => {
         started.resolve();
         return result.promise;
       },
     });
-    const finishModel = () =>
-      result.resolve({
-        text: "Verified the change.",
-        provider: "test",
-        model: "utility",
-        owner: { kind: "harness", id: "test" },
-      });
+    const finishModel = () => result.resolve(activityRecapResult("Verified the change."));
     const completion = service.beginCompletion(
       { key: sessionKey, agentId: "main", storePath },
       fixture.read(),
@@ -161,7 +149,7 @@ it.for(["ready", "late", "abandoned"] as const)(
           text: "done",
         });
         expect(fixture.read()).toMatchObject({ inputTokens: 120, outputTokens: 8 });
-        expectCompletions(observer);
+        expectCommands(observer);
       }
       completion.release();
       finishModel();
@@ -170,9 +158,7 @@ it.for(["ready", "late", "abandoned"] as const)(
         text: "Verified the change.",
         coveredMessages: 1,
       });
-      expect(
-        observer.commands.filter((command) => command === "session.entry.patch.commit"),
-      ).toHaveLength(timing === "ready" ? 0 : 1);
+      expectCommands(observer, "session.entry.patch.commit", timing === "ready" ? 0 : 1);
     } finally {
       completion.release();
       finishModel();
@@ -221,10 +207,8 @@ it.each([
     await expect(finalizeReplyAgentRun(fixture.context)).resolves.toMatchObject({ text: "done" });
     expect(invalidations).toBe(count);
     expect(normalize).toHaveBeenCalledOnce();
-    expect(observer.commands.filter((command) => command === "session.actor.read")).toHaveLength(
-      stage === "initial" ? 1 : 2,
-    );
-    expectCompletions(observer);
+    expectCommands(observer, "session.actor.read", stage === "initial" ? 1 : 2);
+    expectCommands(observer);
     const stored = fixture.read();
     expect(stored).toMatchObject({
       inputTokens: 120,
@@ -293,7 +277,7 @@ it.each(["publication-failure", "unknown-commit"] as const)(
         ? "Unconfirmed actor settlement"
         : /read only|readonly|extensible/i,
     );
-    expectCompletions(observer);
+    expectCommands(observer);
     expect(fixture.read()).toMatchObject({
       inputTokens: 120,
       outputTokens: 8,
@@ -326,7 +310,7 @@ it.each(["usage-only", "with-final-custody", "operation-closed"] as const)(
           : "synthetic completion refusal",
       );
     }
-    expectCompletions(observer);
+    expectCommands(observer);
     expect(beforeCommit).toHaveBeenCalledOnce();
     expect(fixture.read()).toEqual(before);
   },

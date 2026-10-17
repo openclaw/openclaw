@@ -1,4 +1,3 @@
-// Tests direct runtime config overrides passed into agent runner execution.
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -27,8 +26,8 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { createReplyParams } from "./agent-runner-reply-params.test-support.js";
 import { createTestFollowupRun, withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
-import type { QueueSettings } from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import {
@@ -37,7 +36,7 @@ import {
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
-import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
 const freshCfg = { runtimeFresh: true };
 const staleCfg = {
@@ -49,6 +48,11 @@ const staleCfg = {
   },
 };
 const sentinelError = new Error("stop-after-preflight");
+const mainReply = () => ({
+  runId: "runtime-config-test",
+  outcome: { kind: "rejected", payload: { text: "main reply" } },
+});
+const notifyConfig = { agents: { defaults: { compaction: { notifyUser: true } } } };
 
 const resolveQueuedReplyExecutionConfigMock = vi.fn();
 const resolveReplyToModeMock = vi.fn();
@@ -111,16 +115,8 @@ function createDirectRuntimeReplyParams(
     provider: "openai",
     model: "gpt-5.4",
   });
-  const resolvedQueue: QueueSettings = { mode: "interrupt" };
-  const replyParams: ReplyParams = {
-    commandBody: "hello",
+  const replyParams = createReplyParams({
     followupRun,
-    queueKey: "main",
-    resolvedQueue,
-    shouldSteer: false,
-    shouldFollowup: false,
-    isActive: false,
-    typing: createMockTypingController(),
     sessionCtx: {
       Provider: "telegram",
       OriginatingChannel: "telegram",
@@ -130,16 +126,10 @@ function createDirectRuntimeReplyParams(
       MessageSid: "msg-1",
     },
     defaultModel: "openai/gpt-5.4",
-    resolvedVerboseLevel: "off",
-    isNewSession: false,
-    blockStreamingEnabled: false,
-    resolvedBlockStreamingBreak: "message_end",
-    shouldInjectGroupIntro: false,
-    typingMode: "instant",
     ...overrides,
-  };
+  });
 
-  return { followupRun, resolvedQueue, replyParams };
+  return { followupRun, resolvedQueue: replyParams.resolvedQueue, replyParams };
 }
 
 async function createStoredReply(tempDir: string, overrides: Partial<SessionEntry> = {}) {
@@ -207,28 +197,24 @@ async function runRequiredCheckpoint(params: PreflightParams) {
 
 describe("runReplyAgent runtime config", () => {
   beforeEach(() => {
-    resolveQueuedReplyExecutionConfigMock.mockReset();
-    resolveReplyToModeMock.mockReset();
-    runSessionCompactionIfNeededMock.mockReset();
-    runMemoryFlushIfNeededMock.mockReset();
-    executeAgentTurnMock.mockReset();
+    resolveQueuedReplyExecutionConfigMock.mockReset().mockResolvedValue(freshCfg);
+    resolveReplyToModeMock.mockReset().mockReturnValue("all");
     enqueueFollowupRunMock.mockReset();
     compactEmbeddedAgentSessionMock
       .mockReset()
       .mockResolvedValue({ ok: true, compacted: true, result: { tokensAfter: 42 } });
     runEmbeddedAgentMock.mockReset().mockResolvedValue({ payloads: [], meta: {} });
 
-    resolveQueuedReplyExecutionConfigMock.mockResolvedValue(freshCfg);
-    resolveReplyToModeMock.mockReturnValue("all");
-    runSessionCompactionIfNeededMock.mockImplementation(async (params: PreflightParams) => {
-      await runRequiredCheckpoint(params);
-      throw sentinelError;
-    });
-    runMemoryFlushIfNeededMock.mockResolvedValue({ sessionEntry: undefined, outcome: "skipped" });
-    executeAgentTurnMock.mockResolvedValue({
-      runId: "runtime-config-test",
-      outcome: { kind: "rejected", payload: { text: "main reply" } },
-    });
+    runSessionCompactionIfNeededMock
+      .mockReset()
+      .mockImplementation(async (params: PreflightParams) => {
+        await runRequiredCheckpoint(params);
+        throw sentinelError;
+      });
+    runMemoryFlushIfNeededMock
+      .mockReset()
+      .mockResolvedValue({ sessionEntry: undefined, outcome: "skipped" });
+    executeAgentTurnMock.mockReset().mockResolvedValue(mainReply());
   });
 
   it("passes the derived runtime-policy key to pre-run maintenance", async () => {
@@ -268,7 +254,7 @@ describe("runReplyAgent runtime config", () => {
     replyParams.replyOperation = replyOperation;
     resolveQueuedReplyExecutionConfigMock.mockResolvedValue({
       ...freshCfg,
-      agents: { defaults: { compaction: { notifyUser: true } } },
+      ...notifyConfig,
     });
     runSessionCompactionIfNeededMock.mockImplementation(runRequiredCheckpoint);
     runMemoryFlushIfNeededMock.mockImplementation(
@@ -278,9 +264,7 @@ describe("runReplyAgent runtime config", () => {
       },
     );
 
-    const result = await runReplyAgent(replyParams);
-
-    expect(result).toEqual({ text: "main reply" });
+    await expect(runReplyAgent(replyParams)).resolves.toEqual({ text: "main reply" });
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(executeAgentTurnMock).toHaveBeenCalledOnce();
     expect(replyOperation.setPhase).toHaveBeenLastCalledWith("running");
@@ -316,12 +300,7 @@ describe("runReplyAgent runtime config", () => {
       followupRun.run.workspaceDir = tempDir;
       followupRun.run.provider = "anthropic";
       followupRun.run.model = "claude-sonnet-4-6";
-      configureContext(
-        { followupRun, replyParams },
-        {
-          agents: { defaults: { compaction: { notifyUser: true } } },
-        },
-      );
+      configureContext({ followupRun, replyParams }, notifyConfig);
       const onBlockReply = vi.fn();
       const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => void>();
       replyParams.opts = { onBlockReply, onReplyOperationOwned };
@@ -329,15 +308,10 @@ describe("runReplyAgent runtime config", () => {
         expect(SessionManager.open(scope).buildSessionContext().messages).toEqual(
           messages.map((message) => expect.objectContaining(message)),
         );
-        return {
-          runId: "runtime-config-test",
-          outcome: { kind: "rejected", payload: { text: "main reply" } },
-        };
+        return mainReply();
       });
 
-      const result = await runReplyAgent(replyParams);
-
-      expect(result).toEqual({ text: "main reply" });
+      await expect(runReplyAgent(replyParams)).resolves.toEqual({ text: "main reply" });
       expect(followupRun.run.sessionId).toBe(sessionEntry.sessionId);
       expect(onReplyOperationOwned.mock.calls[0]?.[0].sessionId).toBe(sessionEntry.sessionId);
       expect(loadSessionEntry(scope)).toMatchObject({
@@ -500,41 +474,35 @@ describe("runReplyAgent runtime config", () => {
     });
   });
 
-  it("records restart during memory flush as cancellation without starting the main turn", async () => {
-    const { replyParams } = createDirectRuntimeReplyParams();
-    const runState: ReplyOperationRunState = {};
-    replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
-    runSessionCompactionIfNeededMock.mockImplementation(runRequiredCheckpoint);
-    runMemoryFlushIfNeededMock.mockImplementation(
-      async (params: { replyOperation: ReplyOperation }) => {
-        expect(params.replyOperation.abortForRestart()).toBe(true);
-        return { sessionEntry: undefined, outcome: "failed" };
-      },
-    );
-
-    const result = await runReplyAgent(replyParams);
-
-    expect(result).toMatchObject({
-      text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
-    });
-    expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
-    expect(executeAgentTurnMock).not.toHaveBeenCalled();
-  });
-
-  it("records an aborted user agent turn as cancellation", async () => {
-    const { replyParams } = createDirectRuntimeReplyParams();
-    const runState: ReplyOperationRunState = {};
-    replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
-    runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
-    executeAgentTurnMock.mockResolvedValue({
-      runId: "cancelled-runtime-config-test",
-      outcome: { kind: "aborted", reason: "user" },
-    });
-
-    await runReplyAgent(replyParams);
-
-    expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
-  });
+  it.each(["restart during memory flush", "user agent turn"] as const)(
+    "records %s as cancellation",
+    async (phase) => {
+      const { replyParams } = createDirectRuntimeReplyParams();
+      const runState: ReplyOperationRunState = {};
+      replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
+      if (phase === "user agent turn") {
+        runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
+        executeAgentTurnMock.mockResolvedValue({
+          runId: "cancelled-runtime-config-test",
+          outcome: { kind: "aborted", reason: "user" },
+        });
+        await runReplyAgent(replyParams);
+      } else {
+        runSessionCompactionIfNeededMock.mockImplementation(runRequiredCheckpoint);
+        runMemoryFlushIfNeededMock.mockImplementation(
+          async ({ replyOperation }: { replyOperation: ReplyOperation }) => {
+            expect(replyOperation.abortForRestart()).toBe(true);
+            return { sessionEntry: undefined, outcome: "failed" };
+          },
+        );
+        await expect(runReplyAgent(replyParams)).resolves.toMatchObject({
+          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+        });
+        expect(executeAgentTurnMock).not.toHaveBeenCalled();
+      }
+      expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
+    },
+  );
 
   it("surfaces known pre-run Codex usage-limit failures instead of dropping the reply", async () => {
     const { replyParams } = createDirectRuntimeReplyParams();
@@ -547,7 +515,6 @@ describe("runReplyAgent runtime config", () => {
         model: "gpt-5.5",
       }),
     );
-    runMemoryFlushIfNeededMock.mockResolvedValue({ sessionEntry: undefined, outcome: "skipped" });
 
     const result = await runReplyAgent(replyParams);
 
@@ -677,7 +644,7 @@ describe("runReplyAgent runtime config", () => {
     expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
     expect(resolveQueuedReplyExecutionConfigMock).not.toHaveBeenCalled();
     expect(enqueueFollowupRunMock).toHaveBeenCalledTimes(1);
-    const enqueueCall = enqueueFollowupRunMock.mock.calls.at(0);
+    const enqueueCall = enqueueFollowupRunMock.mock.calls[0];
     expect(enqueueCall?.[0]).toBe("main");
     expect(enqueueCall?.[1]).toBe(followupRun);
     expect(enqueueCall?.[2]).toBe(resolvedQueue);

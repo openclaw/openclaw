@@ -18,8 +18,8 @@ import { cleanupSessionStateForTest } from "../../test-utils/session-state-clean
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 
-const tempDirs = createTempDirTracker();
-let rootDir: string;
+export const tempDirs = createTempDirTracker();
+export let rootDir: string;
 
 function registerCliBackendsForTest(): void {
   const backends = (
@@ -50,11 +50,11 @@ function registerCliBackendsForTest(): void {
   });
 }
 
-const runEmbeddedAgentMock = vi.fn();
-const runCliAgentMock = vi.fn();
-const runWithModelFallbackMock = vi.fn();
-const runtimeErrorMock = vi.fn();
-const compactState = vi.hoisted(() => ({
+export const runEmbeddedAgentMock = vi.fn();
+export const runCliAgentMock = vi.fn();
+export const runWithModelFallbackMock = vi.fn();
+export const runtimeErrorMock = vi.fn();
+export const compactState = vi.hoisted(() => ({
   compactEmbeddedAgentSessionMock: vi.fn(),
 }));
 
@@ -160,7 +160,7 @@ vi.mock("../../utils/provider-utils.js", () => ({
     provider === "google" || provider === "google-gemini-cli",
 }));
 
-const loadCronStoreMock = vi.fn();
+export const loadCronStoreMock = vi.fn();
 vi.mock("../../cron/store.js", () => {
   const resolveCronPath = (storePath?: string) => storePath ?? "/tmp/openclaw-cron-store.json";
   return {
@@ -193,7 +193,7 @@ vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (impo
 }));
 
 // #85714: exercise real suppression, spying only its WARN emitter.
-const warnPrivateFinalSpy = vi.hoisted(() => vi.fn());
+export const warnPrivateFinalSpy = vi.hoisted(() => vi.fn());
 vi.mock("./private-message-tool-final.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./private-message-tool-final.js")>()),
   warnPrivateMessageToolFinal: warnPrivateFinalSpy,
@@ -209,20 +209,19 @@ function setupAgentRunnerMocks(): void {
   resetSystemEventsForTest();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   replyRunRegistryTesting.resetReplyRunRegistry();
-  runEmbeddedAgentMock.mockReset();
   warnPrivateFinalSpy.mockClear();
+  runEmbeddedAgentMock.mockReset();
   runCliAgentMock.mockReset();
   runWithModelFallbackMock.mockReset();
   runtimeErrorMock.mockReset();
+  vi.mocked(enqueueFollowupRun).mockReset();
+  vi.mocked(scheduleFollowupDrain).mockReset();
   compactState.compactEmbeddedAgentSessionMock.mockReset().mockResolvedValue({
     compacted: false,
     reason: "test-preflight-disabled",
   });
-  vi.mocked(enqueueFollowupRun).mockReset();
-  vi.mocked(scheduleFollowupDrain).mockReset();
   loadCronStoreMock.mockReset().mockResolvedValue({ version: 1, jobs: [] });
 
-  // Default: no provider switch; execute the chosen provider+model.
   runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
     result: await runInitialModelFallbackAttempt(params),
     provider: params.provider,
@@ -249,15 +248,3 @@ export function setupAgentRunnerTestHooks(): void {
     tempDirs.cleanup();
   });
 }
-
-export {
-  compactState,
-  loadCronStoreMock,
-  rootDir,
-  runCliAgentMock,
-  runEmbeddedAgentMock,
-  runWithModelFallbackMock,
-  runtimeErrorMock,
-  tempDirs,
-  warnPrivateFinalSpy,
-};
