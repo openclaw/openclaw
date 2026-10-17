@@ -1,8 +1,3 @@
-/**
- * Test helpers for subagent registry persistence scenarios. They seed minimal
- * SQLite-backed session entries and runtime dependency mocks without loading
- * the production embedded-agent stack.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
@@ -442,37 +437,39 @@ export function registerSubagentRegistrationPersistenceTests({
     throw new Error("disk full");
   };
   const failNextWrite = () => mocks.persistRegistryRows.mockImplementationOnce(diskFull);
-  it("throws and removes the entry when the initial durable registry write fails", async () => {
-    const mod = getRegistry();
+  const register = (
+    runId: string,
+    options: Partial<Parameters<SubagentRegistryHarness["registerSubagentRun"]>[0]> = {},
+  ) => getRegistry().registerSubagentRun({ runId, task: runId, ...options });
+  const expectDiskFull = (result: Promise<unknown>) => expect(result).rejects.toThrow("disk full");
+  it.each([false, true])("rolls back failed registration (existing row: %s)", async (existing) => {
+    const runId = existing ? "run-same-id-registration" : "run-durability-required";
+    if (existing) {
+      mockPendingAgentWait();
+      await register(runId, { task: "original registration" });
+    }
+    const previous = findRequesterRun(runId);
+    if (existing) {
+      expect(previous).toBeDefined();
+    }
     failNextWrite();
-
-    await expect(
-      mod.registerSubagentRun({
-        runId: "run-durability-required",
-        task: "must fail closed",
-      }),
-    ).rejects.toThrowError("disk full");
-
-    expect(
-      mod
-        .listSubagentRunsForRequester("agent:main:main")
-        .find((entry) => entry.runId === "run-durability-required"),
-    ).toBeUndefined();
+    await expectDiskFull(register(runId, { task: "failed successor" }));
+    if (existing) {
+      expect(findRequesterRun(runId)).toBe(previous);
+      expect(findRequesterRun(runId)?.task).toBe("original registration");
+    } else {
+      expect(findRequesterRun(runId)).toBeUndefined();
+    }
   });
 
   it.each([
     { name: "running", queued: false },
     { name: "queued", queued: true },
   ])("persists the $name native admission before returning", async ({ queued }) => {
-    const mod = getRegistry();
     mockPendingAgentWait();
 
     const runId = `run-single-persist-${queued ? "queued" : "running"}`;
-    await mod.registerSubagentRun({
-      runId,
-      task: "persist one registry snapshot",
-      queued,
-    });
+    await register(runId, { queued });
 
     expect(mocks.persistRegistryRows).toHaveBeenCalledTimes(queued ? 2 : 1);
     expect(mocks.persistRegistryRows).toHaveBeenCalledWith(expect.any(Map), [runId]);
@@ -481,21 +478,19 @@ export function registerSubagentRegistrationPersistenceTests({
   it("restores the source owner when replacement persistence fails", async () => {
     const mod = getRegistry();
     mockPendingAgentWait();
-    await mod.registerSubagentRun({
-      runId: "run-replacement-persist-old",
+    await register("run-replacement-persist-old", {
       childSessionKey: "agent:main:subagent:replacement-persist",
       sessionEntry: { sessionId: "sess-replacement-persist" },
-      task: "keep live successor tracked",
     });
     mocks.persistRegistryRows.mockClear();
     mocks.persistRegistryRows.mockImplementation(diskFull);
 
-    await expect(
+    await expectDiskFull(
       mod.replaceSubagentRunAfterSteerCore({
         previousRunId: "run-replacement-persist-old",
         nextRunId: "run-replacement-persist-new",
       }),
-    ).rejects.toThrow("disk full");
+    );
 
     const runs = mod.listSubagentRunsForRequester("agent:main:main");
     expect(runs).toEqual([
@@ -505,23 +500,6 @@ export function registerSubagentRegistrationPersistenceTests({
       }),
     ]);
     expect(mocks.persistRegistryRows).toHaveBeenCalledOnce();
-  });
-
-  it("preserves the previous row when same-ID registration persistence fails", async () => {
-    const mod = getRegistry();
-    mockPendingAgentWait();
-    const runId = "run-same-id-registration";
-    await mod.registerSubagentRun({ runId, task: "original registration" });
-    const previous = findRequesterRun(runId);
-    expect(previous).toBeDefined();
-    failNextWrite();
-
-    await expect(mod.registerSubagentRun({ runId, task: "failed successor" })).rejects.toThrow(
-      "disk full",
-    );
-
-    expect(findRequesterRun(runId)).toBe(previous);
-    expect(findRequesterRun(runId)?.task).toBe("original registration");
   });
 
   it("rolls back an older kill ownership boundary when registration persistence fails", async () => {
@@ -540,22 +518,16 @@ export function registerSubagentRegistrationPersistenceTests({
     });
     failNextWrite();
 
-    await expect(
-      mod.registerSubagentRun({
-        runId: "run-registration-rollback-new",
+    await expectDiskFull(
+      register("run-registration-rollback-new", {
         childSessionKey,
         sessionEntry: { sessionId: "sess-registration-rollback" },
-        task: "new generation",
       }),
-    ).rejects.toThrowError("disk full");
+    );
 
     const oldRun = findRequesterRun("run-registration-rollback-old");
     expect(oldRun?.killReconciliation).toEqual({ killedAt: Date.now() - 500 });
-    expect(
-      mod
-        .listSubagentRunsForRequester("agent:main:main")
-        .some((entry) => entry.runId === "run-registration-rollback-new"),
-    ).toBe(false);
+    expect(findRequesterRun("run-registration-rollback-new")).toBeUndefined();
   });
 
   it("rolls back a killed tombstone when its durable registry write fails", async () => {
@@ -568,17 +540,13 @@ export function registerSubagentRegistrationPersistenceTests({
       updatedAt: 1,
     };
     mocks.entries["agent:main:subagent:kill-persist-failure"] = sessionEntry;
-    await mod.registerSubagentRun({
-      runId,
+    await register(runId, {
       childSessionKey: "agent:main:subagent:kill-persist-failure",
       sessionEntry,
-      task: "keep kill state atomic",
     });
     failNextWrite();
 
-    await expect(
-      mod.markSubagentRunTerminated({ runId, reason: "manual kill" }),
-    ).rejects.toThrowError("disk full");
+    await expectDiskFull(mod.markSubagentRunTerminated({ runId, reason: "manual kill" }));
 
     const run = findRequesterRun(runId);
     expect(run?.execution.endedAt).toBeUndefined();

@@ -33,11 +33,11 @@ export function registerArchiveCancellationTests({
   waitForNoRequesterRuns: () => Promise<void>;
 }): void {
   type RunInput = Parameters<typeof addCanonicalSubagentRunForTests>[0];
-  const addRun = (
-    entry: Pick<RunInput, "runId" | "childSessionKey" | "task"> & Partial<RunInput>,
-  ) => {
-    const suffix = entry.childSessionKey.replace("agent:main:subagent:", "");
+  const addRun = (suffix: string, entry: Partial<RunInput> = {}) => {
     return addCanonicalSubagentRunForTests({
+      runId: `run-${suffix}`,
+      childSessionKey: `agent:main:subagent:${suffix}`,
+      task: suffix,
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       cleanup: "keep",
@@ -49,9 +49,9 @@ export function registerArchiveCancellationTests({
       ...entry,
     });
   };
-  const addKilledRun = (entry: Parameters<typeof addRun>[0]) => {
+  const addKilledRun = (suffix: string, entry: Partial<RunInput> = {}) => {
     const endedAt = Date.now() - 5 * 60_000;
-    return addRun({
+    return addRun(suffix, {
       endedAt,
       endedReason: "subagent-killed",
       outcome: { status: "error", error: "manual kill" },
@@ -63,32 +63,29 @@ export function registerArchiveCancellationTests({
     });
   };
 
+  const requesterRuns = () => getRegistry().listSubagentRunsForRequester("agent:main:main");
+  const expectNoSessionDelete = () =>
+    expect(
+      vi.mocked(callGateway).mock.calls.filter(([request]) => request.method === "sessions.delete"),
+    ).toHaveLength(0);
+
   it("stabilizes provisional killed tasks before deleting expired tombstones", async () => {
-    const mod = getRegistry();
     const now = Date.now();
-    await addKilledRun({
-      runId: "run-killed-tombstone-expired",
-      childSessionKey: "agent:main:subagent:killed-tombstone-expired",
-      task: "expire killed tombstone",
+    await addKilledRun("killed-tombstone-expired", {
       cleanup: "delete",
       startedAt: now - 10 * 60_000,
       archiveAtMs: now,
     });
 
     await sweepAndSettleCleanup();
-    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
-    expect(
-      vi.mocked(callGateway).mock.calls.some(([request]) => request.method === "sessions.delete"),
-    ).toBe(false);
+    expect(requesterRuns()).toHaveLength(0);
+    expectNoSessionDelete();
   });
 
   it("retains cancellation evidence when the retirement write is rejected", async () => {
     const now = Date.now();
     const runId = "run-killed-tombstone-retry";
-    await addKilledRun({
-      runId,
-      childSessionKey: "agent:main:subagent:killed-tombstone-retry",
-      task: "retry killed tombstone",
+    await addKilledRun("killed-tombstone-retry", {
       cleanup: "delete",
       archiveAtMs: now,
     });
@@ -126,43 +123,32 @@ export function registerArchiveCancellationTests({
       expect(refusedPreimage).toBeDefined();
       expect(refusedPreimage?.cleanupHandled).toBe(true);
       expect(subagentRuns.get(runId)).toEqual({ ...refusedPreimage, cleanupHandled: false });
-      expect(subagentRuns.get(runId)).toMatchObject({
-        endedReason: "subagent-killed",
-        execution: { status: "terminal", outcome: { status: "error", error: "manual kill" } },
-      });
-      expect(loadSubagentRegistryFromSqlite().get(runId)).toMatchObject({
-        endedReason: "subagent-killed",
-        execution: { status: "terminal", outcome: { status: "error", error: "manual kill" } },
-      });
-      expect(
-        vi.mocked(callGateway).mock.calls.some(([request]) => request.method === "sessions.delete"),
-      ).toBe(false);
+      for (const runs of [subagentRuns, loadSubagentRegistryFromSqlite()]) {
+        expect(runs.get(runId)).toMatchObject({
+          endedReason: "subagent-killed",
+          execution: { status: "terminal", outcome: { status: "error", error: "manual kill" } },
+        });
+      }
+      expectNoSessionDelete();
     } finally {
       writer.mockRestore();
     }
   });
 
   it("preserves stable operator cancellation when retiring expired tombstones", async () => {
-    const mod = getRegistry();
     const now = Date.now();
-    await addKilledRun({
-      runId: "run-killed-operator-cancelled",
-      childSessionKey: "agent:main:subagent:killed-operator-cancelled",
-      task: "preserve operator cancellation",
+    await addKilledRun("killed-operator-cancelled", {
       archiveAtMs: now,
     });
 
     await sweepAndSettleCleanup();
-    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+    expect(requesterRuns()).toHaveLength(0);
   });
 
   it("keeps stable cancellation tombstones through the completion grace window", async () => {
     const mod = getRegistry();
     const now = Date.now();
-    await addKilledRun({
-      runId: "run-killed-grace",
-      childSessionKey: "agent:main:subagent:killed-grace",
-      task: "retain cancellation evidence",
+    await addKilledRun("killed-grace", {
       createdAt: now - 2 * 60_000,
       endedAt: now - 60_000,
       killReconciliation: { killedAt: now - 60_000, taskCancellationAccepted: true },
@@ -172,17 +158,14 @@ export function registerArchiveCancellationTests({
 
     await mod.testing.sweepOnceForTests();
 
-    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
+    expect(requesterRuns()).toHaveLength(1);
   });
 
   it("directly kills a replacement run through its durable task ID", async () => {
     const mod = getRegistry();
     const now = Date.now();
-    const childSessionKey = "agent:main:subagent:replacement-direct-kill";
-    await addRun({
+    await addRun("replacement-direct-kill", {
       runId: "run-after-replacement-direct-kill",
-      childSessionKey,
-      task: "kill replacement task",
       sessionStartedAt: now - 11 * 60_000,
     });
 
@@ -195,12 +178,9 @@ export function registerArchiveCancellationTests({
   });
 
   it("does not reconcile an older tombstone through a newer session task", async () => {
-    const mod = getRegistry();
     const now = Date.now();
-    await addKilledRun({
+    await addKilledRun("reused-session", {
       runId: "run-old-generation",
-      childSessionKey: "agent:main:subagent:reused-session",
-      task: "expire old generation",
       sessionStartedAt: now - 10 * 60_000,
       killReconciliation: {
         killedAt: now - 5 * 60_000,
@@ -209,7 +189,7 @@ export function registerArchiveCancellationTests({
     });
 
     await sweepAndSettleCleanup();
-    expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
+    expect(requesterRuns()).toHaveLength(0);
   });
 
   it("retains newly rearmed requester custody while superseded cleanup is awaiting", async () => {
@@ -218,11 +198,8 @@ export function registerArchiveCancellationTests({
     const now = Date.now();
     const runId = "superseded-new-wake";
     const successorRunId = "superseded-new-wake-successor";
-    const childSessionKey = "agent:main:subagent:superseded-new-wake";
-    await addRun({
+    await addRun("superseded-new-wake", {
       runId,
-      childSessionKey,
-      task: "retain rearmed wake",
       generation: 1,
       execution: {
         status: "terminal",
@@ -239,10 +216,8 @@ export function registerArchiveCancellationTests({
       suppressAnnounceReason: "killed",
       killReconciliation: { killedAt: now - 5 * 60_000 },
     });
-    await addRun({
+    await addRun("superseded-new-wake", {
       runId: successorRunId,
-      childSessionKey,
-      task: "successor",
       generation: 2,
       createdAt: now - 60_000,
     });
@@ -295,30 +270,21 @@ export function registerArchiveCancellationTests({
     const mod = getRegistry();
     const now = Date.now();
     const archiveAtMs = now + 55 * 60_000;
-    await addKilledRun({
-      runId: "run-killed-retained-session",
-      childSessionKey: "agent:main:subagent:killed-retained-session",
-      task: "stabilize before archive",
+    await addKilledRun("killed-retained-session", {
       cleanup: "delete",
       killReconciliation: { killedAt: now - 5 * 60_000 },
       archiveAtMs,
     });
 
     await mod.testing.sweepOnceForTests();
-    expect(mod.listSubagentRunsForRequester("agent:main:main")).toEqual([
+    expect(requesterRuns()).toEqual([
       expect.objectContaining({
         runId: "run-killed-retained-session",
         archiveAtMs,
         suppressAnnounceReason: undefined,
       }),
     ]);
-    expect(
-      vi
-        .mocked(callGateway)
-        .mock.calls.some(
-          ([request]) => (request as { method?: string } | undefined)?.method === "sessions.delete",
-        ),
-    ).toBe(false);
+    expectNoSessionDelete();
   });
 
   it("continues killed cleanup when ended hook loading fails", async () => {
@@ -327,10 +293,7 @@ export function registerArchiveCancellationTests({
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(() => {
       throw new Error("plugin load failed");
     });
-    await addKilledRun({
-      runId: "run-killed-hook-load-failure",
-      childSessionKey: "agent:main:subagent:killed-hook-load-failure",
-      task: "cleanup despite hook failure",
+    await addKilledRun("killed-hook-load-failure", {
       killReconciliation: { killedAt: now - 5 * 60_000 },
     });
 
