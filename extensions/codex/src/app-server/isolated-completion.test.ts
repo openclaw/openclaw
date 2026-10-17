@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({ resolveAuthHandoff: vi.fn(), runBoundedTurn: v
 vi.mock("./auth-bridge.js", () => ({
   resolveCodexAppServerPreparedAuthHandoff: mocks.resolveAuthHandoff,
 }));
+// mock-isolation: Exercise completion orchestration without starting a native provider turn.
 vi.mock("./bounded-turn.js", () => ({ runBoundedCodexAppServerTurn: mocks.runBoundedTurn }));
 
 import { runCodexIsolatedCompletion } from "./isolated-completion.js";
