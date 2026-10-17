@@ -357,6 +357,7 @@ class RoomChatTranscriptCacheTest {
           url = "/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full",
           alt = "Managed image",
         )
+      val sentImage = ChatMessageContent(type = "image", mimeType = "image/jpeg", url = "media://inbound/photo---11111111.jpg", sizeBytes = 52433)
       saveTranscript(
         messages =
           listOf(
@@ -365,19 +366,21 @@ class RoomChatTranscriptCacheTest {
             // Inline binary-only messages remain disposable and are skipped entirely.
             ChatMessage(id = "img", role = "user", content = listOf(imagePart), timestampMs = 11),
             ChatMessage(id = "managed", role = "assistant", content = listOf(managedImage), timestampMs = 11),
+            ChatMessage(id = "sent", role = "user", content = listOf(sentImage), timestampMs = 11),
             message("world", role = "assistant", timestampMs = 12),
           ),
       )
 
       val loaded = loadTranscript()
 
-      assertEquals(listOf("hello", null, "world"), loaded.map { it.content.single().text })
+      assertEquals(listOf("hello", null, null, "world"), loaded.map { it.content.single().text })
       assertTrue(loaded.all { message -> message.content.all { part -> part.base64 == null } })
       assertEquals(managedImage.artifactId, loaded[1].content.single().artifactId)
-      assertEquals(listOf("user", "assistant", "assistant"), loaded.map { it.role })
-      assertEquals(listOf(10L, 11L, 12L), loaded.map { it.timestampMs })
-      assertEquals(listOf("run-1:user", null, null), loaded.map { it.idempotencyKey })
-      assertEquals(listOf("Alex (Slack)", null, null), loaded.map { it.senderLabel })
+      assertEquals(sentImage, loaded[2].content.single())
+      assertEquals(listOf("user", "assistant", "user", "assistant"), loaded.map { it.role })
+      assertEquals(listOf(10L, 11L, 11L, 12L), loaded.map { it.timestampMs })
+      assertEquals(listOf("run-1:user", null, null, null), loaded.map { it.idempotencyKey })
+      assertEquals(listOf("Alex (Slack)", null, null, null), loaded.map { it.senderLabel })
     }
 
   @Test
