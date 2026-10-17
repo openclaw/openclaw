@@ -23,6 +23,8 @@ function toolRunner(hooks: ToolHook[], options?: Parameters<typeof createHookRun
   }
   return createHookRunner(registry, options);
 }
+const runParams = (handler: Handler, params: Record<string, unknown>, catchErrors?: boolean) =>
+  toolRunner([{ handler }], { catchErrors }).runBeforeToolCall({ toolName: "bash", params }, ctx);
 
 describe("before_tool_call isolation and approval", () => {
   it("binds the first approval to its owner and snapshot while allowing a later block", async () => {
@@ -88,12 +90,9 @@ describe("before_tool_call isolation and approval", () => {
     },
   ])("fails closed before invoking a handler for $name", async ({ params }) => {
     const handler = vi.fn<Handler>(() => ({}));
-    await expect(
-      toolRunner([{ handler }], { catchErrors: true }).runBeforeToolCall(
-        { toolName: "bash", params },
-        ctx,
-      ),
-    ).rejects.toThrow("before_tool_call mutable input isolation failed");
+    await expect(runParams(handler, params, true)).rejects.toThrow(
+      "before_tool_call mutable input isolation failed",
+    );
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -104,10 +103,7 @@ describe("before_tool_call isolation and approval", () => {
       expect(Reflect.ownKeys(value.params)).toEqual(["command"]);
       value.params.command = "local edit";
     });
-    await toolRunner([{ handler }], { catchErrors: false }).runBeforeToolCall(
-      { toolName: "bash", params },
-      ctx,
-    );
+    await runParams(handler, params, false);
     expect(handler).toHaveBeenCalledOnce();
     expect(params.command).toBe("safe");
   });
@@ -128,10 +124,7 @@ describe("before_tool_call isolation and approval", () => {
     Map.prototype.set.call(map, "key", "value");
     Set.prototype.add.call(set, "value");
     const handler = vi.fn<Handler>(() => ({}));
-    await toolRunner([{ handler }]).runBeforeToolCall(
-      { toolName: "bash", params: { map, set } },
-      ctx,
-    );
+    await runParams(handler, { map, set });
     expect(handler).toHaveBeenCalledOnce();
     expect(handler.mock.calls[0]?.[0].params).toEqual({
       map: new Map([["key", "value"]]),
@@ -144,10 +137,7 @@ describe("before_tool_call isolation and approval", () => {
     const ownKeys = vi.spyOn(Reflect, "ownKeys");
     const handler = vi.fn<Handler>(() => ({}));
     try {
-      await toolRunner([{ handler }]).runBeforeToolCall(
-        { toolName: "bash", params: { bytes } },
-        ctx,
-      );
+      await runParams(handler, { bytes });
       expect(handler).toHaveBeenCalledOnce();
       expect(ownKeys.mock.calls.some(([value]) => ArrayBuffer.isView(value))).toBe(false);
     } finally {
@@ -179,9 +169,7 @@ describe("before_tool_call receipts", () => {
       return true;
     });
   });
-  afterEach(() => {
-    clear();
-  });
+  afterEach(() => clear());
   const admission = (assertAuthority: () => boolean | void = () => true) => ({
     token: createExecutionIdentityAdmissionToken("run-hook", {
       contextId: "context-hook",
@@ -216,36 +204,12 @@ describe("before_tool_call receipts", () => {
   });
 
   it.each([
-    {
-      name: "caught failure",
-      failurePolicy: undefined,
-      sharedMemory: false,
-      rejects: false,
-      outcome: "unknown",
-      coverage: "unknown",
-      reason: "plugin_hook_failed_open",
-    },
-    {
-      name: "configured denial",
-      failurePolicy: "fail-closed",
-      sharedMemory: false,
-      rejects: true,
-      outcome: "denied",
-      coverage: "enforced",
-      reason: "plugin_hook_failed_closed",
-    },
-    {
-      name: "shared memory hidden in Error.cause",
-      failurePolicy: undefined,
-      sharedMemory: true,
-      rejects: true,
-      outcome: "denied",
-      coverage: "enforced",
-      reason: "plugin_hook_failed_closed",
-    },
+    ["caught failure", undefined, false, false],
+    ["configured denial", "fail-closed", false, true],
+    ["shared memory in Error.cause", undefined, true, true],
   ] as const)(
-    "records $name without exposing secrets",
-    async ({ failurePolicy, sharedMemory, rejects, outcome, coverage, reason }) => {
+    "records %s without exposing secrets",
+    async (_name, failurePolicy, sharedMemory, closed) => {
       const handler = vi.fn<Handler>(() => {
         throw new Error("credential=must-not-leak");
       });
@@ -257,7 +221,7 @@ describe("before_tool_call receipts", () => {
         ? { error: new Error("shared", { cause: new Uint8Array(new SharedArrayBuffer(4)) }) }
         : {};
       const run = runner.runBeforeToolCall({ toolName: "bash", params }, ctx, admission());
-      if (rejects) {
+      if (closed) {
         await expect(run).rejects.toThrow(
           sharedMemory
             ? "before_tool_call mutable input isolation failed"
@@ -268,8 +232,11 @@ describe("before_tool_call receipts", () => {
       }
       expect(receipts).toHaveLength(1);
       expect(receipts[0]).toMatchObject({
-        decision: { outcome, reasonCode: reason },
-        enforcement: { coverageState: coverage },
+        decision: {
+          outcome: closed ? "denied" : "unknown",
+          reasonCode: closed ? "plugin_hook_failed_closed" : "plugin_hook_failed_open",
+        },
+        enforcement: { coverageState: closed ? "enforced" : "unknown" },
       });
       expect(JSON.stringify(receipts)).not.toContain("must-not-leak");
       expect(handler).toHaveBeenCalledTimes(sharedMemory ? 0 : 1);

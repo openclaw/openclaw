@@ -36,6 +36,33 @@ describe("plugin host cleanup session stores", () => {
     return stateDir;
   }
 
+  function cleanup(overrides: Partial<Parameters<typeof runPluginHostCleanup>[0]>) {
+    return runPluginHostCleanup({
+      cfg: {},
+      registry: createEmptyPluginRegistry(),
+      reason: "disable",
+      ...overrides,
+    });
+  }
+
+  function store(storePath = path.join(makeStateDir(), "sessions.json"), agentId?: string) {
+    const scope = (sessionKey: string) => ({ storePath, sessionKey, agentId });
+    return {
+      storePath,
+      read: (key: string) => loadSessionEntry(scope(key)),
+      write: (key: string, sessionId: string, overrides: Partial<SessionEntry> = {}) =>
+        replaceSessionEntry(scope(key), { sessionId, updatedAt: 100, ...overrides }),
+    };
+  }
+
+  const preserved = { other: { state: { preserved: true } } };
+  const cleanupState = { cleanup: { state: { active: true } } };
+  function injections(id: string, createdAt = 100): SessionEntry["pluginNextTurnInjections"] {
+    return {
+      cleanup: [{ id, pluginId: "cleanup", text: id, placement: "append_context", createdAt }],
+    };
+  }
+
   function harnessRegistration(
     pluginId: string,
     id: string,
@@ -55,23 +82,17 @@ describe("plugin host cleanup session stores", () => {
   }
 
   it("leaves entries unchanged when cleanup finds no plugin-owned state", async () => {
-    const stateDir = makeStateDir();
-    const storePath = path.join(stateDir, "sessions.json");
-    await replaceSessionEntry({ sessionKey: "agent:main:main", storePath }, {
-      sessionId: "session-id",
-      updatedAt: Date.now(),
-    } satisfies SessionEntry);
-    const before = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+    const { storePath, read, write } = store();
+    await write("agent:main:main", "session-id");
+    const before = read("agent:main:main");
 
-    const result = await runPluginHostCleanup({
+    const result = await cleanup({
       cfg: { session: { store: storePath } },
-      registry: createEmptyPluginRegistry(),
       pluginId: "noop-plugin",
-      reason: "disable",
     });
 
     expect(result).toEqual({ cleanupCount: 0, failures: [] });
-    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toEqual(before);
+    expect(read("agent:main:main")).toEqual(before);
   });
 
   it("cleans healthy agent state without opening a refused agent store", async () => {
@@ -94,11 +115,8 @@ describe("plugin host cleanup session stores", () => {
       },
     ]);
     try {
-      const result = await runPluginHostCleanup({
-        cfg: {},
-        registry: createEmptyPluginRegistry(),
+      const result = await cleanup({
         pluginId: "fixture",
-        reason: "disable",
         sessionStoreTargets: [
           { agentId: "cleaner", storePath: path.join(stateDir, "cleaner.sqlite") },
           { agentId: "main", storePath },
@@ -167,14 +185,12 @@ describe("plugin host cleanup session stores", () => {
               .mockRejectedValueOnce(new Error("snapshot read rejected"))
           : undefined;
       try {
-        const result = await runPluginHostCleanup({
+        const result = await cleanup({
           cfg: {
             agents: { ownership: "explicit", entries: { main: {} } },
             ...(shared ? { session: { store: active.storePath } } : {}),
           },
-          registry: createEmptyPluginRegistry(),
           pluginId: "fixture",
-          reason: "disable",
           sessionStoreTargets: completed ? [retired, active] : [retired],
         });
         expect(result).toEqual({
@@ -253,8 +269,7 @@ describe("plugin host cleanup session stores", () => {
         });
       let current = true;
       const revoked = new Error("session reset authority changed");
-      const cleanup = runPluginHostCleanup({
-        cfg: {},
+      const cleanupResult = cleanup({
         registry,
         reason: mode === "revoked" ? "reset" : "disable",
         pluginId: "fixture",
@@ -267,11 +282,11 @@ describe("plugin host cleanup session stores", () => {
           return current;
         },
       });
-      const settled = Promise.allSettled([blocker, cleanup]);
+      const settled = Promise.allSettled([blocker, cleanupResult]);
       try {
         await Promise.race([
           queued.promise,
-          cleanup.then(() => {
+          cleanupResult.then(() => {
             throw new Error("Cleanup completed before writer admission");
           }),
         ]);
@@ -312,34 +327,19 @@ describe("plugin host cleanup session stores", () => {
   );
 
   it("can defer persistent session-state cleanup to an atomic owner", async () => {
-    const stateDir = makeStateDir();
-    const storePath = path.join(stateDir, "sessions.json");
-    await replaceSessionEntry({ sessionKey: "agent:main:main", storePath }, {
-      sessionId: "session-id",
-      updatedAt: Date.now(),
-      pluginExtensions: {
-        test: {
-          state: { active: true },
-        },
-      },
-    } satisfies SessionEntry);
+    const { storePath, read, write } = store();
+    const pluginExtensions = { test: { state: { active: true } } };
+    await write("agent:main:main", "session-id", { pluginExtensions });
 
-    const result = await runPluginHostCleanup({
+    const result = await cleanup({
       cfg: { session: { store: storePath } },
-      registry: createEmptyPluginRegistry(),
       reason: "reset",
       sessionKey: "agent:main:main",
       skipPersistentSessionState: true,
     });
 
     expect(result).toEqual({ cleanupCount: 0, failures: [] });
-    expect(
-      loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.pluginExtensions,
-    ).toEqual({
-      test: {
-        state: { active: true },
-      },
-    });
+    expect(read("agent:main:main")?.pluginExtensions).toEqual(pluginExtensions);
   });
 
   it.each([
@@ -370,38 +370,21 @@ describe("plugin host cleanup session stores", () => {
   ])(
     "clears only the selected %s session's plugin state",
     async (_, targetKey, siblingKey, filter) => {
-      const stateDir = makeStateDir();
-      const storePath = path.join(stateDir, "sessions.json");
+      const { storePath, read, write } = store();
       for (const [sessionKey, sessionId] of [
         [targetKey, "target"],
         [siblingKey, "sibling"],
       ] as const) {
-        await replaceSessionEntry({ sessionKey, storePath }, {
-          sessionId,
-          updatedAt: Date.now(),
-          pluginExtensions: {
-            cleanup: { state: { sessionId } },
-            other: { state: { preserved: true } },
-          },
-          pluginNextTurnInjections: {
-            cleanup: [
-              {
-                id: sessionId,
-                pluginId: "cleanup",
-                text: sessionId,
-                placement: "append_context",
-                createdAt: Date.now(),
-              },
-            ],
-          },
-        } satisfies SessionEntry);
+        await write(sessionKey, sessionId, {
+          pluginExtensions: { cleanup: { state: { sessionId } }, ...preserved },
+          pluginNextTurnInjections: injections(sessionId),
+        });
       }
-      const siblingBefore = loadSessionEntry({ sessionKey: siblingKey, storePath });
+      const siblingBefore = read(siblingKey);
       expect(siblingBefore?.sessionId).toBe("sibling");
 
-      const result = await runPluginHostCleanup({
+      const result = await cleanup({
         cfg: { session: { store: storePath } },
-        registry: createEmptyPluginRegistry(),
         pluginId: "cleanup",
         reason: "delete",
         sessionKey: filter,
@@ -409,98 +392,52 @@ describe("plugin host cleanup session stores", () => {
 
       expect(result).toEqual({ cleanupCount: 1, failures: [] });
       await closeOpenClawAgentDatabasesAsync();
-      const target = loadSessionEntry({ sessionKey: targetKey, storePath });
-      expect(target?.pluginExtensions).toEqual({ other: { state: { preserved: true } } });
+      const target = read(targetKey);
+      expect(target?.pluginExtensions).toEqual(preserved);
       expect(target?.pluginNextTurnInjections).toBeUndefined();
-      expect(loadSessionEntry({ sessionKey: siblingKey, storePath })).toEqual(siblingBefore);
+      expect(read(siblingKey)).toEqual(siblingBefore);
     },
   );
 
   it("matches a key-like runtime session ID case-insensitively without interpreting it as a key", async () => {
     const runtimeSessionId = "signal:group: Opaque";
     const stateDir = makeStateDir();
-    const firstStorePath = path.join(stateDir, "agents", "a", "sessions", "sessions.json");
-    const secondStorePath = path.join(stateDir, "agents", "b", "sessions", "sessions.json");
+    const first = store(path.join(stateDir, "agents", "a", "sessions", "sessions.json"));
+    const second = store(path.join(stateDir, "agents", "b", "sessions", "sessions.json"));
+    const targetKey = "agent:a:telegram:group:shared-room";
+    const unrelatedKey = "agent:a:telegram:group:unrelated-room";
+    const secondKey = "agent:b:telegram:group:shared-room";
     const beforeUpdatedAt = 100;
-    const unrelatedUpdatedAt = Date.now();
-    const firstEntry: SessionEntry = {
-      sessionId: runtimeSessionId,
-      updatedAt: beforeUpdatedAt,
-      pluginExtensions: {
-        cleanup: { state: { active: true } },
-        other: { state: { preserved: true } },
-      },
-      pluginNextTurnInjections: {
-        cleanup: [
-          {
-            id: "remove",
-            pluginId: "cleanup",
-            text: "remove",
-            placement: "append_context",
-            createdAt: beforeUpdatedAt,
-          },
-        ],
-      },
-    };
-    const secondEntry: SessionEntry = {
-      sessionId: runtimeSessionId,
-      updatedAt: beforeUpdatedAt,
-      pluginExtensions: {
-        cleanup: { state: { active: true } },
-      },
-    };
     const unrelatedEntry: SessionEntry = {
       sessionId: "unrelated-session",
-      updatedAt: unrelatedUpdatedAt,
+      updatedAt: 100,
       delivery: { kind: "none" },
-      pluginExtensions: {
-        cleanup: { state: { keep: true } },
-      },
+      pluginExtensions: { cleanup: { state: { keep: true } } },
     };
-    await replaceSessionEntry(
-      { sessionKey: "agent:a:telegram:group:shared-room", storePath: firstStorePath },
-      firstEntry,
-    );
-    await replaceSessionEntry(
-      { sessionKey: "agent:a:telegram:group:unrelated-room", storePath: firstStorePath },
-      unrelatedEntry,
-    );
-    await replaceSessionEntry(
-      { sessionKey: "agent:b:telegram:group:shared-room", storePath: secondStorePath },
-      secondEntry,
-    );
+    await first.write(targetKey, runtimeSessionId, {
+      pluginExtensions: { ...cleanupState, ...preserved },
+      pluginNextTurnInjections: injections("remove", beforeUpdatedAt),
+    });
+    await first.write(unrelatedKey, unrelatedEntry.sessionId, unrelatedEntry);
+    await second.write(secondKey, runtimeSessionId, { pluginExtensions: cleanupState });
 
-    const result = await runPluginHostCleanup({
-      cfg: { session: { store: firstStorePath } },
-      registry: createEmptyPluginRegistry(),
+    const result = await cleanup({
+      cfg: { session: { store: first.storePath } },
       pluginId: "cleanup",
-      reason: "disable",
       sessionKey: runtimeSessionId.toUpperCase(),
       sessionStoreTargets: [
-        { agentId: "a", storePath: firstStorePath },
-        { agentId: "b", storePath: secondStorePath },
+        { agentId: "a", storePath: first.storePath },
+        { agentId: "b", storePath: second.storePath },
       ],
     });
 
     expect(result).toEqual({ cleanupCount: 2, failures: [] });
-    const firstMain = loadSessionEntry({
-      sessionKey: "agent:a:telegram:group:shared-room",
-      storePath: firstStorePath,
-    });
-    const firstUnrelated = loadSessionEntry({
-      sessionKey: "agent:a:telegram:group:unrelated-room",
-      storePath: firstStorePath,
-    });
-    const secondOther = loadSessionEntry({
-      sessionKey: "agent:b:telegram:group:shared-room",
-      storePath: secondStorePath,
-    });
-    expect(firstMain?.pluginExtensions).toEqual({
-      other: { state: { preserved: true } },
-    });
+    const firstMain = first.read(targetKey);
+    const secondOther = second.read(secondKey);
+    expect(firstMain?.pluginExtensions).toEqual(preserved);
     expect(firstMain?.pluginNextTurnInjections).toBeUndefined();
     expect(firstMain?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
-    expect(firstUnrelated).toEqual(unrelatedEntry);
+    expect(first.read(unrelatedKey)).toEqual(unrelatedEntry);
     expect(secondOther?.pluginExtensions).toBeUndefined();
     expect(secondOther?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
   });
@@ -508,24 +445,13 @@ describe("plugin host cleanup session stores", () => {
   it("clears shared custom SQLite stores for each resolved agent", async () => {
     const stateDir = makeStateDir();
     const sharedStorePath = path.join(stateDir, "custom", "sessions.json");
+    const main = store(sharedStorePath, "main");
+    const work = store(sharedStorePath, "work");
     const beforeUpdatedAt = 100;
-    const entry: SessionEntry = {
-      sessionId: "shared-session",
-      updatedAt: beforeUpdatedAt,
-      pluginExtensions: {
-        cleanup: { state: { active: true } },
-      },
-    };
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey: "agent:main:main", storePath: sharedStorePath },
-      entry,
-    );
-    await replaceSessionEntry(
-      { agentId: "work", sessionKey: "agent:work:main", storePath: sharedStorePath },
-      entry,
-    );
+    await main.write("agent:main:main", "shared-session", { pluginExtensions: cleanupState });
+    await work.write("agent:work:main", "shared-session", { pluginExtensions: cleanupState });
 
-    const result = await runPluginHostCleanup({
+    const result = await cleanup({
       cfg: {
         session: { store: sharedStorePath },
         agents: {
@@ -533,31 +459,22 @@ describe("plugin host cleanup session stores", () => {
           defaults: { sessionStore: { agentId: "main" } },
         },
       },
-      registry: createEmptyPluginRegistry(),
       pluginId: "cleanup",
-      reason: "disable",
     });
 
     expect(result).toEqual({ cleanupCount: 2, failures: [] });
-    const main = loadSessionEntry({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      storePath: sharedStorePath,
-    });
-    const work = loadSessionEntry({
-      agentId: "work",
-      sessionKey: "agent:work:main",
-      storePath: sharedStorePath,
-    });
-    expect(main?.pluginExtensions).toBeUndefined();
-    expect(main?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
-    expect(work?.pluginExtensions).toBeUndefined();
-    expect(work?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
+    for (const [target, key] of [
+      [main, "agent:main:main"],
+      [work, "agent:work:main"],
+    ] as const) {
+      const after = target.read(key);
+      expect(after?.pluginExtensions).toBeUndefined();
+      expect(after?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
+    }
   });
 
   it("preserves locked sessions for every harness owned by a disabled plugin", async () => {
-    const stateDir = makeStateDir();
-    const storePath = path.join(stateDir, "sessions.json");
+    const { storePath, read, write } = store();
     const updatedAt = 100;
     const registry = createEmptyPluginRegistry();
     registry.agentHarnesses.push(
@@ -566,54 +483,45 @@ describe("plugin host cleanup session stores", () => {
       ),
       harnessRegistration("other-plugin", "other-harness"),
     );
-    for (const suffix of ["a", "b"]) {
-      await replaceSessionEntry({ storePath, sessionKey: `agent:main:harness-${suffix}:locked` }, {
-        sessionId: `locked-session-${suffix}`,
-        updatedAt,
-        agentHarnessId: `fixture-harness-${suffix}`,
-        modelSelectionLocked: true,
-        pluginExtensions: {
-          "fixture-plugin": {
-            supervision: { sourceThreadId: `native-thread-${suffix}`, modelLocked: true },
-          },
+    const lockedState = (suffix: string) => ({
+      updatedAt,
+      agentHarnessId: `fixture-harness-${suffix}`,
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        "fixture-plugin": {
+          supervision: { sourceThreadId: `native-thread-${suffix}`, modelLocked: true },
         },
-      } satisfies SessionEntry);
+      },
+    });
+    for (const suffix of ["a", "b"]) {
+      await write(
+        `agent:main:harness-${suffix}:locked`,
+        `locked-session-${suffix}`,
+        lockedState(suffix),
+      );
     }
     for (const [sessionKey, sessionId, agentHarnessId] of [
       ["agent:main:other-harness:locked", "other-locked-session", "other-harness"],
       ["agent:main:ordinary", "ordinary-session", undefined],
     ] as const) {
-      await replaceSessionEntry({ storePath, sessionKey }, {
-        sessionId,
-        updatedAt,
+      await write(sessionKey, sessionId, {
         ...(agentHarnessId ? { agentHarnessId, modelSelectionLocked: true } : {}),
         pluginExtensions: { "fixture-plugin": { transient: true } },
-      } satisfies SessionEntry);
+      });
     }
 
-    const result = await runPluginHostCleanup({
+    const result = await cleanup({
       cfg: { session: { store: storePath } },
       registry,
       pluginId: "fixture-plugin",
-      reason: "disable",
       sessionStoreTargets: [{ agentId: "main", storePath }],
     });
 
     expect(result).toEqual({ cleanupCount: 2, failures: [] });
-    const readEntry = (sessionKey: string) => loadSessionEntry({ storePath, sessionKey });
     for (const suffix of ["a", "b"]) {
-      expect(readEntry(`agent:main:harness-${suffix}:locked`)).toMatchObject({
-        updatedAt,
-        agentHarnessId: `fixture-harness-${suffix}`,
-        modelSelectionLocked: true,
-        pluginExtensions: {
-          "fixture-plugin": {
-            supervision: { sourceThreadId: `native-thread-${suffix}`, modelLocked: true },
-          },
-        },
-      });
+      expect(read(`agent:main:harness-${suffix}:locked`)).toMatchObject(lockedState(suffix));
     }
-    expect(readEntry("agent:main:other-harness:locked")?.pluginExtensions).toBeUndefined();
-    expect(readEntry("agent:main:ordinary")?.pluginExtensions).toBeUndefined();
+    expect(read("agent:main:other-harness:locked")?.pluginExtensions).toBeUndefined();
+    expect(read("agent:main:ordinary")?.pluginExtensions).toBeUndefined();
   });
 });
