@@ -148,10 +148,20 @@ export async function auditScheduledTaskDefinition(
     "Settings.IdleSettings.WaitTimeout": "PT1H",
     "Settings.IdleSettings.StopOnIdleEnd": "true",
     "Settings.IdleSettings.RestartOnIdle": "false",
+    // Schema default; an exported explicit false is not an operator edit.
     "Settings.UseUnifiedSchedulingEngine": "false",
     "Settings.DisallowStartOnRemoteAppSession": "false",
     "Settings.Volatile": "false",
   };
+  // Task Scheduler can populate UseUnifiedSchedulingEngine on registration, and
+  // `schtasks /Create /XML` rejects the element, so the installer can neither author
+  // nor reproduce it (#167778). A non-default value is suppressed only while reporting
+  // drift; when the caller supplies the prepared definition (replacement or publication
+  // verification), it stays reported so a rewrite that cannot retain the value is protected.
+  const nativeManaged =
+    expectedCommand || expectedXml
+      ? undefined
+      : new Set<string>(["Settings.UseUnifiedSchedulingEngine"]);
   const released: Record<string, string> = {
     "Settings.DisallowStartIfOnBatteries": "true",
     "Settings.StopIfGoingOnBatteries": "true",
@@ -225,7 +235,7 @@ export async function auditScheduledTaskDefinition(
       continue;
     }
     if (
-      (!canonical && nativeDefaults[key] === current) ||
+      (!canonical && ((nativeManaged?.has(key) ?? false) || nativeDefaults[key] === current)) ||
       (canonical &&
         (node.children.length || canonical.children.length || current === canonical.textContent))
     ) {

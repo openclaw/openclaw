@@ -20,6 +20,7 @@ import {
 } from "./schtasks-layout.js";
 import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
+import { auditScheduledTaskDefinition } from "./service-audit-schtasks.js";
 import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 import { auditGatewayServiceConfig as inspectGatewayServiceConfig } from "./service-audit.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
@@ -792,4 +793,58 @@ it.each([
   } else {
     expect(await fs.readFile(hiddenPath, "utf8")).toBe(launcher);
   }
+});
+
+async function auditRewrittenTaskXml(
+  rewrite: (xml: string) => string,
+  options: { published?: boolean } = {},
+): Promise<ServiceDefinitionDrift[]> {
+  const home = dirs.make("scheduler-rewrite-");
+  const env = { USERPROFILE: home, OPENCLAW_STATE_DIR: home, USERNAME: "fixture" };
+  const hiddenPath = resolveTaskLauncherScriptPath(
+    { OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" },
+    resolveTaskScriptPath(env),
+  );
+  const prepared = buildScheduledTaskXml({
+    taskDescription: "OpenClaw Gateway",
+    taskUser: "fixture",
+    interactive: true,
+    launchPath: hiddenPath,
+  });
+  native.task.mockResolvedValue({ code: 0, stderr: "", stdout: rewrite(prepared) });
+  const findings: ServiceDefinitionDrift[] = [];
+  await auditScheduledTaskDefinition(
+    env,
+    findings,
+    undefined,
+    undefined,
+    options.published ? prepared : undefined,
+  );
+  return findings;
+}
+
+it("tolerates the scheduler-forced UseUnifiedSchedulingEngine value", async () => {
+  const findings = await auditRewrittenTaskXml((xml) =>
+    xml.replace(
+      "<Priority>7</Priority>",
+      "<Priority>7</Priority>\n    <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>",
+    ),
+  );
+  expect(findings).not.toContainEqual(
+    expect.objectContaining({ key: "Settings.UseUnifiedSchedulingEngine" }),
+  );
+});
+
+it("keeps the scheduler engine setting protected during replacement", async () => {
+  const findings = await auditRewrittenTaskXml(
+    (xml) =>
+      xml.replace(
+        "<Priority>7</Priority>",
+        "<Priority>7</Priority>\n    <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>",
+      ),
+    { published: true },
+  );
+  expect(findings).toContainEqual(
+    expect.objectContaining({ kind: "unknown-edit", key: "Settings.UseUnifiedSchedulingEngine" }),
+  );
 });
