@@ -225,59 +225,85 @@ describe("sessions.patchMany orchestration", () => {
     });
   });
 
-  it("does not reserve a projected label when target authorization fails", async () => {
+  it.each([
+    { archived: false, name: "does not reserve a projected label when target authorization fails" },
+    {
+      archived: true,
+      name: "isolates archive preparation authorization per target in input order",
+    },
+  ])("$name", async ({ archived }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
-      const sessionKeys = [0, 1].map((index) => `agent:main:label-race-${index}`);
-      for (const [index, sessionKey] of sessionKeys.entries()) {
-        await seedEntry(sessionKey, `session-label-race-${index}`);
+      const prefix = archived ? "archive-auth" : "label-race";
+      const failedIndex = archived ? 1 : 0;
+      const message = archived
+        ? "archive authorization changed; retry the request"
+        : "session changed before sessions.patchMany; retry the request";
+      const targets = Array.from({ length: archived ? 3 : 2 }, (_, index) => ({
+        key: `agent:main:${prefix}-${index}`,
+        ...(archived
+          ? {
+              expectedSessionId: `session-${prefix}-${index}`,
+              expectedLifecycleRevision: `revision-${prefix}-${index}`,
+            }
+          : {}),
+      }));
+      for (const [index, target] of targets.entries()) {
+        await seedEntry(target.key, `session-${prefix}-${index}`, target.expectedLifecycleRevision);
       }
       const assertCurrent = vi.fn(() => {
-        throw new Error("outer all-target guard must not be delegated");
+        throw new Error("outer all-target guard must not be used");
       });
       const assertTargetCurrent = vi.fn(({ sessionKey }: { sessionKey: string }) => {
-        if (sessionKey === sessionKeys[0]) {
-          throw new SessionMutationAuthorizationChangedError({
-            code: "INVALID_REQUEST",
-            message: "session changed before sessions.patchMany; retry the request",
-          });
+        if (sessionKey === targets[failedIndex]!.key) {
+          throw new SessionMutationAuthorizationChangedError({ code: "INVALID_REQUEST", message });
         }
       });
       const respond = vi.fn();
-
       await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: sessionKeys.map((key) => ({ key })),
-          patch: { label: "Shared label" },
-        },
+        params: { targets, patch: archived ? { archived: true } : { label: "Shared label" } },
         respond,
         context: patchContext(),
+        ...(archived ? { client: { connect: { scopes: ["operator.write"] } } } : {}),
         sessionMutationAuthorization: { assertCurrent, assertTargetCurrent },
       } as never);
-
       expect(assertCurrent).not.toHaveBeenCalled();
-      expect([
-        ...new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)),
-      ]).toEqual(sessionKeys);
+      const checkedKeys = new Set(
+        assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey),
+      );
+      const keys = targets.map(({ key }) => key);
+      if (archived) {
+        expect(checkedKeys).toEqual(new Set(keys));
+      } else {
+        expect([...checkedKeys]).toEqual(keys);
+      }
       expect(respond).toHaveBeenCalledWith(
         true,
         {
-          outcomes: [
-            {
-              ok: false,
-              key: sessionKeys[0],
-              error: {
-                code: "INVALID_REQUEST",
-                message: "session changed before sessions.patchMany; retry the request",
-              },
-            },
-            { ok: true, key: sessionKeys[1] },
-          ],
+          outcomes: keys.map((key, index) =>
+            index === failedIndex
+              ? { ok: false, key, error: { code: "INVALID_REQUEST", message } }
+              : { ok: true, key },
+          ),
         },
         undefined,
       );
-      expect(readEntry(sessionKeys[0]!)?.label).toBeUndefined();
-      expect(readEntry(sessionKeys[1]!)?.label).toBe("Shared label");
+      for (const [index, target] of targets.entries()) {
+        const entry = readEntry(target.key);
+        if (archived) {
+          expect(entry).toMatchObject({
+            sessionId: target.expectedSessionId,
+            lifecycleRevision: target.expectedLifecycleRevision,
+          });
+          if (index === failedIndex) {
+            expect(entry).not.toHaveProperty("archivedAt");
+          } else {
+            expect(entry).toHaveProperty("archivedAt");
+          }
+        } else {
+          expect(entry?.label).toBe(index === failedIndex ? undefined : "Shared label");
+        }
+      }
     });
   });
 
@@ -291,75 +317,6 @@ describe("sessions.patchMany orchestration", () => {
     signal,
   }) => {
     await checkAliasConflict(false, signal);
-  });
-
-  it("isolates archive preparation authorization per target and continues in input order", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      const targets = [0, 1, 2].map((index) => ({
-        key: `agent:main:archive-auth-${index}`,
-        expectedSessionId: `session-archive-auth-${index}`,
-        expectedLifecycleRevision: `revision-archive-auth-${index}`,
-      }));
-      for (const target of targets) {
-        await seedEntry(target.key, target.expectedSessionId, target.expectedLifecycleRevision);
-      }
-      const respond = vi.fn();
-      const assertCurrent = vi.fn(() => {
-        throw new Error("outer all-target guard must not be used");
-      });
-      const assertTargetCurrent = vi.fn(({ sessionKey }: { sessionKey: string }) => {
-        if (sessionKey.endsWith("-1")) {
-          throw new SessionMutationAuthorizationChangedError({
-            code: "INVALID_REQUEST",
-            message: "archive authorization changed; retry the request",
-          });
-        }
-      });
-
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: { targets, patch: { archived: true } },
-        respond,
-        context: patchContext(),
-        client: { connect: { scopes: ["operator.write"] } },
-        sessionMutationAuthorization: { assertCurrent, assertTargetCurrent },
-      } as never);
-
-      expect(assertCurrent).not.toHaveBeenCalled();
-      expect(new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey))).toEqual(
-        new Set(targets.map(({ key }) => key)),
-      );
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          outcomes: [
-            { ok: true, key: "agent:main:archive-auth-0" },
-            {
-              ok: false,
-              key: "agent:main:archive-auth-1",
-              error: {
-                code: "INVALID_REQUEST",
-                message: "archive authorization changed; retry the request",
-              },
-            },
-            { ok: true, key: "agent:main:archive-auth-2" },
-          ],
-        },
-        undefined,
-      );
-      for (const [index, target] of targets.entries()) {
-        const entry = readEntry(target.key);
-        expect(entry).toMatchObject({
-          sessionId: target.expectedSessionId,
-          lifecycleRevision: target.expectedLifecycleRevision,
-        });
-        if (index === 1) {
-          expect(entry).not.toHaveProperty("archivedAt");
-        } else {
-          expect(entry).toHaveProperty("archivedAt");
-        }
-      }
-    });
   });
 
   it("converts an unexpected target exception into an ordered isolated failure", async () => {

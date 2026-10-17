@@ -3,7 +3,34 @@ import { handleGatewayRequest } from "./server-methods.js";
 
 type Request = Parameters<typeof handleGatewayRequest>[0];
 type Client = NonNullable<Request["client"]>;
-type AuthorizationRequestOptions = Partial<Omit<Request, "req" | "context">> & {
+
+export function startExactAuthorizationRequest(
+  method: string,
+  params: unknown,
+  options: Omit<Request, "req" | "respond" | "isWebchatConnect">,
+  id = method,
+) {
+  const respond = vi.fn();
+  const request = handleGatewayRequest({
+    ...options,
+    req: { type: "req", id, method, params },
+    respond,
+    isWebchatConnect: () => false,
+  });
+  return { request, respond };
+}
+
+export async function dispatchAuthorizationRequest(
+  ...args: Parameters<typeof startExactAuthorizationRequest>
+) {
+  const { request, respond } = startExactAuthorizationRequest(...args);
+  await request;
+  return respond;
+}
+
+type AuthorizationRequestOptions = Partial<
+  Omit<Request, "req" | "context" | "respond" | "isWebchatConnect">
+> & {
   scopes?: string[];
   connId?: string;
   connect?: Partial<Client["connect"]>;
@@ -43,12 +70,8 @@ export function startAuthorizationRequest(
     ...options
   }: AuthorizationRequestOptions = {},
 ) {
-  const respond = vi.fn();
-  const request = handleGatewayRequest({
-    req: { type: "req", id: method, method, params },
-    respond,
+  return startExactAuthorizationRequest(method, params, {
     client: authorizationClient(connId, scopes, {}, connect),
-    isWebchatConnect: () => false,
     context: {
       getRuntimeConfig: () => ({}),
       logGateway: { warn: vi.fn() },
@@ -56,7 +79,6 @@ export function startAuthorizationRequest(
     } as Request["context"],
     ...options,
   });
-  return { request, respond };
 }
 
 export async function sendAuthorizationRequest(

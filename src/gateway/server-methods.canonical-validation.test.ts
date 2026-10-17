@@ -13,7 +13,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
+import { dispatchAuthorizationRequest } from "./server-methods.authorization.test-support.js";
+import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-authorization.js";
 import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
 import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
@@ -34,25 +35,6 @@ function seed(sessionId: string, visibility?: "shared") {
   const sessionKey = `agent:main:${sessionId}`;
   ensureSessionEntrySync({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1, visibility });
   return sessionKey;
-}
-
-async function request(
-  context: GatewayRequestContext,
-  client: ReturnType<typeof sharingPolicyClient>,
-  method: string,
-  params: Record<string, unknown>,
-  extraHandlers = sessionSubscriptionHandlers,
-) {
-  const respond = vi.fn();
-  await handleGatewayRequest({
-    req: { type: "req", id: client.connId ?? "canonical-target", method, params },
-    context,
-    client,
-    respond,
-    extraHandlers,
-    isWebchatConnect: () => false,
-  });
-  return respond;
 }
 
 function setParent(database: ReturnType<typeof openOpenClawAgentDatabase>, parent: string | null) {
@@ -113,15 +95,18 @@ it.each(["sessions.patch", "talk.session.create"])(
       const handler = vi.fn<GatewayRequestHandler>(({ respond }) =>
         respond(true, { allowed: true }),
       );
-      const respond = await request(
-        {
-          getRuntimeConfig: () => ({}),
-          logGateway: { warn: vi.fn() },
-        } as unknown as GatewayRequestContext,
-        sharingPolicyClient({ user: "member", scopes: ["operator.write"] }),
+      const respond = await dispatchAuthorizationRequest(
         method,
         method === "sessions.patch" ? { key: sessionKey } : { sessionKey },
-        { [method]: handler },
+        {
+          context: {
+            getRuntimeConfig: () => ({}),
+            logGateway: { warn: vi.fn() },
+          } as unknown as GatewayRequestContext,
+          client: sharingPolicyClient({ user: "member", scopes: ["operator.write"] }),
+          extraHandlers: { [method]: handler },
+        },
+        "canonical-target",
       );
       expect(handler).toHaveBeenCalledOnce();
       expect(respond).toHaveBeenCalledWith(true, { allowed: true });
@@ -232,7 +217,16 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
       ]);
       const parse = vi.spyOn(JSON, "parse");
       const subscribe = (key: string, connId: string) =>
-        request(context, { ...client, connId }, "sessions.messages.subscribe", { key });
+        dispatchAuthorizationRequest(
+          "sessions.messages.subscribe",
+          { key },
+          {
+            context,
+            client: { ...client, connId },
+            extraHandlers: sessionSubscriptionHandlers,
+          },
+          connId,
+        );
       const respond = await subscribe(cleanKey, "clean-subscribe");
       expect(respond).toHaveBeenCalledWith(
         true,

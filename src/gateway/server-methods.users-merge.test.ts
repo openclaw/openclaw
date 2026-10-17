@@ -34,6 +34,7 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createExpectedProfileBinding } from "./expected-profile.js";
 import { resolveOperatorRolePolicyForProfile } from "./operator-role-policy.js";
+import { authorizationClient } from "./server-methods.authorization.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import {
@@ -53,23 +54,13 @@ const cfg: OpenClawConfig = {
   },
 };
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 function clientFor(profileId: string, scopes = ["operator.admin"]): GatewayClient {
-  return {
-    connId: `users-merge-${profileId}`,
+  return authorizationClient(`users-merge-${profileId}`, scopes, {
     authenticatedUserId: `${profileId}@example.test`,
     authenticatedUserProfile: { profileId, displayName: "Person", hasAvatar: false, updatedAt: 1 },
-    connect: {
-      role: "operator",
-      scopes,
-      client: { id: "test", version: "1", platform: "test", mode: "test" },
-      minProtocol: 1,
-      maxProtocol: 1,
-    },
-  } as GatewayClient;
+  });
 }
 
 async function gateway() {
@@ -164,56 +155,51 @@ it("merges an email-less person through admin RPC without main-thread SQL and re
       setUserProfileAuthLink({ profileId, provider: "openai", authProfileId });
     }
     const captured = await prepareUserProfileIdentity(source.id);
+    using _ = { [Symbol.dispose]: () => captured.release() };
     const selected = await createExpectedProfileBinding(source.id, clientFor(source.id));
     expect(captured.readCurrentProfile().profileId).toBe(source.id);
     expect(() => selected?.assertCurrent()).not.toThrow();
     const params = { sourceProfileId: source.id, targetProfileId: target.id };
-    try {
-      const denied = await rpc.dispatch(
-        "users.merge",
-        params,
-        clientFor(rpc.admin.id, ["operator.read", "operator.write"]),
-      );
-      expect(denied).toEqual([false, undefined, expect.objectContaining({ code: "FORBIDDEN" })]);
-      expect(storedRedirect(source.id)).toBeNull();
-      const queries = vi.spyOn(DatabaseSync.prototype, "prepare");
-      try {
-        const response = await rpc.merge(source.id, target.id);
-        expectMerged(response, {
-          profile: { id: target.id, displayName: "Survivor", role: "member" },
-          movedAliasKinds: ["provider", "channel"],
-        });
-        expect(validateUsersMergeResult(response[1])).toBe(true);
-        expect(queries).not.toHaveBeenCalled();
-      } finally {
-        queries.mockRestore();
-      }
-      expect(storedRedirect(source.id)).toBe(target.id);
-      expect(readResidentUserProfileIdentity(source.id)?.profileId).toBe(target.id);
-      expect(ensureProfileForTailscaleIdentity(providerIdentity).id).toBe(target.id);
-      expect(resolveUserChannelIdentity(identity)?.profileId).toBe(target.id);
-      expect(getUserPreferences(target.id)).toEqual({ shared: "target", sourceOnly: true });
-      expect(listUserProfileAuthLinks(target.id)).toMatchObject([
-        { provider: "anthropic", authProfileId: account.authProfileId },
-        { provider: "openai", authProfileId: "openai:survivor" },
-      ]);
-      expect(listUserModelAccounts({ profileId: target.id }).accounts).toMatchObject([
-        { authProfileId: account.authProfileId, provider: "anthropic", selected: true },
-      ]);
-      expect(() => captured.readCurrentProfile()).toThrow();
-      expect(() => selected?.assertCurrent()).toThrow();
-      const stale = await rpc.dispatch("users.prefs.get", {}, clientFor(source.id));
-      expect(stale[0]).toBe(false);
-      expect(stale[2]?.details).toMatchObject({ reason: "EXPECTED_PROFILE_MISMATCH" });
-      expect(rpc.context.refreshConnectedUserProfile).toHaveBeenCalledWith(
-        expect.objectContaining({ id: target.id, displayName: "Survivor" }),
-      );
-      expect(rpc.context.disconnectClientsForUserProfile.mock.calls.flat()).toEqual(
-        expect.arrayContaining([source.id, target.id]),
-      );
-    } finally {
-      captured.release();
+    const denied = await rpc.dispatch(
+      "users.merge",
+      params,
+      clientFor(rpc.admin.id, ["operator.read", "operator.write"]),
+    );
+    expect(denied).toEqual([false, undefined, expect.objectContaining({ code: "FORBIDDEN" })]);
+    expect(storedRedirect(source.id)).toBeNull();
+    {
+      using queries = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const response = await rpc.merge(source.id, target.id);
+      expectMerged(response, {
+        profile: { id: target.id, displayName: "Survivor", role: "member" },
+        movedAliasKinds: ["provider", "channel"],
+      });
+      expect(validateUsersMergeResult(response[1])).toBe(true);
+      expect(queries).not.toHaveBeenCalled();
     }
+    expect(storedRedirect(source.id)).toBe(target.id);
+    expect(readResidentUserProfileIdentity(source.id)?.profileId).toBe(target.id);
+    expect(ensureProfileForTailscaleIdentity(providerIdentity).id).toBe(target.id);
+    expect(resolveUserChannelIdentity(identity)?.profileId).toBe(target.id);
+    expect(getUserPreferences(target.id)).toEqual({ shared: "target", sourceOnly: true });
+    expect(listUserProfileAuthLinks(target.id)).toMatchObject([
+      { provider: "anthropic", authProfileId: account.authProfileId },
+      { provider: "openai", authProfileId: "openai:survivor" },
+    ]);
+    expect(listUserModelAccounts({ profileId: target.id }).accounts).toMatchObject([
+      { authProfileId: account.authProfileId, provider: "anthropic", selected: true },
+    ]);
+    expect(() => captured.readCurrentProfile()).toThrow();
+    expect(() => selected?.assertCurrent()).toThrow();
+    const stale = await rpc.dispatch("users.prefs.get", {}, clientFor(source.id));
+    expect(stale[0]).toBe(false);
+    expect(stale[2]?.details).toMatchObject({ reason: "EXPECTED_PROFILE_MISMATCH" });
+    expect(rpc.context.refreshConnectedUserProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ id: target.id, displayName: "Survivor" }),
+    );
+    expect(rpc.context.disconnectClientsForUserProfile.mock.calls.flat()).toEqual(
+      expect.arrayContaining([source.id, target.id]),
+    );
   });
 });
 

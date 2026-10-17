@@ -5,9 +5,12 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
-import { handleGatewayRequest } from "./server-methods.js";
+import { dispatchAuthorizationRequest } from "./server-methods.authorization.test-support.js";
 import { sessionsFilesHandlers } from "./server-methods/sessions-files.js";
 import type { GatewayClient, GatewayRequestHandlers } from "./server-methods/types.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
@@ -18,6 +21,18 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 afterEach(() => vi.restoreAllMocks());
 
 const target = { agentId: "main", sessionKey: "agent:main:file-turn", sessionId: "file-turn" };
+const fileContent = "<p>Private host file</p>";
+
+async function hostFile(state: OpenClawTestState) {
+  const filePath = state.path("outside.html");
+  await fs.writeFile(filePath, fileContent);
+  return { sessionRoot: state.workspaceDir, filePath };
+}
+
+function expectFile(payload: unknown, fields: Record<string, unknown> = {}) {
+  expect(payload).toMatchObject({ file: { content: fileContent, ...fields } });
+  expect(payload).not.toHaveProperty("file.hash");
+}
 
 async function fileGateway(cfg: OpenClawConfig = {}, withPlacement = true) {
   const projection = await createSessionRowProjection({ cfg });
@@ -40,20 +55,12 @@ async function fileGateway(cfg: OpenClawConfig = {}, withPlacement = true) {
       path: string,
       extraHandlers: GatewayRequestHandlers = sessionsFilesHandlers,
     ) {
-      const respond = vi.fn();
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "file-read",
-          method: "sessions.files.get",
-          params: { sessionKey, path },
-        },
-        client,
-        context,
-        respond,
-        extraHandlers,
-        isWebchatConnect: () => false,
-      });
+      const respond = await dispatchAuthorizationRequest(
+        "sessions.files.get",
+        { sessionKey, path },
+        { client, context, extraHandlers },
+        "file-read",
+      );
       expect(respond).toHaveBeenCalledOnce();
       return respond;
     },
@@ -75,10 +82,7 @@ it("reads host files for a session writer and hides them from view-only callers"
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = rolePolicyConfig();
     setRuntimeConfigSnapshot(cfg);
-    const sessionRoot = state.path("workspace");
-    const filePath = state.path("outside.html");
-    await fs.mkdir(sessionRoot, { recursive: true });
-    await fs.writeFile(filePath, "<p>Outside workspace</p>");
+    const { sessionRoot, filePath } = await hostFile(state);
     const viewer = roleClient("view", "file-viewer");
     const writer = roleClient("write", "file-writer");
     const entry = {
@@ -106,10 +110,7 @@ it("reads host files for a session writer and hides them from view-only callers"
         .calls[0]!;
       expect(ok).toBe(allowed);
       if (allowed) {
-        expect(payload).toMatchObject({
-          file: { content: "<p>Outside workspace</p>" },
-        });
-        expect(payload).not.toHaveProperty("file.hash");
+        expectFile(payload);
       } else {
         expect(error).toMatchObject({
           details: { type: "session_file_not_found", reason: "outside_session_boundary" },
@@ -127,10 +128,7 @@ it("keeps solo and admin incognito reads inside prepared authorization without s
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = {};
     setRuntimeConfigSnapshot(cfg);
-    const sessionRoot = state.path("workspace");
-    const filePath = state.path("outside.html");
-    await fs.mkdir(sessionRoot, { recursive: true });
-    await fs.writeFile(filePath, "<p>Private host file</p>");
+    const { sessionRoot, filePath } = await hostFile(state);
     const privateTarget = {
       ...target,
       sessionKey: "agent:main:dashboard:incognito-file-turn",
@@ -165,10 +163,7 @@ it("keeps solo and admin incognito reads inside prepared authorization without s
           await rpc.read(sharingPolicyClient({ scopes }), requestedKey, filePath)
         ).mock.calls[0]!;
         expect(ok).toBe(true);
-        expect(payload).toMatchObject({
-          file: { content: "<p>Private host file</p>", path: await fs.realpath(filePath) },
-        });
-        expect(payload).not.toHaveProperty("file.hash");
+        expectFile(payload, { path: await fs.realpath(filePath) });
       }
     }
     expect(projection.selectEntries().map((row) => row.key)).not.toContain(

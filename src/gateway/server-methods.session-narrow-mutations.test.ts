@@ -12,7 +12,7 @@ import {
 import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
-import { handleGatewayRequest } from "./server-methods.js";
+import { startExactAuthorizationRequest } from "./server-methods.authorization.test-support.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import * as chat from "./server-methods/chat-send-external-entry.js";
 import { createActiveRun } from "./server-methods/chat.abort.test-helpers.js";
@@ -50,30 +50,47 @@ function ownerFixture(name: string, role: Parameters<typeof roleClient>[0] = "vi
   client.connect.scopes = ["operator.sessions.write"];
   const cfg = rolePolicyConfig();
   setRuntimeConfigSnapshot(cfg);
-  return { client, cfg };
+  const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+  return {
+    client,
+    cfg,
+    context,
+    run: (sessionId: string, sessionKey = key) =>
+      createActiveRun(sessionKey, { agentId: "main", sessionId, owner: { connId: client.connId } }),
+  };
 }
 
-type Request = Parameters<typeof handleGatewayRequest>[0];
-function invoke({
-  method,
-  params,
-  id = method,
-  ...options
-}: Omit<Request, "req" | "respond" | "isWebchatConnect"> & {
-  method: string;
-  params: unknown;
-  id?: string;
-}) {
-  const respond = vi.fn();
+function pausedHandler(
+  handler: GatewayRequestHandler,
+  before?: (options: Parameters<GatewayRequestHandler>[0]) => void,
+) {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
   return {
-    respond,
-    request: handleGatewayRequest({
-      ...options,
-      respond,
-      req: { type: "req", id, method, params },
-      isWebchatConnect: () => false,
-    }),
+    handler: (async (options) => {
+      before?.(options);
+      entered.resolve();
+      await release.promise;
+      await handler(options);
+    }) satisfies GatewayRequestHandler,
+    async during(request: Promise<void>, change: () => void | Promise<void>) {
+      try {
+        await Promise.race([entered.promise, request]);
+        await change();
+      } finally {
+        release.resolve();
+        await request;
+      }
+    },
   };
+}
+
+function expectAborted(respond: ReturnType<typeof vi.fn>, method: string, runId: string) {
+  expect(respond.mock.calls[0]?.[1]).toMatchObject(
+    method === "chat.abort"
+      ? { aborted: true, runIds: [runId] }
+      : { abortedRunId: runId, status: "aborted" },
+  );
 }
 
 const stopHandlers = {
@@ -89,7 +106,7 @@ describe("invocation-owned session mutations", () => {
     "sessions.abort retains its invocation scope for a $owner foreign run (broad=$broad, rebind=$rebind)",
     async ({ owner, broad, rebind }) => {
       await withState(async () => {
-        const { client, cfg } = ownerFixture("alias-stop-owner", "write");
+        const { client, context, run } = ownerFixture("alias-stop-owner", "write");
         client.connId = "alias-stop-connection";
         client.connect.device = {
           id: "alias-device",
@@ -112,50 +129,35 @@ describe("invocation-owned session mutations", () => {
             createdActor: { type: "human", source: "profile", id: "another-person" },
           },
         );
-        const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
         const foreign = createActiveRun(foreignKey, {
           agentId: "main",
           sessionId: "foreign-incarnation",
           owner: owner === "connection" ? { connId: client.connId } : { deviceId: "alias-device" },
         });
-        const original = createActiveRun(key, {
-          agentId: "main",
-          sessionId: "own-incarnation",
-          owner: { connId: client.connId },
-        });
+        const original = run("own-incarnation");
         context.chatAbortControllers.set("selected", rebind ? original : foreign);
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
+        const paused = pausedHandler(sessionAbortHandlers["sessions.abort"]!, (options) =>
+          expect(readGatewayRequestMutationAuthority(options).sessionScope).toBe(
+            broad ? undefined : "operator.sessions.write",
+          ),
+        );
         const before = [...context.dedupe];
-        const { request, respond } = invoke({
-          id: "alias-foreign",
-          method: "sessions.abort",
-          params: { key, runId: "selected" },
-          context,
-          client,
-          extraHandlers: {
-            "sessions.abort": async (options) => {
-              expect(readGatewayRequestMutationAuthority(options).sessionScope).toBe(
-                broad ? undefined : "operator.sessions.write",
-              );
-              entered.resolve();
-              await release.promise;
-              await sessionAbortHandlers["sessions.abort"]!(options);
-            },
-          },
-        });
-        try {
-          await Promise.race([entered.promise, request]);
+        const { request, respond } = startExactAuthorizationRequest(
+          "sessions.abort",
+          { key, runId: "selected" },
+          { client, context, extraHandlers: { "sessions.abort": paused.handler } },
+          "alias-foreign",
+        );
+        await paused.during(request, () => {
           expect(respond).not.toHaveBeenCalled();
           if (rebind) {
             context.chatAbortControllers.set("selected", foreign);
           }
-        } finally {
-          release.resolve();
-          await request;
-        }
-        expect(foreign.controller.signal.aborted).toBe(broad);
-        expect(original.controller.signal.aborted).toBe(false);
+        });
+        expect([foreign, original].map((entry) => entry.controller.signal.aborted)).toEqual([
+          broad,
+          false,
+        ]);
         expect(respond).toHaveBeenCalledOnce();
         expect(respond.mock.calls[0]?.[0]).toBe(broad);
         if (!broad) {
@@ -184,8 +186,6 @@ describe("invocation-owned session mutations", () => {
         : rolePolicyConfig();
       setRuntimeConfigSnapshot(cfg);
       const targetKey = drift ? key : "agent:main:main";
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
       const send = vi.spyOn(chat, "handleDirectExternalChatSend");
       if (!drift) {
         send.mockImplementation(async (options) => {
@@ -200,29 +200,22 @@ describe("invocation-owned session mutations", () => {
         });
       }
       const handlers = { ...sessionMessagingHandlers, ...sessionCreateHandlers };
-      const { request, respond } = invoke({
+      const paused = pausedHandler(handlers[method]!);
+      const { request, respond } = startExactAuthorizationRequest(
         method,
-        params: { key: targetKey, message: drift ? "first turn" : "hello" },
-        client,
-        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-        extraHandlers: drift
-          ? {
-              [method]: async (options) => {
-                entered.resolve();
-                await release.promise;
-                await handlers[method]!(options);
-              },
-            }
-          : handlers,
-      });
-      try {
-        if (drift) {
-          await Promise.race([entered.promise, request]);
+        { key: targetKey, message: drift ? "first turn" : "hello" },
+        {
+          client,
+          context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+          extraHandlers: drift ? { [method]: paused.handler } : handlers,
+        },
+      );
+      if (drift) {
+        await paused.during(request, () => {
           expect(respond).not.toHaveBeenCalled();
           cfg = { ...cfg, session: { store: nextStore } };
-        }
-      } finally {
-        release.resolve();
+        });
+      } else {
         await request;
       }
       expect(respond.mock.calls[0]?.[0]).toBe(!drift);
@@ -288,17 +281,15 @@ describe("invocation-owned session mutations", () => {
               });
             }
             const before = [...context.dedupe];
-            const { request, respond } = invoke({
-              id: runId,
+            const { request, respond } = startExactAuthorizationRequest(
               method,
-              params: {
+              {
                 ...(method === "chat.abort" ? { sessionKey: requestKey } : { key: requestKey }),
                 ...(explicit ? { runId } : {}),
               },
-              client,
-              context,
-              extraHandlers: stopHandlers,
-            });
+              { client, context, extraHandlers: stopHandlers },
+              runId,
+            );
             await request;
             const allowed = mismatch === "none";
             if (kind === "active" || kind === "queued") {
@@ -307,11 +298,7 @@ describe("invocation-owned session mutations", () => {
               expect([...context.dedupe]).toEqual(before);
             }
             if (allowed) {
-              expect(respond.mock.calls[0]?.[1]).toMatchObject(
-                method === "chat.abort"
-                  ? { aborted: true, runIds: [runId] }
-                  : { abortedRunId: runId, status: "aborted" },
-              );
+              expectAborted(respond, method, runId);
             }
             expect(respond).toHaveBeenCalledOnce();
           }
@@ -328,21 +315,14 @@ describe("invocation-owned session mutations", () => {
     "$method does not adopt a reentrant $kind producer replacement during narrow Stop",
     async ({ kind, method }) => {
       await withState(async () => {
-        const { client, cfg } = ownerFixture("reentrant-stop-owner");
+        const { client, cfg, run } = ownerFixture("reentrant-stop-owner");
         client.connId = "reentrant-stop";
 
         await upsertSessionEntryCore(scope, ownedEntry(client, "original"));
         for (const changed of ["registration", "key", "sessionId", "agentId"] as const) {
           const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
           const runs = kind === "active" ? context.chatAbortControllers : context.chatQueuedTurns;
-          const target = {
-            agentId: "main",
-            sessionId: "original",
-            owner: { connId: client.connId },
-          };
-          const first = createActiveRun(key, target);
-          const second = createActiveRun(key, target);
-          const replacement = createActiveRun(key, target);
+          const [first, second, replacement] = [run("original"), run("original"), run("original")];
           runs.set("first", first);
           runs.set("second", second);
           first.controller.signal.addEventListener(
@@ -358,22 +338,18 @@ describe("invocation-owned session mutations", () => {
             },
             { once: true },
           );
-          const { request, respond } = invoke({
-            id: changed,
+          const { request, respond } = startExactAuthorizationRequest(
             method,
-            params: method === "chat.abort" ? { sessionKey: key } : { key },
-            client,
-            context,
-            extraHandlers: stopHandlers,
-          });
+            method === "chat.abort" ? { sessionKey: key } : { key },
+            { client, context, extraHandlers: stopHandlers },
+            changed,
+          );
           await request;
           expect(first.controller.signal.aborted).toBe(true);
-          expect([second, replacement].some((run) => run.controller.signal.aborted)).toBe(false);
-          expect(respond.mock.calls[0]?.[1]).toMatchObject(
-            method === "chat.abort"
-              ? { aborted: true, runIds: ["first"] }
-              : { abortedRunId: "first", status: "aborted" },
+          expect([second, replacement].some((entry) => entry.controller.signal.aborted)).toBe(
+            false,
           );
+          expectAborted(respond, method, "first");
         }
       });
     },
@@ -426,9 +402,7 @@ describe("invocation-owned session mutations", () => {
           options.sessionMutationAuthorization?.assertCurrent();
           options.respond(true, { allowed: true });
         });
-        const { request, respond } = invoke({
-          method,
-          params,
+        const { request, respond } = startExactAuthorizationRequest(method, params, {
           client,
           context,
           methodRegistry: createGatewayMethodRegistry([
@@ -450,8 +424,7 @@ describe("invocation-owned session mutations", () => {
   it("sessions.steer forwards the original source and exact target across the dispatch await", async () => {
     const method = "sessions.steer";
     await withState(async () => {
-      const { client, cfg } = ownerFixture("send-owner");
-      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const { client, context } = ownerFixture("send-owner");
       for (const changed of ["none", "source", "generation"] as const) {
         const entry = {
           ...ownedEntry(client, "original"),
@@ -474,15 +447,17 @@ describe("invocation-owned session mutations", () => {
             effect();
             options.respond(true, { status: "queued" });
           });
-        const { request, respond } = invoke({
-          id: changed,
+        const { request, respond } = startExactAuthorizationRequest(
           method,
-          params: { key, message: "hello" },
-          client,
-          context,
-          hasCurrentClientAuthority: () => current,
-          extraHandlers: sessionMessagingHandlers,
-        });
+          { key, message: "hello" },
+          {
+            client,
+            context,
+            hasCurrentClientAuthority: () => current,
+            extraHandlers: sessionMessagingHandlers,
+          },
+          changed,
+        );
         const outcome = Promise.allSettled([request]);
         try {
           await Promise.race([entered.promise, request]);
@@ -521,10 +496,7 @@ describe("invocation-owned session mutations", () => {
     "session mutation preserves the original %s fence",
     async (changed) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const client = roleClient("view", "batch-owner");
-        client.connect.scopes = ["operator.sessions.write"];
-        const cfg = rolePolicyConfig();
-        setRuntimeConfigSnapshot(cfg);
+        const { client, context } = ownerFixture("batch-owner");
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const entry = {
           ...ownedEntry(client, "original"),
@@ -535,43 +507,26 @@ describe("invocation-owned session mutations", () => {
         if (!missing) {
           await upsertSessionEntryCore(scope, entry);
         }
-        const entered = createDeferredCore();
-        const resume = createDeferredCore();
         let current = true;
-        const handler: GatewayRequestHandler = async (options) => {
-          entered.resolve();
-          await resume.promise;
-          await sessionMutationHandlers[method]!(options);
-        };
-        const { request, respond } = invoke({
-          id: changed,
+        const paused = pausedHandler(sessionMutationHandlers[method]!);
+        const { request, respond } = startExactAuthorizationRequest(
           method,
-          params:
-            method === "sessions.patch"
-              ? { key, label: "Unowned claim" }
-              : {
-                  targets: [{ key }],
-                  patch: missing ? { label: "Unowned claim" } : { unread: true },
-                },
-          client,
-          context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-          hasCurrentClientAuthority: () => current,
-          extraHandlers: { [method]: handler },
-        });
-        try {
-          await Promise.race([entered.promise, request]);
+          method === "sessions.patch"
+            ? { key, label: "Unowned claim" }
+            : {
+                targets: [{ key }],
+                patch: missing ? { label: "Unowned claim" } : { unread: true },
+              },
+          {
+            client,
+            context,
+            hasCurrentClientAuthority: () => current,
+            extraHandlers: { [method]: paused.handler },
+          },
+          changed,
+        );
+        await paused.during(request, async () => {
           if (missing) {
-            resume.resolve();
-            await request;
-            expect(respond).toHaveBeenCalledExactlyOnceWith(
-              false,
-              undefined,
-              expect.objectContaining({
-                code: "INVALID_REQUEST",
-                message: expect.stringContaining("was not found"),
-              }),
-            );
-            expect(loadSessionEntry(scope)).toBeUndefined();
             return;
           }
           expect(respond).not.toHaveBeenCalled();
@@ -580,9 +535,18 @@ describe("invocation-owned session mutations", () => {
           } else {
             await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement" });
           }
-        } finally {
-          resume.resolve();
-          await request;
+        });
+        if (missing) {
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: "INVALID_REQUEST",
+              message: expect.stringContaining("was not found"),
+            }),
+          );
+          expect(loadSessionEntry(scope)).toBeUndefined();
+          return;
         }
         expect(loadSessionEntry(scope)?.markedUnreadAt).toBeUndefined();
         expect(respond).toHaveBeenCalledOnce();

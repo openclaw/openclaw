@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { validateGatewaySuspendStatusResult } from "../../packages/gateway-protocol/src/index.js";
@@ -38,6 +39,36 @@ function expectHandoff(host: ReturnType<typeof createGatewayHostLifecycle>, valu
   });
 }
 
+type SuspensionMethod = "status" | "prepare" | "resume" | "handoff";
+
+async function requestSuspension(
+  operation: SuspensionMethod,
+  requestParams: unknown,
+  options: Partial<Parameters<typeof dispatch>[0]> = {},
+) {
+  const method = `gateway.suspend.${operation}` as const;
+  const result = dispatch({
+    method,
+    requestParams,
+    scope: "operator.admin",
+    core: true,
+    handler: suspendHandlers[method]!,
+    ...options,
+  });
+  await result.request;
+  return result.respond;
+}
+
+function expectDraining(respond: unknown, activeCount: number, fields = {}) {
+  expectStatus(respond, { status: "draining", activeCount, ...fields });
+}
+
+function expectConflict(respond: unknown) {
+  expectFailure(respond, {
+    details: expect.objectContaining({ reason: "gateway-suspension-conflict" }),
+  });
+}
+
 function createHost(options: Partial<Parameters<typeof createGatewayHostLifecycle>[0]> = {}) {
   return createGatewayHostLifecycle({
     processOwner: { ownsProcessLifecycle: true, supervisor: "external" },
@@ -60,7 +91,6 @@ function prepare(
   });
 }
 
-/** Register host handoff contracts under the caller's shared admission reset hooks. */
 export function registerSuspensionHandoffLifecycleTests() {
   it.each(["resume", "expiry", "replacement"] as const)(
     "reports held custody immediately and observes the lease after %s",
@@ -70,27 +100,18 @@ export function registerSuspensionHandoffLifecycleTests() {
         drain: true,
         inspect: { getTerminalPersistence: () => 1 },
       });
-      if (prepared.status !== "draining") {
-        throw new Error("expected a draining lease");
-      }
+      assert(prepared.status === "draining", "expected a draining lease");
       try {
         if (change === "expiry") {
           await vi.advanceTimersByTimeAsync(40_000);
         }
-        const status = async () => {
-          const result = dispatch({
-            method: "gateway.suspend.status",
-            requestParams: { suspensionId: prepared.suspensionId },
-            scope: "operator.read",
-            core: true,
-            handler: suspendHandlers["gateway.suspend.status"]!,
-          });
-          await result.request;
-          return result.respond;
-        };
-        expectStatus(await status(), {
-          status: "draining",
-          activeCount: 1,
+        const status = () =>
+          requestSuspension(
+            "status",
+            { suspensionId: prepared.suspensionId },
+            { scope: "operator.read" },
+          );
+        expectDraining(await status(), 1, {
           writeCustody: [{ phase: "terminal-persistence", count: 1 }],
         });
         if (change !== "expiry") {
@@ -104,9 +125,7 @@ export function registerSuspensionHandoffLifecycleTests() {
         }
         const current = await status();
         if (change === "replacement") {
-          expectFailure(current, {
-            details: expect.objectContaining({ reason: "gateway-suspension-conflict" }),
-          });
+          expectConflict(current);
         } else {
           expect(current).toHaveBeenCalledWith(true, { status: "running" });
         }
@@ -139,36 +158,25 @@ export function registerSuspensionHandoffLifecycleTests() {
         chatAbortControllers: new Map(),
         chatQueuedTurns: new Map(),
       } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
-      const request = async (method: keyof typeof suspendHandlers, requestParams: unknown) => {
-        const result = dispatch({
-          method,
-          requestParams,
-          scope: "operator.admin",
-          core: true,
-          handler: suspendHandlers[method]!,
-          context,
-        });
-        await result.request;
-        return result.respond;
-      };
+      const request = (method: SuspensionMethod, params: unknown) =>
+        requestSuspension(method, params, { context });
       try {
-        const prepared = await request("gateway.suspend.prepare", {
+        const prepared = await request("prepare", {
           requestId: "release-update",
           terminalPolicy: "terminate",
           drain: true,
         });
-        expectStatus(prepared, { status: "draining", activeCount: 200 });
+        expectDraining(prepared, 200);
         const { suspensionId } = expectDefined(
           prepared.mock.calls[0],
           "suspension prepare response",
         )[1] as { suspensionId: string };
         const status = (includeLifecycle = false) =>
-          request("gateway.suspend.status", {
+          request("status", {
             suspensionId,
             ...(includeLifecycle ? { includeLifecycle } : {}),
           });
-        const draining = await status();
-        expectStatus(draining, { status: "draining", activeCount: 200 });
+        expectDraining(await status(), 200);
         const blocked = Promise.allSettled(
           Array.from({ length: 200 }, () => beginGatewayRootWorkAdmissionWhenOpen()),
         );
@@ -182,24 +190,20 @@ export function registerSuspensionHandoffLifecycleTests() {
           },
         });
         await writing.promise;
-        expectStatus(await status(), {
-          status: "draining",
-          activeCount: 201,
+        expectDraining(await status(), 201, {
           writeCustody: [{ phase: "session-mutation", count: 1 }],
         });
         written.resolve();
         await mutation;
-        expectStatus(await status(), {
-          status: "draining",
-          activeCount: 200,
-          writeCustody: [],
-        });
+        expectDraining(await status(), 200, { writeCustody: [] });
         if (restart === "handoff") {
-          const armed = await request("gateway.suspend.handoff", {
-            suspensionId,
-            target: { pid: process.pid, processInstanceId: getGatewayProcessInstanceId() },
-          });
-          expectStatus(armed, { status: "armed" });
+          expectStatus(
+            await request("handoff", {
+              suspensionId,
+              target: { pid: process.pid, processInstanceId: getGatewayProcessInstanceId() },
+            }),
+            { status: "armed" },
+          );
           expectHandoff(host, true);
         }
         await host.retire();
@@ -210,31 +214,23 @@ export function registerSuspensionHandoffLifecycleTests() {
         );
         expect((await blocked).every((result) => result.status === "rejected")).toBe(true);
         const owned = await status();
-        expectStatus(owned, { status: "draining", activeCount: 200 });
+        expectDraining(owned, 200);
         const legacy = expectDefined(owned.mock.calls[0], "legacy suspension status response")[1];
         expect(legacy).not.toHaveProperty("ownerId");
         expect(legacy).not.toHaveProperty("phase");
-        const lifecycle = await status(true);
-        expectStatus(lifecycle, {
+        expectStatus(await status(true), {
           status: "draining",
           ownerId: "release-update",
           phase: "interrupting",
         });
         expect(validateGatewaySuspendStatusResult(legacy)).toBe(true);
         // Expiry cannot reopen a committed shutdown, even after all old roots settle.
-        for (const root of roots) {
-          root?.release();
-        }
+        roots.forEach((root) => root?.release());
         await vi.advanceTimersByTimeAsync(120_000);
-        const settled = await status(true);
-        expectStatus(settled, { phase: "interrupting", activeCount: 0, status: "draining" });
-        const foreign = await request("gateway.suspend.status", { suspensionId: "foreign" });
-        expectFailure(foreign, {
-          details: expect.objectContaining({ reason: "gateway-suspension-conflict" }),
-        });
+        expectDraining(await status(true), 0, { phase: "interrupting" });
+        expectConflict(await request("status", { suspensionId: "foreign" }));
         expect(cron.resumeScheduling).not.toHaveBeenCalled();
-        const resumed = await request("gateway.suspend.resume", { suspensionId });
-        expectFailure(resumed, {
+        expectFailure(await request("resume", { suspensionId }), {
           code: "UNAVAILABLE",
           message: "gateway shutdown is committed",
         });
@@ -251,9 +247,7 @@ export function registerSuspensionHandoffLifecycleTests() {
       } finally {
         written.resolve();
         await mutation;
-        for (const root of roots) {
-          root?.release();
-        }
+        roots.forEach((root) => root?.release());
         await host.retire();
         resetGatewaySuspendCoordinatorForLifecycleRestart();
         vi.useRealTimers();
@@ -276,10 +270,7 @@ export function registerSuspensionHandoffAuthorizationTests() {
       commitExternalStop:
         mode === "committed"
           ? () => {
-              const handoff = consumeGatewaySuspendHandoff(host.capability.externalRestart);
-              if (!handoff.ok || !handoff.value) {
-                throw new Error("Missing current suspension handoff");
-              }
+              expectHandoff(host, true);
               markGatewayRestartDraining("stop (SIGTERM)");
             }
           : undefined,
@@ -288,9 +279,7 @@ export function registerSuspensionHandoffAuthorizationTests() {
       drain: true,
       inspect: { getRootRequests: () => 1, getTerminalPersistence: () => 0 },
     });
-    if (lease.status !== "draining") {
-      throw new Error("expected a held drain");
-    }
+    assert(lease.status === "draining", "expected a held drain");
     try {
       const result = dispatch({
         method: "gateway.suspend.handoff",
@@ -313,8 +302,7 @@ export function registerSuspensionHandoffAuthorizationTests() {
           logGateway: { warn: vi.fn() },
         } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
       });
-      // The request has crossed an async dispatch boundary, but the original
-      // host must still own its iteration when the synchronous handler commits.
+      // Retire after async dispatch but before the synchronous commit.
       if (mode === "retired-host") {
         await host.retire();
       }
