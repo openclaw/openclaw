@@ -27,6 +27,7 @@ import { runSessionColdStorageMaintenance } from "../../config/sessions/session-
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { withSessionHistoryWorkerDatabase } from "../../config/sessions/session-transcript-worker-runtime.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
+import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -303,6 +304,31 @@ it("reads retained widget receipts and waits only for current live presentations
           code: "FORBIDDEN",
         });
       }
+      const nestedActivity = (toolResult: unknown) =>
+        createNestedToolActivity({
+          runId: "widget-nested-run",
+          scopeId: "widget-nested-scope",
+          afterEntryId: null,
+          startOrder: 0,
+          toolCallId: "nested-widget-call",
+          toolName: "show_widget",
+          input: {},
+          result: toolResult,
+          isError: false,
+          startedAt: 8,
+          timestamp: 9,
+        });
+      const invalidNested = nestedActivity({ content: [], details: unrelatedPresentation });
+      for (const [index, message] of [
+        { ...invalidNested, customType: "unrelated" },
+        { ...invalidNested, details: { ...invalidNested.details, isError: true } },
+        { ...invalidNested, details: { ...invalidNested.details, toolName: "read" } },
+      ].entries()) {
+        await appendTranscriptMessage(scope, { eventId: `invalid-nested-${index}`, message });
+        expect((await view(context, guest, { ...bound, docId: unbound.id }))[2]).toMatchObject({
+          code: "FORBIDDEN",
+        });
+      }
       expect((await view(context, owner, { docId }))[0]).toBe(true);
       expect((await view(context, owner, { docId: unbound.id }))[0]).toBe(true);
 
@@ -346,13 +372,8 @@ it("reads retained widget receipts and waits only for current live presentations
         expect((await view(context, guest, liveRequest))[2]).toMatchObject({ code: "FORBIDDEN" });
         await appendTranscriptMessage(scope, {
           eventId: "live-widget-result",
-          message: {
-            role: "toolResult",
-            toolName: "show_widget",
-            toolCallId: "live-widget-call",
-            ...liveResult,
-            timestamp: 9,
-          },
+          // Code Mode and tool-search persist this existing canonical receipt format.
+          message: nestedActivity(liveResult),
         });
         expect((await view(context, guest, liveRequest))[1]).toMatchObject({
           html: expect.stringContaining("Committed live widget"),

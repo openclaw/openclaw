@@ -4,6 +4,7 @@ import { afterEach, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { readSubagentRunAnnounceResultUsing } from "../../agents/subagents/announce/subagent-announce-result.js";
 import { readSessionMessageByIdAsync } from "../../gateway/session-transcript-readers.js";
+import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -219,7 +220,34 @@ it("keeps match filters and active anchors authoritative across worker payload e
           presentation: { target: "assistant_message" },
         },
       });
-      const active = { ...encodedAssistant("active", "branch-run"), parentId: "widget" };
+      const nestedWidget = {
+        ...encodedAssistant(
+          "nested-widget",
+          "widget-run",
+          createNestedToolActivity({
+            runId: "widget-run",
+            scopeId: "widget-scope",
+            afterEntryId: "widget",
+            startOrder: 0,
+            toolCallId: "nested-call",
+            toolName: "show_widget",
+            input: {},
+            result: {
+              content: [],
+              details: {
+                kind: "canvas",
+                view: { id: "cv_nested" },
+                presentation: { target: "assistant_message" },
+              },
+            },
+            isError: false,
+            startedAt: 1,
+            timestamp: 2,
+          }),
+        ),
+        parentId: "widget",
+      };
+      const active = { ...encodedAssistant("active", "branch-run"), parentId: "nested-widget" };
       const inactive = encodedAssistant("inactive", "branch-run");
       const leaf = { type: "leaf", id: "leaf", parentId: "inactive", targetId: "active" };
       const events = [
@@ -240,6 +268,7 @@ it("keeps match filters and active anchors authoritative across worker payload e
         ordinary,
         user,
         widget,
+        nestedWidget,
         active,
         inactive,
         leaf,
@@ -275,6 +304,7 @@ it("keeps match filters and active anchors authoritative across worker payload e
         { match: { kind: "visible-final", runId: "branch-run" }, event: inactive },
         { match: { kind: "active-assistant", runId: "branch-run" }, event: active },
         { match: { kind: "canvas-widget", docId: "cv_saved" }, event: widget },
+        { match: { kind: "canvas-widget", docId: "cv_nested" }, event: nestedWidget },
         { match: { kind: "latest" }, event: leaf },
       ];
       const hostSql = observeHostDataSql();
