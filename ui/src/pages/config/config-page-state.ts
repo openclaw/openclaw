@@ -1025,15 +1025,6 @@ export function createConfigPage(
         void context.webPush.run({ kind: "set", scope: "device", preferences }),
     } satisfies ConfigProps;
   }
-  const sources = [
-    context.gateway,
-    context.runtimeConfig,
-    context.settingsAgentSelection,
-    context.agentSelection,
-    context.agents,
-    context.agentIdentity,
-    context.overlays,
-  ];
   const refresh = () => {
     synchronize();
     invalidate();
@@ -1044,7 +1035,15 @@ export function createConfigPage(
   createEffect(revision, () => afterCommit());
   onSettled(() => {
     // These notifications admit requests and retire connection-scoped work synchronously.
-    const subscriptions = sources.flatMap((source) => (source ? [source.subscribe(refresh)] : []));
+    const subscriptions = [
+      context.gateway,
+      context.runtimeConfig,
+      context.settingsAgentSelection,
+      context.agentSelection,
+      context.agents,
+      context.agentIdentity,
+      context.overlays,
+    ].map((source) => source.subscribe(refresh));
     // Server selection intent can change while the stored preferences stay equal.
     subscriptions.push(context.theme.subscribe(refresh), subscribeLobsterdex(refresh));
     connected = true;
@@ -1062,9 +1061,7 @@ export function createConfigPage(
     });
     synchronize();
     return () => {
-      for (const stop of subscriptions) {
-        stop();
-      }
+      subscriptions.forEach((stop) => stop());
       connected = false;
       customThemeImportOwner.retireImport();
       retireMediaPermissionRequests();
