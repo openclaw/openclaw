@@ -4,6 +4,7 @@ import { fromMarkdown, type Extension, type Handle } from "mdast-util-from-markd
 import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
 import { gfmTable } from "micromark-extension-gfm-table";
 import { hasUnresolvedImageCode } from "./image-code-retention.js";
+import { findUnsettledDefinitionStarts } from "./reference-definition-retention.js";
 
 export type ReasoningTagTextDelta =
   | { kind: "text"; text: string }
@@ -498,17 +499,8 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
     }
   }
   if (definitions.length) {
-    // An unfinished next-line title can temporarily parse as several other blocks.
-    let lastBlank = -1;
-    for (const blank of text.matchAll(/(?:\r\n|\n|\r(?!\n))[ \t]*(?:\r\n|\n|\r(?!\n))/g)) {
-      lastBlank = blank.index;
-    }
-    for (const definition of definitions) {
-      if (definition.end > lastBlank) {
-        unsettledDefinitionStarts.push(definition.start);
-        retainStart = Math.min(retainStart, definition.start);
-      }
-    }
+    unsettledDefinitionStarts.push(...findUnsettledDefinitionStarts(text, definitions));
+    retainStart = Math.min(retainStart, ...unsettledDefinitionStarts);
   }
   regions.sort((left, right) => left.start - right.start);
   return {

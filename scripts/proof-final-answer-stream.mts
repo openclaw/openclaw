@@ -319,6 +319,8 @@ try {
   );
   console.log(`status: ${result.status}`);
 } finally {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
   await rm(tempRoot, { recursive: true, force: true });
 }
