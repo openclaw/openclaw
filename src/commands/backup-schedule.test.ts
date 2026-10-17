@@ -136,6 +136,8 @@ describe("scheduled backups", () => {
             "--push",
             "--exclude-secrets",
           ],
+          // A full archive outlives the generic cron command deadline.
+          timeoutSeconds: 86_400,
         },
       }),
     );
@@ -210,6 +212,9 @@ describe("scheduled backups", () => {
           "--keep-monthly",
           "0",
         ],
+        // The schedule declares its own archive-sized budget: the generic cron
+        // command deadline would kill a multi-gigabyte archive.
+        timeoutSeconds: 86_400,
       });
       expect(
         summarizeBackupSchedules([
