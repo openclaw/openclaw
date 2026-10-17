@@ -58,15 +58,3 @@ export function canAccessSync(filePath: string, mode?: number): boolean {
 export async function safeStat(filePath: string): Promise<fs.Stats | null> {
   return fsPromises.stat(filePath).catch(() => null);
 }
-
-/** X_OK admits searchable directories too; discovery requires a regular target. */
-export function executableFileExistsSync(filePath: string, platform: NodeJS.Platform): boolean {
-  try {
-    return (
-      fs.statSync(filePath).isFile() &&
-      canAccessSync(filePath, platform === "win32" ? fs.constants.F_OK : fs.constants.X_OK)
-    );
-  } catch {
-    return false;
-  }
-}

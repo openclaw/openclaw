@@ -7,7 +7,6 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   canAccess,
   canAccessSync,
-  executableFileExistsSync,
   pathEntryExists,
   pathMayExistSync,
   readDirectoryEntriesSync,
@@ -75,25 +74,6 @@ describe("filesystem discovery policies", () => {
     const failure = Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
     vi.spyOn(fsPromises, "lstat").mockRejectedValue(failure);
     await expect(pathEntryExists("blocked/child")).rejects.toBe(failure);
-  });
-
-  it("requires executable regular targets while preserving Windows existence-only access", async () => {
-    await withTestDir({ prefix: "openclaw-executable-" }, async (root) => {
-      const file = path.join(root, "file");
-      const directory = path.join(root, "directory");
-      await fsPromises.writeFile(file, "fixture", { mode: 0o600 });
-      await fsPromises.mkdir(directory);
-      expect(executableFileExistsSync(file, "win32")).toBe(true);
-      expect(executableFileExistsSync(directory, "win32")).toBe(false);
-      expect(executableFileExistsSync(path.join(root, "missing"), "win32")).toBe(false);
-      if (process.platform !== "win32") {
-        expect(executableFileExistsSync(file, process.platform)).toBe(false);
-        await fsPromises.chmod(file, 0o700);
-        const link = path.join(root, "link");
-        await fsPromises.symlink(file, link, "file");
-        expect(executableFileExistsSync(link, process.platform)).toBe(true);
-      }
-    });
   });
 });
 

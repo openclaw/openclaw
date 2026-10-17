@@ -1,6 +1,1 @@
-export {
-  canAccess,
-  canAccessSync,
-  executableFileExistsSync,
-  readDirectoryEntriesSync,
-} from "../infra/path-existence.js";
+export { canAccess, canAccessSync, readDirectoryEntriesSync } from "../infra/path-existence.js";
