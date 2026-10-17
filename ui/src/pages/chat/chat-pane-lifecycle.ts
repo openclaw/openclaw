@@ -111,6 +111,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
               presented: this.presented,
               agentId: this.agentId,
               launch: this.mcpAppLaunch,
+              replaceAttachments: this.chatState.attachmentInputProps(state).onAttachmentsChange,
               openFile: (path) => openSessionWorkspaceFile(state, { path }),
             }
           : null;
