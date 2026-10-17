@@ -42,6 +42,7 @@ import {
 import type { CaptureEventRecord } from "./types.js";
 
 const roots: string[] = [];
+const redactedPrefix = "first [REDACTED] café";
 afterEach(() => {
   closeDebugProxyCaptureStore();
   vi.restoreAllMocks();
@@ -186,11 +187,8 @@ describe("capture store lifecycle", () => {
     };
     registerSecretValueForRedaction("fixture-secret-value");
     const bytes = Buffer.from("first fixture-secret-value caf\u00e9");
-    const stream = pendingResponse([
-      bytes.subarray(0, 15),
-      bytes.subarray(15, -1),
-      bytes.subarray(-1),
-    ]);
+    const chunks = [bytes.subarray(0, 15), bytes.subarray(15, -1), bytes.subarray(-1)];
+    const stream = pendingResponse(chunks);
     const terminals: CaptureEventRecord[] = [];
     const record = store.recordEvent.bind(store);
     const recording = vi.spyOn(store, "recordEvent").mockImplementation((event) => {
@@ -224,7 +222,7 @@ describe("capture store lifecycle", () => {
       expect(terminals[0]).toMatchObject({
         kind: "response",
         status: 200,
-        dataText: "first [REDACTED] caf\u00e9",
+        dataText: redactedPrefix,
       });
       expect(JSON.parse(terminals[0]!.metaJson!)).toMatchObject({ bodyCapture: "finalized" });
       expect(end).toHaveBeenCalledExactlyOnceWith(settings.sessionId);
@@ -244,9 +242,7 @@ describe("capture store lifecycle", () => {
       try {
         expect(reopened.store.listSessions()[0]?.endedAt).toBeTypeOf("number");
         expect(reopened.store.getSessionEvents(settings.sessionId)).toHaveLength(2);
-        expect(reopened.store.readBlob(terminals[0]!.dataBlobId!)).toBe(
-          "first [REDACTED] caf\u00e9",
-        );
+        expect(reopened.store.readBlob(terminals[0]!.dataBlobId!)).toBe(redactedPrefix);
       } finally {
         reopened.release();
       }
@@ -312,10 +308,7 @@ describe("capture store lifecycle", () => {
     "settles sibling reads and closes after %s persistence fails",
     async (surface) => {
       const { settings, store, getStore, deps } = storeFixture();
-      const streams = [
-        pendingResponse([Buffer.from("one")]),
-        pendingResponse([Buffer.from("two")]),
-      ];
+      const streams = ["one", "two"].map((text) => pendingResponse([Buffer.from(text)]));
       const failure = new Error("fixture storage failure");
       const attempted: string[] = [];
       const record = store.recordEvent.bind(store);
@@ -736,9 +729,11 @@ describe("async capture lifecycle", () => {
       process.kill(process.pid, ${JSON.stringify(signal)});
     `;
       const child = runRuntimeScript(root, script, [], { HOME: root, XDG_CACHE_HOME: root });
-      expect(child.error, child.stderr).toBeUndefined();
-      expect(child.signal, child.stderr).toBeNull();
-      expect(child.status, child.stderr).toBe(exitCode);
+      expect([child.error, child.signal, child.status], child.stderr).toEqual([
+        undefined,
+        null,
+        exitCode,
+      ]);
       const persisted = withExistingOpenClawStateDatabaseReadOnly(
         ({ db }) => {
           const events = readDebugProxyCaptureSessionEvents(db, settings.sessionId);
@@ -826,26 +821,20 @@ describe("async capture lifecycle", () => {
       });
       try {
         const rows = (await reader.store.getSessionEvents(settings.sessionId)).toReversed();
-        expect(rows).toHaveLength(3);
-        expect(rows.map((row) => row.kind)).toEqual(["ws-frame", "request", "response"]);
-        expect(rows[0]).toMatchObject({ dataText: "websocket original" });
+        expect(rows).toMatchObject([
+          { kind: "ws-frame", dataText: "websocket original" },
+          { kind: "request", dataText: "request original" },
+          { kind: "response", flowId: "http-prefix", dataText: redactedPrefix, status: 200 },
+        ]);
         expect(JSON.parse(String(rows[0]!.metaJson))).toEqual({
           provider: "fixture",
           detail: { phase: "accepted" },
-        });
-        expect(rows[1]).toMatchObject({ dataText: "request original" });
-        expect(rows[2]).toMatchObject({
-          flowId: "http-prefix",
-          dataText: "first [REDACTED] café",
-          status: 200,
         });
         expect(JSON.parse(String(rows[2]!.metaJson))).toEqual({
           detail: { phase: "accepted" },
           bodyCapture: "finalized",
         });
-        expect(await reader.store.readBlob(String(rows[2]!.dataBlobId))).toBe(
-          "first [REDACTED] café",
-        );
+        expect(await reader.store.readBlob(String(rows[2]!.dataBlobId))).toBe(redactedPrefix);
         expect((await reader.store.listSessions())[0]?.endedAt).toBeTypeOf("number");
       } finally {
         await reader.release();

@@ -8,7 +8,7 @@ import {
   type OpenClawDatabaseMaintenanceScope,
 } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateWorkerLease } from "../state/openclaw-state-worker-store.js";
-import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
+import { resolveDebugProxySettings } from "./env.js";
 import { withDeferredDebugProxyCapture } from "./runtime-deferral.js";
 import {
   captureWsEventAsync,
@@ -91,7 +91,7 @@ it.each([
   { phase: "selection", outcome: "success" },
   { phase: "continuation", outcome: "failure" },
 ] as const)(
-  "keeps transport $outcome independent of $phase capture admission and retains the diagnostic",
+  "preserves transport $outcome across $phase admission failure",
   async ({ phase, outcome }) => {
     const admissionFailure = new Error("synthetic admission refusal");
     const transportFailure = new Error("synthetic transport rejection");
@@ -106,15 +106,8 @@ it.each([
     const target: typeof globalThis = { ...globalThis, fetch: transport };
     const store = { upsertSession: vi.fn(), endSession: vi.fn(), recordEvent: vi.fn() };
     const deps = { getStore: () => store, fetchTarget: target };
-    const settings: DebugProxySettings = {
-      enabled: true,
-      required: false,
-      dbPath: "/synthetic/capture.sqlite",
-      blobDir: "/synthetic/blobs",
-      certDir: "/synthetic/certs",
-      sessionId: "transport-admission",
-      sourceProcess: "fixture",
-    };
+    stubGuardedCaptureEnv("transport-admission");
+    const settings = resolveDebugProxySettings();
     initializeDebugProxyCapture("fixture", settings, deps);
     control.scope = createOpenClawDatabaseMaintenanceScope();
     vi.spyOn(control.scope, "assertAdmission").mockImplementation(() => {
@@ -187,14 +180,14 @@ it("returns owner admission failure as an observed rejecting Promise", async () 
 });
 
 it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
-  "defers %s capture writes until the live update owner releases them",
+  "defers %s capture until the update owner releases it",
   async (mode) => {
     stubGuardedCaptureEnv(`deferred-${mode}`);
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_REQUIRE", "1");
     const settings = resolveDebugProxySettings();
     const committed = stubWorker();
-    const store = { upsertSession: vi.fn(), endSession: vi.fn(), recordEvent: vi.fn() };
     const transport = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
+    const store = { upsertSession: vi.fn(), endSession: vi.fn(), recordEvent: vi.fn() };
     const target: typeof globalThis = { ...globalThis, fetch: transport };
     const deps = {
       getStore: vi.fn(() => store),
@@ -235,6 +228,10 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
     const expectWrites = () => {
       expect(committed.mock.calls.length + store.recordEvent.mock.calls.length).toBeGreaterThan(0);
     };
+    const check = async (released = false) => {
+      await exercise();
+      (released ? expectWrites : expectNoWrites)();
+    };
     const continueAfterClose = createDeferredCore();
     const continueWithoutCapture = createDeferredCore();
     let late: Promise<void> | undefined;
@@ -242,18 +239,14 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
     clearWrites();
     try {
       await withDeferredDebugProxyCapture(async (resume) => {
-        await exercise();
-        expectNoWrites();
+        await check();
         await withDeferredDebugProxyCapture(async (resumeNested) => {
-          await exercise();
-          expectNoWrites();
+          await check();
           resumeNested();
-          await exercise();
-          expectWrites();
+          await check(true);
         });
         clearWrites();
-        await exercise();
-        expectWrites();
+        await check(true);
         clearWrites();
         late = continueAfterClose.promise.then(async () => {
           resume();
@@ -265,8 +258,7 @@ it.each(["fresh", "cached-worker", "saved-fetch"] as const)(
       expectWrites();
       clearWrites();
       await withDeferredDebugProxyCapture(async (resume) => {
-        await exercise();
-        expectNoWrites();
+        await check();
         uncapturedLate = continueWithoutCapture.promise.then(async () => {
           resume();
           await withDeferredDebugProxyCapture(async (resumeNested) => {
@@ -293,7 +285,7 @@ it.each([
   { failureKind: "ready", outcome: "success" },
   { failureKind: "reservation", outcome: "failure" },
 ] as const)(
-  "keeps guarded transport $outcome independent of $failureKind capture preparation failure",
+  "preserves guarded transport $outcome across $failureKind preparation failure",
   async ({ failureKind, outcome }) => {
     const preparationFailure = new Error("synthetic capture preparation rejected");
     const transportFailure = new Error("synthetic guarded transport rejected");
@@ -302,29 +294,26 @@ it.each([
       if (failureKind === "reservation") {
         throw preparationFailure;
       }
-      const lease: OpenClawStateWorkerLease = {
+      const fail = async () => {
+        throw preparationFailure;
+      };
+      return {
         ready: Promise.reject(preparationFailure),
-        execute: async () => {
-          throw preparationFailure;
-        },
-        runOperation: async () => {
-          throw preparationFailure;
-        },
+        execute: fail,
+        runOperation: fail,
         release: async () => {},
         retire: async () => {},
       };
-      return lease;
     });
     const settings = resolveDebugProxySettings();
-    const transport = vi.fn<typeof fetch>(async () => {
-      if (outcome === "failure") {
-        throw transportFailure;
-      }
-      return new Response("guarded transport succeeded", {
-        status: 200,
-        headers: { "x-fixture": "transport-response" },
-      });
+    const response = new Response("guarded transport succeeded", {
+      status: 200,
+      headers: { "x-fixture": "transport-response" },
     });
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(response);
+    if (outcome === "failure") {
+      transport.mockRejectedValue(transportFailure);
+    }
     try {
       const pending = fetchWithSsrFGuard({
         url: "https://synthetic.invalid/capture-preparation",
@@ -362,78 +351,63 @@ it.each(["success", "failure"] as const)(
     const committed = stubWorker(ready.promise, acquired.resolve);
     const transportFailure = new Error("synthetic cold-readiness transport rejection");
     const response = new Response(null, { status: 204 });
-    const transport = vi.fn<typeof fetch>(async () => {
-      if (outcome === "failure") {
-        throw transportFailure;
-      }
-      return response;
-    });
-    let completed: { value?: GuardedFetchResult; error?: unknown } | undefined;
+    const transport = vi.fn<typeof fetch>().mockResolvedValue(response);
+    if (outcome === "failure") {
+      transport.mockRejectedValue(transportFailure);
+    }
+    const succeeded = vi.fn<(value: GuardedFetchResult) => void>();
+    const failed = vi.fn<(error: unknown) => void>();
     const operation = fetchWithSsrFGuard({
       url: "https://synthetic.invalid/cold-capture",
       fetchImpl: transport,
       init: { method: "POST", body: Buffer.from("cold request") },
       capture: { flowId: "cold-flow" },
-    }).then(
-      (value) => {
-        completed = { value };
-      },
-      (error: unknown) => {
-        completed = { error };
-      },
-    );
+    }).then(succeeded, failed);
     try {
       await acquired.promise;
       // Drain this turn's ready work without resolving the worker gate or polling.
       await nextEventLoopTurn();
       expect(transport).toHaveBeenCalledTimes(1);
-      expect(completed).toBeDefined();
+      expect([succeeded.mock.calls.length, failed.mock.calls.length]).toEqual(
+        outcome === "success" ? [1, 0] : [0, 1],
+      );
       if (outcome === "success") {
-        expect(completed?.error).toBeUndefined();
-        expect(completed?.value?.response).toBe(response);
-        expect(completed?.value?.response.status).toBe(204);
+        expect(succeeded.mock.calls[0]?.[0].response).toBe(response);
+        expect(response.status).toBe(204);
       } else {
-        expect(completed).toEqual({ error: transportFailure });
+        expect(failed.mock.calls[0]?.[0]).toBe(transportFailure);
       }
       expect(committed).not.toHaveBeenCalled();
       ready.resolve();
       await operation;
       await finalizeDebugProxyCaptureAsync(settings);
       const commands = committed.mock.calls.map(([command]) => command);
-      const payloadCommand = (event: Record<string, unknown>, data: Buffer) =>
-        expect.objectContaining({
-          type: "capture.recordEventWithPayload",
-          input: expect.objectContaining({
-            event: expect.objectContaining({ ...event, flowId: "cold-flow" }),
-            payload: expect.objectContaining({ data }),
-          }),
-        });
-      expect(commands).toEqual([
-        ...(outcome === "success"
+      expect(commands.pop()).toEqual({
+        type: "capture.endSession",
+        input: { sessionId: settings.sessionId, endedAt: expect.any(Number) },
+      });
+      const payloadCommand = (event: Record<string, unknown>, data: Buffer) => ({
+        type: "capture.recordEventWithPayload",
+        input: { event: { ...event, flowId: "cold-flow" }, payload: { data } },
+      });
+      expect(commands).toMatchObject(
+        outcome === "success"
           ? [
               payloadCommand({ kind: "request" }, Buffer.from("cold request")),
               payloadCommand({ kind: "response", status: 204 }, Buffer.alloc(0)),
             ]
           : [
-              expect.objectContaining({
+              {
                 type: "capture.recordEvent",
-                input: expect.objectContaining({
-                  kind: "error",
-                  flowId: "cold-flow",
-                  errorText: transportFailure.message,
-                }),
-              }),
-            ]),
-        {
-          type: "capture.endSession",
-          input: { sessionId: settings.sessionId, endedAt: expect.any(Number) },
-        },
-      ]);
+                input: { kind: "error", flowId: "cold-flow", errorText: transportFailure.message },
+              },
+            ],
+      );
     } finally {
       ready.resolve();
       await operation;
       try {
-        await completed?.value?.release();
+        await succeeded.mock.calls[0]?.[0].release();
       } finally {
         await finalizeDebugProxyCaptureAsync(settings);
       }

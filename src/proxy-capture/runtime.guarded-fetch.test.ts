@@ -1,6 +1,6 @@
 import type { ServerResponse } from "node:http";
 import { text } from "node:stream/consumers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -15,7 +15,23 @@ import { finalizeDebugProxyCaptureAsync, initializeDebugProxyCaptureAsync } from
 import { createDebugProxyCaptureReaderAsync } from "./store-readonly.async.js";
 import { acquireDebugProxyCaptureStoreAsync } from "./store.async.js";
 
+let fixture: Awaited<ReturnType<typeof captureRoots>>;
+let replacement: Awaited<ReturnType<typeof acquireDebugProxyCaptureStoreAsync>> | undefined;
+let replacing = false;
+let controller: AbortController;
+beforeEach(async () => {
+  replacement = undefined;
+  replacing = false;
+  controller = new AbortController();
+  fixture = await captureRoots();
+});
 afterEach(async () => {
+  controller.abort();
+  if (replacing) {
+    await finalizeDebugProxyCaptureAsync(fixture.settings[1]);
+    await replacement?.release();
+  }
+  await fixture.close();
   await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -46,13 +62,12 @@ async function captureRoots() {
     savedWrapper,
     readEvents: () =>
       Promise.all(
-        roots.map((root, index) =>
-          createDebugProxyCaptureReaderAsync({
+        roots.map(async (root, index) => {
+          const reader = createDebugProxyCaptureReaderAsync({
             env: { ...process.env, OPENCLAW_STATE_DIR: root },
-          })
-            .getSessionEvents(settings[index]!.sessionId)
-            .then((events) => events.toReversed()),
-        ),
+          });
+          return (await reader.getSessionEvents(settings[index]!.sessionId)).toReversed();
+        }),
       ),
     close() {
       closing ??= (async () => {
@@ -67,163 +82,128 @@ async function captureRoots() {
   };
 }
 
-describe("guarded capture ownership", () => {
-  it("captures RequestInit overrides as sent by the global fetch transport", async () => {
-    const fixture = await captureRoots();
-    try {
-      await withServer(
-        async (request, response) => {
-          response.setHeader("content-type", "application/json");
-          response.end(
-            JSON.stringify({
-              method: request.method,
-              originalHeader: request.headers["x-original"],
-              overrideHeader: request.headers["x-override"],
-              body: await text(request),
-            }),
-          );
-        },
-        async (baseUrl) => {
-          const request = new Request(`${baseUrl}/overrides`, {
-            method: "PUT",
-            headers: { "x-original": "original" },
-            body: "original body",
-          });
-          const response = await fixture.savedWrapper(request, {
-            method: "POST",
-            headers: { "x-override": "override", "content-type": "application/json" },
-            body: "override body",
-          });
-          expect(await response.json()).toEqual({
-            method: "POST",
-            overrideHeader: "override",
-            body: "override body",
-          });
-        },
-      );
-      await fixture.close();
-      const [events] = await fixture.readEvents();
-      expect(events?.[0]).toMatchObject({
-        kind: "request",
-        method: "POST",
-        dataText: "override body",
-      });
-      expect(JSON.parse(String(events?.[0]?.headersJson))).toEqual({
-        "content-type": "application/json",
-        "x-override": "override",
-      });
-    } finally {
-      await fixture.close();
-    }
-  });
+function guardedFetch(url: string, capture?: false) {
+  return fetchWithSsrFGuard({
+    url,
+    capture,
+    signal: controller.signal,
+    pinDns: false,
+    policy: { allowPrivateNetwork: true },
+  }).then(
+    (value) => ({ value, error: undefined }),
+    (error: unknown) => ({ value: undefined, error }),
+  );
+}
 
-  it("records an active transport rejection once through the global owner", async () => {
-    const fixture = await captureRoots();
-    const arrived = createDeferredCore<ServerResponse>();
-    const controller = new AbortController();
-    const secret = "fixture-transport-secret";
-    registerSecretValueForRedaction(secret);
-    const reason = new Error(`caller abort ${secret}`);
-    try {
-      await withServer(
-        (request, response) => {
-          request.resume();
-          arrived.resolve(response);
-        },
-        async (baseUrl) => {
-          const operation = fetchWithSsrFGuard({
-            url: `${baseUrl}/rejection`,
-            pinDns: false,
-            policy: { allowPrivateNetwork: true },
-            signal: controller.signal,
-            capture: false,
-          }).then(
-            (value) => ({ value, error: undefined }),
-            (error: unknown) => ({ value: undefined, error }),
-          );
-          const response = await arrived.promise;
-          controller.abort(reason);
-          response.end();
-          const completed = await operation;
-          expect(completed.error).toBe(reason);
-          expect(completed.value).toBeUndefined();
-        },
-      );
-      await fixture.close();
-      const events = await fixture.readEvents();
-      expect(events.map((rows) => rows.length)).toEqual([1, 0]);
-      const event = events[0]![0]!;
-      expect(event).toMatchObject({
-        kind: "error",
-        direction: "local",
-        method: "GET",
-        path: "/rejection",
-        errorText: "caller abort [REDACTED]",
-        status: null,
-      });
-      expect(JSON.parse(String(event.metaJson))).toMatchObject({ captureOrigin: "global-fetch" });
-    } finally {
-      controller.abort();
-      await fixture.close();
-    }
-  });
-
-  it.each(["response", "abort"] as const)(
-    "keeps a delayed caller %s while retired admissions stay fenced",
-    async (outcome) => {
-      const fixture = await captureRoots();
-      const arrived = createDeferredCore<ServerResponse>();
-      const controller = new AbortController();
-      const reason = new Error("fixture caller abort");
-      let replacement: Awaited<ReturnType<typeof acquireDebugProxyCaptureStoreAsync>> | undefined;
-      try {
-        await withServer(
-          (request, response) => {
-            request.resume();
-            arrived.resolve(response);
-          },
-          async (baseUrl) => {
-            const operation = fetchWithSsrFGuard({
-              url: `${baseUrl}/delayed`,
-              pinDns: false,
-              policy: { allowPrivateNetwork: true },
-              signal: controller.signal,
-            }).then(
-              (value) => ({ value, error: undefined }),
-              (error: unknown) => ({ value: undefined, error }),
-            );
-            const response = await arrived.promise;
-            await fixture.close();
-            await initializeDebugProxyCaptureAsync("replacement", fixture.settings[1]);
-            replacement = await acquireDebugProxyCaptureStoreAsync();
-            if (outcome === "abort") {
-              controller.abort(reason);
-            }
-            response.writeHead(200, { "x-fixture": "late-response" });
-            response.end("late response");
-            const completed = await operation;
-            if (outcome === "abort") {
-              expect(completed.error).toBe(reason);
-              expect(completed.value).toBeUndefined();
-            } else {
-              expect(completed.error).toBeUndefined();
-              expect(completed.value!.response.headers.get("x-fixture")).toBe("late-response");
-              expect(await completed.value!.response.text()).toBe("late response");
-              await completed.value!.release();
-            }
-            await finalizeDebugProxyCaptureAsync(fixture.settings[1]);
-            expect(
-              await replacement.store.getSessionEvents(fixture.settings[1]!.sessionId),
-            ).toEqual([]);
-            expect((await fixture.readEvents()).map((events) => events.length)).toEqual([0, 0]);
-          },
-        );
-      } finally {
-        controller.abort();
-        await finalizeDebugProxyCaptureAsync(fixture.settings[1]);
-        await replacement?.release();
-        await fixture.close();
-      }
+async function withPendingFetch(
+  path: string,
+  run: (response: ServerResponse, result: ReturnType<typeof guardedFetch>) => Promise<void>,
+  capture?: false,
+) {
+  const arrived = createDeferredCore<ServerResponse>();
+  await withServer(
+    (request, response) => {
+      request.resume();
+      arrived.resolve(response);
+    },
+    async (baseUrl) => {
+      const operation = guardedFetch(`${baseUrl}/${path}`, capture);
+      await run(await arrived.promise, operation);
     },
   );
+}
+
+it("captures RequestInit overrides as sent by the global fetch transport", async () => {
+  const headers = { "x-override": "override", "content-type": "application/json" };
+  await withServer(
+    async (request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end(
+        JSON.stringify([
+          request.method,
+          request.headers["x-original"],
+          request.headers["x-override"],
+          await text(request),
+        ]),
+      );
+    },
+    async (baseUrl) => {
+      const request = new Request(`${baseUrl}/overrides`, {
+        method: "PUT",
+        headers: { "x-original": "original" },
+        body: "original body",
+      });
+      const response = await fixture.savedWrapper(request, {
+        method: "POST",
+        headers,
+        body: "override body",
+      });
+      expect(await response.json()).toEqual(["POST", null, "override", "override body"]);
+    },
+  );
+  await fixture.close();
+  const [events] = await fixture.readEvents();
+  expect(events?.[0]).toMatchObject({ kind: "request", method: "POST", dataText: "override body" });
+  expect(JSON.parse(String(events?.[0]?.headersJson))).toEqual(headers);
 });
+
+it("records an active transport rejection once through the global owner", async () => {
+  const secret = "fixture-transport-secret";
+  registerSecretValueForRedaction(secret);
+  const reason = new Error(`caller abort ${secret}`);
+  await withPendingFetch(
+    "rejection",
+    async (response, operation) => {
+      controller.abort(reason);
+      response.end();
+      const completed = await operation;
+      expect(completed.error).toBe(reason);
+      expect(completed.value).toBeUndefined();
+    },
+    false,
+  );
+  await fixture.close();
+  const events = await fixture.readEvents();
+  expect(events.map((rows) => rows.length)).toEqual([1, 0]);
+  const event = events[0]![0]!;
+  expect(event).toMatchObject({
+    kind: "error",
+    direction: "local",
+    method: "GET",
+    path: "/rejection",
+    errorText: "caller abort [REDACTED]",
+    status: null,
+  });
+  expect(JSON.parse(String(event.metaJson))).toMatchObject({ captureOrigin: "global-fetch" });
+});
+
+it.each(["response", "abort"] as const)(
+  "keeps a delayed caller %s while retired admissions stay fenced",
+  async (outcome) => {
+    const reason = new Error("fixture caller abort");
+    await withPendingFetch("delayed", async (response, operation) => {
+      await fixture.close();
+      replacing = true;
+      await initializeDebugProxyCaptureAsync("replacement", fixture.settings[1]);
+      replacement = await acquireDebugProxyCaptureStoreAsync();
+      if (outcome === "abort") {
+        controller.abort(reason);
+      }
+      response.writeHead(200, { "x-fixture": "late-response" });
+      response.end("late response");
+      const completed = await operation;
+      if (outcome === "abort") {
+        expect(completed.error).toBe(reason);
+        expect(completed.value).toBeUndefined();
+      } else {
+        expect(completed.error).toBeUndefined();
+        expect(completed.value!.response.headers.get("x-fixture")).toBe("late-response");
+        expect(await completed.value!.response.text()).toBe("late response");
+        await completed.value!.release();
+      }
+      await finalizeDebugProxyCaptureAsync(fixture.settings[1]);
+      expect(await replacement.store.getSessionEvents(fixture.settings[1]!.sessionId)).toEqual([]);
+      expect((await fixture.readEvents()).map((events) => events.length)).toEqual([0, 0]);
+    });
+  },
+);

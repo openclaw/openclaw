@@ -20,8 +20,7 @@ vi.mock("./ca.js", () => ({
 }));
 
 let testRoot: string | undefined;
-const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-const cleanup: Array<() => Promise<void>> = [];
+const cleanup: Array<() => void | Promise<void>> = [];
 
 async function startProxy() {
   const settings = await makeSettings();
@@ -32,11 +31,7 @@ async function startProxy() {
 
 async function cleanupTestRoot(): Promise<void> {
   await closeOpenClawStateDatabaseAsync();
-  if (originalStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = originalStateDir;
-  }
+  vi.unstubAllEnvs();
   if (!testRoot) {
     return;
   }
@@ -48,7 +43,7 @@ async function cleanupTestRoot(): Promise<void> {
 async function makeSettings(): Promise<DebugProxySettings> {
   testRoot = await mkdtemp(join(tmpdir(), "openclaw-debug-proxy-server-"));
   const certDir = join(testRoot, "certs");
-  process.env.OPENCLAW_STATE_DIR = testRoot;
+  vi.stubEnv("OPENCLAW_STATE_DIR", testRoot);
   return {
     enabled: true,
     required: false,
@@ -144,14 +139,9 @@ async function getThroughProxy(
 ): Promise<ProxyResponseResult> {
   const proxy = new URL(proxyUrl);
   return await new Promise<ProxyResponseResult>((resolve) => {
-    let settled = false;
     let body = "";
     let response: IncomingMessage | undefined;
     const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
       resolve({
         body,
         complete: response?.complete ?? false,
@@ -271,24 +261,17 @@ async function rawSlowGetThroughProxy(params: {
     let contentLength: number | undefined;
     let headerBytes = Buffer.alloc(0);
     let resumed = false;
-    let settled = false;
     let statusLine = "";
     let resumeTimeout: ReturnType<typeof setTimeout> | undefined;
     const socket = net.connect(Number(proxy.port), proxy.hostname);
     const timeout = setTimeout(() => {
       socket.destroy();
-      if (!settled) {
-        settled = true;
-        reject(new Error("slow proxy client timed out"));
-      }
+      reject(new Error("slow proxy client timed out"));
     }, 15000);
     const finish = () => {
       clearTimeout(timeout);
       clearTimeout(resumeTimeout);
-      if (!settled) {
-        settled = true;
-        resolve({ aborted, bodyBytes, resumed, statusLine });
-      }
+      resolve({ aborted, bodyBytes, resumed, statusLine });
     };
     const maybeFinishCompleteBody = () => {
       if (contentLength !== undefined && bodyBytes >= contentLength) {
@@ -341,28 +324,51 @@ async function rawSlowGetThroughProxy(params: {
     socket.on("error", (error) => {
       clearTimeout(timeout);
       clearTimeout(resumeTimeout);
-      if (!settled) {
-        settled = true;
-        reject(error);
-      }
+      reject(error);
     });
     socket.on("close", finish);
   });
 }
 
-async function openConnectClient(proxyUrl: string, connectTarget: string): Promise<Socket> {
-  const proxy = new URL(proxyUrl);
+async function startConnectProxy(connectTarget: string) {
+  const upstream = new Socket();
+  const openingTimeout = vi.spyOn(upstream, "setTimeout");
+  const connected = createDeferredCore<{ hostname: string; port: number }>();
+  vi.spyOn(net, "connect").mockImplementation(((
+    port: number,
+    hostname: string,
+    onConnect: () => void,
+  ) => {
+    connected.resolve({ hostname, port });
+    upstream.once("connect", onConnect);
+    return upstream;
+  }) as typeof net.connect);
+  const { settings, proxy } = await startProxy();
+  cleanup.push(() => {
+    upstream.destroy();
+  });
+  const address = new URL(proxy.proxyUrl);
   const socket = new Socket();
+  cleanup.push(() => {
+    socket.destroy();
+  });
   socket.on("error", () => {});
   await new Promise<void>((resolve, reject) => {
     socket.once("error", reject);
-    socket.connect(Number(proxy.port), proxy.hostname, () => {
+    socket.connect(Number(address.port), address.hostname, () => {
       socket.off("error", reject);
       resolve();
     });
   });
   socket.write(`CONNECT ${connectTarget} HTTP/1.1\r\nHost: ${connectTarget}\r\n\r\n`);
-  return socket;
+  return {
+    settings,
+    proxy,
+    upstream,
+    client: socket,
+    connected: connected.promise,
+    openingTimeout,
+  };
 }
 
 afterEach(async () => {
@@ -519,84 +525,45 @@ describe("startDebugProxyServer", () => {
   });
 
   it("returns 504 when a CONNECT upstream opening attempt times out", async () => {
-    const settings = await makeSettings();
-    const stalledUpstream = new Socket();
-    const setOpeningTimeout = vi.spyOn(stalledUpstream, "setTimeout");
-    const connectCalled = createDeferredCore<{ hostname: string; port: number }>();
-    vi.spyOn(net, "connect").mockImplementation(((port: number, hostname: string) => {
-      connectCalled.resolve({ hostname, port });
-      return stalledUpstream;
-    }) as typeof net.connect);
-    const proxy = await startDebugProxyServer({ settings });
-    let client: Socket | undefined;
+    const { settings, proxy, upstream, client, connected, openingTimeout } =
+      await startConnectProxy("unreachable.example:443");
+    let response = "";
+    client.setEncoding("utf8");
+    client.on("data", (chunk) => {
+      response += chunk.toString();
+    });
+    const clientClosed = new Promise<void>((resolve) => {
+      client.once("close", resolve);
+    });
 
-    try {
-      const connectedClient = await openConnectClient(proxy.proxyUrl, "unreachable.example:443");
-      client = connectedClient;
-      let response = "";
-      connectedClient.setEncoding("utf8");
-      connectedClient.on("data", (chunk) => {
-        response += chunk.toString();
-      });
-      const clientClosed = new Promise<void>((resolve) => {
-        connectedClient.once("close", resolve);
-      });
+    await expect(connected).resolves.toMatchObject({
+      hostname: "unreachable.example",
+      port: 443,
+    });
+    expect(openingTimeout).toHaveBeenCalledWith(30_000, expect.any(Function));
+    upstream.emit("timeout");
+    await clientClosed;
 
-      await expect(connectCalled.promise).resolves.toMatchObject({
-        hostname: "unreachable.example",
-        port: 443,
-      });
-      expect(setOpeningTimeout).toHaveBeenCalledWith(30_000, expect.any(Function));
-      stalledUpstream.emit("timeout");
-      await clientClosed;
-
-      expect(response).toContain("504 Gateway Timeout");
-      expect(response).toContain("Gateway Timeout\n");
-      expect(stalledUpstream.destroyed).toBe(true);
-      await proxy.stop();
-      expect(await readCaptureEvents(settings.sessionId, 10)).toContainEqual(
-        expect.objectContaining({
-          direction: "local",
-          errorText: "CONNECT upstream opening timed out after 30000ms of inactivity",
-          kind: "error",
-          protocol: "connect",
-        }),
-      );
-    } finally {
-      client?.destroy();
-      stalledUpstream.destroy();
-      await proxy.stop();
-    }
+    expect(response).toContain("504 Gateway Timeout");
+    expect(response).toContain("Gateway Timeout\n");
+    expect(upstream.destroyed).toBe(true);
+    await proxy.stop();
+    expect(await readCaptureEvents(settings.sessionId, 10)).toContainEqual(
+      expect.objectContaining({
+        direction: "local",
+        errorText: "CONNECT upstream opening timed out after 30000ms of inactivity",
+        kind: "error",
+        protocol: "connect",
+      }),
+    );
   });
 
   it("removes the CONNECT opening timeout after the upstream socket connects", async () => {
-    const settings = await makeSettings();
-    const upstream = new Socket();
-    const disableTimeout = vi.spyOn(upstream, "setTimeout");
-    const connectCalled = createDeferredCore();
-    vi.spyOn(net, "connect").mockImplementation(((
-      _port: number,
-      _hostname: string,
-      onConnect: () => void,
-    ) => {
-      connectCalled.resolve();
-      upstream.once("connect", onConnect);
-      return upstream;
-    }) as typeof net.connect);
-    const proxy = await startDebugProxyServer({ settings });
-    let client: Socket | undefined;
+    const { upstream, connected, openingTimeout } = await startConnectProxy("example.com:443");
+    await connected;
+    upstream.emit("connect");
 
-    try {
-      client = await openConnectClient(proxy.proxyUrl, "example.com:443");
-      await connectCalled.promise;
-      upstream.emit("connect");
-
-      expect(disableTimeout).toHaveBeenCalledWith(0);
-      expect(upstream.listenerCount("timeout")).toBe(0);
-    } finally {
-      client?.destroy();
-      upstream.destroy();
-      await proxy.stop();
-    }
+    expect(openingTimeout).toHaveBeenCalledWith(0);
+    expect(upstream.listenerCount("timeout")).toBe(0);
   });
 });
