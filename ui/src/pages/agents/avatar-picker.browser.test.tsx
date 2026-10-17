@@ -22,7 +22,7 @@ it("wraps long avatar descriptions inside a narrow picker", async () => {
   );
   try {
     await page.getByRole("button", { name: "Generate", exact: true }).click();
-    const prompt = page.getByRole("textbox", { name: "Describe your avatar…", exact: true });
+    const prompt = page.getByRole("textbox", { name: "Describe your blobster...", exact: true });
     const description =
       "A gentle garden keeper with a watering can and a leafy sprout.\n" + "leaf".repeat(80);
     await prompt.fill(description);

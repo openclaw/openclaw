@@ -49,7 +49,7 @@ export const identity = {
   avatarUpload: "Upload",
   avatarReset: "Reset",
   avatarPresets: "All Blobster presets",
-  avatarPrompt: "Describe your avatar…",
+  avatarPrompt: "Describe your blobster...",
   avatarUse: "Use avatar",
   avatarDiscard: "Discard",
   avatarRegenerate: "Generate again",
