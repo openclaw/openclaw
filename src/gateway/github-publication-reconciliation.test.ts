@@ -112,9 +112,14 @@ describe("shared GitHub publication reconciliation", () => {
     },
   );
 
-  it.each(["local", "repository"] as const)(
-    "finds an older open PR beyond the first page after an accepted %s push loses authority",
-    async (backend) => {
+  it.each([
+    { backend: "local", mode: "paged" },
+    { backend: "local", mode: "interrupted" },
+    { backend: "repository", mode: "paged" },
+    { backend: "repository", mode: "interrupted" },
+  ] as const)(
+    "reconciles a $mode $backend update after authority ends",
+    async ({ backend, mode }) => {
       const { f, first, pullRequest, transport, observePush } =
         await prepareExistingPullRequest(backend);
       const closed = Array.from({ length: 30 }, (_, index) => ({
@@ -123,74 +128,26 @@ describe("shared GitHub publication reconciliation", () => {
         state: "closed",
         body: `<!-- openclaw-publication:earlier-closed-${index} -->`,
       }));
-      let revoked = false;
-      let recoveryLookup = false;
-      let acceptedWrites: string[] | undefined;
+      let pushed = false,
+        readbackAvailable = false,
+        recoveryLookup = false,
+        unavailableLookups = 0;
+      let acceptedWrites: string[] = [];
       const hostScans = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync");
       let recoveryScanStart = 0;
       mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
         if (argv.includes("state=all")) {
-          recoveryLookup ||= revoked;
-          // gh emits one compact JSON array per page; without pagination the open PR is absent.
-          return commandResult(
-            [closed, ...(argv.includes("--paginate") ? [[pullRequest]] : [])]
-              .map((page) => JSON.stringify(page))
-              .join("\n"),
-          );
-        }
-        const response = await transport(argv, options);
-        if (argv.includes("push") || argv.includes("graphql")) {
-          await observePush();
-          await f.revoke();
-          revoked = true;
-          recoveryScanStart = hostScans.mock.calls.length;
-          acceptedWrites = [...f.externalWrites];
-        }
-        return response;
-      });
-
-      const result = await f.coordinator.requestForSessionV2(f.request("paged-update", f.guest));
-
-      expect(
-        hostScans.mock.calls
-          .slice(recoveryScanStart)
-          .map(([, query]) => query.compile().sql)
-          .filter((sql) => /from "github_(?:repository_)?publication_requests"/u.test(sql)),
-      ).toEqual([]);
-
-      expect(result).toMatchObject({
-        status: "published",
-        url: first.url,
-        headCommit: pullRequest.headSha,
-      });
-      expect(result.requestId).not.toBe(first.requestId);
-      expect(revoked).toBe(true);
-      expect(recoveryLookup).toBe(true);
-      expect(f.readReceipt(result.requestId)).toMatchObject({
-        status: "published",
-        pull_request_url: first.url,
-        head_commit: pullRequest.headSha,
-      });
-      expect(f.externalWrites).toEqual(acceptedWrites);
-      expect(f.publishedTitles).toEqual(["first-publication"]);
-      await f.restart().resumeSessionRequests();
-      expect(f.externalWrites).toEqual(acceptedWrites);
-      expect(await f.coordinator.readAsync(first.requestId)).toEqual(first);
-    },
-  );
-
-  it.each(["local", "repository"] as const)(
-    "recovers an interrupted %s update to a known PR closed before requester-denied restart",
-    async (backend) => {
-      const { f, first, pullRequest, transport, observePush } =
-        await prepareExistingPullRequest(backend);
-      let pushed = false;
-      let readbackAvailable = false;
-      let unavailableLookups = 0;
-      mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
-        if (argv.includes("state=all")) {
+          recoveryLookup ||= pushed;
+          if (mode === "paged") {
+            // gh emits one array per page; the matching open PR is beyond page one.
+            return commandResult(
+              [closed, ...(argv.includes("--paginate") ? [[pullRequest]] : [])]
+                .map((page) => JSON.stringify(page))
+                .join("\n"),
+            );
+          }
           if (pushed && !readbackAvailable) {
-            unavailableLookups += 1;
+            unavailableLookups++;
             return commandResult("", 1);
           }
           return commandResult(JSON.stringify([pullRequest]));
@@ -198,71 +155,99 @@ describe("shared GitHub publication reconciliation", () => {
         const response = await transport(argv, options);
         if (argv.includes("push") || argv.includes("graphql")) {
           await observePush();
+          if (mode === "paged") {
+            await f.revoke();
+          }
           pushed = true;
+          recoveryScanStart = hostScans.mock.calls.length;
+          acceptedWrites = [...f.externalWrites];
         }
         return response;
       });
-
-      const idempotencyKey = "interrupted-existing-pr-update";
-      const pending = f.coordinator.requestForSessionV2(f.request(idempotencyKey, f.guest));
+      const idempotencyKey = `${mode}-update`;
+      const publication = f.coordinator.requestForSessionV2(f.request(idempotencyKey, f.guest));
       let requestId: string;
-      if (backend === "local") {
-        await expect(pending).rejects.toBeInstanceOf(GitHubPublicationRecoveryPendingError);
-        requestId = readGitHubPublicationRequest(f.database.db, {
-          sessionId: f.session.sessionId,
-          idempotencyKey,
-        })!.request_id;
-      } else {
-        const result = await pending;
-        expect(result.status).toBe("requested");
+      if (mode === "paged") {
+        const result = await publication;
+        expect(result).toMatchObject({
+          status: "published",
+          url: first.url,
+          headCommit: pullRequest.headSha,
+        });
+        expect(result.requestId).not.toBe(first.requestId);
         requestId = result.requestId;
-      }
-      expect(pushed).toBe(true);
-      expect(unavailableLookups).toBeGreaterThan(0);
-      expect(f.readReceipt(requestId)).toMatchObject({
-        pull_request_url: null,
-        head_commit: pullRequest.headSha,
-      });
-      expect(pullRequest.body).not.toContain(`<!-- openclaw-publication:${requestId} -->`);
-      expect(await f.coordinator.readAsync(first.requestId)).toEqual(first);
-      const acceptedWrites = [...f.externalWrites];
-
-      // The accepted update survives a later close; its existing PR retains the original body.
-      pullRequest.state = "closed";
-      await f.revoke();
-      expect(f.guest.assertCurrent).toThrow();
-      readbackAvailable = true;
-      const restarted = f.restart();
-      const read = stateReads.executeExistingOpenClawStateRead;
-      const unavailableRead = vi
-        .spyOn(stateReads, "executeExistingOpenClawStateRead")
-        .mockImplementation((options, command, readOptions) =>
-          command.type === "githubPublication.knownPullRequestUrls" ||
-          command.type === "githubRepository.knownPullRequestUrls"
-            ? Promise.reject(new Error("receipt worker unavailable"))
-            : read(options, command, readOptions),
-        );
-      const pendingReceipt = f.readReceipt(requestId)!;
-      try {
-        await expect(restarted.resumeSessionRequests()).rejects.toThrow("unconfirmed");
-        expect(["requested", "publishing"]).toContain(f.readReceipt(requestId)?.status);
+        expect({ pushed, recoveryLookup }).toEqual({ pushed: true, recoveryLookup: true });
+        expect(
+          hostScans.mock.calls
+            .slice(recoveryScanStart)
+            .map(([, query]) => query.compile().sql)
+            .filter((sql) => /from "github_(?:repository_)?publication_requests"/u.test(sql)),
+        ).toEqual([]);
         expect(f.readReceipt(requestId)).toMatchObject({
-          request_digest: pendingReceipt.request_digest,
-          head_commit: pendingReceipt.head_commit,
-          pull_request_url: null,
+          status: "published",
+          pull_request_url: first.url,
+          head_commit: pullRequest.headSha,
         });
         expect(f.externalWrites).toEqual(acceptedWrites);
-      } finally {
-        unavailableRead.mockRestore();
+        expect(f.publishedTitles).toEqual(["first-publication"]);
+        await f.restart().resumeSessionRequests();
+      } else {
+        if (backend === "local") {
+          await expect(publication).rejects.toBeInstanceOf(GitHubPublicationRecoveryPendingError);
+          requestId = readGitHubPublicationRequest(f.database.db, {
+            sessionId: f.session.sessionId,
+            idempotencyKey,
+          })!.request_id;
+        } else {
+          const result = await publication;
+          expect(result.status).toBe("requested");
+          requestId = result.requestId;
+        }
+        expect(pushed).toBe(true);
+        expect(unavailableLookups).toBeGreaterThan(0);
+        expect(f.readReceipt(requestId)).toMatchObject({
+          pull_request_url: null,
+          head_commit: pullRequest.headSha,
+        });
+        expect(pullRequest.body).not.toContain(`<!-- openclaw-publication:${requestId} -->`);
+        expect(await f.coordinator.readAsync(first.requestId)).toEqual(first);
+        acceptedWrites = [...f.externalWrites];
+        // Closing the known PR cannot undo an accepted update.
+        pullRequest.state = "closed";
+        await f.revoke();
+        expect(f.guest.assertCurrent).toThrow();
+        readbackAvailable = true;
+        const restarted = f.restart();
+        const read = stateReads.executeExistingOpenClawStateRead;
+        const unavailableRead = vi
+          .spyOn(stateReads, "executeExistingOpenClawStateRead")
+          .mockImplementation((options, command, readOptions) =>
+            command.type === "githubPublication.knownPullRequestUrls" ||
+            command.type === "githubRepository.knownPullRequestUrls"
+              ? Promise.reject(new Error("receipt worker unavailable"))
+              : read(options, command, readOptions),
+          );
+        const pendingReceipt = f.readReceipt(requestId)!;
+        try {
+          await expect(restarted.resumeSessionRequests()).rejects.toThrow("unconfirmed");
+          expect(["requested", "publishing"]).toContain(f.readReceipt(requestId)?.status);
+          expect(f.readReceipt(requestId)).toMatchObject({
+            request_digest: pendingReceipt.request_digest,
+            head_commit: pendingReceipt.head_commit,
+            pull_request_url: null,
+          });
+          expect(f.externalWrites).toEqual(acceptedWrites);
+        } finally {
+          unavailableRead.mockRestore();
+        }
+        await restarted.resumeSessionRequests();
+        expect(await restarted.readAsync(requestId)).toMatchObject({
+          status: "published",
+          url: first.url,
+          headCommit: pullRequest.headSha,
+        });
       }
-      await restarted.resumeSessionRequests();
-
-      expect(await restarted.readAsync(requestId)).toMatchObject({
-        status: "published",
-        url: first.url,
-        headCommit: pullRequest.headSha,
-      });
-      expect(await restarted.readAsync(first.requestId)).toEqual(first);
+      expect(await f.coordinator.readAsync(first.requestId)).toEqual(first);
       expect(f.externalWrites).toEqual(acceptedWrites);
       expect(f.publishedTitles).toEqual(["first-publication"]);
     },

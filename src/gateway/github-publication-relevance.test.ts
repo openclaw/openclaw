@@ -45,27 +45,22 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
-function requestUrl(input: RequestInfo | URL): string {
-  return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-}
-
+const requestUrl = (input: RequestInfo | URL) =>
+  typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+const json = (value: unknown) => new Response(JSON.stringify(value));
+const published = (sha = head, publishedTree: string | null = tree) => ({
+  sha,
+  tree: publishedTree === null ? null : { sha: publishedTree },
+});
 function responses(publishedTree = "4".repeat(40), compared: unknown = comparison) {
-  return vi.fn(
-    async (input: RequestInfo | URL, _init?: RequestInit) =>
-      new Response(
-        JSON.stringify(
-          requestUrl(input).includes("/compare/")
-            ? compared
-            : { sha: head, tree: { sha: publishedTree } },
-        ),
-        { status: 200 },
-      ),
+  return vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) =>
+    json(requestUrl(input).includes("/compare/") ? compared : published(head, publishedTree)),
   );
 }
 const current = () => {};
 const check = (
   fetchImpl: typeof fetch,
-  accepted: SnapshotInput["accepted"] = {},
+  accepted: Scenario["snapshot"] = {},
   pullRequests = [pr],
   assertCurrent = current,
 ) =>
@@ -94,37 +89,31 @@ it.each(["github.com", "ghe.example.test"])(
     );
     expect(fetchImpl).toHaveBeenCalledOnce();
     const [url, init] = fetchImpl.mock.calls[0]!;
-    expect(url).toBe(
-      `${host === "github.com" ? "https://api.github.com" : "https://ghe.example.test/api/v3"}/repos/owner/repo/git/commits/${head}`,
-    );
-    expect(new Headers(init?.headers).get("Authorization")).toBe(
-      host === "github.com" ? null : "Bearer synthetic-enterprise-history-token",
-    );
+    const publicHost = host === "github.com";
+    const api = publicHost ? "https://api.github.com" : "https://ghe.example.test/api/v3";
+    expect({ url, authorization: new Headers(init?.headers).get("Authorization") }).toEqual({
+      url: `${api}/repos/owner/repo/git/commits/${head}`,
+      authorization: publicHost ? null : "Bearer synthetic-enterprise-history-token",
+    });
   },
 );
 
-type SnapshotInput = {
-  accepted?: Partial<Parameters<typeof isGitHubPublicationSuperseded>[0]>;
-  pullRequest?: Partial<ControlUiSessionPullRequest>;
-  publishedTree?: string;
+type Scenario = {
+  snapshot?: Partial<Parameters<typeof isGitHubPublicationSuperseded>[0]>;
+  pr?: Partial<ControlUiSessionPullRequest>;
+  tree?: string;
   compared?: unknown;
 };
-type SnapshotCase = [name: string, input: SnapshotInput, superseded: boolean, calls?: number];
-const snapshotCases: SnapshotCase[] = [
-  ["committed open history", { pullRequest: { state: "open" } }, true, 2],
-  ["committed draft history", { pullRequest: { state: "draft" } }, true, 2],
-  ["committed merged history", { pullRequest: { state: "merged" } }, true, 2],
-  [
-    "uncommitted exact tree",
-    { accepted: { source_head_commit: null }, publishedTree: tree },
-    true,
-    1,
-  ],
-  ["another branch", { pullRequest: { branch: "another-branch" }, publishedTree: tree }, false, 0],
-  ["another repository", { pullRequest: { repo: "another-repo" }, publishedTree: tree }, false, 0],
-  ["closed PR", { pullRequest: { state: "closed" }, publishedTree: tree }, false, 0],
-  ["unpublished PR", { pullRequest: { headSha: undefined }, publishedTree: tree }, false, 0],
-  ["newer unpublished snapshot", { accepted: { workspace_tree: "5".repeat(40) } }, false],
+const snapshotCases: [name: string, input: Scenario, superseded: boolean, calls?: number][] = [
+  ["committed open history", { pr: { state: "open" } }, true, 2],
+  ["committed draft history", { pr: { state: "draft" } }, true, 2],
+  ["committed merged history", { pr: { state: "merged" } }, true, 2],
+  ["uncommitted exact tree", { snapshot: { source_head_commit: null }, tree }, true, 1],
+  ["another branch", { pr: { branch: "another-branch" }, tree }, false, 0],
+  ["another repository", { pr: { repo: "another-repo" }, tree }, false, 0],
+  ["closed PR", { pr: { state: "closed" }, tree }, false, 0],
+  ["unpublished PR", { pr: { headSha: undefined }, tree }, false, 0],
+  ["newer unpublished snapshot", { snapshot: { workspace_tree: "5".repeat(40) } }, false],
   ["diverged history", { compared: { ...comparison, status: "diverged" } }, false],
   ["wrong merge base", { compared: { ...comparison, merge_base_commit: { sha: head } } }, false],
   ["unreadable comparison", { compared: null }, false],
@@ -132,10 +121,8 @@ const snapshotCases: SnapshotCase[] = [
 it.each(snapshotCases)(
   "checks publication coverage for %s",
   async (_name, input, superseded, calls) => {
-    const fetchImpl = responses(input.publishedTree, input.compared);
-    expect(await check(fetchImpl, input.accepted, [{ ...pr, ...input.pullRequest }])).toBe(
-      superseded,
-    );
+    const fetchImpl = responses(input.tree, input.compared);
+    expect(await check(fetchImpl, input.snapshot, [{ ...pr, ...input.pr }])).toBe(superseded);
     if (calls !== undefined) {
       expect(fetchImpl).toHaveBeenCalledTimes(calls);
     }
@@ -153,9 +140,9 @@ it.each(["missing", "malformed"])("checks later matching PRs after a %s head", a
     if (requestUrl(input).endsWith(missingHead)) {
       return failure === "missing"
         ? new Response("missing", { status: 404 })
-        : new Response(JSON.stringify({ sha: missingHead, tree: null }));
+        : json(published(missingHead, null));
     }
-    return new Response(JSON.stringify({ sha: head, tree: { sha: tree } }));
+    return json(published());
   });
   expect(await check(fetchImpl, {}, [{ ...pr, headSha: missingHead }, pr])).toBe(true);
   expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -175,7 +162,7 @@ it("revalidates session authority after an awaited response before retiring a fa
   let active = true;
   const fetchImpl = vi.fn(async () => {
     active = false;
-    return new Response(JSON.stringify({ sha: head, tree: { sha: tree } }));
+    return json(published());
   });
   await expect(
     check(fetchImpl, {}, [pr], () => {

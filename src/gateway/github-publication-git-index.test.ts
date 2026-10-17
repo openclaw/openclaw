@@ -20,8 +20,12 @@ import {
 } from "./github-publication-git-transport.js";
 
 let testState: OpenClawTestState;
+let f: Awaited<ReturnType<typeof createFixture>>;
 let directoryIndex = 0;
 const REQUEST_ID = "11111111-1111-4111-8111-111111111111";
+const rejectRefUpdate = async () => {
+  throw new Error("update-ref must not run");
+};
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -29,6 +33,7 @@ beforeEach(async () => {
     env: { XDG_CONFIG_HOME: undefined },
   });
   directoryIndex = 0;
+  f = await createFixture();
 });
 
 afterEach(async () => {
@@ -62,6 +67,8 @@ async function git(
 
 async function createFixture() {
   const cwd = await makeDirectory("git");
+  const commit = (tree: string, parent: string, message: string) =>
+    git(cwd, ["commit-tree", tree, "-p", parent], message);
   await git(cwd, ["init", "--initial-branch=main"]);
   await git(cwd, ["config", "user.name", "OpenClaw Test"]);
   await git(cwd, ["config", "user.email", "openclaw@example.test"]);
@@ -72,17 +79,17 @@ async function createFixture() {
   await fs.writeFile(path.join(cwd, "artifact.txt"), "accepted\n");
   await git(cwd, ["add", "artifact.txt"]);
   const sourceIndexTree = await git(cwd, ["write-tree"]);
-  const headCommit = await git(
-    cwd,
-    ["commit-tree", sourceIndexTree, "-p", previousHead],
+  const headCommit = await commit(
+    sourceIndexTree,
+    previousHead,
     `published\n\nOpenClaw-Publication: ${REQUEST_ID}\n`,
   );
-  return { cwd, previousHead, sourceIndexTree, workspaceTree: sourceIndexTree, headCommit };
-}
-
-function publicationIndexParams(fixture: Awaited<ReturnType<typeof createFixture>>) {
-  return {
-    ...fixture,
+  const params = {
+    cwd,
+    previousHead,
+    sourceIndexTree,
+    workspaceTree: sourceIndexTree,
+    headCommit,
     requestId: REQUEST_ID,
     branch: "main",
     env: process.env,
@@ -91,27 +98,40 @@ function publicationIndexParams(fixture: Awaited<ReturnType<typeof createFixture
     run: async (
       argv: string[],
       options?: { cwd?: string; input?: string; env?: NodeJS.ProcessEnv },
-    ) => await git(fixture.cwd, argv.slice(1), options?.input, options?.env),
+    ) => await git(cwd, argv.slice(1), options?.input, options?.env),
   };
-}
-
-type Fixture = Awaited<ReturnType<typeof createFixture>>;
-const moveHead = (fixture: Fixture) =>
-  git(fixture.cwd, ["update-ref", "refs/heads/main", fixture.headCommit, fixture.previousHead]);
-
-function recoveryParams(fixture: Fixture) {
   return {
-    ...publicationIndexParams(fixture),
-    sourceHeadCommit: fixture.previousHead,
+    ...params,
+    commit,
+    git: (...args: string[]) => git(cwd, args),
+    file: (...parts: string[]) => path.join(cwd, ...parts),
+    update: (
+      overrides: Partial<Parameters<typeof updateGitHubPublicationBranchAndIndex>[0]> = {},
+    ) => updateGitHubPublicationBranchAndIndex({ ...params, ...overrides }),
+    recover: (
+      overrides: Partial<Parameters<typeof recoverGitHubPublicationBranchAndIndex>[0]> = {},
+    ) =>
+      recoverGitHubPublicationBranchAndIndex({
+        ...params,
+        sourceHeadCommit: previousHead,
+        ...overrides,
+      }),
+    state: async () => ({
+      head: await git(cwd, ["rev-parse", "HEAD"]),
+      tree: await git(cwd, ["write-tree"]),
+      status: await git(cwd, ["status", "--porcelain"]),
+      artifact: await fs.readFile(path.join(cwd, "artifact.txt"), "utf8"),
+    }),
   };
 }
 
-async function interruptAcceptedUpdate(fixture: Fixture) {
+const moveHead = () => git(f.cwd, ["update-ref", "refs/heads/main", f.headCommit, f.previousHead]);
+
+async function interruptAcceptedUpdate() {
   await expect(
-    updateGitHubPublicationBranchAndIndex({
-      ...publicationIndexParams(fixture),
+    f.update({
       updateRef: async () => {
-        await moveHead(fixture);
+        await moveHead();
         throw new Error("response lost");
       },
     }),
@@ -122,79 +142,67 @@ describe("GitHub publication index update", () => {
   it.each(["reset", "created"] as const)(
     "pins a conditional push when the remote branch was %s after admission",
     async (change) => {
-      const fixture = await createFixture();
       const remote = await makeDirectory("remote");
       await git(remote, ["init", "--bare", "--initial-branch=main"]);
-      await fs.mkdir(path.join(fixture.cwd, ".github/workflows"), { recursive: true });
+      await fs.mkdir(f.file(".github/workflows"), { recursive: true });
       await fs.writeFile(
-        path.join(fixture.cwd, ".github/workflows/example.yml"),
+        f.file(".github/workflows/example.yml"),
         "name: synthetic\non: workflow_dispatch\njobs: {}\n",
       );
-      await git(fixture.cwd, ["add", "-A"]);
-      const workflowTree = await git(fixture.cwd, ["write-tree"]);
-      const observedHead = await git(
-        fixture.cwd,
-        ["commit-tree", workflowTree, "-p", fixture.previousHead],
-        "maintainer workflow\n",
-      );
-      await fs.writeFile(path.join(fixture.cwd, "artifact.txt"), "guest code\n");
-      await git(fixture.cwd, ["add", "artifact.txt"]);
-      const candidateTree = await git(fixture.cwd, ["write-tree"]);
-      const candidate = await git(
-        fixture.cwd,
-        ["commit-tree", candidateTree, "-p", observedHead],
-        "guest code\n",
-      );
-      await git(fixture.cwd, ["merge-base", "--is-ancestor", observedHead, candidate]);
+      await f.git("add", "-A");
+      const workflowTree = await f.git("write-tree");
+      const observedHead = await f.commit(workflowTree, f.previousHead, "maintainer workflow\n");
+      await fs.writeFile(f.file("artifact.txt"), "guest code\n");
+      await f.git("add", "artifact.txt");
+      const candidateTree = await f.git("write-tree");
+      const candidate = await f.commit(candidateTree, observedHead, "guest code\n");
+      await f.git("merge-base", "--is-ancestor", observedHead, candidate);
       if (change === "reset") {
-        await git(fixture.cwd, ["push", remote, `${observedHead}:refs/heads/publication`]);
-        await git(remote, ["update-ref", "refs/heads/publication", fixture.previousHead]);
+        await f.git("push", remote, `${observedHead}:refs/heads/publication`);
+        await git(remote, ["update-ref", "refs/heads/publication", f.previousHead]);
       } else {
-        await git(fixture.cwd, ["push", remote, `${fixture.previousHead}:refs/heads/publication`]);
+        await f.git("push", remote, `${f.previousHead}:refs/heads/publication`);
       }
       const expectedHead = change === "reset" ? observedHead : "";
       const push = githubPublicationPushArgs(remote, candidate, "publication", expectedHead).slice(
         1,
       );
-      await expect(git(fixture.cwd, push)).rejects.toThrow();
-      expect(await git(remote, ["rev-parse", "refs/heads/publication"])).toBe(fixture.previousHead);
+      await expect(git(f.cwd, push)).rejects.toThrow();
+      expect(await git(remote, ["rev-parse", "refs/heads/publication"])).toBe(f.previousHead);
       if (expectedHead) {
         await git(remote, ["update-ref", "refs/heads/publication", expectedHead]);
       } else {
         await git(remote, ["update-ref", "-d", "refs/heads/publication"]);
       }
-      await git(fixture.cwd, push);
+      await git(f.cwd, push);
       expect(await git(remote, ["rev-parse", "refs/heads/publication"])).toBe(candidate);
     },
   );
 
   it("publishes and recovers with worktree-scoped hooks without executing them", async () => {
-    const fixture = await createFixture();
     const remote = await makeDirectory("remote");
     const hooks = await makeDirectory("hooks");
     const marker = path.join(hooks, "invoked");
     const hookEnv = { ...process.env, OPENCLAW_PUBLICATION_HOOK_MARKER: marker };
+    const run = (argv: string[]) => f.run(argv, { env: hookEnv });
     await git(remote, ["init", "--bare"]);
-    await Promise.all(
-      ["pre-push", "post-index-change", "reference-transaction"].map(
-        async (hook) =>
-          await fs.writeFile(
-            path.join(hooks, hook),
-            '#!/bin/sh\nprintf invoked > "$OPENCLAW_PUBLICATION_HOOK_MARKER"\nexit 97\n',
-            { mode: 0o755 },
-          ),
-      ),
-    );
-    await git(fixture.cwd, ["config", "--local", "extensions.worktreeConfig", "true"]);
-    await git(fixture.cwd, ["config", "--worktree", "core.hooksPath", hooks]);
+    for (const hook of ["pre-push", "post-index-change", "reference-transaction"]) {
+      await fs.writeFile(
+        path.join(hooks, hook),
+        '#!/bin/sh\nprintf invoked > "$OPENCLAW_PUBLICATION_HOOK_MARKER"\nexit 97\n',
+        { mode: 0o755 },
+      );
+    }
+    await f.git("config", "--local", "extensions.worktreeConfig", "true");
+    await f.git("config", "--worktree", "core.hooksPath", hooks);
 
     await expect(
       assertSafeGitPublicationWorkspace(
-        fixture.cwd,
+        f.cwd,
         async (argv, options) =>
           await runCommandBuffered(argv, {
-            cwd: options?.cwd ?? fixture.cwd,
-            env: options?.env,
+            ...options,
+            cwd: options?.cwd ?? f.cwd,
             timeoutMs: 10_000,
             maxOutputBytes: 64 * 1024,
           }),
@@ -202,50 +210,31 @@ describe("GitHub publication index update", () => {
     ).resolves.toBeUndefined();
 
     await expect(
-      updateGitHubPublicationBranchAndIndex({
-        ...publicationIndexParams(fixture),
+      f.update({
         env: hookEnv,
         updateRef: async () => {
-          await git(
-            fixture.cwd,
-            githubPublicationUpdateRefArgs("main", fixture.headCommit, fixture.previousHead).slice(
-              1,
-            ),
-            undefined,
-            hookEnv,
-          );
+          await run(githubPublicationUpdateRefArgs("main", f.headCommit, f.previousHead));
           throw new Error("response lost");
         },
       }),
     ).rejects.toThrow("workspace recovery is pending");
-    await fs.rm(path.join(fixture.cwd, ".git", "index.lock"));
-    const hardenedGit = ["-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false"];
-    await git(
-      fixture.cwd,
-      [...hardenedGit, "update-index", "--force-remove", "artifact.txt"],
-      undefined,
-      hookEnv,
-    );
-    await git(fixture.cwd, [...hardenedGit, "add", "artifact.txt"], undefined, hookEnv);
-    await recoverGitHubPublicationBranchAndIndex({
-      ...recoveryParams(fixture),
+    await fs.rm(f.file(".git", "index.lock"));
+    const hardenedGit = ["git", "-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false"];
+    await run([...hardenedGit, "update-index", "--force-remove", "artifact.txt"]);
+    await run([...hardenedGit, "add", "artifact.txt"]);
+    await f.recover({
       run: async (argv, options) =>
-        await git(fixture.cwd, argv.slice(1), options?.input, options?.env ?? hookEnv),
+        await git(f.cwd, argv.slice(1), options?.input, options?.env ?? hookEnv),
     });
     await expect(fs.access(marker)).rejects.toThrow();
-    await git(
-      fixture.cwd,
-      githubPublicationPushArgs(remote, fixture.headCommit, "publication", "").slice(1),
-      undefined,
-      hookEnv,
-    );
+    await run(githubPublicationPushArgs(remote, f.headCommit, "publication", ""));
 
-    expect(await git(remote, ["rev-parse", "refs/heads/publication"])).toBe(fixture.headCommit);
+    expect(await git(remote, ["rev-parse", "refs/heads/publication"])).toBe(f.headCommit);
     await expect(fs.access(marker)).rejects.toThrow();
   });
 
   it("rejects a filter from Git's default global attributes file", async () => {
-    const { cwd } = await createFixture();
+    const { cwd } = f;
     const globalAttributes = path.join(testState.home, ".config", "git", "attributes");
     await fs.mkdir(path.dirname(globalAttributes), { recursive: true });
     await fs.writeFile(globalAttributes, "*.secret filter=redact\n");
@@ -256,109 +245,93 @@ describe("GitHub publication index update", () => {
   });
 
   it("settles the accepted branch and index after publication authority ends", async () => {
-    const fixture = await createFixture();
     let current = true;
-    await updateGitHubPublicationBranchAndIndex({
-      ...publicationIndexParams(fixture),
+    await f.update({
       assertCurrent: () => {
         if (!current) {
           throw new Error("publication permission ended");
         }
       },
       updateRef: async () => {
-        await moveHead(fixture);
+        await moveHead();
         current = false;
       },
     });
 
-    expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.headCommit);
-    expect(await git(fixture.cwd, ["write-tree"])).toBe(fixture.workspaceTree);
-    expect(await git(fixture.cwd, ["status", "--porcelain"])).toBe("");
-    expect(await fs.readFile(path.join(fixture.cwd, "artifact.txt"), "utf8")).toBe("accepted\n");
+    expect(await f.state()).toEqual({
+      head: f.headCommit,
+      tree: f.workspaceTree,
+      status: "",
+      artifact: "accepted\n",
+    });
     expect(
-      (await fs.readdir(path.join(fixture.cwd, ".git"))).filter(
+      (await fs.readdir(f.file(".git"))).filter(
         (entry) => entry === "index.lock" || entry.startsWith("index.openclaw-"),
       ),
     ).toEqual([]);
   });
 
   it("rejects concurrent staged changes without moving HEAD or rewriting the index", async () => {
-    const fixture = await createFixture();
-    await fs.writeFile(path.join(fixture.cwd, "concurrent.txt"), "keep staged\n");
-    await git(fixture.cwd, ["add", "concurrent.txt"]);
+    await fs.writeFile(f.file("concurrent.txt"), "keep staged\n");
+    await f.git("add", "concurrent.txt");
 
-    await expect(
-      updateGitHubPublicationBranchAndIndex({
-        ...publicationIndexParams(fixture),
-        updateRef: async () => {
-          throw new Error("update-ref must not run");
-        },
-      }),
-    ).rejects.toThrow("workspace index changed");
+    await expect(f.update({ updateRef: rejectRefUpdate })).rejects.toThrow(
+      "workspace index changed",
+    );
 
-    expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.previousHead);
-    expect(await git(fixture.cwd, ["diff", "--cached", "--name-only"])).toContain("concurrent.txt");
+    expect(await f.git("rev-parse", "HEAD")).toBe(f.previousHead);
+    expect(await f.git("diff", "--cached", "--name-only")).toContain("concurrent.txt");
   });
 
   it("retries a complete recovery lock when an ambiguous ref CAS did not move", async () => {
-    const fixture = await createFixture();
-    const indexPath = path.join(fixture.cwd, ".git", "index");
+    const indexPath = f.file(".git", "index");
     const indexBefore = await fs.readFile(indexPath);
 
     await expect(
-      updateGitHubPublicationBranchAndIndex({
-        ...publicationIndexParams(fixture),
+      f.update({
         updateRef: async () => {
           throw new Error("ref changed");
         },
       }),
     ).rejects.toThrow("workspace recovery is pending");
 
-    expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.previousHead);
+    expect(await f.git("rev-parse", "HEAD")).toBe(f.previousHead);
     expect(await fs.readFile(indexPath)).toEqual(indexBefore);
-    const recoveryLock = await fs.stat(path.join(fixture.cwd, ".git", "index.lock"));
+    const recoveryLock = await fs.stat(f.file(".git", "index.lock"));
     expect(recoveryLock.size).toBeGreaterThan(0);
 
-    await updateGitHubPublicationBranchAndIndex({
-      ...publicationIndexParams(fixture),
+    await f.update({
       updateRef: async () => {
-        await moveHead(fixture);
+        await moveHead();
       },
     });
-    expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.headCommit);
-    expect(await git(fixture.cwd, ["status", "--porcelain"])).toBe("");
+    expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
+    expect(await f.git("status", "--porcelain")).toBe("");
   });
 
   it("installs a retained recovery index when an ambiguous ref CAS moved", async () => {
-    const fixture = await createFixture();
+    await interruptAcceptedUpdate();
 
-    await interruptAcceptedUpdate(fixture);
-
-    expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.headCommit);
-    await recoverGitHubPublicationBranchAndIndex({
-      ...recoveryParams(fixture),
-    });
-    expect(await git(fixture.cwd, ["write-tree"])).toBe(fixture.workspaceTree);
-    expect(await git(fixture.cwd, ["status", "--porcelain"])).toBe("");
-    await expect(fs.stat(path.join(fixture.cwd, ".git", "index.lock"))).rejects.toThrow();
+    expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
+    await f.recover();
+    expect(await git(f.cwd, ["write-tree"])).toBe(f.workspaceTree);
+    expect(await f.git("status", "--porcelain")).toBe("");
+    await expect(fs.stat(f.file(".git", "index.lock"))).rejects.toThrow();
   });
 
   it("does not install a recovered index after custody changes during Git probes", async () => {
-    const fixture = await createFixture();
-
-    await interruptAcceptedUpdate(fixture);
+    await interruptAcceptedUpdate();
 
     let current = true;
     await expect(
-      recoverGitHubPublicationBranchAndIndex({
-        ...recoveryParams(fixture),
+      f.recover({
         assertCustody: () => {
           if (!current) {
             throw new Error("publication authority changed");
           }
         },
         run: async (argv, options) => {
-          const result = await git(fixture.cwd, argv.slice(1), options?.input, options?.env);
+          const result = await git(f.cwd, argv.slice(1), options?.input, options?.env);
           if (argv[1] === "show") {
             current = false;
           }
@@ -366,48 +339,39 @@ describe("GitHub publication index update", () => {
         },
       }),
     ).rejects.toThrow("publication authority changed");
-    await expect(fs.stat(path.join(fixture.cwd, ".git", "index.lock"))).resolves.toBeDefined();
+    await expect(fs.stat(f.file(".git", "index.lock"))).resolves.toBeDefined();
   });
 
   it("does not claim another Git operation's byte-identical index lock", async () => {
-    const fixture = await createFixture();
-    const foreignIndex = path.join(fixture.cwd, "foreign-index");
-    await git(fixture.cwd, ["read-tree", fixture.headCommit], undefined, {
+    const foreignIndex = f.file("foreign-index");
+    await git(f.cwd, ["read-tree", f.headCommit], undefined, {
       ...process.env,
       GIT_INDEX_FILE: foreignIndex,
     });
-    await fs.rename(foreignIndex, path.join(fixture.cwd, ".git", "index.lock"));
+    await fs.rename(foreignIndex, f.file(".git", "index.lock"));
 
-    await expect(
-      updateGitHubPublicationBranchAndIndex({
-        ...publicationIndexParams(fixture),
-        updateRef: async () => {
-          throw new Error("update-ref must not run");
-        },
-      }),
-    ).rejects.toThrow("locked by another operation");
+    await expect(f.update({ updateRef: rejectRefUpdate })).rejects.toThrow(
+      "locked by another operation",
+    );
 
-    expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.previousHead);
-    expect((await fs.stat(path.join(fixture.cwd, ".git", "index.lock"))).size).toBeGreaterThan(0);
+    expect(await f.git("rev-parse", "HEAD")).toBe(f.previousHead);
+    expect((await fs.stat(f.file(".git", "index.lock"))).size).toBeGreaterThan(0);
   });
 
   it("removes its owned lock after a definite ref CAS rejection", async () => {
-    const fixture = await createFixture();
-
     await expect(
-      updateGitHubPublicationBranchAndIndex({
-        ...publicationIndexParams(fixture),
+      f.update({
         updateRef: async () => {
           const result = await runCommandBuffered(
-            ["git", "update-ref", "refs/heads/main", fixture.headCommit, "f".repeat(40)],
-            { cwd: fixture.cwd },
+            ["git", "update-ref", "refs/heads/main", f.headCommit, "f".repeat(40)],
+            { cwd: f.cwd },
           );
           assertGitHubPublicationRefCasCompleted(result);
         },
       }),
     ).rejects.toThrow("workspace branch changed before commit");
 
-    await expect(fs.stat(path.join(fixture.cwd, ".git", "index.lock"))).rejects.toThrow();
-    expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.previousHead);
+    await expect(fs.stat(f.file(".git", "index.lock"))).rejects.toThrow();
+    expect(await f.git("rev-parse", "HEAD")).toBe(f.previousHead);
   });
 });
