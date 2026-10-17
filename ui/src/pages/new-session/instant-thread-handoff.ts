@@ -2,6 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -124,7 +125,10 @@ export class InstantThreadHandoff {
       canDisplay: () => this.canDisplay(),
     });
     this.transition = beginInstantThreadNavigation(context, "chat", target);
-    this.transition.signal.addEventListener("abort", () => this.dispose(), { once: true });
+    listen(this.transition.signal, "abort", () => this.dispose(), {
+      once: true,
+      signal: this.lifetime.signal,
+    });
     this.stopGateway = context.gateway.subscribe(() => {
       const snapshot = context.gateway.snapshot;
       if (

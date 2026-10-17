@@ -4,6 +4,7 @@ import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-u
 import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { t } from "../../i18n/index.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { showToast } from "../../lib/toast.ts";
 import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.tsx";
 import { isTarget as isCatalogTarget } from "./catalog-target.ts";
@@ -133,12 +134,9 @@ export class NewSessionDraft {
     callbacks: DraftSubmissionCallbacks &
       DraftPreferenceOptions & {
         updateComplete: () => Promise<unknown>;
-        querySelector: (selector: string) => Element | null;
         activeElement: () => Element | null;
-        body: () => HTMLElement | null;
         onInvalidate: () => void;
         onRecoveryReady: (gatewayUrl: string, recoveryScope: string) => void;
-        pickerIdPrefix?: string;
       },
   ) {
     const changed = (this.changed = () => {
@@ -196,10 +194,7 @@ export class NewSessionDraft {
         onProjectMissing: () => this.place.clearProjectSelection(),
         onSelectProject: (projectId) => this.place.selectProjectId(projectId),
         onApprovedListing: (listing) => this.place.recordGatewayApprovedListing(listing),
-        querySelector: callbacks.querySelector,
         activeElement: callbacks.activeElement,
-        body: callbacks.body,
-        pickerIdPrefix: callbacks.pickerIdPrefix,
       },
     );
     this.place = new DraftPlaceState(
@@ -248,9 +243,9 @@ export class NewSessionDraft {
         this.synchronize();
         this.changed();
       };
-      document.addEventListener("visibilitychange", wake);
+      const stopWake = listen(document, "visibilitychange", wake);
       this.stopLifetime = () => {
-        document.removeEventListener("visibilitychange", wake);
+        stopWake();
         stopReloadGuard();
       };
     }
