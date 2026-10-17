@@ -1,35 +1,23 @@
 // @vitest-environment node
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
+import {
+  allSessions as scope,
+  createDeletionHarness as createSessionDeletionHarness,
+} from "./deletion-mutation.test-support.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
-import { createSessionDeletionHarness as createDeletionHarness } from "./session-deletion.test-support.ts";
-
-function createSessionDeletionHarness(...args: Parameters<typeof createDeletionHarness>) {
-  const h = createDeletionHarness(...args);
-  onTestFinished(() => {
-    h.responses.forEach((response) => response.resolve({ deleted: false }));
-    h.sessions.dispose();
-  });
-  return {
-    ...h,
-    rows: () => h.sessions.state.result?.sessions,
-  };
-}
 
 describe("session deletion generation ownership", () => {
   it.each(["history", "changed", "message"] as const)(
     "rejects an old %s generation before it can replace a rolled-back row",
     async (source) => {
       const h = createSessionDeletionHarness();
-      await h.sessions.refresh({ force: true });
+      await h.refresh();
       const current = { ...h.alpha, sessionId: "generation-b" };
-      h.setRows([current, h.sibling]);
-      await h.sessions.refresh({ force: true });
+      await h.refresh([current, h.sibling]);
       const operation = h.sessions.delete(current.key, { expectedSessionId: current.sessionId });
-      h.responses.get(current.key)!.resolve({ deleted: false });
-      await operation;
+      await h.finish(operation);
       const payload = {
         sessionKey: h.alpha.key,
         reason: "message",
@@ -38,10 +26,12 @@ describe("session deletion generation ownership", () => {
       };
       if (source === "history") {
         h.sessions.reconcile(h.alpha);
-      } else if (source === "changed") {
-        h.emitEvent({ type: "event", event: "sessions.changed", payload });
       } else {
-        h.emitEvent({ type: "event", event: "session.message", payload });
+        h.emitEvent({
+          type: "event",
+          event: source === "changed" ? "sessions.changed" : "session.message",
+          payload,
+        });
       }
       expect(h.rows()).toEqual([current, h.sibling]);
     },
@@ -61,7 +51,7 @@ describe("session deletion generation ownership", () => {
       stop();
       coordinator.reset();
     });
-    await h.sessions.refresh({ force: true });
+    await h.refresh();
     h.publish(false);
     coordinator.setForegroundRoute(undefined);
     h.publish(true);
@@ -72,8 +62,7 @@ describe("session deletion generation ownership", () => {
     coordinator.setForegroundRoute(null);
     await vi.waitFor(() => expect(h.rows()).toContainEqual(replacement));
     expect(h.sessions.deletionState(h.alpha.key)).toBeUndefined();
-    h.responses.get(h.alpha.key)!.resolve({ deleted: true });
-    await operation;
+    await h.finish(operation, h.alpha.key, true);
     expect(h.rows()).toContainEqual(replacement);
   });
 
@@ -81,30 +70,20 @@ describe("session deletion generation ownership", () => {
     "keeps a fresh replacement ahead of a slower post-admission %s generation",
     async (source) => {
       const h = createSessionDeletionHarness();
-      const older = createDeferred<SessionsListResult>();
-      const scope = { archivedFilter: "all" as const };
-      const stop = h.sessions.subscribeList(scope, () => {});
+      const older = h.deferredList();
+      h.hold();
       const facts: string[] = [];
       h.sessions.subscribe((state) => facts.push(...state.deletedSessions.map(({ key }) => key)));
-      onTestFinished(() => {
-        older.resolve(sessionsResult([], 1));
-        stop();
-      });
-      await h.sessions.refresh({ force: true });
+      await h.refresh();
       const operation = h.sessions.delete(h.alpha.key, { expectedSessionId: h.alpha.sessionId });
       h.setListResponse(older.promise);
-      const stale =
-        source === "managed"
-          ? h.sessions.refreshList(scope).then(() => h.sessions.listSnapshot(scope).result)
-          : h.sessions.list();
+      const stale = h.read(source);
       h.setListResponse();
       const replacement = { ...h.alpha, sessionId: "newest-generation" };
-      h.setRows([replacement, h.sibling]);
-      await h.sessions.refresh({ force: true });
+      await h.refresh([replacement, h.sibling]);
       older.resolve(sessionsResult([{ ...h.alpha, sessionId: "intermediate-generation" }], 1));
       expect((await stale)?.sessions).toEqual([]);
-      h.responses.get(h.alpha.key)!.resolve({ deleted: true });
-      await operation;
+      await h.finish(operation, h.alpha.key, true);
       expect(facts).toEqual([]);
       expect(h.rows()).toContainEqual(replacement);
     },
@@ -122,20 +101,15 @@ describe("session deletion generation ownership", () => {
     "fences older $source A while B is $outcome (delivery after settlement: $afterSettlement)",
     async ({ source, outcome, afterSettlement }) => {
       const h = createSessionDeletionHarness();
-      const older = createDeferred<SessionsListResult>();
-      const scope = { archivedFilter: "all" as const };
+      const older = h.deferredList();
       const publishedIds: Array<string | undefined> = [];
-      const stop = h.sessions.subscribeList(scope, ({ result }) => {
+      h.hold(scope, ({ result }) => {
         publishedIds.push(...(result?.sessions.map((row) => row.sessionId) ?? []));
       });
       const facts: string[] = [];
       h.sessions.subscribe((state) => {
         publishedIds.push(...(state.result?.sessions.map((row) => row.sessionId) ?? []));
         facts.push(...state.deletedSessions.map(({ key }) => key));
-      });
-      onTestFinished(() => {
-        older.resolve(sessionsResult([], 1));
-        stop();
       });
       h.setRows([h.sibling]);
       let stale: Promise<SessionsListResult | null>;
@@ -149,18 +123,14 @@ describe("session deletion generation ownership", () => {
           .waitFor(() => expect(h.sessions.state.result).not.toBeNull())
           .then(() => h.sessions.state.result);
       } else {
-        await h.sessions.refresh({ force: true });
+        await h.refresh();
         h.setListResponse(older.promise);
-        stale =
-          source === "enumeration"
-            ? h.sessions.list()
-            : h.sessions
-                .refreshList(source === "managed" ? scope : { force: true })
-                .then(() => h.sessions.listSnapshot(source === "managed" ? scope : {}).result);
+        stale = h.read(source);
       }
       h.setListResponse();
       const current = { ...h.alpha, sessionId: "generation-b" };
       h.setRows([current, h.sibling]);
+      const currentScope = source === "primary" || source === "bootstrap" ? scope : {};
       await h.sessions.refreshList(
         source === "primary" || source === "bootstrap" ? scope : { force: true },
       );
@@ -171,13 +141,11 @@ describe("session deletion generation ownership", () => {
       );
       expect(h.sessions.deletionState(current.key)).toBe("pending");
       h.setRows(outcome === "confirmed" ? [h.sibling] : [current, h.sibling]);
-      const settle = () => {
-        if (outcome === "confirmed") {
-          h.responses.get(current.key)!.resolve({ deleted: true });
-        } else {
-          h.responses.get(current.key)!.reject(new Error("reclaim failed"));
-        }
-      };
+      const response = h.responses.get(current.key)!;
+      const settle = () =>
+        outcome === "confirmed"
+          ? response.resolve({ deleted: true })
+          : response.reject(new Error("reclaim failed"));
       if (afterSettlement) {
         settle();
         await vi.waitFor(() => expect(h.sessions.deletionState(current.key)).not.toBe("pending"));
@@ -189,18 +157,13 @@ describe("session deletion generation ownership", () => {
         settle();
       }
       const result = await settled;
-      if (outcome === "confirmed") {
-        expect(result.value).toEqual({ deleted: true });
-      } else {
-        expect(result.error).toEqual(new Error("reclaim failed"));
-      }
+      expect(outcome === "confirmed" ? result.value : result.error).toEqual(
+        outcome === "confirmed" ? { deleted: true } : new Error("reclaim failed"),
+      );
       expect(publishedIds).not.toContain(h.alpha.sessionId);
       expect(facts.includes(current.key)).toBe(outcome === "confirmed");
       if (outcome === "rejected") {
-        expect(
-          h.sessions.listSnapshot(source === "primary" || source === "bootstrap" ? scope : {})
-            .result?.sessions,
-        ).toContainEqual(current);
+        expect(h.sessions.listSnapshot(currentScope).result?.sessions).toContainEqual(current);
       }
     },
   );
@@ -209,9 +172,7 @@ describe("session deletion generation ownership", () => {
     "keeps cached %s and history generations from retiring the current deletion",
     async (cached) => {
       const h = createSessionDeletionHarness();
-      const scope = { archivedFilter: "all" as const };
-      const stop = h.sessions.subscribeList(scope, () => {});
-      onTestFinished(stop);
+      h.hold();
       h.setRows([h.alpha, h.sibling]);
       await h.sessions.refreshList(cached === "managed" ? scope : { force: true });
       const current = { ...h.alpha, sessionId: "generation-b" };
@@ -233,8 +194,7 @@ describe("session deletion generation ownership", () => {
       expect(h.sessions.deletionState(current.key)).toBe("pending");
       expect(h.rows()).toEqual([h.sibling]);
       expect(h.sessions.listSnapshot(scope).result?.sessions).not.toContainEqual(h.alpha);
-      h.responses.get(current.key)!.resolve({ deleted: false });
-      await operation;
+      await h.finish(operation);
       expect(h.sessions.listSnapshot(currentScope).result?.sessions).toContainEqual(current);
       expect(h.sessions.listSnapshot(scope).result?.sessions).not.toContainEqual(h.alpha);
     },
@@ -244,25 +204,13 @@ describe("session deletion generation ownership", () => {
     "resolves an unloaded deletion from fresh %s membership after reconnect",
     async (kind) => {
       const h = createSessionDeletionHarness();
-      const scope = { archivedFilter: "all" as const };
-      const stop = h.sessions.subscribeList(scope, () => {});
-      onTestFinished(stop);
-      h.setRows([h.sibling]);
-      await h.sessions.refresh({ force: true });
-      h.emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: {
-          sessionKey: h.alpha.key,
-          reason: "delete",
-          sessionId: h.alpha.sessionId,
-          agentId: "main",
-        },
-      });
+      h.hold();
+      await h.refresh([h.sibling]);
+      const { key: sessionKey, sessionId } = h.alpha;
+      h.changed({ sessionKey, reason: "delete", sessionId, agentId: "main" });
       expect(h.sessions.deletionState(h.alpha.key)).toBe("confirmed");
       h.publish(false);
       const replacement = { ...h.alpha, sessionId: "replacement-alpha" };
-      // The create event was missed; other windows may also sit outside bootstrap's roster.
       if (kind === "bootstrap") {
         h.setRows([replacement, h.sibling]);
       }
@@ -274,16 +222,7 @@ describe("session deletion generation ownership", () => {
         return;
       }
       h.setRows([replacement, h.sibling]);
-      if (kind === "enumeration") {
-        expect((await h.sessions.list(scope))?.sessions).toContainEqual(replacement);
-      } else {
-        await h.sessions.refreshList(
-          kind === "managed" ? { ...scope, force: true } : { force: true },
-        );
-        expect(
-          h.sessions.listSnapshot(kind === "managed" ? scope : {}).result?.sessions,
-        ).toContainEqual(replacement);
-      }
+      expect((await h.read(kind, scope, scope, true))?.sessions).toContainEqual(replacement);
       expect(h.sessions.deletionState(h.alpha.key)).toBeUndefined();
     },
   );
@@ -292,32 +231,13 @@ describe("session deletion generation ownership", () => {
     "keeps pre-delete %s responses fenced after fresh membership resolves an unloaded deletion",
     async (kind) => {
       const h = createSessionDeletionHarness();
-      const staleList = createDeferred<SessionsListResult>();
-      const scope = { archivedFilter: "all" as const };
-      const stop = h.sessions.subscribeList(scope, () => {});
-      onTestFinished(() => {
-        staleList.resolve(sessionsResult([], 1));
-        stop();
-      });
-      h.setRows([h.sibling]);
-      await h.sessions.refresh({ force: true });
+      const staleList = h.deferredList();
+      h.hold();
+      await h.refresh([h.sibling]);
       h.setListResponse(staleList.promise);
-      const stale =
-        kind === "enumeration"
-          ? h.sessions.list(scope)
-          : h.sessions
-              .refreshList(kind === "managed" ? scope : { force: true })
-              .then(() => h.sessions.listSnapshot(kind === "managed" ? scope : {}).result);
-      h.emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: {
-          sessionKey: h.alpha.key,
-          reason: "delete",
-          sessionId: h.alpha.sessionId,
-          agentId: "main",
-        },
-      });
+      const stale = h.read(kind, scope, scope);
+      const { key: sessionKey, sessionId } = h.alpha;
+      h.changed({ sessionKey, reason: "delete", sessionId, agentId: "main" });
       const replacement = { ...h.alpha, sessionId: "replacement-alpha" };
       h.setListResponse();
       h.setRows([replacement, h.sibling]);
@@ -333,19 +253,16 @@ describe("session deletion generation ownership", () => {
     "retains retired generations while a successor deletion is %s",
     async (outcome) => {
       const h = createSessionDeletionHarness();
-      await h.sessions.refresh({ force: true });
+      await h.refresh();
       const first = h.sessions.delete(h.alpha.key, { expectedSessionId: h.alpha.sessionId });
       h.setRows([h.sibling]);
-      h.responses.get(h.alpha.key)!.resolve({ deleted: true });
-      await first;
+      await h.finish(first, h.alpha.key, true);
       const replacement = { ...h.alpha, sessionId: "replacement-alpha" };
-      h.setRows([replacement, h.sibling]);
-      await h.sessions.refresh({ force: true });
+      await h.refresh([replacement, h.sibling]);
       const facts: string[] = [];
       h.sessions.subscribe((state) => facts.push(...state.deletedSessions.map(({ key }) => key)));
       const next = h.sessions.delete(h.alpha.key, { expectedSessionId: replacement.sessionId });
-      h.setRows([h.alpha, h.sibling]);
-      await h.sessions.refresh({ force: true });
+      await h.refresh([h.alpha, h.sibling]);
       expect(h.rows()).not.toContainEqual(h.alpha);
       expect(h.sessions.deletionState(h.alpha.key)).toBe("pending");
       expect(h.sessions.deletionState(h.alpha.key, "main", h.alpha.sessionId)).toBe("confirmed");
@@ -361,8 +278,7 @@ describe("session deletion generation ownership", () => {
       }
       await settled;
       expect(facts.includes(h.alpha.key)).toBe(outcome === "confirmed");
-      h.setRows([h.alpha, h.sibling]);
-      await h.sessions.refresh({ force: true });
+      await h.refresh([h.alpha, h.sibling]);
       expect(h.rows()).not.toContainEqual(h.alpha);
     },
   );

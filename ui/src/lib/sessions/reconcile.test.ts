@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it, test } from "vitest";
+import { expect, it, test } from "vitest";
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { resolveChatThinkingSelectState } from "../chat/thinking.ts";
@@ -16,7 +16,7 @@ function sessionRow(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionR
   return { key, kind: "direct", updatedAt: 1, ...overrides };
 }
 
-function buildResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
+function buildResult(...sessions: SessionsListResult["sessions"]): SessionsListResult {
   return {
     ts: 1,
     path: "store",
@@ -26,81 +26,74 @@ function buildResult(sessions: SessionsListResult["sessions"]): SessionsListResu
   };
 }
 
-describe("history defaults ownership", () => {
-  it.each(["unknown"] as const)(
-    "replaces the selected %s owner without donating another owner's presentation",
-    (sourceKey) => {
-      const row = { key: sourceKey, kind: sourceKey, sessionId: "shared-session", updatedAt: 1 };
-      const current = buildResult([
-        {
-          ...row,
-          agentId: "main",
-          derivedTitle: "Main title",
-          lastMessagePreview: "Main preview",
-        },
-      ]);
-      const incoming = { ...row, agentId: "work", updatedAt: 2 };
-      expect(reconcileSessionHistory(current, incoming, undefined, { resultAgentId: "main" })).toBe(
-        current,
-      );
-      const next = reconcileSessionHistory(current, incoming, undefined, {
-        resultAgentId: "work",
-      });
-      expect(next?.sessions).toEqual([incoming]);
+it("replaces an unknown owner without donating another owner's presentation", () => {
+  const row = sessionRow({ key: "unknown", kind: "unknown", sessionId: "shared-session" });
+  const current = buildResult({
+    ...row,
+    agentId: "main",
+    derivedTitle: "Main title",
+    lastMessagePreview: "Main preview",
+  });
+  const incoming = { ...row, agentId: "work", updatedAt: 2 };
+  expect(reconcileSessionHistory(current, incoming, undefined, { resultAgentId: "main" })).toBe(
+    current,
+  );
+  const next = reconcileSessionHistory(current, incoming, undefined, {
+    resultAgentId: "work",
+  });
+  expect(next?.sessions).toEqual([incoming]);
+});
+
+it.each([
+  { name: "keeps an empty roster's own inherited thinking", agentId: "main" },
+  { name: "accepts the same agent's updated defaults", agentId: "work" },
+])("$name", ({ agentId }) => {
+  const defaults: SessionsListResult["defaults"] = {
+    ...identity,
+    contextTokens: 128_000,
+    thinkingDefault: "low",
+    thinkingLevels: [
+      { id: "low", label: "Low" },
+      { id: "high", label: "High" },
+    ],
+  };
+  const current = { ...buildResult(), defaults };
+  const workDefaults = { ...defaults, thinkingDefault: "high" };
+  const next = reconcileSessionHistory(
+    current,
+    {
+      ...identity,
+      key: "global",
+      agentId: "work",
+      kind: "global",
+      sessionId: "work-session",
+      updatedAt: 10,
     },
+    workDefaults,
+    { resultAgentId: agentId, selectedGlobalAgentId: "work" },
   );
 
-  it.each([
-    { name: "keeps an empty roster's own inherited thinking", agentId: "main" },
-    { name: "accepts the same agent's updated defaults", agentId: "work" },
-  ])("$name", ({ agentId }) => {
-    const defaults: SessionsListResult["defaults"] = {
-      ...identity,
-      contextTokens: 128_000,
-      thinkingDefault: "low",
-      thinkingLevels: [
-        { id: "low", label: "Low" },
-        { id: "high", label: "High" },
-      ],
-    };
-    const current = { ...buildResult([]), defaults };
-    const workDefaults = { ...defaults, thinkingDefault: "high" };
-    const next = reconcileSessionHistory(
-      current,
-      {
-        ...identity,
-        key: "global",
-        agentId: "work",
-        kind: "global",
-        sessionId: "work-session",
-        updatedAt: 10,
-      },
-      workDefaults,
-      { resultAgentId: agentId, selectedGlobalAgentId: "work" },
-    );
-
-    const ownAgent = agentId === "work";
-    expect(
-      resolveChatThinkingSelectState({ catalog: [], sessionKey: "global", sessionsResult: next })
-        .inherited,
-    ).toEqual({
-      value: ownAgent ? "high" : "low",
-      displayLabel: ownAgent ? "Inherited: High" : "Inherited: Low",
-    });
-    expect(next?.defaults).toEqual(ownAgent ? workDefaults : defaults);
-    expect(next?.sessions.map((row) => row.sessionId)).toEqual(ownAgent ? ["work-session"] : []);
+  const ownAgent = agentId === "work";
+  expect(
+    resolveChatThinkingSelectState({ catalog: [], sessionKey: "global", sessionsResult: next })
+      .inherited,
+  ).toEqual({
+    value: ownAgent ? "high" : "low",
+    displayLabel: ownAgent ? "Inherited: High" : "Inherited: Low",
   });
+  expect(next?.defaults).toEqual(ownAgent ? workDefaults : defaults);
+  expect(next?.sessions.map((row) => row.sessionId)).toEqual(ownAgent ? ["work-session"] : []);
 });
 
 test("enrichment survives omitted fields but not explicit transcript clearing receipts", () => {
-  const initial = buildResult([
+  const initial = buildResult(
     sessionRow({
       sessionId: "same-session",
       derivedTitle: "Task",
       lastMessagePreview: "Last message",
       lastAssistantMessage: { text: "Assistant reply", timestamp: 1 },
     }),
-  ]);
+  );
   const event = {
     sessionKey: key,
     agentId: "main",
@@ -128,7 +121,7 @@ test("enrichment survives omitted fields but not explicit transcript clearing re
 });
 
 test("reconciling the same sessions.changed twice keeps result identity on the second pass", () => {
-  const result = buildResult([sessionRow()]);
+  const result = buildResult(sessionRow());
   const payload = {
     sessionKey: key,
     reason: "patch",
@@ -139,11 +132,12 @@ test("reconciling the same sessions.changed twice keeps result identity on the s
   };
 
   const first = reconcileSessionChanged(result, payload);
-  expect(first.applied).toBe(true);
+  expect(first).toMatchObject({
+    applied: true,
+    result: { ts: 2, sessions: [{ label: "Renamed" }] },
+  });
   expect(first.result).not.toBe(result);
-  expect(first.result?.sessions[0]?.label).toBe("Renamed");
   expect(first.result?.sessions[0]).not.toHaveProperty("catalogChanged");
-  expect(first.result?.ts).toBe(2);
 
   // Duplicate capability/page delivery must not trigger another render.
   const second = reconcileSessionChanged(first.result ?? null, payload);
@@ -151,30 +145,23 @@ test("reconciling the same sessions.changed twice keeps result identity on the s
 });
 
 test("sessions.changed deletes every nested null tombstone, not a hand-kept list", () => {
-  // The gateway tombstones more fields than the old per-field cascade knew
-  // about; these five leaked literal null into rows typed optional-not-null.
-  const result = buildResult([
-    {
-      key,
-      kind: "direct",
-      updatedAt: 1,
-      toolOverrides: { profile: "coding" },
-      contextBudgetStatus: contextBudgetStatusFixture(),
-      agentStatus: { state: "needs_attention", message: "Reply requested" },
-      observerDigest: {
-        agentId: "main",
-        runId: "run-stale",
-        headline: "Waiting",
-        health: "needs_attention",
-        updatedAt: 1,
-        revision: 1,
-      },
-      controlOwnerSessionKey: "agent:main:owner",
-      restartRecoveryStatus: "pending",
-      goal: "ship it",
-      modelOverrideSource: "user",
-    } as never,
-  ]);
+  const fields = {
+    toolOverrides: { profile: "coding" },
+    contextBudgetStatus: contextBudgetStatusFixture(),
+    agentStatus: { state: "needs_attention" },
+    observerDigest: { headline: "Waiting" },
+    controlOwnerSessionKey: "agent:main:owner",
+    restartRecoveryStatus: "pending",
+    goal: "ship it",
+  };
+  const tombstones = Object.fromEntries(Object.keys(fields).map((field) => [field, null]));
+  const result = buildResult({
+    key,
+    kind: "direct",
+    updatedAt: 1,
+    ...fields,
+    modelOverrideSource: "user",
+  } as never);
 
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: key,
@@ -183,43 +170,25 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
       key,
       kind: "direct",
       updatedAt: 2,
-      toolOverrides: null,
-      contextBudgetStatus: null,
-      agentStatus: null,
-      observerDigest: null,
-      controlOwnerSessionKey: null,
-      restartRecoveryStatus: null,
-      goal: null,
+      ...tombstones,
       modelOverrideSource: null,
     },
   } as never);
 
   expect(reconciled.applied).toBe(true);
   const row = reconciled.result?.sessions[0] as Record<string, unknown> | undefined;
-  for (const field of [
-    "toolOverrides",
-    "contextBudgetStatus",
-    "agentStatus",
-    "observerDigest",
-    "controlOwnerSessionKey",
-    "restartRecoveryStatus",
-    "goal",
-  ]) {
+  for (const field of Object.keys(fields)) {
     expect(row?.[field], field).toBeUndefined();
   }
-  // updatedAt stays legitimately nullable and must not be deleted by the loop.
-  expect(row?.updatedAt).toBe(2);
-  // Clearing a pin means the gateway confirmed inheritance. Deleting that null would
-  // make the row indistinguishable from a gateway too old to report provenance, and
-  // the picker would keep showing the cleared pin.
-  expect(row?.modelOverrideSource).toBeNull();
+  // Unlike optional fields, null pin provenance confirms inheritance.
+  expect(row).toMatchObject({ updatedAt: 2, modelOverrideSource: null });
 });
 
 test("sessions.changed preserves the owner facet when ownership is unchanged", () => {
   const createdActor = { type: "human" as const, id: "profile-ada", label: "Ada" };
-  const result = buildResult([
+  const result = buildResult(
     sessionRow({ kind: "global", createdActor, owner: { actor: createdActor } }),
-  ]);
+  );
   result.owners = [createdActor];
 
   const reconciled = reconcileSessionChanged(result, {
@@ -235,18 +204,14 @@ test("sessions.changed preserves the owner facet when ownership is unchanged", (
 
 test("ownerless raw-global events invalidate without contaminating the selected agent row", () => {
   const researchOwner = { type: "agent" as const, id: "research", label: "Research" };
-  const result = buildResult([
-    {
-      key: "global",
-      kind: "global",
-      updatedAt: 1,
-      owner: { actor: researchOwner },
-      model: "research-model",
-      status: "done",
-      hasActiveRun: false,
-      activeRunIds: [],
-    },
-  ]);
+  const result = buildResult({
+    key: "global",
+    kind: "global",
+    updatedAt: 1,
+    owner: { actor: researchOwner },
+    model: "research-model",
+    status: "done",
+  });
   const payload = {
     sessionKey: "global",
     reason: "updated",
@@ -256,7 +221,6 @@ test("ownerless raw-global events invalidate without contaminating the selected 
     status: "running",
     hasActiveRun: true,
     activeRunIds: ["ops-run"],
-    inputTokens: 42,
   };
 
   const invalidated = reconcileSessionChanged(result, payload, {
@@ -268,7 +232,7 @@ test("ownerless raw-global events invalidate without contaminating the selected 
   expect(invalidated.result).toBe(result);
   expect(invalidated.row).toBeUndefined();
 
-  const mainResult = buildResult([{ key: "main", kind: "direct", updatedAt: 1, status: "done" }]);
+  const mainResult = buildResult(sessionRow({ key: "main", status: "done" }));
   const invalidatedMain = reconcileSessionChanged(
     mainResult,
     { sessionKey: "main", reason: "delete", ts: 2 },
@@ -314,138 +278,136 @@ test("ownerless raw-global events invalidate without contaminating the selected 
   });
 });
 
-describe("reconcileSessionChanged", () => {
-  it.each([
-    {
-      name: "configured Off",
-      thinkingDefault: "off",
-      thinkingLevel: undefined,
-      levels: ["off", "medium"],
-    },
-    {
-      name: "explicit Off",
-      thinkingDefault: "medium",
-      thinkingLevel: "off",
-      levels: ["off", "medium"],
-    },
-    { name: "an empty profile", thinkingDefault: undefined, thinkingLevel: undefined, levels: [] },
-  ])(
-    "preserves $name when history omits prepared thinking metadata",
-    ({ thinkingDefault, thinkingLevel, levels }) => {
-      const row = {
-        ...identity,
-        key: "agent:main:main",
-        kind: "direct" as const,
-        sessionId: "s1",
-        updatedAt: 1,
-        thinkingLevel,
-      };
-      const metadata = {
-        ...(thinkingDefault === undefined ? {} : { thinkingDefault }),
-        thinkingLevels: levels.map((id) => ({ id, label: id })),
-        thinkingOptions: levels,
-      };
-      const current = {
-        ...buildResult([{ ...row, ...metadata }]),
-        defaults: { ...identity, ...metadata, contextTokens: null },
-      };
-      const next = reconcileSessionHistory(
-        current,
-        { ...row, updatedAt: 2 },
-        { ...identity, contextTokens: null },
-      );
-
-      const thinking = resolveChatThinkingSelectState({
-        catalog: [],
-        sessionKey: row.key,
-        sessionsResult: next,
-      });
-      expect(thinking.options.map((option) => option.value)).toEqual(levels);
-      expect(next?.sessions[0]).toMatchObject(metadata);
-      expect(next?.defaults).toMatchObject(metadata);
-      expect(next?.sessions[0]?.thinkingDefault).toBe(thinkingDefault);
-      expect(next?.defaults.thinkingDefault).toBe(thinkingDefault);
-      expect(next?.sessions[0]?.thinkingLevel).toBe(thinkingLevel);
-      expect(thinking.selection).toMatchObject({
-        source: thinkingLevel === undefined ? "default" : "override",
-        value: thinkingLevel ?? thinkingDefault ?? "",
-      });
-    },
-  );
-
-  it("does not let stale chat history overwrite a newer runtime switch", () => {
-    const current = buildResult([
-      sessionRow({
-        kind: "global",
-        updatedAt: 3,
-        sessionId: "s1",
-        modelProvider: "openai",
-        model: "gpt-5.6-luna",
-        agentRuntime: { id: "codex", source: "session-key" },
-        thinkingLevels: [{ id: "max", label: "max" }],
-      }),
-    ]);
-
+it.each([
+  {
+    name: "configured Off",
+    thinkingDefault: "off",
+    thinkingLevel: undefined,
+    levels: ["off", "medium"],
+  },
+  {
+    name: "explicit Off",
+    thinkingDefault: "medium",
+    thinkingLevel: "off",
+    levels: ["off", "medium"],
+  },
+  { name: "an empty profile", thinkingDefault: undefined, thinkingLevel: undefined, levels: [] },
+])(
+  "preserves $name when history omits prepared thinking metadata",
+  ({ thinkingDefault, thinkingLevel, levels }) => {
+    const row = {
+      ...identity,
+      key: "agent:main:main",
+      kind: "direct" as const,
+      sessionId: "s1",
+      updatedAt: 1,
+      thinkingLevel,
+    };
+    const metadata = {
+      ...(thinkingDefault === undefined ? {} : { thinkingDefault }),
+      thinkingLevels: levels.map((id) => ({ id, label: id })),
+      thinkingOptions: levels,
+    };
+    const current = {
+      ...buildResult({ ...row, ...metadata }),
+      defaults: { ...identity, ...metadata, contextTokens: null },
+    };
     const next = reconcileSessionHistory(
       current,
-      {
-        ...current.sessions[0]!,
-        updatedAt: 2,
-        agentRuntime: { id: "openclaw", source: "session-key" },
-        thinkingLevels,
-      },
-      undefined,
+      { ...row, updatedAt: 2 },
+      { ...identity, contextTokens: null },
     );
 
-    expect(next).toBe(current);
+    const thinking = resolveChatThinkingSelectState({
+      catalog: [],
+      sessionKey: row.key,
+      sessionsResult: next,
+    });
+    expect(thinking.options.map((option) => option.value)).toEqual(levels);
+    expect(next?.sessions[0]).toMatchObject(metadata);
+    expect(next?.defaults).toMatchObject(metadata);
+    expect(next?.sessions[0]?.thinkingDefault).toBe(thinkingDefault);
+    expect(next?.defaults.thinkingDefault).toBe(thinkingDefault);
+    expect(next?.sessions[0]?.thinkingLevel).toBe(thinkingLevel);
+    expect(thinking.selection).toMatchObject({
+      source: thinkingLevel === undefined ? "default" : "override",
+      value: thinkingLevel ?? thinkingDefault ?? "",
+    });
+  },
+);
+
+it("does not let stale chat history overwrite a newer runtime switch", () => {
+  const current = buildResult(
+    sessionRow({
+      kind: "global",
+      updatedAt: 3,
+      sessionId: "s1",
+      modelProvider: "openai",
+      model: "gpt-5.6-luna",
+      agentRuntime: { id: "codex", source: "session-key" },
+      thinkingLevels: [{ id: "max", label: "max" }],
+    }),
+  );
+
+  const next = reconcileSessionHistory(
+    current,
+    {
+      ...current.sessions[0]!,
+      updatedAt: 2,
+      agentRuntime: { id: "openclaw", source: "session-key" },
+      thinkingLevels,
+    },
+    undefined,
+  );
+
+  expect(next).toBe(current);
+});
+
+it("preserves catalog-backed options when an event omits picker metadata", () => {
+  const result = buildResult(
+    sessionRow({
+      kind: "global",
+      updatedAt: 1,
+      sessionId: "s1",
+      modelProvider: "openai",
+      model: "gpt-5.6-sol",
+      agentRuntime: { id: "codex", source: "model" },
+      thinkingLevels,
+      thinkingOptions: ["max", "ultra"],
+    }),
+  );
+  const next = reconcileSessionChanged(result, {
+    sessionKey: key,
+    key,
+    kind: "global",
+    updatedAt: 2,
+    sessionId: "s1",
+    thinkingLevel: "ultra",
+    agentRuntime: { id: "codex", source: "model" },
   });
 
-  it("preserves catalog-backed options when an event omits picker metadata", () => {
-    const result = buildResult([
-      sessionRow({
-        kind: "global",
-        updatedAt: 1,
-        sessionId: "s1",
-        modelProvider: "openai",
-        model: "gpt-5.6-sol",
-        agentRuntime: { id: "codex", source: "model" },
-        thinkingLevels,
-        thinkingOptions: ["max", "ultra"],
-      }),
-    ]);
-    const next = reconcileSessionChanged(result, {
-      sessionKey: key,
-      key,
+  expect(next.row?.thinkingLevel).toBe("ultra");
+  expect(next.row?.thinkingLevels).toEqual(thinkingLevels);
+  expect(next.row?.thinkingOptions).toEqual(["max", "ultra"]);
+});
+
+it("clears a thinking override when the event carries null", () => {
+  const result = buildResult(
+    sessionRow({
       kind: "global",
-      updatedAt: 2,
+      updatedAt: 1,
       sessionId: "s1",
       thinkingLevel: "ultra",
-      agentRuntime: { id: "codex", source: "model" },
-    });
-
-    expect(next.row?.thinkingLevel).toBe("ultra");
-    expect(next.row?.thinkingLevels).toEqual(thinkingLevels);
-    expect(next.row?.thinkingOptions).toEqual(["max", "ultra"]);
+    }),
+  );
+  const next = reconcileSessionChanged(result, {
+    sessionKey: key,
+    key,
+    kind: "global",
+    updatedAt: 2,
+    sessionId: "s1",
+    thinkingLevel: null,
   });
 
-  it("clears a thinking override when the event carries null", () => {
-    const result = buildResult([
-      sessionRow({
-        kind: "global",
-        updatedAt: 1,
-        sessionId: "s1",
-        thinkingLevel: "ultra",
-      }),
-    ]);
-    const next = reconcileSessionChanged(result, {
-      sessionKey: key,
-      key,
-      kind: "global",
-      updatedAt: 2,
-      sessionId: "s1",
-      thinkingLevel: null,
-    });
-
-    expect(next.row?.thinkingLevel).toBeUndefined();
-  });
+  expect(next.row?.thinkingLevel).toBeUndefined();
 });

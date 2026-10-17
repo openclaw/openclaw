@@ -38,6 +38,16 @@ function harness() {
     setRow: (next: GatewaySessionRow) => {
       row = next;
     },
+    event: (event: string, payload: unknown) =>
+      gateway.emitEvent({ type: "event", event, payload }),
+    start(phase: "pending" | "completed", session = initial) {
+      const pending = this.pending();
+      const previous = sessions.describe({ key: session.key });
+      if (phase === "completed") {
+        pending.resolve({ session });
+      }
+      return { pending, previous };
+    },
   };
 }
 
@@ -119,10 +129,8 @@ describe("session descriptor reads", () => {
     if (cause === "observed revision") {
       await h.sessions.refresh({ agentId: "main" });
     }
-    const pending = h.pending();
-    const old = h.sessions.describe({ key });
+    const { pending, previous: old } = h.start(phase);
     if (phase === "completed") {
-      pending.resolve({ session: initial });
       await old;
     }
     const metadata = cause === "config.changed" || cause === "chat.metadata.changed";
@@ -135,13 +143,9 @@ describe("session descriptor reads", () => {
     } else if (cause === "first observed revision") {
       await h.sessions.refresh({ agentId: "main" });
     } else if (cause === "sessions.changed") {
-      h.emitEvent({
-        type: "event",
-        event: cause,
-        payload: { key, agentId: "main", reason: "patch", session: next },
-      });
+      h.event(cause, { key, agentId: "main", reason: "patch", session: next });
     } else if (metadata) {
-      h.emitEvent({ type: "event", event: cause, payload: {} });
+      h.event(cause, {});
     }
     const fresh = h.sessions.describe({ key }, { refresh: cause === "refresh" });
     expect(h.read).toHaveBeenCalledTimes(2);
@@ -169,26 +173,20 @@ describe("session descriptor reads", () => {
     async ({ phase, coverage, parentKey }) => {
       const parent = { ...initial, key: parentKey };
       h.setRow(parent);
-      const pending = h.pending();
-      const previous = h.sessions.describe({ key: parentKey });
+      const { pending, previous } = h.start(phase, parent);
       if (phase === "completed") {
-        pending.resolve({ session: parent });
         await previous;
       }
       const next = { ...parent, updatedAt: 2, label: "Current ancestor" };
       h.setRow(next);
-      h.emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: {
-          key: "agent:main:child",
-          sessionId: "replacement-child",
-          reason: "create",
-          ...(coverage === "unrelated" ? {} : { parentSessionKey: parentKey }),
-          ...(coverage === "missing"
-            ? {}
-            : { ancestorSessions: coverage === "parent" ? [next] : [] }),
-        },
+      h.event("sessions.changed", {
+        key: "agent:main:child",
+        sessionId: "replacement-child",
+        reason: "create",
+        ...(coverage === "unrelated" ? {} : { parentSessionKey: parentKey }),
+        ...(coverage === "missing"
+          ? {}
+          : { ancestorSessions: coverage === "parent" ? [next] : [] }),
       });
       const current = h.sessions.describe({ key: parentKey });
       expect(h.read).toHaveBeenCalledTimes(coverage === "unrelated" ? 1 : 2);
@@ -235,10 +233,8 @@ describe("session descriptor reads", () => {
           },
         });
       emit(2, true);
-      const pending = h.pending();
-      const first = h.sessions.describe({ key });
+      const { pending, previous: first } = h.start(phase, parent);
       if (phase === "completed") {
-        pending.resolve({ session: parent });
         await first;
       }
       const readers = [first];

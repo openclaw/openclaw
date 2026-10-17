@@ -31,13 +31,13 @@ const flushRead = () =>
     setImmediate(resolve);
   });
 
-function setup() {
+function setup(readList?: (params: unknown) => Promise<ReturnType<typeof sessionsResult>>) {
   const replies = [createDeferred<unknown>(), createDeferred<unknown>()];
   const list = createDeferred<ReturnType<typeof sessionsResult>>();
   const listStarted = createDeferred();
   let reads = 0;
   let writes = 0;
-  const client = createTestGatewayClient(async (method) => {
+  const client = createTestGatewayClient(async (method, params) => {
     if (method === "sessions.subscribe") {
       return { subscribed: true };
     }
@@ -45,6 +45,9 @@ function setup() {
       return replies[writes++]!.promise;
     }
     if (method === "sessions.list") {
+      if (readList) {
+        return readList(params);
+      }
       if (++reads === 1) {
         return result({}, 1);
       }
@@ -205,50 +208,34 @@ describe("session category mutations", () => {
 it.each(["different", "returned"] as const)(
   "does not publish an old scoped category refresh failure into the %s foreground",
   async (selection) => {
-    const reply = createDeferred<unknown>();
     const oldRead = createDeferred<ReturnType<typeof sessionsResult>>();
     let committed = false;
     let scopedReads = 0;
-    const writer = {
-      ...initial,
-      key: "agent:writer:main",
-      sessionId: "writer",
-      category: "Writer",
-    };
-    const client = createTestGatewayClient(async (method, raw) => {
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
+    const writer = { ...initial, key: "agent:writer:main", sessionId: "writer" };
+    const { sessions, confirm } = setup(async (raw) => {
+      if ((raw as { agentId?: string }).agentId === "writer") {
+        return sessionsResult([writer], 3);
       }
-      if (method === "sessions.patch") {
-        return reply.promise;
+      if (committed && ++scopedReads === 1) {
+        return oldRead.promise;
       }
-      if (method === "sessions.list") {
-        if ((raw as { agentId?: string }).agentId === "writer") {
-          return sessionsResult([writer], 3);
-        }
-        if (committed && ++scopedReads === 1) {
-          return oldRead.promise;
-        }
-        return result({ category: committed ? "External" : "Alpha" }, 4);
-      }
-      throw new Error(`Unexpected method: ${method}`);
+      return result({ category: committed ? "External" : "Alpha" }, 4);
     });
-    const h = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(h.gateway);
     await sessions.refresh({ agentId: "main", force: true });
     const move = sessions.patch(initial.key, { category: "Beta" }, options);
     await sessions.refresh({ agentId: "writer", force: true });
     committed = true;
-    reply.resolve(receipt({ category: "Beta" }));
+    confirm(0, "Beta");
     await move;
     await vi.waitFor(() => expect(scopedReads).toBe(1));
     if (selection === "returned") {
       await sessions.refresh({ agentId: "main", force: true });
     }
     oldRead.reject(new Error("old agent read failed"));
-    // Let the completed read propagate through the refresh promise chain.
     await flushRead();
-    expect(sessions.state.agentId).toBe(selection === "returned" ? "main" : "writer");
-    expect(sessions.state.error).toBeNull();
+    expect(sessions.state).toMatchObject({
+      agentId: selection === "returned" ? "main" : "writer",
+      error: null,
+    });
   },
 );
