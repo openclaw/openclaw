@@ -16,18 +16,41 @@ function makeTestModel(id: string, contextTokens: number): ModelDefinitionConfig
 }
 
 describe("buildContextOverflowRecoveryText", () => {
-  it("preserves the session with the built-in recovery hint without heartbeat model evidence", () => {
+  it("replaces the failed /compact advice with a warned, session-specific trim command", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {},
+      agentId: "main",
+      sessionKey: "agent:main:main",
       primaryProvider: "openrouter",
       primaryModel: "qwen3.6-plus",
     });
 
-    expect(text).toContain("fresh session or using a model with a larger context window");
-    expect(text).not.toContain("reserveTokensFloor");
-    expect(text).not.toContain("heartbeat model bleed");
     expect(text).toContain("kept this conversation mapped to the current session");
-    expect(text).not.toContain("reset our conversation");
+    expect(text).not.toContain("/compact");
+    const warningAt = text.indexOf("permanently deletes older history and keeps no backup");
+    const backupAt = text.indexOf("`openclaw backup create`");
+    const commandAt = text.indexOf(
+      "`openclaw sessions compact agent:main:main --agent main --max-lines 200`",
+    );
+    expect(warningAt).toBeGreaterThan(-1);
+    expect(backupAt).toBeGreaterThan(warningAt);
+    expect(commandAt).toBeGreaterThan(backupAt);
+  });
+
+  it("labels shell-specific forms for keys that need quoting", () => {
+    const key = "agent:main:matrix:channel:!ops:example.org:thread:$RootEvent:Example.Org";
+    const text = buildContextOverflowRecoveryText({ cfg: {}, agentId: "main", sessionKey: key });
+
+    expect(text).toContain(
+      `then \`openclaw sessions compact '${key}' --agent main --max-lines 200\` (macOS, Linux, or PowerShell)` +
+        ` or \`openclaw sessions compact "${key}" --agent main --max-lines 200\` (Windows Command Prompt).`,
+    );
+  });
+
+  it("shows a key placeholder when the session key is unknown", () => {
+    const text = buildContextOverflowRecoveryText({ cfg: {} });
+
+    expect(text).toContain("`openclaw sessions compact <session-key> --max-lines 200`");
   });
 
   it("does not use stale heartbeat hints for a different explicit runtime model", () => {
@@ -52,7 +75,7 @@ describe("buildContextOverflowRecoveryText", () => {
       },
     });
 
-    expect(text).toContain("fresh session or using a model with a larger context window");
+    expect(text).toContain("Try a model with a larger context window.");
     expect(text).not.toContain("heartbeat model bleed");
   });
 
@@ -93,6 +116,9 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).toContain("openrouter/qwen3.6-plus");
     expect(text).toContain("heartbeat model bleed");
     expect(text).toContain("heartbeat.isolatedSession");
+    expect(text).toContain(
+      "`openclaw sessions compact <session-key> --agent agent --max-lines 200`",
+    );
   });
 
   it("uses the stored context window for an uncataloged heartbeat model", () => {

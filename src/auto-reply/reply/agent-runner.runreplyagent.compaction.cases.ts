@@ -364,8 +364,11 @@ export function registerReplyCompactionCases({
         throw new Error("expected payload");
       }
       expect(payload.text).toContain("Auto-compaction could not recover this turn");
-      expect(payload.text).toContain("fresh session or using a model with a larger context window");
+      expect(payload.text).not.toContain("/compact");
       expect(payload.text).toContain("/new");
+      expect(payload.text).toContain(
+        "`openclaw sessions compact main --agent main --max-lines 200`",
+      );
     });
 
     it("surfaces overflow fallback when embedded payload text is whitespace-only", async () => {
@@ -387,8 +390,11 @@ export function registerReplyCompactionCases({
         throw new Error("expected payload");
       }
       expect(payload.text).toContain("Auto-compaction could not recover this turn");
-      expect(payload.text).toContain("fresh session or using a model with a larger context window");
+      expect(payload.text).not.toContain("/compact");
       expect(payload.text).toContain("/new");
+      expect(payload.text).toContain(
+        "`openclaw sessions compact main --agent main --max-lines 200`",
+      );
     });
   });
 }

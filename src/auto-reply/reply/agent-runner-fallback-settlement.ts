@@ -108,6 +108,7 @@ export async function settleAgentFallbackCycle(params: {
       ? buildContextOverflowRecoveryText({
           cfg: cycle.runtimeConfig,
           agentId: turn.followupRun.run.agentId,
+          sessionKey: turn.sessionKey,
           primaryProvider: turn.followupRun.run.provider,
           primaryModel: turn.followupRun.run.model,
           runtimeProvider: cycle.state.attemptedRuntimeProvider,

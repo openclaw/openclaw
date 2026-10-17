@@ -281,6 +281,7 @@ export async function handleAgentExecutionError(params: {
       buildContextOverflowRecoveryText({
         cfg: params.runtimeConfig,
         agentId: turn.followupRun.run.agentId,
+        sessionKey: turn.sessionKey,
         primaryProvider: turn.followupRun.run.provider,
         primaryModel: turn.followupRun.run.model,
         runtimeProvider: params.state.attemptedRuntimeProvider,
