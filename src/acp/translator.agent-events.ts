@@ -19,7 +19,11 @@ import {
   type GatewayExecApprovalDetails,
   type GatewayExecApprovalEvent,
 } from "./permission-relay.js";
-import type { AcpPendingApprovalRelay, AcpPendingPrompt } from "./translator.prompt-state.js";
+import type {
+  AcpPendingApprovalRelay,
+  AcpPendingPrompt,
+  AcpStreamContext,
+} from "./translator.prompt-state.js";
 import type { AcpTranslatorSessionUpdates } from "./translator.session-updates.js";
 
 export class AcpTranslatorAgentEvents {
@@ -33,6 +37,10 @@ export class AcpTranslatorAgentEvents {
       sessionKey: string,
       runId?: string,
     ) => AcpPendingPrompt | undefined,
+    private readonly resolveStreamContext: (
+      sessionKey: string,
+      runId?: string,
+    ) => AcpStreamContext | undefined,
     private readonly log: (msg: string) => void,
   ) {}
 
@@ -60,8 +68,8 @@ export class AcpTranslatorAgentEvents {
     if (stream !== "tool" && (stream !== "item" || data.kind !== "preamble")) {
       return;
     }
-    const pending = this.findPendingBySessionKey(sessionKey, runId);
-    if (!pending) {
+    const context = this.resolveStreamContext(sessionKey, runId);
+    if (!context) {
       return;
     }
 
@@ -79,10 +87,10 @@ export class AcpTranslatorAgentEvents {
         return;
       }
       const itemId = normalizeOptionalString(data.itemId) ?? "";
-      const preambles = (pending.sentPreambles ??= new Map());
+      const preambles = (context.sentPreambles ??= new Map());
       const isNewPreamble = !preambles.has(itemId);
       let sent = preambles.get(itemId) ?? "";
-      const previous = pending.preamblePreview;
+      const previous = context.preamblePreview;
       const baseline = previous?.itemId === itemId ? previous.text : sent;
       if (!isNewPreamble && !text.startsWith(baseline)) {
         return;
@@ -92,12 +100,12 @@ export class AcpTranslatorAgentEvents {
         // One retired preview can contain several subsequently identified items.
         sent = previous.sent.slice(previous.text.length).replace(/^\n+/, "");
         preambles.set(previous.itemId, previous.text);
-        pending.preamblePreview = undefined;
+        context.preamblePreview = undefined;
       }
       if (isNewPreamble && projection.retainedText !== undefined) {
         sent = "";
         const retained = projection.retainedText.trimEnd();
-        const answer = pending.sentText ?? "";
+        const answer = context.sentText ?? "";
         if (answer.startsWith(retained)) {
           const preview = answer.slice(retained.length).replace(/^\n+/, "");
           if (text.startsWith(preview) || preview.startsWith(text)) {
@@ -105,8 +113,8 @@ export class AcpTranslatorAgentEvents {
           }
         }
         preceding = retained.startsWith(answer) ? retained.slice(answer.length) : "";
-        pending.sentText = retained;
-        pending.streamMessage = mergeChatStreamMessage(pending.streamMessage, {
+        context.sentText = retained;
+        context.streamMessage = mergeChatStreamMessage(context.streamMessage, {
           deltaText: retained,
           replace: true,
         });
@@ -118,21 +126,21 @@ export class AcpTranslatorAgentEvents {
           : text;
       preambles.set(itemId, sent.startsWith(text) ? sent : text);
       if (sent.startsWith(text) && sent.length > text.length) {
-        pending.preamblePreview = { itemId, text, sent };
-      } else if (pending.preamblePreview?.itemId === itemId) {
-        pending.preamblePreview = undefined;
+        context.preamblePreview = { itemId, text, sent };
+      } else if (context.preamblePreview?.itemId === itemId) {
+        context.preamblePreview = undefined;
       }
       if (!preceding && !delta) {
         if (isNewPreamble) {
-          pending.preambleNeedsSeparator = true;
+          context.preambleNeedsSeparator = true;
         }
         return;
       }
       const separator =
-        isNewPreamble && !sent && pending.preambleNeedsSeparator && !delta.startsWith("\n")
+        isNewPreamble && !sent && context.preambleNeedsSeparator && !delta.startsWith("\n")
           ? "\n"
           : "";
-      pending.preambleNeedsSeparator = true;
+      context.preambleNeedsSeparator = true;
       update = {
         sessionUpdate: "agent_message_chunk",
         content: {
@@ -149,17 +157,17 @@ export class AcpTranslatorAgentEvents {
       }
 
       if (phase === "start") {
-        pending.preamblePreview = undefined;
-        pending.sentPreambles?.delete("");
-        pending.toolCalls ??= new Map();
-        if (pending.toolCalls.has(toolCallId)) {
+        context.preamblePreview = undefined;
+        context.sentPreambles?.delete("");
+        context.toolCalls ??= new Map();
+        if (context.toolCalls.has(toolCallId)) {
           return;
         }
         const args = data.args as Record<string, unknown> | undefined;
         const title = formatToolTitle(name, args);
         const kind = inferToolKind(name);
         const locations = extractToolCallLocations(args);
-        pending.toolCalls.set(toolCallId, {
+        context.toolCalls.set(toolCallId, {
           title,
           kind,
           locations,
@@ -174,10 +182,10 @@ export class AcpTranslatorAgentEvents {
           locations,
         };
       } else if (phase === "update" || phase === "result") {
-        const toolState = pending.toolCalls?.get(toolCallId);
+        const toolState = context.toolCalls?.get(toolCallId);
         const result = phase === "update" ? data.partialResult : data.result;
         if (phase === "result") {
-          pending.toolCalls?.delete(toolCallId);
+          context.toolCalls?.delete(toolCallId);
         }
         update = {
           sessionUpdate: "tool_call_update",
@@ -190,13 +198,13 @@ export class AcpTranslatorAgentEvents {
       } else {
         return;
       }
-      pending.preambleNeedsSeparator = false;
+      context.preambleNeedsSeparator = false;
     }
     await this.sessionUpdates.emit({
-      sessionId: pending.sessionId,
-      sessionKey: pending.sessionKey,
-      ...(pending.ledgerSessionId ? { ledgerSessionId: pending.ledgerSessionId } : {}),
-      runId: pending.idempotencyKey,
+      sessionId: context.sessionId,
+      sessionKey: context.sessionKey,
+      ...(context.ledgerSessionId ? { ledgerSessionId: context.ledgerSessionId } : {}),
+      runId: context.idempotencyKey,
       record: true,
       update,
     });
