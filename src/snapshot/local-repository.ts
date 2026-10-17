@@ -1098,7 +1098,7 @@ async function withPrivateSqliteStagingDirectory<T>(options: {
 
 /** Create or strictly admit a Git repository through the local snapshot root trust policy. */
 export async function ensurePrivateSnapshotRepositoryRoot(rootPath: string): Promise<string> {
-  const stat = await lstatIfExists(rootPath, { bigint: true });
+  const stat = await lstatIfExists(rootPath);
   if (stat) {
     return await assertTrustedStagingRoot(stat, rootPath);
   }
