@@ -9,6 +9,7 @@ import {
   resolveOpenClawCompileCacheRespawnEnv,
 } from "../node-compile-cache.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
+import { resolveCliDatabaseProcessRole } from "./cli/database-process-role.js";
 import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
 import {
   isForegroundGmailRunArgv,
@@ -19,12 +20,17 @@ import {
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayDispatchStartupTrace,
 } from "./cli/startup-trace.js";
+import { normalizeWindowsArgv } from "./cli/windows-argv.js";
+import { installDatabaseProcessRole } from "./infra/database-engine/admission-scope.js";
 import { isMainModule } from "./infra/is-main.js";
 import "./shared/detached-async-context.js";
 
 const isMain = isMainModule({
   currentFile: fileURLToPath(import.meta.url),
 });
+if (isMain) {
+  installDatabaseProcessRole(resolveCliDatabaseProcessRole(normalizeWindowsArgv(process.argv)));
+}
 const handledAdmission =
   isMain && (await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv)));
 const packageRootUrl = new URL("../", import.meta.url);

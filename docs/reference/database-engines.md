@@ -613,11 +613,13 @@ replacement facts after committed DDL. Optional SQLite WAL, checkpoint, and
 page-reclamation work does not apply to PostgreSQL. Explicit SQLite integrity,
 repair, and file-snapshot requests refuse with a PostgreSQL recovery instruction.
 
-Runtime PostgreSQL queries run in workers. Physical open and boot migration code
+Gateway runtime PostgreSQL queries run in workers. Physical open and boot migration code
 may use the synchronous `withEngineStoreAdmission` scope from
 `openclaw/plugin-sdk/database-engine-worker-runtime`; retaining a connection after
 that scope ends does not authorize main-thread queries. The callback must remain
-synchronous. Close remains available to settle resources. The store owner supplies
+synchronous. CLI processes classified as one-shots may use the synchronous bridge
+for offline commands and Doctor repairs; an unset process role still refuses
+main-thread access. Close remains available to settle resources. The store owner supplies
 `openEngineStore` with `inspectSqlite(): { hasExistingData, hasEngineAnchor }`,
 so partially initialized stores are also protected from an accidental engine
 switch. See the canonical
