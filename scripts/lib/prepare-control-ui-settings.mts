@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 /** Keep the alias-aware native builder outside Vite's configuration bundle. */
@@ -10,12 +10,13 @@ export async function prepareControlUiSettings(repoRoot: string): Promise<void> 
     return;
   }
   const scripts = path.resolve(import.meta.dirname, "..");
-  // Vite bundles this helper; share the launcher's live ownership module, not a bundled copy.
+  // Bypass Vite's module runner: its HTTP import URLs cannot launch native children,
+  // and bundled copies would lose the launcher's live ownership context.
   const {
     distArtifactEntryArgs,
     withDistArtifactOwnership,
-  }: typeof import("./dist-artifact-ownership.mts") = await import(
-    pathToFileURL(path.join(scripts, "lib/dist-artifact-ownership.mts")).href
+  }: typeof import("./dist-artifact-ownership.mts") = createRequire(import.meta.url)(
+    path.join(scripts, "lib/dist-artifact-ownership.mts"),
   );
   await withDistArtifactOwnership(repoRoot, () =>
     promisify(execFile)(
