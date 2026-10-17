@@ -122,7 +122,7 @@ ${source}
     env = { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim() };
   };
   if (options?.finalizationWorkMs !== undefined) {
-    const modulePath = path.join(root, "recovery-health.mjs");
+    const terminalPath = path.join(root, "terminal-result.json");
     // Model cold finalizer startup only in the helper; its native child and lease stay real.
     await installPreload(
       "finalization",
@@ -133,10 +133,8 @@ ${source}
       children.spawn = (command, args, options) => {
         const child = spawn(command, args, options);
         try {
-          let input = args.at(-1);
-          if (input.startsWith("[")) input = JSON.parse(input).at(-1);
-          const payload = JSON.parse(fs.readFileSync(input, "utf8"));
-          if (Array.isArray(payload) && payload[0] === ${JSON.stringify(modulePath)}) {
+          const input = args.at(-1);
+          if (input === ${JSON.stringify(terminalPath)} || (input.startsWith("[") && JSON.parse(input).at(-1) === ${JSON.stringify(terminalPath)})) {
             finalizer = child;
             child.once("close", () => { if (finalizer === child) finalizer = undefined; });
           }
@@ -164,25 +162,22 @@ ${source}
       "notice",
       `
       const clearTimeout = global.clearTimeout;
-      const polls = new Map();
-      let captured = false;
+      let captured, poll;
       global.clearTimeout = (timer) => {
-        clearInterval(polls.get(timer));
-        polls.delete(timer);
+        if (timer === captured) clearInterval(poll);
         return clearTimeout(timer);
       };
       global.setTimeout = (callback, delay, ...args) => {
         const timer = setTimeout(callback, delay, ...args);
         if (delay !== 10_000) return timer;
         if (captured) throw new Error("duplicate pre-park notice deadline");
-        captured = true;
+        captured = timer;
         fs.writeFileSync(${JSON.stringify(deadlinePath)}, JSON.stringify({ requestedMs: delay }));
-        const poll = setInterval(() => {
+        poll = setInterval(() => {
           if (!fs.existsSync(${JSON.stringify(releasePath)})) return;
           global.clearTimeout(timer);
           callback.apply(timer, args);
         }, 5);
-        polls.set(timer, poll);
         return timer;
       };
     `,

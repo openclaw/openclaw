@@ -38,15 +38,6 @@ const finalizerSource = sourceBetween(
   "${JSON.stringify(SYSTEM_SERVICE_UPDATE_SETTLED_MARKER)}",
   JSON.stringify("system-update-settled\n"),
 );
-const commandResultSource = sourceBetween(
-  "    const exit = await runOwnedUpdateCommand(params.action,",
-  "    if (updateCancelled || activationRejected)",
-);
-const diagnosticSource = sourceBetween(
-  "async function collectUpdateFailureTriage()",
-  "\n(async () => {",
-);
-
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
@@ -57,13 +48,12 @@ function createBoundary(action: "update" | "triage" = "update") {
   const diagnosticFinished = createDeferred();
   const commandAdmitted = createDeferred();
   const order: string[] = [];
-  const stdin = Object.assign(new EventEmitter(), { destroy: vi.fn() });
   const processFixture = Object.assign(new EventEmitter(), {
     pid: 100,
     platform: "linux",
     execPath: "/fixture/node",
     env: {},
-    stdin,
+    stdin: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
     exitCode: undefined as number | undefined,
     execve: vi.fn(),
   });
@@ -173,7 +163,7 @@ function createBoundary(action: "update" | "triage" = "update") {
     ${MANAGED_HANDOFF_RESULT_SOURCE}
     ${MANAGED_HANDOFF_NATIVE_SCOPE_SOURCE}
     ${HANDOFF_OWNED_COMMAND_SCRIPT}
-    ${diagnosticSource}
+    ${sourceBetween("async function collectUpdateFailureTriage()", "\n(async () => {")}
     ${sourceBetween("function cleanupSensitiveFiles()", "${MANAGED_HANDOFF_SQLITE_SOURCE}")}
     managedUpdateLease = initialLease;
     if (params.action === "update") {
@@ -187,7 +177,7 @@ function createBoundary(action: "update" | "triage" = "update") {
       ${finalizerSource}
     }
     ({ settle: () => complete(async () => {}),
-      command: () => complete(async () => { ${commandResultSource} }), });
+      command: () => complete(async () => { ${sourceBetween("    const exit = await runOwnedUpdateCommand(params.action,", "    if (updateCancelled || activationRejected)")} }), });
     `,
     {
       params,

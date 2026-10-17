@@ -25,13 +25,8 @@ const oldFields = {
 const oldPayload = JSON.stringify(oldFields);
 const oldRow = { owner: "owner", payload_json: oldPayload, updated_at: 123 };
 const retainedMetadata = JSON.stringify({ fixture: "opaque to old readers" });
-const oldLease = {
-  ...oldFields,
-  key: "original",
-  owner: "owner",
-  payload: oldPayload,
-  updatedAt: 123,
-};
+const { owner, updated_at: updatedAt } = oldRow;
+const oldLease = { ...oldFields, key: "original", owner, payload: oldPayload, updatedAt };
 let databasePath: string;
 let database: ReturnType<typeof createManagedHandoffLeaseDatabase>;
 
@@ -58,94 +53,70 @@ function withRawDatabase(operation: (db: DatabaseSync) => void) {
   operation(db);
 }
 
-const insertLease = (db: DatabaseSync, key = "original", owner = "owner", time = 123) =>
+const insertLease = (db: DatabaseSync, key = "original", leaseOwner = "owner", time = 123) =>
   db
     .prepare(`INSERT INTO ${table} (${fields}) VALUES (?, ?, ?, ?)`)
-    .run(key, owner, oldPayload, time);
+    .run(key, leaseOwner, oldPayload, time);
+const select = (db: DatabaseSync, columns: string, suffix = "") =>
+  db.prepare(`SELECT ${columns} FROM ${table}${suffix}`);
 const leaseRow = (db: DatabaseSync) =>
-  db
-    .prepare(`SELECT owner, payload_json, updated_at FROM ${table} WHERE install_root = 'original'`)
-    .get();
+  select(db, "owner, payload_json, updated_at", " WHERE install_root = 'original'").get();
 const metadataReader = (db: DatabaseSync) => () =>
   readManagedHandoffRepairMetadata(db, oldLease, (operation) =>
     database.transact(db, operation, {}),
   );
-const updateMetadata = (db: DatabaseSync, metadata: string) =>
+const recoveryColumn = (db: DatabaseSync) =>
   db
-    .prepare(`UPDATE ${table} SET recovery_json = ? WHERE install_root = ?`)
-    .run(metadata, "original");
-
-function recoveryColumn(db: DatabaseSync) {
-  return db
     .prepare(`PRAGMA table_info(${table})`)
     .all()
     .find((column) => column.name === "recovery_json");
-}
 
 function writeMetadata() {
   database(true, (db) => {
     const read = metadataReader(db);
     expect(read()).toBeNull();
     expect(read()).toBeNull();
-    database.transact(
-      db,
-      () =>
-        executeSqliteQuerySync(
-          db,
-          leaseQueries(db)
-            .updateTable("managed_update_handoffs")
-            .set({ recovery_json: retainedMetadata })
-            .where("install_root", "=", oldLease.key),
-        ),
-      {},
-    );
+    const update = leaseQueries(db)
+      .updateTable("managed_update_handoffs")
+      .set({ recovery_json: retainedMetadata })
+      .where("install_root", "=", oldLease.key);
+    database.transact(db, () => executeSqliteQuerySync(db, update), {});
   });
 }
 
-it.each(["existing", "new"] as const)(
-  "preserves old-reader payload bytes and named-column writes on a %s store",
-  (kind) => {
-    if (kind === "existing") {
-      createOldStore();
-      const before = fs.readFileSync(databasePath);
-      for (const write of [false, true]) {
-        database(write, (db) => {
-          expect(recoveryColumn(db)).toBeUndefined();
-          expect(leaseRow(db)).toEqual(oldRow);
-        });
-      }
-      expect(fs.readFileSync(databasePath)).toEqual(before);
-    }
-    if (kind === "new") {
-      database(true, (db) => insertLease(db));
-    }
-    writeMetadata();
-    withRawDatabase((db) => {
-      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
-      const row = leaseRow(db);
-      expect(row).toEqual(oldRow);
-      expect(parseManagedHandoffLeasePayload(String(row?.payload_json))).toEqual(oldFields);
-      db.prepare(
-        `UPDATE ${table} SET payload_json = ?, updated_at = ? WHERE install_root = ? AND owner = ?`,
-      ).run(oldPayload, 456, "original", "owner");
-      insertLease(db, "old-writer", "another-owner", 789);
-      expect(recoveryColumn(db)).toMatchObject({
-        type: "TEXT",
-        notnull: 0,
-        dflt_value: null,
-        pk: 0,
+it.each(["existing", "new"] as const)("preserves old-reader compatibility in %s stores", (kind) => {
+  if (kind === "existing") {
+    createOldStore();
+    const before = fs.readFileSync(databasePath);
+    for (const write of [false, true]) {
+      database(write, (db) => {
+        expect(recoveryColumn(db)).toBeUndefined();
+        expect(leaseRow(db)).toEqual(oldRow);
       });
-    });
-    database(false, (db) =>
-      expect(
-        db.prepare(`SELECT install_root, recovery_json FROM ${table} ORDER BY install_root`).all(),
-      ).toEqual([
-        { install_root: "old-writer", recovery_json: null },
-        { install_root: "original", recovery_json: retainedMetadata },
-      ]),
-    );
-  },
-);
+    }
+    expect(fs.readFileSync(databasePath)).toEqual(before);
+  } else {
+    database(true, (db) => insertLease(db));
+  }
+  writeMetadata();
+  withRawDatabase((db) => {
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
+    const row = leaseRow(db);
+    expect(row).toEqual(oldRow);
+    expect(parseManagedHandoffLeasePayload(String(row?.payload_json))).toEqual(oldFields);
+    db.prepare(
+      `UPDATE ${table} SET payload_json = ?, updated_at = ? WHERE install_root = ? AND owner = ?`,
+    ).run(oldPayload, 456, "original", "owner");
+    insertLease(db, "old-writer", "another-owner", 789);
+    expect(recoveryColumn(db)).toMatchObject({ type: "TEXT", notnull: 0, dflt_value: null, pk: 0 });
+  });
+  database(false, (db) =>
+    expect(select(db, "install_root, recovery_json", " ORDER BY install_root").all()).toEqual([
+      { install_root: "old-writer", recovery_json: null },
+      { install_root: "original", recovery_json: retainedMetadata },
+    ]),
+  );
+});
 
 it("does not retain a rolled-back column admission and lets existing readers see its later publication", () => {
   createOldStore();
@@ -174,9 +145,7 @@ it("does not retain a rolled-back column admission and lets existing readers see
         writeMetadata();
       }
       reader(false, (db) =>
-        expect(db.prepare(`SELECT recovery_json FROM ${table}`).get()).toEqual({
-          recovery_json: metadata,
-        }),
+        expect(select(db, "recovery_json").get()).toEqual({ recovery_json: metadata }),
       );
     }
   } finally {
@@ -189,10 +158,11 @@ it.each(["", "{"])("does not interpret malformed metadata %j as a legacy record"
   database(true, (db) => {
     const read = metadataReader(db);
     expect(read()).toBeNull();
-    updateMetadata(db, metadata);
+    db.prepare(`UPDATE ${table} SET recovery_json = ? WHERE install_root = ?`).run(
+      metadata,
+      "original",
+    );
     expect(read).toThrow("metadata is unreadable");
-    expect(db.prepare(`SELECT payload_json FROM ${table}`).get()).toEqual({
-      payload_json: oldPayload,
-    });
+    expect(select(db, "payload_json").get()).toEqual({ payload_json: oldPayload });
   });
 });

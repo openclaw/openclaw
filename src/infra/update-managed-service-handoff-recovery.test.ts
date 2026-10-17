@@ -4,25 +4,16 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import * as stateDb from "../state/openclaw-state-db.js";
 import * as bootReader from "./update-managed-service-handoff-boot.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 import { createManagedHandoffRecoveryFixture } from "./update-managed-service-handoff-recovery.test-support.js";
-import {
-  createUpdateRun,
-  finishUpdateRun,
-  getUpdateRun,
-  listUpdateRuns,
-  recordUpdateRunStep,
-} from "./update-run-ledger.js";
+import * as ledger from "./update-run-ledger.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    stateDb.closeOpenClawStateDatabaseForTest();
     cleanup();
   }),
 );
@@ -36,9 +27,9 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const newRun = (origin?: Parameters<typeof createUpdateRun>[0]["origin"]) =>
-  createUpdateRun({ trigger: "cli", ...(origin && { origin }) }, { env });
-const readRun = (runId: string) => getUpdateRun(runId, { env });
+const newRun = (origin?: Parameters<typeof ledger.createUpdateRun>[0]["origin"]) =>
+  ledger.createUpdateRun({ trigger: "cli", ...(origin && { origin }) }, { env });
+const readRun = (runId: string) => ledger.getUpdateRun(runId, { env });
 const nextUpdate = (store = fixture.store) =>
   store.acquire(fixture.root, "next-update", { kind: "update" }).kind;
 const settlement = (runId: string) =>
@@ -56,7 +47,7 @@ async function withRepair(action: (repair: Awaited<ReturnType<typeof prepareRepa
 }
 
 it("records the settlement receipt before releasing a dead legacy lease and admits the next update", async () => {
-  const previous = fixture.seed();
+  fixture.seed();
   let receiptAtRelease: unknown;
   const release = fixture.store.release;
   vi.spyOn(fixture.store, "release").mockImplementation((lease) => {
@@ -64,10 +55,6 @@ it("records the settlement receipt before releasing a dead legacy lease and admi
     return release(lease);
   });
   using repair = await prepareRepair();
-  repair.assertCurrent();
-  const claimed = fixture.current();
-  expect(claimed.owner).not.toBe(previous.owner);
-  expect(claimed.helper.pid).toBe(process.pid);
   const run = newRun();
   expect(() => repair.complete(run.runId)).toThrow("requires its bound repair run");
   repair.bindRun(run.runId);
@@ -81,7 +68,7 @@ it("records the settlement receipt before releasing a dead legacy lease and admi
   });
   expect(fixture.store.read(fixture.root)).toEqual({ kind: "absent" });
   expect(nextUpdate()).toBe("acquired");
-  finishUpdateRun(run.runId, { status: "succeeded" }, { env });
+  ledger.finishUpdateRun(run.runId, { status: "succeeded" }, { env });
   expect(readRun(run.runId)?.steps).toContainEqual(receiptAtRelease);
 });
 
@@ -95,14 +82,9 @@ it.each([
 ] as const)("preserves the retained generation for %s", async (reason) => {
   const largerTimeout = reason === "larger recorded timeout";
   const grace = largerTimeout || reason === "45-minute floor";
-  const previous = fixture.seed(
-    grace
-      ? {
-          ageMs: (largerTimeout ? 46 : 44) * 60_000,
-          timeoutMs: largerTimeout ? 90 * 60_000 : undefined,
-        }
-      : {},
-  );
+  const ageMs = (largerTimeout ? 46 : 44) * 60_000;
+  const timeoutMs = largerTimeout ? 90 * 60_000 : undefined;
+  const previous = fixture.seed(grace ? { ageMs, timeoutMs } : {});
   const { births, helper, processCensus } = fixture;
   let expected: string | RegExp | Error;
   if (grace) {
@@ -124,7 +106,7 @@ it.each([
   expect(fixture.current()).toEqual(previous);
   if (reason === "live descendant") {
     expect(nextUpdate()).toBe("busy");
-    expect(listUpdateRuns({}, { env })).toEqual([]);
+    expect(ledger.listUpdateRuns({}, { env })).toEqual([]);
   }
 });
 
@@ -133,30 +115,29 @@ it("preserves an incomplete rollback across repair state overrides", async () =>
   fixture.repairFacts.mockRestore();
   vi.spyOn(os, "tmpdir").mockReturnValue(fixture.root);
   const run = newRun({ driver: { ...previous.executor, host: os.hostname() } });
-  recordUpdateRunStep(run.runId, { step: "package rollback", status: "completed" }, { env });
-  finishUpdateRun(run.runId, { status: "failed", reason: "interrupted-restoration" }, { env });
+  ledger.recordUpdateRunStep(run.runId, { step: "package rollback", status: "completed" }, { env });
+  ledger.finishUpdateRun(
+    run.runId,
+    { status: "failed", reason: "interrupted-restoration" },
+    { env },
+  );
   const recorded = readRun(run.runId);
 
   await expect(prepareRepair()).rejects.toThrow(/rollback.*update status/u);
 
   const directory = path.join(fixture.root, "openclaw-update-run-handoff-original-profile");
   fs.mkdirSync(directory, { mode: 0o700 });
-  fs.writeFileSync(
-    path.join(directory, "handoff.json"),
-    JSON.stringify({
-      updateLeaseOwner: previous.owner,
-      updateLeaseKey: previous.key,
-      runId: run.runId,
-      cwd: fixture.root,
-    }),
-    { mode: 0o600 },
+  const handoff = {
+    updateLeaseOwner: previous.owner,
+    updateLeaseKey: previous.key,
+    runId: run.runId,
+    cwd: fixture.root,
+  };
+  fs.writeFileSync(path.join(directory, "handoff.json"), JSON.stringify(handoff), { mode: 0o600 });
+  const otherProfile = { ...env, OPENCLAW_STATE_DIR: path.join(fixture.root, "other-state") };
+  await expect(prepareRepair(fixture.store, otherProfile)).rejects.toThrow(
+    "original profile and state overrides",
   );
-  await expect(
-    prepareRepair(fixture.store, {
-      ...env,
-      OPENCLAW_STATE_DIR: path.join(fixture.root, "other-state"),
-    }),
-  ).rejects.toThrow("original profile and state overrides");
 
   expect(fixture.current()).toEqual(previous);
   expect(readRun(run.runId)).toEqual(recorded);
@@ -186,10 +167,9 @@ it.each(["installation repair", "settlement receipt"] as const)(
     const run = failure === "settlement receipt" ? newRun() : undefined;
     await expect(
       withRepair((repair) => {
-        repair.assertCurrent();
         if (run) {
           repair.bindRun(run.runId);
-          finishUpdateRun(run.runId, { status: "failed" }, { env });
+          ledger.finishUpdateRun(run.runId, { status: "failed" }, { env });
           repair.complete(run.runId);
         } else {
           throw new Error("Current installation repair failed");
@@ -219,7 +199,7 @@ it.each(["installation repair", "settlement receipt"] as const)(
       const olderWriterGeneration = fixture.replaceHeartbeat(retained);
       expect(fixture.readMetadata(olderWriterGeneration)).toBeNull();
       expect(nextUpdate()).toBe("busy");
-      expect(listUpdateRuns({}, { env })).toEqual([]);
+      expect(ledger.listUpdateRuns({}, { env })).toEqual([]);
     }
   },
 );

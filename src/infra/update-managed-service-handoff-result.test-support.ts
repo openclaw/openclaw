@@ -89,18 +89,15 @@ export function registerManagedTerminalResultTests(
     (["systemd", "launchd"] as const).flatMap((kind) =>
       (["git", "npm"] as const).flatMap((mode) =>
         (["same", "replacement", "replacement-symlink"] as const).flatMap((rootKind) =>
-          (["published", "consumed"] as const).map((updaterNotification) => ({
-            kind,
-            mode,
-            rootKind,
-            updaterNotification,
-          })),
+          (["published", "consumed"] as const).map(
+            (notification) => [kind, mode, rootKind, notification] as const,
+          ),
         ),
       ),
     ),
   )(
-    "$kind preserves completed $mode success at $rootKind root (notification=$updaterNotification)",
-    async ({ kind, mode, rootKind, updaterNotification }) => {
+    "%s preserves completed %s success at %s root (notification=%s)",
+    async (kind, mode, rootKind, updaterNotification) => {
       let root: string | undefined;
       if (rootKind !== "same") {
         const replacement = await fs.realpath(
@@ -135,11 +132,9 @@ export function registerManagedTerminalResultTests(
         recordedFailure: { error: "A diagnostic export cannot override direct success." },
       });
       expect(startsService(commands)).toBe(false);
-      expect([state.restored, state.healthProbed, state.triageCalls]).toEqual([
-        undefined,
-        undefined,
-        undefined,
-      ]);
+      expect(state.restored).toBeUndefined();
+      expect(state.healthProbed).toBeUndefined();
+      expect(state.triageCalls).toBeUndefined();
       expect(state.publishedSentinel).toMatchObject({ payload: { status: "ok", stats: { mode } } });
       if (updaterNotification === "consumed") {
         expect(state.consumedNotifications).toBe(1);
@@ -153,46 +148,41 @@ export function registerManagedTerminalResultTests(
 
   itUnix.each(
     (["systemd", "launchd"] as const).flatMap((kind) =>
-      (["error", "skipped"] as const).map((status) => ({ kind, status })),
+      (["error", "skipped"] as const).map((status) => [kind, status] as const),
     ),
-  )(
-    "$kind rejects foreign-root $status recovery despite positive runtime proof",
-    async ({ kind, status }) => {
-      const root = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-foreign-")),
-      );
-      tempDirs.add(root);
-      const { commands, state, sentinel } = await runBoundary(kind, {
-        updaterExitCode: status === "skipped" ? 0 : 7,
-        helperExitCode: status === "skipped" ? 1 : 7,
-        updaterResult: {
-          status,
-          root,
+  )("%s rejects foreign-root %s recovery despite positive runtime proof", async (kind, status) => {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-foreign-")),
+    );
+    tempDirs.add(root);
+    const { commands, state, sentinel } = await runBoundary(kind, {
+      updaterExitCode: status === "skipped" ? 0 : 7,
+      helperExitCode: status === "skipped" ? 1 : 7,
+      updaterResult: {
+        status,
+        root,
+        mode: "git",
+        steps: [],
+        durationMs: 100,
+        recovery: gitRecovery(),
+      } satisfies UpdateRunResult,
+      recordedFailure: {
+        result: {
+          status: "error",
           mode: "git",
           steps: [],
-          durationMs: 100,
-          recovery: gitRecovery(),
-        } satisfies UpdateRunResult,
-        recordedFailure: {
-          result: {
-            status: "error",
-            mode: "git",
-            steps: [],
-            recovery: { serviceRestartSafe: true },
-          },
+          recovery: { serviceRestartSafe: true },
         },
-      });
-      expect(startsService(commands)).toBe(false);
-      expect([state.restored, state.healthProbed, state.triageCalls]).toEqual([
-        undefined,
-        undefined,
-        1,
-      ]);
-      expect(sentinel).toMatchObject(
-        sentinelResult("error", { reason: "managed-service-handoff-failed" }),
-      );
-    },
-  );
+      },
+    });
+    expect(startsService(commands)).toBe(false);
+    expect(state.restored).toBeUndefined();
+    expect(state.healthProbed).toBeUndefined();
+    expect(state.triageCalls).toBe(1);
+    expect(sentinel).toMatchObject(
+      sentinelResult("error", { reason: "managed-service-handoff-failed" }),
+    );
+  });
 }
 
 export function registerManagedRecoveryOutcomeTests(
@@ -203,11 +193,11 @@ export function registerManagedRecoveryOutcomeTests(
 ): void {
   itUnix.each(
     kinds.flatMap((kind) =>
-      (["ready", "exited", "throw"] as const).map((gatewayHealth) => ({ kind, gatewayHealth })),
+      (["ready", "exited", "throw"] as const).map((health) => [kind, health] as const),
     ),
   )(
-    "restores the verified previous $kind generation after updater exit 79 (health=$gatewayHealth)",
-    async ({ kind, gatewayHealth }) => {
+    "restores the verified previous %s generation after updater exit 79 (health=%s)",
+    async (kind, gatewayHealth) => {
       const { run, state, log } = await runBoundary(kind, {
         ledger: true,
         rollbackRestoration: true,
@@ -233,35 +223,29 @@ export function registerManagedRecoveryOutcomeTests(
         },
         downtimeMs: gatewayHealth === "ready" ? expect.any(Number) : null,
       });
-      const verification = run?.verification;
-      expect([
-        verification?.runningVersion,
-        verification?.versionMatch,
-        verification?.pid,
-        verification?.readyz,
-        verification?.settled,
-        verification?.channelsReady,
-        verification?.pluginErrors,
-      ]).toEqual([
-        gatewayHealth === "throw" ? undefined : "1.0.0",
-        gatewayHealth === "throw" ? undefined : true,
+      const { runningVersion, versionMatch, pid, readyz, settled, channelsReady, pluginErrors } =
+        run?.verification ?? {};
+      const unreadable = gatewayHealth === "throw";
+      const ready = unreadable ? undefined : gatewayHealth === "ready";
+      expect([runningVersion, versionMatch, pid, readyz]).toEqual([
+        unreadable ? undefined : "1.0.0",
+        unreadable ? undefined : true,
         gatewayHealth === "exited" ? undefined : process.pid,
         undefined,
-        gatewayHealth === "throw" ? undefined : gatewayHealth === "ready",
-        gatewayHealth === "throw" ? undefined : gatewayHealth === "ready",
-        gatewayHealth === "throw" ? undefined : [],
       ]);
+      expect([settled, channelsReady]).toEqual([ready, ready]);
+      expect(pluginErrors).toEqual(unreadable ? undefined : []);
       expect(log).not.toContain("keep the gateway stopped");
     },
   );
 
   itUnix.each(
     kinds.flatMap((kind) =>
-      (["none", "stdout-only", "ledger-only"] as const).map((proof) => ({ kind, proof })),
+      (["none", "stdout-only", "ledger-only"] as const).map((proof) => [kind, proof] as const),
     ),
   )(
-    "keeps $kind parked on unsafe exit 79 without a complete recovery verdict (proof=$proof)",
-    async ({ kind, proof }) => {
+    "keeps %s parked on unsafe exit 79 without a complete recovery verdict (proof=%s)",
+    async (kind, proof) => {
       const { commands, sentinel, state } = await runBoundary(kind, {
         updaterExitCode: 79,
         ledger: proof === "ledger-only",
@@ -328,23 +312,15 @@ export function registerManagedRecoveryOutcomeTests(
   itUnix.each([
     ...kinds.flatMap((kind) =>
       (["error", "skipped"] as const).flatMap((status) =>
-        ([undefined, "published", "consumed"] as const).map((updaterNotification) => ({
-          kind,
-          status,
-          updaterNotification,
-          updaterOutput: undefined,
-        })),
+        ([undefined, "published", "consumed"] as const).map(
+          (notification) => [kind, status, notification, undefined] as const,
+        ),
       ),
     ),
-    ...kinds.map((kind) => ({
-      kind,
-      status: "error" as const,
-      updaterNotification: "published" as const,
-      updaterOutput: "split-utf8" as const,
-    })),
+    ...kinds.map((kind) => [kind, "error", "published", "split-utf8"] as const),
   ])(
-    "$kind restores a verified Git $status before the child owns a service stop (notification=$updaterNotification, output=$updaterOutput)",
-    async ({ kind, status, updaterNotification, updaterOutput }) => {
+    "%s restores verified Git %s before the child owns a stop (notification=%s, output=%s)",
+    async (kind, status, updaterNotification, updaterOutput) => {
       const reason = status === "skipped" ? "no-upstream" : "preflight-fetch";
       const { commands, state, sentinel, log } = await runBoundary(kind, {
         updaterExitCode: status === "skipped" ? 0 : 7,
@@ -387,17 +363,12 @@ export function registerManagedRecoveryOutcomeTests(
             buildId: "original-git-build",
             service,
           })),
-        ].map((recovery) => ({
-          kind,
-          status,
-          recovery,
-          recoveryLabel: recovery && "service" in recovery ? recovery.service : recovery,
-        })),
+        ].map((recovery) => [kind, status, recovery] as const),
       ),
     ),
   )(
-    "$kind preserves terminal foreground $status outcomes and rejects unverified recovery ($recoveryLabel)",
-    async ({ kind, status, recovery }) => {
+    "%s preserves terminal foreground %s and rejects unverified recovery (%j)",
+    async (kind, status, recovery) => {
       const reason = status === "skipped" ? "no-upstream" : "preflight-fetch";
       const { commands, state, sentinel, log, run } = await runBoundary(kind, {
         ledger: true,
@@ -426,25 +397,6 @@ export function registerManagedRecoveryOutcomeTests(
         expect(sentinel).toBeNull();
       } else {
         expect(sentinel).toMatchObject(sentinelResult("error", { reason }));
-      }
-    },
-  );
-
-  itUnix.each(kinds)(
-    "%s fails a zero-exit skip when restored Gateway readiness or identity fails",
-    async (kind) => {
-      for (const gatewayHealth of ["unready", "wrong-version", "wrong-build", "exited"] as const) {
-        const { state, sentinel } = await runBoundary(kind, {
-          updaterExitCode: 0,
-          helperExitCode: 1,
-          gatewayHealth,
-          updaterNotification: "published",
-          updaterResult: gitOutcome("skipped", "no-upstream"),
-        });
-        expect(state).toMatchObject({ restored: true, healthProbeCount: 1 });
-        expect(sentinel).toMatchObject(
-          sentinelResult("error", { reason: "no-upstream", steps: [restoreStep(1)] }),
-        );
       }
     },
   );
@@ -481,11 +433,9 @@ export function registerManagedRecoveryOutcomeTests(
             recovery: { serviceRestartSafe: true, version: "1.0.0" },
           },
         });
-        expect([state.restored, state.healthProbed, state.triageCalls]).toEqual([
-          undefined,
-          undefined,
-          1,
-        ]);
+        expect(state.restored).toBeUndefined();
+        expect(state.healthProbed).toBeUndefined();
+        expect(state.triageCalls).toBe(1);
         expect(sentinel).toMatchObject(
           sentinelResult("error", { reason: "managed-service-handoff-failed" }),
         );
@@ -493,37 +443,41 @@ export function registerManagedRecoveryOutcomeTests(
     },
   );
 
-  itUnix.each(kinds)(
-    "%s verifies readiness and expected version before claiming restored service health",
-    async (kind) => {
-      for (const gatewayHealth of [
-        "unready",
-        "wrong-version",
-        "wrong-build",
-        "exited",
-        "ready",
-      ] as const) {
-        const { sentinel, state } = await runBoundary(kind, {
-          updaterNotification: "published",
-          updaterResult: gitOutcome("error", "preflight-fetch", "restored-git-build"),
-          gatewayHealth,
-        });
-        expect(state).toMatchObject({
-          healthProbed: true,
-          expectedVersion: "1.0.0",
-          expectedBuildId: "restored-git-build",
-        });
-        expect(sentinel).toMatchObject({
-          payload: {
-            stats: {
-              reason: "preflight-fetch",
-              steps: expect.arrayContaining([
-                expect.objectContaining(restoreStep(gatewayHealth === "ready" ? 0 : 1)),
-              ]),
+  itUnix.each(
+    kinds.flatMap((kind) =>
+      (["error", "skipped"] as const).map((status) => [kind, status] as const),
+    ),
+  )("%s verifies restored Gateway readiness and identity after %s", async (kind, status) => {
+    const skipped = status === "skipped";
+    const reason = skipped ? "no-upstream" : "preflight-fetch";
+    const failures = ["unready", "wrong-version", "wrong-build", "exited"] as const;
+    for (const gatewayHealth of skipped ? failures : ([...failures, "ready"] as const)) {
+      const { sentinel, state } = await runBoundary(kind, {
+        updaterNotification: "published",
+        updaterResult: gitOutcome(status, reason, skipped ? undefined : "restored-git-build"),
+        ...(skipped ? { updaterExitCode: 0, helperExitCode: 1 } : {}),
+        gatewayHealth,
+      });
+      expect(state).toMatchObject(
+        skipped
+          ? { restored: true, healthProbeCount: 1 }
+          : {
+              healthProbed: true,
+              expectedVersion: "1.0.0",
+              expectedBuildId: "restored-git-build",
             },
-          },
-        });
-      }
-    },
-  );
+      );
+      const stats = {
+        reason,
+        steps: skipped
+          ? [restoreStep(1)]
+          : expect.arrayContaining([
+              expect.objectContaining(restoreStep(gatewayHealth === "ready" ? 0 : 1)),
+            ]),
+      };
+      expect(sentinel).toMatchObject({
+        payload: { ...(skipped ? { status: "error" } : {}), stats },
+      });
+    }
+  });
 }

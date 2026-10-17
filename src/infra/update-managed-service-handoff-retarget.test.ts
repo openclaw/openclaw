@@ -16,9 +16,15 @@ import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "./update-managed-service-handoff-
 import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-runtime.js";
 
 const scratch: string[] = [];
+const databases: DatabaseSync[] = [];
 const openDatabase = nodeSqlite.openNodeSqliteDatabase;
 afterEach(() => {
   vi.restoreAllMocks();
+  for (const db of databases.splice(0)) {
+    if (db.isOpen) {
+      db.close();
+    }
+  }
   for (const root of scratch.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -47,14 +53,18 @@ const foreground = (store: Store) =>
     lifetime: { kind: "foreground", boot: store.bootIdentity() },
   }) as const;
 
-function withDatabase<T>(file: string, use: (db: DatabaseSync) => T): T {
+function database(file: string) {
   const db = new DatabaseSync(file);
-  try {
-    return use(db);
-  } finally {
-    db.close();
-  }
+  databases.push(db);
+  return db;
 }
+
+const observeDatabase = (visit: (db: DatabaseSync, readOnly: boolean) => void) =>
+  vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+    const db = openDatabase(...args);
+    visit(db, args[1]?.readOnly === true);
+    return db;
+  });
 
 function insertLegacy(db: DatabaseSync, to: string, payload: string, replace = false) {
   db.prepare(
@@ -62,13 +72,17 @@ function insertLegacy(db: DatabaseSync, to: string, payload: string, replace = f
   ).run(to, "legacy-owner", payload, 1);
 }
 
-async function withChild(use: (child: ReturnType<typeof spawn>) => Promise<void> | void) {
-  const child = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
-    stdio: ["pipe", "ignore", "ignore"],
+async function withChild(
+  use: (child: ReturnType<typeof spawn>, exited: ReturnType<typeof once>) => Promise<void> | void,
+  script = "process.stdin.resume()",
+  ipc = false,
+) {
+  const child = spawn(process.execPath, ["-e", script], {
+    stdio: ipc ? ["pipe", "ignore", "inherit", "ipc"] : ["pipe", "ignore", "ignore"],
   });
   const exited = once(child, "exit");
   try {
-    await use(child);
+    await use(child, exited);
   } finally {
     child.kill();
     await exited;
@@ -102,18 +116,6 @@ function expectLegacyRefused(store: Store, source: ManagedHandoffLease, to: stri
   expect(() => store.retarget(source, to, action)).toThrow("incompatible");
 }
 
-function withLegacyDestination(
-  databasePath: string,
-  to: string,
-  payload: string,
-  inspect: (db: DatabaseSync) => void,
-) {
-  return withDatabase(databasePath, (db) => {
-    insertLegacy(db, to, payload);
-    inspect(db);
-  });
-}
-
 function fixture() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "retarget-")));
   scratch.push(root);
@@ -137,8 +139,7 @@ function fixture() {
   // Exercise the transaction's observation window using real owner operations.
   const racing = (beforeBegin: () => void) => {
     let pending: (() => void) | undefined = beforeBegin;
-    vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-      const db = openDatabase(...args);
+    observeDatabase((db) => {
       const exec = db.exec.bind(db);
       db.exec = (sql) => {
         if (sql === "BEGIN IMMEDIATE" && pending) {
@@ -148,7 +149,6 @@ function fixture() {
         }
         return exec(sql);
       };
-      return db;
     });
     return createStore(options);
   };
@@ -185,6 +185,11 @@ if(!running)throw new Error('activation failed');child.send(running);
     expect(closed.action).toMatchObject({ phase: uncertain ? "uncertain" : "closed" });
     return closed;
   };
+  const legacy = (payload = legacyPayload()) => {
+    const db = database(options.databasePath);
+    insertLegacy(db, to, payload);
+    return db;
+  };
   return {
     from,
     to,
@@ -194,6 +199,7 @@ if(!running)throw new Error('activation failed');child.send(running);
     closedDestination,
     options,
     stagedOptions,
+    legacy,
   };
 }
 
@@ -236,48 +242,46 @@ unix.each(["failed", "inactive"])(
   },
 );
 
-unix.each(["changed realpath", "closed destination"])(
+unix.each(["changed realpath", "closed destination", "same root"])(
   "retargets %s, preserving its helper",
   (mode) => {
     const { from, to, store, source, closedDestination } = fixture();
     if (mode === "changed realpath") {
       fs.rmdirSync(from);
       fs.symlinkSync(to, from, "dir");
-    } else {
+    } else if (mode === "closed destination") {
       closedDestination();
     }
-    const moved = store.retarget(source, to, action);
+    const target = mode === "same root" ? from : to;
+    const moved = store.retarget(source, target, action);
     assert(moved?.kind === "acquired", "retarget refused");
-    expect(store.read(from)).toEqual({ kind: "absent" });
+    if (mode !== "same root") {
+      expect(store.read(from)).toEqual({ kind: "absent" });
+    }
     expect(moved.lease).toMatchObject({
-      key: to,
+      key: target,
       owner: source.owner,
       helper: source.helper,
       executor: source.helper,
       action,
     });
-    expect(store.current(source)).toBe(false);
+    if (mode !== "same root") {
+      expect(store.current(source)).toBe(false);
+    }
     expect(store.current(moved.lease)).toBe(true);
-    expect(store.read(to)).toMatchObject({ kind: "current", lease: moved.lease });
+    expect(store.read(target)).toMatchObject({ kind: "current", lease: moved.lease });
+    if (mode === "same root") {
+      expect(moved.lease.updatedAt).toBeGreaterThan(source.updatedAt);
+    }
   },
 );
 
-unix("keeps same-root transition in the existing binding flow", () => {
-  const { from, store, source } = fixture();
-  const moved = store.retarget(source, from, action);
-  assert(moved?.kind === "acquired", "retarget refused");
-  expect(moved.lease.key).toBe(from);
-  expect(moved.lease.updatedAt).toBeGreaterThan(source.updatedAt);
-  expect(store.current(moved.lease)).toBe(true);
-});
-
-unix("preserves the original error when canonical rollback closes the operation's handle", () => {
+unix("preserves commit errors across rollback and closes its own handle", () => {
   const { from, to, store, source, options } = fixture();
   const failure = new Error("fixture commit failed");
   let damaged: DatabaseSync | undefined;
-  const opener = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    const db = openDatabase(...args);
-    if (!args[1]?.readOnly) {
+  const opener = observeDatabase((db, readOnly) => {
+    if (!readOnly) {
       damaged = db;
       const exec = db.exec.bind(db);
       db.exec = (sql) => {
@@ -290,7 +294,6 @@ unix("preserves the original error when canonical rollback closes the operation'
         exec(sql);
       };
     }
-    return db;
   });
   expect(() => store.retarget(source, to, action)).toThrow(failure);
   expect(damaged?.isOpen).toBe(false);
@@ -298,21 +301,16 @@ unix("preserves the original error when canonical rollback closes the operation'
   expect(store.read(from)).toEqual({ kind: "current", lease: source });
   expect(store.read(to)).toEqual({ kind: "absent" });
   const independent = openDatabase(options.databasePath);
-  try {
-    expect(() =>
-      store.transact(independent, () =>
-        store.transact(independent, () => {
-          throw failure;
-        }),
-      ),
-    ).toThrow(failure);
-    expect(independent.isOpen).toBe(true);
-    expect(store.transact(independent, () => "sentinel handle remains usable")).toBe(
-      "sentinel handle remains usable",
-    );
-  } finally {
-    independent.close();
-  }
+  databases.push(independent);
+  expect(() =>
+    store.transact(independent, () =>
+      store.transact(independent, () => {
+        throw failure;
+      }),
+    ),
+  ).toThrow(failure);
+  expect(independent.isOpen).toBe(true);
+  expect(store.transact(independent, () => "usable")).toBe("usable");
 });
 
 unix("refuses retarget while the update executor is still a child", async () => {
@@ -326,7 +324,7 @@ unix("refuses retarget while the update executor is still a child", async () => 
 });
 
 unix.each(["closed", "legacy"])("preserves %s destination after source loss", (mode) => {
-  const { to, store, source, racing, closedDestination, options } = fixture();
+  const { to, store, source, racing, closedDestination, legacy } = fixture();
   const check = (destination: () => unknown) => {
     const before = destination();
     let current: ManagedHandoffLease | null = null;
@@ -343,11 +341,8 @@ unix.each(["closed", "legacy"])("preserves %s destination after source loss", (m
     closedDestination();
     check(() => store.read(to));
   } else {
-    withLegacyDestination(options.databasePath, to, legacyPayload(), (db) => {
-      check(() =>
-        db.prepare("SELECT * FROM managed_update_handoffs WHERE install_root = ?").get(to),
-      );
-    });
+    const db = legacy();
+    check(() => db.prepare("SELECT * FROM managed_update_handoffs WHERE install_root = ?").get(to));
   }
 });
 
@@ -369,12 +364,11 @@ unix.each(["arrival", "generation"] as const)(
   },
 );
 
-unix("leaves source and destination unchanged when destination inspection is unreadable", () => {
+unix("preserves both roots when destination inspection fails", () => {
   const { to, store, source, options } = fixture();
   expect(store.acquire(to, "winner", { kind: "update" }).kind).toBe("acquired");
   const before = store.read(to);
-  const probe = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    const db = openDatabase(...args);
+  const probe = observeDatabase((db) => {
     const prepare = db.prepare.bind(db);
     db.prepare = (sql) => {
       const statement = prepare(sql);
@@ -391,13 +385,10 @@ unix("leaves source and destination unchanged when destination inspection is unr
         const get = statement.get.bind(statement);
         statement.get = (root) => get(requireReadableRoot(root));
         const iterate = statement.iterate.bind(statement);
-        statement.iterate = (root) => {
-          return iterate(requireReadableRoot(root));
-        };
+        statement.iterate = (root) => iterate(requireReadableRoot(root));
       }
       return statement;
     };
-    return db;
   });
   const other = createStore(options);
   try {
@@ -413,39 +404,37 @@ unix("leaves source and destination unchanged when destination inspection is unr
 unix.each(["update", "foreground", "retarget"] as const)(
   "retires a dead legacy process only at %s admission",
   (admission) => {
-    const { from, to, store, source, options } = fixture();
+    const { from, to, store, source, legacy } = fixture();
     const payload = legacyPayload(deadPid());
-    withLegacyDestination(options.databasePath, to, payload, (db) => {
-      const before = leaseRows(db);
-      expect(store.read(to)).toEqual({ kind: "unreadable", error: expect.any(Error) });
-      expect(leaseRows(db)).toEqual(before);
-      const result =
-        admission === "retarget"
-          ? store.retarget(source, to, action)
-          : store.acquire(to, "legacy-owner", admission === "update" ? update : foreground(store));
-      expect(result?.kind).toBe("acquired");
-      expect(store.read(to)).toMatchObject({ kind: "current", lease: { version: 2 } });
-      // A late stable updater/helper binding must lose its expected-payload CAS.
-      expect(
-        db
-          .prepare(
-            "UPDATE managed_update_handoffs SET payload_json = ?, updated_at = ? WHERE install_root = ? AND owner = ? AND payload_json = ?",
-          )
-          .run(payload, 2, to, "legacy-owner", payload).changes,
-      ).toBe(0);
-      expect(store.read(from)).toEqual(
-        admission === "retarget" ? { kind: "absent" } : { kind: "current", lease: source },
-      );
-    });
+    const db = legacy(payload);
+    const before = leaseRows(db);
+    expect(store.read(to)).toEqual({ kind: "unreadable", error: expect.any(Error) });
+    expect(leaseRows(db)).toEqual(before);
+    const result =
+      admission === "retarget"
+        ? store.retarget(source, to, action)
+        : store.acquire(to, "legacy-owner", admission === "update" ? update : foreground(store));
+    expect(result?.kind).toBe("acquired");
+    expect(store.read(to)).toMatchObject({ kind: "current", lease: { version: 2 } });
+    // A late stable updater/helper binding must lose its expected-payload CAS.
+    expect(
+      db
+        .prepare(
+          "UPDATE managed_update_handoffs SET payload_json = ?, updated_at = ? WHERE install_root = ? AND owner = ? AND payload_json = ?",
+        )
+        .run(payload, 2, to, "legacy-owner", payload).changes,
+    ).toBe(0);
+    expect(store.read(from)).toEqual(
+      admission === "retarget" ? { kind: "absent" } : { kind: "current", lease: source },
+    );
   },
 );
 
 unix("reclaims a legacy reused PID without granting authority to its live process", () => {
-  const { to, store, options } = fixture();
-  withLegacyDestination(options.databasePath, to, legacyPayload(), () => {
-    expect(store.acquire(to, "fresh-owner", { kind: "update" }).kind).toBe("acquired");
-    expect(() => process.kill(process.pid, 0)).not.toThrow();
-  });
+  const { to, store, legacy } = fixture();
+  legacy();
+  expect(store.acquire(to, "fresh-owner", { kind: "update" }).kind).toBe("acquired");
+  expect(() => process.kill(process.pid, 0)).not.toThrow();
 });
 
 unix.each([
@@ -456,91 +445,76 @@ unix.each([
   ["extra authority", { startIdentity: "0", action: update }],
   ["non-object", null],
 ] as const)("preserves the complete %s legacy row", (_, overrides) => {
-  const { to, store, source, options } = fixture();
+  const { to, store, source, legacy } = fixture();
   const value = overrides ? { version: 1, ...store.processIdentity(), ...overrides } : [];
-  withLegacyDestination(options.databasePath, to, JSON.stringify(value), (db) => {
-    const before = leaseRows(db);
-    expectLegacyRefused(store, source, to);
-    expect(leaseRows(db)).toEqual(before);
-  });
+  const db = legacy(JSON.stringify(value));
+  const before = leaseRows(db);
+  expectLegacyRefused(store, source, to);
+  expect(leaseRows(db)).toEqual(before);
 });
 
 unix.each(["owner", "payload_json", "updated_at"] as const)(
   "preserves a legacy %s replacement between death probe and commit",
   (column) => {
     const { to, store, source, options, racing } = fixture();
-    withDatabase(options.databasePath, (db) => {
-      const payload = legacyPayload();
-      const live = JSON.stringify({ version: 1, ...store.processIdentity() });
-      const rows = () => leaseRows(db);
-      for (const admission of ["acquire", "retarget"]) {
-        insertLegacy(db, to, payload, true);
-        let winner: ReturnType<typeof rows> = [];
-        const other = racing(() => {
-          db.prepare(`UPDATE managed_update_handoffs SET ${column} = ? WHERE install_root = ?`).run(
-            column === "owner" ? "rebound-owner" : column === "payload_json" ? live : 2,
-            to,
-          );
-          winner = rows();
-        });
-        expect(() =>
-          admission === "acquire"
-            ? other.acquire(to, "fresh-owner", { kind: "update" })
-            : other.retarget(source, to, action),
-        ).toThrow("incompatible");
-        expect(rows()).toEqual(winner);
-      }
-    });
+    const db = database(options.databasePath);
+    const payload = legacyPayload();
+    const live = JSON.stringify({ version: 1, ...store.processIdentity() });
+    const rows = () => leaseRows(db);
+    for (const admission of ["acquire", "retarget"]) {
+      insertLegacy(db, to, payload, true);
+      let winner: ReturnType<typeof rows> = [];
+      const other = racing(() => {
+        db.prepare(`UPDATE managed_update_handoffs SET ${column} = ? WHERE install_root = ?`).run(
+          column === "owner" ? "rebound-owner" : column === "payload_json" ? live : 2,
+          to,
+        );
+        winner = rows();
+      });
+      expect(() =>
+        admission === "acquire"
+          ? other.acquire(to, "fresh-owner", { kind: "update" })
+          : other.retarget(source, to, action),
+      ).toThrow("incompatible");
+      expect(rows()).toEqual(winner);
+    }
   },
 );
 
-unix("does not reclaim a legacy process when its creation identity is unknown", async () => {
-  const { to, store, source, options } = fixture();
+unix("preserves a legacy process with unknown creation identity", async () => {
+  const { to, store, source, legacy } = fixture();
   const readStart = pidIdentity.getFileLockProcessStartTime;
-  await withChild((child) =>
-    withDatabase(options.databasePath, (db) => {
-      const identity = store.processIdentity(child.pid);
-      insertLegacy(db, to, JSON.stringify({ version: 1, ...identity, startIdentity: "0" }));
-      const rows = () => leaseRows(db);
-      const before = rows();
-      const probe = vi
-        .spyOn(pidIdentity, "getFileLockProcessStartTime")
-        .mockImplementation((pid, ...args) => (pid === child.pid ? null : readStart(pid, ...args)));
-      try {
-        expectLegacyRefused(store, source, to);
-        expect(rows()).toEqual(before);
-      } finally {
-        probe.mockRestore();
-      }
-    }),
-  );
+  await withChild((child) => {
+    const identity = store.processIdentity(child.pid);
+    const db = legacy(JSON.stringify({ version: 1, ...identity, startIdentity: "0" }));
+    const rows = () => leaseRows(db);
+    const before = rows();
+    const probe = vi
+      .spyOn(pidIdentity, "getFileLockProcessStartTime")
+      .mockImplementation((pid, ...args) => (pid === child.pid ? null : readStart(pid, ...args)));
+    try {
+      expectLegacyRefused(store, source, to);
+      expect(rows()).toEqual(before);
+    } finally {
+      probe.mockRestore();
+    }
+  });
 });
 
-unix(
-  "keeps a closed v2 generation occupied while its actors live and preserves late revoke",
-  async () => {
-    const { to, store, source, stagedOptions } = fixture();
-    const acquired = store.acquire(to, "closing-owner", foreground(store));
-    assert(acquired.kind === "acquired", "fixture busy");
-    const runtimeEntry = path.join(path.dirname(to), "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
-    const child = spawn(
-      process.execPath,
-      [
-        "-e",
-        `
+unix("preserves live closed-v2 actors and late revocation", async () => {
+  const { to, store, source, stagedOptions } = fixture();
+  const acquired = store.acquire(to, "closing-owner", foreground(store));
+  assert(acquired.kind === "acquired", "fixture busy");
+  const runtimeEntry = path.join(path.dirname(to), "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
+  const script = `
     const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process');
     const {createManagedHandoffLeaseStore}=require(${JSON.stringify(runtimeEntry)});
     const store=createManagedHandoffLeaseStore(${JSON.stringify(stagedOptions)});
     process.stdin.resume();
     process.once('message',lease=>{const closed=store.settle(lease, "closed");if(!closed)throw new Error('completion refused');process.send(closed,()=>process.disconnect());});
-  `,
-      ],
-      { stdio: ["pipe", "ignore", "inherit", "ipc"] },
-    );
-    const exited = new Promise((resolve) => {
-      child.once("exit", resolve);
-    });
-    try {
+  `;
+  await withChild(
+    async (child, exited) => {
       const completed = new Promise<ManagedHandoffLease>((resolve) => {
         child.once("message", resolve);
       });
@@ -555,75 +529,68 @@ unix(
       await exited;
       expect(store.release(closed)).toBe(true);
       expect(store.read(to)).toEqual({ kind: "absent" });
-    } finally {
-      child.stdin!.end();
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill();
-      }
-      await exited;
-    }
-  },
-);
+    },
+    script,
+    true,
+  );
+});
 
-unix(
-  "reclaims a released dead process at common managed admission and cleans up on cancel",
-  async () => {
-    const { startManagedServiceUpdateHandoff, cancelManagedServiceUpdateHandoff } =
-      await import("./update-managed-service-handoff.js");
-    const { createManagedHandoffLeaseStore, resolveManagedUpdateLeaseDatabasePath } =
-      await import("./update-managed-service-handoff-lease.js");
-    const { to } = fixture();
-    const tmpDirOwner = await import("./tmp-openclaw-dir.js");
-    // Keep the legacy fixture row away from concurrent config writers.
-    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
-      path.join(path.dirname(to), "coordinator"),
+unix("reclaims a dead legacy process at managed admission and cleans up on cancel", async () => {
+  const { startManagedServiceUpdateHandoff, cancelManagedServiceUpdateHandoff } =
+    await import("./update-managed-service-handoff.js");
+  const { createManagedHandoffLeaseStore, resolveManagedUpdateLeaseDatabasePath } =
+    await import("./update-managed-service-handoff-lease.js");
+  const { to } = fixture();
+  const tmpDirOwner = await import("./tmp-openclaw-dir.js");
+  // Keep the legacy fixture row away from concurrent config writers.
+  vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+    path.join(path.dirname(to), "coordinator"),
+  );
+  const store = createManagedHandoffLeaseStore();
+  const reserved = store.acquire(to, "legacy-owner", { kind: "update" });
+  expect(reserved.kind).toBe("acquired");
+  const pid = deadPid();
+  const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
+  try {
+    db.prepare("UPDATE managed_update_handoffs SET payload_json = ? WHERE install_root = ?").run(
+      JSON.stringify({ version: 1, pid, startIdentity: "0" }),
+      to,
     );
-    const store = createManagedHandoffLeaseStore();
-    const reserved = store.acquire(to, "legacy-owner", { kind: "update" });
-    expect(reserved.kind).toBe("acquired");
-    const pid = deadPid();
-    const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
+    const identity = {
+      kind: "managed-update-handoff" as const,
+      installRoot: to,
+      handoffId: "fresh-helper",
+    };
     try {
-      db.prepare("UPDATE managed_update_handoffs SET payload_json = ? WHERE install_root = ?").run(
-        JSON.stringify({ version: 1, pid, startIdentity: "0" }),
-        to,
-      );
-      const identity = {
-        kind: "managed-update-handoff" as const,
-        installRoot: to,
-        handoffId: "fresh-helper",
+      const started = await startManagedServiceUpdateHandoff({
+        root: to,
+        restartDrainTimeoutMs: 300_000,
+        parentPid: process.pid,
+        execPath: process.execPath,
+        argv1: "/unused/openclaw.mjs",
+        env: { OPENCLAW_STATE_DIR: to },
+        handoffId: identity.handoffId,
+        meta: {},
+      });
+      expect(started.status).toBe("started");
+      const directory = path.dirname(started.logPath);
+      scratch.push(directory);
+      const params = JSON.parse(fs.readFileSync(path.join(directory, "handoff.json"), "utf8")) as {
+        sensitivePaths: string[];
       };
-      try {
-        const started = await startManagedServiceUpdateHandoff({
-          root: to,
-          restartDrainTimeoutMs: 300_000,
-          parentPid: process.pid,
-          execPath: process.execPath,
-          argv1: "/unused/openclaw.mjs",
-          env: { OPENCLAW_STATE_DIR: to },
-          handoffId: identity.handoffId,
-          meta: {},
-        });
-        expect(started.status).toBe("started");
-        const directory = path.dirname(started.logPath);
-        scratch.push(directory);
-        const params = JSON.parse(
-          fs.readFileSync(path.join(directory, "handoff.json"), "utf8"),
-        ) as { sensitivePaths: string[] };
-        await expect(cancelManagedServiceUpdateHandoff(identity)).resolves.toBe(
-          "restored-in-process",
-        );
-        // Observe product terminal cleanup before fixture rescue removes the directories.
-        expect(params.sensitivePaths.filter((file) => fs.existsSync(file))).toEqual([]);
-        expect(
-          db.prepare("SELECT * FROM managed_update_handoffs WHERE install_root = ?").get(to),
-        ).toBeUndefined();
-      } finally {
-        await cancelManagedServiceUpdateHandoff(identity);
-      }
+      await expect(cancelManagedServiceUpdateHandoff(identity)).resolves.toBe(
+        "restored-in-process",
+      );
+      // Observe product terminal cleanup before fixture rescue removes the directories.
+      expect(params.sensitivePaths.filter((file) => fs.existsSync(file))).toEqual([]);
+      expect(
+        db.prepare("SELECT * FROM managed_update_handoffs WHERE install_root = ?").get(to),
+      ).toBeUndefined();
     } finally {
-      db.prepare("DELETE FROM managed_update_handoffs WHERE install_root = ?").run(to);
-      db.close();
+      await cancelManagedServiceUpdateHandoff(identity);
     }
-  },
-);
+  } finally {
+    db.prepare("DELETE FROM managed_update_handoffs WHERE install_root = ?").run(to);
+    db.close();
+  }
+});
