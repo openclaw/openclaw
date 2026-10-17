@@ -18,7 +18,7 @@ import pluginStyles from "../../styles/plugins.css?inline";
 import settingsStyles from "../../styles/settings.css?inline";
 
 const views = new WeakMap<Element, { unmount: () => void }>();
-function render(content: () => JSX.Element, container: HTMLDivElement) {
+function render(content: () => JSX.Element) {
   views.get(container)?.unmount();
   const view = mountSolid(content, { container });
   views.set(container, view);
@@ -96,7 +96,7 @@ function catalogProps(): PluginCatalogResultsProps {
 }
 
 function renderCatalog(props: Partial<PluginCatalogResultsProps>) {
-  render(() => PluginCatalogResults({ ...catalogProps(), ...props }), container);
+  render(() => PluginCatalogResults({ ...catalogProps(), ...props }));
 }
 
 it.each([263, 362])(
@@ -189,42 +189,36 @@ it.each([
     const artwork = (slug = "demo", name = "Demo") => (
       <PluginArtTile slug={slug} name={name} iconUrl={icon} whiteBackground={whiteBackground} />
     );
-    render(
-      () => (
-        <>
-          {whiteBackground ? (
-            artwork("official", "Official")
-          ) : (
-            <>
-              <span class="installed-plugins-card__art">{artwork()}</span>
-              {renderPluginDetailShell({
-                id: "demo",
-                name: "Demo",
-                backHref: "/plugins",
-                backLabel: "Plugins",
-                onBack: vi.fn(),
-                identity: <></>,
-                panel: <></>,
-                icon: artwork(),
-              })}
-            </>
-          )}
-          <PluginCatalogResults {...catalogProps()} result={{ items }} iconUrls={iconUrls()} />
-        </>
-      ),
-      container,
+    render(() => (
+      <>
+        {whiteBackground ? (
+          artwork("official", "Official")
+        ) : (
+          <>
+            <span class="installed-plugins-card__art">{artwork()}</span>
+            {renderPluginDetailShell({
+              id: "demo",
+              name: "Demo",
+              backHref: "/plugins",
+              backLabel: "Plugins",
+              onBack: vi.fn(),
+              identity: <></>,
+              panel: <></>,
+              icon: artwork(),
+            })}
+          </>
+        )}
+        <PluginCatalogResults {...catalogProps()} result={{ items }} iconUrls={iconUrls()} />
+      </>
+    ));
+    const images = [...container.querySelectorAll<HTMLImageElement>(".plugins-icon")].filter(
+      (image) => image.getAttribute("src") === icon,
     );
-    await Promise.all(
-      [...container.querySelectorAll<HTMLImageElement>(".plugins-icon")]
-        .filter((image) => image.getAttribute("src") === icon)
-        .map(
-          (image) =>
-            new Promise<void>((resolve, reject) => {
-              image.addEventListener("load", () => resolve(), { once: true });
-              image.addEventListener("error", reject, { once: true });
-            }),
-        ),
-    );
+    await expect
+      .poll(() =>
+        images.every((image) => image.complete && image.naturalWidth > 0 && !image.hidden),
+      )
+      .toBe(true);
     const loadedCard = container.querySelector('[data-plugin-id="loaded-artwork"]')!;
     const failedCard = container.querySelector('[data-plugin-id="failed-artwork"]')!;
     const loadedImage = loadedCard.querySelector<HTMLImageElement>(".plugins-icon")!;
@@ -253,10 +247,8 @@ it.each([
       expect(image.naturalWidth).toBe(width);
       const frameBounds = frame.getBoundingClientRect();
       const imageBounds = image.getBoundingClientRect();
-      expect(imageBounds.width).toBe(frameBounds.width);
-      expect(imageBounds.height).toBe(frameBounds.height);
-      expect(getComputedStyle(image).padding).toBe("0px");
-      expect(getComputedStyle(image).objectFit).toBe("contain");
+      expect(imageBounds).toMatchObject({ width: frameBounds.width, height: frameBounds.height });
+      expect(getComputedStyle(image)).toMatchObject({ padding: "0px", objectFit: "contain" });
       expect(getComputedStyle(image.parentElement!).borderWidth).toBe("0px");
     }
   },
@@ -297,43 +289,33 @@ it.each([390, 768, 1366, 1440])(
   "keeps the README close to expandable MCP servers beside a tall sidebar at %ipx",
   async (width) => {
     await page.viewport(width, 900);
-    render(
-      () =>
-        renderPluginDetailShell({
-          id: "mcp",
-          name: "Workspace integrations",
-          backHref: "/plugins",
-          backLabel: "Plugins",
-          onBack: vi.fn(),
-          identity: undefined,
-          panel: renderPluginContentCapabilities({
-            contracts: undefined,
-            skills: [],
-            tools: [],
-            mcpServers: ["workspace", "local"],
-            mcpServerDetails: [
-              {
-                name: "workspace",
-                url: "https://mcp.example.com/" + "long-path/".repeat(35),
-                transport: "streamable-http",
-                auth: "oauth",
-                scope: "documents.read documents.write",
-                setup: "Connect your workspace in OpenClaw.",
-              },
-            ],
-          }),
-          sidebar: (
-            <>
-              <div style={{ "min-height": "900px" }}>Release and security metadata</div>
-            </>
-          ),
-          readme: (
-            <>
-              <p>Use the workspace integration to read your documents.</p>
-            </>
-          ),
+    render(() =>
+      renderPluginDetailShell({
+        id: "mcp",
+        name: "Workspace integrations",
+        backHref: "/plugins",
+        backLabel: "Plugins",
+        onBack: vi.fn(),
+        identity: undefined,
+        panel: renderPluginContentCapabilities({
+          contracts: undefined,
+          skills: [],
+          tools: [],
+          mcpServers: ["workspace", "local"],
+          mcpServerDetails: [
+            {
+              name: "workspace",
+              url: "https://mcp.example.com/" + "long-path/".repeat(35),
+              transport: "streamable-http",
+              auth: "oauth",
+              scope: "documents.read documents.write",
+              setup: "Connect your workspace in OpenClaw.",
+            },
+          ],
         }),
-      container,
+        sidebar: <div style={{ "min-height": "900px" }}>Release and security metadata</div>,
+        readme: <p>Use the workspace integration to read your documents.</p>,
+      }),
     );
     const readme = container.querySelector<HTMLElement>(".plugin-catalog-detail__readme-section")!;
     const capabilities = container.querySelector<HTMLElement>(".plugin-capabilities")!;

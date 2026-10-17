@@ -1,3 +1,4 @@
+import type { Locator } from "playwright";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -31,8 +32,9 @@ describeControlUiE2e("plugin install button progress", () => {
       const page = await context.newPage();
       await page.clock.install();
       await page.emulateMedia({ colorScheme: "dark" });
+      const methods = [...pluginMethods, "openclaw.chat", "openclaw.chat.history"];
       const gateway = await installMockGateway(page, {
-        featureMethods: [...pluginMethods, "openclaw.chat", "openclaw.chat.history"],
+        featureMethods: methods,
         methodResponses: pluginMethodResponses(),
       });
       const installed = { ...calendarPlugin, catalogId: calendarDiscoveryPlugin.id };
@@ -63,6 +65,53 @@ describeControlUiE2e("plugin install button progress", () => {
       try {
         await page.goto(`${server.baseUrl}plugins/${calendarDiscoveryPlugin.id}`);
         const button = page.locator(".plugin-catalog-detail__install");
+        const card = page.locator(".plugin-install-progress");
+        const timer = card.locator(".plugin-install-progress__header > span");
+        const countActivities = (state = "") =>
+          card.locator(`.plugin-install-progress__activity${state && `--${state}`}`).count();
+        const pluginButton = (action: string) =>
+          page.getByRole("button", { name: `${action} Calendar Plus`, exact: true });
+        const disable = pluginButton("Disable");
+        const applying = card.getByText("Applying plugin to Gateway", { exact: true });
+        const expectFocused = async (control: Locator) => {
+          expect(await control.evaluate((element) => element === document.activeElement)).toBe(
+            true,
+          );
+        };
+        const expectTick = async () => {
+          const before = await timer.textContent();
+          await page.clock.runFor(1100);
+          await expect.poll(() => timer.textContent()).not.toBe(before);
+        };
+        const capture = async (prefix: string, widths: number[], fit?: "horizontal" | "both") => {
+          for (const width of widths) {
+            await page.setViewportSize({ width, height: 900 });
+            await button.hover();
+            if (fit) {
+              await expect
+                .poll(async () => {
+                  const box = await card.boundingBox();
+                  if (!box) {
+                    return false;
+                  }
+                  const fitsWidth = box.x >= 0 && box.x + box.width <= width;
+                  const fitsHeight = box.y >= 0 && box.y + box.height <= 900;
+                  return fitsWidth && (fit === "horizontal" || fitsHeight);
+                })
+                .toBe(true);
+            }
+            await page.screenshot({ path: `${evidence}/${prefix}-${width}.png` });
+          }
+        };
+        const resolveInstall = async () => {
+          await gateway.resolveDeferred("plugins.install", {
+            ok: true,
+            plugin: installed,
+            restartRequired: false,
+          });
+          await disable.waitFor();
+          expect(await card.count()).toBe(0);
+        };
         await button.waitFor();
         await page.screenshot({ path: `${evidence}/before.png` });
         await gateway.deferNext("plugins.install");
@@ -79,7 +128,7 @@ describeControlUiE2e("plugin install button progress", () => {
           });
         };
         await activity("resolve", "completed", "another-install");
-        expect(await page.locator(".plugin-install-progress__activity").count()).toBe(0);
+        expect(await countActivities()).toBe(0);
         for (const stage of ["resolve", "download", "extract", "files"]) {
           await activity(stage, "started");
           await activity(stage, "completed");
@@ -87,13 +136,9 @@ describeControlUiE2e("plugin install button progress", () => {
         await activity("dependencies", "started");
         await button.blur();
         await button.hover();
-        const card = page.locator(".plugin-install-progress");
         await card.waitFor({ state: "visible" });
-        expect(await card.locator(".plugin-install-progress__activity--completed").count()).toBe(4);
-        const timer = card.locator(".plugin-install-progress__header > span");
-        const initialTime = await timer.textContent();
-        await page.clock.runFor(1100);
-        await expect.poll(() => timer.textContent()).not.toBe(initialTime);
+        expect(await countActivities("completed")).toBe(4);
+        await expectTick();
         expect(await card.textContent()).toContain("Installing plugin dependencies");
         const buttonBounds = (await button.boundingBox())!;
         const cardBounds = (await card.boundingBox())!;
@@ -110,77 +155,47 @@ describeControlUiE2e("plugin install button progress", () => {
         expect(await card.isVisible()).toBe(true);
         const outsideControl = page.locator(".plugins-settings-breadcrumb__parent");
         await outsideControl.focus();
-        expect(await outsideControl.evaluate((element) => element === document.activeElement)).toBe(
-          true,
-        );
+        await expectFocused(outsideControl);
         expect(await card.isVisible()).toBe(true);
         await page.keyboard.press("Escape");
         await card.waitFor({ state: "hidden" });
-        expect(await button.evaluate((element) => element === document.activeElement)).toBe(true);
+        await expectFocused(button);
         expect(await button.getAttribute("aria-expanded")).toBe("false");
         expect(await page.locator(".plugin-catalog-detail").count()).toBe(1);
         await button.blur();
         await button.focus();
         await card.waitFor({ state: "visible" });
-        for (const width of [1440, 768, 390]) {
-          await page.setViewportSize({ width, height: 900 });
-          await button.hover();
-          await expect
-            .poll(async () => {
-              const box = await card.boundingBox();
-              return Boolean(box && box.x >= 0 && box.x + box.width <= width);
-            })
-            .toBe(true);
-          await page.screenshot({ path: `${evidence}/progress-${width}.png` });
-        }
+        await capture("progress", [1440, 768, 390], "horizontal");
         await page.keyboard.press("Escape");
         await button.tap();
         await card.waitFor({ state: "visible" });
         expect((await gateway.getRequests("plugins.install")).length).toBe(1);
         await activity("dependencies", outcome === "failure" ? "failed" : "completed");
         if (outcome !== "failure") {
-          expect(await card.locator(".plugin-install-progress__activity--started").count()).toBe(0);
+          expect(await countActivities("started")).toBe(0);
           await activity("runtime", "started");
-          await card.getByText("Applying plugin to Gateway", { exact: true }).waitFor();
-          expect(await card.locator(".plugin-install-progress__activity--completed").count()).toBe(
-            5,
-          );
-          const applyingAt = await timer.textContent();
-          await page.clock.runFor(1100);
-          await expect.poll(() => timer.textContent()).not.toBe(applyingAt);
-          expect(await card.locator(".plugin-install-progress__activity--started").count()).toBe(1);
+          await applying.waitFor();
+          expect(await countActivities("completed")).toBe(5);
+          await expectTick();
+          expect(await countActivities("started")).toBe(1);
           expect(await button.textContent()).toContain("Installing");
           if (outcome === "success") {
             const inspections = (await gateway.getRequests("plugins.inspect")).length;
             await publishInstalled();
             await gateway.setMethodResponse("plugins.uiDescriptors", {
               ...enabledWorkboardCapabilities(),
-              methods: [...pluginMethods, "openclaw.chat", "openclaw.chat.history"],
+              methods,
               controlUiTabs: [],
             });
             await gateway.emitGatewayEvent("plugins.changed", { generation: 1 });
             await gateway.waitForRequest("plugins.inspect", { after: inspections });
             expect(await button.textContent()).toContain("Installing");
             expect(await card.isVisible()).toBe(true);
-            expect(
-              await card.getByText("Applying plugin to Gateway", { exact: true }).count(),
-            ).toBe(1);
-            expect(
-              await page
-                .getByRole("button", { name: "Disable Calendar Plus", exact: true })
-                .count(),
-            ).toBe(0);
-            expect(
-              await page
-                .getByRole("button", { name: "Uninstall Calendar Plus", exact: true })
-                .count(),
-            ).toBe(0);
+            expect(await applying.count()).toBe(1);
+            expect(await disable.count()).toBe(0);
+            expect(await pluginButton("Uninstall").count()).toBe(0);
           }
-          for (const width of [1440, 390]) {
-            await page.setViewportSize({ width, height: 900 });
-            await button.hover();
-            await page.screenshot({ path: `${evidence}/runtime-${width}.png` });
-          }
+          await capture("runtime", [1440, 390]);
           await activity("runtime", outcome === "runtime-failure" ? "failed" : "completed");
         }
         if (outcome !== "success") {
@@ -192,9 +207,7 @@ describeControlUiE2e("plugin install button progress", () => {
               : { details: { persistence: { operation: "install", pluginId: installed.id } } }),
           });
           await page.getByText(failure[outcome].label, { exact: true }).waitFor();
-          expect(await card.locator(".plugin-install-progress__activity--completed").count()).toBe(
-            failure[outcome].completed,
-          );
+          expect(await countActivities("completed")).toBe(failure[outcome].completed);
           await page.screenshot({ path: `${evidence}/failure-state.png` });
           expect((await button.textContent())?.trim()).toBe(
             outcome === "failure" ? "Retry install" : "View status",
@@ -205,28 +218,7 @@ describeControlUiE2e("plugin install button progress", () => {
           expect(await timer.textContent()).toBe(stoppedAt);
           expect(await page.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
           await page.screenshot({ path: `${evidence}/after.png` });
-          const captureFailure = async (expanded: boolean) => {
-            for (const width of [1440, 1366, 768, 390]) {
-              await page.setViewportSize({ width, height: 900 });
-              await button.hover();
-              await expect
-                .poll(async () => {
-                  const box = await card.boundingBox();
-                  return Boolean(
-                    box &&
-                    box.x >= 0 &&
-                    box.y >= 0 &&
-                    box.x + box.width <= width &&
-                    box.y + box.height <= 900,
-                  );
-                })
-                .toBe(true);
-              await page.screenshot({
-                path: `${evidence}/failure-${expanded ? "expanded-" : ""}${width}.png`,
-              });
-            }
-          };
-          await captureFailure(false);
+          await capture("failure", [1440, 1366, 768, 390], "both");
           if (outcome === "failure") {
             expect(await card.textContent()).toContain("Plugin not installed");
             expect(await card.textContent()).not.toContain(
@@ -236,15 +228,11 @@ describeControlUiE2e("plugin install button progress", () => {
               await page.locator('.plugins-row-message[role="alert"]').textContent(),
             ).toContain("This attempt did not install the plugin.");
             await card.getByText("Failure details", { exact: true }).click();
-            await card
-              .getByText("Registry refused the dependency download.", { exact: true })
-              .waitFor();
-            await captureFailure(true);
+            await card.getByText(failure[outcome].message, { exact: true }).waitFor();
+            await capture("failure-expanded", [1440, 1366, 768, 390], "both");
             const failureSummary = card.locator(".plugin-install-progress__failure > summary");
             await failureSummary.focus();
-            expect(
-              await failureSummary.evaluate((element) => element === document.activeElement),
-            ).toBe(true);
+            await expectFocused(failureSummary);
             await page.keyboard.press("Escape");
             await card.waitFor({ state: "hidden" });
             await expect.poll(() => button.getAttribute("aria-expanded")).toBe("false");
@@ -255,17 +243,9 @@ describeControlUiE2e("plugin install button progress", () => {
             await button.click();
             await gateway.waitForRequest("plugins.install", { after: 1 });
             expect(await button.textContent()).toContain("Installing");
-            expect(await card.locator(".plugin-install-progress__activity").count()).toBe(0);
+            expect(await countActivities()).toBe(0);
             await publishInstalled();
-            await gateway.resolveDeferred("plugins.install", {
-              ok: true,
-              plugin: installed,
-              restartRequired: false,
-            });
-            await page
-              .getByRole("button", { name: "Disable Calendar Plus", exact: true })
-              .waitFor();
-            expect(await page.locator(".plugin-install-progress").count()).toBe(0);
+            await resolveInstall();
             expect((await gateway.getRequests("plugins.install")).length).toBe(2);
             await page.screenshot({ path: `${evidence}/retry-success.png` });
           } else {
@@ -273,21 +253,13 @@ describeControlUiE2e("plugin install button progress", () => {
             expect((await gateway.getRequests("plugins.install")).length).toBe(1);
           }
         } else {
-          expect(await card.locator(".plugin-install-progress__activity--started").count()).toBe(0);
+          expect(await countActivities("started")).toBe(0);
           expect(await button.textContent()).toContain("Installing");
-          const waitingAt = await timer.textContent();
-          await page.clock.runFor(1100);
-          await expect.poll(() => timer.textContent()).not.toBe(waitingAt);
+          await expectTick();
           await publishInstalled();
           await gateway.deferNext("config.get");
-          await gateway.resolveDeferred("plugins.install", {
-            ok: true,
-            plugin: installed,
-            restartRequired: false,
-          });
           // Final success changes actions before the unrelated config refresh can finish.
-          await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
-          expect(await page.locator(".plugin-install-progress").count()).toBe(0);
+          await resolveInstall();
           expect(await page.locator(".plugin-catalog-detail__actions").textContent()).toContain(
             "Ask OpenClaw",
           );

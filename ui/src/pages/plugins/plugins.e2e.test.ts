@@ -1,6 +1,7 @@
 // Control UI tests cover plugin catalog browsing and lifecycle mutations.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { pauseVirtualClock, reconnectMockGateway } from "../../test-helpers/control-ui-e2e.ts";
@@ -27,8 +28,13 @@ import {
   teardownPluginsE2e,
 } from "./plugins.e2e.test-support.ts";
 
+function role(root: Page | Locator, kind: Parameters<Page["getByRole"]>[0], name: string) {
+  return root.getByRole(kind, { name, exact: true });
+}
+
 async function setup(
-  { methodResponses, ...options }: NonNullable<Parameters<typeof installMockGateway>[1]> = {},
+  methodResponses: Record<string, unknown> = {},
+  options: NonNullable<Parameters<typeof installMockGateway>[1]> = {},
   viewport?: Parameters<typeof newContext>[0],
 ) {
   const context = await newContext(viewport);
@@ -39,7 +45,18 @@ async function setup(
     methodResponses: { ...pluginMethodResponses(), ...methodResponses },
     ...options,
   });
-  return { page, gateway };
+  return { page, gateway, context };
+}
+
+async function expectBrowse(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  params: Record<string, unknown>,
+) {
+  const request = await gateway.waitForRequest("plugins.catalog.browse", {
+    after: 0,
+    match: params,
+  });
+  expect(request.params).toEqual(params);
 }
 
 describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
@@ -47,8 +64,12 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
   afterAll(teardownPluginsE2e);
 
   it("keeps category navigation while a search replaces pending category results", async () => {
-    const context = await newContext();
-    const page = await context.newPage();
+    const { context, page, gateway } = await setup(
+      {},
+      {
+        presenceUsers: [{ self: true, id: "catalog-proof", name: "Catalog Proof" }],
+      },
+    );
     const origin = new URL(server.baseUrl).origin;
     const blockedRequests: string[] = [];
     await context.route("**/*", async (route) => {
@@ -60,90 +81,75 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         await route.abort();
       }
     });
-    const gateway = await installMockGateway(page, {
-      featureMethods: pluginMethods,
-      presenceUsers: [{ self: true, id: "catalog-proof", name: "Catalog Proof" }],
-      methodResponses: pluginMethodResponses(),
-    });
     const proofDir =
       process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
         ? createControlUiE2eArtifactDir("plugin-search-category-navigation")
         : undefined;
-    try {
-      await page.goto(`${server.baseUrl}plugins`);
-      const catalog = page.getByRole("region", { name: "Explore plugins" });
-      const chips = catalog.locator(".plugin-catalog-chip");
-      const labels = async () => (await chips.allTextContents()).map((label) => label.trim());
-      await expect.poll(labels).toContain("Channels");
-      const categories = await labels();
-      await page.clock.install();
-      await pauseVirtualClock(page);
-      await gateway.deferNext("plugins.catalog.browse", { category: "channels" });
-      await gateway.deferNext("plugins.catalog.browse", { query: "matrix" });
-      await catalog.getByRole("button", { name: "Channels", exact: true }).click();
-      await gateway.waitForRequest("plugins.catalog.browse", { match: { category: "channels" } });
-      await catalog.getByRole("searchbox", { name: "Search plugins" }).fill("matrix");
-      await gateway.resolveDeferred("plugins.catalog.browse", { items: [matrixDiscoveryPlugin] });
-      const cards = catalog.locator(".plugin-catalog-grid--results .plugin-catalog-card");
-      // The older category response must not replace loading for the newer search intent.
-      const loading = catalog.getByRole("status", {
-        name: "Loading ClawHub plugins…",
-        exact: true,
+    await page.goto(`${server.baseUrl}plugins`);
+    const catalog = page.getByRole("region", { name: "Explore plugins" });
+    const chips = catalog.locator(".plugin-catalog-chip");
+    const labels = async () => (await chips.allTextContents()).map((label) => label.trim());
+    await expect.poll(labels).toContain("Channels");
+    const categories = await labels();
+    await page.clock.install();
+    await pauseVirtualClock(page);
+    await gateway.deferNext("plugins.catalog.browse", { category: "channels" });
+    await gateway.deferNext("plugins.catalog.browse", { query: "matrix" });
+    await role(catalog, "button", "Channels").click();
+    await gateway.waitForRequest("plugins.catalog.browse", { match: { category: "channels" } });
+    await catalog.getByRole("searchbox", { name: "Search plugins" }).fill("matrix");
+    await gateway.resolveDeferred("plugins.catalog.browse", { items: [matrixDiscoveryPlugin] });
+    const cards = catalog.locator(".plugin-catalog-grid--results .plugin-catalog-card");
+    // The older category response must not replace loading for the newer search intent.
+    const loading = role(catalog, "status", "Loading ClawHub plugins…");
+    await loading.waitFor();
+    expect(await cards.count()).toBe(0);
+    expect(await gateway.getRequests("plugins.catalog.browse", { query: "matrix" })).toEqual([]);
+    const duringDebounce = await labels();
+    await page.clock.runFor(250);
+    const searchRequest = await gateway.waitForRequest("plugins.catalog.browse", {
+      match: { query: "matrix" },
+    });
+    expect(searchRequest.params).toEqual({
+      intent: "all",
+      query: "matrix",
+      pageSize: 100,
+      searchSource: "openclaw-control-ui",
+    });
+    expect(await loading.isVisible()).toBe(true);
+    expect(await labels()).toEqual(categories);
+    await gateway.resolveDeferred("plugins.catalog.browse", {
+      items: [
+        {
+          ...matrixDiscoveryPlugin,
+          catalog: { ...matrixDiscoveryPlugin.catalog, name: "Matrix search result" },
+        },
+      ],
+    });
+    await role(catalog, "link", "Matrix search result").waitFor();
+    expect(await cards.count()).toBe(1);
+    expect(await loading.count()).toBe(0);
+    if (proofDir) {
+      expect(await page.locator(".community-invite-card").count()).toBe(0);
+      await page.screenshot({
+        animations: "disabled",
+        fullPage: true,
+        path: path.join(proofDir, "search-navigation.png"),
       });
-      await loading.waitFor();
-      expect(await cards.count()).toBe(0);
-      expect(await gateway.getRequests("plugins.catalog.browse", { query: "matrix" })).toEqual([]);
-      const duringDebounce = await labels();
-      await page.clock.runFor(250);
-      const searchRequest = await gateway.waitForRequest("plugins.catalog.browse", {
-        match: { query: "matrix" },
-      });
-      expect(searchRequest.params).toEqual({
-        intent: "all",
-        query: "matrix",
-        pageSize: 100,
-        searchSource: "openclaw-control-ui",
-      });
-      expect(await loading.isVisible()).toBe(true);
-      expect(await labels()).toEqual(categories);
-      await gateway.resolveDeferred("plugins.catalog.browse", {
-        items: [
-          {
-            ...matrixDiscoveryPlugin,
-            catalog: { ...matrixDiscoveryPlugin.catalog, name: "Matrix search result" },
-          },
-        ],
-      });
-      await catalog.getByRole("link", { name: "Matrix search result", exact: true }).waitFor();
-      expect(await cards.count()).toBe(1);
-      expect(await loading.count()).toBe(0);
-      if (proofDir) {
-        expect(await page.locator(".community-invite-card").count()).toBe(0);
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(proofDir, "search-navigation.png"),
-        });
-        await writeFile(
-          path.join(proofDir, "search-navigation.json"),
-          JSON.stringify(
-            {
-              categories,
-              duringDebounce,
-              afterSearch: await labels(),
-              blockedRequests,
-              requests: await gateway.getRequests("plugins.catalog.browse"),
-            },
-            null,
-            2,
-          ),
-        );
-      }
-      expect.soft(duringDebounce).toEqual(categories);
-      expect.soft(await labels()).toEqual(categories);
-    } finally {
-      await context.close();
+      const proof = {
+        categories,
+        duringDebounce,
+        afterSearch: await labels(),
+        blockedRequests,
+        requests: await gateway.getRequests("plugins.catalog.browse"),
+      };
+      await writeFile(
+        path.join(proofDir, "search-navigation.json"),
+        JSON.stringify(proof, null, 2),
+      );
     }
+    expect.soft(duringDebounce).toEqual(categories);
+    expect.soft(await labels()).toEqual(categories);
   });
 
   it("renders unified discovery with focused search, category sections, and settings navigation", async () => {
@@ -289,17 +295,17 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
   it("installs directly and uses Settings for required configuration", async () => {
     const installed = { ...matrixNeedsSetup, catalogId: matrixDiscoveryPlugin.id };
-    const { page, gateway } = await setup({
-      featureMethods: [...pluginMethods, "config.schema"],
-      methodResponses: {
+    const { page, gateway } = await setup(
+      {
         "config.schema": matrixConfigSchema,
         "plugins.inspect": { ...calendarInspection, plugin: installed },
       },
-    });
+      { featureMethods: [...pluginMethods, "config.schema"] },
+    );
     await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
     const connects = (await gateway.getRequests("connect")).length;
     await gateway.deferNext("plugins.install");
-    await page.getByRole("button", { name: "Install", exact: true }).click();
+    await role(page, "button", "Install").click();
     expect((await gateway.waitForRequest("plugins.install")).params).toEqual({
       source: "clawhub",
       packageName: "matrix",
@@ -315,15 +321,12 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       plugin: installed,
       restartRequired: false,
     });
-    const enable = page.getByRole("button", { name: "Enable Matrix", exact: true });
+    const enable = role(page, "button", "Enable Matrix");
     await enable.waitFor();
     expect(await enable.getAttribute("aria-disabled")).toBe("true");
     await captureScreenshot(page, "direct-install-needs-settings.png");
-    await page
-      .locator(".plugin-catalog-detail__actions")
-      .getByRole("link", { name: "Settings", exact: true })
-      .click();
-    await page.getByRole("textbox", { name: "Homeserver", exact: true }).waitFor();
+    await role(page.locator(".plugin-catalog-detail__actions"), "link", "Settings").click();
+    await role(page, "textbox", "Homeserver").waitFor();
     expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
     expect(await gateway.getRequests("config.set")).toHaveLength(0);
     expect(await gateway.getRequests("connect")).toHaveLength(connects);
@@ -333,9 +336,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
   it("preserves a deliberately disabled install returned by the Gateway", async () => {
     const installed = { ...localCalendarDisabled, catalogId: localOnlyDiscoveryPlugin.id };
     const { page, gateway } = await setup({
-      methodResponses: {
-        "plugins.install": { ok: true, plugin: installed, restartRequired: false },
-      },
+      "plugins.install": { ok: true, plugin: installed, restartRequired: false },
     });
     await page.goto(`${server.baseUrl}plugins/${localOnlyDiscoveryPlugin.id}`);
     await page.getByRole("heading", { level: 1, name: "Local Calendar", exact: true }).waitFor();
@@ -344,12 +345,12 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       "plugins.list",
       inventory([...initialInventory.plugins, installed]),
     );
-    await page.getByRole("button", { name: "Install", exact: true }).click();
+    await role(page, "button", "Install").click();
     expect((await gateway.waitForRequest("plugins.install")).params).toEqual({
       source: "official",
       pluginId: "local-calendar",
     });
-    await page.getByRole("button", { name: "Enable Local Calendar", exact: true }).waitFor();
+    await role(page, "button", "Enable Local Calendar").waitFor();
     expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
     expect(await gateway.getRequests("connect")).toHaveLength(connects);
     expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
@@ -357,19 +358,17 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
   it("keeps a failed installation visible and retryable", async () => {
     const { page, gateway } = await setup({
-      methodResponses: {
-        "plugins.install": {
-          __mockError: {
-            code: "UNAVAILABLE",
-            message: "ClawHub package download failed; check the network and retry.",
-          },
+      "plugins.install": {
+        __mockError: {
+          code: "UNAVAILABLE",
+          message: "ClawHub package download failed; check the network and retry.",
         },
       },
     });
 
     await page.goto(`${server.baseUrl}plugins`);
     const card = page.locator(`[data-plugin-id="${matrixDiscoveryPlugin.id}"]`).first();
-    await card.getByRole("button", { name: "Install Matrix", exact: true }).click();
+    await role(card, "button", "Install Matrix").click();
     const failure = card.locator('.plugins-row-message[role="alert"]');
     await failure
       .getByText("ClawHub package download failed; check the network and retry.")
@@ -384,11 +383,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     const browseRequests = (await gateway.getRequests("plugins.catalog.browse")).length;
     await gateway.deferNext("plugins.list");
     await gateway.deferNext("plugins.catalog.browse");
-    await card.getByRole("button", { name: "Retry install of Matrix", exact: true }).click();
-    const status = card.getByRole("button", {
-      name: "View status of Matrix installation",
-      exact: true,
-    });
+    await role(card, "button", "Retry install of Matrix").click();
+    const status = role(card, "button", "View status of Matrix installation");
     await status.click();
     await page.mouse.move(1400, 800);
     await card.getByText("Installation saved", { exact: true }).waitFor();
@@ -402,7 +398,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
           : plugin,
       ),
     });
-    await card.getByRole("link", { name: "Matrix refreshed", exact: true }).waitFor();
+    await role(card, "link", "Matrix refreshed").waitFor();
     if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
       const proof = createControlUiE2eArtifactDir("plugin-status-popup");
       await page.screenshot({ path: `${proof}/status.png` });
@@ -416,7 +412,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
     await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
     await gateway.deferNext("plugins.install");
-    await page.getByRole("button", { name: "Install", exact: true }).click();
+    await role(page, "button", "Install").click();
     await gateway.waitForRequest("plugins.install");
     await gateway.setMethodResponse(
       "plugins.list",
@@ -426,7 +422,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       ]),
     );
     await reconnectMockGateway(page, gateway);
-    await page.getByRole("button", { name: "Disable Matrix", exact: true }).waitFor();
+    await role(page, "button", "Disable Matrix").waitFor();
     expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
     expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
     expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
@@ -441,7 +437,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     expect(await row.getByText("Local Calendar", { exact: true }).count()).toBe(1);
     expect(await row.getByText(/downloads/u).count()).toBe(0);
 
-    await row.getByRole("link", { name: "Local Calendar", exact: true }).click();
+    await role(row, "link", "Local Calendar").click();
     await page.getByRole("heading", { level: 1, name: "Local Calendar", exact: true }).waitFor();
     expect(
       (await gateway.getRequests("plugins.catalog.get")).map((request) => request.params),
@@ -456,12 +452,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
   it("keeps local-only rows visible beside an isolated ClawHub outage", async () => {
     const { page } = await setup({
-      methodResponses: {
-        "plugins.catalog.browse": {
-          items: [localOnlyDiscoveryPlugin],
-          remoteError:
-            "ClawHub is unavailable: service unavailable. Local plugins remain available.",
-        },
+      "plugins.catalog.browse": {
+        items: [localOnlyDiscoveryPlugin],
+        remoteError: "ClawHub is unavailable: service unavailable. Local plugins remain available.",
       },
     });
 
@@ -482,7 +475,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
     await page.goto(`${server.baseUrl}plugins`);
     const explore = page.getByRole("region", { name: "Explore plugins" });
-    await explore.getByRole("heading", { name: "Featured", exact: true }).waitFor();
+    await role(explore, "heading", "Featured").waitFor();
     const categoryLabels = await explore.locator(".plugin-catalog-chips button").allTextContents();
     expect(categoryLabels.map((label) => label.trim()).join(" | ")).toBe(
       "All | Featured | Trending | Channels | Models | Agent runtimes | Memory | Context | Voice | Web | Computer use | Media | Security | Integrations | Developer tools | Infrastructure | Documents & files | Inbox & collaboration | Productivity | Scheduling | Finance & payments | Sales & marketing | Data & analytics | Agent orchestration | Research",
@@ -502,27 +495,18 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     expect(await matrixCard.getByText(/downloads/u).count()).toBe(0);
     expect(await matrixCard.getByRole("button", { name: "Install Matrix" }).count()).toBe(1);
 
-    await explore.getByRole("button", { name: "Documents & files", exact: true }).click();
-    // Match full results, excluding section previews, then select the first page.
-    const categoryRequest = await gateway.waitForRequest("plugins.catalog.browse", {
-      after: 0,
-      match: { intent: "all", category: "documents-files", pageSize: 100 },
-    });
-    expect(categoryRequest.params).toEqual({
+    await role(explore, "button", "Documents & files").click();
+    await expectBrowse(gateway, {
       intent: "all",
       category: "documents-files",
       pageSize: 100,
     });
     expect(await explore.locator(".plugin-catalog-section").count()).toBe(0);
-    await explore.getByRole("link", { name: "Matrix", exact: true }).waitFor();
+    await role(explore, "link", "Matrix").waitFor();
 
     const search = explore.getByRole("searchbox", { name: "Search plugins" });
     await search.fill("matrix");
-    const searchRequest = await gateway.waitForRequest("plugins.catalog.browse", {
-      after: 0,
-      match: { intent: "all", query: "matrix", pageSize: 100 },
-    });
-    expect(searchRequest.params).toEqual({
+    await expectBrowse(gateway, {
       intent: "all",
       query: "matrix",
       pageSize: 100,
@@ -540,13 +524,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
     await page.goto(`${server.baseUrl}plugins`);
     await page.setViewportSize({ height: 1024, width: 768 });
-    await explore.getByRole("button", { name: "Scheduling", exact: true }).click();
-    // The fresh page may still issue its initial unfiltered browse request.
-    const mobileCategoryRequest = await gateway.waitForRequest("plugins.catalog.browse", {
-      after: 0,
-      match: { intent: "all", category: "scheduling", pageSize: 100 },
-    });
-    expect(mobileCategoryRequest.params).toEqual({
+    await role(explore, "button", "Scheduling").click();
+    await expectBrowse(gateway, {
       intent: "all",
       category: "scheduling",
       pageSize: 100,
@@ -594,24 +573,23 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     };
     const { page, gateway } = await setup(
       {
-        methodResponses: {
-          "plugins.catalog.browse": {
-            cases: [
-              {
-                match: { query: "uncategorized" },
-                response: { items: uncategorized },
+        "plugins.catalog.browse": {
+          cases: [
+            {
+              match: { query: "uncategorized" },
+              response: { items: uncategorized },
+            },
+            {
+              match: { intent: "all", pageSize: 100 },
+              response: {
+                items: [...featuredOverviewItems, ...uncategorized, other],
+                categories: discoveryResult.categories,
               },
-              {
-                match: { intent: "all", pageSize: 100 },
-                response: {
-                  items: [...featuredOverviewItems, ...uncategorized, other],
-                  categories: discoveryResult.categories,
-                },
-              },
-            ],
-          },
+            },
+          ],
         },
       },
+      {},
       { height: 852, width: 393 },
     );
 
@@ -621,7 +599,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     await featuredSection.waitFor();
     expect(await explore.locator('[data-catalog-section="uncategorized"]').count()).toBe(0);
     expect(await explore.locator('[data-catalog-section="other"]').count()).toBe(0);
-    expect(await explore.getByRole("button", { name: "Other", exact: true }).count()).toBe(0);
+    expect(await role(explore, "button", "Other").count()).toBe(0);
 
     const visibleCardCount = async (selector: string) =>
       page
@@ -636,17 +614,13 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
     await explore.getByRole("searchbox", { name: "Search plugins" }).fill("uncategorized");
     await gateway.waitForRequest("plugins.catalog.browse", { match: { query: "uncategorized" } });
-    await explore.getByRole("link", { name: "Uncategorized 3", exact: true }).waitFor();
+    await role(explore, "link", "Uncategorized 3").waitFor();
     expect(await visibleCardCount(".plugin-catalog-grid--results .plugin-catalog-card")).toBe(3);
     expect(await explore.locator(".plugin-catalog-section").count()).toBe(0);
   });
 
   it("keeps plugin mutations unavailable to read-only operators", async () => {
-    const { page, gateway } = await setup({
-      methodResponses: {
-        connect: readOnlyConnectResponse(),
-      },
-    });
+    const { page, gateway } = await setup({ connect: readOnlyConnectResponse() });
 
     await page.goto(`${server.baseUrl}plugins`);
     const availableCard = page.locator(`[data-plugin-id="${localOnlyDiscoveryPlugin.id}"]`).first();
@@ -658,14 +632,14 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     expect(await gateway.getRequests("plugins.setEnabled")).toEqual([]);
     expect(await gateway.getRequests("plugins.install")).toEqual([]);
     await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
-    const install = page.getByRole("button", { name: "Install", exact: true });
+    const install = role(page, "button", "Install");
     await install.waitFor();
     expect(await install.isDisabled()).toBe(true);
     await install.evaluate((button: HTMLButtonElement) => button.click());
     await captureScreenshot(page, "read-only-install.png");
     expect(await gateway.getRequests("plugins.install")).toEqual([]);
     await page.goto(`${server.baseUrl}plugins`);
-    await availableCard.getByRole("link", { name: "Local Calendar", exact: true }).click();
+    await role(availableCard, "link", "Local Calendar").click();
     await expect
       .poll(() => new URL(page.url()).pathname)
       .toBe(`/plugins/${localOnlyDiscoveryPlugin.id}`);
@@ -673,12 +647,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
 
   it("recovers unified discovery after a ClawHub retry", async () => {
     const { page, gateway } = await setup({
-      methodResponses: {
-        "plugins.catalog.browse": {
-          __mockError: {
-            code: "UNAVAILABLE",
-            message: "Plugin discovery is unavailable. Retry to reconnect to ClawHub.",
-          },
+      "plugins.catalog.browse": {
+        __mockError: {
+          code: "UNAVAILABLE",
+          message: "Plugin discovery is unavailable. Retry to reconnect to ClawHub.",
         },
       },
     });
@@ -693,11 +665,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
   });
 
   it("explains a successful empty ClawHub response", async () => {
-    const { page } = await setup({
-      methodResponses: {
-        "plugins.catalog.browse": { items: [] },
-      },
-    });
+    const { page } = await setup({ "plugins.catalog.browse": { items: [] } });
 
     await page.goto(`${server.baseUrl}plugins`);
     await page.getByText("No plugins found", { exact: true }).waitFor();
