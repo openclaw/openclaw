@@ -157,18 +157,14 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       const binding = runtime.publication.binding;
       return binding ? projectOwner(binding, (owner) => owner.view()) : undefined;
     });
-    const presence = projectOwner(runtime.presence, (owner) => owner.snapshot);
     const gateway = projectGateway(context.gateway);
     const theme = projectTheme(context.theme);
     // Startup attaches one host for this mounted pane's lifetime.
     const state = runtime.readState();
-    const workspace = state && projectOwner(sessionWorkspaceForHost(state), (owner) => owner.state);
-    const composerCapabilities = projectOwner(runtime.composerCapabilities, (owner) => owner);
     const realtime = createMemo(() => {
       const owner = runtime.realtimeTalk;
       return owner && projectOwner(owner, (source) => source.snapshot);
     });
-    const inputOwner = projectOwner(chatInputOwnerForContext(context), (owner) => owner.current);
     // Ordinary keystrokes stay in the composer; command intent changes the pane's submit gate.
     const controlCommand = projectOwner(
       runtime.chatState.composerDraft,
@@ -180,7 +176,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       (source) => source.read().attachments,
       Object.is,
     );
-    const questions = projectOwner(runtime.questionPromptState, (owner) => owner);
     const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
     const queuedEdit =
       state &&
@@ -189,11 +184,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         subscribe: subscribeQueuedMessageEdit,
         equality: "revision",
       });
-    const goals = state && projectOwner(chatGoalOperations(state), (owner) => owner);
-    const resources = projectOwner(runtime.activeSessionResources, (owner) => owner);
-    const discussion = projectOwner(runtime.sessionDiscussion, (owner) => owner.snapshot);
-    const transcript = projectOwner(runtime.transcript, (owner) => owner);
-    const companion = projectOwner(runtime.sessionCompanionThreads, (owner) => owner);
     const swarm = createMemo(() => {
       const hydrator = runtime.swarm.hydrator;
       return hydrator ? projectOwner(hydrator, (owner) => owner) : undefined;
@@ -240,13 +230,23 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       return stop;
     });
     const sources = [
-      runtime.context.plugins,
-      runtime.context.agents,
-      runtime.context.config,
-      runtime.context.overlays,
-      runtime.context.navigation,
-      runtime.context.placementStartup,
-      runtime.context.runtimeConfig,
+      context.plugins,
+      context.agents,
+      context.config,
+      context.overlays,
+      context.navigation,
+      context.placementStartup,
+      context.runtimeConfig,
+      runtime.presence,
+      state && sessionWorkspaceForHost(state),
+      chatInputOwnerForContext(context),
+      runtime.sessionDiscussion,
+      runtime.composerCapabilities,
+      runtime.questionPromptState,
+      state && chatGoalOperations(state),
+      runtime.activeSessionResources,
+      runtime.transcript,
+      runtime.sessionCompanionThreads,
       nativeGatewaysCapability(),
       lazySidebarElements,
     ].map((source) => source && projectOwner(source, (capability) => capability));
@@ -260,23 +260,13 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         publication()?.read();
         repository()?.read();
         parentSession.read();
-        presence.read();
         progress.read();
-        composerCapabilities.read();
         realtime()?.read();
         projects.read();
         theme.preferences.read();
-        workspace?.read();
-        goals?.read();
-        resources.read();
-        inputOwner.read();
         controlCommand.read();
         attachments.read();
-        questions.read();
         queuedEdit?.read();
-        discussion.read();
-        transcript.read();
-        companion.read();
         swarm()?.read();
         board().forEach((source) => source.read());
         i18nRevision();
