@@ -1,7 +1,3 @@
-/**
- * Tests the plugin SDK public API baseline.
- */
-
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -30,21 +26,18 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function renderSourceFixture(
-  files: Readonly<Record<string, string>>,
+  source: string | Readonly<Record<string, string>>,
   entrypoints: readonly string[] = ["fixture"],
   { symlinked = false } = {},
 ) {
+  const files = typeof source === "string" ? { "fixture.ts": source } : source;
   const repoRoot = tempDirs.make("openclaw-plugin-sdk-api-");
   const sourceDir = path.join(repoRoot, "src", "plugin-sdk");
   fs.mkdirSync(sourceDir, { recursive: true });
   fs.writeFileSync(
     path.join(repoRoot, "tsconfig.json"),
     `${JSON.stringify({
-      compilerOptions: {
-        module: "NodeNext",
-        moduleResolution: "NodeNext",
-        target: "ESNext",
-      },
+      compilerOptions: { module: "NodeNext", moduleResolution: "NodeNext", target: "ESNext" },
     })}\n`,
   );
   for (const [relativePath, content] of Object.entries(files)) {
@@ -58,6 +51,21 @@ async function renderSourceFixture(
   const alias = path.join(tempDirs.make("openclaw-plugin-sdk-api-alias-"), "checkout");
   fs.symlinkSync(repoRoot, alias, "junction");
   return renderPluginSdkApiBaseline({ repoRoot: alias, entrypoints });
+}
+
+function optionFunctions(type: string, fields: string, ...names: string[]) {
+  return [
+    `type ${type} = { ${fields} };`,
+    ...names.map((name) => `export declare function ${name}(options: ${type}): void;`),
+  ].join("\n");
+}
+
+function importedFunction(type: string, file: string, name: string) {
+  return `import type { ${type} } from "./${file}.js";\nexport declare function ${name}(value: ${type}): ${type};`;
+}
+
+function report(diff: PluginSdkApiDiff) {
+  return formatPluginSdkApiDiffReport({ baseLabel: "base", diff, headLabel: "head" });
 }
 
 function writePluginSdkInventory(repoRoot: string, entrypoints: readonly string[]): void {
@@ -177,36 +185,24 @@ describe("Plugin SDK API baseline", () => {
     );
   });
 
-  it.each([
-    [
-      "openclaw-worktree",
-      "openclaw-worktree/node_modules/.pnpm/@openclaw+fs-safe@1.0.0/node_modules/@openclaw/fs-safe/dist/secret-file.d.ts",
-      "node_modules/@openclaw/fs-safe/dist/secret-file.d.ts",
-    ],
-  ])("normalizes source paths under %s: %s", (repo, source, expected) => {
+  it("normalizes source paths under pnpm node_modules", () => {
+    const repo = path.join(path.sep, "workspace", "openclaw-worktree");
     expect(
       normalizePluginSdkApiSourcePath(
-        path.join(path.sep, "workspace", repo),
-        path.join(path.sep, "workspace", source),
+        repo,
+        path.join(
+          repo,
+          "node_modules/.pnpm/@openclaw+fs-safe@1.0.0/node_modules/@openclaw/fs-safe/dist/secret-file.d.ts",
+        ),
       ),
-    ).toBe(expected);
+    ).toBe("node_modules/@openclaw/fs-safe/dist/secret-file.d.ts");
   });
 
-  it.each([
-    {
-      tuple: "[3, 1, 2] as const",
-      warmup: "1",
-      expected: "3 | 1 | 2",
-    },
-  ])("keeps tuple-derived unions stable across unrelated type discovery", (fixture) => {
-    using baseline = createTupleAliasFixture(fixture.tuple, fixture.warmup, false);
-    using prewarmed = createTupleAliasFixture(fixture.tuple, fixture.warmup, true);
-    expect(formatPluginSdkApiTypeAlias(baseline.checker, baseline.declaration)).toBe(
-      fixture.expected,
-    );
-    expect(formatPluginSdkApiTypeAlias(prewarmed.checker, prewarmed.declaration)).toBe(
-      fixture.expected,
-    );
+  it("keeps tuple-derived unions stable across unrelated type discovery", () => {
+    using baseline = createTupleAliasFixture("[3, 1, 2] as const", "1", false);
+    using prewarmed = createTupleAliasFixture("[3, 1, 2] as const", "1", true);
+    expect(formatPluginSdkApiTypeAlias(baseline.checker, baseline.declaration)).toBe("3 | 1 | 2");
+    expect(formatPluginSdkApiTypeAlias(prewarmed.checker, prewarmed.declaration)).toBe("3 | 1 | 2");
   });
 
   it("preserves empty tuple defaults in public function signatures", async () => {
@@ -235,9 +231,7 @@ describe("Plugin SDK API baseline", () => {
     expect(await readPluginSdkApiEntrypoints(baseRoot)).toEqual(["fixture"]);
     expect(await readPluginSdkApiEntrypoints(headRoot)).toEqual(["fixture", "added"]);
 
-    const before = await renderSourceFixture({
-      "fixture.ts": "export type Fixture = string;\n",
-    });
+    const before = await renderSourceFixture("export type Fixture = string;\n");
     const renderAdded = (valueType: "number" | "string") =>
       renderSourceFixture(
         {
@@ -277,24 +271,16 @@ describe("Plugin SDK API baseline", () => {
       ]),
     });
     expect(addedDiff.digest).not.toBe(diffPluginSdkApi(before, sameNamesDifferentContents).digest);
-    expect(
-      formatPluginSdkApiDiffReport({ baseLabel: "base", diff: addedDiff, headLabel: "head" }),
-    ).toContain("value: number");
+    expect(report(addedDiff)).toContain("value: number");
   });
 
   it("classifies exported signature changes separately from reachable-only changes", async () => {
-    const baseline = await renderSourceFixture({
-      "fixture.ts": [
-        "export interface SendOptions { text: string }",
-        "export declare function send(options: SendOptions): void;",
-      ].join("\n"),
-    });
-    const changed = await renderSourceFixture({
-      "fixture.ts": [
-        "export interface SendOptions { text: string; accountId: string }",
-        "export declare function send(options: SendOptions): void;",
-      ].join("\n"),
-    });
+    const render = (fields: string) =>
+      renderSourceFixture(
+        `export interface SendOptions { ${fields} }\nexport declare function send(options: SendOptions): void;`,
+      );
+    const baseline = await render("text: string");
+    const changed = await render("text: string; accountId: string");
 
     const diff = diffPluginSdkApi(baseline, changed);
     expect(diff.exports).toEqual([
@@ -309,19 +295,9 @@ describe("Plugin SDK API baseline", () => {
     const render = (field: string) =>
       renderSourceFixture(
         {
-          "fixture.ts": [
-            `type SharedOptions = { ${field}: string };`,
-            "export declare function preview(options: SharedOptions): void;",
-            "export declare function send(options: SharedOptions): void;",
-          ].join("\n"),
-          "pool-a.ts": [
-            "type PoolOptions = { value: string };",
-            "export declare function fixed(options: PoolOptions): void;",
-          ].join("\n"),
-          "pool-b.ts": [
-            "type PoolOptions = { value: number };",
-            "export declare function fixed(options: PoolOptions): void;",
-          ].join("\n"),
+          "fixture.ts": optionFunctions("SharedOptions", `${field}: string`, "preview", "send"),
+          "pool-a.ts": optionFunctions("PoolOptions", "value: string", "fixed"),
+          "pool-b.ts": optionFunctions("PoolOptions", "value: number", "fixed"),
         },
         ["pool-b", "fixture", "pool-a"],
       );
@@ -370,17 +346,15 @@ describe("Plugin SDK API baseline", () => {
     ]);
     expect(diff.exports[1]?.declarationChanges).toEqual([]);
     expect(JSON.stringify(diff).match(/type SharedOptions/gu)).toHaveLength(2);
-    const report = formatPluginSdkApiDiffReport({ baseLabel: "base", diff, headLabel: "head" });
-    expect(report).toContain("Affected exports (2)");
-    expect(report).toContain("`openclaw/plugin-sdk/fixture` — `preview` (reachable)");
-    expect(report).toContain("`openclaw/plugin-sdk/fixture` — `send` (reachable)");
-    expect(report).not.toContain("affects 1 export");
+    const text = report(diff);
+    expect(text).toContain("Affected exports (2)");
+    expect(text).toContain("`openclaw/plugin-sdk/fixture` — `preview` (reachable)");
+    expect(text).toContain("`openclaw/plugin-sdk/fixture` — `send` (reachable)");
+    expect(text).not.toContain("affects 1 export");
   });
 
   it("validates renderer artifacts at the subprocess boundary", async () => {
-    const baseline = await renderSourceFixture({
-      "fixture.ts": "export type Fixture = { value: string };\n",
-    });
+    const baseline = await renderSourceFixture("export type Fixture = { value: string };\n");
     const parsed = parsePluginSdkApiDiffSurface(JSON.stringify(baseline));
 
     expect(hasPluginSdkApiChanges(diffPluginSdkApi(baseline, parsed))).toBe(false);
@@ -397,14 +371,14 @@ describe("Plugin SDK API baseline", () => {
       "export declare const fixtureValue: { newValue: number };\n",
     );
     const diff = diffPluginSdkApi(before, after);
-    const report = formatPluginSdkApiDiffReport({ baseLabel: "base", diff, headLabel: "head" });
+    const text = report(diff);
 
     expect(diff.exports).toEqual([
       expect.objectContaining({ change: "signature", exportName: "publicValue" }),
     ]);
-    expect(report).toContain("oldValue: string");
-    expect(report).toContain("newValue: number");
-    expect(report).toContain(`Acknowledgement digest: \`${pluginSdkApiAcknowledgement(diff)}\``);
+    expect(text).toContain("oldValue: string");
+    expect(text).toContain("newValue: number");
+    expect(text).toContain(`Acknowledgement digest: \`${pluginSdkApiAcknowledgement(diff)}\``);
   });
 
   it("bounds reports by UTF-8 bytes without splitting multibyte text", () => {
@@ -429,10 +403,10 @@ describe("Plugin SDK API baseline", () => {
       ],
     };
 
-    const report = formatPluginSdkApiDiffReport({ baseLabel: "base", diff, headLabel: "head" });
-    expect(Buffer.byteLength(report, "utf8")).toBeLessThanOrEqual(64 * 1024);
-    expect(report).toContain("summary truncated");
-    expect(report).not.toContain("�");
+    const text = report(diff);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(64 * 1024);
+    expect(text).toContain("summary truncated");
+    expect(text).not.toContain("�");
   });
 
   it.skipIf(process.platform === "win32")(
@@ -480,7 +454,7 @@ describe("Plugin SDK API baseline", () => {
           return createProject(options);
         });
       try {
-        const rendered = await renderSourceFixture({ "fixture.ts": "export const value = 1;" });
+        const rendered = await renderSourceFixture("export const value = 1;");
         expect(observedOverlay).toBe(true);
         expect(rendered.modules[0]?.exports[0]?.declaration).toBe("export const value: 1;");
       } finally {
@@ -492,7 +466,7 @@ describe("Plugin SDK API baseline", () => {
   it("renders a checkout reached through a symlinked alias", async () => {
     // macOS temporary revision checkouts sit behind the /var -> /private/var alias.
     const baseline = await renderSourceFixture(
-      { "fixture.ts": "export declare function measure(value: string): number;\n" },
+      "export declare function measure(value: string): number;\n",
       ["fixture"],
       { symlinked: true },
     );
@@ -512,12 +486,9 @@ describe("Plugin SDK API baseline", () => {
 
   it("fails when a declaration dependency cannot be resolved", async () => {
     await expect(
-      renderSourceFixture({
-        "fixture.ts": [
-          'import type { Missing } from "missing-plugin-sdk-dependency";',
-          "export declare function createFixture(value: Missing): void;",
-        ].join("\n"),
-      }),
+      renderSourceFixture(
+        'import type { Missing } from "missing-plugin-sdk-dependency";\nexport declare function createFixture(value: Missing): void;',
+      ),
     ).rejects.toThrow("missing-plugin-sdk-dependency");
   });
 
@@ -585,8 +556,7 @@ describe("Plugin SDK API baseline", () => {
   it("ignores unreachable declarations beside a transitive export", async () => {
     const render = (extra = "") =>
       renderSourceFixture({
-        "fixture.ts":
-          'import type { Bridge } from "./bridge.js";\nexport declare function createFixture(value: Bridge): Bridge;',
+        "fixture.ts": importedFunction("Bridge", "bridge", "createFixture"),
         "bridge.ts":
           'import type { Shared } from "./shared.js";\nexport type Bridge = { shared: Shared };',
         "shared.ts": `export type Shared = { value: string };\n${extra}`,
@@ -647,14 +617,8 @@ describe("Plugin SDK API baseline", () => {
     const render = (optionalMarker: boolean) =>
       renderSourceFixture(
         {
-          "cycle-a.ts": [
-            'import type { A } from "./a.js";',
-            "export declare function first(value: A): A;",
-          ].join("\n"),
-          "cycle-b.ts": [
-            'import type { B } from "./b.js";',
-            "export declare function second(value: B): B;",
-          ].join("\n"),
+          "cycle-a.ts": importedFunction("A", "a", "first"),
+          "cycle-b.ts": importedFunction("B", "b", "second"),
           "a.ts": [
             'import type { B } from "./b.js";',
             `export type A = { marker${optionalMarker ? "?" : ""}: string; b?: B };`,
@@ -739,8 +703,6 @@ describe("Plugin SDK API baseline", () => {
     ).toEqual(expect.arrayContaining(["FixtureOptionLeaf", "FixtureResultLeaf"]));
     expect(hasPluginSdkApiChanges(combinedDiff)).toBe(true);
     expect(pluginSdkApiAcknowledgement(combinedDiff)).toMatch(/^[a-f0-9]{8}$/u);
-    expect(
-      formatPluginSdkApiDiffReport({ baseLabel: "base", diff: combinedDiff, headLabel: "head" }),
-    ).toContain("Reachable declarations changed");
+    expect(report(combinedDiff)).toContain("Reachable declarations changed");
   });
 });

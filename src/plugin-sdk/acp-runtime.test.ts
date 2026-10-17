@@ -1,4 +1,3 @@
-// ACP runtime tests cover plugin-facing ACP runtime setup and gateway dispatch behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
@@ -6,7 +5,8 @@ import { PluginInstance } from "../plugins/plugin-instance.js";
 
 const { bypassMock, dispatchMock } = vi.hoisted(() => ({
   bypassMock: vi.fn(),
-  dispatchMock: vi.fn(),
+  dispatchMock:
+    vi.fn<typeof import("../auto-reply/reply/dispatch-acp.runtime.js").tryDispatchAcpReply>(),
 }));
 
 vi.mock("../auto-reply/reply/dispatch-acp.runtime.js", () => ({
@@ -22,13 +22,16 @@ import {
   tryDispatchAcpReplyHook,
 } from "./acp-runtime.js";
 
-const event = {
-  ctx: buildTestCtx({
+const messageContext = (text: string, commandBody = text) =>
+  buildTestCtx({
     SessionKey: "agent:test:session",
-    CommandBody: "/acp cancel",
-    BodyForCommands: "/acp cancel",
-    BodyForAgent: "/acp cancel",
-  }),
+    CommandBody: commandBody,
+    BodyForCommands: text,
+    BodyForAgent: text,
+  });
+const counts = { tool: 0, block: 0, final: 0 };
+const event = {
+  ctx: messageContext("/acp cancel"),
   runId: "run-1",
   sessionKey: "agent:test:session",
   inboundAudio: false,
@@ -61,35 +64,23 @@ const ctx = {
 };
 
 describe("tryDispatchAcpReplyHook", () => {
+  const dispatch = (overrides: Partial<Parameters<typeof tryDispatchAcpReplyHook>[0]> = {}) =>
+    tryDispatchAcpReplyHook({ ...event, ...overrides }, ctx);
   beforeEach(() => {
     vi.clearAllMocks();
+    bypassMock.mockReset().mockResolvedValue(false);
+    dispatchMock.mockReset().mockResolvedValue({ queuedFinal: false, counts });
   });
 
   it("skips ACP runtime lookup for non-command deny turns even when CommandBody is populated", async () => {
-    const result = await tryDispatchAcpReplyHook(
-      {
-        ...event,
-        sendPolicy: "deny",
-        ctx: buildTestCtx({
-          SessionKey: "agent:test:session",
-          CommandBody: "write a test",
-          BodyForCommands: "write a test",
-          BodyForAgent: "write a test",
-        }),
-      },
-      ctx,
-    );
-
+    const result = await dispatch({ sendPolicy: "deny", ctx: messageContext("write a test") });
     expect(result).toBeUndefined();
     expect(bypassMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("skips ACP dispatch when send policy denies delivery and no bypass applies", async () => {
-    bypassMock.mockResolvedValue(false);
-
-    const result = await tryDispatchAcpReplyHook({ ...event, sendPolicy: "deny" }, ctx);
-
+    const result = await dispatch({ sendPolicy: "deny" });
     expect(result).toBeUndefined();
     expect(dispatchMock).not.toHaveBeenCalled();
   });
@@ -104,22 +95,17 @@ describe("tryDispatchAcpReplyHook", () => {
     const wrappedEvent = {
       ...event,
       sendPolicy: "deny" as const,
-      ctx: buildTestCtx({
-        SessionKey: "agent:test:session",
-        CommandBody: "[WhatsApp +15551234567 +1m Fri 2026-05-08 16:12 UTC] /status",
-        BodyForCommands: "/status",
-        BodyForAgent: "/status",
-      }),
+      ctx: messageContext(
+        "/status",
+        "[WhatsApp +15551234567 +1m Fri 2026-05-08 16:12 UTC] /status",
+      ),
     };
 
     const result = await tryDispatchAcpReplyHook(wrappedEvent, ctx);
 
     expect(bypassMock).toHaveBeenCalledWith(wrappedEvent.ctx, ctx.cfg);
     expect(dispatchMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: wrappedEvent.ctx,
-        bypassForCommand: true,
-      }),
+      expect.objectContaining({ ctx: wrappedEvent.ctx, bypassForCommand: true }),
     );
     expect(result).toEqual({
       handled: true,
@@ -129,11 +115,6 @@ describe("tryDispatchAcpReplyHook", () => {
   });
 
   it("normalizes plugin-supplied canonical fields without finalization provenance", async () => {
-    bypassMock.mockResolvedValue(false);
-    dispatchMock.mockResolvedValue({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
     const pluginCtx = {
       Body: "hello\r\nworld",
       commandText: "[System Message] /reset",
@@ -143,7 +124,7 @@ describe("tryDispatchAcpReplyHook", () => {
       SessionKey: "agent:test:session",
     } as FinalizedMsgContext;
 
-    await tryDispatchAcpReplyHook({ ...event, ctx: pluginCtx }, ctx);
+    await dispatch({ ctx: pluginCtx });
 
     // Finalization normalizes newlines only; bracketed tags and a line-leading
     // `System:` pass through unchanged.
@@ -156,11 +137,6 @@ describe("tryDispatchAcpReplyHook", () => {
   });
 
   it("passes a live tool-summary predicate through to ACP runtime", async () => {
-    bypassMock.mockResolvedValue(false);
-    dispatchMock.mockResolvedValue({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
     let shouldSendToolSummaries = true;
     let fullToolDetails = false;
     const eventWithGetter = {
@@ -175,31 +151,25 @@ describe("tryDispatchAcpReplyHook", () => {
 
     await tryDispatchAcpReplyHook(eventWithGetter, ctx);
 
-    const [payload] = dispatchMock.mock.calls[0] ?? [];
-    const livePredicate = (payload as { shouldSendToolSummaries: () => Promise<boolean> })
-      .shouldSendToolSummaries;
+    const [payload] = dispatchMock.mock.calls[0];
+    const livePredicate = payload.shouldSendToolSummaries;
     expect(livePredicate).toBeTypeOf("function");
     expect(await livePredicate()).toBe(true);
 
     shouldSendToolSummaries = false;
     expect(await livePredicate()).toBe(false);
     fullToolDetails = true;
-    expect(
-      await (
-        payload as { shouldSendFullToolDetails: () => Promise<boolean> }
-      ).shouldSendFullToolDetails(),
-    ).toBe(false);
+    expect(await payload.shouldSendFullToolDetails()).toBe(false);
   });
 
   it("uses awaited visibility without touching deprecated event getters", async () => {
-    bypassMock.mockResolvedValue(false);
     let summaries = false;
     dispatchMock.mockImplementationOnce(async (params) => {
       expect(await params.shouldSendToolSummaries()).toBe(false);
       summaries = true;
       expect(await params.shouldSendToolSummaries()).toBe(true);
       expect(await params.shouldSendFullToolDetails()).toBe(true);
-      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      return { queuedFinal: false, counts };
     });
     await tryDispatchAcpReplyHook(
       {
@@ -219,24 +189,22 @@ describe("tryDispatchAcpReplyHook", () => {
   });
 
   it("returns unhandled when ACP dispatcher declines the turn", async () => {
-    bypassMock.mockResolvedValue(false);
     dispatchMock.mockResolvedValue(undefined);
-
-    const result = await tryDispatchAcpReplyHook(event, ctx);
-
+    const result = await dispatch();
     expect(result).toBeUndefined();
     expect(dispatchMock).toHaveBeenCalledOnce();
   });
 });
 
 describe("resolveAcpSessionAvailability", () => {
+  const availability = (
+    config: Parameters<typeof resolveAcpSessionAvailability>[0]["config"] = {},
+  ) => resolveAcpSessionAvailability({ config, backendId: "acpx", agentId: "opencode" });
   beforeEach(() => testing.resetAcpRuntimeBackendsForTests());
   afterEach(() => testing.resetAcpRuntimeBackendsForTests());
 
   it("requires an allowed agent and a healthy registered backend", () => {
-    expect(
-      resolveAcpSessionAvailability({ config: {}, backendId: "acpx", agentId: "opencode" }),
-    ).toMatchObject({ available: false });
+    expect(availability()).toMatchObject({ available: false });
     registerAcpRuntimeBackend({
       id: "acpx",
       runtime: {
@@ -246,16 +214,11 @@ describe("resolveAcpSessionAvailability", () => {
         close: vi.fn(),
       },
     });
-    expect(
-      resolveAcpSessionAvailability({ config: {}, backendId: "acpx", agentId: "opencode" }),
-    ).toEqual({ available: true });
-    expect(
-      resolveAcpSessionAvailability({
-        config: { acp: { allowedAgents: ["pi"] } },
-        backendId: "acpx",
-        agentId: "opencode",
-      }),
-    ).toMatchObject({ available: false, message: expect.stringContaining("not allowed") });
+    expect(availability()).toEqual({ available: true });
+    expect(availability({ acp: { allowedAgents: ["pi"] } })).toMatchObject({
+      available: false,
+      message: expect.stringContaining("not allowed"),
+    });
   });
 
   it("honors the canonical ACP dispatch policy", () => {

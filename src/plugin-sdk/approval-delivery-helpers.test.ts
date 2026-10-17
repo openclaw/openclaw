@@ -1,6 +1,3 @@
-/**
- * Tests approval delivery helper capability composition.
- */
 import { describe, expect, it, vi } from "vitest";
 import {
   createApproverRestrictedNativeApprovalAdapter,
@@ -10,6 +7,25 @@ import {
   createChannelApprovalCapability,
   splitChannelApprovalCapability,
 } from "./approval-delivery-helpers.js";
+
+const execRequest = {
+  id: "approval-1",
+  request: { command: "pwd" },
+  createdAtMs: 0,
+  expiresAtMs: 10_000,
+};
+const actionInput = { cfg: {}, accountId: "work", action: "approve" } as const;
+function makeNativeRuntime() {
+  return {
+    availability: { isConfigured: vi.fn(), shouldHandle: vi.fn() },
+    presentation: {
+      buildPendingPayload: vi.fn(),
+      buildResolvedResult: vi.fn(),
+      buildExpiredResult: vi.fn(),
+    },
+    transport: { prepareTarget: vi.fn(), deliverPending: vi.fn() },
+  };
+}
 
 describe("createApproverRestrictedNativeApprovalAdapter", () => {
   it("uses approver-restricted authorization for exec and plugin commands", () => {
@@ -30,30 +46,24 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
 
     expect(
       authorizeActorAction({
-        cfg: {} as never,
-        accountId: "work",
+        ...actionInput,
         senderId: "exec-owner",
-        action: "approve",
         approvalKind: "exec",
       }),
     ).toEqual({ authorized: true });
 
     expect(
       authorizeActorAction({
-        cfg: {} as never,
-        accountId: "work",
+        ...actionInput,
         senderId: "plugin-owner",
-        action: "approve",
         approvalKind: "plugin",
       }),
     ).toEqual({ authorized: true });
 
     expect(
       authorizeActorAction({
-        cfg: {} as never,
-        accountId: "work",
+        ...actionInput,
         senderId: "someone-else",
-        action: "approve",
         approvalKind: "plugin",
       }),
     ).toEqual({
@@ -63,17 +73,10 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
 
     expect(
       authorizeActorAction({
-        cfg: {},
-        accountId: "work",
+        ...actionInput,
         senderId: "plugin-owner",
-        action: "approve",
         approvalKind: "plugin",
-        request: {
-          id: "exec-request",
-          request: { command: "pwd" },
-          createdAtMs: 0,
-          expiresAtMs: 10_000,
-        },
+        request: { ...execRequest, id: "exec-request" },
       }),
     ).toMatchObject({ authorized: false });
   });
@@ -105,48 +108,25 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       cfg: {} as never,
       accountId: "channel-only",
       approvalKind: "exec",
-      request: {
-        id: "approval-1",
-        request: { command: "pwd" },
-        createdAtMs: 0,
-        expiresAtMs: 10_000,
-      },
+      request: execRequest,
     });
 
+    const availability = (accountId: string) =>
+      getActionAvailabilityState({ ...actionInput, accountId });
+    expect(availability("dm-only")).toEqual({ kind: "enabled" });
+    expect(availability("no-approvers")).toEqual({ kind: "disabled" });
+    expect(availability("disabled")).toEqual({ kind: "enabled" });
     expect(
       getActionAvailabilityState({
-        cfg: {} as never,
-        accountId: "dm-only",
-        action: "approve",
-      }),
-    ).toEqual({ kind: "enabled" });
-    expect(
-      getActionAvailabilityState({
-        cfg: {} as never,
-        accountId: "no-approvers",
-        action: "approve",
-      }),
-    ).toEqual({ kind: "disabled" });
-    expect(
-      getActionAvailabilityState({
-        cfg: {} as never,
+        ...actionInput,
         accountId: "disabled",
-        action: "approve",
-      }),
-    ).toEqual({ kind: "enabled" });
-    expect(
-      getActionAvailabilityState({
-        cfg: {} as never,
-        accountId: "disabled",
-        action: "approve",
         approvalKind: "plugin",
       }),
     ).toEqual({ kind: "enabled" });
     expect(
       getExecInitiatingSurfaceState({
-        cfg: {} as never,
+        ...actionInput,
         accountId: "disabled",
-        action: "approve",
       }),
     ).toEqual({ kind: "disabled" });
     expect(hasConfiguredDmRoute.hasConfiguredDmRoute({ cfg: {} as never })).toBe(true);
@@ -180,90 +160,37 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       throw new Error("delivery suppression helper unavailable");
     }
 
-    expect(
+    const suppress = (
+      turnSourceChannel: string,
+      channel = "telegram",
+      approvalKind: "exec" | "plugin" = "exec",
+      turnSourceAccountId = "topic-1",
+    ) =>
       shouldSuppressForwardingFallback({
-        cfg: {} as never,
-        approvalKind: "exec",
-        target: { channel: "telegram", to: "target-1" },
+        cfg: {},
+        approvalKind,
+        target: { channel, to: "target-1" },
         request: {
-          request: {
-            command: "pwd",
-            turnSourceChannel: "telegram",
-            turnSourceAccountId: " topic-1 ",
-          },
-        } as never,
-      }),
-    ).toBe(true);
-
-    expect(
-      shouldSuppressForwardingFallback({
-        cfg: {} as never,
-        approvalKind: "exec",
-        target: { channel: "telegram", to: "target-1" },
-        request: {
-          request: {
-            command: "pwd",
-            turnSourceChannel: "slack",
-            turnSourceAccountId: "topic-1",
-          },
-        } as never,
-      }),
-    ).toBe(false);
-
-    expect(
-      shouldSuppressForwardingFallback({
-        cfg: {} as never,
-        approvalKind: "exec",
-        target: { channel: "slack", to: "target-1" },
-        request: {
-          request: {
-            command: "pwd",
-            turnSourceChannel: "telegram",
-            turnSourceAccountId: "topic-1",
-          },
-        } as never,
-      }),
-    ).toBe(false);
+          ...execRequest,
+          request: { command: "pwd", turnSourceChannel, turnSourceAccountId },
+        },
+      });
+    expect(suppress("telegram", "telegram", "exec", " topic-1 ")).toBe(true);
+    expect(suppress("slack")).toBe(false);
+    expect(suppress("telegram", "slack")).toBe(false);
 
     expect(isNativeDeliveryEnabled).toHaveBeenCalledWith({
       cfg: {} as never,
       accountId: "topic-1",
     });
 
-    expect(
-      shouldSuppressForwardingFallback({
-        cfg: {} as never,
-        approvalKind: "plugin",
-        target: { channel: "telegram", to: "target-1" },
-        request: {
-          request: {
-            command: "pwd",
-            turnSourceChannel: "telegram",
-            turnSourceAccountId: "topic-1",
-          },
-        } as never,
-      }),
-    ).toBe(true);
+    expect(suppress("telegram", "telegram", "plugin")).toBe(true);
   });
 });
 
 describe("createApproverRestrictedNativeApprovalCapability", () => {
   it("builds the canonical approval capability and preserves legacy split compatibility", () => {
-    const nativeRuntime = {
-      availability: {
-        isConfigured: vi.fn(),
-        shouldHandle: vi.fn(),
-      },
-      presentation: {
-        buildPendingPayload: vi.fn(),
-        buildResolvedResult: vi.fn(),
-        buildExpiredResult: vi.fn(),
-      },
-      transport: {
-        prepareTarget: vi.fn(),
-        deliverPending: vi.fn(),
-      },
-    };
+    const nativeRuntime = makeNativeRuntime();
     const describeExecApprovalSetup = vi.fn(
       ({
         channel,
@@ -291,22 +218,15 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
       nativeRuntime,
     });
     const actorInput = {
-      cfg: {},
-      accountId: "work",
+      ...actionInput,
       senderId: "@owner:example.com",
-      action: "approve",
       approvalKind: "exec",
     } as const;
     const deliveryInput = {
       cfg: {},
       accountId: "work",
       approvalKind: "exec",
-      request: {
-        id: "approval-1",
-        request: { command: "pwd" },
-        createdAtMs: 0,
-        expiresAtMs: 10_000,
-      },
+      request: execRequest,
     } as const;
     const expectedCapabilities = {
       enabled: true,
@@ -315,23 +235,12 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
       supportsApproverDmSurface: true,
       notifyOriginWhenDmOnly: false,
     };
+    const setupInput = { channel: "matrix", channelLabel: "Matrix", accountId: "ops" };
 
     expect(capability.authorizeActorAction?.(actorInput)).toEqual({ authorized: true });
     expect(capability.delivery?.hasConfiguredDmRoute?.({ cfg: {} as never })).toBe(true);
-    expect(
-      capability.describeExecApprovalSetup?.({
-        channel: "matrix",
-        channelLabel: "Matrix",
-        accountId: "ops",
-      }),
-    ).toBe("Matrix:matrix:ops:setup");
-    expect(
-      capability.describePluginApprovalSetup?.({
-        channel: "matrix",
-        channelLabel: "Matrix",
-        accountId: "ops",
-      }),
-    ).toBeUndefined();
+    expect(capability.describeExecApprovalSetup?.(setupInput)).toBe("Matrix:matrix:ops:setup");
+    expect(capability.describePluginApprovalSetup?.(setupInput)).toBeUndefined();
     expect(capability.native?.describeDeliveryCapabilities(deliveryInput)).toEqual(
       expectedCapabilities,
     );
@@ -379,39 +288,26 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
       },
     } as never;
     const request = {
-      id: "approval-1",
+      ...execRequest,
       request: {
         command: "pwd",
         turnSourceChannel: "example",
         turnSourceTo: "Origin",
       },
-      createdAtMs: 0,
-      expiresAtMs: 10_000,
     } as never;
+    const input = { cfg, accountId: "default", approvalKind: "exec", action: "approve" } as const;
 
     expect(
       routed.capability.authorizeActorAction?.({
-        cfg,
-        accountId: "default",
+        ...input,
         senderId: "owner",
-        action: "approve",
-        approvalKind: "exec",
       }),
     ).toBe(authResult);
     expect(routed.capability.render).toBe(render);
-    expect(
-      routed.capability.getActionAvailabilityState?.({
-        cfg,
-        accountId: "default",
-        action: "approve",
-        approvalKind: "exec",
-      }),
-    ).toEqual({ kind: "enabled" });
+    expect(routed.capability.getActionAvailabilityState?.(input)).toEqual({ kind: "enabled" });
     expect(
       routed.capability.native?.describeDeliveryCapabilities({
-        cfg,
-        accountId: "default",
-        approvalKind: "exec",
+        ...input,
         request,
       }),
     ).toEqual({
@@ -436,36 +332,11 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
 describe("createChannelApprovalCapability", () => {
   it("accepts canonical top-level capability surfaces", () => {
     const delivery = { hasConfiguredDmRoute: vi.fn() };
-    const nativeRuntime = {
-      availability: {
-        isConfigured: vi.fn(),
-        shouldHandle: vi.fn(),
-      },
-      presentation: {
-        buildPendingPayload: vi.fn(),
-        buildResolvedResult: vi.fn(),
-        buildExpiredResult: vi.fn(),
-      },
-      transport: {
-        prepareTarget: vi.fn(),
-        deliverPending: vi.fn(),
-      },
-    };
-    const render = {
-      exec: {
-        buildPendingPayload: vi.fn(),
-      },
-    };
+    const nativeRuntime = makeNativeRuntime();
+    const render = { exec: { buildPendingPayload: vi.fn() } };
     const native = { describeDeliveryCapabilities: vi.fn() };
 
-    expect(
-      createChannelApprovalCapability({
-        delivery,
-        nativeRuntime,
-        render,
-        native,
-      }),
-    ).toEqual({
+    expect(createChannelApprovalCapability({ delivery, nativeRuntime, render, native })).toEqual({
       authorizeActorAction: undefined,
       getActionAvailabilityState: undefined,
       getExecInitiatingSurfaceState: undefined,
