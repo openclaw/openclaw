@@ -25,7 +25,10 @@ export function renderSidebarSessionSectionHeader(params: {
   const draggable = createMemo(() => params.draggable !== false && !params.disabledReason);
   return (
     <div
-      class={`sidebar-recent-sessions__head ${draggable() ? "sidebar-recent-sessions__head--draggable" : ""}`}
+      class={[
+        "sidebar-recent-sessions__head",
+        draggable() && "sidebar-recent-sessions__head--draggable",
+      ]}
       draggable={draggable() ? "true" : "false"}
       title={params.disabledReason}
       onMouseDown={(event) => {

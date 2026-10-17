@@ -14,7 +14,7 @@ import {
   resetAutoMigrateLegacyStateDirForTest,
 } from "../infra/state-migrations.state-dir.js";
 import * as updateState from "../infra/update-candidate-state.js";
-import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
+import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-database-generations.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -160,15 +160,15 @@ describe("Doctor maintenance with shared-state workers", () => {
             async () => {
               const databasePath = path.join(legacy, "state", "openclaw.sqlite");
               const databaseGenerations = scenario.startsWith("receipt-")
-                ? readUpdateDatabaseGenerations([databasePath])
+                ? await readUpdatePhysicalDatabaseGenerations([databasePath])
                 : undefined;
               if (databaseGenerations) {
                 vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(
-                  async (paths) => readUpdateDatabaseGenerations(paths),
+                  async (paths) => readUpdatePhysicalDatabaseGenerations(paths),
                 );
               }
               const admittedGenerations = databaseGenerations
-                ? readUpdateDatabaseGenerations([databasePath])
+                ? await readUpdatePhysicalDatabaseGenerations([databasePath])
                 : undefined;
               const log = vi.fn();
               const maintenance = await beginDoctorMaintenance({
@@ -232,7 +232,7 @@ describe("Doctor maintenance with shared-state workers", () => {
                 expect(maintenance!.databaseWrites).toEqual({
                   unchanged: false,
                   fromGenerations: admittedGenerations,
-                  generations: readUpdateDatabaseGenerations([databasePath]),
+                  generations: await readUpdatePhysicalDatabaseGenerations([databasePath]),
                 });
                 expect(maintenance!.databaseWrites?.generations[databasePath]).not.toBe(
                   databaseGenerations[databasePath],

@@ -11,7 +11,7 @@ import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budge
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import * as updateState from "../infra/update-candidate-state.js";
-import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
+import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-database-generations.js";
 import {
   collectUpdateDoctorFailureFacts,
   consumeUpdatePostInstallDoctorResult,
@@ -25,6 +25,7 @@ import { redactPublicSupportDiagnosticLine } from "../logging/diagnostic-support
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { defaultRuntime } from "../runtime.js";
+import * as databaseBackup from "../snapshot/database-backup.js";
 import { OpenClawAgentDatabaseLeaseActiveError } from "../state/openclaw-agent-db-lease.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import * as nocow from "./doctor-sqlite-nocow.js";
@@ -65,8 +66,10 @@ function executeEvidence(pathname: string, sql: string) {
 }
 
 function fingerprintReads() {
+  // These SQLite fixtures exercise generation settlement without native engine inspection.
+  vi.spyOn(databaseBackup, "readBackupEngine").mockReturnValue({ engine: "sqlite" });
   vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
-    readUpdateDatabaseGenerations(paths),
+    readUpdatePhysicalDatabaseGenerations(paths),
   );
 }
 
@@ -116,9 +119,9 @@ it("refuses rollback attribution for writes preceding Doctor admission", async (
     pathname,
     "CREATE TABLE evidence(value INTEGER); INSERT INTO evidence VALUES (1)",
   );
-  const databaseGenerations = readUpdateDatabaseGenerations([pathname, missing]);
+  const databaseGenerations = await readUpdatePhysicalDatabaseGenerations([pathname, missing]);
   executeEvidence(pathname, "INSERT INTO evidence VALUES (99)");
-  const admitted = readUpdateDatabaseGenerations([pathname, missing]);
+  const admitted = await readUpdatePhysicalDatabaseGenerations([pathname, missing]);
   const maintenance = await beginWithGenerations(databaseGenerations);
   expect(maintenance?.databaseWrites).toBeUndefined();
   await maintenance!.releaseState();
@@ -126,13 +129,13 @@ it("refuses rollback attribution for writes preceding Doctor admission", async (
   expect(receipt).toEqual({
     unchanged: false,
     fromGenerations: admitted,
-    generations: readUpdateDatabaseGenerations([pathname, missing]),
+    generations: await readUpdatePhysicalDatabaseGenerations([pathname, missing]),
   });
   expect(receipt?.generations[pathname]).not.toBe(databaseGenerations[pathname]);
   executeEvidence(pathname, "INSERT INTO evidence VALUES (100)");
   await maintenance!.release();
   expect(maintenance!.databaseWrites).toEqual(receipt);
-  expect(readUpdateDatabaseGenerations([pathname])[pathname]).not.toBe(
+  expect((await readUpdatePhysicalDatabaseGenerations([pathname]))[pathname]).not.toBe(
     receipt?.generations[pathname],
   );
 });
@@ -144,7 +147,7 @@ it("refuses automatic restore after a NOCOW physical replacement during Doctor m
     pathname,
     "CREATE TABLE evidence(value INTEGER); INSERT INTO evidence VALUES (1)",
   );
-  const generations = readUpdateDatabaseGenerations([pathname]);
+  const generations = await readUpdatePhysicalDatabaseGenerations([pathname]);
   const rewrite = vi.spyOn(nocow, "repairDoctorSqliteNoCow").mockImplementation(async () => {
     expect(boundary.close).toHaveBeenCalled();
     fs.copyFileSync(pathname, `${pathname}.new`);
@@ -160,7 +163,7 @@ it("refuses automatic restore after a NOCOW physical replacement during Doctor m
   expect(maintenance!.databaseWrites).toEqual({
     unchanged: false,
     fromGenerations: generations,
-    generations: readUpdateDatabaseGenerations([pathname]),
+    generations: await readUpdatePhysicalDatabaseGenerations([pathname]),
   });
   expect(maintenance!.databaseWrites?.generations[pathname]).not.toBe(generations[pathname]);
   expect(maintenance!.warnings).not.toContain("NOCOW rewrite complete");

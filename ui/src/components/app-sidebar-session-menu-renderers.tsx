@@ -180,7 +180,10 @@ export function renderSidebarCatalogViewMenuForMenus(
   return (
     <SidebarDropdown
       position={position}
-      class={`sidebar-session-sort-menu sidebar-catalog-view-menu${ownerFilter().compact ? " session-menu--compact" : ""}`}
+      class={[
+        "sidebar-session-sort-menu sidebar-catalog-view-menu",
+        ownerFilter().compact && "session-menu--compact",
+      ]}
       label={t("chat.sidebar.catalogViewOptions")}
       onSelect={(value) => {
         const view = sidebarFilterMenuViewForValue(value);

@@ -106,8 +106,13 @@ function seedTranscriptState(storePath: string): void {
       for (let index = 0; index < rows; index += 1) {
         insertEvent({ seq: index, eventJson: event, createdAt: now + index });
         insertActive.run(sessionId, index, index, index);
-        insertFts({ ...ftsFields, messageId: `${sessionId}-message-${index}` });
       }
+      insertFts(
+        Array.from({ length: rows }, (_, index) => ({
+          ...ftsFields,
+          messageId: `${sessionId}-message-${index}`,
+        })),
+      );
       insertIndex.run(sessionId, rows - 1, rows, rows, now);
       insertWatermark.run(sessionId, generation, now);
     }
