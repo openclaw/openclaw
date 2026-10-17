@@ -3,6 +3,8 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import { createNestedToolActivity } from "../../../src/sessions/nested-tool-activity.js";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
@@ -276,12 +278,28 @@ suite.define(() => {
           inner.getByRole("button", { name: "Add one", exact: true }),
         );
         await expect.poll(() => inner.locator("output").textContent()).toBe("1");
-        await tool({ phase: "result", toolCallId: "widget-wrapper", name: "exec", result });
         const userMessage = {
           role: "user",
           content: "Show a tiny interactive counter.",
           timestamp: startedAt - 1,
           __openclaw: { id: "nested-prompt", seq: 1, idempotencyKey: `${runId}:user` },
+        };
+        const nested = {
+          ...createNestedToolActivity({
+            runId,
+            scopeId: "widget-scope",
+            afterEntryId: null,
+            startOrder: 0,
+            parentToolCallId: "widget-wrapper",
+            toolCallId: "nested-widget",
+            toolName: "show_widget",
+            input: { title: "Counter" },
+            result: { content: [{ type: "text", text: JSON.stringify(result) }], details: result },
+            isError: false,
+            startedAt: startedAt + 900,
+            timestamp: startedAt + 901,
+          }),
+          __openclaw: { id: "nested-result", seq: 2, runId },
         };
         const wrapper = {
           role: "toolResult",
@@ -289,7 +307,7 @@ suite.define(() => {
           toolName: "exec",
           content: JSON.stringify(result),
           timestamp: startedAt + 1,
-          __openclaw: { id: "wrapper-result", seq: 2, runId },
+          __openclaw: { id: "wrapper-result", seq: 3, runId },
         };
         const finalMessage = {
           role: "assistant",
@@ -297,18 +315,46 @@ suite.define(() => {
           timestamp: startedAt + 901,
           idempotencyKey: runId,
           stopReason: "stop",
-          __openclaw: { id: "nested-final", seq: 3, runId, runTerminal: true },
+          __openclaw: { id: "nested-final", seq: 4, runId, runTerminal: true },
         };
-        await gateway.setHistoryMessages([userMessage, wrapper, finalMessage]);
-        for (const message of [wrapper, finalMessage]) {
-          await gateway.emitGatewayEvent("session.message", {
+        const history = prepareChatHistoryFixture([userMessage, nested, wrapper, finalMessage]);
+        const persist = (message: Record<string, unknown>, messageId: string, messageSeq: number) =>
+          gateway.emitGatewayEvent("session.message", {
             sessionKey,
             runId,
             message,
-            messageId: message["__openclaw"].id,
-            messageSeq: message["__openclaw"].seq,
+            messageId,
+            messageSeq,
           });
+        await gateway.setMethodResponse(
+          "chat.history",
+          prepareChatHistoryFixture([userMessage, nested]),
+        );
+        await persist(history.messages[1]!, "nested-result", 2);
+        await expect.poll(() => widgets.count()).toBe(1);
+        await tool({ phase: "result", toolCallId: "widget-wrapper", name: "exec", result });
+        await gateway.setMethodResponse(
+          "chat.history",
+          prepareChatHistoryFixture([userMessage, nested, wrapper]),
+        );
+        await persist(wrapper, "wrapper-result", 3);
+        if (captureUiProofEnabled) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator("section.chat"),
+            [widgets.first().locator("iframe")],
+            { animations: "disabled" },
+          );
+          writeFileSync(path.join(artifactDir, "persisted.png"), frame.png);
+          console.info(
+            "Persisted widget proof",
+            JSON.stringify({ artifactDir, widgets: await widgets.count() }),
+          );
         }
+        expect(await widgets.count()).toBe(1);
+        expect(await inner.locator("output").textContent()).toBe("1");
+        await gateway.setMethodResponse("chat.history", history);
+        await persist(finalMessage, "nested-final", 4);
         await gateway.emitGatewayEvent("chat", {
           sessionKey,
           runId,

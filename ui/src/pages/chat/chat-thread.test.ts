@@ -1315,10 +1315,11 @@ describe("buildCachedChatItems", () => {
     expect(shortcodeReply).toEqual(original);
   });
   it.each([
-    { persisted: false, parent: "exec-widget", viewId: "cv_nested", count: 1 },
-    { persisted: true, parent: "exec-widget", viewId: "cv_nested", count: 1 },
-    { persisted: false, parent: "exec-widget", viewId: "cv_distinct", count: 2 },
-    { persisted: true, parent: "another-exec", viewId: "cv_nested", count: 2 },
+    { persisted: "none", parent: "exec-widget", viewId: "cv_nested", count: 1 },
+    { persisted: "wrapper", parent: "exec-widget", viewId: "cv_nested", count: 1 },
+    { persisted: "both", parent: "exec-widget", viewId: "cv_nested", count: 1 },
+    { persisted: "none", parent: "exec-widget", viewId: "cv_distinct", count: 2 },
+    { persisted: "wrapper", parent: "another-exec", viewId: "cv_nested", count: 2 },
   ])(
     "reconciles nested previews (saved=$persisted): $parent / $viewId",
     ({ persisted, parent, viewId, count }) => {
@@ -1346,11 +1347,17 @@ describe("buildCachedChatItems", () => {
         wrapper,
         assistant("Ready.", 1_005),
       ];
-      const messages = persisted ? saved : saved.filter((message) => message !== wrapper);
+      const messages =
+        persisted === "both"
+          ? [...saved.slice(0, 2), nested, ...saved.slice(2)]
+          : persisted === "wrapper"
+            ? saved
+            : saved.filter((message) => message !== wrapper);
       const original = structuredClone(messages);
       const groups = messageGroups({
         messages,
-        toolMessages: persisted ? [nested] : [wrapper, nested],
+        toolMessages:
+          persisted === "both" ? [] : persisted === "wrapper" ? [nested] : [wrapper, nested],
         showToolCalls: false,
       });
 

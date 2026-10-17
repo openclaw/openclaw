@@ -290,9 +290,11 @@ export function buildChatItems(
 
     const isToolResult = normalized.role.toLowerCase() === "toolresult";
     const persistedCanvasSource = isToolResult ? extractChatMessagePreview(msg) : null;
+    let duplicatePersistedCanvas = false;
     if (persistedCanvasSource) {
       const identity = canvasPreviewBaseIdentity(msg, persistedCanvasSource);
       if (identity) {
+        duplicatePersistedCanvas = canvasIdentities.has(identity);
         canvasIdentities.add(identity);
       }
     }
@@ -312,6 +314,7 @@ export function buildChatItems(
     }
     const renderPersistedPreview =
       persistedCanvasSource != null &&
+      !duplicatePersistedCanvas &&
       !matchingCanvas &&
       (!searchFiltering || canvasTurns[i]!.lastMatchingAssistantIndex > i);
     if (persistedCanvasSource && renderPersistedPreview) {
