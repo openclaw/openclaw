@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { AgentDatabaseSchemaAdmissionInvalidError } from "./agent-database-admission-error.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -27,21 +29,25 @@ it("rejects malformed native schema receipts without replaying caller work", asy
   closeOpenClawAgentDatabaseByPath(database.path);
   const execution = captureOpenClawAgentDatabaseExecution(options);
   let publications = 0;
+  const malformed = sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
+    const facts = request.facts;
+    if (
+      request.stage === "prepare" &&
+      isRecord(facts) &&
+      isRecord(facts.identity) &&
+      facts.identity.nativeLocation === database.path &&
+      facts.validation !== undefined
+    ) {
+      publications += 1;
+      request.facts = { ...facts, validation: {} };
+    }
+    admit(request, grant);
+  });
   const source: AgentDatabaseRequestExecutionSource = {
     assertCurrent: () => execution.assertCurrent(),
     createAdmission: (binding) => () => ({
       nativeLocations: binding.nativeLocations,
-      admission: createSqliteWorkerOperationAdmission((request, grant) => {
-        if (
-          request.stage === "prepare" &&
-          typeof request.facts === "object" &&
-          request.facts !== null &&
-          "validation" in request.facts &&
-          request.facts.validation !== undefined
-        ) {
-          publications += 1;
-          request.facts = { ...request.facts, validation: {} };
-        }
+      admission: workerAdmission.createSqliteWorkerOperationAdmission((request, grant) => {
         binding.authorize(request);
         if (!grant()) {
           throw new Error("Malformed schema fixture lost admission");
@@ -57,6 +63,7 @@ it("rejects malformed native schema receipts without replaying caller work", asy
     expect(publications).toBe(1);
     expect(operation).not.toHaveBeenCalled();
   } finally {
+    malformed.mockRestore();
     await execution.release();
   }
 });

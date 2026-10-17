@@ -23,6 +23,7 @@ import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.j
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-build.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { withPluginSourceCaptureStorage } from "../plugins/plugin-source-capture-context.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { inspectDoctorDatabaseLegacyMigrations } from "./doctor-database-legacy-inspection.js";
 
@@ -218,9 +219,12 @@ if (parentPort && workerData?.doctorDatabaseEngines === true) {
         );
       }
     };
-    await withArtifactPreservingStateReads(
-      () => (selection ? withDatabaseEngineSelection(selection, inspect) : inspect()),
-      { agentDatabases: true },
+    // The caller's inspection context does not cross this worker boundary.
+    await withPluginSourceCaptureStorage({ stateDir: input.stateDir, placement: "temporary" }, () =>
+      withArtifactPreservingStateReads(
+        () => (selection ? withDatabaseEngineSelection(selection, inspect) : inspect()),
+        { agentDatabases: true },
+      ),
     );
     return result;
   });

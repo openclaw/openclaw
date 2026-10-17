@@ -158,7 +158,7 @@ describe("skill library upload policy", () => {
       await library.open(read.entry.skillId);
       const draft = library.state.draft!;
       const original = { ...draft.files[0]! };
-      Object.assign(draft.files[0]!, change);
+      draft.files = draft.files.map((file, index) => (index === 0 ? { ...file, ...change } : file));
       config.current.uploadsEnabled = false;
       await library.save();
       expect(request).toHaveBeenCalledTimes(1);
@@ -175,10 +175,13 @@ describe("skill library upload policy", () => {
     request.mockResolvedValueOnce(read);
     await library.open(read.entry.skillId);
     const draft = library.state.draft!;
-    expect(draft.baseFiles[0]).not.toBe(draft.files[0]);
-    draft.files[1]!.content = "Updated notes";
     const newFile = { path: "new.txt", content: "New notes", encoding: "utf8" as const };
-    draft.files.push(newFile);
+    draft.files = [
+      ...draft.files.map((file) =>
+        file.path === "notes.txt" ? { ...file, content: "Updated notes" } : file,
+      ),
+      newFile,
+    ];
     config.current.uploadsEnabled = false;
     await library.save();
     expect(request).toHaveBeenCalledTimes(1);
@@ -197,7 +200,6 @@ describe("skill library upload policy", () => {
       }),
     );
     expect(draft.baseFiles).toEqual(draft.files);
-    expect(draft.baseFiles[1]).not.toBe(draft.files[1]);
 
     config.current.uploadsEnabled = false;
     draft.content = "# Next edit";

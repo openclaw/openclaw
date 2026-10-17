@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   HOME_PANEL_TOGGLE_EVENT,
@@ -15,12 +15,15 @@ import {
   type TestOptionalCustomElement,
 } from "./app-host.test-support.ts";
 import { ShellChromeOwner, type ShellChromeHost } from "./app-shell-chrome.ts";
+import type { ShellOwnedElements } from "./app-shell-lazy-view.tsx";
 import type { ApplicationContext } from "./context.ts";
 import type { LazyCustomElementRequests } from "./lazy-custom-element.ts";
 import { persistLazyShellAction, readLazyShellAction } from "./lazy-shell-action.ts";
 
 type ShellPanelToggleState = {
   element: HTMLElement;
+  elements: ShellOwnedElements;
+  terminalPanel?: HTMLElement;
   lazyCustomElements: LazyCustomElementRequests;
   routeState: { routeId: string };
   runtime: { context: ApplicationContext };
@@ -68,8 +71,14 @@ function configurePanelShell(
     configurable: true,
     get: () => Promise.resolve(true),
   });
-  // Unported panel tags stay mounted before their modules define them.
-  shell.element.appendChild(document.createElement(element.tagName));
+  const panel = shell.element.appendChild(document.createElement(element.tagName));
+  if (kind === "browser") {
+    shell.elements.browserPanel = panel;
+  } else {
+    shell.terminalPanel = panel;
+  }
+  document.body.append(shell.element);
+  onTestFinished(() => shell.element.remove());
   return shell;
 }
 

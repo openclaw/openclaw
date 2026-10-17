@@ -61,32 +61,31 @@ export async function startChannelApprovalHandlerBootstrap(params: {
   const channelLabel = params.plugin.meta.label || params.plugin.id;
   const logger = params.logger ?? createSubsystemLogger(`${params.plugin.id}/approval-bootstrap`);
   const retryId = `approval-bootstrap/${params.plugin.id}/${params.accountId}/${randomUUID()}`;
-  let activeGeneration = 0;
+  let stopped = false;
+  const contextKey = {
+    channelRuntime: params.channelRuntime,
+    channelId: params.plugin.id,
+    accountId: params.accountId,
+    capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+  };
+  const currentContext = () => (stopped ? undefined : getChannelRuntimeContext(contextKey));
   let activeHandler: ChannelApprovalHandler | null = null;
   let retryJob: GatewayScheduledJob | undefined;
-  const invalidateActiveHandler = () => {
+  const cancelRetry = () => {
     retryJob?.cancel();
     retryJob = undefined;
-    activeGeneration += 1;
   };
 
   const stopHandler = async () => {
     const handler = activeHandler;
     activeHandler = null;
-    if (!handler) {
-      return;
+    if (handler) {
+      await handler.stop();
     }
-    await handler.stop();
   };
 
-  const startHandlerForContext = async (context: unknown, generation: number) => {
-    if (generation !== activeGeneration) {
-      return;
-    }
+  const startHandlerForContext = async (context: unknown) => {
     await stopHandler();
-    if (generation !== activeGeneration) {
-      return;
-    }
     const handler = await withGatewayNativeApprovalRuntime(params.gatewayRuntime, () =>
       createChannelApprovalHandlerFromCapability({
         capability,
@@ -102,9 +101,9 @@ export async function startChannelApprovalHandlerBootstrap(params: {
     if (!handler) {
       return;
     }
-    if (generation !== activeGeneration) {
-      // Runtime contexts can unregister while the handler factory awaits; stop stale handlers.
-      await handler.stop().catch(() => {});
+    // Starting subscribes to external approval delivery; require the live context here.
+    if (context !== currentContext()) {
+      await handler.stop();
       return;
     }
     activeHandler = handler;
@@ -114,7 +113,9 @@ export async function startChannelApprovalHandlerBootstrap(params: {
       if (activeHandler === handler) {
         activeHandler = null;
       }
-      await handler.stop().catch(() => {});
+      await handler.stop().catch((stopError: unknown) => {
+        logger.error(`failed to clean up native approval handler: ${String(stopError)}`);
+      });
       throw error;
     }
   };
@@ -124,74 +125,52 @@ export async function startChannelApprovalHandlerBootstrap(params: {
       logger.error(`${label}: ${String(error)}`);
     });
   };
-  const scheduleRetryForContext = (context: unknown, generation: number) => {
-    if (generation !== activeGeneration) {
+  const startRegisteredHandler = async (): Promise<void> => {
+    const context = currentContext();
+    if (context === undefined) {
       return;
     }
-    retryJob = params.scheduler.schedule({
-      id: retryId,
-      delayMs: APPROVAL_HANDLER_BOOTSTRAP_RETRY_MS,
-      run: () => startHandlerForRegisteredContext(context, generation),
-    });
-  };
-  const startHandlerForRegisteredContext = async (context: unknown, generation: number) => {
     try {
-      await startHandlerForContext(context, generation);
+      await startHandlerForContext(context);
     } catch (error) {
-      if (generation === activeGeneration) {
-        if (isExecApprovalChannelRuntimeTerminalStartError(error)) {
-          logger.error(`native approval handler disabled: ${String(error)}`);
-          return;
-        }
-        if (isRetryableApprovalBootstrapStartError(error)) {
-          logger.warn(
-            `native approval handler deferred until gateway readiness recovers: ${formatRetryableApprovalBootstrapStartError(error)}`,
-          );
-        } else {
-          logger.error(`failed to start native approval handler: ${String(error)}`);
-        }
-        scheduleRetryForContext(context, generation);
+      if (isExecApprovalChannelRuntimeTerminalStartError(error)) {
+        logger.error(`native approval handler disabled: ${String(error)}`);
+        return;
       }
+      if (isRetryableApprovalBootstrapStartError(error)) {
+        logger.warn(
+          `native approval handler deferred until gateway readiness recovers: ${formatRetryableApprovalBootstrapStartError(error)}`,
+        );
+      } else {
+        logger.error(`failed to start native approval handler: ${String(error)}`);
+      }
+      retryJob = params.scheduler.schedule({
+        id: retryId,
+        delayMs: APPROVAL_HANDLER_BOOTSTRAP_RETRY_MS,
+        run: startRegisteredHandler,
+      });
     }
-  };
-
-  const startForContext = (context: unknown) => {
-    invalidateActiveHandler();
-    spawn(
-      "failed to start native approval handler",
-      startHandlerForRegisteredContext(context, activeGeneration),
-    );
   };
 
   const unsubscribe =
     watchChannelRuntimeContexts({
-      channelRuntime: params.channelRuntime,
-      channelId: params.plugin.id,
-      accountId: params.accountId,
-      capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+      ...contextKey,
       onEvent: (event) => {
+        cancelRetry();
         if (event.type === "registered") {
-          startForContext(event.context);
+          spawn("failed to start native approval handler", startRegisteredHandler());
           return;
         }
-        invalidateActiveHandler();
         spawn("failed to stop native approval handler", stopHandler());
       },
     }) ?? (() => {});
 
-  const existingContext = getChannelRuntimeContext({
-    channelRuntime: params.channelRuntime,
-    channelId: params.plugin.id,
-    accountId: params.accountId,
-    capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
-  });
-  if (existingContext !== undefined) {
-    startForContext(existingContext);
-  }
+  spawn("failed to start native approval handler", startRegisteredHandler());
 
   return async () => {
+    stopped = true;
     unsubscribe();
-    invalidateActiveHandler();
+    cancelRetry();
     await stopHandler();
   };
 }

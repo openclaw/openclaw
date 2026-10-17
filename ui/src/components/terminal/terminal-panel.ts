@@ -3,6 +3,7 @@ import { onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { terminalFontFamily } from "../../app/terminal-font.ts";
 import { renderSolidSnapshot } from "../../lib/dom/solid-snapshot.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createDockLayout } from "../dock-layout.ts";
@@ -96,6 +97,7 @@ export class TerminalPanelController extends SolidPanelOwner {
       currentSessionIds: () =>
         new Set(this.terminalSessions.tabs.map((tab) => tab.gatewaySessionId).filter(Boolean)),
       list: () => this.terminalSessions.listSessions(),
+      showError: (error) => this.terminalSessions.setError(formatUiError(error)),
       attach: (id, agentOwned) => this.terminalSessions.attachSessionById(id, agentOwned),
     });
     onSettled(() => {

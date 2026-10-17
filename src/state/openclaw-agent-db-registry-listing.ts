@@ -95,7 +95,8 @@ type AgentDatabaseRegistryMemo = {
   pathname: string;
   token: symbol;
   entries?: readonly OpenClawRegisteredAgentDatabase[];
-  next?: { memo: AgentDatabaseRegistryMemo; transition?: RegistryTransition };
+  transition?: RegistryTransition;
+  next?: AgentDatabaseRegistryMemo;
 };
 
 // A plugin may first open a hot-created agent; its registration must invalidate
@@ -164,9 +165,9 @@ function advanceRegisteredAgentDatabasesMemo(
   if (previous?.pathname !== pathname) {
     return undefined;
   }
-  const memo = { pathname, token: Symbol(pathname) };
+  const memo = { pathname, token: Symbol(pathname), transition };
   // Only captured readers retain older nodes; the owner never keeps a backward history.
-  previous.next = { memo, transition };
+  previous.next = memo;
   registry.memo = memo;
   return { previous: previous.token, current: memo.token };
 }
@@ -605,25 +606,33 @@ export function prepareOpenClawAgentDatabaseRegistrySnapshotRead(
             invalidated = true;
             throw new AgentDatabaseRegistryChangedError();
           }
-          cursor = next.memo;
+          cursor = next;
         }
       };
       const followRegistration = (change: AgentDatabaseRegistryChange) => {
         assertAdmissionCurrent();
-        if (
-          invalidated ||
-          cursor.token !== change.previous ||
-          registry.memo?.pathname !== cursor.pathname ||
-          registry.memo.token !== change.current
-        ) {
+        if (invalidated || registry.memo?.pathname !== cursor.pathname) {
           invalidated = true;
           throw new Error("Agent registration cannot replace an invalidated registry read");
         }
-        const operation = cursor.next?.transition?.operation;
+        const next = cursor.token === change.current ? cursor : cursor.next;
+        if (
+          (cursor.token !== change.previous && cursor.token !== change.current) ||
+          next?.token !== change.current
+        ) {
+          // Shared preparation replays its receipts to late joiners. Older receipts
+          // cannot advance a newer witness; a gap at the current receipt still refuses it.
+          if (change.current !== registry.memo.token) {
+            return;
+          }
+          invalidated = true;
+          throw new Error("Agent registration cannot replace an invalidated registry read");
+        }
+        const operation = next.transition?.operation;
         if (operation) {
           followedRegistrations.add(operation);
         }
-        cursor = registry.memo;
+        cursor = next;
       };
       return {
         memo,

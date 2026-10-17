@@ -310,10 +310,10 @@ export function readWorkspaceJournalInDatabase(
   db: EngineConnection,
   command: WorkspaceJournalReadCommand,
 ): WorkspaceJournalReadResult {
+  if (command.type === "placementJournals.owners") {
+    return { type: command.type, owners: listWorkspaceReconciliationOwners(db) };
+  }
   return runSqliteDeferredTransactionSync(db, () => {
-    if (command.type === "placementJournals.owners") {
-      return { type: command.type, owners: listWorkspaceReconciliationOwners(db) };
-    }
     if (command.type === "placementJournals.placement") {
       return {
         type: command.type,

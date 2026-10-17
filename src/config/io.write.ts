@@ -328,7 +328,8 @@ export async function writeConfigFileFromContext(
   const includeFileHashes: Record<string, string> = {};
   const includeFileTargets: Record<string, string> = {};
   const sourceConfigForPreflight = context.resolveRuntimePreflightSourceConfig(
-    stampedOutputConfig,
+    // Receipts must reflect JSON omissions, just like a later read of this file.
+    JSON.parse(json),
     includeFileHashes,
     includeFileTargets,
     validationEnvBase,

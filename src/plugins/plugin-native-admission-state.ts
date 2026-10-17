@@ -234,7 +234,7 @@ export function overlayPluginNativeAdmissions(
             ...record,
             sourceAdmissions: {
               ...record.sourceAdmissions,
-              ...structuredClone(Object.fromEntries(receipts)),
+              ...Object.fromEntries(receipts),
             },
           }
         : record;
@@ -284,7 +284,7 @@ export function preparePluginNativeAdmissions(
       }
     }
     for (const [key, receipt] of Object.entries(record.sourceAdmissions ?? {})) {
-      state.receipts.set(key, structuredClone(receipt));
+      state.receipts.set(key, receipt);
       for (const [id, namespace] of Object.entries(receipt.nativeNamespaces)) {
         state.namespaces.set(id, structuredClone(namespace));
       }
