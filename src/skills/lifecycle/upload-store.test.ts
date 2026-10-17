@@ -16,37 +16,30 @@ import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { commitSkillUploadInDatabase } from "./upload-store-commit.js";
 import { SkillUploadRequestError } from "./upload-store-error.js";
+import { defaultSkillUploadStore } from "./upload-store.js";
 import { beginSkillUploadInDatabase } from "./upload-store.kernel.js";
 import {
   deleteExpiredSkillUploadUnlessLeasedInDatabase,
   renewSkillUploadInstallLease,
 } from "./upload-store.sqlite.js";
-import { createSkillUploadStore, observeSkillUploadRenewal } from "./upload-store.test-support.js";
+import {
+  observeSkillUploadRenewal,
+  useSkillUploadStoreLocation,
+} from "./upload-store.test-support.js";
 
 const ACTIVE_UPLOAD_LIMIT = 32;
 
 const tempDirs = createTempDirTracker();
 
-async function makeStore(options?: {
-  installLeaseHeartbeatMs?: number;
-  installLeaseMs?: number;
-  ttlMs?: number;
-}) {
+async function makeStore() {
   const root = tempDirs.make("openclaw-skill-upload-store-");
   const databasePath = path.join(root, "openclaw.sqlite");
-  return {
-    root,
-    databasePath,
-    store: createSkillUploadStore({
-      path: databasePath,
-      tempRootDir: root,
-      ...options,
-    }),
-  };
+  useSkillUploadStoreLocation(databasePath, root);
+  return { root, databasePath, store: defaultSkillUploadStore };
 }
 
 async function commitUploadFixture(
-  store: ReturnType<typeof createSkillUploadStore>,
+  store: typeof defaultSkillUploadStore,
   databasePath: string,
   slug: string,
 ) {
@@ -183,10 +176,9 @@ describe("skill upload store", () => {
 
   beforeAll(async () => {
     activeLimitRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-limit-"));
-    const store = createSkillUploadStore({
-      path: path.join(activeLimitRoot, "openclaw.sqlite"),
-      tempRootDir: activeLimitRoot,
-    });
+    const databasePath = path.join(activeLimitRoot, "openclaw.sqlite");
+    useSkillUploadStoreLocation(databasePath, activeLimitRoot);
+    const store = defaultSkillUploadStore;
     capacityReads = trackSqliteStatementExecutions(
       requireNativeSqliteDatabase(stateDatabase(path.join(activeLimitRoot, "openclaw.sqlite"))),
       ["capacity"],
@@ -372,20 +364,19 @@ describe("skill upload store", () => {
   });
 
   it("accepts exactly one concurrent chunk at the same offset", async () => {
-    const { databasePath, root, store } = await makeStore();
+    const { databasePath, store } = await makeStore();
     const begin = await store.begin({
       kind: "skill-archive",
       slug: "concurrent-skill",
       sizeBytes: 2,
     });
-    const secondStore = createSkillUploadStore({ path: databasePath, tempRootDir: root });
     const results = await Promise.allSettled([
       store.chunk({
         uploadId: begin.uploadId,
         offset: 0,
         dataBase64: Buffer.from("a").toString("base64"),
       }),
-      secondStore.chunk({
+      store.chunk({
         uploadId: begin.uploadId,
         offset: 0,
         dataBase64: Buffer.from("b").toString("base64"),
@@ -401,15 +392,14 @@ describe("skill upload store", () => {
   });
 
   it("creates one row for concurrent idempotent begins and rejects conflicts", async () => {
-    const { databasePath, root, store } = await makeStore();
-    const secondStore = createSkillUploadStore({ path: databasePath, tempRootDir: root });
+    const { databasePath, store } = await makeStore();
     const params = {
       kind: "skill-archive" as const,
       slug: "idem-skill",
       sizeBytes: 3,
       idempotencyKey: "same-key",
     };
-    const [first, second] = await Promise.all([store.begin(params), secondStore.begin(params)]);
+    const [first, second] = await Promise.all([store.begin(params), store.begin(params)]);
     expect(second.uploadId).toBe(first.uploadId);
     expect(uploadCount(databasePath)).toBe(1);
     await expectUploadError(
@@ -565,10 +555,7 @@ describe("skill upload store", () => {
   });
 
   it("renews the install lease and preserves an expired leased upload", async () => {
-    const { databasePath, store } = await makeStore({
-      installLeaseHeartbeatMs: 10,
-      installLeaseMs: 60_000,
-    });
+    const { databasePath, store } = await makeStore();
     const committed = await commitUploadFixture(store, databasePath, "heartbeat-skill");
 
     const entered = deferred();
@@ -586,7 +573,7 @@ describe("skill upload store", () => {
       db.prepare(
         "UPDATE state_leases SET heartbeat_at = 1 WHERE scope = 'skill-upload-install' AND lease_key = ?",
       ).run(committed.uploadId);
-      const heartbeat = intervals.mock.calls.find(([, delay]) => delay === 10)?.[0];
+      const heartbeat = intervals.mock.calls.find(([, delay]) => delay === 30_000)?.[0];
       if (!heartbeat) {
         throw new Error("Install heartbeat was not scheduled");
       }
@@ -598,7 +585,7 @@ describe("skill upload store", () => {
         )
         .get(committed.uploadId) as { heartbeat_at: number; expires_at: number };
       expect(renewed.heartbeat_at).toBeGreaterThan(1);
-      expect(renewed.expires_at - renewed.heartbeat_at).toBe(60_000);
+      expect(renewed.expires_at - renewed.heartbeat_at).toBe(900_000);
 
       expireUpload(databasePath, committed.uploadId);
       expect(
@@ -625,7 +612,7 @@ describe("skill upload store", () => {
   });
 
   it("does not renew an expired install lease", async () => {
-    const { databasePath, store } = await makeStore({ installLeaseHeartbeatMs: 60_000 });
+    const { databasePath, store } = await makeStore();
     const archive = Buffer.from("abc");
     const committed = await store.begin({
       kind: "skill-archive",
