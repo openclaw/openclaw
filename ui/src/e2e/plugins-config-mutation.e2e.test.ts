@@ -2,6 +2,7 @@
 import { expect, it } from "vitest";
 import type { PluginsInspectResult } from "../lib/plugins/index.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { inspection } from "./plugins-settings-admin.test-support.ts";
 
@@ -13,42 +14,25 @@ const suite = createControlUiE2eSuite({
 });
 
 function configResponse(fallback: string | undefined, workboardEnabled: boolean, hash: string) {
+  const defaultModel = { primary: "openai/gpt-5" };
+  const model = { ...defaultModel, ...(fallback ? { fallbacks: [fallback] } : {}) };
   const config = {
     agents: {
-      defaults: { model: { primary: "openai/gpt-5" } },
-      entries: {
-        main: {
-          model: {
-            primary: "openai/gpt-5",
-            ...(fallback ? { fallbacks: [fallback] } : {}),
-          },
-        },
-      },
+      defaults: { model: defaultModel },
+      entries: { main: { model } },
     },
-    plugins: {
-      entries: { workboard: { enabled: workboardEnabled } },
-    },
+    plugins: { entries: { workboard: { enabled: workboardEnabled } } },
   };
-  return {
-    config,
-    hash,
-    appliedConfigHash: hash,
-    issues: [],
-    raw: JSON.stringify(config),
-    valid: true,
-  };
+  return { ...configSnapshot(config, hash), appliedConfigHash: hash };
 }
 
 const workboardDisabled = {
   id: "workboard",
   name: "Workboard",
-  description: "Plan and track work",
   origin: "global",
   installed: true,
   enabled: false,
   state: "disabled",
-  featured: true,
-  order: 10,
 };
 
 const workboardEnabled = {
@@ -85,8 +69,8 @@ function workboardInspection(enabled: boolean): PluginsInspectResult {
 }
 
 suite.define(() => {
-  it("config.set drains a pending draft before re-enabling an accepted external plugin without review", async () => {
-    await suite.withPage(
+  it("config.set drains a pending draft before re-enabling an accepted external plugin without review", () =>
+    suite.withPage(
       {
         colorScheme: "dark",
         locale: "en-US",
@@ -172,6 +156,5 @@ suite.define(() => {
         expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
         expect(await gateway.getRequests("connect")).toHaveLength(connects);
       },
-    );
-  });
+    ));
 });

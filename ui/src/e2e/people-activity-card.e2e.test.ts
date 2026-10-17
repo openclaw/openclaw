@@ -76,7 +76,8 @@ async function openPeople(
       .first();
     await toggle[touch]();
   }
-  await selectOnlineView(page, Boolean(touch));
+  const online = page.locator(".sidebar-rail").getByRole("button", { name: "Users", exact: true });
+  await online[touch ? "tap" : "click"]();
   return gateway;
 }
 function sessionRow(
@@ -163,18 +164,9 @@ async function expectMultilineTitle(title: Locator) {
   expect(layout.renderedLines).toBeGreaterThan(1.5);
 }
 
-async function selectOnlineView(page: Page, touch = false) {
-  const online = page.locator(".sidebar-rail").getByRole("button", { name: "Users", exact: true });
-  if (touch) {
-    await online.tap();
-  } else {
-    await online.click();
-  }
-}
-
 suite.define(() => {
-  it("reports native browser interaction but not automatic reconnection", async () => {
-    await withPage({}, async ({ page }) => {
+  it("reports native browser interaction but not automatic reconnection", () =>
+    withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, scenario());
       await page.clock.install();
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
@@ -189,10 +181,9 @@ suite.define(() => {
       await page.clock.resume();
       await reconnectMockGateway(page, gateway);
       expect(await gateway.getRequests("presence.activity")).toHaveLength(2);
-    });
-  });
-  it("separates connection duration from active, idle, and unavailable activity", async () => {
-    await withPage({ colorScheme: "dark" }, async ({ page }) => {
+    }));
+  it("separates connection duration from active, idle, and unavailable activity", () =>
+    withPage({ colorScheme: "dark" }, async ({ page }) => {
       const now = Date.now();
       const data = scenario();
       const gateway = await openPeople(page, {
@@ -226,18 +217,10 @@ suite.define(() => {
       ]);
       await expect.poll(() => person.getAttribute("data-presence-activity")).toBe("active");
       await expectText(card.locator(".person-activity-card__status"), "Active");
-    });
-  });
-  it("labels shared owner presence separately from a personal sign-in", async () => {
-    await withPage({ colorScheme: "light" }, async ({ page }) => {
-      const gateway = await openPeople(page, {
-        sessionKey: selected,
-        methodResponses: {
-          "sessions.list": chatSessionListResponse([
-            sessionRow(selected, "Synthetic audit session", 1),
-          ]),
-        },
-      });
+    }));
+  it("labels shared owner presence separately from a personal sign-in", () =>
+    withPage({ colorScheme: "light" }, async ({ page }) => {
+      const gateway = await openPeople(page, { sessionKey: selected });
       await gateway.waitForRequest("connect");
       await emitPresence(gateway, [
         {
@@ -271,19 +254,14 @@ suite.define(() => {
         "aria-label",
         "Shared owner",
       );
-    });
-  });
+    }));
 
   it.each(["click", "Enter", "tap", "tap with loaded preview"] as const)(
     "opens a person's Activity page directly on %s",
     async (action) => {
       const touch = action.startsWith("tap");
       await withPage(
-        {
-          hasTouch: touch,
-          isMobile: touch,
-          viewport: touch ? phone : desktop,
-        },
+        { hasTouch: touch, isMobile: touch, viewport: touch ? phone : desktop },
         async ({ page }) => {
           const gateway = await openPeople(page, scenario(), touch ? "click" : undefined);
           const person = onlinePerson(page, "alice");
@@ -320,13 +298,9 @@ suite.define(() => {
     },
   );
 
-  it("opens person details on hover, preserves focus on updates, and follows the card activity link", async () => {
-    await withPage(
-      {
-        hasTouch: false,
-        colorScheme: "light",
-        serviceWorkers: "block",
-      },
+  it("opens person details on hover, preserves focus on updates, and follows the card activity link", () =>
+    withPage(
+      { hasTouch: false, colorScheme: "light", serviceWorkers: "block" },
       async ({ page }) => {
         const gateway = await openPeople(page);
         const row = page
@@ -344,12 +318,11 @@ suite.define(() => {
         await expect
           .poll(() => card.locator("a").allTextContents())
           .toEqual(
-            expect.arrayContaining([
-              expect.stringContaining("Release checklist"),
-              expect.stringContaining("Main Session"),
-              expect.stringContaining(recentLabel),
-              expect.stringContaining("View activity"),
-            ]),
+            expect.arrayContaining(
+              ["Release checklist", "Main Session", recentLabel, "View activity"].map((text) =>
+                expect.stringContaining(text),
+              ),
+            ),
           );
         expect(await card.innerHTML()).not.toContain("agent:private:hidden");
         await expectInlineLastActivity(card);
@@ -420,11 +393,10 @@ suite.define(() => {
         await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/alice");
         await pollCount(card).toBe(0);
       },
-    );
-  });
+    ));
 
-  it("opens focused details inside a narrow touch viewport and follows the session's saved face", async () => {
-    await withPage(
+  it("opens focused details inside a narrow touch viewport and follows the session's saved face", () =>
+    withPage(
       {
         hasTouch: true,
         isMobile: true,
@@ -473,10 +445,9 @@ suite.define(() => {
         await expect.poll(() => page.url()).toContain("/dashboard/");
         await pollCount(card).toBe(0);
       },
-    );
-  });
-  it("keeps colliding people, watches, owner exclusion and open cards separate through updates", async () => {
-    await withPage({ colorScheme: "light", serviceWorkers: "block" }, async ({ page }) => {
+    ));
+  it("keeps colliding people, watches, owner exclusion and open cards separate through updates", () =>
+    withPage({ colorScheme: "light", serviceWorkers: "block" }, async ({ page }) => {
       const actor = {
         type: "human" as const,
         id,
@@ -548,12 +519,11 @@ suite.define(() => {
       await expectAttribute(link(profileCard, "View activity"), "href", `/activity/${id}`);
       expect(await requestCount(gateway, "connect")).toBeGreaterThan(0);
       expect(await requestCount(gateway, "sessions.list")).toBeGreaterThan(0);
-    });
-  });
+    }));
   it.each([true, false])(
     "keeps a same-ID peer visible and typing enabled for profile self: %s",
-    async (qualified) => {
-      await withPage({}, async ({ page }) => {
+    (qualified) =>
+      withPage({}, async ({ page }) => {
         const self = qualified ? profile : raw;
         const peer = qualified ? raw : profile;
         const gateway = await openPeople(page, {
@@ -563,14 +533,8 @@ suite.define(() => {
             { ...self, self: true, watchedSessions: [selected] },
             { ...peer, watchedSessions: [selected] },
           ],
-          methodResponses: {
-            "session.typing": { ok: true, broadcast: true },
-            "sessions.list": chatSessionListResponse([
-              sessionRow(selected, "Namespace isolation", 1, {
-                sessionId: "namespace-session",
-              }),
-            ]),
-          },
+          sessions: [{ key: selected, kind: "direct", sessionId: "namespace-session" }],
+          methodResponses: { "session.typing": { ok: true, broadcast: true } },
         });
         await page
           .getByRole(qualified ? "button" : "link", {
@@ -589,7 +553,6 @@ suite.define(() => {
           .fill("A synthetic typing draft");
         const typing = await gateway.waitForRequest("session.typing");
         expect(typing.params).toMatchObject({ sessionKey: selected, typing: true });
-      });
-    },
+      }),
   );
 });

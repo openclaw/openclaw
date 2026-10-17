@@ -39,6 +39,11 @@ const preferenceFor = (kind: "none" | "theme"): BackgroundPreference => ({
   ...DEFAULT_BACKGROUND_PREFERENCE,
   source: { kind },
 });
+const backgroundReply = (
+  asset: UserBackgroundAsset | null,
+  preference: BackgroundPreference | null,
+) => ({ status: "ok", asset, preference });
+const preferenceReply = (entries: Record<string, unknown>) => ({ status: "ok", entries });
 async function installBackground(
   page: Page,
   preference: BackgroundPreference | null,
@@ -50,11 +55,8 @@ async function installBackground(
     ...overrides,
     methodResponses: {
       "config.get": configResponse({}, "personal-background"),
-      "users.prefs.get": {
-        status: "ok",
-        entries: preference ? { "ui.background": preference } : {},
-      },
-      "users.background.get": { status: "ok", asset, preference },
+      "users.prefs.get": preferenceReply(preference ? { "ui.background": preference } : {}),
+      "users.background.get": backgroundReply(asset, preference),
       ...overrides.methodResponses,
     },
   });
@@ -102,14 +104,7 @@ async function openRoute(page: Page, routePath: string, routeId: "new-session" |
   await waitForControlUiRoute(page, { routeId });
 }
 
-async function openAppearance(page: Page) {
-  await page.keyboard.press("ControlOrMeta+Shift+Comma");
-  await waitForControlUiSettingsTakeover(page);
-  await page.locator(sectionSelector).scrollIntoViewIfNeeded();
-}
-
 async function busyImage(page: Page) {
-  // Synthetic image fixture, not a replacement for the application's rendering.
   const imageFixture = await page.evaluate(() => {
     const canvas = document.createElement("canvas");
     canvas.width = 960;
@@ -141,15 +136,15 @@ async function updateSnapshot(
   asset: UserBackgroundAsset | null,
   mode: "light" | "dark",
 ) {
-  await gateway.setMethodResponse("users.prefs.get", {
-    status: "ok",
-    entries: {
+  await gateway.setMethodResponse(
+    "users.prefs.get",
+    preferenceReply({
       "ui.theme": "claw",
       "ui.themeMode": mode,
       ...(preference ? { "ui.background": preference } : {}),
-    },
-  });
-  await gateway.setMethodResponse("users.background.get", { status: "ok", asset, preference });
+    }),
+  );
+  await gateway.setMethodResponse("users.background.get", backgroundReply(asset, preference));
 }
 
 async function changePreference(
@@ -157,9 +152,9 @@ async function changePreference(
   gateway: MockGatewayControls,
   action: () => Promise<unknown>,
   preference: BackgroundPreference,
-  expectedPreference: BackgroundPreference | null,
-  asset: UserBackgroundAsset | null,
-  mode: "light" | "dark",
+  expectedPreference: BackgroundPreference | null = null,
+  asset: UserBackgroundAsset | null = null,
+  mode: "light" | "dark" = "light",
 ) {
   const after = (await gateway.getRequests("users.prefs.set")).length;
   const params = {
@@ -181,8 +176,8 @@ async function changePreference(
 }
 
 suite.define(() => {
-  it("keeps anonymous None and per-surface theme choices browser-local across reload", async () => {
-    await suite.withPage({ viewport: desktop }, async ({ page }) => {
+  it("keeps anonymous None and per-surface theme choices browser-local across reload", () =>
+    suite.withPage({ viewport: desktop }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         presenceUsers: [],
         methodResponses: {
@@ -209,20 +204,15 @@ suite.define(() => {
       await openRoute(page, "chat", "chat");
       await expectCount(page, backgroundImage, 0);
       await expectNoWrites(gateway, ["config.patch", "users.prefs.set", "users.background.upload"]);
-    });
-  });
+    }));
 
   it.each(["light", "dark"] as const)(
     "uses private upload controls and independent placements without covering the %s transcript",
-    async (mode) => {
-      await suite.withPage(
+    (mode) =>
+      suite.withPage(
         { colorScheme: mode, locale: "en-US", viewport: largeDesktop },
         async ({ page }) => {
-          const gateway = await installMockGateway(page, {
-            assistantName: "Assistant",
-            agentModel: "demo/example",
-            models: [{ id: "example", name: "Example model", provider: "demo" }],
-            presenceUsers,
+          const gateway = await installBackground(page, null, {
             featureMethods: [
               ...defaultControlUiFeatureMethods,
               "users.prefs.get",
@@ -230,21 +220,15 @@ suite.define(() => {
               ...backgroundMethods,
             ],
             historyMessages: [
-              chatMessage(
-                "assistant",
-                "## A readable conversation\n\nReadable text.\n\n- Selectable text.\n- Preserved draft.",
-              ),
+              chatMessage("assistant", "## A readable conversation\n\nText.\n\n- Item."),
             ],
-            methodResponses: {
-              "config.get": configResponse({ themeMode: mode }, "personal-background"),
-              "users.prefs.get": {
-                status: "ok",
-                entries: { "ui.theme": "claw", "ui.themeMode": mode },
-              },
-              "users.prefs.set": { status: "ok" },
-              "users.background.get": { status: "ok", asset: null, preference: null },
-            },
+            methodResponses: { "users.prefs.set": { status: "ok" } },
           });
+          await gateway.setMethodResponse(
+            "config.get",
+            configResponse({ themeMode: mode }, "personal-background"),
+          );
+          await updateSnapshot(gateway, null, null, mode);
           const section = await visitAppearance(page, true);
           await gateway.waitForRequest("users.background.get");
           expect(await section.locator("[data-background-source]").count()).toBe(3);
@@ -278,11 +262,10 @@ suite.define(() => {
             imageBase64: imageFixture.png.toString("base64"),
           });
           await updateSnapshot(gateway, preference, asset, mode);
-          await gateway.resolveDeferred("users.background.upload", {
-            status: "ok",
-            asset,
-            preference,
-          });
+          await gateway.resolveDeferred(
+            "users.background.upload",
+            backgroundReply(asset, preference),
+          );
           await section
             .getByRole("status")
             .filter({ hasText: "Background image saved." })
@@ -311,7 +294,9 @@ suite.define(() => {
           expect(reads).toEqual([]);
           const composer = page.locator(".agent-chat__composer-combobox textarea");
           await composer.fill("An unfinished thought stays here.");
-          await openAppearance(page);
+          await page.keyboard.press("ControlOrMeta+Shift+Comma");
+          await waitForControlUiSettingsTakeover(page);
+          await page.locator(sectionSelector).scrollIntoViewIfNeeded();
           const change = async (
             action: () => Promise<unknown>,
             patch: Partial<BackgroundPreference>,
@@ -370,36 +355,26 @@ suite.define(() => {
           await expectCount(page, backgroundImage, 0);
           await expectNoWrites(gateway, ["config.patch"]);
         },
-      );
-    },
+      ),
   );
 
-  it("saves an initial explicit None only with the absent-value CAS", async () => {
-    await suite.withPage({ viewport: desktop }, async ({ page }) => {
+  it("saves an initial explicit None only with the absent-value CAS", () =>
+    suite.withPage({ viewport: desktop }, async ({ page }) => {
       const gateway = await installBackground(page, null, {
         methodResponses: { "users.prefs.set": { status: "conflict" } },
       });
       await visitAppearance(page, true);
       await gateway.waitForRequest("users.background.get");
       const preference = preferenceFor("none");
-      await changePreference(
-        page,
-        gateway,
-        () => source(page, "none").click(),
-        preference,
-        null,
-        null,
-        "light",
-      );
+      await changePreference(page, gateway, () => source(page, "none").click(), preference);
       await page.reload();
       await expectSelected(page, "none");
-    });
-  });
+    }));
 
   it.each(["none", "theme"] as const)(
     "refreshes retained-image metadata when another device removes it while %s is selected",
-    async (kind) => {
-      await suite.withPage({ viewport: desktop }, async ({ page }) => {
+    (kind) =>
+      suite.withPage({ viewport: desktop }, async ({ page }) => {
         const image = await busyImage(page);
         const preference = preferenceFor(kind);
         const asset = imageAsset(image.jpeg);
@@ -418,11 +393,7 @@ suite.define(() => {
         const thumbnail = section.locator(thumbnailSelector);
         await thumbnail.waitFor();
         const before = (await gateway.getRequests("users.background.get")).length;
-        await gateway.setMethodResponse("users.background.get", {
-          status: "ok",
-          asset: null,
-          preference,
-        });
+        await gateway.setMethodResponse("users.background.get", backgroundReply(null, preference));
         await gateway.emitGatewayEvent("users.prefs.changed", {
           profileId,
           keys: ["ui.background"],
@@ -437,12 +408,11 @@ suite.define(() => {
         await section.locator('[data-background-source="custom"]').click();
         await (await chooser).setFiles([]);
         await expectNoWrites(gateway, ["users.prefs.set"]);
-      });
-    },
+      }),
   );
 
-  it("keeps an existing background after an upload conflict and exposes recovery", async () => {
-    await suite.withPage({ viewport: desktop }, async ({ page }) => {
+  it("keeps an existing background after an upload conflict and exposes recovery", () =>
+    suite.withPage({ viewport: desktop }, async ({ page }) => {
       const preference = preferenceFor("none");
       const gateway = await installBackground(page, preference, {
         methodResponses: { "users.background.upload": { status: "conflict" } },
@@ -458,6 +428,5 @@ suite.define(() => {
       expect(await source(section, "none").getAttribute("aria-pressed")).toBe("true");
       expect(await section.locator(uploadSelector).isEnabled()).toBe(true);
       await expectNoWrites(gateway, ["users.prefs.set"]);
-    });
-  });
+    }));
 });

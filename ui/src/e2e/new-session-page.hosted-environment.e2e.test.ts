@@ -1,7 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
-import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -23,35 +22,40 @@ async function withPage(
   }
 }
 const trigger = (page: Page, name: string) => page.locator(`#new-session-${name}-trigger`);
-async function darkTheme(page: Page) {
-  await evaluateControlUiContext(page, (application) => application.theme.setMode("dark"));
-}
-const models: ModelCatalogEntry[] = [
-  {
+function models(available = true, restoredLabel?: string): ModelCatalogEntry[] {
+  const hosted: NonNullable<ModelCatalogEntry["agentRuntime"]> = {
+    id: "agentsapi",
+    source: "model",
+    cloudPlacementSupported: false,
+    workspaceEnvironment: {
+      kind: "provider-hosted",
+      label: restoredLabel ?? "OpenAI (Agents API)",
+    },
+  };
+  const choice: NonNullable<ModelCatalogEntry["runtimeChoices"]>[number] = {
+    available,
+    agentRuntime: hosted,
+    ...(available ? {} : { unavailableReason: "missing-auth" }),
+  };
+  const model: ModelCatalogEntry = {
     id: "gpt-5.5",
     name: "GPT-5.5",
     provider: "openai",
     available: true,
-    agentRuntime: {
+    agentRuntime: hosted,
+    runtimeChoices: restoredLabel ? [] : [choice],
+  };
+  if (!restoredLabel) {
+    model.agentRuntime = {
       id: "openclaw",
       source: "model",
       cloudPlacementSupported: true,
       cloudPlacementExecutionMode: "worker-turn",
       devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-    },
-    runtimeChoices: [
-      {
-        available: true,
-        agentRuntime: {
-          id: "agentsapi",
-          source: "model",
-          cloudPlacementSupported: false,
-          workspaceEnvironment: { kind: "provider-hosted", label: "OpenAI (Agents API)" },
-        },
-      },
-    ],
-  },
-];
+    };
+  }
+  return [model];
+}
 const responses = {
   "environments.list": {
     environments: [],
@@ -68,12 +72,12 @@ const responses = {
     headBranch: "main",
     repositoryStatus: "git",
   },
-  "models.list": { models },
+  "models.list": { models: models() },
   "sessions.create": { key: "agent:main:hosted-proof" },
 };
 suite.define(() => {
-  it("pairs the hosted environment with its runtime and preserves local draft intent on return", async () => {
-    await withPage(desktop, async (page) => {
+  it("pairs the hosted environment with its runtime and preserves local draft intent on return", () =>
+    withPage(desktop, async (page) => {
       const gateway = await installMockGateway(page, {
         workspace: "/home/peter/openclaw",
         workspaceGit: true,
@@ -90,7 +94,6 @@ suite.define(() => {
       });
       await page.goto(suite.server.baseUrl + "new");
       await page.locator(".new-session-page__message").waitFor();
-      await darkTheme(page);
       await openEnvironmentPicker(page);
       const surface = page.locator(".oc-popover.new-session-page__where-popover");
       const option = surface.locator('[data-value="runtime:agentsapi"]');
@@ -135,10 +138,9 @@ suite.define(() => {
         expect(create.params).not.toHaveProperty(key);
       }
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
-    });
-  });
-  it("keeps loading and unavailable hosted choices honest on mobile", async () => {
-    await withPage(mobile, async (page) => {
+    }));
+  it("keeps loading and unavailable hosted choices honest on mobile", () =>
+    withPage(mobile, async (page) => {
       const gateway = await installMockGateway(page, {
         workspace: "/home/peter/openclaw",
         deferredMethods: ["models.list"],
@@ -146,18 +148,11 @@ suite.define(() => {
       });
       await page.goto(suite.server.baseUrl + "new");
       await page.locator(".new-session-page__message").waitFor();
-      await darkTheme(page);
       await openEnvironmentPicker(page);
       const picker = page.locator(".oc-popover.new-session-page__where-popover");
       await picker.getByRole("searchbox").fill("Agents API");
       await picker.getByRole("status").waitFor();
-      const unavailable = models.map((model) => ({
-        ...model,
-        runtimeChoices: model.runtimeChoices!.map((choice) =>
-          Object.assign({}, choice, { available: false, unavailableReason: "missing-auth" }),
-        ),
-      }));
-      await gateway.resolveDeferred("models.list", { models: unavailable });
+      await gateway.resolveDeferred("models.list", { models: models(false) });
       const option = picker.locator('[data-value="runtime:agentsapi"]');
       await pollAttribute(option, "aria-disabled").toBe("true");
       await option.waitFor();
@@ -165,30 +160,19 @@ suite.define(() => {
       await page.keyboard.press("Enter");
       expect(await trigger(page, "where").getAttribute("data-hosted-runtime")).toBeNull();
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-    });
-  });
-  it("restores the hosted environment from model preferences without exposing local projects", async () => {
-    await withPage(mobile, async (page) => {
+    }));
+  it("restores the hosted environment from model preferences without exposing local projects", () =>
+    withPage(mobile, async (page) => {
       const label = "OpenAI (Agents API) · Research and analysis workspace";
-      const hosted = models[0]!.runtimeChoices![0]!;
-      const configured = {
-        ...models[0]!,
-        agentRuntime: {
-          ...hosted.agentRuntime,
-          workspaceEnvironment: { kind: "provider-hosted", label },
-        },
-        runtimeChoices: [],
-      };
       await installMockGateway(page, {
         workspace: "/home/peter/openclaw",
         workspaceGit: true,
-        methodResponses: { ...responses, "models.list": { models: [configured] } },
+        methodResponses: { ...responses, "models.list": { models: models(true, label) } },
       });
       await page.goto(suite.server.baseUrl + "new");
       const where = trigger(page, "where");
       await pollAttribute(where, "data-hosted-runtime").toBe("agentsapi");
       await where.waitFor();
-      await darkTheme(page);
       expect(await trigger(page, "project").count()).toBe(0);
       expect(await where.getAttribute("aria-label")).toContain(label);
       await openEnvironmentPicker(page);
@@ -198,6 +182,5 @@ suite.define(() => {
       expect(await page.locator('[data-value="gateway"]').getAttribute("aria-disabled")).toBe(
         "true",
       );
-    });
-  });
+    }));
 });

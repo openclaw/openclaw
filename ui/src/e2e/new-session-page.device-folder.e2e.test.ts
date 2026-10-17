@@ -63,8 +63,8 @@ async function setup(page: Page, scenario: ControlUiMockGatewayScenario) {
 }
 
 suite.define(() => {
-  it("creates and dispatches an existing folder on exactly the selected capable device", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+  it("creates and dispatches an existing folder on exactly the selected capable device", () =>
+    suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const sessionKey = "agent:main:existing-device-folder";
       const deviceFolder = { deviceId: "paired-runner", path: "/srv/existing project" };
       const { gateway, project, input, message, start } = await setup(page, {
@@ -144,10 +144,9 @@ suite.define(() => {
         key: sessionKey,
         message: "Work in the existing device folder",
       });
-    });
-  });
-  it("browses folders on the selected device and creates the session in the chosen one", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+    }));
+  it("browses folders on the selected device and creates the session in the chosen one", () =>
+    suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const sessionKey = "agent:main:browsed-device-folder";
       const home = { path: "/Users/dev", home: "/Users/dev", parent: "/Users" };
       const { gateway, input, message, start } = await setup(page, {
@@ -201,10 +200,9 @@ suite.define(() => {
       expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
         deviceFolder: { deviceId: "paired-runner", path: "/Users/dev/src" },
       });
-    });
-  });
-  it("offers device browsing only to admins", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+    }));
+  it("offers device browsing only to admins", () =>
+    suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       await setup(page, {
         operatorScopes: ["operator.read", "operator.write"],
         methodResponses: {
@@ -216,10 +214,9 @@ suite.define(() => {
       });
       await page.locator('[data-value="device-folder"]').waitFor();
       expect(await page.locator('[data-value="browse-device"]').count()).toBe(0);
-    });
-  });
-  it("restores a pending device-folder create without changing its device or path", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+    }));
+  it("restores a pending device-folder create without changing its device or path", () =>
+    suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const deviceFolder = { deviceId: "paired-runner", path: "/srv/existing" };
       const { gateway, input, message, start } = await setup(page, {
         deferredMethods: ["sessions.create"],
@@ -251,6 +248,5 @@ suite.define(() => {
       expect((await gateway.waitForRequest("sessions.dispatch")).params).toMatchObject({
         deviceId: deviceFolder.deviceId,
       });
-    });
-  });
+    }));
 });

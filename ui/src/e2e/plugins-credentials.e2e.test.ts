@@ -65,8 +65,8 @@ suite.define(() => {
     { width: 390, readOnly: false, literal: false, missing: true },
   ])(
     "edits the advertised nested reference through the acknowledged writer at $width (readOnly=$readOnly, literal=$literal, missing=$missing)",
-    async ({ width, readOnly, literal, missing }) => {
-      await suite.withPage(
+    ({ width, readOnly, literal, missing }) =>
+      suite.withPage(
         { colorScheme: "dark", viewport: { width, height: 900 } },
         async ({ page }) => {
           const { apiKey, ...siblings } = searchConfig;
@@ -318,7 +318,6 @@ suite.define(() => {
             await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
           ).toBe(true);
         },
-      );
-    },
+      ),
   );
 });

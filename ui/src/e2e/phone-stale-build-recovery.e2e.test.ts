@@ -1,8 +1,8 @@
 // Phone stale-build proof covers artifact identity, reconnect retention, and service workers.
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Locator, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import type { Locator } from "playwright";
+import { expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -12,6 +12,7 @@ import {
   pauseVirtualClock,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   closeContext,
@@ -23,6 +24,7 @@ import {
   resetPhoneRecoveryRequestObserver,
   startPhoneProofServer,
   type PhoneRecoveryObservation,
+  type ObservedGatewayRequest,
   waitForObservedGatewayRequest,
   waitForPhoneProofServiceWorker,
 } from "./login-gate-e2e.test-support.ts";
@@ -42,20 +44,20 @@ const suite = createControlUiE2eSuite({
 const RETAINED_IMAGE_ALT = "Generated image retained after timeout";
 const RETAINED_TIMEOUT_TEXT =
   "Provider timed out after the request started. Retry the turn, or increase its configured timeout.";
-let RECOVERY_ARTIFACT_DIR: string;
-
-beforeEach(() => {
-  RECOVERY_ARTIFACT_DIR = createControlUiE2eArtifactDir("zombie-reload");
-});
-async function capture(page: Page, name: string, content: Locator) {
-  await writeFile(
-    path.join(RECOVERY_ARTIFACT_DIR, name + ".png"),
-    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [content]),
-  );
-}
 
 function requestsFor<T extends { method: string }>(requests: T[], ...methods: string[]) {
   return requests.filter((request) => methods.includes(request.method));
+}
+function effects(requests: ObservedGatewayRequest[]) {
+  return {
+    assignmentMutationCount: requestsFor(requests, "sessions.assignOwner").length,
+    modelWakeCount: requestsFor(requests, "chat.send").length,
+  };
+}
+async function expectNoTerminalAdvice(content: Locator) {
+  expect(
+    await content.evaluate((element) => element.closest("[role='status']")?.textContent ?? ""),
+  ).not.toMatch(/openclaw (?:triage|update)|terminal command|run .*terminal/iu);
 }
 
 suite.define(() => {
@@ -65,12 +67,13 @@ suite.define(() => {
   ] as const)(
     "rearms one bounded build recovery after the visible refresh action with $serviceWorker service-worker state",
     async ({ serviceWorker, serviceWorkers }) => {
+      const artifactDir = createControlUiE2eArtifactDir("zombie-reload");
       const proofServer = suite.server;
       const context = await suite.browser.newContext({
         hasTouch: true,
         isMobile: true,
         recordVideo: {
-          dir: RECOVERY_ARTIFACT_DIR,
+          dir: artifactDir,
           size: { height: 844, width: 390 },
         },
         serviceWorkers,
@@ -79,6 +82,11 @@ suite.define(() => {
       await using contextCleanup = phoneProofCleanup(() => closeContext(context));
       void contextCleanup;
       const page = await context.newPage();
+      const capture = async (name: string, content: Locator) =>
+        writeFile(
+          path.join(artifactDir, name + ".png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [content]),
+        );
       const documentRequests: PhoneRecoveryObservation["documentRequests"] = [];
       const documentResponses: PhoneRecoveryObservation["documentResponses"] = [];
       page.on("request", (request) => {
@@ -132,27 +140,17 @@ suite.define(() => {
         deferredMethods: ["connect"],
         featureMethods: ["chat.startup", "sessions.assignOwner", "users.list"],
         historyMessages: [
+          { type: "text", text: RETAINED_TIMEOUT_TEXT },
           {
-            role: "assistant",
-            content: [{ type: "text", text: RETAINED_TIMEOUT_TEXT }],
-            timestamp: 1,
+            type: "image",
+            artifactId: retainedImageArtifactId,
+            url: retainedImagePath,
+            alt: RETAINED_IMAGE_ALT,
+            mimeType: "image/png",
+            width: 1280,
+            height: 358,
           },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "image",
-                artifactId: retainedImageArtifactId,
-                url: retainedImagePath,
-                alt: RETAINED_IMAGE_ALT,
-                mimeType: "image/png",
-                width: 1280,
-                height: 358,
-              },
-            ],
-            timestamp: 2,
-          },
-        ],
+        ].map((item, index) => ({ role: "assistant", content: [item], timestamp: index + 1 })),
         serverBuildId: proofBuildId,
         methodResponses: {
           "artifacts.download": {
@@ -166,13 +164,7 @@ suite.define(() => {
             url: retainedImageTicketedUrl,
             expiresAt: "2099-01-01T00:00:00.000Z",
           },
-          "config.get": {
-            config,
-            hash: "phone-recovery-theme",
-            issues: [],
-            raw: JSON.stringify(config),
-            valid: true,
-          },
+          "config.get": configSnapshot(config, "phone-recovery-theme"),
           "users.list": {
             profiles: ["Ada", "Bob"].map((displayName) => ({
               id: `profile-${displayName.toLowerCase()}`,
@@ -294,8 +286,7 @@ suite.define(() => {
         const retentionRequests = await observeGatewayRequests(page);
         const retentionConnects = requestsFor(retentionRequests, "connect");
         const retentionTranscripts = requestsFor(retentionRequests, "chat.history", "chat.startup");
-        const retentionModelWakes = requestsFor(retentionRequests, "chat.send");
-        const retentionAssignmentMutations = requestsFor(retentionRequests, "sessions.assignOwner");
+        const retentionEffects = effects(retentionRequests);
         expect([beforeReconnect, afterReconnect]).toEqual([
           { image: true, timeout: true },
           { image: true, timeout: true },
@@ -303,8 +294,7 @@ suite.define(() => {
         expect(retentionConnects).toHaveLength(2);
         expect(new Set(retentionConnects.map((request) => request.requestId)).size).toBe(2);
         expect(retentionTranscripts.length).toBeGreaterThanOrEqual(1);
-        expect(retentionModelWakes).toHaveLength(0);
-        expect(retentionAssignmentMutations).toHaveLength(0);
+        expect(retentionEffects).toEqual({ assignmentMutationCount: 0, modelWakeCount: 0 });
         const artifactDownloadRequests = await gateway.getRequests("artifacts.download");
         expect(artifactDownloadRequests.length).toBeGreaterThanOrEqual(1);
         expect(retainedImageRequestUrls.length).toBeGreaterThanOrEqual(1);
@@ -330,10 +320,9 @@ suite.define(() => {
             sourcePathname: retainedImagePath,
           },
           reconnect: {
-            assignmentMutationCount: retentionAssignmentMutations.length,
+            ...retentionEffects,
             connectRequestCount: retentionConnects.length,
             connectRequestIds: retentionConnects.map((request) => request.requestId),
-            modelWakeCount: retentionModelWakes.length,
             transcriptRequestCount: retentionTranscripts.length,
           },
           timeoutDelivery: {
@@ -366,16 +355,16 @@ suite.define(() => {
         expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
         expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).not.toBeNull();
         const recoveryAccess = await recovery.evaluate((button) => {
-          const bounds = button.getBoundingClientRect();
+          const { height, width } = button.getBoundingClientRect();
           const liveRegion = button.closest<HTMLElement>("[role='status']");
           const outlet = document.querySelector("openclaw-router-outlet");
           return {
             ariaLive: liveRegion?.getAttribute("aria-live"),
             disabled: (button as HTMLButtonElement).disabled,
-            height: bounds.height,
+            height,
             insideFencedOutlet: outlet?.contains(button) ?? false,
             tabIndex: (button as HTMLButtonElement).tabIndex,
-            width: bounds.width,
+            width,
           };
         });
         expect(recoveryAccess).toEqual({
@@ -396,16 +385,14 @@ suite.define(() => {
         );
         expect(recoveryFocused).toBe(true);
         const terminalInvocationCount = (await gateway.getRequests("terminal.open")).length;
-        expect(
-          await recovery.evaluate((button) => button.closest("[role='status']")?.textContent ?? ""),
-        ).not.toMatch(/openclaw (?:triage|update)|terminal command|run .*terminal/iu);
+        await expectNoTerminalAdvice(recovery);
         observation.reloadRequired = {
           actionCount: await recovery.count(),
           access: recoveryAccess,
           focused: recoveryFocused,
           terminalInvocationCount,
         };
-        await capture(page, `01-${serviceWorker}-reload-required`, recovery);
+        await capture(`01-${serviceWorker}-reload-required`, recovery);
         expect(terminalInvocationCount).toBe(0);
 
         const documentCountBeforeFailedProbe = documentRequests.length;
@@ -432,11 +419,7 @@ suite.define(() => {
           .poll(() => failedRecovery.textContent())
           .toContain("Could not refresh. Check your connection and try again.");
         expect(documentRequests).toHaveLength(documentCountBeforeFailedProbe);
-        expect(
-          await failedRecovery.evaluate(
-            (card) => card.closest("[role='status']")?.textContent ?? "",
-          ),
-        ).not.toMatch(/openclaw (?:triage|update)|terminal command|run .*terminal/iu);
+        await expectNoTerminalAdvice(failedRecovery);
 
         await recovery.tap();
         await expect.poll(() => documentRequests.length).toBe(3);
@@ -514,7 +497,7 @@ suite.define(() => {
           routePath: new URL(page.url()).pathname,
         };
         const actions = page.getByRole("button", { name: "Actions for Main" });
-        await capture(page, `02-${serviceWorker}-recovered`, actions);
+        await capture(`02-${serviceWorker}-recovered`, actions);
         await actions.tap();
         const assignment = page.getByRole("menuitem", { name: "Assign to…", exact: true });
         await assignment.waitFor();
@@ -538,21 +521,15 @@ suite.define(() => {
         expect(connectRequests).toHaveLength(4);
         expect(connectRequests.map((request) => request.documentOrdinal)).toEqual([1, 2, 3, 4]);
         expect(new Set(connectRequests.map((request) => request.requestId)).size).toBe(4);
-        const modelWakeCount = requestsFor(observedGatewayRequests, "chat.send").length;
-        expect(modelWakeCount).toBe(0);
-        const assignmentMutationCount = requestsFor(
-          observedGatewayRequests,
-          "sessions.assignOwner",
-        ).length;
-        expect(assignmentMutationCount).toBe(0);
+        const assignmentEffects = effects(observedGatewayRequests);
+        expect(assignmentEffects).toEqual({ assignmentMutationCount: 0, modelWakeCount: 0 });
         observation.assignment = {
-          assignmentMutationCount,
+          ...assignmentEffects,
           expectedOwner: "Bob",
-          modelWakeCount,
           selectedOwners,
           visible: await selectedOwner.isVisible(),
         };
-        await capture(page, `03-${serviceWorker}-assignment-menu`, selectedOwner);
+        await capture(`03-${serviceWorker}-assignment-menu`, selectedOwner);
         observation.scenarioCompleted = true;
       } finally {
         if (!page.isClosed()) {
@@ -596,7 +573,7 @@ suite.define(() => {
           };
         }
         await writeFile(
-          path.join(RECOVERY_ARTIFACT_DIR, `observed-${serviceWorker}.json`),
+          path.join(artifactDir, `observed-${serviceWorker}.json`),
           `${JSON.stringify(observation, null, 2)}\n`,
         );
       }
