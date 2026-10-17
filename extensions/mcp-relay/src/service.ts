@@ -1,11 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type { GatewayControlUiIngressFactoryV2 } from "openclaw/plugin-sdk/gateway-ingress";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { ownsGrant, type RelayCaller } from "./caller.js";
-import { RelayConsent } from "./consent.js";
 import type { GatewayRequest } from "./gateway-request.js";
 import { GrantBindings, isRetiredBindingError } from "./grant-bindings.js";
 import {
@@ -58,7 +57,6 @@ type ServiceOptions = {
 };
 
 export class RelayService {
-  readonly consent: RelayConsent;
   readonly #options: ServiceOptions;
   readonly #ingress: GatewayControlUiIngressFactoryV2;
   readonly #pending = new Map<string, Pending>();
@@ -78,16 +76,6 @@ export class RelayService {
       );
     }
     this.#ingress = options.controlUiIngress;
-    this.consent = new RelayConsent({
-      relayUrl: options.relayUrl,
-      request: (operation, params) => this.#request(operation, params),
-      revoke: (grantId) => this.revoke(grantId),
-      state: options.state,
-      scheduler: options.scheduler,
-      controlUiIngress: this.#ingress,
-      config: options.config,
-      requireReady: () => this.#requireReady(),
-    });
   }
 
   start(): void {
@@ -152,7 +140,7 @@ export class RelayService {
       principal: { kind: "owner" as const },
       ceiling: ["operator.read", "operator.write"],
     };
-    await this.consent.validateAuthority(
+    await this.#validateAuthority(
       selected,
       assertCommandCurrent ?? (() => this.#options.scheduler.signal.throwIfAborted()),
     );
@@ -200,6 +188,127 @@ export class RelayService {
       // A missing local grant remains refused even if the relay is offline.
       return { revoked: true, relayNotified: false };
     }
+  }
+
+  async #validateAuthority(
+    authority: RelayGrantAuthority,
+    assertCurrent: () => void,
+  ): Promise<void> {
+    assertCurrent();
+    const config = this.#options.config();
+    if (
+      authority.principal.kind === "owner" &&
+      (config.gateway?.roles || config.gateway?.auth?.mode === "trusted-proxy")
+    ) {
+      throw new RelayError(
+        "unavailable",
+        "This Gateway requires a person-bound grant. Sign in and pair again from the Connected apps tab.",
+      );
+    }
+    const binding = await this.#ingress.bindPrincipal({
+      audienceId: `consent:${randomUUID()}`,
+      principal: authority.principal,
+      operatorScopeCeiling: authority.ceiling,
+      signal: this.#options.scheduler.signal,
+      assertCurrent,
+    });
+    await binding.close();
+    assertCurrent();
+  }
+
+  async describeConsent(requestId: string, assertCurrent: () => void) {
+    assertCurrent();
+    const result = await this.#request("authorize.describe", { requestId });
+    assertCurrent();
+    if (
+      !isRecord(result) ||
+      (result.kind !== "oauth" && result.kind !== "link") ||
+      typeof result.clientName !== "string" ||
+      !result.clientName ||
+      result.clientName.length > 2000 ||
+      typeof result.redirectHost !== "string" ||
+      !result.redirectHost ||
+      result.redirectHost.length > 2000 ||
+      typeof result.expiresAt !== "number" ||
+      !Number.isSafeInteger(result.expiresAt) ||
+      result.expiresAt <= this.#options.scheduler.now()
+    ) {
+      throw new RelayError(
+        "not_found",
+        "This connection request is invalid or expired. Start connecting again.",
+      );
+    }
+    return {
+      kind: result.kind,
+      clientName: result.clientName,
+      redirectHost: result.redirectHost,
+      expiresAt: result.expiresAt,
+      relayUrl: this.#options.relayUrl,
+    };
+  }
+
+  #continueUrl(requestId: string): string {
+    const url = new URL("/oauth/continue", this.#options.relayUrl);
+    url.searchParams.set("request", requestId);
+    return url.href;
+  }
+
+  async approveConsent(
+    requestId: string,
+    authority: RelayGrantAuthority,
+    assertCurrent: () => void,
+  ) {
+    const details = await this.describeConsent(requestId, assertCurrent);
+    await this.#validateAuthority(authority, assertCurrent);
+    const grantId = `gr_${randomBytes(32).toString("base64url")}`;
+    const assertApprovalCurrent = () => {
+      assertCurrent();
+      this.#requireReady();
+      if (this.#options.scheduler.now() >= details.expiresAt) {
+        throw new RelayError(
+          "not_found",
+          "This connection request expired. Start connecting again.",
+        );
+      }
+    };
+    assertApprovalCurrent();
+    await this.#options.state.approveGrant(
+      {
+        grantId,
+        clientId: requestId,
+        clientName: details.clientName,
+        createdAt: this.#options.scheduler.now(),
+        ...authority,
+      },
+      assertApprovalCurrent,
+    );
+    try {
+      assertApprovalCurrent();
+      await this.#request("authorize.approve", {
+        requestId,
+        grantId,
+        principal: authority.principal.kind,
+        principalLabel:
+          authority.principalLabel ??
+          (authority.principal.kind === "owner" ? "Gateway owner" : "Gateway user"),
+        ceiling: authority.ceiling,
+      });
+      assertApprovalCurrent();
+      this.#options.state.assertGrantCurrent(grantId);
+    } catch (error) {
+      // An uncertain approval must never leave a usable local grant behind.
+      await this.revoke(grantId);
+      throw error;
+    }
+    return { continueUrl: this.#continueUrl(requestId) };
+  }
+
+  async denyConsent(requestId: string, assertCurrent: () => void) {
+    await this.describeConsent(requestId, assertCurrent);
+    assertCurrent();
+    await this.#request("authorize.deny", { requestId });
+    assertCurrent();
+    return { continueUrl: this.#continueUrl(requestId) };
   }
 
   #requireReady(): void {
