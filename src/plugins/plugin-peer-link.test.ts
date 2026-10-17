@@ -1,4 +1,3 @@
-// Covers plugin peer linking for development installs.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
@@ -36,18 +35,63 @@ function peerInstall(installedDir: string) {
   return { installedDir, peerDependencies: { openclaw: "*" }, logger: {} };
 }
 
+function peerFixture(layout = "missing-modules", registered = false, root = makeTempDir()) {
+  const extensionsDir = path.join(root, "extensions");
+  const parent = registered ? extensionsDir : path.join(root, "node_modules");
+  const packageDir = path.join(parent, "peer-plugin");
+  const nodeModulesDir = path.join(packageDir, "node_modules");
+  const linkPath = path.join(nodeModulesDir, "openclaw");
+  const oldHost = path.join(root, "old-host");
+  peerPackage(packageDir);
+  if (layout !== "missing-modules") {
+    fs.mkdirSync(nodeModulesDir);
+  }
+  if (layout === "stale-link") {
+    fs.mkdirSync(oldHost);
+    fs.symlinkSync(oldHost, linkPath, "junction");
+  } else if (layout === "package-copy") {
+    writePackage(linkPath, { name: "openclaw" });
+  }
+  return { root, extensionsDir, packageDir, nodeModulesDir, linkPath, oldHost };
+}
+
+function registeredRepair(packageDir: string, ...siblings: string[]) {
+  return {
+    extensionsDir: path.dirname(packageDir),
+    installRecords: Object.fromEntries(
+      [packageDir, ...siblings].map((installPath) => [
+        path.basename(installPath),
+        { source: "npm" as const, installPath },
+      ]),
+    ),
+    mode: "repair" as const,
+  };
+}
+
+function oneShotAuthority() {
+  const failure = new Error("update authority revoked");
+  const guard = {
+    current: true,
+    beforePersistentApply: () => {
+      if (!guard.current) {
+        guard.current = true;
+        throw failure;
+      }
+    },
+  };
+  return { guard, failure };
+}
+
 function expectHostLink(linkPath: string, hostRoot = process.cwd()) {
   expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
   expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(hostRoot));
 }
 
 function unreadablePackageFixture() {
-  const npmRoot = makeTempDir();
+  const { root: npmRoot, packageDir: peerDir } = peerFixture();
   const unreadableDir = path.join(npmRoot, "node_modules", "bad-plugin");
-  const peerDir = path.join(npmRoot, "node_modules", "peer-plugin");
   fs.mkdirSync(unreadableDir, { recursive: true });
   fs.writeFileSync(path.join(unreadableDir, "package.json"), "{", "utf8");
-  writePackage(peerDir, { name: "peer-plugin", peerDependencies: { openclaw: ">=2026.0.0" } });
   const failures: Array<{ error: unknown; packageDir: string }> = [];
   const onPackageReadError = (error: unknown, packageDir: string) => {
     failures.push({ error, packageDir });
@@ -69,8 +113,7 @@ function makeTempDir() {
 describe("plugin peer links", () => {
   function standalone(root: string, overrides: Record<string, unknown> = {}) {
     const runtime = path.join(root, "runtime");
-    fs.mkdirSync(runtime, { recursive: true });
-    fs.writeFileSync(path.join(runtime, "package.json"), '{"name":"openclaw"}');
+    writePackage(runtime, { name: "openclaw" });
     writeJson(path.join(root, "manifest.json"), {
       schemaVersion: 1,
       mode: "jit",
@@ -84,18 +127,13 @@ describe("plugin peer links", () => {
   }
 
   it("admits a peer installed by another copy of the same standalone build and rebinds on repair", async () => {
-    const root = makeTempDir();
+    const { root, packageDir, linkPath: peer } = peerFixture();
     const bundle = standalone(path.join(root, "bundle"));
     const seed = standalone(path.join(root, "seed"));
-    const packageDir = path.join(root, "plugin");
-    fs.mkdirSync(packageDir);
     vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${bundle}/`).href);
     const install = peerInstall(packageDir);
-    expect(await linkOpenClawPeerDependencies({ ...install, hostRoot: bundle })).toEqual({
-      repaired: 1,
-      skipped: 0,
-    });
-    const peer = path.join(packageDir, "node_modules", "openclaw");
+    const linked = await linkOpenClawPeerDependencies({ ...install, hostRoot: bundle });
+    expect(linked).toEqual({ repaired: 1, skipped: 0 });
     expect(fs.realpathSync(peer)).toBe(fs.realpathSync(bundle));
 
     vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${seed}/`).href);
@@ -113,22 +151,17 @@ describe("plugin peer links", () => {
     ["unrelated sidecar", { runtime: { path: "other-runtime", sha256: "b".repeat(64) } }],
     ["version only", { openclaw: { version: "2026.10.4" } }],
   ])("rejects %s and lets an explicit install re-resolve its host", async (_label, overrides) => {
-    const root = makeTempDir();
+    const { root, packageDir, linkPath: peer } = peerFixture("missing-link");
     const previous = standalone(path.join(root, "previous"));
     const current = standalone(path.join(root, "current"), overrides);
-    const packageDir = path.join(root, "plugin");
-    const peer = path.join(packageDir, "node_modules", "openclaw");
-    fs.mkdirSync(path.dirname(peer), { recursive: true });
     fs.symlinkSync(previous, peer, "junction");
     vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${current}/`).href);
     const issue = auditOpenClawPeerDependencyLinkSync({ packageDir });
     expect(issue?.reason).toContain("instead of");
     expect(issue?.reason).toContain("openclaw doctor --fix");
     expect(fs.realpathSync(peer)).toBe(fs.realpathSync(previous));
-    expect(await linkOpenClawPeerDependencies(peerInstall(packageDir))).toEqual({
-      repaired: 1,
-      skipped: 0,
-    });
+    const linked = await linkOpenClawPeerDependencies(peerInstall(packageDir));
+    expect(linked).toEqual({ repaired: 1, skipped: 0 });
     expect(auditOpenClawPeerDependencyLinkSync({ packageDir })).toBeNull();
     expect(fs.realpathSync(peer)).toBe(fs.realpathSync(current));
   });
@@ -137,56 +170,29 @@ describe("plugin peer links", () => {
     it.each(["missing-modules", "missing-link", "stale-link", "package-copy"] as const)(
       "preserves %s on a one-shot authority refusal during preparation",
       async (layout) => {
-        const root = makeTempDir();
-        const extensionsDir = path.join(root, "extensions");
-        const packageDir = path.join(
-          entry === "registered" ? extensionsDir : path.join(root, "node_modules"),
-          "peer-plugin",
+        const { root, packageDir, nodeModulesDir, linkPath, oldHost } = peerFixture(
+          layout,
+          entry === "registered",
         );
-        const nodeModulesDir = path.join(packageDir, "node_modules");
-        const linkPath = path.join(nodeModulesDir, "openclaw");
-        const oldHost = path.join(root, "old-host");
-        peerPackage(packageDir);
         const siblingDir = path.join(path.dirname(packageDir), "z-peer-plugin");
         peerPackage(siblingDir);
-        if (layout !== "missing-modules") {
-          fs.mkdirSync(nodeModulesDir);
-        }
-        if (layout === "stale-link") {
-          fs.mkdirSync(oldHost);
-          fs.symlinkSync(oldHost, linkPath, "junction");
-        } else if (layout === "package-copy") {
-          fs.mkdirSync(linkPath);
-          fs.writeFileSync(path.join(linkPath, "package.json"), '{"name":"openclaw"}');
-        }
-        const failure = new Error("update authority revoked");
-        let current = true;
+        const { guard, failure } = oneShotAuthority();
         const warnings: string[] = [];
         const guarded = {
           logger: { warn: (message: string) => warnings.push(message) },
-          beforePersistentApply: () => {
-            if (!current) {
-              current = true;
-              throw failure;
-            }
-          },
+          beforePersistentApply: guard.beforePersistentApply,
         };
         const operation =
           entry === "managed"
             ? relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot: root, ...guarded })
             : entry === "registered"
               ? reconcileRegisteredOpenClawHostLinks({
-                  extensionsDir,
-                  installRecords: {
-                    "peer-plugin": { source: "npm", installPath: packageDir },
-                    "z-peer-plugin": { source: "npm", installPath: siblingDir },
-                  },
-                  mode: "repair",
+                  ...registeredRepair(packageDir, siblingDir),
                   ...guarded,
                 })
               : linkOpenClawPeerDependencies({ ...peerInstall(packageDir), ...guarded });
         // Each entry has started asynchronous filesystem preparation but has not mutated yet.
-        current = false;
+        guard.current = false;
         await expect(operation).rejects.toBe(failure);
         expect(warnings).toEqual([]);
         expect(fs.existsSync(path.join(siblingDir, "node_modules"))).toBe(false);
@@ -206,15 +212,7 @@ describe("plugin peer links", () => {
   });
 
   it("awaits registered peer preparation before checking synchronous apply authority", async () => {
-    const root = makeTempDir();
-    const extensionsDir = path.join(root, "extensions");
-    const packageDir = path.join(extensionsDir, "peer-plugin");
-    const linkPath = path.join(packageDir, "node_modules", "openclaw");
-    const oldHost = path.join(root, "old-host");
-    fs.mkdirSync(path.dirname(linkPath), { recursive: true });
-    fs.mkdirSync(oldHost);
-    peerPackage(packageDir);
-    fs.symlinkSync(oldHost, linkPath, "junction");
+    const { packageDir, linkPath, oldHost } = peerFixture("stale-link", true);
     const prepared = createDeferred();
     const release = createDeferred();
     let preparationEntered = false;
@@ -223,9 +221,7 @@ describe("plugin peer links", () => {
       throw refusal;
     });
     const operation = reconcileRegisteredOpenClawHostLinks({
-      extensionsDir,
-      installRecords: { "peer-plugin": { source: "npm", installPath: packageDir } },
-      mode: "repair",
+      ...registeredRepair(packageDir),
       beforePersistentEffect: async () => {
         preparationEntered = true;
         prepared.resolve();
@@ -253,53 +249,40 @@ describe("plugin peer links", () => {
   it.each(["symlink", "directory"] as const)(
     "stops before replacement on a one-shot refusal after removing the old %s",
     async (existingKind) => {
-      const root = makeTempDir();
-      const packageDir = path.join(root, "peer-plugin");
-      const linkPath = path.join(packageDir, "node_modules", "openclaw");
-      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
-      let current = true;
+      const { packageDir, linkPath } = peerFixture(
+        existingKind === "symlink" ? "stale-link" : "package-copy",
+      );
+      const { guard, failure } = oneShotAuthority();
       if (existingKind === "symlink") {
-        const oldHost = path.join(root, "old-host");
-        fs.mkdirSync(oldHost);
-        fs.symlinkSync(oldHost, linkPath, "junction");
         const unlink = fs.unlinkSync.bind(fs);
         vi.spyOn(fs, "unlinkSync").mockImplementation((target) => {
           unlink(target);
-          current = false;
+          guard.current = false;
         });
         syncBuiltinESMExports();
       } else {
-        fs.mkdirSync(linkPath);
-        fs.writeFileSync(path.join(linkPath, "package.json"), '{"name":"openclaw"}');
         const rm = fsPromises.rm.bind(fsPromises);
         vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
           await rm(target, options);
-          current = false;
+          guard.current = false;
         });
       }
-      const failure = new Error("update authority revoked after removal");
       const warnings: string[] = [];
       await expect(
         linkOpenClawPeerDependencies({
           ...peerInstall(packageDir),
           logger: { warn: (message) => warnings.push(message) },
-          beforePersistentApply: () => {
-            if (!current) {
-              current = true;
-              throw failure;
-            }
-          },
+          beforePersistentApply: guard.beforePersistentApply,
         }),
       ).rejects.toBe(failure);
-      expect(current).toBe(true);
+      expect(guard.current).toBe(true);
       expect(fs.existsSync(linkPath)).toBe(false);
       expect(warnings).toEqual([]);
     },
   );
 
   it("preserves filesystem failure reporting while caller authority remains current", async () => {
-    const packageDir = makeTempDir();
-    fs.mkdirSync(path.join(packageDir, "node_modules"));
+    const { packageDir, linkPath } = peerFixture("missing-link");
     const failure = new Error("peer link write denied");
     vi.spyOn(fs, "symlinkSync").mockImplementationOnce(() => {
       throw failure;
@@ -315,7 +298,7 @@ describe("plugin peer links", () => {
 
     expect(result).toEqual({ repaired: 0, skipped: 1 });
     expect(warnings).toEqual([expect.stringContaining(failure.message)]);
-    expect(fs.existsSync(path.join(packageDir, "node_modules", "openclaw"))).toBe(false);
+    expect(fs.existsSync(linkPath)).toBe(false);
   });
 
   it.each(["dependencies", "optionalDependencies"] as const)(
@@ -323,12 +306,7 @@ describe("plugin peer links", () => {
     async (declaration) => {
       const npmRoot = makeTempDir();
       const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
-      writePackage(packageDir, {
-        name: "runtime-plugin",
-        version: "1.0.0",
-        [declaration]: { openclaw: "2026.7.1" },
-      });
-
+      writePackage(packageDir, { name: "runtime-plugin", [declaration]: { openclaw: "2026.7.1" } });
       const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot, logger: {} });
 
       const linkPath = path.join(packageDir, "node_modules", "openclaw");
@@ -337,111 +315,94 @@ describe("plugin peer links", () => {
     },
   );
 
-  it("reports one unreadable package and continues repairing its sibling", async () => {
-    const { npmRoot, unreadableDir, peerDir, failures, onPackageReadError } =
-      unreadablePackageFixture();
+  it.each(["repair", "audit"] as const)(
+    "reports one unreadable package and continues to %s its sibling",
+    async (mode) => {
+      const { npmRoot, unreadableDir, peerDir, failures, onPackageReadError } =
+        unreadablePackageFixture();
 
-    const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({
-      npmRoot,
-      logger: {},
-      onPackageReadError,
-    });
+      const options = { npmRoot, onPackageReadError };
+      const linkPath = path.join(peerDir, "node_modules", "openclaw");
+      if (mode === "repair") {
+        expect(
+          await relinkOpenClawPeerDependenciesInManagedNpmRoot({ ...options, logger: {} }),
+        ).toEqual({ checked: 1, attempted: 1, repaired: 1, skipped: 1 });
+        expect(failures[0]?.error).toBeInstanceOf(SyntaxError);
+        expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+      } else {
+        const result = await auditOpenClawPeerDependenciesInManagedNpmRoot(options);
+        expect(result).toMatchObject({ checked: 1, broken: 1 });
+        expect(result.issues[0]?.packageName).toBe("peer-plugin");
+        expect(fs.existsSync(linkPath)).toBe(false);
+      }
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.packageDir).toBe(unreadableDir);
+    },
+  );
 
-    expect(result).toEqual({ checked: 1, attempted: 1, repaired: 1, skipped: 1 });
-    expect(failures).toHaveLength(1);
-    expect(failures[0]?.packageDir).toBe(unreadableDir);
-    expect(failures[0]?.error).toBeInstanceOf(SyntaxError);
-    expect(fs.lstatSync(path.join(peerDir, "node_modules", "openclaw")).isSymbolicLink()).toBe(
-      true,
-    );
-  });
-
-  it("reports one unreadable package and continues auditing its sibling", async () => {
-    const { npmRoot, unreadableDir, peerDir, failures, onPackageReadError } =
-      unreadablePackageFixture();
-
-    const result = await auditOpenClawPeerDependenciesInManagedNpmRoot({
-      npmRoot,
-      onPackageReadError,
-    });
-
-    expect(result.checked).toBe(1);
-    expect(result.broken).toBe(1);
-    expect(result.issues[0]?.packageName).toBe("peer-plugin");
-    expect(failures).toHaveLength(1);
-    expect(failures[0]?.packageDir).toBe(unreadableDir);
-    expect(fs.existsSync(path.join(peerDir, "node_modules", "openclaw"))).toBe(false);
-  });
-
-  it("replaces an existing real openclaw package directory", async () => {
-    const root = makeTempDir();
-    const packageDir = path.join(root, "peer-plugin");
-    const existingOpenClawDir = path.join(packageDir, "node_modules", "openclaw");
-    fs.mkdirSync(existingOpenClawDir, { recursive: true });
-    fs.writeFileSync(path.join(existingOpenClawDir, "package.json"), '{"name":"openclaw"}', "utf8");
-
-    const messages: string[] = [];
-    const result = await linkOpenClawPeerDependencies({
-      installedDir: packageDir,
-      peerDependencies: { openclaw: ">=2026.0.0" },
-      logger: { info: (message) => messages.push(message) },
-    });
-
-    expect(result).toEqual({ repaired: 1, skipped: 0 });
-    expectHostLink(existingOpenClawDir);
-    expect(messages.join("\n")).toContain('Linked peerDependency "openclaw"');
-  });
-
-  it("does not delete an unrelated existing package directory", async () => {
-    const root = makeTempDir();
-    const packageDir = path.join(root, "peer-plugin");
-    const existingOpenClawDir = path.join(packageDir, "node_modules", "openclaw");
-    fs.mkdirSync(existingOpenClawDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(existingOpenClawDir, "package.json"),
-      '{"name":"not-openclaw"}',
-      "utf8",
-    );
-
-    const warnings: string[] = [];
-    const result = await linkOpenClawPeerDependencies({
-      installedDir: packageDir,
-      peerDependencies: { openclaw: ">=2026.0.0" },
-      logger: { warn: (message) => warnings.push(message) },
-    });
-
-    expect(result).toEqual({ repaired: 0, skipped: 1 });
-    expect(fs.existsSync(path.join(existingOpenClawDir, "package.json"))).toBe(true);
-    expect(warnings.join("\n")).toContain("already exists and is not a symlink");
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "does not follow a registered plugin manifest symlink outside its package root",
-    async () => {
-      const root = makeTempDir();
-      const extensionsDir = path.join(root, "extensions");
-      const packageDir = path.join(extensionsDir, "email");
-      const staleHostDir = path.join(packageDir, "node_modules", "openclaw");
-      const outsideManifest = path.join(root, "outside-package.json");
-      fs.mkdirSync(staleHostDir, { recursive: true });
-      writeJson(outsideManifest, { name: "email", peerDependencies: { openclaw: "*" } });
-      fs.symlinkSync(outsideManifest, path.join(packageDir, "package.json"), "file");
-      fs.writeFileSync(path.join(staleHostDir, "package.json"), '{"name":"openclaw"}');
-      const failures: Array<{ error: unknown; packageDir: string }> = [];
-
-      const result = await reconcileRegisteredOpenClawHostLinks({
-        extensionsDir,
-        installRecords: { email: { source: "npm", installPath: packageDir } },
-        mode: "repair",
-        onPackageReadError: (error, failedPackageDir) => {
-          failures.push({ error, packageDir: failedPackageDir });
+  it.each(["openclaw", "not-openclaw"])(
+    "replaces an existing package only when its name is openclaw: %s",
+    async (name) => {
+      const { packageDir, linkPath } = peerFixture("package-copy");
+      writePackage(linkPath, { name });
+      const messages: string[] = [];
+      const warnings: string[] = [];
+      const result = await linkOpenClawPeerDependencies({
+        ...peerInstall(packageDir),
+        peerDependencies: { openclaw: ">=2026.0.0" },
+        logger: {
+          info: (message) => messages.push(message),
+          warn: (message) => warnings.push(message),
         },
       });
+      if (name === "openclaw") {
+        expect(result).toEqual({ repaired: 1, skipped: 0 });
+        expectHostLink(linkPath);
+        expect(messages.join("\n")).toContain('Linked peerDependency "openclaw"');
+      } else {
+        expect(result).toEqual({ repaired: 0, skipped: 1 });
+        expect(fs.existsSync(path.join(linkPath, "package.json"))).toBe(true);
+        expect(warnings.join("\n")).toContain("already exists and is not a symlink");
+      }
+    },
+  );
 
-      expect(result.repaired).toBe(0);
-      expect(result.skipped).toBe(1);
-      expect(failures[0]?.packageDir).toBe(packageDir);
-      expect(fs.lstatSync(staleHostDir).isDirectory()).toBe(true);
+  it.runIf(process.platform !== "win32").each(["manifest", "node_modules"])(
+    "does not follow a registered plugin %s symlink outside its package root",
+    async (boundary) => {
+      const { root, packageDir, linkPath } = peerFixture(
+        boundary === "manifest" ? "package-copy" : "missing-modules",
+        true,
+      );
+      const outsideModules = path.join(root, "outside-node-modules");
+      const outsideHost = path.join(outsideModules, "openclaw");
+      writePackage(outsideHost, { name: "openclaw", peerDependencies: { openclaw: "*" } });
+      if (boundary === "manifest") {
+        fs.unlinkSync(path.join(packageDir, "package.json"));
+        fs.symlinkSync(
+          path.join(outsideHost, "package.json"),
+          path.join(packageDir, "package.json"),
+          "file",
+        );
+      } else {
+        fs.symlinkSync(outsideModules, path.join(packageDir, "node_modules"), "dir");
+      }
+      const onPackageReadError = vi.fn((_error: unknown, _failedDir: string) => {});
+      const warnings: string[] = [];
+      const result = await reconcileRegisteredOpenClawHostLinks({
+        ...registeredRepair(packageDir),
+        ...(boundary === "manifest"
+          ? { onPackageReadError }
+          : { logger: { warn: (message: string) => warnings.push(message) } }),
+      });
+      expect(result).toMatchObject({ repaired: 0, skipped: 1 });
+      if (boundary === "manifest") {
+        expect(onPackageReadError.mock.calls[0]?.[1]).toBe(packageDir);
+        expect(fs.lstatSync(linkPath).isDirectory()).toBe(true);
+      } else {
+        expect(fs.lstatSync(outsideHost).isDirectory()).toBe(true);
+        expect(warnings.join("\n")).toContain("is not a real directory");
+      }
     },
   );
 
@@ -453,55 +414,15 @@ describe("plugin peer links", () => {
       const extensionsDir = path.join(root, "extensions");
       fs.mkdirSync(realExtensionsDir, { recursive: true });
       fs.symlinkSync(realExtensionsDir, extensionsDir, "dir");
-      const packageDir = path.join(extensionsDir, "email");
-      const staleHostDir = path.join(packageDir, "node_modules", "openclaw");
-      fs.mkdirSync(staleHostDir, { recursive: true });
+      const { packageDir, linkPath } = peerFixture("package-copy", true, root);
       writeJson(path.join(packageDir, "package.json"), {
         name: "email",
         dependencies: { openclaw: "2026.7.1" },
       });
-      fs.writeFileSync(path.join(staleHostDir, "package.json"), '{"name":"openclaw"}');
-
-      const result = await reconcileRegisteredOpenClawHostLinks({
-        extensionsDir,
-        installRecords: { email: { source: "npm", installPath: packageDir } },
-        mode: "repair",
-      });
+      const result = await reconcileRegisteredOpenClawHostLinks(registeredRepair(packageDir));
 
       expect(result.repaired).toBe(1);
-      expectHostLink(staleHostDir);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "does not follow a registered plugin node_modules symlink outside its package root",
-    async () => {
-      const root = makeTempDir();
-      const extensionsDir = path.join(root, "extensions");
-      const packageDir = path.join(extensionsDir, "email");
-      const outsideModules = path.join(root, "outside-node-modules");
-      const outsideHost = path.join(outsideModules, "openclaw");
-      fs.mkdirSync(packageDir, { recursive: true });
-      fs.mkdirSync(outsideHost, { recursive: true });
-      writeJson(path.join(packageDir, "package.json"), {
-        name: "email",
-        peerDependencies: { openclaw: "*" },
-      });
-      fs.writeFileSync(path.join(outsideHost, "package.json"), '{"name":"openclaw"}');
-      fs.symlinkSync(outsideModules, path.join(packageDir, "node_modules"), "dir");
-      const warnings: string[] = [];
-
-      const result = await reconcileRegisteredOpenClawHostLinks({
-        extensionsDir,
-        installRecords: { email: { source: "npm", installPath: packageDir } },
-        mode: "repair",
-        logger: { warn: (message) => warnings.push(message) },
-      });
-
-      expect(result.repaired).toBe(0);
-      expect(result.skipped).toBe(1);
-      expect(fs.lstatSync(outsideHost).isDirectory()).toBe(true);
-      expect(warnings.join("\n")).toContain("is not a real directory");
+      expectHostLink(linkPath);
     },
   );
 });
