@@ -138,9 +138,9 @@ describe("describeImageWithModelCore OpenCode routing identity", () => {
     const streamFn = stubProviderStream();
 
     await requestImage({
-      provider: "openai",
+      provider: "acme",
       model: "gpt-5-mini",
-      baseUrl: "https://api.openai.com/v1",
+      baseUrl: "https://llm.example.com/v1",
     });
 
     const options = capturedStreamOptions(streamFn, 0);
