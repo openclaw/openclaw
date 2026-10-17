@@ -155,6 +155,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
+    await search.getByRole("button", { name: "Search transcripts" }).click();
     const input = search.getByRole("searchbox", { name: "Search session transcripts" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await captureUiProof("01-initial.png");
@@ -255,6 +256,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
     });
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
+    await search.getByRole("button", { name: "Search transcripts" }).click();
     const input = search.getByRole("searchbox", { name: "Search session transcripts" });
     await input.fill("Release notes");
     await input.press("Enter");
@@ -333,6 +335,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
     });
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
+    await page.getByRole("button", { name: "Search transcripts" }).click();
     const input = page.getByRole("searchbox", { name: "Search session transcripts" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await page
@@ -398,11 +401,12 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
+    await search.getByRole("button", { name: "Search transcripts" }).click();
     const input = search.getByRole("searchbox", { name: "Search session transcripts" });
-    const submit = search.getByRole("button", { name: "Search" });
+    const submit = search.getByRole("button", { name: "Search transcripts" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await input.fill("   ");
-    await expect.poll(() => submit.isDisabled()).toBe(true);
+    await expect.poll(() => submit.isEnabled()).toBe(true);
     await input.press("Enter");
     expect(await gateway.getRequests("sessions.search")).toHaveLength(0);
 

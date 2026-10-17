@@ -34,25 +34,34 @@ describe("sessions transcript search view", () => {
       const rosterFilter = container.querySelector<HTMLInputElement>(
         '.sessions-filter-bar input[type="text"]',
       );
-      const transcriptInput = container.querySelector<HTMLInputElement>(
-        '.sessions-transcript-search input[type="search"]',
+      const transcriptTrigger = container.querySelector<HTMLButtonElement>(
+        ".sessions-transcript-search__trigger",
       );
       expect(rosterFilter?.value).toBe("agent label");
       expect(rosterFilter?.getAttribute("aria-label")).toBe("Filter by key, agent, label, kind…");
-      expect(transcriptInput?.value).toBe(available ? "  exact phrase  " : "hidden");
-      expect(transcriptInput?.disabled).toBe(!available);
+      expect(transcriptTrigger?.getAttribute("aria-label")).toBe("Search transcripts");
+      expect(transcriptTrigger?.disabled).toBe(!available);
+      expect(container.querySelector(".sessions-transcript-search__input input")).toBeNull();
       if (available) {
+        transcriptTrigger!.click();
+        await Promise.resolve();
+        const transcriptInput = container.querySelector<HTMLInputElement>(
+          '.sessions-transcript-search__input input[type="search"]',
+        );
+        expect(transcriptInput?.value).toBe("  exact phrase  ");
         transcriptInput!.value = "different words";
         transcriptInput!.dispatchEvent(new Event("input", { bubbles: true }));
         expect(onTranscriptSearchChange).toHaveBeenCalledWith("different words");
         expect(onTranscriptSearch).not.toHaveBeenCalled();
+        container
+          .querySelector(".sessions-transcript-search__form")
+          ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        expect(onTranscriptSearch).toHaveBeenCalledTimes(1);
       } else {
-        expect(container.textContent).toContain("Transcript search requires a newer Gateway.");
+        expect(transcriptTrigger?.closest("openclaw-tooltip")?.content).toBe(
+          "Transcript search requires a newer Gateway.",
+        );
       }
-
-      container
-        .querySelector(".sessions-transcript-search__form")
-        ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       expect(onTranscriptSearch).toHaveBeenCalledTimes(available ? 1 : 0);
     },
   );

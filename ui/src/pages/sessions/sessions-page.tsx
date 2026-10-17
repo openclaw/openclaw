@@ -21,10 +21,10 @@ export function SessionsPageContent(props: { page: SessionsPageOwner }) {
   });
   const menu = () => props.page.menu();
   return (
-    <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-      <section class="content-header content-header--settings content-header--page hub-page-header sessions-hub-header">
+    <ShellLayoutBoundary traits={{ hubHeader: true }}>
+      <section class="content-header content-header--stacked content-header--settings content-header--page hub-page-header hub-page-header--stacked sessions-hub-header">
         <div class="hub-page-header__title">
-          <div class="page-title">{titleForRoute("sessions", t)}</div>
+          <h1 class="page-title">{titleForRoute("sessions", t)}</h1>
           <div class="page-subtitle">
             {subtitleForRoute("sessions", t)}{" "}
             <LearnMoreLink url="https://docs.openclaw.ai/concepts/session" />

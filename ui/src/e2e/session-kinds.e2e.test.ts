@@ -9,7 +9,69 @@ const suite = createControlUiE2eSuite({ name: "Control UI session kinds" });
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
-  it("sorts and groups by displayed kind while preserving pins", async () => {
+  it.each([1440, 390])("keeps the sessions header and actions usable at %i px", async (width) => {
+    await suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
+      await installMockGateway(page, {
+        sessions: [{ key: "agent:main:alpha", kind: "direct", label: "Alpha", updatedAt: 6 }],
+      });
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      const header = page.locator(".sessions-hub-header");
+      const title = header.getByRole("heading", { name: "Sessions", level: 1 });
+      await title.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          header.evaluate((element) => {
+            const heading = element.querySelector(".page-title")?.getBoundingClientRect();
+            const tabRow = element.querySelector(".hub-page-header__tabs")?.getBoundingClientRect();
+            return heading && tabRow
+              ? {
+                  visibleTitle: heading.width > 1 && heading.height > 1,
+                  leftAligned: Math.abs(heading.left - tabRow.left) <= 1,
+                  tabsBelowTitle: tabRow.top >= heading.bottom,
+                }
+              : null;
+          }),
+        )
+        .toEqual({ visibleTitle: true, leftAligned: true, tabsBelowTitle: true });
+
+      const actions = page.locator(".settings-section__actions");
+      const search = actions.getByRole("button", { name: "Search transcripts" });
+      const refresh = actions.getByRole("button", { name: "Refresh" });
+      const create = actions.getByRole("link", { name: "New session" });
+      await search.waitFor({ state: "visible" });
+      await refresh.waitFor({ state: "visible" });
+      await create.waitFor({ state: "visible" });
+      expect(await create.getAttribute("href")).toContain("/new");
+      const positions = await Promise.all(
+        [search, refresh, create].map((control) =>
+          control.evaluate((element) => element.getBoundingClientRect().left),
+        ),
+      );
+      expect(positions[0]).toBeLessThan(positions[1]!);
+      expect(positions[1]).toBeLessThan(positions[2]!);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        width,
+      );
+      if (captureUiProof) {
+        await writeFile(
+          path.join(suite.artifactDir, `sessions-${width}-collapsed.png`),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [header, actions]),
+        );
+      }
+      await search.click();
+      await page.getByRole("searchbox", { name: "Search session transcripts" }).waitFor();
+      if (captureUiProof) {
+        await writeFile(
+          path.join(suite.artifactDir, `sessions-${width}-search.png`),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [header, actions]),
+        );
+      }
+      await create.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+    });
+  });
+
+  it("groups by displayed kind while keeping the scan table compact", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const sessions = [
         { key: "agent:main:alpha", kind: "direct", label: "Alpha conversation", updatedAt: 6 },
@@ -41,21 +103,19 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}sessions`);
       const table = page.locator(".sessions-table");
       await expect.poll(() => table.locator(".session-data-row").count()).toBe(6);
-      const kinds = () => table.locator(".session-data-row .session-kind").allTextContents();
-      const kindHeader = table.locator("th[data-sortable]").filter({ hasText: "Kind" });
-      await kindHeader.getByRole("button").click();
-      await expect.poll(() => kindHeader.getAttribute("aria-sort")).toBe("descending");
-      expect.soft(await kinds()).toEqual(["direct", "group", "direct", "direct", "cron", "cron"]);
-      await kindHeader.getByRole("button").click();
-      await expect.poll(() => kindHeader.getAttribute("aria-sort")).toBe("ascending");
-      const ascending = await kinds();
+      expect(await table.locator("thead th").allTextContents()).toEqual([
+        "",
+        "Session",
+        "Updated",
+        "Actions",
+      ]);
+      expect(await table.locator(".session-data-row .session-kind").count()).toBe(0);
       if (captureUiProof) {
         await writeFile(
-          path.join(suite.artifactDir, "kind-sort.png"),
+          path.join(suite.artifactDir, "session-table-compact.png"),
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [table]),
         );
       }
-      expect.soft(ascending).toEqual(["direct", "cron", "cron", "direct", "direct", "group"]);
 
       await page.getByRole("button", { name: "Filters", exact: true }).click();
       await page.locator(".sessions-filter-popover:popover-open").waitFor();
@@ -71,15 +131,10 @@ suite.define(() => {
         );
         await writeFile(
           path.join(suite.artifactDir, "kind-proof.json"),
-          JSON.stringify(
-            { ascending, groups, requests: await gateway.getRequests("sessions.list") },
-            null,
-            2,
-          ),
+          JSON.stringify({ groups, requests: await gateway.getRequests("sessions.list") }, null, 2),
         );
       }
       expect.soft(groups).toEqual(["cron", "direct", "group"]);
-      expect.soft(await kinds()).toEqual(["cron", "cron", "direct", "direct", "direct", "group"]);
       await page.getByRole("button", { name: "Filters", exact: true }).click();
       await page.locator(".sessions-filter-popover:popover-open").waitFor();
       await page.locator(".session-groupby__select").selectOption("none");

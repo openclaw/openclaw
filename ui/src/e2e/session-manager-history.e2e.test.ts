@@ -91,6 +91,7 @@ suite.define(() => {
         await mainRow.waitFor({ state: "visible" });
 
         const transcriptSearch = page.getByRole("search", { name: "Search transcripts" });
+        await transcriptSearch.getByRole("button", { name: "Search transcripts" }).click();
         const transcriptInput = transcriptSearch.getByRole("searchbox", {
           name: "Search session transcripts",
         });

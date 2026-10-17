@@ -887,6 +887,7 @@ export const en: TranslationMap & {
     selectAllOnPage: "Select all on page",
     selectSession: "Select session",
     optionalPlaceholder: "(optional)",
+    session: "Session",
     key: "Key",
     label: "Label",
     kind: "Kind",

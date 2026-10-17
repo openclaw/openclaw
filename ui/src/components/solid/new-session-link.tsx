@@ -68,6 +68,7 @@ export function ContextNewSessionAction(props: {
   context: ApplicationContext;
   class: string;
   agentId?: string;
+  label?: string;
 }) {
   const agentId = () =>
     props.agentId ??
@@ -96,7 +97,7 @@ export function ContextNewSessionAction(props: {
       basePath={props.context.basePath}
       agentId={agentId()}
       class={props.class}
-      label={t("agentChip.newConversation")}
+      label={props.label ?? t("agentChip.newConversation")}
       showShortcut
       disabledReason={disabledReason()}
       onOpen={onOpen}

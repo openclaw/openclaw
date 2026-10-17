@@ -22,7 +22,7 @@ type PluginsHubHeaderProps = {
 export function PluginsHubHeader(props: PluginsHubHeaderProps) {
   return (
     <ShellLayoutBoundary traits={{ hubHeader: true }}>
-      <section class="content-header content-header--stacked content-header--settings content-header--page hub-page-header plugins-hub-header">
+      <section class="content-header content-header--stacked content-header--settings content-header--page hub-page-header hub-page-header--stacked plugins-hub-header">
         <div class="hub-page-header__title">
           <h1 class="page-title">{titleForRoute(props.active, t)}</h1>
           <div class="page-subtitle">

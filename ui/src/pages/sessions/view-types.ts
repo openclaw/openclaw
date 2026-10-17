@@ -18,7 +18,7 @@ export type SessionsProps = {
   mainKey: string;
   searchQuery: string;
   agentIdentityById: Record<string, AgentIdentityResult>;
-  sortColumn: "key" | "kind" | "updated" | "tokens";
+  sortColumn: "key" | "updated";
   sortDir: "asc" | "desc";
   knownCategories: string[];
   page: number;
@@ -32,7 +32,7 @@ export type SessionsProps = {
   deleteSelectedDisabledReason?: string;
   onClearFilters: () => void;
   onSearchChange: (query: string) => void;
-  onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
+  onSortChange: (column: "key" | "updated", dir: "asc" | "desc") => void;
   onAssignCategory: (key: string, category: string | null) => void;
   onLoadMore: () => void;
   onPageChange: (page: number) => void;
