@@ -40,6 +40,16 @@ const cases: Array<{
     contexts: [{ systemPrompt: "", tools: [] }],
     contextFiles: ["tools.json"],
   },
+  ...(process.platform === "win32"
+    ? []
+    : [
+        {
+          name: "literal whitespace in output directory",
+          contexts: [complete],
+          contextFiles: ["system-prompt.txt", "tools.json"],
+          outputPath: " inventory ",
+        },
+      ]),
   {
     name: "latest truncated context",
     contexts: [complete, oversized],

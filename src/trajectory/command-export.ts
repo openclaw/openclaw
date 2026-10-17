@@ -1,6 +1,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { pathScope } from "@openclaw/fs-safe/advanced";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import { root } from "../infra/fs-safe.js";
 import { isPathStrictlyInside } from "../infra/path-guards.js";
@@ -29,7 +30,7 @@ async function resolveTrajectoryCommandOutputDir(params: {
   sessionId: string;
 }): Promise<string> {
   const { baseDir, realBase } = await resolveTrajectoryExportBaseDir(params.workspaceDir);
-  const raw = params.outputPath?.trim();
+  const raw = readNonBlankString(params.outputPath);
   if (!raw) {
     const defaultDir = resolveDefaultTrajectoryExportDir({
       workspaceDir: params.workspaceDir,
