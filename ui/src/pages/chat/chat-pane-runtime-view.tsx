@@ -117,6 +117,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const context = runtime.context;
     const gateway = projectGateway(context.gateway);
     const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
+    const resources = projectOwner(runtime.activeSessionResources, (owner) => owner);
     const boardProvider = createMemo(() => {
       revision();
       return runtime.subscribedBoardProvider;
@@ -181,6 +182,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         revision();
         progress.read();
         projects.read();
+        resources.read();
         board().forEach((source) => source.read());
         i18nRevision();
         sources.forEach((source) => source?.read());

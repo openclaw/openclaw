@@ -647,7 +647,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       isPresented: () => this.presented && this.visuallyPresented,
       commit: (layout, automaticResource) =>
         this.commitSidebarLayout(layout, { persist: false, automaticResource }),
-      requestUpdate: () => this.invalidate(),
     });
     if (this.state) {
       const layout = this.initializeBrowserSidebarLayout(this.state.sidebarLayout);

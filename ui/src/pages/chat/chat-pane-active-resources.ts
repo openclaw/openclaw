@@ -46,7 +46,6 @@ export type ActiveResourceOwner = {
   browserTab?: BrowserTabSelection;
   layout: () => SidebarLayout;
   commit: (layout: SidebarLayout, resource: ResourceSlot) => void;
-  requestUpdate: () => void;
   isCurrent: () => boolean;
 };
 
@@ -86,6 +85,7 @@ function hasResourceSlot(layout: SidebarLayout, slot: ResourceSlot): boolean {
 
 /** Read-only discovery belongs to the visible session, not to a global tool dock. */
 export class ChatPaneActiveResources {
+  private readonly listeners = new Set<() => void>();
   private owner: ActiveResourceOwner | null = null;
   private descriptorRead:
     | {
@@ -115,7 +115,6 @@ export class ChatPaneActiveResources {
     isConnected: () => boolean;
     isPresented: () => boolean;
     commit: (layout: SidebarLayout, resource: ResourceSlot) => void;
-    requestUpdate: () => void;
   }): void {
     const state = view.state();
     const client = state?.client;
@@ -155,7 +154,6 @@ export class ChatPaneActiveResources {
             // Discovery is not a saved layout preference. Reload must validate again
             // before mounting a resource; explicit UI actions still persist normally.
             commit: (layout, resource) => view.commit(layout, resource),
-            requestUpdate: () => view.requestUpdate(),
             isCurrent: () =>
               view.isConnected() &&
               view.state() === state &&
@@ -178,7 +176,12 @@ export class ChatPaneActiveResources {
     this.signature = undefined;
   }
 
-  reconcileObservation(view: { requestUpdate: () => void; updated: () => Promise<unknown> }): void {
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  reconcileObservation(): void {
     const owner = this.owner;
     if (!owner?.isCurrent() || !owner.observation.isCurrent()) {
       return;
@@ -194,7 +197,17 @@ export class ChatPaneActiveResources {
     // Do not expose a resource while its assignment is being revalidated.
     this.invalidate();
     this.descriptorRead = undefined;
-    void this.readSession(owner).then(view.requestUpdate, () => {});
+    void this.readSession(owner).then(
+      () => {
+        const current = this.owner;
+        if (current?.isCurrent() && this.descriptorRead === undefined) {
+          // Revalidation resumes discovery even when the pane has no rendering observer.
+          this.invalidate();
+          this.sync(current);
+        }
+      },
+      () => {},
+    );
   }
 
   private readSession(owner: ActiveResourceOwner): Promise<GatewaySessionRow | null> {
@@ -329,7 +342,8 @@ export class ChatPaneActiveResources {
     if (!this.desktop && (source === null || existing)) {
       return;
     }
-    const changed = this.desktop?.source !== source;
+    const changed =
+      this.desktop?.source !== source || this.desktop?.observation !== owner.observation;
     this.desktop = {
       client: owner.client,
       observation: owner.observation,
@@ -343,7 +357,9 @@ export class ChatPaneActiveResources {
       this.reveal(owner, "desktop");
     }
     if (changed) {
-      owner.requestUpdate();
+      for (const listener of this.listeners) {
+        listener();
+      }
     }
   }
 

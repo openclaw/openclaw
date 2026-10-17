@@ -56,7 +56,7 @@ const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 /** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
-  protected readonly activeSessionResources = new ChatPaneActiveResources();
+  readonly activeSessionResources = new ChatPaneActiveResources();
 
   readProgressCardScope() {
     const gateway = this.context.gateway;
