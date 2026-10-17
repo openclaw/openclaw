@@ -9,7 +9,6 @@ import {
   appendSessionTranscriptReport,
   appendTranscriptMessage,
   appendTranscriptMessages,
-  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as projectionReads from "../../config/sessions/session-accessor.sqlite-projection-read.js";
 import * as projectionWriter from "../../config/sessions/session-transcript-projection-writer.js";
@@ -30,6 +29,26 @@ import {
 } from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 
+type Scope = Awaited<ReturnType<typeof seedHistorySession>>;
+function withHistory(id: string, run: (scope: Scope) => Promise<void>) {
+  return withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    await run(await seedHistorySession(id));
+  });
+}
+function append(
+  scope: Scope,
+  eventId: string,
+  now: number,
+  role: string,
+  content: string,
+  extra: Record<string, unknown> = {},
+) {
+  return appendTranscriptMessage(scope, { eventId, now, message: { role, content, ...extra } });
+}
+const decode = (payload: unknown) =>
+  JSON.parse(serializeGatewayFrame({ type: "res", payload }).toString()).payload;
+
 function expectHistoryThreadSql(queries: string[]) {
   const isVersionProbe = (sql: string) =>
     /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql);
@@ -41,16 +60,9 @@ function expectHistoryThreadSql(queries: string[]) {
 }
 
 it("serves committed history while transcript searches wait on a stuck writer", async (test) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    setRuntimeConfigSnapshot({});
-    const scope = await seedHistorySession("writer-isolation");
-    await appendTranscriptMessage(scope, {
-      eventId: "committed-message",
-      now: 1,
-      message: { role: "user", content: "Committed needle", timestamp: 1 },
-    });
-    const context = await createHistoryReadContext();
-    const rpc = historyRpc(context, scope.sessionKey);
+  await withHistory("writer-isolation", async (scope) => {
+    await append(scope, "committed-message", 1, "user", "Committed needle", { timestamp: 1 });
+    const rpc = historyRpc(await createHistoryReadContext(), scope.sessionKey);
     const request = async () => historyPayload(await rpc("chat.history")).messages;
     const committed = await request();
     expect(committed).toMatchObject([{ content: "Committed needle" }]);
@@ -96,20 +108,14 @@ it("serves committed history while transcript searches wait on a stuck writer", 
 it.each(["native", "acp"])(
   "keeps repeated cursor bytes and %s coordination visibility without request-thread transcript reads",
   async (sourceKind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      const scope = await seedHistorySession("worker-delta");
+    await withHistory("worker-delta", async (scope) => {
       const sourceSessionKey = `agent:main:${sourceKind === "native" ? "subagent" : "acp"}:worker`;
       if (sourceKind === "acp") {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: sourceSessionKey },
-          {
-            sessionId: "acp-worker",
-            updatedAt: 1,
-            spawnDepth: 0,
-            parentSessionKey: scope.sessionKey,
-          },
-        );
+        await seedHistorySession("acp:worker", {
+          sessionId: "acp-worker",
+          spawnDepth: 0,
+          parentSessionKey: scope.sessionKey,
+        });
         await upsertAcpSessionMeta({
           sessionKey: sourceSessionKey,
           agentId: "main",
@@ -124,27 +130,16 @@ it.each(["native", "acp"])(
           now: () => 2,
         });
       }
-      await appendTranscriptMessage(scope, {
-        eventId: "question",
-        now: 1,
-        message: { role: "user", content: "Question", timestamp: 1 },
-      });
-      await appendTranscriptMessage(scope, {
-        eventId: "coordination",
-        now: 2,
-        message: {
-          role: "user",
-          content: "Internal checkpoint",
-          idempotencyKey: "worker-run:user",
-          provenance: {
-            kind: "inter_session",
-            sourceTool: "sessions_send",
-            sourceSessionKey,
-          },
+      await append(scope, "question", 1, "user", "Question", { timestamp: 1 });
+      await append(scope, "coordination", 2, "user", "Internal checkpoint", {
+        idempotencyKey: "worker-run:user",
+        provenance: {
+          kind: "inter_session",
+          sourceTool: "sessions_send",
+          sourceSessionKey,
         },
       });
-      const context = await createHistoryReadContext();
-      const rpc = historyRpc(context, scope.sessionKey);
+      const rpc = historyRpc(await createHistoryReadContext(), scope.sessionKey);
       const call = async (cursor?: string) =>
         historyPayload(await rpc("chat.history", cursor ? { cursor } : {}));
       const initial = await call();
@@ -162,14 +157,9 @@ it.each(["native", "acp"])(
       if (typeof initial.deltaCursor !== "string") {
         throw new Error("Expected initial delta cursor");
       }
-      await appendTranscriptMessage(scope, {
-        eventId: "internal-answer",
-        now: 3,
-        message: {
-          role: "assistant",
-          content: "Internal response",
-          __openclaw: { runId: "worker-run" },
-        },
+      const run = { runId: "worker-run" };
+      await append(scope, "internal-answer", 3, "assistant", "Internal response", {
+        __openclaw: run,
       });
       await appendSessionTranscriptReport(scope, {
         kind: "custom",
@@ -178,34 +168,18 @@ it.each(["native", "acp"])(
           customType: "run-failed-before-reply",
           content: "Internal failure",
           display: true,
-          details: { runId: "worker-run" },
+          details: run,
         }),
       });
-      await appendTranscriptMessage(scope, {
-        eventId: "human-steer",
-        now: 4,
-        message: {
-          role: "user",
-          content: "Show me the result.",
-          idempotencyKey: "human-steer:user",
-          __openclaw: { steerTargetRunId: "worker-run" },
-        },
+      await append(scope, "human-steer", 4, "user", "Show me the result.", {
+        idempotencyKey: "human-steer:user",
+        __openclaw: { steerTargetRunId: "worker-run" },
       });
-      await appendTranscriptMessage(scope, {
-        eventId: "answer",
-        now: 5,
-        message: {
-          role: "assistant",
-          content: 'Escaped "answer" 🤖',
-          timestamp: 5,
-          __openclaw: { runId: "worker-run" },
-        },
+      await append(scope, "answer", 5, "assistant", 'Escaped "answer" 🤖', {
+        timestamp: 5,
+        __openclaw: run,
       });
-      await appendTranscriptMessage(scope, {
-        eventId: "ordinary-sibling",
-        now: 6,
-        message: { role: "assistant", content: "Ordinary sibling", timestamp: 6 },
-      });
+      await append(scope, "ordinary-sibling", 6, "assistant", "Ordinary sibling", { timestamp: 6 });
       const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
       const projectionRead = vi.spyOn(projectionReads, "readCurrentProjectionSnapshot");
       const counter = observeSqliteReadSql(StatementSync.prototype);
@@ -213,11 +187,9 @@ it.each(["native", "acp"])(
         const firstDelta = await call(initial.deltaCursor);
         expect(firstDelta).toMatchObject({
           kind: "delta",
-          messages: [
-            { messageId: "human-steer" },
-            { messageId: "answer" },
-            { messageId: "ordinary-sibling" },
-          ],
+          messages: ["human-steer", "answer", "ordinary-sibling"].map((messageId) => ({
+            messageId,
+          })),
         });
         const firstJson = JSON.stringify(firstDelta);
         expect(firstJson).toContain(JSON.stringify('Escaped "answer" 🤖'));
@@ -285,8 +257,8 @@ it("keeps transferred visibility proportional to the bounded delta, including cl
     { isSubagentSession: () => false, isSubagentRunMessage: () => false },
   );
   expect(serializedBytes).toBeLessThan(1_000_000);
-  expect(prepared.subagentCoordination.runMessages).toHaveLength(200);
   expect(prepared.subagentCoordination.sessions).toEqual([]);
+  expect(prepared.subagentCoordination.runMessages).toHaveLength(200);
   expect(Buffer.byteLength(JSON.stringify(prepared.subagentCoordination))).toBeLessThan(
     serializedBytes,
   );
@@ -296,9 +268,7 @@ it("keeps transferred visibility proportional to the bounded delta, including cl
 });
 
 it("forwards worker history as text JSON while preserving object callers and tiny budgets", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    setRuntimeConfigSnapshot({});
-    const scope = await seedHistorySession("encoded-history");
+  await withHistory("encoded-history", async (scope) => {
     await appendTranscriptMessages(scope, {
       messages: Array.from({ length: 3 }, (_, index) => ({
         eventId: `large-${index}`,
@@ -309,15 +279,14 @@ it("forwards worker history as text JSON while preserving object callers and tin
         },
       })),
     });
-    const context = await createHistoryReadContext();
-    const rpc = historyRpc(context, scope.sessionKey);
+    const rpc = historyRpc(await createHistoryReadContext(), scope.sessionKey);
     const request = async (
       acceptsSerializedJson: boolean,
       maxBytes = 200_000,
       method = "chat.history",
       maxChars = 50_000,
-    ) => {
-      return historyPayload(
+    ) =>
+      historyPayload(
         await rpc(
           "chat.history",
           { maxChars, maxBytes },
@@ -327,7 +296,6 @@ it("forwards worker history as text JSON while preserving object callers and tin
           },
         ),
       );
-    };
     const ordinary = await request(false);
     const encoded = await request(true);
     expect(encoded.messages).toBeInstanceOf(SerializedJsonArray);
@@ -349,10 +317,9 @@ it("forwards worker history as text JSON while preserving object callers and tin
     expect(Array.isArray((await request(true, 200_000, "cron.history")).messages)).toBe(true);
     const small = await request(true, 200_000, "chat.history", 64);
     expect(small.messages).toBeInstanceOf(SerializedJsonArray);
-    expect(
-      JSON.parse(serializeGatewayFrame({ type: "res", payload: small }).toString()).payload
-        .messages,
-    ).toEqual((await request(false, 200_000, "chat.history", 64)).messages);
+    expect(decode(small).messages).toEqual(
+      (await request(false, 200_000, "chat.history", 64)).messages,
+    );
     const omissions: Extract<DiagnosticEventPayload, { type: "payload.large" }>[] = [];
     const stop = onDiagnosticEvent((event) => {
       if (event.type === "payload.large" && event.surface === "gateway.chat.history") {
@@ -362,8 +329,7 @@ it("forwards worker history as text JSON while preserving object callers and tin
     try {
       const tiny = await request(true, 1024);
       expect(tiny.messages).toBeInstanceOf(SerializedJsonArray);
-      const messages = JSON.parse(serializeGatewayFrame({ type: "res", payload: tiny }).toString())
-        .payload.messages;
+      const { messages } = decode(tiny);
       expect(messages).toMatchObject(
         Array.from({ length: 3 }, (_, index) => ({
           __openclaw: { id: `large-${index}`, truncated: true, reason: "oversized" },

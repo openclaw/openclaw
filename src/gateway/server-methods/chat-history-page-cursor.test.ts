@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
@@ -9,11 +8,15 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { serializeGatewayFrame } from "../serialized-json.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
-import { historyPayload, historyRpc } from "./chat-history-fixture.test-support.js";
+import {
+  historyPayload,
+  historyRpc,
+  seedHistorySession,
+  seedHistoryTranscript,
+  withHistoryState,
+} from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 
 const scope = {
@@ -21,25 +24,22 @@ const scope = {
   sessionKey: "agent:main:anchored-page-cursor",
   sessionId: "anchored-page-cursor",
 };
+const makeMessage = (content: string, extra: Record<string, unknown> = {}) => ({
+  role: "assistant",
+  content,
+  ...extra,
+});
 
 async function seedHistory(
   messages: Record<string, unknown>[],
   entryOptions: { sessionStartedAt?: number } = {},
 ) {
-  await upsertSessionEntryCore(scope, {
-    sessionId: scope.sessionId,
-    updatedAt: 1,
-    ...entryOptions,
-  });
-  await replaceTranscriptEvents(scope, [
-    { type: "session", version: 3, id: scope.sessionId },
-    ...messages.map((message, index) => ({
-      type: "message",
-      id: `message-${index}`,
-      parentId: index > 0 ? `message-${index - 1}` : null,
-      message,
-    })),
-  ]);
+  await captureRuntimeConfigAsyncReader()();
+  await seedHistorySession(scope.sessionId, entryOptions);
+  await seedHistoryTranscript(
+    scope,
+    messages.map((message, index) => [`message-${index}`, message]),
+  );
   const context = await createHistoryReadContext();
   const request = historyRpc(context, scope.sessionKey);
   const send = async (params: Record<string, unknown>) => {
@@ -61,44 +61,61 @@ function messageIds(page: Record<string, unknown>) {
   return (page.messages as unknown[]).map(readChatHistoryMessageId);
 }
 
+async function walkPages(
+  initial: Record<string, unknown>,
+  direction: "olderCursor" | "newerCursor",
+  read: Awaited<ReturnType<typeof seedHistory>>["read"],
+  params: Record<string, unknown>,
+  maxPages: number,
+) {
+  const used = new Set<string>();
+  const ids: Array<string | undefined> = [];
+  let emptyPages = 0;
+  let page = initial;
+  while (typeof page[direction] === "string") {
+    const cursor = page[direction];
+    expect(used.has(cursor)).toBe(false);
+    used.add(cursor);
+    expect(used.size).toBeLessThan(maxPages);
+    page = await read({ cursor, ...params });
+    const next = messageIds(page);
+    emptyPages += Number(next.length === 0);
+    ids.push(...next);
+  }
+  return { ids, emptyPages };
+}
+
 describe("source-bound chat history page cursors", () => {
   it("walks both sides of a byte-limited anchor without gaps and rejects replaced transcripts", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await captureRuntimeConfigAsyncReader()();
+    await withHistoryState(async () => {
       const { read, send } = await seedHistory(
         Array.from({ length: 13 }, (_, index) => ({
           role: index % 2 === 0 ? "user" : "assistant",
           content: `Message ${index}: ${"x".repeat(100_000)}`,
         })),
       );
-      const transcriptHash = async () =>
-        createHash("sha256")
-          .update(JSON.stringify(await loadTranscriptEvents(scope)))
-          .digest("hex");
-      const before = await transcriptHash();
+      const before = await loadTranscriptEvents(scope);
       const initial = await read({ messageId: "message-6", limit: 13, maxChars: 200_000 });
       const initialIds = messageIds(initial);
       expect(initialIds).toContain("message-6");
-      expect(initial.olderCursor).toEqual(expect.any(String));
-      expect(initial.newerCursor).toEqual(expect.any(String));
-      const seen = new Set(initialIds);
+      expect(initial).toMatchObject({
+        olderCursor: expect.any(String),
+        newerCursor: expect.any(String),
+      });
+      const seen = [...initialIds];
       for (const direction of ["olderCursor", "newerCursor"] as const) {
-        let page = initial;
-        const used = new Set<string>();
-        while (typeof page[direction] === "string") {
-          const cursor = page[direction];
-          expect(used.has(cursor)).toBe(false);
-          used.add(cursor);
-          expect(used.size).toBeLessThan(13);
-          page = await read({ cursor, limit: 13, maxChars: 200_000, maxBytes: 2_000_000 });
-          for (const id of messageIds(page)) {
-            expect(seen.has(id)).toBe(false);
-            seen.add(id);
-          }
-        }
+        const page = await walkPages(
+          initial,
+          direction,
+          read,
+          { limit: 13, maxChars: 200_000, maxBytes: 2_000_000 },
+          13,
+        );
+        seen.push(...page.ids);
       }
-      expect(seen).toEqual(new Set(Array.from({ length: 13 }, (_, index) => `message-${index}`)));
-      expect(await transcriptHash()).toBe(before);
+      const expectedIds = Array.from({ length: 13 }, (_, index) => `message-${index}`);
+      expect(seen.toSorted()).toEqual(expectedIds.toSorted());
+      expect(await loadTranscriptEvents(scope)).toEqual(before);
 
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:unrelated" },
@@ -114,14 +131,8 @@ describe("source-bound chat history page cursors", () => {
         message: "sessionId does not belong to sessionKey",
       });
 
-      await replaceTranscriptEvents(scope, [
-        { type: "session", version: 3, id: scope.sessionId },
-        {
-          type: "message",
-          id: "message-4",
-          parentId: null,
-          message: { role: "user", content: "A different transcript generation" },
-        },
+      await seedHistoryTranscript(scope, [
+        ["message-4", makeMessage("A different transcript generation", { role: "user" })],
       ]);
       expect(await read({ cursor: initial.olderCursor })).toMatchObject({
         messages: [],
@@ -130,22 +141,19 @@ describe("source-bound chat history page cursors", () => {
     });
   });
 
-  it.each(
-    (["olderCursor", "newerCursor"] as const).flatMap((direction) =>
-      (["display flags", "stale announce pairs"] as const).map((hiddenBy) => ({
-        direction,
-        hiddenBy,
-      })),
-    ),
-  )(
-    "$direction advances through pages hidden by $hiddenBy with a one-message limit",
-    async ({ direction, hiddenBy }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        await captureRuntimeConfigAsyncReader()();
+  it.each([
+    ["olderCursor", "display flags"],
+    ["olderCursor", "stale announce pairs"],
+    ["newerCursor", "display flags"],
+    ["newerCursor", "stale announce pairs"],
+  ] as const)(
+    "%s advances through pages hidden by %s with a one-message limit",
+    async (direction, hiddenBy) => {
+      await withHistoryState(async () => {
         const announcePair = hiddenBy === "stale announce pairs";
         const { read } = await seedHistory(
           [
-            { role: "user", content: "First visible message" },
+            makeMessage("First visible message", { role: "user" }),
             announcePair
               ? {
                   role: "user",
@@ -153,43 +161,31 @@ describe("source-bound chat history page cursors", () => {
                   timestamp: 1000,
                   provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
                 }
-              : { role: "assistant", content: "Hidden one", display: false },
+              : makeMessage("Hidden one", { display: false }),
             announcePair
-              ? { role: "assistant", content: "Old paired reply", timestamp: 1500 }
-              : { role: "assistant", content: "Hidden two", display: false },
-            { role: "assistant", content: "Last visible message", timestamp: 3000 },
+              ? makeMessage("Old paired reply", { timestamp: 1500 })
+              : makeMessage("Hidden two", { display: false }),
+            makeMessage("Last visible message", { timestamp: 3000 }),
           ],
           { sessionStartedAt: 2000 },
         );
         const older = direction === "olderCursor";
-        let page = await read({ messageId: older ? "message-3" : "message-0", limit: 1 });
+        const page = await read({ messageId: older ? "message-3" : "message-0", limit: 1 });
         expect(messageIds(page)).toEqual([older ? "message-3" : "message-0"]);
-        const used = new Set<string>();
-        const seen: Array<string | undefined> = [];
-        let emptyPages = 0;
-        while (typeof page[direction] === "string") {
-          const cursor = page[direction];
-          expect(used.has(cursor)).toBe(false);
-          used.add(cursor);
-          expect(used.size).toBeLessThan(5);
-          page = await read({ cursor, limit: 1 });
-          const ids = messageIds(page);
-          emptyPages += ids.length === 0 ? 1 : 0;
-          seen.push(...ids);
-        }
-        expect(emptyPages).toBe(2);
-        expect(seen).toEqual([older ? "message-0" : "message-3"]);
+        expect(await walkPages(page, direction, read, { limit: 1 }, 5)).toEqual({
+          emptyPages: 2,
+          ids: [older ? "message-0" : "message-3"],
+        });
       });
     },
   );
 
   it("stays in the retained reset interval after the live session advances", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await captureRuntimeConfigAsyncReader()();
+    await withHistoryState(async () => {
       const { read, send } = await seedHistory([
-        { role: "user", content: "Retained start" },
-        { role: "assistant", content: "Retained anchor" },
-        { role: "user", content: "Retained end" },
+        makeMessage("Retained start", { role: "user" }),
+        makeMessage("Retained anchor"),
+        makeMessage("Retained end", { role: "user" }),
       ]);
       await appendTranscriptEvent(scope, {
         type: "reset",
@@ -229,10 +225,9 @@ describe("source-bound chat history page cursors", () => {
   });
 
   it("keeps recovery context when an older cursor excludes the successful boundary reply", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await captureRuntimeConfigAsyncReader()();
+    await withHistoryState(async () => {
       const { read } = await seedHistory([
-        { role: "user", content: "Question" },
+        makeMessage("Question", { role: "user" }),
         {
           role: "assistant",
           content: [],
@@ -240,12 +235,10 @@ describe("source-bound chat history page cursors", () => {
           errorMessage: "Temporary provider failure",
           __openclaw: { runId: "recovered-run" },
         },
-        {
-          role: "assistant",
-          content: "Recovered answer",
+        makeMessage("Recovered answer", {
           stopReason: "stop",
           __openclaw: { runId: "recovered-run" },
-        },
+        }),
       ]);
       const initial = await read({ messageId: "message-2", limit: 1 });
       const recovered = await read({ cursor: initial.olderCursor, limit: 1 });

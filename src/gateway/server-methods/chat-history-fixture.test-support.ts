@@ -2,11 +2,31 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import type { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+
+export const withHistoryState = (use: Parameters<typeof withOpenClawTestState>[1]) =>
+  withOpenClawTestState({ scenario: "minimal" }, use);
+
+export function seedHistoryTranscript(
+  scope: Parameters<typeof replaceTranscriptEvents>[0],
+  messages: Array<[string, Record<string, unknown>]>,
+) {
+  return replaceTranscriptEvents(scope, [
+    { type: "session", version: 3, id: scope.sessionId },
+    ...messages.map(([id, message], index) => ({
+      type: "message",
+      id,
+      parentId: messages[index - 1]?.[0] ?? null,
+      message,
+    })),
+  ]);
+}
 
 export async function seedHistorySession(id: string, entry: Partial<InternalSessionEntry> = {}) {
   const scope = { agentId: "main", sessionKey: `agent:main:${id}`, sessionId: id };
