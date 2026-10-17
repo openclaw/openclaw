@@ -38,13 +38,11 @@ async function seedSessionStore(storePath: string, sessionKey: string, entry: Se
   await upsertSessionEntryCore({ storePath, sessionKey }, entry);
 }
 
-async function loadStoredEntry(storePath: string, sessionKey: string): Promise<SessionEntry> {
-  const entry = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
-  if (!entry) {
-    throw new Error(`expected persisted session entry for ${sessionKey}`);
-  }
-  return entry;
-}
+const loadStoredEntry = (storePath: string, sessionKey: string) =>
+  expectDefined(
+    loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
+    `expected persisted session entry for ${sessionKey}`,
+  );
 
 async function createCompactionSessionFixture(entry: SessionEntry) {
   const tmp = sessionDirs.make();
@@ -74,17 +72,23 @@ describe("history helpers", () => {
     expect(buildHistoryContext({ historyText: "  ", currentMessage: "hello" })).toBe("hello");
   });
 
-  it("wraps history entries and excludes current by default", () => {
-    const result = buildHistoryContextFromEntries({
-      ...context,
-      entries,
-    });
-
-    expect(result).toContain(HISTORY_CONTEXT_MARKER);
-    expect(result).toContain("A: one");
-    expect(result).not.toContain("B: two");
-    expect(result).toContain(CURRENT_MESSAGE_MARKER);
-    expect(result).toContain("current");
+  it.each([
+    ["entries", "A: one", ["one", "two"]],
+    ["append", "A: one\nB: two", ["one", "two", "three"]],
+    ["pending", "A: one\nB: two", ["one", "two"]],
+  ] as const)("builds %s context without echoing the current entry", (source, history, bodies) => {
+    const historyMap = createHistoryMapWithTwoEntries();
+    const params = { ...context, historyMap };
+    const result =
+      source === "entries"
+        ? buildHistoryContextFromEntries({ ...context, entries })
+        : source === "append"
+          ? buildHistoryContextFromMap({ ...params, entry: { sender: "C", body: "three" } })
+          : buildPendingHistoryContextFromMap(params);
+    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(bodies);
+    expect(result).toBe(
+      `${HISTORY_CONTEXT_MARKER}\n${history}\n\n${CURRENT_MESSAGE_MARKER}\ncurrent`,
+    );
   });
 
   it("trims history to configured limit", () => {
@@ -95,38 +99,6 @@ describe("history helpers", () => {
     }
 
     expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["two", "three"]);
-  });
-
-  it("builds context from map and appends entry", () => {
-    const historyMap = createHistoryMapWithTwoEntries();
-
-    const result = buildHistoryContextFromMap({
-      historyMap,
-      ...context,
-      entry: { sender: "C", body: "three" },
-    });
-
-    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["one", "two", "three"]);
-    expect(result).toContain(HISTORY_CONTEXT_MARKER);
-    expect(result).toContain("A: one");
-    expect(result).toContain("B: two");
-    expect(result).not.toContain("C: three");
-  });
-
-  it("builds context from pending map without appending", () => {
-    const historyMap = createHistoryMapWithTwoEntries();
-
-    const result = buildPendingHistoryContextFromMap({
-      historyMap,
-      ...context,
-    });
-
-    expect(historyMap.get("group")?.map((entry) => entry.body)).toEqual(["one", "two"]);
-    expect(result).toContain(HISTORY_CONTEXT_MARKER);
-    expect(result).toContain("A: one");
-    expect(result).toContain("B: two");
-    expect(result).toContain(CURRENT_MESSAGE_MARKER);
-    expect(result).toContain("current");
   });
 
   it("builds structured inbound history with media metadata", () => {
@@ -182,21 +154,21 @@ describe("shouldRunMemoryFlush", () => {
     expect(shouldRunMemoryFlush({ entry: undefined, threshold: 11_000 })).toBe(false);
   });
 
-  it.each([[32_768, 20_000, 12_768]])(
-    "honors the selected reserve in a %i-token window",
-    (contextWindowTokens, reserveTokensFloor, expected) => {
-      const threshold = resolveCompactionThreshold({ contextWindowTokens, reserveTokensFloor });
-      expect(threshold).toBe(expected);
-      for (const tokenCount of [expected - 1, expected, expected + 1]) {
-        expect(
-          shouldRunPreflightCompaction({
-            entry: { totalTokens: tokenCount, totalTokensFresh: true, totalTokensVersion: 1 },
-            threshold,
-          }),
-        ).toBe(expected > 0 && tokenCount >= expected);
-      }
-    },
-  );
+  it("honors the selected reserve in a 32K-token window", () => {
+    const threshold = resolveCompactionThreshold({
+      contextWindowTokens: 32_768,
+      reserveTokensFloor: 20_000,
+    });
+    expect(threshold).toBe(12_768);
+    for (const tokenCount of [12_767, 12_768, 12_769]) {
+      expect(
+        shouldRunPreflightCompaction({
+          entry: { totalTokens: tokenCount, totalTokensFresh: true, totalTokensVersion: 1 },
+          threshold,
+        }),
+      ).toBe(tokenCount >= 12_768);
+    }
+  });
 
   it("skips when already flushed for current compaction count", () => {
     expect(

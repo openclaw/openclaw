@@ -24,7 +24,10 @@ import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agen
 import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import { replyRunRegistry, waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
 import {
@@ -48,6 +51,53 @@ type Admission = Awaited<ReturnType<typeof admitReplyTurn>>;
 
 function admit(params: Omit<Parameters<typeof admitReplyTurn>[0], "kind" | "resetTriggered">) {
   return admitReplyTurn({ kind: "visible", resetTriggered: false, ...params });
+}
+
+function makeTarget(
+  state: OpenClawTestState,
+  name: string,
+  agentId = "main",
+  seed = true,
+  options: { sessionId?: string } = {},
+) {
+  const value = {
+    ...(agentId === "main" ? {} : { agentId }),
+    storePath: path.join(state.sessionsDir(agentId), "agent.sqlite"),
+    sessionKey: `agent:${agentId}:${name}`,
+    sessionId: options.sessionId ?? `${name}-session`,
+  };
+  if (seed) {
+    replaceSessionEntrySync(
+      { storePath: value.storePath, sessionKey: value.sessionKey },
+      { sessionId: value.sessionId, updatedAt: 1 },
+    );
+  }
+  return value;
+}
+
+function trackSettlement<T>(pending: Promise<T>) {
+  let settled = false;
+  const done = () => {
+    settled = true;
+  };
+  return { pending, done: pending.then(done, done), isSettled: () => settled };
+}
+
+function waitAtGate(
+  gate: Promise<void>,
+  pending: Promise<unknown>,
+  message: string,
+  signal: AbortSignal,
+) {
+  return withinTest(awaitGateBeforeSettlement(gate, pending, message), signal);
+}
+
+function requireOwned(result: Admission) {
+  expect(result.status).toBe("owned");
+  if (result.status !== "owned" || !result.databaseClaim) {
+    throw new Error("Persistent admission must retain its physical database claim");
+  }
+  return { ...result, databaseClaim: result.databaseClaim };
 }
 
 function observeSql() {
@@ -106,8 +156,8 @@ async function completeAdmission(result: Admission | undefined, sessionKey: stri
 
 it("creates a missing persistent store through reply admission without main-thread SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = path.join(state.sessionsDir(), "agent.sqlite");
-    const sessionKey = "agent:main:first-worker-admission";
+    const request = makeTarget(state, "first-worker-admission", "main", false);
+    const { storePath, sessionKey } = request;
     openOpenClawStateDatabase({ env: state.env });
     expect(fs.existsSync(storePath)).toBe(false);
     const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
@@ -121,20 +171,16 @@ it("creates a missing persistent store through reply admission without main-thre
     let result: Admission | undefined;
     try {
       const pending = admit({
-        storePath,
-        sessionKey,
-        sessionId: "first-worker-admission-session",
+        ...request,
         onDatabaseRegistration: sharing.followRegistration,
       }).then((admitted) => {
         result = admitted;
         return admitted;
       });
       result = await pending;
-      if (result.status !== "owned" || !result.databaseClaim) {
-        throw new Error("First persistent admission must retain its database claim");
-      }
-      expect(result.sessionEntry).toBeUndefined();
-      expect(result.databaseClaim.isCurrent()).toBe(true);
+      const owned = requireOwned(result);
+      expect(owned.sessionEntry).toBeUndefined();
+      expect(owned.databaseClaim.isCurrent()).toBe(true);
       expect(fs.existsSync(storePath)).toBe(true);
       expect(sharing.readCurrent(cfg).target).toBeNull();
       await completeAdmission(result, sessionKey);
@@ -155,10 +201,8 @@ it("retains one actor per cold/reopened reply admission and drains it without ma
   signal,
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = path.join(state.sessionsDir(), "agent.sqlite");
-    const sessionKey = "agent:main:worker-admission";
-    const sessionId = "worker-admission-session";
-    replaceSessionEntrySync({ storePath, sessionKey }, { sessionId, updatedAt: 1 });
+    const request = makeTarget(state, "worker-admission");
+    const { storePath, sessionKey, sessionId } = request;
     const statePath = openOpenClawStateDatabase({ env: state.env }).path;
     let previousIncarnation: string | undefined;
 
@@ -169,50 +213,35 @@ it("retains one actor per cold/reopened reply admission and drains it without ma
       const sql = observeSql();
       const controller = new AbortController();
       const pending = admit({
-        storePath,
-        sessionKey,
-        sessionId,
+        ...request,
         expectedSessionId: sessionId,
         upstreamAbortSignal: controller.signal,
       });
-      let settled = false;
-      const settlement = pending.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
+      const settlement = trackSettlement(pending);
       let result: Admission | undefined;
       const releaseActorPhase = createDeferred();
       let actorPhase: Promise<void> | undefined;
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            nativeOpen.entered,
-            pending,
-            `${phase} admission completed while its shared writer was held`,
-          ),
+        await waitAtGate(
+          nativeOpen.entered,
+          pending,
+          `${phase} admission completed while its shared writer was held`,
           signal,
         );
         await setImmediate();
         expect(Atomics.load(holder.released, 0)).toBe(0);
         sql.expectIdle();
-        expect(settled).toBe(false);
+        expect(settlement.isSettled()).toBe(false);
         await holder.release();
         result = await pending;
-        expect(result.status).toBe("owned");
-        if (result.status !== "owned" || !result.databaseClaim) {
-          throw new Error("Persistent admission must retain its physical database claim");
-        }
-        expect(result.sessionEntry?.sessionId).toBe(sessionId);
-        expect(result.databaseClaim.isCurrent()).toBe(true);
+        const owned = requireOwned(result);
+        expect(owned.sessionEntry?.sessionId).toBe(sessionId);
+        expect(owned.databaseClaim.isCurrent()).toBe(true);
         if (previousIncarnation !== undefined) {
-          expect(result.databaseClaim.incarnation).not.toBe(previousIncarnation);
+          expect(owned.databaseClaim.incarnation).not.toBe(previousIncarnation);
         }
-        previousIncarnation = result.databaseClaim.incarnation;
-        const { operation, databaseClaim } = result;
+        previousIncarnation = owned.databaseClaim.incarnation;
+        const { operation, databaseClaim } = owned;
         const [actor, sibling] = await Promise.all([
           acquireReplyOperationSessionActor(operation),
           acquireReplyOperationSessionActor(operation),
@@ -252,17 +281,13 @@ it("retains one actor per cold/reopened reply admission and drains it without ma
         operation.complete();
         expect(() => actor.snapshot(authority)).toThrow();
         expect(() => acquireReplyOperationSessionActor(operation)).toThrow();
-        let successorSettled = false;
-        const successor = waitForReplyRunSuccessorAdmission(sessionKey, null).then((next) => {
-          successorSettled = true;
-          return next;
-        });
+        const successor = trackSettlement(waitForReplyRunSuccessorAdmission(sessionKey, null));
         await setImmediate();
-        expect(successorSettled).toBe(false);
+        expect(successor.isSettled()).toBe(false);
         expect(databaseClaim.isCurrent()).toBe(true);
         releaseActorPhase.resolve();
         await withinTest(actorPhase, signal);
-        expect(await withinTest(successor, signal)).toMatchObject({ settled: true });
+        expect(await withinTest(successor.pending, signal)).toMatchObject({ settled: true });
         expect(databaseClaim.isCurrent()).toBe(false);
         expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
         sql.expectIdle();
@@ -278,7 +303,7 @@ it("retains one actor per cold/reopened reply admission and drains it without ma
             await waitForReplyRunSuccessorAdmission(sessionKey, null);
           }
           await completeAdmission(result, sessionKey);
-          await settlement;
+          await settlement.done;
         } finally {
           nativeOpen.restore();
           sql.restore();
@@ -292,16 +317,10 @@ it("cancels a contended persistent admission without claiming the reply or poiso
   signal,
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = path.join(state.sessionsDir(), "agent.sqlite");
-    const sessionKey = "agent:main:cancel-worker-admission";
-    const sessionId = "cancel-worker-admission-session";
-    const followerKey = "agent:main:concurrent-worker-admission";
-    const followerSessionId = "concurrent-worker-admission-session";
-    replaceSessionEntrySync({ storePath, sessionKey }, { sessionId, updatedAt: 1 });
-    replaceSessionEntrySync(
-      { storePath, sessionKey: followerKey },
-      { sessionId: followerSessionId, updatedAt: 1 },
-    );
+    const initial = makeTarget(state, "cancel-worker-admission");
+    const concurrent = makeTarget(state, "concurrent-worker-admission");
+    const { storePath, sessionKey, sessionId } = initial;
+    const { sessionKey: followerKey, sessionId: followerSessionId } = concurrent;
     await closeOpenClawAgentDatabaseByPathAsync(storePath);
     const holder = await holdWriter(openOpenClawStateDatabase({ env: state.env }).path);
     const nativeOpen = observeNativeOpen(storePath, "main");
@@ -319,9 +338,7 @@ it("cancels a contended persistent admission without claiming the reply or poiso
       });
     const controller = new AbortController();
     const request = {
-      storePath,
-      sessionKey,
-      sessionId,
+      ...initial,
       expectedSessionId: sessionId,
     };
     const pending = admit({ ...request, upstreamAbortSignal: controller.signal });
@@ -330,28 +347,22 @@ it("cancels a contended persistent admission without claiming the reply or poiso
     let follower: Promise<Admission> | undefined;
     let result: Admission | undefined;
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          nativeOpen.entered,
-          pending,
-          "Admission completed before cancellation under contention",
-        ),
+      await waitAtGate(
+        nativeOpen.entered,
+        pending,
+        "Admission completed before cancellation under contention",
         signal,
       );
       follower = admit({
-        ...request,
-        sessionKey: followerKey,
-        sessionId: followerSessionId,
+        ...concurrent,
         expectedSessionId: followerSessionId,
         upstreamAbortSignal: followerController.signal,
       });
       void follower.catch(() => undefined);
-      await withinTest(
-        awaitGateBeforeSettlement(
-          followerQueued.promise,
-          follower,
-          "Concurrent admission completed before entering the writer queue",
-        ),
+      await waitAtGate(
+        followerQueued.promise,
+        follower,
+        "Concurrent admission completed before entering the writer queue",
         signal,
       );
       controller.abort(new Error("Synthetic cancelled reply"));
@@ -389,23 +400,16 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
   "keeps successors behind physical claim release after %s during executor drain with a full idle cache",
   async (ending) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const activePath = path.join(state.sessionsDir(), "agent.sqlite");
-      const activeKey = "agent:main:completion-close";
-      const activeSessionId = "completion-active-session";
-      const idleTargets = Array.from({ length: 4 }, (_, index) => {
-        const agentId = `other-${index}`;
-        return {
-          agentId,
-          storePath: path.join(state.sessionsDir(agentId), "agent.sqlite"),
-          sessionKey: `agent:${agentId}:completion-idle`,
-          sessionId: `completion-idle-session-${index}`,
-        };
+      const activeTarget = makeTarget(state, "completion-close", "main", true, {
+        sessionId: "completion-active-session",
       });
-      for (const { storePath, sessionKey, sessionId } of [
-        { storePath: activePath, sessionKey: activeKey, sessionId: activeSessionId },
-        ...idleTargets,
-      ]) {
-        replaceSessionEntrySync({ storePath, sessionKey }, { sessionId, updatedAt: 1 });
+      const { storePath: activePath, sessionKey: activeKey } = activeTarget;
+      const idleTargets = Array.from({ length: 4 }, (_, index) =>
+        makeTarget(state, "completion-idle", `other-${index}`, true, {
+          sessionId: `completion-idle-session-${index}`,
+        }),
+      );
+      for (const { storePath } of [activeTarget, ...idleTargets]) {
         await closeOpenClawAgentDatabaseByPathAsync(storePath);
       }
       const shared = openOpenClawStateDatabase({ env: state.env });
@@ -416,15 +420,11 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
       try {
         active = await work.run(() =>
           admit({
-            storePath: activePath,
-            sessionKey: activeKey,
-            sessionId: activeSessionId,
-            expectedSessionId: activeSessionId,
+            ...activeTarget,
+            expectedSessionId: activeTarget.sessionId,
           }),
         );
-        if (active.status !== "owned" || !active.databaseClaim) {
-          throw new Error("Fixture requires an admitted persistent reply owner");
-        }
+        const { operation, databaseClaim } = requireOwned(active);
         for (const target of idleTargets) {
           const admission = await admit({
             ...target,
@@ -446,14 +446,13 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
           // Drain forces physical retirement of the active owner and the full idle cache.
           markGatewayRestartDraining();
           if (ending !== "complete") {
-            active.operation.setPhase("running");
-            active.operation.attachBackend({
+            operation.setPhase("running");
+            operation.attachBackend({
               kind: "embedded",
               runId: "completion-run",
               cancel() {},
             });
             if (ending === "frozen-restart") {
-              const operation = active.operation;
               operation.freezeAbort();
               const restartReason = createAgentRunRestartAbortError();
               work.beginClose(restartReason);
@@ -462,16 +461,14 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
               expect(() => getReplyOperationSessionTarget(operation)).toThrow(restartReason);
             } else {
               expect(
-                ending === "restart-abort"
-                  ? active.operation.abortForRestart()
-                  : active.operation.abortByUser(),
+                ending === "restart-abort" ? operation.abortForRestart() : operation.abortByUser(),
               ).toBe(true);
             }
-            expect(active.databaseClaim.isCurrent()).toBe(ending === "user-abort");
-            expect(replyRunRegistry.get(activeKey)).toBe(active.operation);
+            expect(databaseClaim.isCurrent()).toBe(ending === "user-abort");
+            expect(replyRunRegistry.get(activeKey)).toBe(operation);
           }
-          active.operation.complete();
-          expect(active.databaseClaim.isCurrent()).toBe(false);
+          operation.complete();
+          expect(databaseClaim.isCurrent()).toBe(false);
           let settled = false;
           successor = waitForReplyRunSuccessorAdmission(activeKey, null).then((result) => {
             settled = true;
