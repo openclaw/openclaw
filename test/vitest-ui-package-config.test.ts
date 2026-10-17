@@ -72,7 +72,7 @@ describe("ui package vitest config", () => {
       const output = path.join(root, "report.json");
       const selectionsPath = path.join(root, "selections.json");
       const selections = Object.fromEntries(
-        (["bun-compatible", "dual"] as const).map((policy) => [
+        (["bun-all", "dual-all"] as const).map((policy) => [
           policy,
           resolveCiTestRuntimeSelections({ configs: ["ui/vitest.config.ts"] }, policy),
         ]),
@@ -190,12 +190,23 @@ describe("ui package vitest config", () => {
           .flatMap((row) => row.original)
           .toSorted(),
       ).toEqual(report.discovered);
+      const nodeRequired = new Set([
+        "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
+        "ui/src/pages/chat/chat-pane-retention.test.ts",
+        "ui/src/pages/chat/chat-thread-retention.test.ts",
+        "ui/src/pages/chat/session-snapshot-store.test.ts",
+        "ui/src/pages/usage/usage-page-retention.test.ts",
+      ]);
       for (const row of report.rows) {
-        const compatible = row.selected["bun-compatible"]!;
-        expect(compatible).toEqual([{ runtime: "bun", files: row.original }]);
-        expect(row.selected.dual).toEqual([
+        const nodeFiles = row.original.filter((file) => nodeRequired.has(file));
+        const bunFiles = row.original.filter((file) => !nodeRequired.has(file));
+        expect(row.selected["bun-all"]).toEqual([
+          { runtime: "node", files: nodeFiles },
+          { runtime: "bun", files: bunFiles },
+        ]);
+        expect(row.selected["dual-all"]).toEqual([
           { runtime: "node", files: row.original },
-          { runtime: "bun", files: row.original },
+          { runtime: "bun", files: bunFiles },
         ]);
       }
     }));
