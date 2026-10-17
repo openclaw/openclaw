@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -9,7 +10,11 @@ import {
   type FixtureReceiptChannel,
 } from "../../../test/helpers/fixture-receipts.js";
 import { waitForFixtureFile } from "../../../test/helpers/process-wait.js";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import {
   buildExternalRunFailureReply,
   buildKnownAgentRunFailureReplyPayload,
@@ -19,7 +24,6 @@ import { projectInFlightRunSnapshot } from "../../gateway/chat-inflight-snapshot
 import { createAgentEventTestHarness } from "../../gateway/server-chat.agent-events.test-harness.js";
 import { subscribeAgentEvents } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
-import { hasErrnoCode } from "../../infra/errno.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import {
@@ -87,17 +91,9 @@ async function fixtureEnteredBeforeSettlement(
   expected = "",
 ): Promise<void> {
   const filename = path.join(directory, `${control}-entered`);
-  const matches = async () => {
-    const value = await fs.readFile(filename, "utf8").catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return "";
-      }
-      throw error;
-    });
-    return value.length > 0 && (!expected || value === expected);
-  };
-  const checkSettlement = async (status: "exited" | "failed", cause?: unknown) => {
-    if (!(await matches())) {
+  const checkSettlement = (status: "exited" | "failed", cause?: unknown) => {
+    const value = existsSync(filename) ? readFileSync(filename, "utf8") : "";
+    if (!value || (expected && value !== expected)) {
       throw new Error(`Child ${status} before writing ${filename}`, { cause });
     }
   };
@@ -122,16 +118,10 @@ async function peerStates(directory: string): Promise<PeerState[]> {
   );
 }
 
-const policyCases = [
-  { agent: "opencode", profile: "messaging", alsoAllow: undefined, denied: true },
-  { agent: "kilocode", profile: "coding", alsoAllow: ["message"], denied: false },
-] satisfies Array<{
-  agent: string;
-  profile: NonNullable<OpenClawConfig["tools"]>["profile"];
-  alsoAllow: string[] | undefined;
-  denied: boolean;
-}>;
-it.each(policyCases)(
+it.each([
+  { agent: "opencode", profile: "messaging" as const, alsoAllow: undefined, denied: true },
+  { agent: "kilocode", profile: "coding" as const, alsoAllow: ["message"], denied: false },
+])(
   "admits $agent profile=$profile alsoAllow=$alsoAllow before native effects",
   async ({ agent, profile, alsoAllow, denied }) => {
     await withNativeAttempt(
@@ -161,8 +151,7 @@ it.each(policyCases)(
           });
           expect.soft(reply.text).toContain("cannot run with this chat's tool restrictions");
           expect.soft(reply.text).toContain("Choose a different model provider");
-          expect.soft(reply.text).not.toContain("try again");
-          expect.soft(reply.text).not.toContain("/new");
+          expect.soft(reply.text).not.toMatch(/try again|\/new/);
           expect.soft(reply.isGenericRunnerFailure).toBe(false);
           expect
             .soft(
@@ -176,9 +165,9 @@ it.each(policyCases)(
         } else {
           expect.soft(outcome.error).toBeUndefined();
           expect.soft(outcome.value?.terminal).toMatchObject({ kind: "ok" });
-          expect.soft(records).toHaveLength(1);
-          expect.soft(records[0]?.history).toHaveLength(1);
-          expect(records[0]?.history[0]).toContain("Earlier conversation");
+          expect
+            .soft(records)
+            .toMatchObject([{ history: [expect.stringContaining("Earlier conversation")] }]);
           expect(records[0]?.history[0]).toContain(
             "Current turn:\nChannel context\nRecord the requested native effect.",
           );
@@ -250,12 +239,11 @@ it.for(["complete", "revoke"] as const)(
           }
         });
         const unsubscribe = subscribeAgentEvents(async (event) => {
-          if (event.runId !== attempt.input.runId) {
-            return;
-          }
-          await gateway.handler(event);
-          if (event.stream === "assistant") {
-            updates.push(event);
+          if (event.runId === attempt.input.runId) {
+            await gateway.handler(event);
+            if (event.stream === "assistant") {
+              updates.push(event);
+            }
           }
         });
         let finished = false;
@@ -336,8 +324,7 @@ it.for([
           };
           const handle = await runtime.ensureSession(nativeTarget);
           const getStatus = runtime.getStatus.bind(runtime);
-          const initial = await getStatus({ handle });
-          expect(initial.models?.currentModelId).toBe(nativeTarget.model);
+          expect((await getStatus({ handle })).models?.currentModelId).toBe(nativeTarget.model);
           const before = await peerStates(native.peerDirectory);
           holdingControl = runtime.setMode({ handle, mode: "review" });
           void holdingControl.catch(() => {});
@@ -371,14 +358,11 @@ it.for([
           run = runAgentHarnessAttempt(attempt.input);
           void run.catch(() => {});
           await withinTest(
-            Promise.race([
+            awaitGateBeforeSettlement(
               upstreamEntered.promise,
-              run.then((result) => {
-                throw new Error(`Attempt ended before native ${operation} boundary`, {
-                  cause: result,
-                });
-              }),
-            ]),
+              run,
+              `Attempt ended before native ${operation} boundary`,
+            ),
             signal,
           );
           expect(upstreamOperation).toHaveBeenCalledOnce();
@@ -391,21 +375,16 @@ it.for([
           const records = await peerStates(native.peerDirectory);
           const effects = await fs.readdir(path.join(native.peerDirectory, "effects"));
           const persisted = await getStatus({ handle });
-          if (kind === "active") {
-            expect.soft(outcome?.terminal).toMatchObject({ kind: "ok" });
-            expect.soft(persisted.models?.currentModelId).toBe("selected");
-            expect.soft(records[0]?.currentModelId).toBe("selected");
-            expect.soft(records[0]?.modelChanges).toEqual(["selected"]);
-            expect.soft(records[0]?.history).toHaveLength(1);
-            expect.soft(effects).toHaveLength(1);
-          } else {
-            expect.soft(outcome?.terminal).toMatchObject({ kind: "failed" });
-            expect.soft(persisted.models?.currentModelId).toBe(nativeTarget.model);
-            expect.soft(records[0]?.currentModelId).toBe(nativeTarget.model);
-            expect.soft(records[0]?.modelChanges).toEqual(before[0]?.modelChanges);
-            expect.soft(records[0]?.history).toEqual(before[0]?.history);
-            expect.soft(effects).toEqual([]);
-          }
+          const active = kind === "active";
+          const model = active ? "selected" : nativeTarget.model;
+          expect.soft(outcome?.terminal.kind).toBe(active ? "ok" : "failed");
+          expect.soft(persisted.models?.currentModelId).toBe(model);
+          expect.soft(records[0]).toMatchObject({
+            currentModelId: model,
+            modelChanges: active ? ["selected"] : before[0]?.modelChanges,
+            history: active ? [expect.any(String)] : before[0]?.history,
+          });
+          expect.soft(effects).toEqual(active ? [expect.any(String)] : []);
         } finally {
           await fs.writeFile(path.join(native.peerDirectory, "mode-control-release"), "release");
           await Promise.allSettled([run, holdingControl]);

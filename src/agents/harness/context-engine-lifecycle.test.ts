@@ -1,6 +1,5 @@
-// Covers context-engine message filtering, assemble validation, and turn finalization.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildMemorySystemPromptAddition } from "../../context-engine/delegate.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import {
@@ -35,6 +34,8 @@ import {
 } from "./context-engine-lifecycle.test-support.js";
 import { createContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 
+const { sessionId, sessionIdUsed, sessionKey, sessionFile } = sessionParams;
+
 function registerTestContextEngine(
   id: string,
   factory: Parameters<typeof registerContextEngineForOwner>[1],
@@ -45,23 +46,18 @@ function registerTestContextEngine(
 }
 
 function runtimeContextMessage(content: string, timestamp: number): AgentMessage {
-  // Runtime context is hidden harness metadata. Context engines should see
-  // user/assistant transcript messages, not this internal custom channel.
   return {
     role: "custom",
     customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
     content,
     display: false,
-    details: { source: "openclaw-runtime-context" },
     timestamp,
   } as AgentMessage;
 }
 
 let configuredProofEngineIdCounter = 0;
-function uniqueConfiguredProofEngineId() {
-  configuredProofEngineIdCounter += 1;
-  return `configured-runtime-settings-proof-${configuredProofEngineIdCounter}`;
-}
+const uniqueConfiguredProofEngineId = () =>
+  `configured-runtime-settings-proof-${++configuredProofEngineIdCounter}`;
 async function configuredEngineLease(
   assemble: ContextEngine["assemble"],
   maxActiveTranscriptBytes = 1024,
@@ -70,26 +66,29 @@ async function configuredEngineLease(
   await registerTestContextEngine(id, () =>
     createContextEngine({ info: { id, name: id }, assemble }),
   );
-  return createContextEngineLogicalTurnLease({
-    identity: { runId: id, sessionId: sessionParams.sessionId },
+  const lease = await createContextEngineLogicalTurnLease({
+    identity: { runId: id, sessionId },
     config: {
       plugins: { slots: { contextEngine: id } },
       agents: { defaults: { compaction: { maxActiveTranscriptBytes } } },
     },
   });
+  onTestFinished(() => lease.dispose());
+  return lease;
 }
 
 const assemblySession = {
-  sessionId: sessionParams.sessionId,
-  sessionKey: sessionParams.sessionKey,
+  sessionId,
+  sessionKey,
 };
+const unchangedMaintenance = { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
 const finalizationSession = {
   promptError: false,
   aborted: false,
   yieldAborted: false,
-  sessionIdUsed: sessionParams.sessionIdUsed,
-  sessionKey: sessionParams.sessionKey,
-  sessionFile: sessionParams.sessionFile,
+  sessionIdUsed,
+  sessionKey,
+  sessionFile,
   warn: () => {},
 };
 const promptDefaults = {
@@ -98,7 +97,7 @@ const promptDefaults = {
   promptBudget: {
     contextTokens: 100_000,
     reserveTokens: 0,
-    systemPrompt: "system",
+    systemPrompt: "Required instructions",
     prompt: "next",
   },
   repairToolUseResultPairing: true,
@@ -106,9 +105,7 @@ const promptDefaults = {
 };
 function toolCallMessage(id: string, timestamp: number) {
   const message = textMessage("assistant", "", timestamp);
-  if (message.role !== "assistant") {
-    throw new Error("Expected assistant fixture");
-  }
+  assert(message.role === "assistant");
   message.content = [{ type: "toolCall", id, name: "exec", arguments: {} }];
   return message;
 }
@@ -190,9 +187,7 @@ describe("harness context engine lifecycle", () => {
       } else {
         const argumentsWithCycle: Record<string, unknown> = {};
         argumentsWithCycle.self = argumentsWithCycle;
-        if (malformed.role !== "assistant") {
-          throw new Error("Expected assistant fixture");
-        }
+        assert(malformed.role === "assistant");
         malformed.content = [
           { type: "toolCall", id: "cyclic_fixture", name: "exec", arguments: argumentsWithCycle },
         ];
@@ -203,27 +198,19 @@ describe("harness context engine lifecycle", () => {
         systemPromptAddition: "Invalid plugin instructions",
       }));
       const warn = vi.fn();
-      try {
-        const result = await prepareHarnessContextEnginePrompt({
-          ...promptDefaults,
-          contextEngine: lease.engine,
-          messages,
-          promptBudget: {
-            ...promptDefaults.promptBudget,
-            systemPrompt: "Required instructions",
-          },
-          warn,
-        });
-        expect(result.messages).toEqual(messages);
-        expect(Buffer.byteLength(JSON.stringify(result.messages))).toBeLessThanOrEqual(1024);
-        expect(JSON.stringify(messages)).toBe(original);
-        expect(result.systemPrompt).toBe("Required instructions");
-        expect(warn).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining("context engine assemble failed, using pipeline messages:"),
-        );
-      } finally {
-        await lease.dispose();
-      }
+      const result = await prepareHarnessContextEnginePrompt({
+        ...promptDefaults,
+        contextEngine: lease.engine,
+        messages,
+        warn,
+      });
+      expect(result.messages).toEqual(messages);
+      expect(Buffer.byteLength(JSON.stringify(result.messages))).toBeLessThanOrEqual(1024);
+      expect(JSON.stringify(messages)).toBe(original);
+      expect(result.systemPrompt).toBe("Required instructions");
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("context engine assemble failed, using pipeline messages:"),
+      );
     },
   );
 
@@ -253,23 +240,15 @@ describe("harness context engine lifecycle", () => {
         }
         return { messages: input, estimatedTokens: 0 };
       }, cap);
-      try {
-        const bounded = await prepareHarnessContextEnginePrompt({
-          ...promptDefaults,
-          contextEngine: lease.engine,
-          messages,
-          promptBudget: {
-            ...promptDefaults.promptBudget,
-            systemPrompt: "Required instructions",
-          },
-          warn: vi.fn(),
-        });
-        expect(bounded.messages).toEqual(messages.slice(3));
-        expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(cap);
-        expect(JSON.stringify(messages)).toBe(original);
-      } finally {
-        await lease.dispose();
-      }
+      const bounded = await prepareHarnessContextEnginePrompt({
+        ...promptDefaults,
+        contextEngine: lease.engine,
+        messages,
+        warn: vi.fn(),
+      });
+      expect(bounded.messages).toEqual(messages.slice(3));
+      expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(cap);
+      expect(JSON.stringify(messages)).toBe(original);
     },
   );
 
@@ -315,11 +294,10 @@ describe("harness context engine lifecycle", () => {
     expect(first?.contextProjection?.mode).toBe("thread_bootstrap");
     expect(first?.contextProjection).toEqual(second?.contextProjection);
     expect(first?.systemPromptAddition).toBe("Required engine instructions");
-    await lease.dispose();
   });
 
   it("isolates prepared memory tools across sandboxed non-legacy turns", async () => {
-    const sandboxed = true;
+    onTestFinished(() => clearMemoryPluginState());
     const prepare = vi.fn(async (params: MemoryPromptSectionParams) => {
       const tools = [...params.availableTools].join(",");
       params.availableTools.add("preparer-only");
@@ -340,39 +318,33 @@ describe("harness context engine lifecycle", () => {
       }),
     }));
 
-    try {
-      for (const toolNames of [undefined, [], ["wiki_search"], ["memory_search"]]) {
-        const availableTools = toolNames ? new Set(toolNames) : undefined;
-        const result = await assembleHarnessContextEngine({
-          contextEngine: createContextEngine({ assemble }),
-          sessionId: sessionParams.sessionId,
-          sessionKey: "global",
-          agentId: "support",
-          messages: [textMessage("user", "visible ask", 1)],
-          availableTools,
-          citationsMode: "on",
-          sandboxed,
-          modelId: "gpt-test",
-        });
+    for (const toolNames of [undefined, [], ["wiki_search"], ["memory_search"]]) {
+      const availableTools = toolNames ? new Set(toolNames) : undefined;
+      const result = await assembleHarnessContextEngine({
+        contextEngine: createContextEngine({ assemble }),
+        sessionId,
+        sessionKey: "global",
+        agentId: "support",
+        messages: [textMessage("user", "visible ask", 1)],
+        availableTools,
+        citationsMode: "on",
+        sandboxed: true,
+        modelId: "gpt-test",
+      });
 
-        expect(result?.systemPromptAddition).toBe(
-          `## Memory Recall\n\n## Prepared Memory\nsandboxed=${sandboxed}; tools=${(toolNames ?? []).join(",")}`,
-        );
-        expect([...(availableTools ?? [])]).toEqual(toolNames ?? []);
-        expect(prepare).toHaveBeenLastCalledWith(
-          expect.objectContaining({
-            agentId: "support",
-            agentSessionKey: "global",
-            sandboxed,
-          }),
-        );
-      }
-      expect(buildMemorySystemPromptAddition({ availableTools: new Set() })).toBe(
-        "## Memory Recall",
+      expect(result?.systemPromptAddition).toBe(
+        `## Memory Recall\n\n## Prepared Memory\nsandboxed=true; tools=${(toolNames ?? []).join(",")}`,
       );
-    } finally {
-      clearMemoryPluginState();
+      expect([...(availableTools ?? [])]).toEqual(toolNames ?? []);
+      expect(prepare).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          agentId: "support",
+          agentSessionKey: "global",
+          sandboxed: true,
+        }),
+      );
     }
+    expect(buildMemorySystemPromptAddition({ availableTools: new Set() })).toBe("## Memory Recall");
   });
 
   it("keeps persisted runtime-context carriers in place for append-only replay policies", async () => {
@@ -435,21 +407,14 @@ describe("harness context engine lifecycle", () => {
     }> = [];
     const sessionTarget = {
       agentId: "main",
-      sessionId: sessionParams.sessionId,
-      sessionKey: sessionParams.sessionKey,
+      sessionId,
+      sessionKey,
       storePath: "/tmp/state/openclaw.sqlite",
     };
     const bootstrapRuntimeContext = {
       transcriptStorage: { kind: "sqlite" as const },
       sessionTarget,
-      promptCache: {
-        observation: {
-          broke: true,
-          previousCacheRead: 5000,
-          cacheRead: 2000,
-          changes: [{ code: "systemPrompt", detail: "system prompt digest changed" }],
-        },
-      },
+      promptCache: { observation: { broke: true } },
     } satisfies ContextEngineRuntimeContext;
     const observe = <T extends Omit<(typeof captured)[number], "hook">, R>(
       hook: Hook,
@@ -471,7 +436,7 @@ describe("harness context engine lifecycle", () => {
         estimatedTokens: 0,
       })),
       afterTurn: observe("afterTurn", () => undefined),
-      maintain: observe("maintain", () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 })),
+      maintain: observe("maintain", () => unchangedMaintenance),
       compact: observe("compact", () => ({ ok: true, compacted: false })),
     });
     await registerTestContextEngine(engineId, () => engine);
@@ -493,7 +458,7 @@ describe("harness context engine lifecycle", () => {
       ...lifecycleParams,
       hadSessionFile: true,
       sessionTarget,
-      sessionFile: sessionParams.sessionFile,
+      sessionFile,
       warn: () => {},
     });
 
@@ -506,13 +471,8 @@ describe("harness context engine lifecycle", () => {
       ...lifecycleParams,
       ...finalizationSession,
       sessionTarget,
-      messagesSnapshot: [
-        textMessage("user", "old ask", 1),
-        textMessage("assistant", "old answer", 2),
-        textMessage("user", "new ask", 3),
-        textMessage("assistant", "new answer", 4),
-      ],
-      prePromptMessageCount: 2,
+      messagesSnapshot: [textMessage("assistant", "new answer", 4)],
+      prePromptMessageCount: 0,
     });
 
     const compactRuntimeSettings = buildContextEngineRuntimeSettings({
@@ -528,12 +488,9 @@ describe("harness context engine lifecycle", () => {
     await compactContextEngineWithSafetyTimeout(
       configuredEngine,
       {
-        sessionId: sessionParams.sessionId,
-        sessionKey: sessionParams.sessionKey,
-        sessionTarget: {
-          sessionId: sessionParams.sessionId,
-          sessionKey: sessionParams.sessionKey,
-        },
+        sessionId,
+        sessionKey,
+        sessionTarget: assemblySession,
         tokenBudget: 2048,
         runtimeSettings: compactRuntimeSettings,
       },
@@ -543,17 +500,14 @@ describe("harness context engine lifecycle", () => {
     expect(new Set(captured.map((entry) => entry.hook))).toEqual(
       new Set(["bootstrap", "assemble", "afterTurn", "maintain", "compact"]),
     );
+    const capturedFor = (hook: Hook) => captured.find((entry) => entry.hook === hook);
     for (const hook of ["bootstrap", "afterTurn"] as const) {
-      const capturedHook = captured.find((entry) => entry.hook === hook);
+      const capturedHook = capturedFor(hook);
       expect(capturedHook?.runtimeContext).toEqual(bootstrapRuntimeContext);
       expect(capturedHook?.sessionTarget).toEqual(sessionTarget);
     }
-    expect(captured.find((entry) => entry.hook === "maintain")?.sessionTarget).toEqual(
-      sessionTarget,
-    );
-    expect(
-      captured.find((entry) => entry.hook === "maintain")?.runtimeContext?.sessionTarget,
-    ).toEqual(sessionTarget);
+    expect(capturedFor("maintain")?.sessionTarget).toEqual(sessionTarget);
+    expect(capturedFor("maintain")?.runtimeContext?.sessionTarget).toEqual(sessionTarget);
     for (const entry of captured) {
       expect(entry.runtimeSettings).toMatchObject({
         schemaVersion: 1,
@@ -565,13 +519,8 @@ describe("harness context engine lifecycle", () => {
           provider: "openai",
           family: null,
         },
-        contextEngineSelection: {
-          selectedId: engineId,
-          source: "configured",
-        },
-        diagnostics: {
-          fallbackReason: "provider_unavailable",
-        },
+        contextEngineSelection: { selectedId: engineId, source: "configured" },
+        diagnostics: { fallbackReason: "provider_unavailable" },
       });
     }
   });
@@ -634,7 +583,7 @@ describe("harness context engine lifecycle", () => {
       const calls = mode === "batch" ? ingestBatch.mock.calls : ingest.mock.calls;
       expect(calls).toHaveLength(mode === "batch" ? 1 : 2);
       for (const [params] of calls) {
-        expect(params).toMatchObject({ isHeartbeat: true, sessionKey: sessionParams.sessionKey });
+        expect(params).toMatchObject({ isHeartbeat: true, sessionKey });
       }
     },
   );
@@ -670,14 +619,10 @@ describe("harness context engine lifecycle", () => {
       hadSessionFile: true,
       contextEngine: createContextEngine({
         bootstrap: undefined,
-        maintain: vi.fn(async () => ({
-          changed: false,
-          bytesFreed: 0,
-          rewrittenEntries: 0,
-        })),
+        maintain: vi.fn(async () => unchangedMaintenance),
       }),
       ...assemblySession,
-      sessionFile: sessionParams.sessionFile,
+      sessionFile,
       runMaintenance,
       warn: () => {},
     });
@@ -685,7 +630,7 @@ describe("harness context engine lifecycle", () => {
     expect(runMaintenance).toHaveBeenCalledWith(
       expect.objectContaining({
         reason: "bootstrap",
-        sessionKey: sessionParams.sessionKey,
+        sessionKey,
       }),
     );
   });
@@ -694,11 +639,7 @@ describe("harness context engine lifecycle", () => {
     const afterTurn = vi.fn(async () => {});
     const ingest = vi.fn(async () => ({ ingested: true }));
     const ingestBatch = vi.fn(async () => ({ ingestedCount: 0 }));
-    const maintain = vi.fn(async () => ({
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-    }));
+    const maintain = vi.fn(async () => unchangedMaintenance);
 
     await finalizeHarnessContextEngineTurn({
       contextEngine: createContextEngine({ afterTurn, ingest, ingestBatch, maintain }),

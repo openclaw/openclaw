@@ -72,8 +72,7 @@ export async function registerNative(
   setRuntimeConfigSnapshot(config);
   const peer = fileURLToPath(new URL(`../../../test/fixtures/acp/${peerName}`, import.meta.url));
   const peerDirectory = state.path("peer");
-  await fs.mkdir(peerDirectory);
-  await fs.mkdir(path.join(peerDirectory, "effects"));
+  await fs.mkdir(path.join(peerDirectory, "effects"), { recursive: true });
   const receiptModule = path.join(peerDirectory, "receipts.mjs");
   if (peerOptions.receiptEndpoint) {
     await fs.writeFile(
@@ -165,6 +164,7 @@ export async function attemptFor(
   });
   const admittedRunContext = await admission.admit("plugin-harness", "acpx");
   const provider = `acp-${agent}`;
+  const prompt = "Record the requested native effect.";
   const input: EmbeddedRunAttemptParams = {
     ...target,
     ...createEmptyAgentDiscoveryStores(),
@@ -177,25 +177,18 @@ export async function attemptFor(
     modelId: "selected",
     agentHarnessRuntimeOverride: provider,
     permissionMode,
-    prompt: "Record the requested native effect.",
+    prompt,
     timeoutMs: 30000,
     thinkLevel: "off",
     model: makeProviderModelFixture({
       id: "selected",
-      name: "Selected",
       api: "openai-completions",
       provider,
       baseUrl: "",
-      contextWindow: 32768,
-      maxTokens: 2048,
     }),
     authProfileStore: { version: 1, profiles: {} },
     userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-      message: {
-        role: "user",
-        content: "Record the requested native effect.",
-        timestamp: Date.now(),
-      },
+      message: { role: "user", content: prompt, timestamp: Date.now() },
       target: { ...target, sessionEntry: entry },
       updateMode: "none",
     }),

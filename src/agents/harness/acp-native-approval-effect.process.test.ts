@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { diffGatewayReloadPaths } from "../../gateway/config-diff.js";
@@ -95,14 +96,11 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
         attempt.input.abortSignal = AbortSignal.any([test.signal, abort.signal]);
         const run = fixture.track(runAgentHarnessAttempt(attempt.input));
         try {
-          const approvalId = await Promise.race([
+          const approvalId = await awaitGateBeforeSettlement(
             entered.promise,
-            run.then((result) => {
-              throw new Error(
-                `Attempt ended before approval wait: ${JSON.stringify(result.terminal)}`,
-              );
-            }),
-          ]);
+            run,
+            "Attempt ended before approval wait",
+          );
           expect(await manager.listPendingRecords()).toHaveLength(1);
           expect(await manager.getSnapshot(approvalId)).toMatchObject({
             request: {
@@ -149,10 +147,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
           const resolution = await manager.resolveDetailed(
             approvalId,
             kind === "deny" || kind === "always-only" ? "deny" : "allow-once",
-            {
-              kind: "device",
-              id: "test-reviewer",
-            },
+            { kind: "device", id: "test-reviewer" },
           );
           expect(resolution.outcome).toBe(kind === "cancel" ? "already-resolved" : "resolved");
           const result = await run;
@@ -202,8 +197,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
       // Inspect after shutdown so a late native permission reply cannot race this assertion.
       if (kind !== "allow") {
         await expect(readEffect()).rejects.toMatchObject({ code: "ENOENT" });
-      }
-      if (kind === "allow") {
+      } else {
         expect(await readEffect()).toBe("approved native effect");
       }
       if (kind !== "cancel") {

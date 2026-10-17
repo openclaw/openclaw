@@ -19,8 +19,7 @@ describe("createOpenClawAgentHarness", () => {
   let harness: ReturnType<typeof createOpenClawAgentHarness>;
   beforeEach(() => {
     harness = createOpenClawAgentHarness();
-    runEmbeddedAttempt.mockReset();
-    runEmbeddedAttempt.mockImplementation(async (params: EmbeddedRunAttemptParams) => {
+    runEmbeddedAttempt.mockReset().mockImplementation(async (params: EmbeddedRunAttemptParams) => {
       params.onAttemptDeadlineChanged?.(deadline);
       params.onAttemptTimeoutArmed?.();
       await params.onAgentEvent?.(lifecycle("start"));
@@ -67,7 +66,6 @@ describe("createOpenClawAgentHarness", () => {
   );
 
   it("enforces tool-free finalization while forwarding execution and lifecycle notifications", async () => {
-    const sessionManager = { owner: "host" };
     const prepareAssistantTranscriptMessage = vi.fn();
     const onAttemptDeadlineChanged = vi.fn();
     const onAttemptTimeoutArmed = vi.fn();
@@ -83,7 +81,7 @@ describe("createOpenClawAgentHarness", () => {
     const attempt = {
       ...ambient,
       prompt: "finalize",
-      sessionManager,
+      sessionManager: { owner: "host" },
       sessionPersistence: "detached",
       disableTools: false,
       onAttemptDeadlineChanged,
@@ -107,7 +105,7 @@ describe("createOpenClawAgentHarness", () => {
     const finalizationAttempt = runEmbeddedAttempt.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(finalizationAttempt).toMatchObject({
       prompt: "finalize",
-      sessionManager,
+      sessionManager: { owner: "host" },
       sessionPersistence: "detached",
       disableTools: true,
       disableTrajectory: true,
@@ -127,10 +125,7 @@ describe("createOpenClawAgentHarness", () => {
       ...fixtures.createAttemptParams(),
       authorization: {
         owner: "harness",
-        plan: {
-          providerForAuth: "openai",
-          authProfileProviderForAuth: "openai",
-        },
+        plan: { providerForAuth: "openai", authProfileProviderForAuth: "openai" },
         authProfileStore: { version: 1, profiles: {} },
       },
       config: {},

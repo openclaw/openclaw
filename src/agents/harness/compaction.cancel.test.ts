@@ -76,6 +76,7 @@ const directPlan = {
   authProfileProviderForAuth: proxyModel.provider,
   selectedAuthMode: "api_key" as const,
 };
+const proxyTarget = { provider: proxyModel.provider, model: proxyModel.id };
 
 function operatorSource(
   overrides: Partial<Parameters<typeof createAdmittedRunOperatorAuthority>[0]> = {},
@@ -139,12 +140,8 @@ function registerCompactor(
 type CompactionOptions = Parameters<typeof maybeCompactAgentHarnessSession>[1];
 function compactSession(
   params: Partial<Parameters<typeof maybeCompactAgentHarnessSession>[0]>,
-  {
-    sourceAuthority,
-    ...options
-  }: Partial<Omit<CompactionOptions, "sourceAuthority">> & {
-    sourceAuthority?: Partial<CompactionOptions["sourceAuthority"]>;
-  } = {},
+  sourceAuthority: Partial<CompactionOptions["sourceAuthority"]> = {},
+  options: Partial<Omit<CompactionOptions, "sourceAuthority">> = {},
 ) {
   return maybeCompactAgentHarnessSession(
     {
@@ -194,34 +191,27 @@ describe("harness compaction cancellation", () => {
       const compact = registerCompactor(async (params) => {
         expect(params.resolvedApiKey).toBe("fixture-key");
         credential.abort(retired);
-        expect(() => assertProviderAuthAuthority(params.runtimeModel)).toThrow(
-          "Compaction credential retired",
-        );
+        expect(() => assertProviderAuthAuthority(params.runtimeModel)).toThrow(retired);
         return { ...compacted };
       });
       const operation = compactSession(
         {
-          provider: proxyModel.provider,
-          model: proxyModel.id,
-          ...(supplied
-            ? {
-                runtimeModel: attachProviderAuthAuthority(proxyModel, assertCurrent),
-                resolvedApiKey: "fixture-key",
-              }
-            : {}),
+          ...proxyTarget,
+          runtimeModel: supplied
+            ? attachProviderAuthAuthority(proxyModel, assertCurrent)
+            : undefined,
+          resolvedApiKey: supplied ? "fixture-key" : undefined,
         },
         {
-          sourceAuthority: {
-            prepareDispatch: async () => {
-              if (revoke) {
-                credential.abort(retired);
-              }
-            },
+          prepareDispatch: async () => {
+            if (revoke) {
+              credential.abort(retired);
+            }
           },
         },
       );
       if (revoke) {
-        await expect(operation).rejects.toThrow("Compaction credential retired");
+        await expect(operation).rejects.toThrow(retired);
         expect(compact).not.toHaveBeenCalled();
       } else {
         await expect(operation).resolves.toMatchObject(compacted);
@@ -241,8 +231,7 @@ describe("harness compaction cancellation", () => {
         retain: () => {
           sourceHolds += 1;
           return () => {
-            sourceHolds -= 1;
-            if (sourceHolds === 0) {
+            if (--sourceHolds === 0) {
               sourceReleased.resolve();
             }
           };
@@ -276,15 +265,9 @@ describe("harness compaction cancellation", () => {
         }
       }, "native");
       const operation = compactSession(
-        {
-          agentHarnessId: "codex",
-          config: restrictedConfig,
-          trigger: "manual",
-        },
-        {
-          sourceAuthority: { operatorAuthority },
-          ...(dispatch === "required_preflight" ? { nativeCompactionRequest: dispatch } : {}),
-        },
+        { agentHarnessId: "codex", config: restrictedConfig, trigger: "manual" },
+        { operatorAuthority },
+        { nativeCompactionRequest: dispatch === "required_preflight" ? dispatch : undefined },
       );
       if (dispatch === "source revocation") {
         await expect(operation).rejects.toThrow("Compaction source revoked");
@@ -306,9 +289,7 @@ describe("harness compaction cancellation", () => {
       const cancelled = new Error("Compaction model preparation cancelled");
       const compact = registerCompactor(async () => ({ ok: true, compacted: false }));
       if (stage === "auth-route rematerialization") {
-        compactAuthMocks.resolveModelAsync.mockResolvedValueOnce({
-          model: proxyModel,
-        });
+        compactAuthMocks.resolveModelAsync.mockResolvedValueOnce({ model: proxyModel });
         compactAuthMocks.ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue(
           createAuthProfileStoreFixture({
             "local-proxy:stale": createApiKeyCredential("local-proxy", "stale-key"),
@@ -340,8 +321,7 @@ describe("harness compaction cancellation", () => {
 
       await expect(
         compactSession({
-          provider: "local-proxy",
-          model: "proxy-model",
+          ...proxyTarget,
           abortSignal: controller.signal,
         }),
       ).rejects.toBe(cancelled);
@@ -350,12 +330,11 @@ describe("harness compaction cancellation", () => {
   );
 
   it("preserves the unknown-model guard for a registered compactor without exact model support", async () => {
-    const operatorAuthority = operatorSource();
     const compact = registerCompactor();
     await expect(
       compactSession(
         { config: restrictedConfig, trigger: "manual" },
-        { sourceAuthority: { operatorAuthority } },
+        { operatorAuthority: operatorSource() },
       ),
     ).rejects.toThrow("operator role cannot use this model");
     expect(compact).not.toHaveBeenCalled();
