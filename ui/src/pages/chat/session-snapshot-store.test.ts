@@ -620,6 +620,39 @@ describe("persistent chat session snapshots", () => {
     },
   );
 
+  it("retains persisted snapshots through a temporary database open failure", async () => {
+    const sessionKey = key("agent:main:temporary-open-failure");
+    const value = snapshot("Retained conversation");
+    writer.write(sessionKey, value);
+    await writer.flush();
+    vi.spyOn(indexedDB, "open").mockImplementationOnce(() => {
+      throw new DOMException("temporarily unavailable", "UnknownError");
+    });
+
+    const reader = new SessionSnapshotStore();
+    expect(await reader.read(sessionKey)).toBeNull();
+    expect(await reader.read(sessionKey)).toEqual(value);
+  });
+
+  it("rebuilds a missing snapshot store after a non-fatal read failure", async () => {
+    const request = indexedDB.open(DB, 8);
+    request.addEventListener("upgradeneeded", () => {
+      for (const name of [METADATA, SIDEBAR]) {
+        request.result.createObjectStore(name, { keyPath: "sessionKey" });
+      }
+    });
+    const database = await requestResult(request);
+    database.close();
+    const sessionKey = key("agent:main:missing-snapshot-store");
+    const store = new SessionSnapshotStore();
+    expect(await store.read(sessionKey)).toBeNull();
+
+    const value = snapshot("Rebuilt conversation");
+    store.write(sessionKey, value);
+    await store.flush();
+    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(value);
+  });
+
   it("keeps every operation non-fatal when IndexedDB is unavailable or throws", async () => {
     vi.stubGlobal("indexedDB", undefined);
     const unavailable = new SessionSnapshotStore();

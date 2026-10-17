@@ -495,14 +495,69 @@ type ChildCompletion = Pick<ChildProcess, "exitCode" | "signalCode" | "killed"> 
   output: string;
 };
 
+const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
+
+async function withFixtureRoot(name: string, run: (root: string) => Promise<void>) {
+  // Outer test cleanup must not erase unjoined writers; retain failed fixtures.
+  const parent = path.join(repoRoot, ".artifacts", name);
+  await fs.mkdir(parent, { recursive: true });
+  const root = await fs.mkdtemp(path.join(parent, "run-"));
+  try {
+    await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
+    await run(root);
+    await fs.rm(root, { recursive: true, force: true });
+  } catch (error) {
+    if (error instanceof Error) {
+      error.message += `; retained fixture ${root}`;
+    }
+    throw error;
+  }
+}
+
+async function runFixture(root: string, signal: AbortSignal, env = childEnv()) {
+  const reportPath = path.join(root, "report.json");
+  let child!: ChildProcess;
+  const result = await runVitestShutdownCommand({
+    bin: resolveTestNodeExecPath(),
+    args: [
+      path.join(vitestPackageDir, "vitest.mjs"),
+      "run",
+      "--root",
+      root,
+      "--config",
+      path.join(root, "vitest.config.ts"),
+      "--configLoader",
+      "runner",
+      "--reporter=verbose",
+      "--reporter=json",
+      `--reporter=${path.join(repoRoot, "scripts/lib/vitest-report-capture.mts")}`,
+      `--outputFile.json=${reportPath}`,
+    ],
+    cwd: repoRoot,
+    env,
+    workerRun: fixtureWorkers,
+    maxBytes: 16 * 1024 * 1024,
+    signal,
+    onReady(owned) {
+      child = owned;
+    },
+  });
+  const completion: ChildCompletion = {
+    exitCode: child.exitCode,
+    signalCode: child.signalCode,
+    killed: child.killed,
+    code: result.code,
+    output: `${result.stdout}\n${result.stderr}`,
+  };
+  const canonicalRoot = (await fs.realpath(root)).replaceAll(path.sep, "/");
+  return { child, completion, canonicalRoot, reportPath };
+}
+
 async function assertCompletion(
   child: ChildCompletion,
   expected: { root: string; pid: number | undefined; files: string[]; reportPath: string },
 ) {
-  expect(child.code).toBe(1);
-  expect(child.exitCode).toBe(1);
-  expect(child.signalCode).toBeNull();
-  expect(child.killed).toBe(false);
+  expect(child).toMatchObject({ code: 1, exitCode: 1, signalCode: null, killed: false });
 
   // JSON success/suite totals are not completion evidence: skips look like passed
   // files, and unhandled errors or process teardown timeouts need native hooks.
@@ -596,13 +651,7 @@ async function assertCompletion(
 }
 
 async function verifyRunnerCleanup(signal: AbortSignal) {
-  // Outside the enclosing Vitest TMPDIR: outer cleanup must not erase unjoined writers.
-  const fixtureRoots = path.join(repoRoot, ".artifacts", "non-isolated-runner");
-  await fs.mkdir(fixtureRoots, { recursive: true });
-  const root = await fs.mkdtemp(path.join(fixtureRoots, "run-"));
-  try {
-    const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
-    await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
+  await withFixtureRoot("non-isolated-runner", async (root) => {
     const files = fixtureFiles(root);
     for (const [name, content] of Object.entries(files)) {
       await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
@@ -638,42 +687,7 @@ export default defineConfig({
       "utf8",
     );
 
-    const reportPath = path.join(root, "report.json");
-    let child!: ChildProcess;
-    const env = childEnv();
-    const result = await runVitestShutdownCommand({
-      bin: resolveTestNodeExecPath(),
-      args: [
-        path.join(vitestPackageDir, "vitest.mjs"),
-        "run",
-        "--root",
-        root,
-        "--config",
-        path.join(root, "vitest.config.ts"),
-        "--configLoader",
-        "runner",
-        "--reporter=verbose",
-        "--reporter=json",
-        `--reporter=${path.join(repoRoot, "scripts/lib/vitest-report-capture.mts")}`,
-        `--outputFile.json=${reportPath}`,
-      ],
-      cwd: repoRoot,
-      env,
-      workerRun: fixtureWorkers,
-      maxBytes: 16 * 1024 * 1024,
-      signal,
-      onReady(owned) {
-        child = owned;
-      },
-    });
-    const completion: ChildCompletion = {
-      exitCode: child.exitCode,
-      signalCode: child.signalCode,
-      killed: child.killed,
-      code: result.code,
-      output: `${result.stdout}\n${result.stderr}`,
-    };
-    const canonicalRoot = (await fs.realpath(root)).replaceAll(path.sep, "/");
+    const { child, completion, canonicalRoot, reportPath } = await runFixture(root, signal);
     const expected = {
       root: canonicalRoot,
       pid: child.pid,
@@ -712,6 +726,8 @@ export default defineConfig({
       }
     }
     type Replay = { child: ChildCompletion; report: JsonTestResults; capture: VitestReportCapture };
+    const passedFile = ({ report }: Replay) =>
+      report.testResults.find((file) => file.status === "passed")!;
     const faults: [string, (replay: Replay) => void][] = [
       ["missing project", ({ capture }) => capture.projects.pop()],
       [
@@ -726,24 +742,9 @@ export default defineConfig({
       ["unexpected file", ({ report }) => Object.assign(report.testResults[0]!, { name: "other" })],
       [
         "extra collection error",
-        ({ report }) =>
-          Object.assign(
-            report.testResults.find((file) => file.status === "passed")!,
-            {
-              message: "other",
-            },
-          ),
+        (replay) => Object.assign(passedFile(replay), { message: "other" }),
       ],
-      [
-        "extra failed file",
-        ({ report }) =>
-          Object.assign(
-            report.testResults.find((file) => file.status === "passed")!,
-            {
-              status: "failed",
-            },
-          ),
-      ],
+      ["extra failed file", (replay) => Object.assign(passedFile(replay), { status: "failed" })],
       [
         "wrong collection error",
         ({ report }) =>
@@ -800,43 +801,32 @@ export default defineConfig({
         continue;
       }
       const name = path.basename(file.name);
+      const assertionFault = (
+        label: string,
+        mutate: (tests: typeof file.assertionResults) => void,
+      ) => {
+        faults.push([
+          `${name}: ${label}`,
+          ({ report }) => mutate(report.testResults[index]!.assertionResults),
+        ]);
+      };
       for (const status of ["pending", "skipped", "todo", "failed", "passed"] as const) {
         if (status === file.assertionResults[0]!.status) {
           continue;
         }
-        faults.push([
-          `${name}: unexpected ${status} assertion`,
-          ({ report }) => {
-            report.testResults[index]!.assertionResults.at(-1)!.status = status;
-          },
-        ]);
+        assertionFault(`unexpected ${status} assertion`, (tests) => {
+          tests.at(-1)!.status = status;
+        });
       }
-      faults.push(
-        [
-          `${name}: omitted assertion`,
-          ({ report }) => report.testResults[index]!.assertionResults.pop(),
-        ],
-        [
-          `${name}: extra assertion`,
-          ({ report }) =>
-            report.testResults[index]!.assertionResults.push(file.assertionResults[0]!),
-        ],
-        [
-          `${name}: failure messages`,
-          ({ report }) =>
-            Object.assign(report.testResults[index]!.assertionResults[0]!, {
-              failureMessages: ["unexpected failure"],
-            }),
-        ],
+      assertionFault("omitted assertion", (tests) => tests.pop());
+      assertionFault("extra assertion", (tests) => tests.push(file.assertionResults[0]!));
+      assertionFault("failure messages", (tests) =>
+        Object.assign(tests[0]!, { failureMessages: ["unexpected failure"] }),
       );
       if (file.assertionResults.length > 1) {
-        faults.push([
-          `${name}: duplicated assertion replacing its sibling`,
-          ({ report }) => {
-            report.testResults[index]!.assertionResults[1] =
-              report.testResults[index]!.assertionResults[0]!;
-          },
-        ]);
+        assertionFault("duplicated assertion replacing its sibling", (tests) => {
+          tests[1] = tests[0]!;
+        });
       }
     }
     for (const generation of ["producer", "observer"]) {
@@ -863,14 +853,7 @@ export default defineConfig({
       await fs.writeFile(capturePath, JSON.stringify(replay.capture));
       await expect(assertCompletion(replay.child, expected), label).rejects.toThrow();
     }
-    // Release only after the managed child/group/output join and native proof.
-    await fs.rm(root, { recursive: true, force: true });
-  } catch (error) {
-    if (error instanceof Error) {
-      error.message += `; retained fixture ${root}`;
-    }
-    throw error;
-  }
+  });
 }
 
 it("cleans every shared runner surface between files", (context) => {
@@ -882,12 +865,7 @@ it("cleans every shared runner surface between files", (context) => {
 });
 
 async function verifyGatewayWorkerLifetimes(signal: AbortSignal) {
-  const fixtureRoots = path.join(repoRoot, ".artifacts", "gateway-worker-lifetimes");
-  await fs.mkdir(fixtureRoots, { recursive: true });
-  const root = await fs.mkdtemp(path.join(fixtureRoots, "run-"));
-  try {
-    const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
-    await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
+  await withFixtureRoot("gateway-worker-lifetimes", async (root) => {
     await fs.writeFile(path.join(root, "threads-events.log"), "");
     await fs.writeFile(path.join(root, "provenance-events.log"), "");
     const files = {
@@ -935,43 +913,18 @@ export default defineConfig({
 });
 `,
     );
-    const reportPath = path.join(root, "report.json");
-    let child!: ChildProcess;
     const env = {
       ...childEnv(),
       OPENCLAW_VITEST_MAX_WORKERS: "1",
       GATEWAY_LIFETIME_PROBE_ROOT: root,
     };
-    const result = await runVitestShutdownCommand({
-      bin: resolveTestNodeExecPath(),
-      args: [
-        path.join(vitestPackageDir, "vitest.mjs"),
-        "run",
-        "--root",
-        root,
-        "--config",
-        path.join(root, "vitest.config.ts"),
-        "--configLoader",
-        "runner",
-        "--reporter=verbose",
-        "--reporter=json",
-        `--reporter=${path.join(repoRoot, "scripts/lib/vitest-report-capture.mts")}`,
-        `--outputFile.json=${reportPath}`,
-      ],
-      cwd: repoRoot,
-      env,
-      workerRun: fixtureWorkers,
-      maxBytes: 16 * 1024 * 1024,
-      signal,
-      onReady(owned) {
-        child = owned;
-      },
+    const { child, completion, canonicalRoot, reportPath } = await runFixture(root, signal, env);
+    expect(completion, completion.output).toMatchObject({
+      code: 0,
+      exitCode: 0,
+      signalCode: null,
+      killed: false,
     });
-    expect(result.code, result.stdout + result.stderr).toBe(0);
-    expect(child.exitCode).toBe(0);
-    expect(child.signalCode).toBeNull();
-    expect(child.killed).toBe(false);
-    const canonicalRoot = (await fs.realpath(root)).replaceAll(path.sep, "/");
     const expected = Object.keys(files)
       .map((name) => `${canonicalRoot}/${name}`)
       .toSorted();
@@ -1010,13 +963,7 @@ export default defineConfig({
         assertionResults: [{ status: "passed", failureMessages: [] }],
       });
     }
-    await fs.rm(root, { recursive: true, force: true });
-  } catch (error) {
-    if (error instanceof Error) {
-      error.message += `; retained fixture ${root}`;
-    }
-    throw error;
-  }
+  });
 }
 
 it("gives Gateway files separate workers after their resource drains", (context) => {

@@ -1832,7 +1832,13 @@ describe("systemd service install and uninstall", () => {
     expect(requireFirstWrite(write)).toContain("Systemd service not found");
   });
 
-  it.each(["operator-values", "password-only", "unlink-refused", "reload-failed"] as const)(
+  it.each([
+    "operator-values",
+    "password-only",
+    "unlink-refused",
+    "read-refused",
+    "reload-failed",
+  ] as const)(
     "uninstalls the selected node unit and cleans credentials only after removal: %s",
     async (scenario) => {
       const { env, unitPath, nodeEnvFilePath } = await createSystemdFixture("node");
@@ -1855,7 +1861,11 @@ describe("systemd service install and uninstall", () => {
                 "LLM_API_KEY=$SECRET_FROM_SHELL",
                 "LITERAL_API_KEY=\\$SECRET_FROM_SHELL",
               ].join("\n") + "\n";
-      await fs.writeFile(nodeEnvFilePath, previous, { encoding: "utf8", mode: 0o600 });
+      if (scenario === "read-refused") {
+        await fs.mkdir(nodeEnvFilePath);
+      } else {
+        await fs.writeFile(nodeEnvFilePath, previous, { encoding: "utf8", mode: 0o600 });
+      }
       queueUserCommands(["status"], ["disable", "--now", NODE_SERVICE]);
       if (scenario === "unlink-refused") {
         vi.spyOn(fs, "unlink").mockRejectedValueOnce(
@@ -1884,6 +1894,11 @@ describe("systemd service install and uninstall", () => {
           "Previous OpenClaw Node",
         );
         await expect(fs.readFile(nodeEnvFilePath, "utf8")).resolves.toBe(previous);
+      } else if (scenario === "read-refused") {
+        await expect(operation).rejects.toMatchObject({ code: "EISDIR" });
+        await expectFiles({ [unitPath]: null, [`${unitPath}.bak`]: null });
+        expect((await fs.stat(nodeEnvFilePath)).isDirectory()).toBe(true);
+        expect(write).not.toHaveBeenCalled();
       } else {
         await operation;
         await expectFiles({ [unitPath]: null, [`${unitPath}.bak`]: null });
@@ -1894,8 +1909,10 @@ describe("systemd service install and uninstall", () => {
           expect(requireFirstWrite(write)).toContain("Removed systemd service");
         }
       }
-      expect(execFileMock).toHaveBeenCalledTimes(scenario === "unlink-refused" ? 2 : 3);
-      if (scenario !== "unlink-refused") {
+      expect(execFileMock).toHaveBeenCalledTimes(
+        scenario === "unlink-refused" || scenario === "read-refused" ? 2 : 3,
+      );
+      if (scenario !== "unlink-refused" && scenario !== "read-refused") {
         expect(execFileMock.mock.calls.map(([, args]) => args[1])).toEqual([
           "status",
           "disable",
