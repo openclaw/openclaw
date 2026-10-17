@@ -21,11 +21,12 @@ vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => boundary.supervisor,
 }));
 vi.mock("../process/spawn-utils.js", async (importOriginal) => {
-  const { spawnWithFallback } = await importOriginal<typeof import("../process/spawn-utils.js")>();
+  const actual = await importOriginal<typeof import("../process/spawn-utils.js")>();
   return {
-    spawnWithFallback: async (...args: Parameters<typeof spawnWithFallback>) => {
+    ...actual,
+    spawnAndWait: async (...args: Parameters<typeof actual.spawnAndWait>) => {
       boundary.before();
-      const result = await spawnWithFallback(...args);
+      const result = await actual.spawnAndWait(...args);
       boundary.nativeLaunches += 1;
       boundary.after();
       return result;

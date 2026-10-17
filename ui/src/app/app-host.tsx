@@ -91,7 +91,7 @@ export class ShellOwner
   readonly onboardingMemoryImportElement = {
     tagName: "openclaw-onboarding-memory-import",
     label: t("onboarding.memoryImport.title"),
-    loadModule: () => import("../components/onboarding-memory-import.ts"),
+    loadModule: () => import("../components/onboarding-memory-import-solid.tsx"),
   } satisfies OptionalCustomElement;
   readonly lazyCustomElements = createLazyCustomElementRequests(
     this,

@@ -98,6 +98,8 @@ export function openEngineStore(ref: {
   prepareAnchor: () => void;
   inspectSqlite: () => { hasExistingData: boolean; hasEngineAnchor: boolean };
   existingOnly?: boolean;
+  /** Existing-state short leases may retain an idle PG transport in this worker. */
+  reusePostgresConnection?: boolean;
   /** Inspection admits the declared source schema without running its migration. */
   existingVersion?: boolean;
   admitPostgres?: (db: PostgresSqlConnection, fresh: boolean) => void;

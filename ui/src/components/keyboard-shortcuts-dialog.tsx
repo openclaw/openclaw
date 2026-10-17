@@ -5,6 +5,7 @@ import { resolveKeyboardShortcutSections } from "../lib/keyboard-shortcut-catalo
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
+  resolveNewSessionShortcut,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
@@ -44,7 +45,7 @@ export const KeyboardShortcutsDialog = defineSolidBridge<DialogProps, DialogMeth
       const newSessionHost = props.newSessionHost;
       const context = newSessionHost?.context;
       const newSession =
-        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newSession, event) &&
+        matchesShortcutCombo(resolveNewSessionShortcut(), event) &&
         newSessionHost &&
         !newSessionHost.onboardingMode &&
         readSessionMethodAccess(context?.gateway.snapshot, {

@@ -1651,27 +1651,25 @@ Task/flow lifecycle joins and writes remain retired. This migration adds no
 runtime Task reader, replacement ledger, or SQL schema change.
 
 Existing asynchronous config observation, recovery health records, and config
-audit appends run their SQLite work on this same actor. Observations capture a
-short-lived scope before awaited work; newer observations of the same database
-and config path supersede older scopes. Scopes end on return, and synchronous
-write invalidation waits for the outer transaction to commit. The worker checks
-each operation's scope at dispatch; a superseded read stops before logging or
-file work. Health writes carry the exact persisted facts from their original read
-and compare them again inside the
-write transaction. They merge only the selected path's changed fields when those
-facts still match; a failed read or stale observation cannot overwrite newer
-health state. Other paths and untouched JSON fields remain unchanged. Audit
-appends retain the same redaction, insertion ordering, scope limits, and atomic
-insertion-and-pruning transaction. Promotion and recovery return true when their
-file operation commits, even if newer health metadata supersedes their conditional
-update. Ordinary post-file metadata retirement uses the existing best-effort
-failure policy; ownership and maintenance refusals still propagate. Doctor uses
-the committed result to reread the changed file. Explicit prepared
-recovery re-runs the same planner at apply and rejects changed or no-longer-eligible
-candidates before file work. Unavailable health metadata retains the existing
-backup-based planning fallback. Health metadata remains best-effort; the file and
-health row are not one atomic transaction. Synchronous config readers and writers
-keep their existing APIs; config parsing, validation, and plugin preparation retain
+audit appends run their SQLite work on this same actor. Each operation retains
+its captured database and current admission rather than superseding other
+observations. Health writes carry the exact persisted facts from their original
+read and compare them inside the write transaction. They merge only the selected
+path's changed fields when those facts still match; a failed read cannot supply
+an authoritative comparison basis. Other paths and untouched JSON fields remain
+unchanged. Audit appends retain the same redaction, insertion ordering, scope
+limits, and atomic insertion-and-pruning transaction.
+
+Prepared recovery keeps its originally selected candidate instead of rerunning
+the planner at apply. The file effect rechecks the original source bytes and
+physical identity, caller authority, and current database admission before each
+rename attempt. A changed source refuses the write. Ordinary post-file metadata
+retirement uses the existing best-effort failure policy; ownership and
+maintenance refusals still propagate. Doctor uses the committed result to reread
+the changed file. Unavailable health metadata retains the existing backup-based
+planning fallback. Health metadata remains best-effort; the file and health row
+are not one atomic transaction. Synchronous config readers and writers keep
+their existing APIs; config parsing, validation, and plugin preparation retain
 their own execution paths.
 
 GitHub OAuth reconciliation loads persisted config through the asynchronous config

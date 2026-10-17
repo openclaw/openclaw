@@ -45,7 +45,7 @@ const resolveSessionTranscriptRuntimeTargetMock = vi.fn(async (scope: Record<str
   storePath: scope.storePath ?? resolveDefaultSessionStorePath("main"),
 }));
 let resetDeferredTurnMaintenanceStateForTest: typeof import("./context-engine-maintenance.test-support.js").resetDeferredTurnMaintenanceStateForTest;
-let waitForDeferredTurnMaintenanceForSession: typeof import("./context-engine-maintenance.js").waitForDeferredTurnMaintenanceForSession;
+let waitForSessionMaintenance: typeof import("../session-maintenance/coordinator.js").waitForSessionMaintenance;
 let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js").runContextEngineMaintenance;
 
 vi.mock("./context-engine-capabilities.js", () => ({
@@ -82,7 +82,7 @@ describe("runContextEngineMaintenance", () => {
     resolveSessionTranscriptRuntimeTargetMock.mockClear();
     ({
       runContextEngineMaintenance,
-      waitForDeferredTurnMaintenanceForSession,
+      waitForSessionMaintenance,
       resetDeferredTurnMaintenanceStateForTest,
     } = await loadContextEngineMaintenanceModuleForTest());
   });
@@ -313,7 +313,7 @@ describe("runContextEngineMaintenance", () => {
           },
         });
         await expectDefined(deferred, "deferred maintenance completion");
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
 
         expect(activeRewriteResult).toEqual({ changed: true, bytesFreed: 77, rewrittenEntries: 1 });
         expect(dispose).toHaveBeenCalledOnce();
@@ -394,7 +394,7 @@ describe("runContextEngineMaintenance", () => {
         expect(result).toBeUndefined();
         await backgroundEngine.started;
         expect(maintain).toHaveBeenCalledTimes(1);
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
         expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
           sessionManager: sessionManagerFixture.current,
           replacements: [
@@ -424,13 +424,10 @@ describe("runContextEngineMaintenance", () => {
         });
 
         await foregroundTurn;
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
       } finally {
         releaseForeground.resolve();
-        await Promise.allSettled([
-          waitForDeferredTurnMaintenanceForSession(sessionKey),
-          foregroundTurn,
-        ]);
+        await Promise.allSettled([waitForSessionMaintenance(sessionKey), foregroundTurn]);
         vi.useRealTimers();
       }
     });
@@ -571,7 +568,7 @@ describe("runContextEngineMaintenance", () => {
           trigger();
           let timeout: ReturnType<typeof setTimeout> | undefined;
           const settled = await Promise.race([
-            waitForDeferredTurnMaintenanceForSession(sessionKey).then(() => true),
+            waitForSessionMaintenance(sessionKey).then(() => true),
             new Promise<false>((resolve) => {
               timeout = setTimeout(() => resolve(false), 500);
             }),
@@ -670,7 +667,7 @@ describe("runContextEngineMaintenance", () => {
         releaseLane.resolve();
         await laneBlocker;
         await deferred;
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
 
         expect(maintain).not.toHaveBeenCalled();
         expect(engine["dispose"]).toHaveBeenCalledTimes(1);
@@ -829,7 +826,7 @@ describe("runContextEngineMaintenance", () => {
         await firstDeferred[0];
       } finally {
         releaseMaintenance.resolve();
-        await Promise.allSettled([waitForDeferredTurnMaintenanceForSession(sessionKey)]);
+        await Promise.allSettled([waitForSessionMaintenance(sessionKey)]);
         resetCommandQueueStateForTest();
         vi.useRealTimers();
       }
@@ -897,7 +894,7 @@ describe("runContextEngineMaintenance", () => {
 
         foregroundTurn = enqueueCommandInLane(sessionLane, async () => {
           events.push("foreground-before-read-checkpoint");
-          await waitForDeferredTurnMaintenanceForSession(sessionKey);
+          await waitForSessionMaintenance(sessionKey);
           events.push("foreground-read");
         });
 
@@ -915,10 +912,7 @@ describe("runContextEngineMaintenance", () => {
         expect(maintain).toHaveBeenCalledTimes(1);
       } finally {
         allowRewrite.resolve();
-        await Promise.allSettled([
-          waitForDeferredTurnMaintenanceForSession(sessionKey),
-          foregroundTurn,
-        ]);
+        await Promise.allSettled([waitForSessionMaintenance(sessionKey), foregroundTurn]);
         vi.useRealTimers();
       }
     });
@@ -965,7 +959,7 @@ describe("runContextEngineMaintenance", () => {
         await backgroundEngine.started;
         expect(maintain).toHaveBeenCalledTimes(1);
         process.emit("SIGTERM", "SIGTERM");
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
         expect(onDeferredMaintenanceFailure).toHaveBeenCalledWith(
           expect.objectContaining({ message: "maintenance cleanup failed" }),
         );

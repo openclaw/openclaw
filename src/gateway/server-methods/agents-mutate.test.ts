@@ -334,7 +334,6 @@ vi.mock("../../state/openclaw-agent-db.js", () => ({
 
 // mock-isolation: Handler scenarios consume staged journal outcomes without shared-state storage.
 vi.mock("../../state/agent-deletion-journal.js", () => ({
-  readAgentDeletionJournal: mocks.readAgentDeletionJournal,
   readAgentDeletionJournalAsync: async () => mocks.readAgentDeletionJournal(),
   listPendingAgentDeletionJournalsAsync: async () => ({
     entries: mocks.listPendingAgentDeletionJournals(),

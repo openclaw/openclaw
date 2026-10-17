@@ -347,9 +347,6 @@ export async function offerLiveModelVerification(params: {
       // Saved model rows stay sparse; compare runtime defaults while retaining authored plugin policy.
       const projectRoute = (config: OpenClawConfig) =>
         projectInferenceRoute(materializeRuntimeConfig(config), undefined, {}, config);
-      const verifiedRoute = savedProfile?.credential.setup?.replacement
-        ? await projectRoute(candidate.config)
-        : undefined;
       const config = await commitSetupInferenceActivation({
         config: candidate.config,
         configTarget: {
@@ -357,10 +354,12 @@ export async function offerLiveModelVerification(params: {
           write: verifiedConfig?.write ?? params.configTarget.write,
         },
         assertCurrent: () => {},
-        activate: async () => {
-          if (savedProfile?.credential.setup?.replacement && verifiedRoute) {
+        activate: async (_assertCurrent, committedConfig) => {
+          if (savedProfile?.credential.setup?.replacement) {
             const latest = (await params.configTarget.read()).config;
-            if (!isDeepStrictEqual(await projectRoute(latest), verifiedRoute)) {
+            if (
+              !isDeepStrictEqual(await projectRoute(latest), await projectRoute(committedConfig))
+            ) {
               throw new Error(
                 "The connection changed before activation. Test the saved sign-in again.",
               );

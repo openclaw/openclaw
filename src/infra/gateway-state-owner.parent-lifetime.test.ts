@@ -54,8 +54,9 @@ it.for(["independent", "preload", "env"] as const)(
       process.once("disconnect", () => { disconnected = true; });
       process.send(process.pid);
     `;
+    const executable = resolveTestNodeExecPath();
     const childArgs = [
-      ...resolveRuntimeWorkerArgv(ownerUrl).slice(0, -1),
+      ...resolveRuntimeWorkerArgv(ownerUrl, executable).slice(0, -1),
       ...(transport === "preload" ? ["--import", CLI_PARENT_BOUND_PRELOAD] : []),
       "--input-type=module",
       "-e",
@@ -73,14 +74,10 @@ it.for(["independent", "preload", "env"] as const)(
       child.once("message", pid => { process.send(pid); process.exit(0); });
     `,
     );
-    const launcher = spawn(
-      resolveTestNodeExecPath(),
-      ["--import", CLI_PARENT_BOUND_PRELOAD, launcherPath],
-      {
-        env: { ...process.env, HOME: root, OPENCLAW_STATE_DIR: root },
-        stdio: ["ignore", "pipe", "pipe", "ipc"],
-      },
-    );
+    const launcher = spawn(executable, ["--import", CLI_PARENT_BOUND_PRELOAD, launcherPath], {
+      env: { ...process.env, HOME: root, OPENCLAW_STATE_DIR: root },
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    });
     const closed = once(launcher, "close");
     let stdout = "";
     let stderr = "";

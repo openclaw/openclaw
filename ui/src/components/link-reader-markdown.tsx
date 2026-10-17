@@ -1,10 +1,10 @@
 import { parseCanonicalIpAddress } from "@openclaw/net-policy/ip";
 import createDOMPurify from "dompurify";
-import { full as markdownItEmoji } from "markdown-it-emoji";
 import { createEffect, createMemo } from "solid-js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { i18n, t as translate } from "../i18n/index.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { installMarkdownEmoji } from "./markdown-emoji.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { normalizeMarkdownRenderOptions } from "./markdown-render-options.ts";
 
@@ -17,7 +17,7 @@ const documentOptions = normalizeMarkdownRenderOptions({
 });
 const markdown = createMarkdownParser();
 // Reader documents support named emoji without changing chat or emoticon text.
-markdown.use(markdownItEmoji, { shortcuts: {} });
+markdown.use(installMarkdownEmoji);
 // Remote attachments commonly use a standalone HTML img. Only that passive
 // element is admitted; all other authored HTML keeps the shared parser's rules.
 for (const kind of ["html_inline", "html_block"] as const) {
@@ -182,53 +182,58 @@ export function LinkReaderMarkdown(props: { body: string; base: string; loadImag
       [props.body, props.base, props.loadImage, i18n.getLocale(), t("linkReader.image")] as const,
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
-  createEffect(source, ([body, base, loadImage]) => {
-    const lifetime = new AbortController();
-    let rendered: string;
+  const rendered = createMemo(() => {
+    const [body] = source();
     try {
-      rendered = markdown.render(body, documentOptions);
+      return markdown.render(body, documentOptions);
     } catch {
-      rendered = "<pre>" + escapeHtml(body) + "</pre>";
+      return "<pre>" + escapeHtml(body) + "</pre>";
     }
-    const fragment = purifier.sanitize(rendered, {
-      RETURN_DOM_FRAGMENT: true,
-      ALLOWED_TAGS: passiveTags,
-      ALLOWED_ATTR: [
-        "href",
-        "src",
-        "alt",
-        "title",
-        "class",
-        "open",
-        "start",
-        "type",
-        "checked",
-        "disabled",
-      ],
-      ALLOW_DATA_ATTR: false,
-      ALLOW_ARIA_ATTR: false,
-    });
-    for (const anchor of fragment.querySelectorAll<HTMLAnchorElement>("a")) {
-      const url = documentUrl(anchor.getAttribute("href") ?? "", base);
-      if (!url) {
-        anchor.removeAttribute("href");
-      } else {
-        anchor.href = url.href;
-        anchor.target = "_blank";
-        anchor.rel = "noopener noreferrer";
-        anchor.referrerPolicy = "no-referrer";
-      }
-    }
-    for (const input of fragment.querySelectorAll("input")) {
-      input.type = "checkbox";
-      input.disabled = true;
-    }
-    for (const image of fragment.querySelectorAll<HTMLImageElement>("img")) {
-      prepareImage(image, base, loadImage, lifetime.signal);
-    }
-    element.replaceChildren(fragment);
-    return () => lifetime.abort();
   });
+  createEffect(
+    () => [rendered(), source()] as const,
+    ([html, [, base, loadImage]]) => {
+      const lifetime = new AbortController();
+      const fragment = purifier.sanitize(html, {
+        RETURN_DOM_FRAGMENT: true,
+        ALLOWED_TAGS: passiveTags,
+        ALLOWED_ATTR: [
+          "href",
+          "src",
+          "alt",
+          "title",
+          "class",
+          "open",
+          "start",
+          "type",
+          "checked",
+          "disabled",
+        ],
+        ALLOW_DATA_ATTR: false,
+        ALLOW_ARIA_ATTR: false,
+      });
+      for (const anchor of fragment.querySelectorAll<HTMLAnchorElement>("a")) {
+        const url = documentUrl(anchor.getAttribute("href") ?? "", base);
+        if (!url) {
+          anchor.removeAttribute("href");
+        } else {
+          anchor.href = url.href;
+          anchor.target = "_blank";
+          anchor.rel = "noopener noreferrer";
+          anchor.referrerPolicy = "no-referrer";
+        }
+      }
+      for (const input of fragment.querySelectorAll("input")) {
+        input.type = "checkbox";
+        input.disabled = true;
+      }
+      for (const image of fragment.querySelectorAll<HTMLImageElement>("img")) {
+        prepareImage(image, base, loadImage, lifetime.signal);
+      }
+      element.replaceChildren(fragment);
+      return () => lifetime.abort();
+    },
+  );
   return (
     <div
       class="lr-markdown"

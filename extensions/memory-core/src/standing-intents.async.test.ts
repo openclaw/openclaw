@@ -293,6 +293,59 @@ async function registeredIntentTool(assertInvocationCurrent?: () => void) {
 }
 
 describe("standing-intent admitted operations", () => {
+  it("reuses service-owned absence without hiding a queued creation or another agent", async () => {
+    const clock = createGatewaySchedulerClock(1_000);
+    const gateway = createTestGatewayScheduler(clock.clock);
+    const scheduler = createTestPluginServiceScheduler(gateway);
+    const stop = startStandingIntentMaintenance({
+      agentIds: ["main"],
+      scheduler,
+      warn: vi.fn(),
+    });
+    const open = vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2");
+    try {
+      await clock.wake();
+      open.mockClear();
+      const match = () => matchStandingIntents({ agentId: "main", prompt: "launch", nowMs: 1_000 });
+      await expect(match()).resolves.toEqual([]);
+      await expect(match()).resolves.toEqual([]);
+      expect(open).not.toHaveBeenCalled();
+
+      const other = await createStandingIntent({
+        agentId: "other",
+        description: "Another agent's launch.",
+        triggerKeywords: ["launch"],
+        creatorSender: "owner",
+        maxFires: 1,
+      });
+      await expect(
+        matchStandingIntents({ agentId: "other", prompt: "launch" }),
+      ).resolves.toMatchObject([{ id: other.id, fireCount: 1 }]);
+
+      const held = await holdWriter();
+      const created = keep(seed());
+      const matching = keep(match());
+      await expectWaiting(matching, held.entered);
+      held.release();
+      const intent = await created;
+      await expect(matching).resolves.toMatchObject([{ id: intent.id, fireCount: 1 }]);
+      await held.done;
+      await clock.wake();
+      open.mockClear();
+      await expect(match()).resolves.toEqual([]);
+      expect(open).not.toHaveBeenCalled();
+
+      stop();
+      await expect(match()).resolves.toEqual([]);
+      expect(open).toHaveBeenCalledOnce();
+    } finally {
+      open.mockRestore();
+      stop();
+      await scheduler.stop();
+      await gateway.stop();
+    }
+  });
+
   it("recovers overdue intents at restart and schedules writes and cooldowns while idle", async () => {
     const expired = await createStandingIntent({
       agentId: "main",

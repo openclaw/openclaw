@@ -33,6 +33,23 @@ async function handleRequest(request: BridgeRequest) {
   let reply: BridgeReply;
   try {
     if (request.operation === "connect") {
+      if (client && !connectionError) {
+        try {
+          // Validate only while idle: user statements are never replayed after a lost connection.
+          await client.query("SELECT 1");
+          reply = { id: request.id, result: { rows: [], rowCount: 0, fields: [] } };
+          port.postMessage(reply);
+          Atomics.store(control, 0, request.id);
+          Atomics.notify(control, 0);
+          return;
+        } catch (error) {
+          connectionError = error instanceof Error ? error : new Error(String(error));
+        }
+      }
+      if (client) {
+        await client.end().catch(() => {});
+      }
+      connectionError = undefined;
       // URL parsing can throw too; every connect failure must wake the waiting host.
       client = new pg.Client({
         connectionString: url,
@@ -65,7 +82,14 @@ async function handleRequest(request: BridgeRequest) {
       if (connectionError) {
         throw connectionError;
       }
-      if (request.operation === "recovery-generation") {
+      if (request.operation === "release") {
+        // Server status also catches transactions opened later in a multi-statement query.
+        const reusable = client.getTransactionStatus() === "I";
+        if (!reusable) {
+          await client.end();
+        }
+        reply = { id: request.id, reusable };
+      } else if (request.operation === "recovery-generation") {
         if (request.lock) {
           await lockPostgresGeneration(client, schema);
         }
@@ -124,7 +148,11 @@ async function handleRequest(request: BridgeRequest) {
   port.postMessage(reply);
   Atomics.store(control, 0, request.id);
   Atomics.notify(control, 0);
-  if (request.operation === "close" || (request.operation === "connect" && "error" in reply)) {
+  if (
+    request.operation === "close" ||
+    (request.operation === "connect" && "error" in reply) ||
+    ("reusable" in reply && !reply.reusable)
+  ) {
     port.close();
     parentPort?.close();
   }

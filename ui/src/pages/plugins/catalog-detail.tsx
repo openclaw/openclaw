@@ -42,17 +42,18 @@ export type PluginCatalogDetailProps = {
 };
 
 export function renderPluginReadme(readme: string | undefined): JSX.Element {
-  const readmeHtml = readme
-    ? toSanitizedMarkdownHtml(readme, { mode: "document" })
-        .replaceAll("<h1", "<h2")
-        .replaceAll("</h1>", "</h2>")
-    : null;
   return readme ? (
     <article
       class="plugin-catalog-detail__readme sidebar-markdown"
       onClick={handleMarkdownCodeBlockClick}
     >
-      <SanitizedHtml html={readmeHtml ?? ""} class="lit-content" style={{ display: "contents" }} />
+      <SanitizedHtml
+        html={toSanitizedMarkdownHtml(readme, { mode: "document" })
+          .replaceAll("<h1", "<h2")
+          .replaceAll("</h1>", "</h2>")}
+        class="lit-content"
+        style={{ display: "contents" }}
+      />
     </article>
   ) : (
     <p class="plugin-catalog-detail__empty">{t("pluginsPage.detailNoReadme")}</p>

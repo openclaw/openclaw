@@ -7,8 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
-import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -117,10 +116,7 @@ function requiredText(row: AuditEventRow, value: unknown, field: string): string
 }
 
 function optionalText(row: AuditEventRow, value: unknown, field: string): string | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  return requiredText(row, value, field);
+  return value === null || value === undefined ? undefined : requiredText(row, value, field);
 }
 
 function requiredEnum<const Value extends string>(
@@ -734,9 +730,13 @@ export function pruneExpiredAuditEventsInDatabase(params: {
   now?: number;
   database: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase };
 }): number {
-  return runOpenClawStateWriteTransaction(({ db }) => {
-    const deleted = deleteExpiredAuditEvents(db, params.now ?? Date.now());
-    auditEventRetention.delete(db);
-    return Number(deleted.numAffectedRows ?? 0n);
-  }, params.database);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const deleted = deleteExpiredAuditEvents(db, params.now ?? Date.now());
+      auditEventRetention.delete(db);
+      return Number(deleted.numAffectedRows ?? 0n);
+    },
+    params.database,
+    { singleStatement: true },
+  );
 }

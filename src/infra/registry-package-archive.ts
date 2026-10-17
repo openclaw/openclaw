@@ -19,9 +19,7 @@ export async function fetchRegistryPackageManifest(params: {
   version: string;
   timeoutMs?: number;
   signal?: AbortSignal;
-}): Promise<
-  { ok: true; metadata: NpmSpecResolution & { tarball: string } } | { ok: false; error: string }
-> {
+}): Promise<NpmSpecResolution & { tarball: string }> {
   try {
     const json = await fetchRegistryPackageDocument({
       ...params,
@@ -35,9 +33,9 @@ export async function fetchRegistryPackageManifest(params: {
     if (!metadata?.name || !metadata.version || !tarball) {
       throw new Error("Registry returned incomplete package metadata (name, version, or tarball).");
     }
-    return { ok: true, metadata: { ...metadata, tarball } };
+    return { ...metadata, tarball };
   } catch (error) {
-    return { ok: false, error: `Registry package manifest failed: ${String(error)}` };
+    throw new Error(`Registry package manifest failed: ${String(error)}`, { cause: error });
   }
 }
 
@@ -48,7 +46,7 @@ export async function downloadRegistryPackageArchive(params: {
   cwd: string;
   timeoutMs?: number;
   signal?: AbortSignal;
-}): Promise<{ ok: true; archivePath: string } | { ok: false; error: string }> {
+}): Promise<string> {
   const { signal, cleanup, refresh } = buildTimeoutAbortSignal({
     timeoutMs: Math.max(1, params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS),
     signal: params.signal,
@@ -88,12 +86,12 @@ export async function downloadRegistryPackageArchive(params: {
     if (`sha512-${hash.digest("base64")}` !== params.integrity) {
       throw new Error("Package archive integrity mismatch.");
     }
-    return { ok: true, archivePath };
+    return archivePath;
   } catch (error) {
     if (archivePath) {
       await fs.rm(archivePath, { force: true });
     }
-    return { ok: false, error: `Registry package archive failed: ${String(error)}` };
+    throw new Error(`Registry package archive failed: ${String(error)}`, { cause: error });
   } finally {
     await cancelUnreadResponseBody(response);
     cleanup();
