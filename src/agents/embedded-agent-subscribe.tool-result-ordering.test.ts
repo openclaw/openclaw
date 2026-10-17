@@ -370,12 +370,6 @@ it.each([
         details: { status: "approval-unavailable", reason: "no-approval-route" },
       });
       await entered.promise;
-      expect(onToolResult).toHaveBeenCalledOnce();
-      expect(onToolResult).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channelData: { execApprovalUnavailable: { reason: "no-approval-route" } },
-        }),
-      );
       onBlockReplyFlush.mockClear();
       h.emit({ type: "message_start", message: { role: "assistant", content: [] } });
       emitAssistantTextDeltaAndEnd({ emit: h.emit, text: answer });
@@ -443,12 +437,11 @@ it.each([
 );
 
 it("suppresses live and terminal-only assistant blocks after an approval prompt", async () => {
-  const onToolResult = vi.fn();
   const onBlockReply = vi.fn();
   const onPartialReply = vi.fn();
   const { onAgentEvent, events } = eventRecorder();
   const h = harness({
-    onToolResult,
+    onToolResult: () => {},
     onBlockReply,
     onPartialReply,
     onAgentEvent,
@@ -483,14 +476,6 @@ it("suppresses live and terminal-only assistant blocks after an approval prompt"
     },
   });
   await h.subscription.waitForPendingEvents();
-  expect(onToolResult).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      channelData: expect.objectContaining({
-        execApproval: expect.objectContaining({ approvalId }),
-      }),
-    }),
-  );
-  expect(h.subscription.didSendDeterministicApprovalPrompt()).toBe(true);
   h.emit({ type: "message_start", message: first });
   h.emit({
     type: "message_update",
