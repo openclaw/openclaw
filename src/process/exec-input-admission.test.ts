@@ -14,6 +14,43 @@ const unbufferedExecSpawn: {
   spawnCommandWithInvocation: typeof execSpawn.spawnCommandWithInvocation<{ buffer: false }>;
 } = execSpawn;
 
+async function withReadyChild(
+  argv: string[],
+  signal: AbortSignal,
+  ipc: boolean,
+  run: (
+    spawned: ReturnType<typeof unbufferedExecSpawn.spawnCommandWithInvocation>,
+  ) => Promise<void>,
+) {
+  const spawned = unbufferedExecSpawn.spawnCommandWithInvocation(argv, {
+    buffer: false,
+    detached: true,
+    encoding: "buffer",
+    ...(ipc ? { ipc: true } : {}),
+    reject: false,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let restoreSpawn: (() => void) | undefined;
+  try {
+    expect(await once(spawned.child.stdout!, "data", { signal })).toEqual([Buffer.from("ready")]);
+    const spy = vi
+      .spyOn(unbufferedExecSpawn, "spawnCommandWithInvocation")
+      .mockImplementationOnce((_argv, options) => {
+        expect(options?.buffer).toBe(false);
+        return spawned;
+      });
+    restoreSpawn = () => spy.mockRestore();
+    await run(spawned);
+  } finally {
+    restoreSpawn?.();
+    const child = spawned.child.nodeChildProcess;
+    if (child.exitCode === null && child.signalCode === null) {
+      spawned.child.kill("SIGKILL");
+    }
+    await spawned.child;
+  }
+}
+
 describe("child input admission", () => {
   it("publishes input only after binding the actual spawned PID and argv", async () => {
     let admittedPid: number | undefined;
@@ -167,28 +204,8 @@ describe("child input admission", () => {
           "setInterval(()=>{},1000)",
         ].join(";"),
       ];
-      const spawnOptions = {
-        buffer: false,
-        detached: true,
-        encoding: "buffer",
-        reject: false,
-        stdio: ["pipe", "pipe", "pipe"],
-      } satisfies Parameters<typeof execSpawn.spawnCommandWithInvocation>[1];
-      const spawned = execSpawn.spawnCommandWithInvocation<{ buffer: false }>(argv, spawnOptions);
-      let restoreSpawn: (() => void) | undefined;
-      try {
-        // The real child must install its signal handler before admission rejects.
-        // Its synchronous read prevents SIGTERM handling until input reaches EOF.
-        expect(await once(spawned.child.stdout!, "data", { signal })).toEqual([
-          Buffer.from("ready"),
-        ]);
-        const spawnSpy = vi
-          .spyOn(unbufferedExecSpawn, "spawnCommandWithInvocation")
-          .mockImplementationOnce((_argv, options) => {
-            expect(options?.buffer).toBe(false);
-            return spawned;
-          });
-        restoreSpawn = () => spawnSpy.mockRestore();
+      // Its synchronous read prevents SIGTERM handling until input reaches EOF.
+      await withReadyChild(argv, signal, false, async (spawned) => {
         const refusal = new Error("authority lost before input");
         const work = runCommandWithTimeout(argv, {
           input: "forbidden",
@@ -202,16 +219,7 @@ describe("child input admission", () => {
         expect(existsSync(effect)).toBe(false);
         expect(refusal).toMatchObject({ cleanup: "forced" });
         expect(isPidAlive(spawned.child.pid!)).toBe(false);
-      } finally {
-        restoreSpawn?.();
-        if (
-          spawned.child.nodeChildProcess.exitCode === null &&
-          spawned.child.nodeChildProcess.signalCode === null
-        ) {
-          spawned.child.kill("SIGKILL");
-        }
-        await spawned.child;
-      }
+      });
     },
   );
 
@@ -226,27 +234,7 @@ describe("child input admission", () => {
         "-e",
         "require('node:fs').closeSync(0);process.on('message',()=>process.exit(0));require('node:fs').writeSync(1,'ready')",
       ];
-      const spawnOptions = {
-        buffer: false,
-        detached: true,
-        encoding: "buffer",
-        ipc: true,
-        reject: false,
-        stdio: ["pipe", "pipe", "pipe"],
-      } satisfies Parameters<typeof execSpawn.spawnCommandWithInvocation>[1];
-      const spawned = execSpawn.spawnCommandWithInvocation<{ buffer: false }>(argv, spawnOptions);
-      let restoreSpawn: (() => void) | undefined;
-      try {
-        expect(await once(spawned.child.stdout!, "data", { signal })).toEqual([
-          Buffer.from("ready"),
-        ]);
-        const spawnSpy = vi
-          .spyOn(unbufferedExecSpawn, "spawnCommandWithInvocation")
-          .mockImplementationOnce((_argv, options) => {
-            expect(options?.buffer).toBe(false);
-            return spawned;
-          });
-        restoreSpawn = () => spawnSpy.mockRestore();
+      await withReadyChild(argv, signal, true, async (spawned) => {
         const beforeInput = vi.fn(() => {
           // Keep the peer alive through input publication; cancellation may win the reply.
           setImmediate(() => spawned.child.nodeChildProcess.send("finish", () => {}));
@@ -263,16 +251,7 @@ describe("child input admission", () => {
           spawned.child.nodeChildProcess.spawnargs,
         );
         expect(isPidAlive(spawned.child.pid!)).toBe(false);
-      } finally {
-        restoreSpawn?.();
-        if (
-          spawned.child.nodeChildProcess.exitCode === null &&
-          spawned.child.nodeChildProcess.signalCode === null
-        ) {
-          spawned.child.kill("SIGKILL");
-        }
-        await spawned.child;
-      }
+      });
     },
   );
 });

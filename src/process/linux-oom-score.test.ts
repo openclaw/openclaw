@@ -6,8 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  prepareOomScoreAdjustedSpawn,
-  prepareOomScoreAdjustedSpawnPreservingExecEnv,
+  prepareOomScoreAdjustedSpawn as prepareSpawn,
+  prepareOomScoreAdjustedSpawnPreservingExecEnv as preparePreservingEnv,
   resolveOomScoreWrappedCommand,
   spawnOomScoreAdjusted,
   type OomScoreAdjustedSpawn,
@@ -23,6 +23,15 @@ const carriers = {
 const linux = { platform: "linux", env: {}, shellAvailable: () => true } as const;
 const bashAvailable = fs.existsSync("/bin/bash");
 
+function withMarker(name: string, run: (markerPath: string, tempDir: string) => void) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oom-"));
+  try {
+    run(path.join(tempDir, name), tempDir);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 function spawnPreparedWithBashAsSh(prepared: OomScoreAdjustedSpawn) {
   return spawnSync(prepared.wrapped ? "/bin/bash" : prepared.command, prepared.args, {
     ...(prepared.wrapped
@@ -36,7 +45,7 @@ function spawnPreparedWithBashAsSh(prepared: OomScoreAdjustedSpawn) {
 }
 
 describe("resolveOomScoreWrappedCommand", () => {
-  it.each([prepareOomScoreAdjustedSpawn, prepareOomScoreAdjustedSpawnPreservingExecEnv])(
+  it.each([prepareSpawn, preparePreservingEnv])(
     "attributes an owner-prepared wrapper to the final executable",
     (prepare) => {
       const prepared = prepare("/usr/bin/node", ["run.js"], linux);
@@ -69,8 +78,7 @@ describe("prepareOomScoreAdjustedSpawn", () => {
   it("adjusts a distinct child argv0 without a shell", () => {
     const argv0 = "/opt/shims/claude";
     const options = { ...linux, argv0 };
-
-    const prepared = prepareOomScoreAdjustedSpawn("/usr/bin/mise", ["-p"], {
+    const prepared = prepareSpawn("/usr/bin/mise", ["-p"], {
       ...options,
       shellAvailable: () => false,
     });
@@ -95,11 +103,9 @@ describe("prepareOomScoreAdjustedSpawn", () => {
     vi.stubEnv("OPENCLAW_CHILD_OOM_SCORE_ADJ", "0");
     try {
       const options = { ...linux, argv0: "/opt/shims/claude" };
-      expect(prepareOomScoreAdjustedSpawn("/usr/bin/node", [], options)).not.toHaveProperty(
-        "afterSpawn",
-      );
+      expect(prepareSpawn("/usr/bin/node", [], options)).not.toHaveProperty("afterSpawn");
       expect(
-        prepareOomScoreAdjustedSpawn("/usr/bin/node", [], {
+        prepareSpawn("/usr/bin/node", [], {
           ...options,
           env: { OPENCLAW_CHILD_OOM_SCORE_ADJ: "1" },
         }),
@@ -111,7 +117,7 @@ describe("prepareOomScoreAdjustedSpawn", () => {
 
   it("does not double-wrap an adjusted command", () => {
     expect(
-      prepareOomScoreAdjustedSpawn("/bin/sh", ["-c", wrapScript, "/usr/bin/node", "run.js"], {
+      prepareSpawn("/bin/sh", ["-c", wrapScript, "/usr/bin/node", "run.js"], {
         ...linux,
         env: {
           PATH: "/usr/bin",
@@ -133,7 +139,7 @@ describe("prepareOomScoreAdjustedSpawn", () => {
   });
 
   it("does not pass command names that look like shell options to exec", () => {
-    expect(prepareOomScoreAdjustedSpawn("-p", ["node"], linux)).toMatchObject({
+    expect(prepareSpawn("-p", ["node"], linux)).toMatchObject({
       command: "-p",
       args: ["node"],
       wrapped: false,
@@ -186,11 +192,10 @@ describe("prepareOomScoreAdjustedSpawnPreservingExecEnv", () => {
       BASH_ENV: "/tmp/bashenv",
       [carriers.ENV]: "reserved",
     };
-    const result = prepareOomScoreAdjustedSpawnPreservingExecEnv("/usr/bin/node", ["run.js"], {
+    const result = preparePreservingEnv("/usr/bin/node", ["run.js"], {
       ...linux,
       env,
     });
-
     expect(result).toEqual({
       command: "/usr/bin/node",
       args: ["run.js"],
@@ -203,12 +208,10 @@ describe("prepareOomScoreAdjustedSpawnPreservingExecEnv", () => {
   it.runIf(process.platform !== "win32")(
     "restores exact values only for the final executable",
     () => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oom-env-"));
-      const bashEnvPath = path.join(tempDir, "bash-env.sh");
-      const startupMarkerPath = path.join(tempDir, "wrapper-startup-marker");
-      fs.writeFileSync(bashEnvPath, `printf touched > "${startupMarkerPath}"\n`);
-      try {
-        const prepared = prepareOomScoreAdjustedSpawnPreservingExecEnv(
+      withMarker("wrapper-startup-marker", (startupMarkerPath, tempDir) => {
+        const bashEnvPath = path.join(tempDir, "bash-env.sh");
+        fs.writeFileSync(bashEnvPath, `printf touched > "${startupMarkerPath}"\n`);
+        const prepared = preparePreservingEnv(
           process.execPath,
           [
             "-e",
@@ -229,7 +232,6 @@ describe("prepareOomScoreAdjustedSpawnPreservingExecEnv", () => {
           env: prepared.env,
           encoding: "utf8",
         });
-
         expect(child.status).toBe(0);
         expect(JSON.parse(child.stdout)).toEqual({
           bashEnv: bashEnvPath,
@@ -240,49 +242,36 @@ describe("prepareOomScoreAdjustedSpawnPreservingExecEnv", () => {
           carrierKeys: [],
         });
         expect(fs.existsSync(startupMarkerPath)).toBe(false);
-      } finally {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      }
+      });
     },
   );
 
   it.runIf(bashAvailable)(
     "does not expose preserving carriers to Bash-as-sh xtrace startup",
     () => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oom-xtrace-"));
-      const markerPath = path.join(tempDir, "ps4-marker");
-      const secret = "review-secret-carried-value";
-      try {
+      withMarker("ps4-marker", (markerPath) => {
+        const secret = "review-secret-carried-value";
         const env = {
           PATH: process.env.PATH,
           BASH_ENV: secret,
           SHELLOPTS: "braceexpand:hashall:interactive-comments:xtrace",
           PS4: `$(printf touched > "${markerPath}")trace `,
         };
-        const prepared = prepareOomScoreAdjustedSpawnPreservingExecEnv(
-          process.execPath,
-          ["-e", ""],
-          { ...linux, env },
-        );
+        const prepared = preparePreservingEnv(process.execPath, ["-e", ""], { ...linux, env });
         const child = spawnPreparedWithBashAsSh(prepared);
-
         expect(child.status).toBe(0);
         expect(fs.existsSync(markerPath)).toBe(false);
         expect(child.stderr).not.toContain(secret);
         expect(child.stderr).not.toContain(carriers.BASH_ENV);
         expect(prepared.wrapped).toBe(false);
         expect(prepared.env).toBe(env);
-      } finally {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      }
+      });
     },
   );
 
   it.runIf(bashAvailable)("strips xtrace startup controls from Bash-as-sh", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oom-strip-xtrace-"));
-    const markerPath = path.join(tempDir, "ps4-marker");
-    try {
-      const prepared = prepareOomScoreAdjustedSpawn(process.execPath, ["-e", ""], {
+    withMarker("ps4-marker", (markerPath) => {
+      const prepared = prepareSpawn(process.execPath, ["-e", ""], {
         ...linux,
         env: {
           PATH: process.env.PATH,
@@ -291,25 +280,20 @@ describe("prepareOomScoreAdjustedSpawnPreservingExecEnv", () => {
         },
       });
       const child = spawnPreparedWithBashAsSh(prepared);
-
       expect(child.status).toBe(0);
       expect(fs.existsSync(markerPath)).toBe(false);
       expect(prepared.wrapped).toBe(true);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it.runIf(process.platform === "linux" && bashAvailable)(
     "blocks imported Bash functions from overriding wrapper commands",
     () => {
       for (const [prepare, expectedWrapped] of [
-        [prepareOomScoreAdjustedSpawnPreservingExecEnv, false],
-        [prepareOomScoreAdjustedSpawn, true],
+        [preparePreservingEnv, false],
+        [prepareSpawn, true],
       ] as const) {
-        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oom-function-"));
-        const markerPath = path.join(tempDir, "echo-marker");
-        try {
+        withMarker("echo-marker", (markerPath) => {
           const prepared = prepare(process.execPath, ["-e", ""], {
             ...linux,
             env: {
@@ -318,13 +302,10 @@ describe("prepareOomScoreAdjustedSpawnPreservingExecEnv", () => {
             },
           });
           const child = spawnPreparedWithBashAsSh(prepared);
-
           expect(child.status).toBe(0);
           expect(fs.existsSync(markerPath)).toBe(false);
           expect(prepared.wrapped).toBe(expectedWrapped);
-        } finally {
-          fs.rmSync(tempDir, { recursive: true, force: true });
-        }
+        });
       }
     },
   );
