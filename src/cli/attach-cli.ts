@@ -234,7 +234,9 @@ export async function registerAttachCli(program: Command) {
               : (outcome.code ?? 0);
           }
         } catch (error) {
-          if (!(error instanceof AttachGrantRejectedError)) throw error;
+          if (!(error instanceof AttachGrantRejectedError)) {
+            throw error;
+          }
         } finally {
           try {
             if (!keepGrant) {
