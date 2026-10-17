@@ -118,7 +118,7 @@ it.each(["small", "large"])(
             payload: { messages },
           });
           let segment: Uint8Array | undefined;
-          const concat = Buffer.concat;
+          const concat = Buffer.concat.bind(Buffer);
           // Observe the actual memoized piece when the codec assembles its wire output.
           const assembled = vi.spyOn(Buffer, "concat").mockImplementation((parts, length) => {
             if (parts.length === 3 && Buffer.isBuffer(parts[1]) && parts[1].equals(compressed)) {
@@ -150,8 +150,12 @@ it.each(["small", "large"])(
       }
       expect(retained.get(10)).not.toBe(retained.get(15));
     } finally {
-      for (const client of clients) client.terminate();
-      for (const socket of sockets) socket.terminate();
+      for (const client of clients) {
+        client.terminate();
+      }
+      for (const socket of sockets) {
+        socket.terminate();
+      }
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
