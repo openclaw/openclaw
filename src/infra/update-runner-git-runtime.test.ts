@@ -20,7 +20,12 @@ import {
 } from "../../test/scripts/run-node.test-support.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { expectRuntime, writeRuntime } from "./update-runner-git-candidate.test-support.js";
+import {
+  expectRuntime,
+  writeRuntime,
+  expectFile,
+  readText,
+} from "./update-runner-git-candidate.test-support.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 
 describe("Git runtime promotion", () => {
@@ -193,9 +198,7 @@ describe("Git runtime promotion", () => {
       if (previous) {
         await expectRuntime(root, "original");
       } else {
-        expect(await fs.readFile(path.join(destination, "subsequent-owner"), "utf8")).toBe(
-          "preserve",
-        );
+        await expectFile(path.join(destination, "subsequent-owner"), "preserve");
       }
       await promotion.cleanup();
     },
@@ -333,9 +336,7 @@ describe("Git runtime promotion", () => {
       await fs.symlink(outside, path.join(root, "packages"), "junction");
 
       await expect(promotion[phase]()).rejects.toThrow("symbolic link");
-      expect(await fs.readFile(path.join(outsideModules, "operator.cjs"), "utf8")).toBe(
-        "outside content\n",
-      );
+      await expectFile(path.join(outsideModules, "operator.cjs"), "outside content\n");
       expect(await fs.readdir(outsideModules)).toEqual(["operator.cjs"]);
 
       await fs.unlink(path.join(root, "packages"));
@@ -365,9 +366,7 @@ describe("Git runtime promotion", () => {
       await fs.symlink(target, path.join(modules, "unresolved"));
       await activate(candidateRoot);
       expect(await fs.readlink(path.join(root, "node_modules", "unresolved"))).toBe(target);
-      expect(await fs.readFile(path.join(root, "node_modules", ".vite", "content"), "utf8")).toBe(
-        "retained",
-      );
+      await expectFile(path.join(root, "node_modules", ".vite", "content"), "retained");
       await expectRuntime(root, "candidate");
       return;
     }
@@ -413,10 +412,7 @@ describe("Git runtime promotion", () => {
     expect(probe.stdout.trim()).toBe("retained");
     if (layout === "dependency") {
       expect(
-        await fs.readFile(
-          path.join(root, "node_modules", "linked-runtime", "nested", "value.cjs"),
-          "utf8",
-        ),
+        await readText(path.join(root, "node_modules", "linked-runtime", "nested", "value.cjs")),
       ).toContain("nested");
     }
     await expectRuntime(root, "candidate");
@@ -458,9 +454,7 @@ describe("Git runtime promotion", () => {
     await fs.writeFile(path.join(candidateRoot, ".gitignore"), "node_modules/\ndist/\n");
     await fs.writeFile(
       path.join(modules, ".modules.yaml"),
-      JSON.stringify({
-        virtualStoreDir: path.relative(modules, storePath),
-      }),
+      JSON.stringify({ virtualStoreDir: path.relative(modules, storePath) }),
     );
     await expect(preparePromotion(candidateRoot)).rejects.toThrow(/virtual store/i);
     await expectRuntime(root, "original");
@@ -482,10 +476,7 @@ runtimeIt.for([false, true])(
       [newerBuild ? BUILD_STAMP : RUNTIME_POSTBUILD_STAMP],
       NEW_TIME,
     );
-    const expected = {
-      shouldSync: newerBuild,
-      reason: newerBuild ? "build_stamp_newer" : "clean",
-    };
+    const expected = { shouldSync: newerBuild, reason: newerBuild ? "build_stamp_newer" : "clean" };
     expect(resolveRuntimePostBuildRequirement(deps)).toEqual(expected);
 
     const promotion = await prepareGitRuntimePromotion(

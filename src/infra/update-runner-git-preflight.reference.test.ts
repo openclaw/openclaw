@@ -276,9 +276,7 @@ describe("reference source candidate preparation", () => {
 
   it("refuses divergent main before install or copying operator inputs", async () => {
     const beforeSha = await commit("local.txt", "local\n");
-    await git(root, "checkout", "-b", "upstream", base);
-    const targetRevision = await commit("target.txt", "target\n");
-    await git(root, "checkout", "main");
+    const targetRevision = await commitTarget("target.txt", "target\n");
     const copyBuildInputs = vi.fn(async () => {});
 
     expect(
