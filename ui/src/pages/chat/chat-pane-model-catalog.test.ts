@@ -22,6 +22,7 @@ import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   applyChatModelCatalogSnapshot,
@@ -47,6 +48,45 @@ function composerControls(state: ChatPageHost) {
 
 describe("chat pane composer controls", () => {
   const cachedModels = [{ id: "cached-model", name: "Cached Model", provider: "openai" }];
+  it("keeps the detailed picker read pending when a basic snapshot arrives", async () => {
+    const detailed = createDeferred<ModelCatalogResult>();
+    const request = makeRequestMock({ "models.list": () => detailed.promise });
+    const client = createTestGatewayClient(request);
+    const { state } = createRefreshChatPane(client);
+    state.sessionKey = "agent:main:main";
+    onTestFinished(() => {
+      detailed.resolve({ models: [] });
+      retireChatMetadataRequests(state);
+    });
+
+    const refresh = refreshChatModelCatalogOnDemand(state);
+    const scope = { agentId: "main", sessionKey: state.sessionKey };
+    const basic = {
+      id: "race-model",
+      name: "Race Model",
+      provider: "openai",
+      contextWindow: 200_000,
+    };
+    expect(
+      publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, { models: [basic] }),
+    ).toBe(true);
+    handlePageGatewayEvent(state, { type: "event", event: "models.snapshot", payload: {} });
+    expect(state.chatModelCatalog).toEqual([basic]);
+
+    const resolved = { ...basic, contextTokens: 128_000 };
+    detailed.resolve({ models: [resolved] });
+    await refresh;
+    expect(state.chatModelCatalog).toEqual([resolved]);
+    expect(request).toHaveBeenCalledWith("models.list", {
+      view: "configured",
+      agentId: "main",
+      sessionKey: state.sessionKey,
+      includeDetails: true,
+    });
+    const container = document.createElement("div");
+    render(composerControls(state), container);
+    expect(container.textContent).toContain("128k active · 200k max");
+  });
   it.each([
     { entry: "direct", retained: false },
     { entry: "direct", retained: true },
@@ -68,7 +108,7 @@ describe("chat pane composer controls", () => {
         retireChatMetadataRequests(state);
       });
       if (retained) {
-        const scope = { agentId: "main", sessionKey: state.sessionKey };
+        const scope = { agentId: "main", sessionKey: state.sessionKey, includeDetails: true };
         expect(
           publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, {
             models: cachedModels,
@@ -169,7 +209,7 @@ describe("chat pane composer controls", () => {
         state.sessions.dispose();
       });
       if (cachedCatalog) {
-        const scope = { agentId: "main", sessionKey: "main" };
+        const scope = { agentId: "main", sessionKey: "main", includeDetails: true };
         expect(
           publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, cachedCatalog),
         ).toBe(true);
@@ -196,6 +236,7 @@ describe("chat pane composer controls", () => {
         view: "configured",
         agentId: "main",
         sessionKey: "main",
+        includeDetails: true,
       });
       expect(state.chatModelsLoading).toBe(!cachedCatalog);
       renderPaneModelControl(composerControls(state), container);
@@ -244,7 +285,7 @@ describe("chat pane composer controls", () => {
       name: "Cached Model",
       provider: "openai",
     };
-    const scope = { agentId: "main", sessionKey: host.sessionKey };
+    const scope = { agentId: "main", sessionKey: host.sessionKey, includeDetails: true };
     const release = subscribeChatMetadata(client, scope, () => {});
     beginChatMetadataPublication(client, scope).publish({
       commands: [],

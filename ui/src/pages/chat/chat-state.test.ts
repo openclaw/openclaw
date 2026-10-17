@@ -3707,7 +3707,7 @@ describe("refreshChatMetadata", () => {
         state.chatMetadataIsPresented = () => !hidden;
         retiredCatalog.resolve({ models: [discovered] });
         if (metadataPending) {
-          const scope = { agentId: "work", sessionKey: state.sessionKey };
+          const scope = { agentId: "work", sessionKey: state.sessionKey, includeDetails: true };
           publishModelCatalogResult(beginModelCatalogRead(state.client!, scope), scope, {
             models: acceptedModels,
           });

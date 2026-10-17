@@ -427,18 +427,19 @@ async function loadChatModelCatalog(
     host.chatModelCatalog.length === 0;
   host.chatModelCatalogError = null;
   host.requestUpdate?.();
-  const promise = loadModelCatalog(binding.client, { ...binding.scope, signal: controller.signal })
+  const detailedScope = { ...binding.scope, includeDetails: true as const };
+  const promise = loadModelCatalog(binding.client, { ...detailedScope, signal: controller.signal })
     .then(
       (result) => {
         if (!binding.isCurrent()) {
           return false;
         }
-        const fresh = peekModelCatalog(binding.client, binding.scope);
+        const fresh = peekModelCatalog(binding.client, detailedScope);
         if (fresh || ownsRequest()) {
           applyCachedChatModelCatalog(host, binding);
           return (
             Boolean(fresh) ||
-            peekModelCatalog(binding.client, binding.scope, { allowStale: true }) === result
+            peekModelCatalog(binding.client, detailedScope, { allowStale: true }) === result
           );
         }
         return false;
@@ -474,8 +475,13 @@ function applyChatModelCatalog(host: ChatPageHost, result?: ModelCatalogResult) 
 }
 
 function applyCachedChatModelCatalog(host: ChatPageHost, binding: ChatMetadataBinding): boolean {
-  const fresh = peekModelCatalog(binding.client, binding.scope);
-  const result = fresh ?? peekModelCatalog(binding.client, binding.scope, { allowStale: true });
+  const detailedScope = { ...binding.scope, includeDetails: true as const };
+  const detailed = peekModelCatalog(binding.client, detailedScope);
+  const fresh = detailed ?? peekModelCatalog(binding.client, binding.scope);
+  const result =
+    fresh ??
+    peekModelCatalog(binding.client, detailedScope, { allowStale: true }) ??
+    peekModelCatalog(binding.client, binding.scope, { allowStale: true });
   if (!result && binding.isCurrent() && isModelCatalogRetired(binding.client, binding.scope)) {
     binding.catalogResult = undefined;
     applyChatModelCatalog(host);
@@ -485,7 +491,8 @@ function applyCachedChatModelCatalog(host: ChatPageHost, binding: ChatMetadataBi
   if (!result || !binding.isCurrent()) {
     return false;
   }
-  if (fresh) {
+  // A basic snapshot can fill the picker, but cannot settle its detailed read.
+  if (detailed) {
     binding.catalogRequest?.controller.abort();
     binding.catalogRequest = undefined;
   }
@@ -502,7 +509,7 @@ function applyCachedChatModelCatalog(host: ChatPageHost, binding: ChatMetadataBi
   }
   host.chatModelsLoading = !fresh && previousLoading;
   host.requestUpdate?.();
-  return Boolean(fresh);
+  return Boolean(detailed);
 }
 
 export function applyChatModelCatalogSnapshot(host: ChatPageHost): boolean {
