@@ -89,21 +89,28 @@ describe("ensurePlaywrightChromium", () => {
     expectProbe(spawnSync, "/snap/bin/chromium");
   });
 
-  it("fails when the explicit Chromium executable override is missing", () => {
+  it.each([
+    [
+      { PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: "/snap/bin/chromium" },
+      1,
+      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH points to /snap/bin/chromium",
+    ],
+    [{ OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM: "1" }, 0, "leaves the lane skipped"],
+  ] as const)("does not launch missing browsers: %j", (env, status, message) => {
     const log = vi.fn();
     const spawnSync = vi.fn();
 
     expectStatus(
       {
-        env: { PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: "/snap/bin/chromium" },
+        env,
         existsSync: () => false,
         log,
         spawnSync,
       },
-      1,
+      status,
     );
     expect(spawnSync).not.toHaveBeenCalled();
-    expectLog(log, "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH points to /snap/bin/chromium");
+    expectLog(log, message);
   });
 
   it("installs Playwright Chromium when the lane requires its pinned browser", () => {
@@ -247,20 +254,6 @@ describe("ensurePlaywrightChromium", () => {
     expectProbe(spawnSync, "/snap/bin/chromium");
     expectProbe(spawnSync, "/usr/bin/google-chrome");
     expectLog(log, "Using system Chromium at /usr/bin/google-chrome");
-  });
-
-  it("preserves the intentional missing-browser skip mode", () => {
-    const log = vi.fn();
-    const spawnSync = vi.fn();
-
-    expectStatus({
-      env: { OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM: "1" },
-      existsSync: () => false,
-      log,
-      spawnSync,
-    });
-    expect(spawnSync).not.toHaveBeenCalled();
-    expectLog(log, "leaves the lane skipped");
   });
 
   it.each([

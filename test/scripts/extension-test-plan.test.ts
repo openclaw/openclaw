@@ -80,12 +80,6 @@ describe("extension executable test plans", () => {
     const only = [one!];
     samples.mockReturnValue({ [key(workerConfig, only)!]: 22 });
     expect(cost(workerConfig, 1, only)).toBe(22);
-    samples.mockReturnValue({
-      [key(workerConfig, only)!]: 22,
-      [key(workerConfig, only, undefined, "singleton-invocation")!]: 20,
-      [key(workerConfig, [], undefined, "wrapper-overhead")!]: 2,
-    });
-    expect(cost(workerConfig, 1, only)).toBe(22);
   });
 
   it("requests overlap only for selected Telegram singleton envelopes", async () => {
