@@ -4,7 +4,6 @@ import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-co
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMetaForEntryAsync } from "../../acp/runtime/session-meta-readonly.js";
-import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
@@ -38,8 +37,7 @@ import {
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import { ToolInputError } from "../tool-input-error.js";
-import type { AnyAgentTool } from "./common.js";
-import { readToolStringParam } from "./common.js";
+import { type AnyAgentTool, readToolStringParam } from "./common.js";
 import { wrapGatewayPersonalToolExecution } from "./gateway-caller-context.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import {
@@ -52,7 +50,6 @@ import {
   isExpectedSessionLookupMiss,
   resolveDisplaySessionKey,
   resolveSessionReference,
-  resolveSessionToolAccess,
   resolveSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
@@ -60,6 +57,7 @@ import {
   PlacedSessionsSendSchema,
   PLACED_SESSIONS_SEND_DESCRIPTION,
 } from "./sessions-placement-tool-contract.js";
+import { resolveSessionsSendAccess } from "./sessions-send-access.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
 import { dispatchSessionsSendFollowup } from "./sessions-send-followup.js";
 import { sendFailure } from "./sessions-send-helpers.js";
@@ -78,6 +76,7 @@ import {
   isConfiguredAgentMainSessionKey,
   notifySessionsSendSession,
   resolveConfiguredAgentMainSessionKey,
+  resolveSessionsSendTargetError,
 } from "./sessions-send-tool.delivery.js";
 import {
   readSessionsSendMessage,
@@ -137,9 +136,8 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         return sendFailure("forbidden", formatErrorMessage(err));
       }
       const { readTarget: readSession, readRequester } = createSessionsSendSessionReaders(cfg);
-
-      const sessionKeyParam = readToolStringParam(params, "sessionKey");
       const labelParam = readToolStringParam(params, "label");
+      const sessionKeyParam = readToolStringParam(params, "sessionKey");
       const labelAgentIdInput = readToolStringParam(params, "agentId");
       const normalizedLabelAgentId =
         labelAgentIdInput === undefined ? null : normalizeAgentIdStrict(labelAgentIdInput);
@@ -149,15 +147,12 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           `Agent "${labelAgentIdInput}" not found. Run openclaw agents list to see configured agents.`,
         );
       }
-      const explicitTargetAgentId = normalizedLabelAgentId?.value;
-
       let sessionKey = sessionKeyParam;
-      let resolvedTargetAgentId: string | undefined;
-      let resolvedLabelKey: string | undefined;
-      if (!sessionKey && !labelParam && explicitTargetAgentId) {
+      let resolvedTargetAgentId: string | undefined, resolvedLabelKey: string | undefined;
+      if (!sessionKey && !labelParam && normalizedLabelAgentId?.value) {
         const agentMainKey = resolveConfiguredAgentMainSessionKey({
           cfg,
-          agentId: explicitTargetAgentId,
+          agentId: normalizedLabelAgentId.value,
           mainKey,
         });
         if (!agentMainKey) {
@@ -169,7 +164,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         sessionKey = agentMainKey;
       }
       if (!sessionKey && labelParam) {
-        const requestedAgentId = explicitTargetAgentId;
+        const requestedAgentId = normalizedLabelAgentId?.value;
 
         if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
           return sendFailure(
@@ -334,7 +329,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       const resolvedTargetOwner =
         visibleSession.agentId ??
         resolvedTargetAgentId ??
-        (labelParam ? explicitTargetAgentId : undefined);
+        (labelParam ? normalizedLabelAgentId?.value : undefined);
       if (
         persistedTargetOwner.kind === "configured" &&
         resolvedTargetOwner &&
@@ -387,49 +382,38 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       );
       const timeoutMs = finiteSecondsToTimerSafeMilliseconds(timeoutSeconds) ?? 0;
       const replyTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
-      const idempotencyKey = opts?.idempotencyKey ?? crypto.randomUUID();
-      const runId: string = idempotencyKey;
+      const idempotencyKey = opts?.idempotencyKey ?? crypto.randomUUID(),
+        runId: string = idempotencyKey;
       const sameSession = requesterSessionKey === resolvedKey && targetAgentId === requesterAgentId;
-      // Fire-and-forget self-send remains a channel-delivery path. A synchronous
-      // self-send would wait behind its own active session lane until timeout.
-      if (timeoutSeconds !== 0 && sameSession) {
+      // Fire-and-forget self-send is channel delivery; synchronous self-send blocks on its lane.
+      const targetError = resolveSessionsSendTargetError(
+        timeoutSeconds,
+        sameSession,
+        cfg.tools?.sessions?.allowThreadTargets === true,
+        resolvedKey,
+      );
+      if (targetError) {
         return sendFailure(
           "error",
-          "sessions_send cannot target the calling session; use your own reply instead",
+          targetError.message,
           unresolvedDisplayKey,
-          runId,
+          targetError.includeRunId ? runId : undefined,
         );
       }
-      if (
-        cfg.tools?.sessions?.allowThreadTargets !== true &&
-        resolveSessionThreadInfo(resolvedKey).threadId
-      ) {
-        return sendFailure(
-          "error",
-          "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead, or enable tools.sessions.allowThreadTargets.",
-          unresolvedDisplayKey,
-        );
-      }
-      const authorizationTargetKey = mayUseRequesterForLiteralSentinel
-        ? effectiveRequesterKey
-        : targetAgentId && !parseAgentSessionKey(resolvedKey)
-          ? `agent:${targetAgentId}:${resolvedKey}`
-          : resolvedKey;
-      const access = await resolveSessionToolAccess({
-        action: "send",
-        watch: params.watch === true,
+      const { access, authorizationTargetSessionKey } = await resolveSessionsSendAccess({
         readConfig,
+        watch: params.watch === true,
         sandboxed: opts?.sandboxed,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         mainSessionKey,
         targetAgentId,
         targetSessionKey: resolvedKey,
-        authorizationTargetSessionKey: authorizationTargetKey,
         requesterOwned: visibleSession.requesterOwned,
         visibility: sessionVisibility,
         a2aPolicy,
         callGateway: gatewayCall,
+        useRequesterForLiteralSentinel: mayUseRequesterForLiteralSentinel,
       });
       if (!access.allowed) {
         return sendFailure(
@@ -450,11 +434,11 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           runId,
         );
       }
-
       return await runWithScopedSessionAccess({
         cfg,
         storePath: opts?.expectedTargetStorePath,
         agentId: targetAgentId,
+        ...access,
         expectedSessionId,
         ...(opts?.signal ? { signal: opts.signal } : {}),
         targetSessionKey: resolvedKey,
@@ -524,7 +508,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 sandboxed: opts?.sandboxed,
                 watch: params.watch === true,
                 requesterOwned: visibleSession.requesterOwned,
-                authorizationTargetSessionKey: authorizationTargetKey,
+                authorizationTargetSessionKey,
                 expectedSessionId,
               },
               assertSourceCurrent: opts?.assertSourceCurrent,

@@ -670,10 +670,11 @@ export const ToolsSchema = z
         /**
          * - "self": only the current session
          * - "tree": current session + sessions spawned by this session
+         * - "channel": current session + verified same-agent sessions in the same channel route
          * - "agent": any session belonging to the current agent id (can include other users)
          * - "all": any session (default; cross-agent access is governed by tools.agentToAgent)
          */
-        visibility: z.enum(["self", "tree", "agent", "all"]).optional(),
+        visibility: z.enum(["self", "tree", "channel", "agent", "all"]).optional(),
         /** Allow sessions_send to target thread/topic sessions (default: false). */
         allowThreadTargets: z.boolean().optional(),
       })

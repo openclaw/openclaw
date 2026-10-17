@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithInProcessGatewaySessionMutation } from "../../gateway/server-plugin-in-process-dispatch.js";
 import type { GatewaySessionStoreTarget } from "../../gateway/session-utils-store.types.js";
@@ -46,6 +47,28 @@ import {
 import { queueSessionsSendSteeringWithCustody } from "./sessions-send-tool.steering.js";
 
 // Bind at dispatch: child followup custody installs its context after tool construction.
+export function resolveSessionsSendTargetError(
+  timeoutSeconds: number,
+  sameSession: boolean,
+  allowThreadTargets: boolean,
+  sessionKey: string,
+): { message: string; includeRunId: boolean } | undefined {
+  if (timeoutSeconds !== 0 && sameSession) {
+    return {
+      message: "sessions_send cannot target the calling session; use your own reply instead",
+      includeRunId: true,
+    };
+  }
+  if (!allowThreadTargets && resolveSessionThreadInfo(sessionKey).threadId) {
+    return {
+      message:
+        "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead, or enable tools.sessions.allowThreadTargets.",
+      includeRunId: false,
+    };
+  }
+  return undefined;
+}
+
 export const callSessionsSendGateway: AgentToolGatewayRequestCaller = async <T>(
   request: Parameters<AgentToolGatewayRequestCaller>[0],
 ): Promise<T> => await bindAgentToolGatewayRequest({ revalidateOnCompletion: false })<T>(request);

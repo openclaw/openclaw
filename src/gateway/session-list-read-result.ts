@@ -1,5 +1,5 @@
 import type { GatewayClient } from "./server-methods/types.js";
-import { withReadySessionRows } from "./session-row-prepared-read.js";
+import { withReadySessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import type { MaterializedRow } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -67,8 +67,9 @@ export async function readSessionListRowTitleFields(row: object, requireOwner: b
 /** Finalize buffered enrichment inside one current owner read, without a later await. */
 export async function withCurrentSessionListRows<T>(
   rows: readonly object[],
-  consume: (visible: readonly boolean[]) => T,
+  consume: (visible: readonly boolean[], read?: SessionRowReadView) => T,
   requireOwner: boolean,
+  additionalQueries: readonly { key: string; agentId: string }[] = [],
 ): Promise<T> {
   if (rows.length === 0) {
     return consume([]);
@@ -90,7 +91,7 @@ export async function withCurrentSessionListRows<T>(
   }
   return withReadySessionRows(
     projection,
-    () => selected.map(({ agentId, key }) => ({ agentId, key })),
+    () => [...selected.map(({ agentId, key }) => ({ agentId, key })), ...additionalQueries],
     (read) => {
       const presentations = new Map<
         GatewayClient | null | undefined,
@@ -125,7 +126,7 @@ export async function withCurrentSessionListRows<T>(
           presentation.sharing.entryFilter?.(record.key, record.entry) !== false
         );
       });
-      return consume(visible);
+      return consume(visible, read);
     },
   );
 }

@@ -1,7 +1,11 @@
 // Shared memory results for Memory Wiki queries: a native provider answers through its
 // provider runtime, and a legacy memory runtime keeps its manager calls and result shapes.
 import path from "node:path";
-import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/session-search-visibility-api.js";
+import {
+  filterMemorySearchHitsBySessionVisibility,
+  prepareMemorySearchChannelRead,
+  type MemorySearchChannelTargets,
+} from "@openclaw/memory-core/session-search-visibility-api.js";
 import {
   getActiveMemorySearchManager,
   type MemoryCallerContext,
@@ -168,6 +172,7 @@ export async function searchSharedMemory<M extends string>(
           : {}),
       })
     : [];
+  let channelTargets: readonly MemorySearchChannelTargets[] = [];
   if (
     params.appConfig &&
     shouldEnforceSessionVisibility(params) &&
@@ -181,9 +186,13 @@ export async function searchSharedMemory<M extends string>(
       hits: rawMemoryResults,
       conversationRecall: params.conversationRecall,
       trustedAgentScope: !params.agentSessionKey && Boolean(params.agentId?.trim()),
+      captureChannelTargets: (targets) => {
+        channelTargets = targets;
+      },
     });
   }
-  return rawMemoryResults.map((result) => {
+  const presentations = new Map<(typeof rawMemoryResults)[number], SharedMemorySearchResult<M>>();
+  for (const result of rawMemoryResults) {
     const hit: SharedMemorySearchResult<M> = {
       corpus: "memory",
       path: result.path,
@@ -199,7 +208,39 @@ export async function searchSharedMemory<M extends string>(
     if (result.citation) {
       hit.citation = result.citation;
     }
-    return hit;
+    presentations.set(result, hit);
+  }
+  const present = (results: readonly (typeof rawMemoryResults)[number][]) =>
+    results.flatMap((result) => {
+      const hit = presentations.get(result);
+      return hit ? [hit] : [];
+    });
+  if (!params.appConfig) {
+    return present(rawMemoryResults);
+  }
+  const agentId = resolveActiveMemoryAgentId(params);
+  if (!agentId) {
+    return present(rawMemoryResults.filter((result) => result.source !== "sessions"));
+  }
+  const channelRead = await prepareMemorySearchChannelRead({
+    cfg: params.appConfig,
+    agentId,
+    requesterSessionKey: params.agentSessionKey,
+    sandboxed: params.sandboxed === true,
+    hits: rawMemoryResults,
+    targets: channelTargets,
+  });
+  if (!channelRead) {
+    return present(rawMemoryResults);
+  }
+  const sessionHits = new Set(channelRead.sessionHits);
+  return await channelRead.withCurrentAccess((visible) => {
+    const allowed = new Set(
+      channelRead.sessionHits.filter((_hit, index) => visible[index] === true),
+    );
+    return present(
+      rawMemoryResults.filter((result) => !sessionHits.has(result) || allowed.has(result)),
+    );
   });
 }
 
@@ -263,6 +304,15 @@ export async function readSharedMemoryPage(
     shouldEnforceSessionVisibility(params) &&
     relPath.startsWith("sessions/")
   ) {
+    let channelTargets: readonly MemorySearchChannelTargets[] = [];
+    const candidate = {
+      path: relPath,
+      startLine: 1,
+      endLine: 1,
+      score: 0,
+      snippet: "",
+      source: "sessions" as const,
+    };
     const visible = await filterMemorySearchHitsBySessionVisibility({
       cfg: params.appConfig,
       agentId: params.agentId,
@@ -270,13 +320,42 @@ export async function readSharedMemoryPage(
       sandboxed: params.sandboxed === true,
       conversationRecall: params.conversationRecall,
       trustedAgentScope: !params.agentSessionKey && Boolean(params.agentId?.trim()),
-      hits: [
-        { path: relPath, startLine: 1, endLine: 1, score: 0, snippet: "", source: "sessions" },
-      ],
+      hits: [candidate],
+      captureChannelTargets: (targets) => {
+        channelTargets = targets;
+      },
     });
     if (visible.length === 0) {
       return null;
     }
+    const agentId = resolveActiveMemoryAgentId(params);
+    if (!agentId) {
+      return null;
+    }
+    const channelRead = await prepareMemorySearchChannelRead({
+      cfg: params.appConfig,
+      agentId,
+      requesterSessionKey: params.agentSessionKey,
+      sandboxed: params.sandboxed === true,
+      hits: visible,
+      targets: channelTargets,
+    });
+    const result = await manager.readFile({ relPath, from: fromLine, lines: lineCount });
+    const page =
+      result.status === "not_found"
+        ? null
+        : {
+            corpus: "memory" as const,
+            path: result.path,
+            title: buildMemorySearchTitle(result.path),
+            kind: "memory" as const,
+            content: result.text,
+            fromLine,
+            lineCount,
+          };
+    return channelRead
+      ? await channelRead.withCurrentAccess((allowed) => (allowed[0] === true ? page : null))
+      : page;
   }
   const result = await manager.readFile({ relPath, from: fromLine, lines: lineCount });
   return result.status === "not_found"

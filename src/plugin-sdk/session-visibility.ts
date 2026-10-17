@@ -20,6 +20,8 @@ import {
   type SessionVisibilityDecisionRow,
   type SessionVisibilityDecision,
   type SessionOwnershipLookupFailure,
+  type SessionChannelScope,
+  resolveSessionChannelScope,
 } from "./session-visibility-internal.js";
 
 type GatewayCaller = typeof defaultCallGateway;
@@ -131,7 +133,13 @@ export type SessionVisibilityRow = SessionVisibilityDecisionRow;
 /** Resolve configured session-tool visibility, defaulting invalid or missing values to all. */
 export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
   const value = normalizeLowercaseStringOrEmpty(cfg.tools?.sessions?.visibility);
-  if (value === "self" || value === "tree" || value === "agent" || value === "all") {
+  if (
+    value === "self" ||
+    value === "tree" ||
+    value === "channel" ||
+    value === "agent" ||
+    value === "all"
+  ) {
     return value;
   }
   return "all";
@@ -146,7 +154,11 @@ export function resolveEffectiveSessionToolsVisibility(params: {
   if (!params.sandboxed) {
     return visibility;
   }
-  return resolveSandboxSessionToolsVisibility(params.cfg) === "spawned" ? "tree" : visibility;
+  return resolveSandboxSessionToolsVisibility(params.cfg) === "spawned"
+    ? visibility === "channel"
+      ? "self"
+      : "tree"
+    : visibility;
 }
 
 /** Resolve sandbox-specific session visibility clamp for agent defaults. */
@@ -281,6 +293,11 @@ type SessionVisibilityCheckerParams = {
   defaultAgentId?: string;
   requesterAgentId?: string;
   requesterSessionKey: string;
+  requesterChannelScope?: SessionChannelScope;
+  requesterChannelRow?: unknown;
+  /** Host-owned stored scope lookup; missing facts fail closed in channel mode. */
+  channelScopeForSession?: (key: string) => SessionChannelScope | undefined;
+  channelRowForSession?: (key: string) => unknown;
   mainSessionKey?: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
@@ -293,12 +310,30 @@ function createSessionVisibilityCheckerWithResult(
 ): { check: (targetSessionKey: string) => SessionAccessResult } {
   const spawnedKeys = params.spawnedKeys;
   let lookupFailureLogged = false;
-  const decisionChecker = createSessionVisibilityDecisionChecker(params);
+  const decisionChecker = createSessionVisibilityDecisionChecker({
+    ...params,
+    requesterChannelScope:
+      params.requesterChannelScope ?? resolveSessionChannelScope(params.requesterChannelRow),
+  });
 
   const check = (targetSessionKey: string): SessionAccessResult => {
     const incognitoDenial = resolveIncognitoSessionAccessDecision(targetSessionKey);
     if (incognitoDenial) {
       return toSessionAccessResult(incognitoDenial, params.action, targetSessionKey);
+    }
+    let channelScope: SessionChannelScope | undefined;
+    if (params.visibility === "channel") {
+      try {
+        channelScope =
+          params.channelScopeForSession?.(targetSessionKey) ??
+          resolveSessionChannelScope(params.channelRowForSession?.(targetSessionKey));
+      } catch {
+        // Host metadata lookup failures cannot widen the channel boundary.
+      }
+      const ceiling = decisionChecker.check({ key: targetSessionKey, channelScope });
+      if (!ceiling.allowed) {
+        return toSessionAccessResult(ceiling, params.action, targetSessionKey);
+      }
     }
     if (params.action !== "list") {
       const scoped = resolveScopedSessionAccess({
@@ -314,6 +349,7 @@ function createSessionVisibilityCheckerWithResult(
     const isSpawnedSession = spawnedKeySet?.has(targetSessionKey) === true;
     const result = decisionChecker.check({
       key: targetSessionKey,
+      channelScope,
       spawnedBy: isSpawnedSession ? params.requesterSessionKey : undefined,
     });
     if (!result.allowed) {
@@ -371,9 +407,19 @@ export const createSessionVisibilityChecker = Object.assign(createSessionVisibil
 export function createSessionVisibilityRowChecker(params: SessionVisibilityCheckerParams): {
   check: (row: SessionVisibilityRow) => SessionAccessResult;
 } {
-  const checker = createSessionVisibilityDecisionChecker(params);
+  const checker = createSessionVisibilityDecisionChecker({
+    ...params,
+    requesterChannelScope:
+      params.requesterChannelScope ?? resolveSessionChannelScope(params.requesterChannelRow),
+  });
   return {
-    check: (row) => toSessionAccessResult(checker.check(row), params.action, row.key),
+    check: (row) => {
+      const resolvedRow =
+        params.visibility === "channel" && !row.channelScope
+          ? { ...row, channelScope: resolveSessionChannelScope(row) }
+          : row;
+      return toSessionAccessResult(checker.check(resolvedRow), params.action, row.key);
+    },
   };
 }
 

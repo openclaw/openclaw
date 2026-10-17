@@ -7,6 +7,7 @@ import {
   type ChatHistoryDeltaResult,
   type ChatPendingInputsPage,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
@@ -39,6 +40,7 @@ import {
   resolveSessionToolTargetAgentId,
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
+import { withCurrentSessionChannelReadAccess } from "./sessions-channel-read-result.js";
 import {
   createSessionVisibilityRowChecker,
   formatSessionToolAccessDenial,
@@ -466,11 +468,25 @@ export function createSessionsHistoryTool(opts?: {
           }),
         });
       }
+      if (
+        visibility === "channel" &&
+        (targetAgentId !== requesterAgentId || resolvedKey !== effectiveRequesterKey) &&
+        sessionId &&
+        sessionId !== access.expectedSessionId
+      ) {
+        // A retained incarnation has no immutable channel-route facts to authorize here.
+        return jsonResult({
+          status: "forbidden",
+          error: `Session "${displayKey}" history anchors must use its current channel incarnation.`,
+        });
+      }
 
       const result = await runWithScopedSessionAccess({
         cfg,
         agentId: targetAgentId,
         expectedSessionId: access.expectedSessionId,
+        revalidateCurrent: access.revalidateCurrent,
+        admissionIdentities: access.admissionIdentities,
         targetSessionKey: resolvedKey,
         run: async () =>
           await gatewayCall<
@@ -512,21 +528,51 @@ export function createSessionsHistoryTool(opts?: {
         requestedOffset: offset,
         requestedMessageId: messageId,
       });
-      return jsonResult({
-        sessionKey: displayKey,
-        messages: hardened.items,
-        truncated: droppedMessages || contentTruncated || hardened.hardCapped,
-        droppedMessages: droppedMessages || hardened.hardCapped,
-        contentTruncated,
-        contentRedacted: false,
-        bytes: hardened.bytes + (pending?.bytes ?? 0),
-        ...(result?.windowReset ? { windowReset: true } : {}),
-        ...(pending ? { pendingInputs: pending.pendingInputs } : {}),
-        ...(opts?.sessionLinkBase
-          ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
-          : {}),
-        ...pagination,
-      });
+      const finalize = () =>
+        jsonResult({
+          sessionKey: displayKey,
+          messages: hardened.items,
+          truncated: droppedMessages || contentTruncated || hardened.hardCapped,
+          droppedMessages: droppedMessages || hardened.hardCapped,
+          contentTruncated,
+          contentRedacted: false,
+          bytes: hardened.bytes + (pending?.bytes ?? 0),
+          ...(result?.windowReset ? { windowReset: true } : {}),
+          ...(pending ? { pendingInputs: pending.pendingInputs } : {}),
+          ...(opts?.sessionLinkBase
+            ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
+            : {}),
+          ...pagination,
+        });
+      return visibility === "channel"
+        ? await withCurrentSessionChannelReadAccess(
+            {
+              requesterAgentId,
+              requesterSessionKey: effectiveRequesterKey,
+              sandboxed: opts?.sandboxed === true,
+              a2aPolicy,
+              targets: [
+                {
+                  key: resolvedKey,
+                  agentId: targetAgentId,
+                  storePath: resolveSessionStorePathCore(cfg.session?.store, {
+                    agentId: targetAgentId,
+                  }),
+                  ...(access.expectedSessionId
+                    ? { expectedSessionId: access.expectedSessionId }
+                    : {}),
+                },
+              ],
+            },
+            ([visible]) =>
+              visible
+                ? finalize()
+                : jsonResult({
+                    status: "forbidden",
+                    error: `Session "${displayKey}" is no longer visible to this channel; retry the request.`,
+                  }),
+          )
+        : finalize();
     }),
   };
 }

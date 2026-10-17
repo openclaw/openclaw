@@ -48,6 +48,20 @@ key. Public inspection renders that generic fact as an unverified
 successful session operation is not labeled `enforced` merely because its
 mechanics succeeded.
 
+For opt-in channel-scoped recall, set `tools.sessions.visibility: "channel"`.
+Session tools can then access verified same-agent sessions in the same stored
+provider/account/channel/workspace, including sibling threads. Unknown routes,
+other channels, and cross-agent targets remain denied. This controls retrieval,
+not automatic history injection or shared files; see [session visibility scopes](/gateway/config-tools/sessions-and-subagents#toolssessions).
+
+Channel scope is retrieval-only: sibling send, status/model changes, and session
+controls remain denied. In channel mode, cross-session list, history, search, and
+transcript-backed memory recall require a Gateway-hosted agent; standalone
+RPC-only readers fail closed for those results. Self-only reads and ordinary
+memory/wiki retrieval retain their existing behavior. Cross-session history
+anchors must use the target's currently admitted session ID; older incarnations
+do not inherit its current route authorization.
+
 For the same admitted run, create, fork, send, patch, reset, archive, restore,
 and delete results can queue attribution-only generic facts. The private facts
 distinguish committed or scheduled work from typed lifecycle conflicts and
@@ -468,12 +482,13 @@ For ACP-specific behavior, see [ACP Agents](/tools/acp-agents).
 
 Session tools are scoped to limit what the agent can see:
 
-| Level   | Scope                                                             |
-| ------- | ----------------------------------------------------------------- |
-| `self`  | Only the current session                                          |
-| `tree`  | Current + spawned; when called from main, all same-agent sessions |
-| `agent` | All sessions for this agent                                       |
-| `all`   | All sessions (cross-agent access is on by default)                |
+| Level     | Scope                                                             |
+| --------- | ----------------------------------------------------------------- |
+| `self`    | Only the current session                                          |
+| `tree`    | Current + spawned; when called from main, all same-agent sessions |
+| `channel` | Current + verified same-agent channel, including sibling threads  |
+| `agent`   | All sessions for this agent                                       |
+| `all`     | All sessions (cross-agent access is on by default)                |
 
 Default is `all`: unsandboxed sessions, including retained cron sessions, can
 list, read, search, message, and inspect status across agents on the Gateway.

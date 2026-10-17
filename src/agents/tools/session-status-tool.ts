@@ -535,6 +535,8 @@ export function createSessionStatusTool(opts?: {
         cfg,
         agentId,
         expectedSessionId: access.expectedSessionId,
+        revalidateCurrent: access.revalidateCurrent,
+        admissionIdentities: access.admissionIdentities,
         targetSessionKey: scopedResolved.key,
         run: async () => {
           const configured = resolveDefaultModelForAgent({ cfg, agentId });
