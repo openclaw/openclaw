@@ -47,6 +47,20 @@ function expectGeneratedPathResolution(tempRoot: string, expectedRelativePath: s
   ).toBe(path.join(tempRoot, expectedRelativePath));
 }
 
+function writeAlphaPlugin(pluginRoot: string, manifest: Record<string, unknown>) {
+  writeJson(path.join(pluginRoot, "package.json"), {
+    name: "@openclaw/alpha",
+    version: "0.0.1",
+    openclaw: { extensions: ["./index.ts"] },
+  });
+  writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+    id: "alpha",
+    configSchema: { type: "object" },
+    ...manifest,
+  });
+  fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export const source = true;\n", "utf8");
+}
+
 let repoBundledPluginManifestsCache:
   | ReturnType<typeof listRepoBundledPluginManifestsUncached>
   | undefined;
@@ -314,36 +328,11 @@ describe("bundled plugin metadata", () => {
     );
     fs.writeFileSync(absoluteEscape, "export {};\n", "utf8");
 
-    expect(
-      resolveBundledPluginGeneratedPath(
-        tempRoot,
-        {
-          source: absolutePluginEntry,
-          built: absolutePluginEntry,
-        },
-        "alpha",
-      ),
-    ).toBe(absolutePluginEntry);
-    expect(
-      resolveBundledPluginGeneratedPath(
-        tempRoot,
-        {
-          source: "../escape.ts",
-          built: "../escape.js",
-        },
-        "alpha",
-      ),
-    ).toBeNull();
-    expect(
-      resolveBundledPluginGeneratedPath(
-        tempRoot,
-        {
-          source: absoluteEscape,
-          built: absoluteEscape,
-        },
-        "alpha",
-      ),
-    ).toBeNull();
+    const resolve = (source: string, built = source) =>
+      resolveBundledPluginGeneratedPath(tempRoot, { source, built }, "alpha");
+    expect(resolve(absolutePluginEntry)).toBe(absolutePluginEntry);
+    expect(resolve("../escape.ts", "../escape.js")).toBeNull();
+    expect(resolve(absoluteEscape)).toBeNull();
   });
 
   it("scans direct plugin-tree overrides and resolves generated paths from that scan dir", () => {
@@ -351,19 +340,7 @@ describe("bundled plugin metadata", () => {
     const pluginsDir = path.join(tempRoot, "bundled-plugins");
     const pluginRoot = path.join(pluginsDir, "alpha");
 
-    writeJson(path.join(pluginRoot, "package.json"), {
-      name: "@openclaw/alpha",
-      version: "0.0.1",
-      openclaw: {
-        extensions: ["./index.ts"],
-      },
-    });
-    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
-      id: "alpha",
-      channels: ["alpha"],
-      configSchema: { type: "object" },
-    });
-    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export const source = true;\n", "utf8");
+    writeAlphaPlugin(pluginRoot, { channels: ["alpha"] });
     const builtRoot = path.join(tempRoot, "dist", "extensions", "alpha");
     fs.mkdirSync(builtRoot, { recursive: true });
     fs.writeFileSync(path.join(builtRoot, "index.js"), "export const built = true;\n", "utf8");
@@ -390,19 +367,7 @@ describe("bundled plugin metadata", () => {
     const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-fresh-");
     const pluginRoot = path.join(tempRoot, "extensions", "alpha");
 
-    writeJson(path.join(pluginRoot, "package.json"), {
-      name: "@openclaw/alpha",
-      version: "0.0.1",
-      openclaw: {
-        extensions: ["./index.ts"],
-      },
-    });
-    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export const source = true;\n", "utf8");
-    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
-      id: "alpha",
-      name: "Before",
-      configSchema: { type: "object" },
-    });
+    writeAlphaPlugin(pluginRoot, { name: "Before" });
 
     expect(listBundledPluginMetadata({ rootDir: tempRoot })[0]?.manifest.name).toBe("Before");
 

@@ -12,6 +12,7 @@ import {
 } from "./bundled-dir.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
+import { writeJson } from "./generated-plugin-test-helpers.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -40,17 +41,15 @@ function createOpenClawRoot(params: {
   hasPnpmWorkspace?: boolean;
 }) {
   const repoRoot = makeRepoRoot(params.prefix);
-  if (params.hasExtensions) {
-    fs.mkdirSync(path.join(repoRoot, "extensions"), { recursive: true });
-  }
-  if (params.hasSrc) {
-    fs.mkdirSync(path.join(repoRoot, "src"), { recursive: true });
-  }
-  if (params.hasDistRuntimeExtensions) {
-    fs.mkdirSync(path.join(repoRoot, "dist-runtime", "extensions"), { recursive: true });
-  }
-  if (params.hasDistExtensions) {
-    fs.mkdirSync(path.join(repoRoot, "dist", "extensions"), { recursive: true });
+  for (const [enabled, dir] of [
+    [params.hasExtensions, "extensions"],
+    [params.hasSrc, "src"],
+    [params.hasDistRuntimeExtensions, "dist-runtime/extensions"],
+    [params.hasDistExtensions, "dist/extensions"],
+  ] as const) {
+    if (enabled) {
+      fs.mkdirSync(path.join(repoRoot, dir), { recursive: true });
+    }
   }
   if (params.hasGitCheckout) {
     fs.writeFileSync(path.join(repoRoot, ".git"), "gitdir: /tmp/fake.git\n", "utf8");
@@ -62,27 +61,14 @@ function createOpenClawRoot(params: {
       "utf8",
     );
   }
-  fs.writeFileSync(
-    path.join(repoRoot, "package.json"),
-    `${JSON.stringify({ name: "openclaw" }, null, 2)}\n`,
-    "utf8",
-  );
+  writeJson(path.join(repoRoot, "package.json"), { name: "openclaw" });
   return repoRoot;
 }
 
 function seedBundledPluginTree(rootDir: string, relativeDir: string, pluginId = "discord") {
   const pluginDir = path.join(rootDir, relativeDir, pluginId);
-  fs.mkdirSync(pluginDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    `${JSON.stringify({ name: `@openclaw/${pluginId}` }, null, 2)}\n`,
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    `${JSON.stringify({ id: pluginId }, null, 2)}\n`,
-    "utf8",
-  );
+  writeJson(path.join(pluginDir, "package.json"), { name: `@openclaw/${pluginId}` });
+  writeJson(path.join(pluginDir, "openclaw.plugin.json"), { id: pluginId });
 }
 
 function expectResolvedBundledDirFromRoot(params: {
@@ -478,10 +464,7 @@ describe("foreign compiled bundle recognition", () => {
             : "dist/extensions";
     seedBundledPluginTree(previous, relativeDir, "probe");
     if (mode === "lookalike") {
-      fs.writeFileSync(
-        path.join(previous, "package.json"),
-        JSON.stringify({ name: "external-package" }),
-      );
+      writeJson(path.join(previous, "package.json"), { name: "external-package" });
     }
     let pluginRoot = path.join(mode === "own" ? current : previous, relativeDir, "probe");
     if (mode === "symlink") {
@@ -517,7 +500,7 @@ describe("relocated compiled bundle precedence", () => {
   const makeTempDir = () => makeRepoRoot("bundled-precedence-");
   const mkdirSafe = (root: string) => fs.mkdirSync(root, { recursive: true, mode: 0o755 });
   const writeManifest = (root: string, manifest: object) =>
-    fs.writeFileSync(path.join(root, "openclaw.plugin.json"), JSON.stringify(manifest));
+    writeJson(path.join(root, "openclaw.plugin.json"), manifest);
   function createPluginCandidate({
     installOwner,
     ...candidate
@@ -550,13 +533,9 @@ describe("relocated compiled bundle precedence", () => {
         writeManifest(pluginRoot, { id: "probe", configSchema: { type: "object" } });
       }
       for (const packageRoot of [current, previous]) {
-        fs.writeFileSync(
-          path.join(packageRoot, "package.json"),
-          JSON.stringify({
-            name:
-              packageRoot === previous && mode === "lookalike" ? "ordinary-external" : "openclaw",
-          }),
-        );
+        writeJson(path.join(packageRoot, "package.json"), {
+          name: packageRoot === previous && mode === "lookalike" ? "ordinary-external" : "openclaw",
+        });
       }
       if (mode === "dev-source") {
         fs.writeFileSync(path.join(previous, "pnpm-workspace.yaml"), "packages: [extensions/*]\n");
@@ -572,30 +551,24 @@ describe("relocated compiled bundle precedence", () => {
       if (mode === "configSelected") {
         selected.configSelected = true;
       }
-      const argv = process.argv;
-      process.argv = [...argv];
       process.argv[1] = path.join(current, "openclaw.mjs");
-      try {
-        const registry = withPluginCache(createPluginCache(), () =>
-          loadPluginManifestRegistryCore({
-            env: mode === "dev-source" ? { OPENCLAW_DEV_SOURCE_ROOT: previous } : {},
-            installRecords: { probe: { source: "path", installPath: selectedPlugin } },
-            candidates: [
-              createPluginCandidate({ idHint: "probe", rootDir: currentPlugin, origin: "bundled" }),
-              selected,
-            ],
-          }),
-        );
-        expect(registry.plugins[0]).toMatchObject({
-          rootDir: selectedPlugin,
-          trust: { reason: "origin-path" },
-        });
-        expect(
-          registry.diagnostics.some((d) => d.message.includes("stale plugin install record")),
-        ).toBe(false);
-      } finally {
-        process.argv = argv;
-      }
+      const registry = withPluginCache(createPluginCache(), () =>
+        loadPluginManifestRegistryCore({
+          env: mode === "dev-source" ? { OPENCLAW_DEV_SOURCE_ROOT: previous } : {},
+          installRecords: { probe: { source: "path", installPath: selectedPlugin } },
+          candidates: [
+            createPluginCandidate({ idHint: "probe", rootDir: currentPlugin, origin: "bundled" }),
+            selected,
+          ],
+        }),
+      );
+      expect(registry.plugins[0]).toMatchObject({
+        rootDir: selectedPlugin,
+        trust: { reason: "origin-path" },
+      });
+      expect(
+        registry.diagnostics.some((d) => d.message.includes("stale plugin install record")),
+      ).toBe(false);
     },
   );
 
@@ -607,10 +580,7 @@ describe("relocated compiled bundle precedence", () => {
         const packageRoot = path.join(root, name);
         const pluginDir = path.join(packageRoot, "dist", "extensions", "relocation-probe");
         mkdirSafe(pluginDir);
-        fs.writeFileSync(
-          path.join(packageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw" }),
-        );
+        writeJson(path.join(packageRoot, "package.json"), { name: "openclaw" });
         writeManifest(pluginDir, { id: "relocation-probe", configSchema: { type: "object" } });
         return { packageRoot, pluginDir };
       };
@@ -644,39 +614,33 @@ describe("relocated compiled bundle precedence", () => {
           origin: "bundled",
         }),
       ];
-      const argv = process.argv;
-      process.argv = [...argv];
       process.argv[1] = path.join(current.packageRoot, "openclaw.mjs");
-      try {
-        const registry = withPluginCache(createPluginCache(), () =>
-          loadPluginManifestRegistryCore({
-            env: {},
-            config,
-            installRecords,
-            candidates: reversed ? candidates.toReversed() : candidates,
-          }),
-        );
-        expect(registry.plugins[0]).toMatchObject({
-          rootDir: current.pluginDir,
-          origin: "bundled",
-          trust: { reason: "bundled" },
-        });
-        const warning = registry.diagnostics.find((d) =>
-          d.message.includes("stale plugin install record"),
-        );
-        expect(warning).toMatchObject({ level: "warn", source: staleCandidate.source });
-        expect(warning?.message).toContain(previous.pluginDir);
-        expect(warning?.message).toContain("No uninstall is needed");
-        expect(warning?.message).toContain("removes plugin configuration");
-        expect(warning?.message).toContain("re-enabling does not restore it");
-        expect(JSON.stringify(installRecords)).toBe(recordsBefore);
-        expect(JSON.stringify(config)).toBe(configBefore);
-        expect(fs.readFileSync(path.join(previous.pluginDir, "openclaw.plugin.json"))).toEqual(
-          oldManifest,
-        );
-      } finally {
-        process.argv = argv;
-      }
+      const registry = withPluginCache(createPluginCache(), () =>
+        loadPluginManifestRegistryCore({
+          env: {},
+          config,
+          installRecords,
+          candidates: reversed ? candidates.toReversed() : candidates,
+        }),
+      );
+      expect(registry.plugins[0]).toMatchObject({
+        rootDir: current.pluginDir,
+        origin: "bundled",
+        trust: { reason: "bundled" },
+      });
+      const warning = registry.diagnostics.find((d) =>
+        d.message.includes("stale plugin install record"),
+      );
+      expect(warning).toMatchObject({ level: "warn", source: staleCandidate.source });
+      expect(warning?.message).toContain(previous.pluginDir);
+      expect(warning?.message).toContain("No uninstall is needed");
+      expect(warning?.message).toContain("removes plugin configuration");
+      expect(warning?.message).toContain("re-enabling does not restore it");
+      expect(JSON.stringify(installRecords)).toBe(recordsBefore);
+      expect(JSON.stringify(config)).toBe(configBefore);
+      expect(fs.readFileSync(path.join(previous.pluginDir, "openclaw.plugin.json"))).toEqual(
+        oldManifest,
+      );
     },
   );
 });

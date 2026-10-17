@@ -1,5 +1,4 @@
 /** Covers bundled plugin source overlays and packaged load-path decisions. */
-import { expectDefined } from "@openclaw/normalization-core";
 import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -29,21 +28,17 @@ vi.mock("./manifest.js", async (importOriginal) => ({
   loadPluginManifest: (...args: unknown[]) => loadPluginManifestMock(...args),
 }));
 
-function createBundledCandidate(params: {
-  rootDir: string;
-  packageName: string;
-  npmSpec?: string;
-  origin?: "bundled" | "global";
-}) {
+function createBundledCandidate(
+  id: string,
+  origin: "bundled" | "global" = "bundled",
+  rootDir = appBundledPluginRoot(id),
+) {
+  const packageName = `@openclaw/${id}`;
   return {
-    origin: params.origin ?? "bundled",
-    rootDir: params.rootDir,
-    packageName: params.packageName,
-    packageManifest: {
-      install: {
-        npmSpec: params.npmSpec ?? params.packageName,
-      },
-    },
+    origin,
+    rootDir,
+    packageName,
+    packageManifest: { install: { npmSpec: packageName } },
   };
 }
 
@@ -57,42 +52,27 @@ function setBundledDiscoveryCandidates(candidates: unknown[]) {
 function setBundledManifestIdsByRoot(
   manifestIds: Record<string, string | { id: string; required?: string[] }>,
 ) {
-  loadPluginManifestMock.mockImplementation((rootDir: string) =>
-    rootDir in manifestIds
-      ? {
+  loadPluginManifestMock.mockImplementation((rootDir: string) => {
+    const value = manifestIds[rootDir];
+    return value === undefined
+      ? { ok: false, error: "invalid manifest", manifestPath: `${rootDir}/openclaw.plugin.json` }
+      : {
           ok: true,
           manifest:
-            typeof manifestIds[rootDir] === "string"
-              ? { id: manifestIds[rootDir] }
+            typeof value === "string"
+              ? { id: value }
               : {
-                  id: expectDefined(manifestIds[rootDir], "manifestIds[rootDir] test invariant").id,
-                  configSchema: {
-                    type: "object",
-                    required: expectDefined(
-                      manifestIds[rootDir],
-                      "manifestIds[rootDir] test invariant",
-                    ).required,
-                  },
+                  id: value.id,
+                  configSchema: { type: "object", required: value.required },
                 },
-        }
-      : {
-          ok: false,
-          error: "invalid manifest",
-          manifestPath: `${rootDir}/openclaw.plugin.json`,
-        },
-  );
+        };
+  });
 }
 
 function setBundledLookupFixture() {
   setBundledDiscoveryCandidates([
-    createBundledCandidate({
-      rootDir: appBundledPluginRoot("feishu"),
-      packageName: "@openclaw/feishu",
-    }),
-    createBundledCandidate({
-      rootDir: appBundledPluginRoot("diffs"),
-      packageName: "@openclaw/diffs",
-    }),
+    createBundledCandidate("feishu"),
+    createBundledCandidate("diffs"),
   ]);
   setBundledManifestIdsByRoot({
     [appBundledPluginRoot("feishu")]: "feishu",
@@ -100,51 +80,26 @@ function setBundledLookupFixture() {
   });
 }
 
-function createResolvedBundledSource(params: {
-  pluginId: string;
-  localPath: string;
-  npmSpec?: string;
-  configSchema?: Record<string, unknown>;
-  requiresConfig?: boolean;
-}) {
+function expectedSource(pluginId: string, configSchema?: Record<string, unknown>) {
   return {
-    pluginId: params.pluginId,
-    localPath: params.localPath,
-    npmSpec: params.npmSpec ?? `@openclaw/${params.pluginId}`,
-    ...(params.configSchema ? { configSchema: params.configSchema } : {}),
-    requiresConfig: params.requiresConfig ?? false,
+    pluginId,
+    localPath: appBundledPluginRoot(pluginId),
+    npmSpec: `@openclaw/${pluginId}`,
+    ...(configSchema ? { configSchema } : {}),
+    requiresConfig: Boolean(configSchema),
   };
 }
 
 function expectBundledSourceLookup(
   lookup: Parameters<typeof findBundledPluginSource>[0]["lookup"],
-  expected:
-    | {
-        pluginId: string;
-        localPath: string;
-      }
-    | undefined,
+  expected: Pick<ReturnType<typeof expectedSource>, "pluginId" | "localPath"> | undefined,
 ) {
   const resolved = findBundledPluginSource({ lookup });
   if (!expected) {
     expect(resolved).toBeUndefined();
     return;
   }
-  expect(resolved?.pluginId).toBe(expected.pluginId);
-  expect(resolved?.localPath).toBe(expected.localPath);
-}
-
-function expectBundledSourceLookupCase(params: {
-  lookup: Parameters<typeof findBundledPluginSource>[0]["lookup"];
-  expected:
-    | {
-        pluginId: string;
-        localPath: string;
-      }
-    | undefined;
-}) {
-  setBundledLookupFixture();
-  expectBundledSourceLookup(params.lookup, params.expected);
+  expect(resolved).toMatchObject(expected);
 }
 
 describe("bundled plugin sources", () => {
@@ -182,23 +137,10 @@ describe("bundled plugin sources", () => {
 
   it("resolves bundled sources keyed by plugin id", () => {
     setBundledDiscoveryCandidates([
-      createBundledCandidate({
-        origin: "global",
-        rootDir: "/global/feishu",
-        packageName: "@openclaw/feishu",
-      }),
-      createBundledCandidate({
-        rootDir: appBundledPluginRoot("feishu"),
-        packageName: "@openclaw/feishu",
-      }),
-      createBundledCandidate({
-        rootDir: appBundledPluginRoot("feishu-dup"),
-        packageName: "@openclaw/feishu",
-      }),
-      createBundledCandidate({
-        rootDir: appBundledPluginRoot("msteams"),
-        packageName: "@openclaw/msteams",
-      }),
+      createBundledCandidate("feishu", "global", "/global/feishu"),
+      createBundledCandidate("feishu"),
+      createBundledCandidate("feishu", "bundled", appBundledPluginRoot("feishu-dup")),
+      createBundledCandidate("msteams"),
     ]);
     setBundledManifestIdsByRoot({
       [appBundledPluginRoot("feishu")]: "feishu",
@@ -208,12 +150,7 @@ describe("bundled plugin sources", () => {
     const map = resolveBundledPluginSources({});
 
     expect(Array.from(map.keys())).toEqual(["feishu", "msteams"]);
-    expect(map.get("feishu")).toEqual(
-      createResolvedBundledSource({
-        pluginId: "feishu",
-        localPath: appBundledPluginRoot("feishu"),
-      }),
-    );
+    expect(map.get("feishu")).toEqual(expectedSource("feishu"));
   });
 
   it.each([
@@ -243,16 +180,12 @@ describe("bundled plugin sources", () => {
       undefined,
     ],
   ] as const)("%s", (_name, lookup, expected) => {
-    expectBundledSourceLookupCase({ lookup, expected });
+    setBundledLookupFixture();
+    expectBundledSourceLookup(lookup, expected);
   });
 
   it("marks bundled sources that require plugin config before activation", () => {
-    setBundledDiscoveryCandidates([
-      createBundledCandidate({
-        rootDir: appBundledPluginRoot("memory-lancedb"),
-        packageName: "@openclaw/memory-lancedb",
-      }),
-    ]);
+    setBundledDiscoveryCandidates([createBundledCandidate("memory-lancedb")]);
     setBundledManifestIdsByRoot({
       [appBundledPluginRoot("memory-lancedb")]: {
         id: "memory-lancedb",
@@ -261,15 +194,7 @@ describe("bundled plugin sources", () => {
     });
 
     expect(resolveBundledPluginSources({}).get("memory-lancedb")).toEqual(
-      createResolvedBundledSource({
-        pluginId: "memory-lancedb",
-        localPath: appBundledPluginRoot("memory-lancedb"),
-        configSchema: {
-          type: "object",
-          required: ["embedding"],
-        },
-        requiresConfig: true,
-      }),
+      expectedSource("memory-lancedb", { type: "object", required: ["embedding"] }),
     );
   });
 });

@@ -40,36 +40,8 @@ function discoveryFor(...plugins: TempPlugin[]): PluginDiscoveryResult {
   };
 }
 
-function writeChannelCapabilityPlugin(id: string): TempPlugin {
-  const plugin = writePlugin({
-    id,
-    body: `module.exports = {
-      id: ${JSON.stringify(id)},
-      register(api) {
-        if (api.registrationMode === "discovery") {
-          api.registerTranscriptSourceProvider({
-            id: ${JSON.stringify(`${id}-voice`)},
-            name: "Voice transcripts",
-            sourceKinds: ["meeting"],
-          });
-        }
-      },
-    };`,
-  });
-  fs.writeFileSync(
-    path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id,
-        channels: [id],
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      },
-      null,
-      2,
-    ),
-  );
-  return plugin;
-}
+const providerIds = (registry: ReturnType<typeof loadBundledCapabilityRuntimeRegistry>) =>
+  registry.providers.map((entry) => entry.provider.id);
 
 describe("loadBundledCapabilityRuntimeRegistry", () => {
   it("retains the bundled owner under an external shadow without rediscovering changed manifests", () => {
@@ -109,31 +81,25 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
     setGatewayPluginMetadataSnapshot(snapshot, { config, env });
     fs.writeFileSync(path.join(target.dir, "openclaw.plugin.json"), "{}");
 
-    const registry = loadBundledCapabilityRuntimeRegistry({ pluginIds: [target.id], config, env });
-    expect(registry.providers.map((entry) => entry.provider.id)).toEqual(["bundled-capability"]);
-    expect(registry.plugins.find((plugin) => plugin.id === target.id)?.origin).toBe("bundled");
-    const loadExplicitDiscovery = () =>
+    const load = (explicit = false) =>
       loadBundledCapabilityRuntimeRegistry({
         pluginIds: [target.id],
         config,
         env,
-        discovery: discoveryFor(target),
+        ...(explicit && { discovery: discoveryFor(target) }),
       });
-    expect(loadExplicitDiscovery().providers.map((entry) => entry.provider.id)).toEqual([
-      "bundled-capability",
-    ]);
-    const freshRegistry = withPluginCache(createPluginCache(), loadExplicitDiscovery);
+    const registry = load();
+    expect(providerIds(registry)).toEqual(["bundled-capability"]);
+    expect(registry.plugins.find((plugin) => plugin.id === target.id)?.origin).toBe("bundled");
+    expect(providerIds(load(true))).toEqual(["bundled-capability"]);
+    const freshRegistry = withPluginCache(createPluginCache(), () => load(true));
     expect(freshRegistry.providers).toEqual([]);
     expect(freshRegistry.diagnostics).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ pluginId: target.id, message: "plugin manifest requires id" }),
       ]),
     );
-    expect(
-      loadBundledCapabilityRuntimeRegistry({ pluginIds: [target.id], config, env }).providers.map(
-        (entry) => entry.provider.id,
-      ),
-    ).toEqual(["bundled-capability"]);
+    expect(providerIds(load())).toEqual(["bundled-capability"]);
   });
 
   it("loads only the requested bundled plugin without replacing the active registry", () => {
@@ -197,7 +163,22 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
   });
 
   it("registers channel capabilities during discovery without replacing the active registry", () => {
-    const target = writeChannelCapabilityPlugin("capability-channel");
+    const target = writePlugin({
+      id: "capability-channel",
+      registration: `if (api.registrationMode === "discovery") {
+        api.registerTranscriptSourceProvider({
+          id: "capability-channel-voice", name: "Voice transcripts", sourceKinds: ["meeting"],
+        });
+      }`,
+    });
+    fs.writeFileSync(
+      path.join(target.dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: target.id,
+        channels: [target.id],
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      }),
+    );
     const active = createEmptyPluginRegistry();
     setActivePluginRegistry(active, "existing-channel-registry");
     const registry = loadBundledCapabilityRuntimeRegistry({
