@@ -3,7 +3,6 @@
  */
 import "./server-worker-free.test-support.js";
 import fs from "node:fs";
-import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createInfoErrorLogger,
@@ -56,7 +55,10 @@ import { registerGatewayStartupAdmissionTests } from "./server-startup-admission
 import { restartSentinelMocks } from "./server-startup-background.test-support.js";
 import "./server-startup-outcomes.test-support.js";
 import { markGatewayStartupMainSessionOrphans } from "./server-startup-observers.js";
-import { registerGatewayStartupReadinessTests } from "./server-startup-readiness.test-support.js";
+import {
+  registerGatewayStartupAcpReadinessTests,
+  registerGatewayStartupReadinessTests,
+} from "./server-startup-readiness.test-support.js";
 import { transcriptSidecarMocks } from "./server-startup-transcripts.test-support.js";
 
 type PluginHookGatewayStartEvent = Parameters<PluginHookHandlerMap["gateway_start"]>[0];
@@ -3028,67 +3030,13 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(trace.measures).not.toContain("sidecars.restart-sentinel");
   });
 
-  it.each([
-    { direction: "forward", shiftedWallClockMs: 10_000, monotonicMs: 50, timedOut: false },
-    { direction: "backward", shiftedWallClockMs: -10_000, monotonicMs: 5_000, timedOut: true },
-  ])(
-    "waits for a healthy ACP runtime backend before startup identity reconcile after a $direction wall-clock shift",
-    async ({ shiftedWallClockMs, monotonicMs, timedOut }) => {
-      const trace = createStartupTraceRecorder();
-      let healthy = false;
-      let wallClockMs = 10_000;
-      const wallClockNow = vi.spyOn(Date, "now").mockImplementation(() => wallClockMs);
-      const monotonicNow = vi.spyOn(performance, "now").mockReturnValue(0);
-      const probeHealth = vi.fn(() => healthy);
-      hoisted.getAcpRuntimeBackend.mockImplementation((id?: string) => ({
-        id: id ?? "acpx",
-        runtime: {},
-        healthy: probeHealth,
-      }));
-
-      try {
-        await startGatewaySidecars({
-          cfg: {
-            hooks: { internal: { enabled: false } },
-            acp: { enabled: true, backend: "acpx" },
-          } as never,
-          startupTrace: trace.startupTrace,
-        });
-
-        await waitForGatewayTestState(() => {
-          expect(hoisted.getAcpRuntimeBackend).toHaveBeenCalledWith("acpx");
-        });
-        expect(hoisted.reconcilePendingSessionIdentities).not.toHaveBeenCalled();
-
-        wallClockMs += shiftedWallClockMs;
-        monotonicNow.mockReturnValue(monotonicMs);
-        if (!timedOut) {
-          await waitForGatewayTestState(() => {
-            expect(probeHealth.mock.calls.length).toBeGreaterThan(1);
-          });
-          expect(hoisted.reconcilePendingSessionIdentities).not.toHaveBeenCalled();
-          healthy = true;
-        }
-        await waitForGatewayTestState(() => {
-          expect(hoisted.reconcilePendingSessionIdentities).toHaveBeenCalledTimes(1);
-        });
-        expect(trace.measures).toContain("sidecars.acp.runtime-ready");
-        expect(trace.measures).toContain("sidecars.acp.identity-reconcile");
-        expect(trace.details).toContainEqual({
-          name: "sidecars.acp.runtime-ready",
-          metrics: [
-            ["readyCount", timedOut ? 0 : 1],
-            ["backend", "acpx"],
-          ],
-        });
-      } finally {
-        healthy = true;
-        wallClockNow.mockRestore();
-        monotonicNow.mockRestore();
-        await waitForGatewayTestState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      }
-    },
-  );
+  registerGatewayStartupAcpReadinessTests({
+    startSidecars: startGatewaySidecars,
+    createTrace: createStartupTraceRecorder,
+    waitForState: waitForGatewayTestState,
+    getAcpRuntimeBackend: hoisted.getAcpRuntimeBackend,
+    reconcilePendingSessionIdentities: hoisted.reconcilePendingSessionIdentities,
+  });
 
   it.each(["suspension", "backend readiness", "manager import", "reconciliation"] as const)(
     "retires unstarted ACP reconciliation when close wins during %s",
