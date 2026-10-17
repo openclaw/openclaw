@@ -44,6 +44,13 @@ const PUBLISHER_POLICY = {
   schema: "openclaw.plugin-npm-publisher-policy/v1",
   sha256: "6a40c33756ff1016744bb929660c1d9bf271cd478b0b9811fa8e2d8f1f775e95",
 };
+const WORKFLOW_BINDING = {
+  repository: REPOSITORY,
+  workflowEvent: "workflow_dispatch",
+  workflowHeadBranch: "main",
+  workflowPath: WORKFLOW_PATH,
+  workflowSha: WORKFLOW_SHA,
+};
 
 const tempDirs: string[] = [];
 
@@ -91,6 +98,16 @@ function writeTarOctal(header: Buffer, offset: number, length: number, value: nu
   writeTarString(header, offset, length, `${raw} \0`);
 }
 
+function checksumTarHeader(header: Buffer) {
+  header.fill(0x20, 148, 156);
+  writeTarOctal(
+    header,
+    148,
+    8,
+    header.reduce((sum, byte) => sum + byte, 0),
+  );
+}
+
 type TarEntry = {
   content?: Buffer | string;
   format?: "ustar" | "v7";
@@ -126,11 +143,7 @@ function tarEntry(entry: TarEntry): Buffer {
   if (entry.prefix) {
     writeTarString(header, 345, 155, entry.prefix);
   }
-  let checksum = 0;
-  for (const byte of header) {
-    checksum += byte;
-  }
-  writeTarOctal(header, 148, 8, checksum);
+  checksumTarHeader(header);
   const padding = Buffer.alloc((512 - (content.length % 512)) % 512);
   return Buffer.concat([header, content, padding]);
 }
@@ -144,12 +157,7 @@ function mutateTarEntryHeader(
   const header = result.subarray(0, 512);
   mutate(header);
   if (!options.preserveChecksumBytes) {
-    header.fill(0x20, 148, 156);
-    let checksum = 0;
-    for (const byte of header) {
-      checksum += byte;
-    }
-    writeTarOctal(header, 148, 8, checksum);
+    checksumTarHeader(header);
   }
   return result;
 }
@@ -175,8 +183,10 @@ function stageTarball(build: (markerPath: string) => Buffer) {
   return fixture;
 }
 
-function expectTarballError(artifactDir: string, message?: RegExp) {
-  expect(() => createPluginPublicationArtifact(publicationParams(artifactDir))).toThrow(message);
+function expectTarballError(artifactDir: string, message?: RegExp, overrides = {}) {
+  expect(() => createPluginPublicationArtifact(publicationParams(artifactDir, overrides))).toThrow(
+    message,
+  );
 }
 
 function consumerTarEntries(file: string) {
@@ -218,6 +228,17 @@ type ZipFile = {
   nameBytes?: Buffer;
 };
 
+function zipValues(record: Buffer, width: 2 | 4, offset: number, ...values: number[]) {
+  values.forEach((value, index) => {
+    if (width === 2) {
+      record.writeUInt16LE(value, offset + index * width);
+    } else {
+      record.writeUInt32LE(value, offset + index * width);
+    }
+  });
+  return record;
+}
+
 function createZip(files: ZipFile[]): Buffer {
   const localParts: Buffer[] = [];
   const centralParts: Buffer[] = [];
@@ -232,62 +253,46 @@ function createZip(files: ZipFile[]): Buffer {
     const checksum = crc32(file.bytes);
     const flags = file.flags ?? (file.descriptor ? 0x0008 : 0);
     const local = Buffer.alloc(30);
-    local.writeUInt32LE(0x04034b50, 0);
-    local.writeUInt16LE(20, 4);
-    local.writeUInt16LE(flags, 6);
-    local.writeUInt16LE(compression, 8);
-    local.writeUInt16LE(0, 10);
-    local.writeUInt16LE(0, 12);
-    local.writeUInt32LE(file.localCrc ?? (file.descriptor ? 0 : checksum), 14);
-    local.writeUInt32LE(file.descriptor ? 0 : compressed.length, 18);
-    local.writeUInt32LE(file.descriptor ? 0 : expandedSize, 22);
-    local.writeUInt16LE(localName.length, 26);
-    local.writeUInt16LE(0, 28);
+    zipValues(local, 4, 0, 0x04034b50);
+    zipValues(local, 2, 4, 20, flags, compression);
+    zipValues(
+      local,
+      4,
+      14,
+      file.localCrc ?? (file.descriptor ? 0 : checksum),
+      file.descriptor ? 0 : compressed.length,
+      file.descriptor ? 0 : expandedSize,
+    );
+    zipValues(local, 2, 26, localName.length);
     const descriptor = file.descriptor
-      ? (() => {
-          const value = Buffer.alloc(16);
-          value.writeUInt32LE(0x08074b50, 0);
-          value.writeUInt32LE(file.descriptorCrc ?? checksum, 4);
-          value.writeUInt32LE(compressed.length, 8);
-          value.writeUInt32LE(expandedSize, 12);
-          return value;
-        })()
+      ? zipValues(
+          Buffer.alloc(16),
+          4,
+          0,
+          0x08074b50,
+          file.descriptorCrc ?? checksum,
+          compressed.length,
+          expandedSize,
+        )
       : Buffer.alloc(0);
     const gap = file.gapAfter ?? Buffer.alloc(0);
     localParts.push(local, localName, compressed, descriptor, gap);
 
     const central = Buffer.alloc(46);
-    central.writeUInt32LE(0x02014b50, 0);
-    central.writeUInt16LE(0x0314, 4);
-    central.writeUInt16LE(20, 6);
-    central.writeUInt16LE(flags, 8);
-    central.writeUInt16LE(compression, 10);
-    central.writeUInt16LE(0, 12);
-    central.writeUInt16LE(0, 14);
-    central.writeUInt32LE(checksum, 16);
-    central.writeUInt32LE(compressed.length, 20);
-    central.writeUInt32LE(expandedSize, 24);
-    central.writeUInt16LE(name.length, 28);
-    central.writeUInt16LE(0, 30);
-    central.writeUInt16LE(0, 32);
-    central.writeUInt16LE(0, 34);
-    central.writeUInt16LE(0, 36);
-    central.writeUInt32LE((0o100600 * 0x10000) >>> 0, 38);
-    central.writeUInt32LE(localOffset, 42);
+    zipValues(central, 4, 0, 0x02014b50);
+    zipValues(central, 2, 4, 0x0314, 20, flags, compression);
+    zipValues(central, 4, 16, checksum, compressed.length, expandedSize);
+    zipValues(central, 2, 28, name.length);
+    zipValues(central, 4, 38, (0o100600 * 0x10000) >>> 0, localOffset);
     centralParts.push(central, name);
     localOffset +=
       local.length + localName.length + compressed.length + descriptor.length + gap.length;
   }
   const centralDirectory = Buffer.concat(centralParts);
   const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(0, 4);
-  end.writeUInt16LE(0, 6);
-  end.writeUInt16LE(files.length, 8);
-  end.writeUInt16LE(files.length, 10);
-  end.writeUInt32LE(centralDirectory.length, 12);
-  end.writeUInt32LE(localOffset, 16);
-  end.writeUInt16LE(0, 20);
+  zipValues(end, 4, 0, 0x06054b50);
+  zipValues(end, 2, 8, files.length, files.length);
+  zipValues(end, 4, 12, centralDirectory.length, localOffset);
   return Buffer.concat([...localParts, centralDirectory, end]);
 }
 
@@ -319,6 +324,10 @@ function expectZipFileError(name: string, options: Partial<ZipFile>, message: Re
   expectZipError([zipFile(name, "x", options)], message);
 }
 
+function lifecycleScript(markerPath: string, content: string) {
+  return `node -e "require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, '${content}')"`;
+}
+
 function metaPackageJson(markerPath: string, overrides: Record<string, unknown> = {}): string {
   return `${JSON.stringify(
     {
@@ -326,8 +335,8 @@ function metaPackageJson(markerPath: string, overrides: Record<string, unknown> 
       version: PACKAGE_VERSION,
       type: "module",
       scripts: {
-        preinstall: `node -e "require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'bad')"`,
-        postinstall: `node -e "require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'bad')"`,
+        preinstall: lifecycleScript(markerPath, "bad"),
+        postinstall: lifecycleScript(markerPath, "bad"),
       },
       openclaw: {
         release: {
@@ -369,20 +378,17 @@ function createFixture(
   options: {
     packageJson?: string;
     publicationOverrides?: Record<string, unknown>;
-    tarEntries?: TarEntry[];
   } = {},
 ) {
   const { root, artifactDir, markerPath, tarballPath } = stagingFixture("lifecycle-ran");
   const outputDir = path.join(root, "verified");
   const packageJson = options.packageJson ?? metaPackageJson(markerPath);
-  const tarball = createTarball(
-    options.tarEntries ?? [
-      { path: "package/", type: "5" },
-      { content: packageJson, path: "package/package.json" },
-      { content: '{"id":"meta"}\n', path: "package/openclaw.plugin.json" },
-      { content: "export default {};\n", path: "package/index.js" },
-    ],
-  );
+  const tarball = createTarball([
+    { path: "package/", type: "5" },
+    { content: packageJson, path: "package/package.json" },
+    { content: '{"id":"meta"}\n', path: "package/openclaw.plugin.json" },
+    { content: "export default {};\n", path: "package/index.js" },
+  ]);
   writeFileSync(tarballPath, tarball);
   const created = createPluginPublicationArtifact(
     publicationParams(artifactDir, options.publicationOverrides),
@@ -398,23 +404,8 @@ function createFixture(
   const workflowJobsPath = path.join(root, "jobs.json");
   writeFileSync(zipPath, zip);
   writeArtifactMetadata(metadataPath, zip);
-  writeWorkflowRunMetadata(workflowRunPath);
-  writeFileSync(
-    workflowJobsPath,
-    `${JSON.stringify({
-      total_count: 1,
-      jobs: [
-        {
-          name: PRODUCER_JOB_NAME,
-          run_id: RUN_ID,
-          run_attempt: RUN_ATTEMPT,
-          head_sha: WORKFLOW_SHA,
-          status: "completed",
-          conclusion: "success",
-        },
-      ],
-    })}\n`,
-  );
+  writeJson(workflowRunPath, workflowRunMetadata());
+  writeJson(workflowJobsPath, workflowJobsMetadata());
   return {
     artifactDir,
     created,
@@ -461,12 +452,32 @@ function workflowRunMetadata(
   };
 }
 
-function writeArtifactMetadata(metadataPath: string, zip: Buffer): void {
-  writeFileSync(metadataPath, `${JSON.stringify(artifactMetadataFor(zip))}\n`);
+function workflowJobsMetadata(
+  name = PRODUCER_JOB_NAME,
+  attempt = RUN_ATTEMPT,
+  conclusion = "success",
+) {
+  return {
+    total_count: 1,
+    jobs: [
+      {
+        name,
+        run_id: RUN_ID,
+        run_attempt: attempt,
+        head_sha: WORKFLOW_SHA,
+        status: "completed",
+        conclusion,
+      },
+    ],
+  };
 }
 
-function writeWorkflowRunMetadata(workflowRunPath: string): void {
-  writeFileSync(workflowRunPath, `${JSON.stringify(workflowRunMetadata())}\n`);
+function writeJson(file: string, value: unknown) {
+  writeFileSync(file, `${JSON.stringify(value)}\n`);
+}
+
+function writeArtifactMetadata(metadataPath: string, zip: Buffer): void {
+  writeJson(metadataPath, artifactMetadataFor(zip));
 }
 
 function createDownloadFixture(
@@ -481,14 +492,10 @@ function createDownloadFixture(
     artifactId: ARTIFACT_ID,
     artifactName: ARTIFACT_NAME,
     artifactSizeBytes: zip.length,
-    repository: REPOSITORY,
+    ...WORKFLOW_BINDING,
     runStatePolicy: "completed-success",
     runAttempt,
     runId: RUN_ID,
-    workflowEvent: "workflow_dispatch",
-    workflowHeadBranch: "main",
-    workflowPath: WORKFLOW_PATH,
-    workflowSha: WORKFLOW_SHA,
   };
   const artifactMetadata = {
     ...artifactMetadataFor(zip),
@@ -553,14 +560,18 @@ function verifyFixture(
     outputDir: fixture.outputDir,
     producerRunAttempt: RUN_ATTEMPT,
     producerRunId: RUN_ID,
-    repository: REPOSITORY,
-    workflowEvent: "workflow_dispatch",
-    workflowHeadBranch: "main",
-    workflowPath: WORKFLOW_PATH,
+    ...WORKFLOW_BINDING,
     workflowRunMetadataPath: fixture.workflowRunPath,
-    workflowSha: WORKFLOW_SHA,
     ...overrides,
   });
+}
+
+function expectVerifyError(
+  fixture: ReturnType<typeof createFixture>,
+  message?: string | RegExp,
+  overrides = {},
+) {
+  expect(() => verifyFixture(fixture, overrides)).toThrow(message);
 }
 
 it.each(["npm-readback"])("retains historical alpha artifact readback through %s", (route) => {
@@ -591,16 +602,10 @@ describe("plugin publication artifact", () => {
       route: "npm-token-placeholder-recovery",
       tag: "beta",
     });
-    expect(() =>
-      verifyFixture(fixture, {
-        authMode: "release-token",
-      }),
-    ).toThrow("auth mode must be token-bootstrap");
-    expect(() =>
-      verifyFixture(fixture, {
-        capability: "first-publication",
-      }),
-    ).toThrow("capability must be placeholder-recovery");
+    expectVerifyError(fixture, "auth mode must be token-bootstrap", { authMode: "release-token" });
+    expectVerifyError(fixture, "capability must be placeholder-recovery", {
+      capability: "first-publication",
+    });
   });
 
   it("binds exact tarball size and canonical inventory", () => {
@@ -621,30 +626,26 @@ describe("plugin publication artifact", () => {
     expect(existsSync(fixture.markerPath)).toBe(false);
 
     const wrongSizeFixture = createFixture();
-    expect(() =>
-      verifyFixture(wrongSizeFixture, {
-        expectedTarballSizeBytes: wrongSizeFixture.tarball.length + 1,
-      }),
-    ).toThrow("tarball size does not match");
+    expectVerifyError(wrongSizeFixture, "tarball size does not match", {
+      expectedTarballSizeBytes: wrongSizeFixture.tarball.length + 1,
+    });
 
     const wrongInventoryFixture = createFixture();
-    expect(() =>
-      verifyFixture(wrongInventoryFixture, {
-        expectedInventory: expectedInventory.slice(0, -1),
-      }),
-    ).toThrow("tarball inventory does not match");
+    expectVerifyError(wrongInventoryFixture, "tarball inventory does not match", {
+      expectedInventory: expectedInventory.slice(0, -1),
+    });
   });
 
   it("requires a fresh non-symlink output directory", () => {
     const existingFixture = createFixture();
     mkdirSync(existingFixture.outputDir);
-    expect(() => verifyFixture(existingFixture)).toThrow("must not already exist");
+    expectVerifyError(existingFixture, "must not already exist");
 
     const symlinkFixture = createFixture();
     const symlinkTarget = path.join(symlinkFixture.root, "output-target");
     mkdirSync(symlinkTarget);
     symlinkSync(symlinkTarget, symlinkFixture.outputDir);
-    expect(() => verifyFixture(symlinkFixture)).toThrow("must not already exist");
+    expectVerifyError(symlinkFixture, "must not already exist");
   });
 
   it("binds the exact ClawHub token-release manual override reason", () => {
@@ -662,12 +663,10 @@ describe("plugin publication artifact", () => {
       requiresManualOverride: true,
       route: "clawhub-token-release",
     });
-    expect(() =>
-      verifyFixture(fixture, {
-        manualOverrideReason:
-          "OpenClaw Release Publish run 12345 approved token release for v2026.7.1-beta.4",
-      }),
-    ).toThrow(/does not canonically bind/u);
+    expectVerifyError(fixture, /does not canonically bind/u, {
+      manualOverrideReason:
+        "OpenClaw Release Publish run 12345 approved token release for v2026.7.1-beta.4",
+    });
   });
 
   it("rejects invalid npm policy and npm controls on a ClawHub route", () => {
@@ -680,7 +679,7 @@ describe("plugin publication artifact", () => {
       { publisherPolicy: { ...PUBLISHER_POLICY, extra: true } },
       { requiresManualOverride: true, route: "clawhub-token-release" },
     ]) {
-      expect(() => verifyFixture(fixture, controls)).toThrow();
+      expectVerifyError(fixture, undefined, controls);
     }
   });
 
@@ -724,10 +723,8 @@ describe("plugin publication artifact", () => {
     ]) {
       const fixture = createFixture();
       const run = JSON.parse(readFileSync(fixture.workflowRunPath, "utf8"));
-      writeFileSync(fixture.workflowRunPath, `${JSON.stringify({ ...run, ...overrides })}\n`);
-      expect(() => verifyFixture(fixture)).toThrow(
-        /workflow run does not match the immutable publication tuple/u,
-      );
+      writeJson(fixture.workflowRunPath, { ...run, ...overrides });
+      expectVerifyError(fixture, /workflow run does not match the immutable publication tuple/u);
     }
   });
 
@@ -739,7 +736,7 @@ describe("plugin publication artifact", () => {
     ({ status, conclusion }) => {
       const fixture = createFixture();
       const workflowRun = workflowRunMetadata(RUN_ATTEMPT, status, conclusion);
-      writeFileSync(fixture.workflowRunPath, `${JSON.stringify(workflowRun)}\n`);
+      writeJson(fixture.workflowRunPath, workflowRun);
       const controls = {
         consumerRunAttempt: RUN_ATTEMPT,
         producerJobName: PRODUCER_JOB_NAME,
@@ -753,9 +750,11 @@ describe("plugin publication artifact", () => {
 
       if (status === "completed") {
         workflowRun.conclusion = "cancelled";
-        writeFileSync(fixture.workflowRunPath, `${JSON.stringify(workflowRun)}\n`);
-        expect(() => verifyFixture(fixture, controls)).toThrow(
+        writeJson(fixture.workflowRunPath, workflowRun);
+        expectVerifyError(
+          fixture,
           "Current producer workflow attempt must still be active or sealed.",
+          controls,
         );
       }
     },
@@ -857,50 +856,56 @@ describe("plugin publication artifact", () => {
     expect(requests).toBe(1);
   });
 
-  it.each([downloadActionsArtifactArchive])(
-    "does not retry before Retry-After when it exceeds the shared deadline (%#)",
-    async (download) => {
-      const fixture = createDownloadFixture();
-      let requests = 0;
-      await expect(
-        download({
-          expected: fixture.expected,
-          deadlineMs: Date.now() + 500,
-          fetchImpl: async (input: string | URL | Request) => {
-            requests += 1;
-            return requests === 1
-              ? new Response("rate limited", { status: 429, headers: { "retry-after": "60" } })
-              : fixture.fetchImpl(input);
-          },
-          retryDelayMs: 1,
-          token: "test-token",
-        }),
-      ).rejects.toThrow(/deadline/u);
-      expect(requests).toBe(1);
-    },
-  );
-
-  it("does not retry or retain an archive whose bytes contradict its approved digest", async () => {
+  it("does not retry before Retry-After when it exceeds the shared deadline", async () => {
     const fixture = createDownloadFixture();
-    const archivePath = path.join(tempDir(), "retained.zip");
-    const corrupt = Buffer.from(fixture.zip);
-    corrupt.writeUInt32LE(0, 0);
-    let archiveRequests = 0;
+    let requests = 0;
     await expect(
       downloadFixture(fixture, {
-        archivePath,
+        deadlineMs: Date.now() + 500,
         fetchImpl: async (input: string | URL | Request) => {
-          if (String(input).endsWith("/zip")) {
-            archiveRequests += 1;
-            return new Response(new Uint8Array(corrupt));
-          }
-          return fixture.fetchImpl(input);
+          requests += 1;
+          return requests === 1
+            ? new Response("rate limited", { status: 429, headers: { "retry-after": "60" } })
+            : fixture.fetchImpl(input);
         },
       }),
-    ).rejects.toThrow(/digest/u);
-    expect(archiveRequests).toBe(1);
-    expect(existsSync(archivePath)).toBe(false);
+    ).rejects.toThrow(/deadline/u);
+    expect(requests).toBe(1);
   });
+
+  it.each([false, true])(
+    "rejects corrupt archive bytes (already retained: %s)",
+    async (retained) => {
+      const fixture = createDownloadFixture();
+      const archivePath = path.join(tempDir(), "retained.zip");
+      const corrupt = Buffer.from(fixture.zip);
+      corrupt.writeUInt32LE(0, 0);
+      if (retained) {
+        writeFileSync(archivePath, corrupt);
+      }
+      let archiveRequests = 0;
+      await expect(
+        downloadFixture(fixture, {
+          archivePath,
+          fetchImpl: async (input: string | URL | Request) => {
+            if (String(input).endsWith("/zip")) {
+              archiveRequests += 1;
+              if (!retained) {
+                return new Response(new Uint8Array(corrupt));
+              }
+            }
+            return fixture.fetchImpl(input);
+          },
+        }),
+      ).rejects.toThrow(/digest/u);
+      expect(archiveRequests).toBe(retained ? 0 : 1);
+      if (retained) {
+        expect(readFileSync(archivePath)).toEqual(corrupt);
+      } else {
+        expect(existsSync(archivePath)).toBe(false);
+      }
+    },
+  );
 
   it("recovers HTTP transfers and reuses only verified bytes after revalidating the producer", async () => {
     const fixture = createDownloadFixture();
@@ -969,28 +974,6 @@ describe("plugin publication artifact", () => {
     }
   });
 
-  it("refuses changed retained bytes instead of overwriting them on re-entry", async () => {
-    const fixture = createDownloadFixture();
-    const archivePath = path.join(tempDir(), "retained.zip");
-    const corrupt = Buffer.from(fixture.zip);
-    corrupt.writeUInt32LE(0, 0);
-    writeFileSync(archivePath, corrupt);
-    let archiveRequests = 0;
-    await expect(
-      downloadFixture(fixture, {
-        archivePath,
-        fetchImpl: async (input: string | URL | Request) => {
-          if (String(input).endsWith("/zip")) {
-            archiveRequests += 1;
-          }
-          return fixture.fetchImpl(input);
-        },
-      }),
-    ).rejects.toThrow(/digest/u);
-    expect(archiveRequests).toBe(0);
-    expect(readFileSync(archivePath)).toEqual(corrupt);
-  });
-
   it("reuses only an exact successful producer job from the current or a prior attempt", async () => {
     const producerJobName = "Pack immutable ClawHub bootstrap artifacts";
 
@@ -1007,22 +990,9 @@ describe("plugin publication artifact", () => {
         status: producerAttempt === consumerAttempt ? "in_progress" : "completed",
         conclusion: producerAttempt === consumerAttempt ? null : "failure",
       });
-      const workflowJobs = {
-        total_count: 1,
-        jobs: [
-          {
-            name: producerJobName,
-            run_id: RUN_ID,
-            run_attempt: producerAttempt,
-            head_sha: WORKFLOW_SHA,
-            status: "completed",
-            conclusion: producerConclusion,
-          },
-        ],
-      };
       fixture.bodies.set(
         `/actions/runs/${RUN_ID}/attempts/${producerAttempt}/jobs?per_page=100`,
-        workflowJobs,
+        workflowJobsMetadata(producerJobName, producerAttempt, producerConclusion),
       );
 
       return downloadFixture(fixture, {
@@ -1054,36 +1024,33 @@ describe("plugin publication artifact", () => {
   it("rejects ZIP traversal, additional files, and byte tampering", () => {
     const fixture = createFixture();
     const manifest = readFileSync(fixture.created.manifestPath);
-    const malformedArtifacts: Array<{
-      expected: RegExp;
-      files: Array<{ bytes: Buffer; name: string }>;
-    }> = [
-      {
-        expected: /Unsafe ZIP entry path/u,
-        files: [
-          { bytes: fixture.tarball, name: TARBALL_NAME },
-          { bytes: manifest, name: "../plugin-publication-manifest.json" },
+    const malformedArtifacts: Array<[RegExp, ZipFile[]]> = [
+      [
+        /Unsafe ZIP entry path/u,
+        [
+          zipFile(TARBALL_NAME, fixture.tarball),
+          zipFile("../plugin-publication-manifest.json", manifest),
         ],
-      },
-      {
-        expected: /must contain between 2 and 2 exact files/u,
-        files: [
-          { bytes: fixture.tarball, name: TARBALL_NAME },
-          { bytes: manifest, name: "plugin-publication-manifest.json" },
-          { bytes: Buffer.from("unexpected"), name: "extra.txt" },
+      ],
+      [
+        /must contain between 2 and 2 exact files/u,
+        [
+          zipFile(TARBALL_NAME, fixture.tarball),
+          zipFile("plugin-publication-manifest.json", manifest),
+          zipFile("extra.txt", "unexpected"),
         ],
-      },
+      ],
     ];
-    for (const { expected, files } of malformedArtifacts) {
+    for (const [expected, files] of malformedArtifacts) {
       replaceArtifactZip(fixture, files);
-      expect(() => verifyFixture(fixture)).toThrow(expected);
+      expectVerifyError(fixture, expected);
     }
 
     const tamperFixture = createFixture();
     const tampered = Buffer.from(tamperFixture.zip);
     tampered[35] = tampered.readUInt8(35) ^ 0xff;
     writeFileSync(tamperFixture.zipPath, tampered);
-    expect(() => verifyFixture(tamperFixture)).toThrow(/digest/u);
+    expectVerifyError(tamperFixture, /digest/u);
   });
 
   it("rejects changed ZIP payload bytes with matching header checksums", () => {
@@ -1157,26 +1124,21 @@ describe("plugin publication artifact", () => {
     const fixture = createFixture();
     const manifest = readFileSync(fixture.created.manifestPath);
     const oversizedManifest = Buffer.alloc(16 * 1024 * 1024 + 1, 0x20);
-
-    replaceArtifactZip(fixture, [
-      zipFile(TARBALL_NAME, fixture.tarball),
-      zipFile("plugin-publication-manifest.json", oversizedManifest, { compression: 8 }),
-    ]);
-    expect(() => verifyFixture(fixture)).toThrow(
-      /entry is too large: plugin-publication-manifest\.json/u,
-    );
-
-    replaceArtifactZip(fixture, [
-      zipFile(TARBALL_NAME, fixture.tarball),
-      zipFile("plugin-publication-manifest.json", oversizedManifest, {
-        compression: 8,
-        declaredExpandedSize: 1,
-      }),
-    ]);
-    expect(() => verifyFixture(fixture)).toThrow(
-      /entry expansion exceeds its allowed range: plugin-publication-manifest\.json/u,
-    );
-
+    for (const declaredExpandedSize of [undefined, 1]) {
+      replaceArtifactZip(fixture, [
+        zipFile(TARBALL_NAME, fixture.tarball),
+        zipFile("plugin-publication-manifest.json", oversizedManifest, {
+          compression: 8,
+          declaredExpandedSize,
+        }),
+      ]);
+      expectVerifyError(
+        fixture,
+        declaredExpandedSize === undefined
+          ? /entry is too large: plugin-publication-manifest\.json/u
+          : /entry expansion exceeds its allowed range: plugin-publication-manifest\.json/u,
+      );
+    }
     replaceArtifactZip(fixture, [
       zipFile(TARBALL_NAME, fixture.tarball, {
         compression: 8,
@@ -1184,7 +1146,8 @@ describe("plugin publication artifact", () => {
       }),
       zipFile("plugin-publication-manifest.json", manifest),
     ]);
-    expect(() => verifyFixture(fixture)).toThrow(
+    expectVerifyError(
+      fixture,
       new RegExp(`entry is too large: ${TARBALL_NAME.replaceAll(".", "\\.")}`, "u"),
     );
   });
@@ -1224,9 +1187,7 @@ describe("plugin publication artifact", () => {
         Buffer.alloc(512),
         tarEntry({
           content: metaPackageJson(marker, {
-            scripts: {
-              postinstall: `node -e "require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'hidden')"`,
-            },
+            scripts: { postinstall: lifecycleScript(marker, "hidden") },
           }),
           path: "package/package.json",
         }),
@@ -1246,7 +1207,6 @@ describe("plugin publication artifact", () => {
         { content: metaPackageJson(markerPath), path: "package/package.json" },
       ]),
     );
-
     expectTarballError(artifactDir, /Directory tar entry "package\/" must have size zero/u);
   });
 
@@ -1260,7 +1220,6 @@ describe("plugin publication artifact", () => {
         },
       ]),
     );
-
     expect(consumerTarEntries(tarballPath).at(-1)).toMatchObject({
       path: "package/package.json/",
       size: 0,
@@ -1269,35 +1228,27 @@ describe("plugin publication artifact", () => {
     expectTarballError(artifactDir, /Non-directory tar entry must not end with a slash/u);
   });
 
-  it.each([{ path: "package.json", prefix: " package", field: "prefix" }])(
-    "rejects whitespace-bearing USTAR $field fields before manifest selection",
-    (entry) => {
-      const { artifactDir, markerPath } = stageTarball((marker) =>
-        createTarball([
-          { path: "package/", type: "5" },
-          {
-            content: metaPackageJson(marker, {
-              scripts: {
-                postinstall: `node -e "require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'smuggled')"`,
-              },
-            }),
-            path: entry.path,
-            prefix: entry.prefix,
-          },
-          { content: metaPackageJson(marker), path: "package/package.json" },
-        ]),
-      );
+  it("rejects whitespace-bearing USTAR prefix fields before manifest selection", () => {
+    const { artifactDir, markerPath } = stageTarball((marker) =>
+      createTarball([
+        { path: "package/", type: "5" },
+        {
+          content: metaPackageJson(marker, {
+            scripts: { postinstall: lifecycleScript(marker, "smuggled") },
+          }),
+          path: "package.json",
+          prefix: " package",
+        },
+        { content: metaPackageJson(marker), path: "package/package.json" },
+      ]),
+    );
 
-      expectTarballError(
-        artifactDir,
-        new RegExp(
-          `tar entry ${entry.field} changes under the pinned ClawHub path normalization`,
-          "u",
-        ),
-      );
-      expect(existsSync(markerPath)).toBe(false);
-    },
-  );
+    expectTarballError(
+      artifactDir,
+      /tar entry prefix changes under the pinned ClawHub path normalization/u,
+    );
+    expect(existsSync(markerPath)).toBe(false);
+  });
 
   it("rejects V7 headers whose prefix bytes disagree with node-tar path semantics", () => {
     const { artifactDir, tarballPath } = stageTarball((markerPath) =>
@@ -1311,7 +1262,6 @@ describe("plugin publication artifact", () => {
         },
       ]),
     );
-
     const consumerPaths = consumerTarEntries(tarballPath).map((entry) => entry.path);
     expect(consumerPaths).toContain("package.json");
     expect(consumerPaths).not.toContain("package/package.json");
@@ -1356,9 +1306,7 @@ describe("plugin publication artifact", () => {
 
     const nestedManifest = tarEntry({
       content: metaPackageJson(markerPath, {
-        scripts: {
-          postinstall: `node -e "require('node:fs').writeFileSync(${JSON.stringify(markerPath)}, 'smuggled')"`,
-        },
+        scripts: { postinstall: lifecycleScript(markerPath, "smuggled") },
         tag: "latest",
       }),
       path: "package/package.json",
@@ -1373,14 +1321,7 @@ describe("plugin publication artifact", () => {
     );
     writeFileSync(
       tarballPath,
-      createTarballFromParts([
-        tarEntry({ path: "package/", type: "5" }),
-        tarEntry({
-          content: metaPackageJson(markerPath),
-          path: "package/package.json",
-        }),
-        decoy,
-      ]),
+      createTarballFromParts([...packageEntries(markerPath).map(tarEntry), decoy]),
     );
 
     const consumerPaths = consumerTarEntries(tarballPath).map((entry) => entry.path);
@@ -1392,16 +1333,11 @@ describe("plugin publication artifact", () => {
   });
 
   it("rejects canonical PAX metadata for every plugin publication route", () => {
-    const root = tempDir();
-    const markerPath = path.join(root, "marker");
+    const { artifactDir, markerPath, tarballPath } = stagingFixture();
     const longPath = `package/${"nested/".repeat(18)}index.js`;
     const content = Buffer.from("export {};\n", "utf8");
     const tarball = createTarball([
-      { path: "package/", type: "5" },
-      {
-        content: metaPackageJson(markerPath),
-        path: "package/package.json",
-      },
+      ...packageEntries(markerPath),
       {
         content: Buffer.concat([
           paxRecord("path", longPath),
@@ -1412,40 +1348,25 @@ describe("plugin publication artifact", () => {
       },
       { content, path: "package/placeholder.js" },
     ]);
-    const npmArtifactDir = path.join(root, "npm-artifact");
-    mkdirSync(npmArtifactDir, { recursive: true });
-    writeFileSync(path.join(npmArtifactDir, TARBALL_NAME), tarball);
-    expect(() => createPluginPublicationArtifact(publicationParams(npmArtifactDir))).toThrow(
-      /PAX and GNU tar metadata are not supported/u,
-    );
-
+    writeFileSync(tarballPath, tarball);
     for (const controls of [
+      { route: "npm-token-bootstrap" },
       { route: "clawhub-token-release" },
       { bootstrapMode: "publish", route: "clawhub-token-bootstrap" },
       { route: "clawhub-readback" },
     ]) {
-      const { route } = controls;
-      const artifactDir = path.join(root, route);
-      mkdirSync(artifactDir, { recursive: true });
-      writeFileSync(path.join(artifactDir, TARBALL_NAME), tarball);
-      expect(() =>
-        createPluginPublicationArtifact(publicationParams(artifactDir, controls)),
-      ).toThrow(/PAX and GNU tar metadata are not supported/u);
+      expectTarballError(artifactDir, /PAX and GNU tar metadata are not supported/u, controls);
     }
   });
 
   it("rejects beta npm artifacts bound to latest or extended-stable", () => {
     const fixture = createFixture();
-    expect(() =>
-      createPluginPublicationArtifact(
-        publicationParams(fixture.artifactDir, { publishTag: "latest" }),
-      ),
-    ).toThrow(/does not match release channel beta/u);
-    expect(() =>
-      createPluginPublicationArtifact(
-        publicationParams(fixture.artifactDir, { publishTag: "extended-stable" }),
-      ),
-    ).toThrow(/Extended-stable npm publication requires/u);
+    expectTarballError(fixture.artifactDir, /does not match release channel beta/u, {
+      publishTag: "latest",
+    });
+    expectTarballError(fixture.artifactDir, /Extended-stable npm publication requires/u, {
+      publishTag: "extended-stable",
+    });
   });
 
   it.each([
@@ -1463,69 +1384,35 @@ describe("plugin publication artifact", () => {
   });
 
   it("rejects traversal, links, and special entries inside the plugin tarball", () => {
-    const root = tempDir();
-    const markerPath = path.join(root, "marker");
     for (const badEntry of [
       { content: "bad", path: "package/../escape" },
       { linkPath: "package/package.json", path: "package/alias", type: "2" as const },
       { path: "package/device", type: "3" as const },
     ]) {
-      const artifactDir = path.join(root, Math.random().toString(16).slice(2));
-      mkdirSync(artifactDir, { recursive: true });
-      const entries: TarEntry[] = [
-        { path: "package/", type: "5" },
-        { content: metaPackageJson(markerPath), path: "package/package.json" },
-        badEntry,
-      ];
-      writeFileSync(path.join(artifactDir, TARBALL_NAME), createTarball(entries));
-      expect(() => createPluginPublicationArtifact(publicationParams(artifactDir))).toThrow();
+      const { artifactDir, markerPath } = stageTarball((marker) =>
+        createTarball([...packageEntries(marker), badEntry]),
+      );
+      expectTarballError(artifactDir);
+      expect(existsSync(markerPath)).toBe(false);
     }
-    expect(existsSync(markerPath)).toBe(false);
   });
 
-  it("requires the exact Meta package name, dir, and both publication flags", () => {
-    const root = tempDir();
-    const markerPath = path.join(root, "marker");
-    const cases: Array<{
-      manifestOverrides?: Record<string, unknown>;
-      params?: Record<string, unknown>;
-    }> = [
-      {
-        manifestOverrides: {
-          openclaw: { release: { publishToClawHub: false, publishToNpm: true } },
-        },
-      },
-      {
-        manifestOverrides: {
-          openclaw: { release: { publishToClawHub: true, publishToNpm: false } },
-        },
-      },
-      {
-        manifestOverrides: { name: "@openclaw/not-meta" },
-        params: { packageName: "@openclaw/not-meta" },
-      },
-      {
-        params: { packageDir: "extensions/not-meta" },
-      },
-    ];
-    for (const [index, testCase] of cases.entries()) {
-      const artifactDir = path.join(root, Math.random().toString(16).slice(2));
-      mkdirSync(artifactDir, { recursive: true });
-      writeFileSync(
-        path.join(artifactDir, TARBALL_NAME),
-        createTarball([
-          { path: "package/", type: "5" },
-          {
-            content: metaPackageJson(markerPath, testCase.manifestOverrides),
-            path: "package/package.json",
-          },
-          { content: '{"id":"meta"}\n', path: "package/openclaw.plugin.json" },
-        ]),
-      );
-      expect(
-        () => createPluginPublicationArtifact(publicationParams(artifactDir, testCase.params)),
-        `Meta identity case ${index}`,
-      ).toThrow(/Meta publication requires extensions\/meta with npm and ClawHub enabled/u);
-    }
+  it.each([
+    [{ openclaw: { release: { publishToClawHub: false, publishToNpm: true } } }, {}],
+    [{ openclaw: { release: { publishToClawHub: true, publishToNpm: false } } }, {}],
+    [{ name: "@openclaw/not-meta" }, { packageName: "@openclaw/not-meta" }],
+    [{}, { packageDir: "extensions/not-meta" }],
+  ])("requires exact Meta identity and publication flags (%#)", (manifest, params) => {
+    const { artifactDir } = stageTarball((marker) =>
+      createTarball([
+        ...packageEntries(marker, manifest),
+        { content: '{"id":"meta"}\n', path: "package/openclaw.plugin.json" },
+      ]),
+    );
+    expectTarballError(
+      artifactDir,
+      /Meta publication requires extensions\/meta with npm and ClawHub enabled/u,
+      params,
+    );
   });
 });
