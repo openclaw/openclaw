@@ -6,12 +6,10 @@ import type { runHeartbeatOnce } from "./heartbeat-runner-run.js";
 import type { HeartbeatRunner } from "./heartbeat-runner-scheduler.js";
 import type { HeartbeatWakeRequest } from "./heartbeat-wake-contracts.js";
 
-const cfg: OpenClawConfig = {
-  agents: {
-    entries: { main: {} },
-    defaults: { heartbeat: { every: "30m" } },
-  },
-};
+function config(heartbeat: { every: string; prompt?: string }): OpenClawConfig {
+  return { agents: { entries: { main: {} }, defaults: { heartbeat } } };
+}
+const cfg = config({ every: "30m" });
 const runners: HeartbeatRunner[] = [];
 const executionLoaded = vi.fn();
 const execute = vi.fn<typeof runHeartbeatOnce>();
@@ -34,10 +32,8 @@ afterEach(async () => {
     runner.stop();
   }
   const { setHeartbeatWakeHandler } = await import("./heartbeat-wake.js");
-  const dispose = setHeartbeatWakeHandler(async () => ({
-    status: "skipped",
-    reason: "disabled",
-  }));
+  const disabled = { status: "skipped", reason: "disabled" } as const;
+  const dispose = setHeartbeatWakeHandler(async () => disabled);
   await vi.advanceTimersByTimeAsync(250);
   dispose();
   vi.doUnmock("./heartbeat-runner-run.js");
@@ -65,6 +61,35 @@ async function loadScheduler() {
   };
 }
 
+function deferExecution(recordLoad = false) {
+  const loading = createDeferredCore();
+  const release = createDeferredCore();
+  vi.doMock("./heartbeat-runner-run.js", async () => {
+    if (recordLoad) {
+      executionLoaded();
+    }
+    loading.resolve();
+    await release.promise;
+    return { runHeartbeatOnce: execute };
+  });
+  return {
+    wait: async () => {
+      await vi.advanceTimersByTimeAsync(1);
+      expect(execute).not.toHaveBeenCalled();
+      await loading.promise;
+    },
+    release: async () => {
+      release.resolve();
+      await vi.dynamicImportSettled();
+    },
+  };
+}
+
+async function expectRan(result: Promise<unknown>) {
+  await vi.advanceTimersByTimeAsync(1);
+  await expect(result).resolves.toMatchObject({ status: "ran" });
+}
+
 describe("heartbeat scheduler execution loading", { concurrent: false }, () => {
   it("keeps execution unloaded through synchronous start, update, and stop", async () => {
     vi.doMock("./heartbeat-runner-config.js", () => {
@@ -87,48 +112,20 @@ describe("heartbeat scheduler execution loading", { concurrent: false }, () => {
       const { start, wake } = await loadScheduler();
       const runner = start();
       expect(executionLoaded).not.toHaveBeenCalled();
-      const loading = createDeferredCore();
-      const release = createDeferredCore();
-      vi.doMock("./heartbeat-runner-run.js", async () => {
-        executionLoaded();
-        loading.resolve();
-        await release.promise;
-        return { runHeartbeatOnce: execute };
-      });
-      const nextCfg: OpenClawConfig = {
-        agents: {
-          entries: { main: {} },
-          defaults: { heartbeat: { every: "5m", prompt: "updated heartbeat" } },
-        },
-      };
-      const result = wake({
-        source,
-        intent: source === "interval" ? "scheduled" : "manual",
-        reason: source,
-      });
+      const pending = deferExecution(true);
+      const nextHeartbeat = { every: "5m", prompt: "updated heartbeat" };
+      const nextCfg = config(nextHeartbeat);
+      const intent = source === "interval" ? "scheduled" : "manual";
+      const result = wake({ source, intent, reason: source });
       try {
-        await vi.advanceTimersByTimeAsync(1);
-        expect(execute).not.toHaveBeenCalled();
-        await loading.promise;
-
+        await pending.wait();
         runner.updateConfig(nextCfg);
-        release.resolve();
-        await vi.dynamicImportSettled();
+        await pending.release();
         await expect(result).resolves.toMatchObject({ status: "ran" });
         expect(executionLoaded).toHaveBeenCalledOnce();
-        expect(execute).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            cfg,
-            agentId: "main",
-            heartbeat: { every: "30m" },
-            source,
-            intent: source === "interval" ? "scheduled" : "manual",
-          }),
-        );
-
-        const nextResult = wake();
-        await vi.advanceTimersByTimeAsync(1);
-        await expect(nextResult).resolves.toMatchObject({ status: "ran" });
+        const firstRun = { cfg, agentId: "main", heartbeat: { every: "30m" }, source, intent };
+        expect(execute).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(firstRun));
+        await expectRan(wake());
         expect(execute).toHaveBeenCalledTimes(2);
         expect(execute).toHaveBeenNthCalledWith(
           2,
@@ -138,8 +135,7 @@ describe("heartbeat scheduler execution loading", { concurrent: false }, () => {
           }),
         );
       } finally {
-        release.resolve();
-        await vi.dynamicImportSettled();
+        await pending.release();
       }
     },
   );
@@ -150,22 +146,13 @@ describe("heartbeat scheduler execution loading", { concurrent: false }, () => {
       const { start, wake } = await loadScheduler();
       const owner = new AbortController();
       const original = start({ cfg, abortSignal: owner.signal });
-      const loading = createDeferredCore();
-      const release = createDeferredCore();
-      vi.doMock("./heartbeat-runner-run.js", async () => {
-        loading.resolve();
-        await release.promise;
-        return { runHeartbeatOnce: execute };
-      });
+      const pending = deferExecution();
       const replacement = vi
         .fn<typeof runHeartbeatOnce>()
         .mockResolvedValue({ status: "ran", durationMs: 1 });
       const result = wake();
       try {
-        await vi.advanceTimersByTimeAsync(1);
-        expect(execute).not.toHaveBeenCalled();
-        await loading.promise;
-
+        await pending.wait();
         if (action === "stop") {
           original.stop();
         } else if (action === "abort") {
@@ -181,17 +168,14 @@ describe("heartbeat scheduler execution loading", { concurrent: false }, () => {
         await vi.advanceTimersByTimeAsync(250);
         expect(replacement).not.toHaveBeenCalled();
 
-        release.resolve();
-        await vi.dynamicImportSettled();
+        await pending.release();
         await vi.advanceTimersByTimeAsync(1);
 
         if (action === "replace") {
           await expect(result).resolves.toMatchObject({ status: "ran" });
           expect(execute).toHaveBeenCalledOnce();
           expect(replacement).not.toHaveBeenCalled();
-          const nextResult = wake();
-          await vi.advanceTimersByTimeAsync(1);
-          await expect(nextResult).resolves.toMatchObject({ status: "ran" });
+          await expectRan(wake());
         } else {
           expect(execute).not.toHaveBeenCalled();
           const { HEARTBEAT_IDLE_RETRY_GRACE_MS } = await import("./heartbeat-wake.js");
@@ -199,8 +183,7 @@ describe("heartbeat scheduler execution loading", { concurrent: false }, () => {
         }
         expect(replacement).toHaveBeenCalledOnce();
       } finally {
-        release.resolve();
-        await vi.dynamicImportSettled();
+        await pending.release();
       }
     },
   );

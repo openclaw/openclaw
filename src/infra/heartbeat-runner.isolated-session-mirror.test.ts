@@ -10,7 +10,6 @@ import { resolveHeartbeatPreflight } from "./heartbeat-runner-prompt.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
-  type HeartbeatReplySpy,
   heartbeatTestConfig,
   readSessionStoreForTest,
   seedSessionStore,
@@ -57,7 +56,7 @@ afterEach(() => {
 
 const latestDeliveryRequest = () => deliverOutboundPayloadsInternal.mock.calls.at(-1)?.[0];
 
-function installWhatsAppRoute(options?: { exact?: boolean }) {
+function installWhatsAppRoute(exact: boolean) {
   const plugin: ChannelPlugin = {
     ...heartbeatRunnerWhatsAppPlugin,
     capabilities: {
@@ -67,47 +66,43 @@ function installWhatsAppRoute(options?: { exact?: boolean }) {
     messaging: {
       ...heartbeatRunnerWhatsAppPlugin.messaging,
       targetResolver: { looksLikeId: () => true },
-      ...(options?.exact === true
-        ? {
-            resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) =>
-              buildChannelOutboundSessionRoute({
-                cfg,
-                agentId,
-                channel: "whatsapp",
-                accountId,
-                recipientSessionExact: true,
-                peer: { kind: "direct", id: target },
-                chatType: "direct",
-                from: target,
-                to: target,
-              }),
-          }
-        : {}),
+      resolveOutboundSessionRoute: exact
+        ? ({ cfg, agentId, accountId, target }) =>
+            buildChannelOutboundSessionRoute({
+              cfg,
+              agentId,
+              channel: "whatsapp",
+              accountId,
+              recipientSessionExact: true,
+              peer: { kind: "direct", id: target },
+              chatType: "direct",
+              from: target,
+              to: target,
+            })
+        : undefined,
     },
   };
   setActivePluginRegistry(createTestRegistry([{ pluginId: "whatsapp", plugin, source: "test" }]));
 }
 
-type MirrorFixture = Awaited<ReturnType<typeof createMirrorFixture>>;
 function withMirror(
-  fn: (fixture: MirrorFixture) => Promise<void>,
+  fn: (fixture: Awaited<ReturnType<typeof createMirrorFixture>>) => Promise<void>,
   projection: boolean | "inexact" = true,
 ) {
-  return withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) =>
-    fn(await createMirrorFixture(tmpDir, storePath, replySpy, projection)),
+  return withTempHeartbeatSandbox(async (sandbox) =>
+    fn(await createMirrorFixture(sandbox, projection)),
   );
 }
 async function createMirrorFixture(
-  tmpDir: string,
-  storePath: string,
-  replySpy: HeartbeatReplySpy,
+  sandbox: Parameters<Parameters<typeof withTempHeartbeatSandbox>[0]>[0],
   projection: boolean | "inexact",
 ) {
+  const { tmpDir, storePath, replySpy } = sandbox;
   const cfg = heartbeatTestConfig(tmpDir, "last", "whatsapp", storePath);
   cfg.agents!.entries = { main: {} };
   cfg.agents!.defaults!.heartbeat!.isolatedSession = true;
   if (projection) {
-    installWhatsAppRoute({ exact: projection !== "inexact" });
+    installWhatsAppRoute(projection !== "inexact");
     cfg.session = { ...cfg.session, dmScope: "per-channel-peer" };
   }
   const baseKey = resolveMainSessionKey(cfg);
@@ -136,26 +131,16 @@ async function createMirrorFixture(
       ...wake,
       deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0, nowMs: () => nowMs },
     });
-  const awareness = () =>
+  const awareness = (events?: Parameters<typeof drainFormattedSystemEvents>[0]["events"]) =>
     drainFormattedSystemEvents({
       cfg,
       agentId: "main",
       sessionKey: targetKey,
       isMainSession: false,
       isNewSession: false,
+      events,
     });
-  return {
-    cfg,
-    storePath,
-    replySpy,
-    baseKey,
-    isolatedKey,
-    targetKey,
-    target,
-    nowMs,
-    run,
-    awareness,
-  };
+  return { ...sandbox, cfg, baseKey, isolatedKey, targetKey, target, nowMs, run, awareness };
 }
 
 describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => {
@@ -177,16 +162,11 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
       });
 
       expect(result.status).toBe("ran");
-      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
-        SessionKey: isolatedKey,
-      });
+      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({ SessionKey: isolatedKey });
       expect(latestDeliveryRequest()).toMatchObject({
         channel: "whatsapp",
         to: "+15551234567",
-        session: {
-          key: isolatedKey,
-          policyKey: baseKey,
-        },
+        session: { key: isolatedKey, policyKey: baseKey },
       });
       const store = readSessionStoreForTest(storePath);
       expect(store[baseKey]).toMatchObject({
@@ -209,16 +189,7 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
           heartbeat: { isolatedSession: true },
         });
         expect(pendingEventEntries).toEqual([]);
-        await expect(
-          drainFormattedSystemEvents({
-            cfg,
-            agentId: "main",
-            sessionKey: targetKey,
-            isMainSession: false,
-            isNewSession: false,
-            events: pendingEventEntries,
-          }),
-        ).resolves.toBeUndefined();
+        await expect(awareness(pendingEventEntries)).resolves.toBeUndefined();
         const context = await awareness();
         expect(context).toContain("A heartbeat delivered this message to this channel:");
         expect(context).toContain("Status needs attention.");
