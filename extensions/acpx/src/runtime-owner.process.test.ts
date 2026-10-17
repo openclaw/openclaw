@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createFileSessionStore, decodeAcpxRuntimeHandleState } from "acpx/runtime";
+import { decodeAcpxRuntimeHandleState } from "acpx/runtime";
 import {
   getAcpSessionManager,
   registerAcpRuntimeBackend,
@@ -10,15 +10,78 @@ import {
   readAcpSessionEntryAsync,
 } from "openclaw/plugin-sdk/acp-runtime";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import type { OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeAll, expect, it, type TestContext } from "vitest";
-import { ownerRuntimeOptions, type RuntimeHandle } from "./runtime-process.test-support.js";
-import { AcpxRuntime } from "./runtime.js";
+import {
+  mcpServers,
+  withProcessRuntime,
+  type RuntimeHandle,
+  type OwnerRuntimeOptions,
+} from "./runtime-process.test-support.js";
 
 const harness = "owner-fixture";
 const fixtureRuns = new WeakMap<TestContext, Promise<void>>();
 type Manager = ReturnType<typeof getAcpSessionManager>;
 type Target = Pick<Parameters<Manager["runTurn"]>[0], "cfg" | "sessionKey" | "agentId">;
+type ProcessFixture = Parameters<Parameters<typeof withProcessRuntime>[1]>[0];
+const ownerConfig = (global = false, cold = false) => ({
+  agents: {
+    ownership: "explicit" as const,
+    entries: {
+      main: {},
+      ...(global || cold ? { work: {} } : {}),
+      ...(cold ? { helper: {} } : {}),
+    },
+  },
+  ...(global ? { session: { scope: "global" as const } } : {}),
+  acp: { backend: "acpx" },
+});
+
+const initialize = async (manager: Manager, target: Target, mode: "persistent" | "oneshot") =>
+  (await manager.initializeSession({ ...target, agent: harness, mode })).handle;
+
+function withOwner(
+  context: TestContext,
+  label: string,
+  run: (
+    fixture: ProcessFixture & {
+      cfg: ReturnType<typeof ownerConfig>;
+      manager: Manager;
+      restart: () => Promise<Manager>;
+    },
+  ) => Promise<void>,
+  options: (state: OpenClawTestState) => Promise<OwnerRuntimeOptions> = async () => ({}),
+  cfg = ownerConfig(),
+) {
+  const runPromise = withProcessRuntime(
+    label,
+    async (fixture) => {
+      let runtime = fixture.runtime;
+      const register = () => {
+        registerAcpRuntimeBackend({ id: "acpx", runtime });
+        testing.resetAcpSessionManagerForTests();
+        return getAcpSessionManager();
+      };
+      const restart = async () => {
+        await runtime.shutdown();
+        runtime = fixture.create(await options(fixture.state));
+        return register();
+      };
+      try {
+        await run({ ...fixture, cfg, manager: register(), restart });
+      } finally {
+        testing.resetAcpSessionManagerForTests();
+        unregisterAcpRuntimeBackend("acpx");
+      }
+    },
+    async (state) => {
+      await state.writeConfig(cfg);
+      return { agent: harness, ...(await options(state)) };
+    },
+  );
+  fixtureRuns.set(context, runPromise);
+  return runPromise;
+}
 
 async function prompt(
   manager: Manager,
@@ -63,84 +126,59 @@ async function prompt(
 it.for([true, false])(
   "runs the first cold oneshot turn (load support: %s)",
   async (loadSession, context) => {
-    const run = withOpenClawTestState({ label: "acpx-cold-oneshot-process" }, async (state) => {
-      const cfg = {
-        agents: { ownership: "explicit" as const, entries: { main: {}, work: {}, helper: {} } },
-        acp: { backend: "acpx" },
-      };
-      await state.writeConfig(cfg);
-      const peerDirectory = path.join(state.root, "peer");
-      await fs.mkdir(peerDirectory);
-      const store = createFileSessionStore({ stateDir: state.root });
-      const createRuntime = () =>
-        new AcpxRuntime(
-          ownerRuntimeOptions(state.root, {
-            sessionStore: store,
-            agent: harness,
-            args: !loadSession ? ["--no-session-load"] : [],
-          }),
-        );
-      let runtime = createRuntime();
-      registerAcpRuntimeBackend({ id: "acpx", runtime });
-      testing.resetAcpSessionManagerForTests();
-      let manager = getAcpSessionManager();
-      const target = { cfg, sessionKey: "agent:main:acp:cold-first-turn", agentId: "main" };
-      try {
-        const { handle } = await manager.initializeSession({
-          ...target,
-          agent: harness,
-          mode: "oneshot",
-        });
-        expect(handle.backendSessionId).toBeTruthy();
-        const peerPath = path.join(peerDirectory, `${handle.backendSessionId}.json`);
-        const readPeer = async () => JSON.parse(await fs.readFile(peerPath, "utf8"));
-        expect(await readPeer()).toMatchObject({ history: [] });
-        const before = await readAcpSessionEntryAsync(target);
-        expect(before?.acp?.identity).toMatchObject({
-          acpxRecordId: handle.acpxRecordId,
-        });
-        expect((await store.load(handle.acpxRecordId!))?.lastPromptAt).toBeUndefined();
-        await expect(
-          manager.closeSession({
-            ...target,
-            reason: "test-restart",
-            discardPersistentState: false,
-            clearMeta: false,
-          }),
-        ).resolves.toMatchObject({ runtimeClosed: true, metaCleared: false });
-        expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
-        await runtime.shutdown();
-        testing.resetAcpSessionManagerForTests();
-        runtime = createRuntime();
-        registerAcpRuntimeBackend({ id: "acpx", runtime });
-        manager = getAcpSessionManager();
-        expect(await readPeer()).toMatchObject({ history: [] });
-        expect((await readAcpSessionEntryAsync(target))?.acp?.identity).toMatchObject({
-          acpxRecordId: handle.acpxRecordId,
-        });
-        expect((await store.load(handle.acpxRecordId!))?.lastPromptAt).toBeUndefined();
-        const text = "cold-oneshot-first-prompt";
-        const reply = await prompt(
-          manager,
-          target,
-          state.workspaceDir,
-          text,
-          "cold-oneshot-core-session",
-        );
-        expect(reply).toMatchObject({ history: [text] });
-        if (loadSession) {
-          expect(reply.sessionId).toBe(handle.backendSessionId);
-        } else {
-          expect(reply.sessionId).not.toBe(handle.backendSessionId);
-        }
-        expect((await fs.readdir(peerDirectory)).toSorted()).toEqual(
-          [...new Set([handle.backendSessionId, reply.sessionId])]
-            .map((id) => `${id}.json`)
-            .toSorted(),
-        );
-        expect(await readPeer()).toMatchObject({ history: loadSession ? [text] : [] });
-      } finally {
+    await withOwner(
+      context,
+      "acpx-cold-oneshot-process",
+      async ({ state, cfg, directory, store, restart, manager: initialManager }) => {
+        let manager = initialManager;
+        const target = { cfg, sessionKey: "agent:main:acp:cold-first-turn", agentId: "main" };
         try {
+          const handle = await initialize(manager, target, "oneshot");
+          expect(handle.backendSessionId).toBeTruthy();
+          const peerPath = path.join(directory, `${handle.backendSessionId}.json`);
+          const readPeer = async () => JSON.parse(await fs.readFile(peerPath, "utf8"));
+          expect(await readPeer()).toMatchObject({ history: [] });
+          const before = await readAcpSessionEntryAsync(target);
+          expect(before?.acp?.identity).toMatchObject({
+            acpxRecordId: handle.acpxRecordId,
+          });
+          expect((await store.load(handle.acpxRecordId!))?.lastPromptAt).toBeUndefined();
+          await expect(
+            manager.closeSession({
+              ...target,
+              reason: "test-restart",
+              discardPersistentState: false,
+              clearMeta: false,
+            }),
+          ).resolves.toMatchObject({ runtimeClosed: true, metaCleared: false });
+          expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
+          manager = await restart();
+          expect(await readPeer()).toMatchObject({ history: [] });
+          expect((await readAcpSessionEntryAsync(target))?.acp?.identity).toMatchObject({
+            acpxRecordId: handle.acpxRecordId,
+          });
+          expect((await store.load(handle.acpxRecordId!))?.lastPromptAt).toBeUndefined();
+          const text = "cold-oneshot-first-prompt";
+          const reply = await prompt(
+            manager,
+            target,
+            state.workspaceDir,
+            text,
+            "cold-oneshot-core-session",
+          );
+          expect(reply).toMatchObject({ history: [text] });
+          if (loadSession) {
+            expect(reply.sessionId).toBe(handle.backendSessionId);
+          } else {
+            expect(reply.sessionId).not.toBe(handle.backendSessionId);
+          }
+          expect((await fs.readdir(directory)).toSorted()).toEqual(
+            [...new Set([handle.backendSessionId, reply.sessionId])]
+              .map((id) => `${id}.json`)
+              .toSorted(),
+          );
+          expect(await readPeer()).toMatchObject({ history: loadSession ? [text] : [] });
+        } finally {
           await manager.closeSession({
             ...target,
             reason: "test-cleanup",
@@ -148,15 +186,11 @@ it.for([true, false])(
             discardPersistentState: true,
             clearMeta: true,
           });
-        } finally {
-          testing.resetAcpSessionManagerForTests();
-          unregisterAcpRuntimeBackend("acpx");
-          await runtime.shutdown();
         }
-      }
-    });
-    fixtureRuns.set(context, run);
-    await run;
+      },
+      async () => ({ args: !loadSession ? ["--no-session-load"] : [] }),
+      ownerConfig(false, true),
+    );
   },
 );
 
@@ -168,8 +202,7 @@ beforeAll(async () => {
 });
 
 afterEach(async (context) => {
-  // Join timed-out cases before shared afterEach hooks reset plugin state.
-  // The test body reports failures; let the remaining cleanup hooks run.
+  // Join timed-out cases before shared hooks reset plugin state, preserving the test failure.
   const run = fixtureRuns.get(context);
   fixtureRuns.delete(context);
   await run?.catch(() => {});
@@ -178,188 +211,132 @@ afterEach(async (context) => {
 it.for(["global", "shared-project"])(
   "isolates real ACPX histories for two owners of %s across restart and controls",
   async (sessionKey, context) => {
-    const run = withOpenClawTestState({ label: "acpx-owner-process" }, async (state) => {
-      const directory = state.root;
-      const cfg = {
-        agents: { ownership: "explicit" as const, entries: { main: {}, work: {} } },
-        session: { scope: "global" as const },
-        acp: { backend: "acpx" },
-      };
-      await state.writeConfig(cfg);
-      const peerDirectory = path.join(directory, "peer");
-      await fs.mkdir(peerDirectory);
-      await fs.mkdir(path.join(directory, "sessions"));
-      const store = createFileSessionStore({ stateDir: directory });
-      const createRuntime = async () =>
-        new AcpxRuntime(
-          ownerRuntimeOptions(directory, {
-            agent: harness,
-            sessionStore: store,
-            openclawLegacyBareSessionKeys: new Set(
-              (await fs.readdir(path.join(directory, "sessions")))
-                .filter((name) => name.endsWith(".json"))
-                .map((name) => decodeURIComponent(name.slice(0, -5))),
-            ),
-            pluginToolsMcpBridgeEnabled: true,
-            openclawToolsMcpBridgeEnabled: true,
-            mcpServers: ["openclaw-plugin-tools", "openclaw-tools", "user-server"].map((name) => ({
-              name,
-              command: process.execPath,
-              args: ["server.mjs"],
-              env: [],
-            })),
-          }),
-        );
-      let runtime = await createRuntime();
-      registerAcpRuntimeBackend({ id: "acpx", runtime });
-      testing.resetAcpSessionManagerForTests();
-      let manager = getAcpSessionManager();
-      const handles: RuntimeHandle[] = [];
-      const target = (agentId?: string) => ({ cfg, sessionKey, agentId });
-      const turn = (handle: RuntimeHandle, text: string) =>
-        prompt(
-          manager,
-          target(handle.agentId),
-          state.workspaceDir,
-          text,
-          `${handle.agentId}-session`,
-          text,
-          handle.sessionKey,
-        );
-      try {
-        for (const agentId of ["main", "work"]) {
-          const { handle } = await manager.initializeSession({
-            ...target(agentId),
-            agent: harness,
-            mode: "persistent",
-          });
-          handles.push(handle);
-          const expectedSessionKey =
-            sessionKey === "global" ? sessionKey : `agent:${agentId}:${sessionKey}`;
-          expect(handle.sessionKey).toBe(expectedSessionKey);
-          expect(handle.agentId).toBe(agentId);
-          expect(decodeAcpxRuntimeHandleState(handle.runtimeSessionName)?.name).toBe(
-            handle.acpxRecordId,
-          );
-          const first = await turn(handle, `${agentId}-first`);
-          expect(first).toMatchObject({ history: [`${agentId}-first`] });
-          expect(first.mcpServers).toEqual([
-            ...["openclaw-plugin-tools", "openclaw-tools"].map((name) => ({
-              name,
-              command: process.execPath,
-              args: ["server.mjs", "--openclaw-agent-id", agentId],
-              env: [{ name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", value: expectedSessionKey }],
-            })),
-            { name: "user-server", command: process.execPath, args: ["server.mjs"], env: [] },
-          ]);
-          await manager.setSessionRuntimeMode({ ...target(agentId), runtimeMode: "review" });
-          await manager.setSessionConfigOption({ ...target(agentId), key: "tone", value: "brief" });
-          const beforeCancel = await store.load(handle.acpxRecordId!);
-          await manager.cancelSession(target(agentId));
-          expect((await store.load(handle.acpxRecordId!))?.pid).toBe(beforeCancel?.pid);
-          expect(() => process.kill(beforeCancel!.pid!, 0)).not.toThrow();
-          await manager.getSessionStatus(target(agentId));
-          await manager.closeSession({ ...target(agentId), reason: "restart" });
-        }
-        expect(handles[0]!.acpxRecordId).not.toBe(handles[1]!.acpxRecordId);
-        expect(handles[0]!.backendSessionId).not.toBe(handles[1]!.backendSessionId);
-        await runtime.shutdown();
-        runtime = await createRuntime();
-        registerAcpRuntimeBackend({ id: "acpx", runtime });
-        testing.resetAcpSessionManagerForTests();
-        manager = getAcpSessionManager();
-        const readWorkState = async (): Promise<unknown> =>
-          JSON.parse(
-            await fs.readFile(
-              path.join(peerDirectory, `${handles[1]!.backendSessionId}.json`),
-              "utf8",
-            ),
-          );
-        const workState = await readWorkState();
-        for (const previous of handles) {
-          const resumed = await manager.getSessionStatus(target(previous.agentId));
-          expect(resumed).toMatchObject({
-            agentId: previous.agentId,
-            sessionKey: previous.sessionKey,
-            identity: { acpxRecordId: previous.acpxRecordId },
-          });
-          const handle = previous;
-          expect(readAcpSessionEntry(target(handle.agentId))?.storeSessionKey).toBe(
+    await withOwner(
+      context,
+      "acpx-owner-process",
+      async ({ state, cfg, directory, store, restart, manager: initialManager }) => {
+        let manager = initialManager;
+        const handles: RuntimeHandle[] = [];
+        const target = (agentId?: string) => ({ cfg, sessionKey, agentId });
+        const turn = (handle: RuntimeHandle, text: string) =>
+          prompt(
+            manager,
+            target(handle.agentId),
+            state.workspaceDir,
+            text,
+            `${handle.agentId}-session`,
+            text,
             handle.sessionKey,
           );
-          const result = await turn(handle, `${handle.agentId}-second`);
-          expect(result).toMatchObject({
-            history: [`${handle.agentId}-first`, `${handle.agentId}-second`],
-            tone: "brief",
-            mode: "review",
-          });
-          expect((await store.load(handle.acpxRecordId!))?.messages.length).toBeGreaterThan(0);
-          if (handle.agentId === "main") {
-            expect(await readWorkState()).toEqual(workState);
+        try {
+          for (const agentId of ["main", "work"]) {
+            const handle = await initialize(manager, target(agentId), "persistent");
+            handles.push(handle);
+            const expectedSessionKey =
+              sessionKey === "global" ? sessionKey : `agent:${agentId}:${sessionKey}`;
+            expect(handle).toMatchObject({ sessionKey: expectedSessionKey, agentId });
+            expect(decodeAcpxRuntimeHandleState(handle.runtimeSessionName)?.name).toBe(
+              handle.acpxRecordId,
+            );
+            const first = await turn(handle, `${agentId}-first`);
+            expect(first).toMatchObject({ history: [`${agentId}-first`] });
+            expect(first.mcpServers).toEqual(mcpServers(agentId, expectedSessionKey));
+            await manager.setSessionRuntimeMode({ ...target(agentId), runtimeMode: "review" });
+            await manager.setSessionConfigOption({
+              ...target(agentId),
+              key: "tone",
+              value: "brief",
+            });
+            const beforeCancel = await store.load(handle.acpxRecordId!);
+            await manager.cancelSession(target(agentId));
+            expect((await store.load(handle.acpxRecordId!))?.pid).toBe(beforeCancel?.pid);
+            expect(() => process.kill(beforeCancel!.pid!, 0)).not.toThrow();
+            await manager.getSessionStatus(target(agentId));
+            await manager.closeSession({ ...target(agentId), reason: "restart" });
           }
-          await manager.closeSession({
-            ...target(handle.agentId),
-            reason: "reset",
-            discardPersistentState: true,
-            clearMeta: true,
-          });
-          const { handle: fresh } = await manager.initializeSession({
-            ...target(handle.agentId),
-            agent: harness,
-            mode: "persistent",
-          });
-          expect(await turn(fresh, "fresh")).toMatchObject({ history: ["fresh"] });
-          await manager.closeSession({ ...target(fresh.agentId), reason: "test-complete" });
-          if (handle.agentId === "main") {
-            expect(await readWorkState()).toEqual(workState);
-          }
-        }
-      } finally {
-        for (const handle of handles) {
-          await manager
-            .closeSession({
+          expect(handles[0]!.acpxRecordId).not.toBe(handles[1]!.acpxRecordId);
+          expect(handles[0]!.backendSessionId).not.toBe(handles[1]!.backendSessionId);
+          manager = await restart();
+          const readWorkState = async (): Promise<unknown> =>
+            JSON.parse(
+              await fs.readFile(
+                path.join(directory, `${handles[1]!.backendSessionId}.json`),
+                "utf8",
+              ),
+            );
+          const workState = await readWorkState();
+          for (const previous of handles) {
+            const resumed = await manager.getSessionStatus(target(previous.agentId));
+            expect(resumed).toMatchObject({
+              agentId: previous.agentId,
+              sessionKey: previous.sessionKey,
+              identity: { acpxRecordId: previous.acpxRecordId },
+            });
+            const handle = previous;
+            expect(readAcpSessionEntry(target(handle.agentId))?.storeSessionKey).toBe(
+              handle.sessionKey,
+            );
+            const result = await turn(handle, `${handle.agentId}-second`);
+            expect(result).toMatchObject({
+              history: [`${handle.agentId}-first`, `${handle.agentId}-second`],
+              tone: "brief",
+              mode: "review",
+            });
+            expect((await store.load(handle.acpxRecordId!))?.messages.length).toBeGreaterThan(0);
+            if (handle.agentId === "main") {
+              expect(await readWorkState()).toEqual(workState);
+            }
+            await manager.closeSession({
               ...target(handle.agentId),
-              reason: "test-cleanup",
-              requireAcpSession: false,
-            })
-            .catch(() => {});
+              reason: "reset",
+              discardPersistentState: true,
+              clearMeta: true,
+            });
+            const fresh = await initialize(manager, target(handle.agentId), "persistent");
+            expect(await turn(fresh, "fresh")).toMatchObject({ history: ["fresh"] });
+            await manager.closeSession({ ...target(fresh.agentId), reason: "test-complete" });
+            if (handle.agentId === "main") {
+              expect(await readWorkState()).toEqual(workState);
+            }
+          }
+        } finally {
+          for (const handle of handles) {
+            await manager
+              .closeSession({
+                ...target(handle.agentId),
+                reason: "test-cleanup",
+                requireAcpSession: false,
+              })
+              .catch(() => {});
+          }
         }
-        testing.resetAcpSessionManagerForTests();
-        unregisterAcpRuntimeBackend("acpx");
-        await runtime.shutdown();
-      }
-    });
-    fixtureRuns.set(context, run);
-    await run;
+      },
+      async ({ root }) => {
+        const sessions = path.join(root, "sessions");
+        await fs.mkdir(sessions, { recursive: true });
+        return {
+          openclawLegacyBareSessionKeys: new Set(
+            (await fs.readdir(sessions))
+              .filter((name) => name.endsWith(".json"))
+              .map((name) => decodeURIComponent(name.slice(0, -5))),
+          ),
+          pluginToolsMcpBridgeEnabled: true,
+          openclawToolsMcpBridgeEnabled: true,
+          mcpServers: mcpServers(),
+        };
+      },
+      ownerConfig(true),
+    );
   },
 );
 
 it("closes a completed oneshot without mixing its replacement record identity", async (context) => {
-  const run = withOpenClawTestState({ label: "acpx-oneshot-owner-process" }, async (state) => {
-    const cfg = {
-      agents: { ownership: "explicit" as const, entries: { main: {} } },
-      acp: { backend: "acpx" },
-    };
-    await state.writeConfig(cfg);
-    const peerDirectory = path.join(state.root, "peer");
-    await fs.mkdir(peerDirectory);
-    const store = createFileSessionStore({ stateDir: state.root });
-    const runtime = new AcpxRuntime(
-      ownerRuntimeOptions(state.root, {
-        agent: harness,
-        sessionStore: store,
-      }),
-    );
-    registerAcpRuntimeBackend({ id: "acpx", runtime });
-    testing.resetAcpSessionManagerForTests();
-    const manager = getAcpSessionManager();
-    const target = { cfg, sessionKey: "agent:main:acp:oneshot-record", agentId: "main" };
-    try {
-      const { handle } = await manager.initializeSession({
-        ...target,
-        agent: harness,
-        mode: "oneshot",
-      });
+  await withOwner(
+    context,
+    "acpx-oneshot-owner-process",
+    async ({ state, cfg, runtime, manager }) => {
+      const target = { cfg, sessionKey: "agent:main:acp:oneshot-record", agentId: "main" };
+      const handle = await initialize(manager, target, "oneshot");
       expect(
         await prompt(
           manager,
@@ -400,12 +377,6 @@ it("closes a completed oneshot without mixing its replacement record identity", 
         }),
       ).resolves.toMatchObject({ runtimeClosed: true, metaCleared: true });
       expect(readAcpSessionEntry(target)?.acp).toBeUndefined();
-    } finally {
-      testing.resetAcpSessionManagerForTests();
-      unregisterAcpRuntimeBackend("acpx");
-      await runtime.shutdown();
-    }
-  });
-  fixtureRuns.set(context, run);
-  await run;
+    },
+  );
 });

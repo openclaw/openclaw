@@ -5,7 +5,6 @@ import {
   createAgentRegistry,
   createFileSessionStore,
 } from "acpx/runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
@@ -13,39 +12,13 @@ import {
   ownerAgentScript as peer,
   ownerRuntimeOptions,
   promptJson,
+  createTestGate,
+  createHeldCall,
+  fixtureSession,
+  mcpServers,
+  withProcessRuntime,
 } from "./runtime-process.test-support.js";
 import { AcpxRuntime } from "./runtime.js";
-
-async function withRuntime(
-  label: string,
-  run: (
-    runtime: AcpxRuntime,
-    store: ReturnType<typeof createFileSessionStore>,
-    directory: string,
-  ) => Promise<void>,
-  options: {
-    args?: string[];
-    processLifecycle?: ConstructorParameters<typeof AcpxRuntime>[0]["processLifecycle"];
-  } = {},
-) {
-  await withOpenClawTestState({ label }, async (state) => {
-    const directory = path.join(state.root, "peer");
-    await fs.mkdir(directory);
-    const store = createFileSessionStore({ stateDir: state.root });
-    const runtime = new AcpxRuntime(
-      ownerRuntimeOptions(state.root, {
-        sessionStore: store,
-        args: options.args,
-        processLifecycle: options.processLifecycle,
-      }),
-    );
-    try {
-      await run(runtime, store, directory);
-    } finally {
-      await runtime.shutdown();
-    }
-  });
-}
 
 function startTurnWithHeldCheckpoint(
   runtime: AcpxRuntime,
@@ -53,8 +26,7 @@ function startTurnWithHeldCheckpoint(
   handle: Awaited<ReturnType<AcpxRuntime["ensureSession"]>>,
   requestId: string,
 ) {
-  const saveStarted = createDeferred<void>();
-  const releaseSave = createDeferred<void>();
+  const gate = createTestGate();
   const save = store.save.bind(store);
   let held = false;
   let promptAdmitted = false;
@@ -66,16 +38,14 @@ function startTurnWithHeldCheckpoint(
       record.messages.length > 0
     ) {
       held = true;
-      saveStarted.resolve();
-      await releaseSave.promise;
+      await gate.hold();
     }
     await save(record);
   });
   const turn = runtime.startTurn({ handle, text: `${requestId} turn`, mode: "prompt", requestId });
   const events = (async () => {
-    for await (const ignoredEventValue of turn.events) {
-      // Drain the real adapter while its persistence checkpoint is held.
-      void ignoredEventValue;
+    for await (const event of turn.events) {
+      void event;
     }
   })();
   void events.catch(() => {});
@@ -83,7 +53,7 @@ function startTurnWithHeldCheckpoint(
     await turn.promptStarted;
     promptAdmitted = true;
   };
-  return { turn, events, saveStarted, releaseSave, saveSpy, admit };
+  return { turn, events, gate, saveSpy, admit };
 }
 
 it.each([process.platform === "win32" ? "bridge" : "env-bridge", "catalog", "openclaw-direct"])(
@@ -108,12 +78,7 @@ it.each([process.platform === "win32" ? "bridge" : "env-bridge", "catalog", "ope
           : bridge
             ? bridgeCommand
             : directCommand;
-      const servers = ["openclaw-plugin-tools", "openclaw-tools", "user-server"].map((name) => ({
-        name,
-        command: process.execPath,
-        args: ["server.mjs"],
-        env: [],
-      }));
+      const servers = mcpServers();
       const store = createFileSessionStore({ stateDir: state.root });
       const createRuntime = (configuredCommand = command) =>
         new AcpxRuntime(
@@ -144,16 +109,7 @@ it.each([process.platform === "win32" ? "bridge" : "env-bridge", "catalog", "ope
           );
           for (const [index, result] of results.entries()) {
             expect(reconnected ? result.loadedMcpServers : result.mcpServers).toEqual(
-              bridge || catalog
-                ? []
-                : servers.map((server) =>
-                    server.name === "user-server"
-                      ? server
-                      : Object.assign({}, server, {
-                          args: [...server.args, "--openclaw-agent-id", handles[index]!.agentId],
-                          env: [{ name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", value: "shared" }],
-                        }),
-                  ),
+              bridge || catalog ? [] : mcpServers(["main", "work"][index]!),
             );
           }
         };
@@ -177,34 +133,27 @@ it.each([process.platform === "win32" ? "bridge" : "env-bridge", "catalog", "ope
 );
 
 it("finishes an admitted discard after reset retires its pending snapshot", async () => {
-  await withRuntime("acpx-discard-snapshot", async (runtime, store) => {
+  await withProcessRuntime("acpx-discard-snapshot", async ({ runtime, store }) => {
     const target = { sessionKey: "discard-snapshot", agentId: "main" };
     await runtime.prepareFreshSession(target);
     const handle = await runtime.ensureSession({ ...target, agent: "fixture", mode: "persistent" });
     const shutdown = vi.spyOn(BaseAcpxRuntime.prototype, "shutdown");
-    const snapshotStarted = createDeferred<void>();
-    const releaseSnapshot = createDeferred<void>();
     const load = store.load.bind(store);
-    const loadSpy = vi.spyOn(store, "load").mockImplementationOnce(async (key) => {
-      snapshotStarted.resolve();
-      await releaseSnapshot.promise;
-      return load(key);
-    });
+    const snapshot = createHeldCall(load);
+    const loadSpy = vi.spyOn(store, "load").mockImplementationOnce(snapshot.call);
     const closing = runtime.close({ handle, reason: "discard", discardPersistentState: true });
     void closing.catch(() => {});
     try {
-      await snapshotStarted.promise;
+      await snapshot.entered;
       await runtime.prepareFreshSession(target);
       expect(shutdown).not.toHaveBeenCalled();
-      releaseSnapshot.resolve();
+      snapshot.release();
       await closing;
       const persisted = await load(handle.acpxRecordId!);
-      expect(persisted?.closed).toBe(true);
-      expect(persisted?.acpx?.reset_on_next_ensure).toBe(true);
+      expect(persisted).toMatchObject({ closed: true, acpx: { reset_on_next_ensure: true } });
       expect(shutdown).toHaveBeenCalledOnce();
     } finally {
-      releaseSnapshot.resolve();
-      await Promise.allSettled([closing]);
+      await snapshot.settle(closing);
       loadSpy.mockRestore();
       shutdown.mockRestore();
     }
@@ -213,35 +162,27 @@ it("finishes an admitted discard after reset retires its pending snapshot", asyn
 
 it("cleans up real initialization that completes after reset", async () => {
   let exited = false;
-  await withRuntime(
+  await withProcessRuntime(
     "acpx-superseded-initialization",
-    async (runtime, store, directory) => {
-      const saveStarted = createDeferred<void>();
-      const releaseSave = createDeferred<void>();
-      const save = store.save.bind(store);
-      const saveSpy = vi.spyOn(store, "save").mockImplementationOnce(async (record) => {
-        saveStarted.resolve();
-        await releaseSave.promise;
-        await save(record);
-      });
+    async ({ runtime, store, directory }) => {
+      const saveGate = createHeldCall(store.save.bind(store));
+      const saveSpy = vi.spyOn(store, "save").mockImplementationOnce(saveGate.call);
       const target = { sessionKey: "superseded-initialization", agentId: "main" };
       const initializing = runtime.ensureSession({
+        ...fixtureSession(target.sessionKey),
         ...target,
-        agent: "fixture",
-        mode: "persistent",
       });
       void initializing.catch(() => {});
       try {
-        await saveStarted.promise;
+        await saveGate.entered;
         expect(exited).toBe(false);
         await runtime.prepareFreshSession(target);
-        releaseSave.resolve();
+        saveGate.release();
         await expect(initializing).rejects.toThrow("superseded by reset");
         expect(exited).toBe(true);
         expect(await fs.readdir(directory)).toEqual([]);
       } finally {
-        releaseSave.resolve();
-        await Promise.allSettled([initializing]);
+        await saveGate.settle(initializing);
         saveSpy.mockRestore();
       }
     },
@@ -258,28 +199,25 @@ it("cleans up real initialization that completes after reset", async () => {
 it.each([false, true])(
   "keeps controls attached to distinct oneshot records (discard: %s)",
   async (discardPersistentState) => {
-    const promptBlocked = createDeferred<void>();
-    const releasePrompt = createDeferred<void>();
+    const promptGate = createTestGate();
     await withServer(
       (_request, response) => {
-        promptBlocked.resolve();
-        void releasePrompt.promise.then(() => response.end("released"));
+        void promptGate.hold().then(() => response.end("released"));
       },
       async (promptGateUrl) => {
-        await withRuntime(
+        await withProcessRuntime(
           "acpx-oneshot-custody",
-          async (runtime, store) => {
-            const target = {
-              sessionKey: "shared-oneshot",
-              agentId: "main",
-              agent: "fixture",
-              mode: "oneshot" as const,
-            };
+          async ({ runtime, store }) => {
+            const target = { ...fixtureSession("shared-oneshot", "oneshot"), agentId: "main" };
             await runtime.prepareFreshSession(target);
             const first = await runtime.ensureSession(target);
             const shutdown = vi.spyOn(BaseAcpxRuntime.prototype, "shutdown");
-            const { turn, events, saveStarted, releaseSave, saveSpy, admit } =
-              startTurnWithHeldCheckpoint(runtime, store, first, "first");
+            const { turn, events, gate, saveSpy, admit } = startTurnWithHeldCheckpoint(
+              runtime,
+              store,
+              first,
+              "first",
+            );
             let turnFinished = false;
             void turn.result.then(
               () => {
@@ -294,7 +232,7 @@ it.each([false, true])(
             try {
               await admit();
               // Terminal persistence owns ACPX's record lock; these controls need a live prompt.
-              await Promise.all([promptBlocked.promise, saveStarted.promise]);
+              await Promise.all([promptGate.entered, gate.entered]);
               second = await runtime.ensureSession(target);
               expect(second.acpxRecordId).not.toBe(first.acpxRecordId);
               expect((await runtime.getStatus({ handle: first })).backendSessionId).toBe(
@@ -310,8 +248,8 @@ it.each([false, true])(
               });
               expect(turnFinished).toBe(false);
               expect(shutdown).not.toHaveBeenCalled();
-              releaseSave.resolve();
-              releasePrompt.resolve();
+              gate.release();
+              promptGate.release();
               await Promise.all([events, turn.result]);
               expect((await runtime.getStatus({ handle: second })).backendSessionId).toBe(
                 second.backendSessionId,
@@ -320,8 +258,8 @@ it.each([false, true])(
               expect(shutdown).toHaveBeenCalledOnce();
               await shutdown.mock.results[0]!.value;
             } finally {
-              releaseSave.resolve();
-              releasePrompt.resolve();
+              gate.release();
+              promptGate.release();
               await Promise.allSettled([
                 events,
                 turn.result,
@@ -339,15 +277,10 @@ it.each([false, true])(
 );
 
 it("creates a fresh oneshot while an old physical record write is still pending", async () => {
-  await withRuntime("acpx-oneshot-write-isolation", async (runtime, store) => {
-    const target = {
-      sessionKey: "oneshot-write-isolation",
-      agentId: "main",
-      agent: "fixture",
-      mode: "oneshot" as const,
-    };
+  await withProcessRuntime("acpx-oneshot-write-isolation", async ({ runtime, store }) => {
+    const target = { ...fixtureSession("oneshot-write-isolation", "oneshot"), agentId: "main" };
     const first = await runtime.ensureSession(target);
-    const { turn, events, saveStarted, releaseSave, saveSpy, admit } = startTurnWithHeldCheckpoint(
+    const { turn, events, gate, saveSpy, admit } = startTurnWithHeldCheckpoint(
       runtime,
       store,
       first,
@@ -358,7 +291,7 @@ it("creates a fresh oneshot while an old physical record write is still pending"
     let fresh: typeof first | undefined;
     try {
       await admit();
-      await saveStarted.promise;
+      await gate.entered;
       await runtime.prepareFreshSession(target);
       creating = runtime.ensureSession(target).then((handle) => {
         fresh = handle;
@@ -367,13 +300,13 @@ it("creates a fresh oneshot while an old physical record write is still pending"
       void creating.catch(() => {});
       await vi.waitFor(() => expect(fresh).toBeDefined(), { timeout: 5000 });
       expect(fresh?.acpxRecordId).not.toBe(first.acpxRecordId);
-      releaseSave.resolve();
+      gate.release();
       await Promise.all([events, turn.result]);
       const handle = await creating;
       expect((await runtime.getStatus({ handle })).backendSessionId).toBe(handle.backendSessionId);
       await runtime.close({ handle, reason: "fresh complete" });
     } finally {
-      releaseSave.resolve();
+      gate.release();
       await Promise.allSettled([events, turn.result, ...(creating ? [creating] : [])]);
       saveSpy.mockRestore();
     }

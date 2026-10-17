@@ -91,10 +91,8 @@ export function makeManagedRuntime() {
       record = structuredClone(next);
     }),
   };
-  const sleep = vi.fn(async () => {});
   mockAcpxProcessSystem({
     listProcesses: async () => [{ pid, ppid: 1, command: CODEX_ACP_WRAPPER_COMMAND }],
-    sleep,
   });
   const runtime = new AcpxRuntime({
     cwd: "/tmp",
@@ -108,9 +106,7 @@ export function makeManagedRuntime() {
   return {
     runtime,
     target,
-    resource,
     baseStore,
-    sleep,
     ensure: () => runtime.ensureSession({ ...target, agent: "fixture", mode: "persistent" }),
   };
 }
@@ -138,10 +134,7 @@ export function makeTurn(
 }
 
 export function runtimeCommand(runtime: AcpxRuntime): AcpxAgentCommand {
-  const registry: { resolve(agent: string): AcpxAgentCommand } = Reflect.get(
-    runtime,
-    "scopedAgentRegistry",
-  );
+  const registry: AcpRuntimeOptions["agentRegistry"] = Reflect.get(runtime, "scopedAgentRegistry");
   return registry.resolve("codex");
 }
 
