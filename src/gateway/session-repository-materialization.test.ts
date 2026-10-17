@@ -9,6 +9,7 @@ import {
   observeHostDataSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as githubOAuth from "../agents/github-oauth-client.js";
+import { createGitHubReadIdentity } from "../agents/github-read-identity.js";
 import {
   resolveManagedGitHubProfileDir,
   writeManagedGitHubProfileFiles,
@@ -32,6 +33,7 @@ import * as githubOAuthLifecycle from "./github-oauth-lifecycle.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
+import * as repositoryGitHubIdentity from "./worker-environments/repository-github-identity.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
@@ -55,6 +57,7 @@ describe("explicit repository move to Gateway", () => {
     "reset",
     "clone reset",
     "auth failure",
+    "unavailable identity",
   ] as const)(
     "keeps the current shared GitHub identity and move authority at clone admission: %s",
     async (scenario) => {
@@ -158,6 +161,9 @@ describe("explicit repository move to Gateway", () => {
                   lifecycleRevision: "reset-revision",
                 }));
               }
+              if (scenario === "unavailable identity") {
+                return { status: "unavailable" };
+              }
               return {
                 status: "available",
                 account: { accountId: 42, login: "shared-bot", avatarUrl: null },
@@ -201,6 +207,9 @@ describe("explicit repository move to Gateway", () => {
           if (scenario === "host mismatch") {
             await expect(operation).rejects.toThrow("configured GitHub host (ghe.example.test)");
             expect(verify).not.toHaveBeenCalled();
+            expect(clone).not.toHaveBeenCalled();
+          } else if (scenario === "unavailable identity") {
+            await expect(operation).rejects.toThrow(/reconnect.*GitHub identity/iu);
             expect(clone).not.toHaveBeenCalled();
           } else if (scenario === "revoked" || scenario === "reset") {
             await expect(operation).rejects.toThrow(
@@ -248,6 +257,16 @@ describe("explicit repository move to Gateway", () => {
     "requested topic",
     "unbound incognito",
   ] as const)("retains only committed materialization: %s", async (outcome) => {
+    // Local recovery fixtures exercise retained state; identity admission is covered above.
+    vi.spyOn(repositoryGitHubIdentity, "prepareRepositoryGitHubIdentity").mockImplementation(
+      async (_agentId, assertCurrent) =>
+        createGitHubReadIdentity({
+          token: undefined,
+          selection: { source: "anonymous" },
+          assertSelected: assertCurrent,
+          readToken: async () => undefined,
+        }),
+    );
     await withOpenClawTestState({ label: "repository-materialize" }, async (state) => {
       const cfg = {
         ...(outcome === "enterprise"

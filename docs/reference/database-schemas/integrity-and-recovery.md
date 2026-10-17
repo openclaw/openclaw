@@ -140,18 +140,25 @@ or validate seals. No database schema change is required for this seal format.
 
 After an agent schema migration, the schema owner registers the database while
 its verified connection is still open. Later opens in the same Doctor process
-can reuse that admission instead of repeating its full integrity scan. The
-pre-migration integrity check, recovery backups, and restart seal requirements
-remain unchanged.
+can reuse that admission instead of repeating its full integrity scan. Migration
+integrity coverage follows the policy below; recovery backups and restart seal
+requirements remain unchanged.
 
-| When                                             | Check                                                                                                                        |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| Startup with a matching, recent clean-close seal | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans |
-| Startup without a reusable seal                  | Run the normal full format, schema, canonical-index, integrity, and foreign-key validation                                   |
-| Same-process reopen or new worker                | Reuse live file-bound facts or a matching seal; retain current ownership and durable quarantine-row checks                   |
-| Before a pending migration                       | Run full integrity, foreign-key, role, schema, and index checks                                                              |
-| After a migration or repair                      | Verify changes and publish committed facts through the existing owner                                                        |
-| Doctor, backup verification, and compaction      | Run full checks before accepting or rewriting the database                                                                   |
+| When                                                   | Check                                                                                                                                                                                      |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Startup with a matching, recent clean-close seal       | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans                                                               |
+| Startup without a reusable seal                        | Run the normal full format, schema, canonical-index, integrity, and foreign-key validation                                                                                                 |
+| Same-process reopen or new worker                      | Reuse live file-bound facts or a matching seal; retain current ownership and durable quarantine-row checks                                                                                 |
+| Before a pending migration                             | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; `--full-integrity-check` requests full database integrity |
+| After a migration or repair                            | Verify changes and publish committed facts through the existing owner                                                                                                                      |
+| Explicit verification, Doctor recovery, and compaction | Retain full checks before accepting or rewriting the database; ordinary Doctor migrations use the migration policy above                                                                   |
+
+The migration default does not compare every untouched index with its table.
+An index/table mismatch outside the declared migration scope therefore needs
+`--full-integrity-check` to be detected. Structural corruption still refuses
+migration through the whole-database quick check, and a quick result never
+publishes full-verification facts. See
+[migration integrity checks](/install/updating#migration-integrity-checks).
 
 Gateway agent inspections share a five-second foreground wait. Unfinished stores
 remain unavailable while the startup admission owner completes their inspection

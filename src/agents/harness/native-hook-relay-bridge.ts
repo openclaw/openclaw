@@ -159,19 +159,11 @@ async function pruneNativeHookRelayBridges(stateDbPath: string): Promise<void> {
   // Liveness checks stay outside the transaction; deletion checks the token
   // owner and current expiry so renewal or replacement wins the race.
   try {
-    const pruned = await pruneNativeHookRelayBridgeRecords({
+    await pruneNativeHookRelayBridgeRecords({
       currentPid: process.pid,
       isPidDead: isPidDefinitelyDead,
       stateDbPath,
     });
-    for (const row of pruned) {
-      log.debug("pruned stale native hook relay bridge record", {
-        relayId: row.relayId,
-        stalePid: row.pid,
-        currentPid: process.pid,
-        reason: row.reason,
-      });
-    }
   } catch (error) {
     log.debug("native hook relay bridge record prune skipped", { error });
   }

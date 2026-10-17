@@ -27,8 +27,6 @@ export function createTestContext() {
   const onAgentEvent = vi.fn();
   const onExecutionPhase = vi.fn();
   const warn = vi.fn();
-  const trace = vi.fn();
-  const isEnabled = vi.fn<NonNullable<ToolHandlerContext["log"]["isEnabled"]>>(() => false);
   const ctx: ToolHandlerContext = {
     params: {
       runId: "run-test",
@@ -44,8 +42,6 @@ export function createTestContext() {
     hookRunner: undefined,
     log: {
       debug: vi.fn(),
-      trace,
-      isEnabled,
       info: vi.fn(),
       warn,
     },
@@ -57,5 +53,5 @@ export function createTestContext() {
     trimMessagingToolSent: vi.fn(),
   };
 
-  return { ctx, warn, onBlockReplyFlush, onAgentEvent, onExecutionPhase, trace, isEnabled };
+  return { ctx, warn, onBlockReplyFlush, onAgentEvent, onExecutionPhase };
 }

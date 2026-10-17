@@ -28,6 +28,7 @@ import {
 import { resolveBackupConfigCapture } from "./backup-config-capture.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256Hex } from "./crypto-digest.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import {
   pinDirectory,
   publishFileExclusive,
@@ -232,7 +233,7 @@ export function captureUpdateRecoveryBaseline(params: {
         stateDir,
         warnings,
         requireLocalResources: true,
-        ...(snapshot.sourceConfig.database?.engine === "postgres"
+        ...(resolveDatabaseFamilyEngines(snapshot.sourceConfig).state === "postgres"
           ? {
               manifestRegistry: (
                 await resolveConfigWidePluginMetadataSnapshotAsync({
@@ -248,7 +249,7 @@ export function captureUpdateRecoveryBaseline(params: {
       return plugins.resources;
     };
     const collectResources = () =>
-      snapshot.sourceConfig.database?.engine === "postgres"
+      resolveDatabaseFamilyEngines(snapshot.sourceConfig).state === "postgres"
         ? collect()
         : withOpenClawStateDatabaseReadSnapshot(collect, { env });
     const declared = await collectResources();

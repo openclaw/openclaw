@@ -31,11 +31,12 @@ export class WebSearchProviderError extends Error {
       const chatLogin = buildOAuthRefreshFailureLoginCommand(oauthFailure.provider, {
         surface: "chat",
       });
+      // Facts only: the model decides whether the outage is worth mentioning.
       message =
         `Search failed: this search provider's ${signIn} ${state}. ` +
-        `To fix it, send \`${chatLogin}\` from a private chat or Control UI session, ` +
-        `or run \`${buildOAuthRefreshFailureLoginCommand(oauthFailure.provider)}\` on the Gateway. ` +
-        "Until then, tell the user web search is unavailable and use another route.";
+        `The Gateway owner can fix it by sending \`${chatLogin}\` in a private chat or Control UI session, ` +
+        `or by running \`${buildOAuthRefreshFailureLoginCommand(oauthFailure.provider)}\`. ` +
+        "Other routes, such as web_fetch, may still work.";
     } else if (!status && isSignalTimeoutReason(this.cause)) {
       // Only a numeric budget crosses the boundary; never parse upstream diagnostic prose.
       const timeoutMs: unknown =

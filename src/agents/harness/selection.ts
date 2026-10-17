@@ -375,12 +375,6 @@ export async function runAgentHarnessAttempt(
     selection.builtIn,
     selection.ownerPluginId,
   );
-  logAgentHarnessSelection(selection, {
-    provider: params.provider,
-    modelId: params.modelId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
   let result: EmbeddedRunAttemptResult;
   let assembly: ContextEngineAssemblySnapshot | undefined;
   try {
@@ -713,23 +707,4 @@ function appendPluginHarnessToolPolicyPrompt(existing: string | undefined, promp
     return prompt;
   }
   return trimmed.includes(prompt) ? trimmed : `${trimmed}\n\n${prompt}`;
-}
-
-function logAgentHarnessSelection(
-  selection: AgentHarnessSelectionDecision,
-  params: { provider: string; modelId?: string; sessionKey?: string; agentId?: string },
-) {
-  if (!log.isEnabled("debug")) {
-    return;
-  }
-  log.debug("agent harness selected", {
-    provider: params.provider,
-    modelId: params.modelId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    selectedHarnessId: selection.selectedHarnessId,
-    selectedReason: selection.selectedReason,
-    runtime: selection.policy.runtime,
-    candidates: selection.candidates,
-  });
 }

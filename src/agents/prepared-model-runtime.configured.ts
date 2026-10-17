@@ -289,6 +289,8 @@ export function listConfiguredOwnerInputs(
   defaultWorkspaceDir?: string,
   allowGatewaySubagentBinding?: boolean,
   preservedWorkspaceByAgentDir?: ReadonlyMap<string, ReadonlyMap<string, string>>,
+  /** The published inventory; refreshes inside a lifecycle lease cannot read it from cache. */
+  pluginMetadataSnapshot?: PluginMetadataSnapshot,
 ): PreparedModelRuntimeInput[] {
   const compatibilityAgentId = tryResolveLegacyCompatibilityAgentId(config);
   const inheritedAuthDir = resolveLegacyInheritedAuthDir(config);
@@ -314,7 +316,11 @@ export function listConfiguredOwnerInputs(
       const workspaceDir = preserveWorkspaceDirOnRefresh
         ? launchWorkspaceDir
         : resolveAgentWorkspaceDir(config, agentId);
-      const configured = resolveDefaultModelForAgent({ cfg: config, agentId });
+      const configured = resolveDefaultModelForAgent({
+        cfg: config,
+        agentId,
+        manifestPlugins: pluginMetadataSnapshot,
+      });
       const subagentModel = resolveSubagentConfiguredModelSelection({
         cfg: config,
         agentId,

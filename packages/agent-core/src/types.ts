@@ -312,6 +312,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     message: AssistantMessage;
     toolResults: ToolResultMessage[];
     terminalToolCallIds: ReadonlySet<string>;
+    inputScope: object;
   }) => boolean;
 
   /** @internal Preserves loop safety evidence across Agent.continue() retries. */

@@ -106,6 +106,7 @@ export function dismissRealtimeTalkError(state: ChatRealtimeState) {
   stopChatRealtimeTalk(state);
 }
 
+// Realtime call/device state stays synchronous; requestUpdate publishes it to the pane render lifecycle.
 export function attachChatRealtimeActions(
   state: ChatRealtimeState,
   canStart: () => boolean = () => true,
