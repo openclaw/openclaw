@@ -75,42 +75,38 @@ function projectWorkerResult(result: CodeModeWorkerResult) {
   };
 }
 
-function workerExec(source: string, swarmEnabled: boolean) {
+function runWorker(input: Parameters<typeof testing.runCodeModeExecutor>[0]) {
   return testing
-    .runCodeModeExecutor(
-      {
-        kind: "exec",
-        source,
-        config,
-        catalog: [],
-        apiFiles: [],
-        namespaces: [],
-        swarmEnabled,
-      },
-      { timeoutMs: 10_000, executor: config.executor },
-    )
+    .runCodeModeExecutor(input, { timeoutMs: 10_000, executor: config.executor })
     .then(projectWorkerResult);
+}
+
+function workerExec(source: string, swarmEnabled: boolean) {
+  return runWorker({
+    kind: "exec",
+    source,
+    config,
+    catalog: [],
+    apiFiles: [],
+    namespaces: [],
+    swarmEnabled,
+  });
 }
 
 function workerResume(
   waiting: Extract<Awaited<ReturnType<typeof workerExec>>, { status: "waiting" }>,
   settledRequests: Array<{ id: string; ok: true; value: unknown }>,
 ) {
-  return testing
-    .runCodeModeExecutor(
-      {
-        kind: "resume",
-        continuation: waiting.continuation,
-        config,
-        settledRequests: settledRequests.map(({ id, ok, value }) => ({
-          id,
-          ok,
-          json: JSON.stringify(value),
-        })),
-      },
-      { timeoutMs: 10_000, executor: config.executor },
-    )
-    .then(projectWorkerResult);
+  return runWorker({
+    kind: "resume",
+    continuation: waiting.continuation,
+    config,
+    settledRequests: settledRequests.map(({ id, ok, value }) => ({
+      id,
+      ok,
+      json: JSON.stringify(value),
+    })),
+  });
 }
 
 function expectWaiting(
@@ -135,12 +131,7 @@ async function completeWorkerAgent(prompt: string, runId: string, completion: un
 }
 
 function swarmContext() {
-  const runtimeConfig = {
-    tools: {
-      codeMode: true,
-      swarm: { enabled: true },
-    },
-  };
+  const runtimeConfig = { tools: { codeMode: true, swarm: { enabled: true } } };
   return {
     config: runtimeConfig,
     runtimeConfig,
@@ -149,6 +140,18 @@ function swarmContext() {
     runId: "run-swarm",
   };
 }
+
+const acceptedCollector = {
+  status: "accepted",
+  runId: "collector-1",
+  childSessionKey: "agent:main:subagent:1",
+};
+const restoredCollector = {
+  runId: "collector-1",
+  status: "done",
+  result: "restored",
+  sessionKey: "agent:main:subagent:1",
+};
 
 function collectorRecord(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {
@@ -193,7 +196,7 @@ function createSwarmHarness(onSpawn?: (input: SpawnSubagentParams) => void | Pro
   if (onSpawn) {
     swarmMocks.spawnSubagentDirect.mockImplementation(async (input: SpawnSubagentParams) => {
       await onSpawn(input);
-      return { status: "accepted", runId: "collector-1", childSessionKey: "agent:main:subagent:1" };
+      return { ...acceptedCollector };
     });
   }
   applyCodeModeCatalog({
@@ -214,20 +217,11 @@ async function runSwarmCode(harness: ReturnType<typeof createSwarmHarness>, code
 }
 
 beforeEach(() => {
-  swarmMocks.spawnSubagentDirect.mockReset().mockResolvedValue({
-    status: "accepted",
-    runId: "collector-1",
-    childSessionKey: "agent:main:subagent:1",
-  });
+  swarmMocks.spawnSubagentDirect.mockReset().mockResolvedValue({ ...acceptedCollector });
   swarmMocks.emitSessionLifecycleEvent.mockReset();
   swarmMocks.getSwarmRunByLaunchReplayKey.mockReset().mockResolvedValue(undefined);
   swarmMocks.initSubagentRegistry.mockReset();
-  swarmMocks.waitForCollectorCompletion.mockReset().mockResolvedValue({
-    runId: "collector-1",
-    status: "done",
-    result: "restored",
-    sessionKey: "agent:main:subagent:1",
-  });
+  swarmMocks.waitForCollectorCompletion.mockReset().mockResolvedValue({ ...restoredCollector });
 });
 
 afterEach(async () => {
@@ -474,11 +468,8 @@ describe("Code Mode swarm host bridge", () => {
         assertCollectorOffered();
       }
       swarmMocks.waitForCollectorCompletion.mockResolvedValueOnce({
-        runId: "collector-1",
-        status: "done",
-        result: "restored",
+        ...restoredCollector,
         structured: { answer: "restored" },
-        sessionKey: "agent:main:subagent:1",
       });
       // Only a missing reader hides the fields; an offered reader keeps them stable.
       const advertised = reader === "execution-denied";

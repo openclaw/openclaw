@@ -1,36 +1,25 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { applyCodeModeCatalog, runCodeModeScriptHeadless } from "./code-mode.js";
 import {
-  applyCodeModeCatalog,
-  createCodeModeTools,
-  runCodeModeScriptHeadless,
-} from "./code-mode.js";
-import {
+  createCodeModeHarness,
   createHeadlessCodeModeHarness,
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
   testing,
 } from "./code-mode.test-support.js";
-import { createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 // Both public entry points use the real selected executor and normal tool executor.
 function harness(headless: boolean, limit: number, tool: AnyAgentTool) {
-  const config: OpenClawConfig = {
-    tools: { codeMode: { enabled: true, maxPendingToolCalls: limit } },
-  };
-  const ctx = {
-    config,
-    runtimeConfig: config,
+  const { ctx, tools } = createCodeModeHarness({ codeMode: { maxPendingToolCalls: limit } });
+  Object.assign(ctx, {
     sessionId: "backpressure-session",
     sessionKey: "agent:main:backpressure",
     runId: "backpressure-run",
-    catalogRef: createToolSearchCatalogRef(),
-  };
-  const tools = createCodeModeTools(ctx);
+  });
   applyCodeModeCatalog({ ...ctx, tools: [...tools, tool] });
   return async (
     code: string,
@@ -192,15 +181,11 @@ describe("ordinary bridge backpressure", () => {
 });
 
 it("carries queued calls through a public exec/wait without replaying the prefix", async () => {
-  const config: OpenClawConfig = { tools: { codeMode: true } };
-  const ctx = {
-    config,
-    runtimeConfig: config,
-    catalogRef: createToolSearchCatalogRef(),
+  const { ctx, tools } = createCodeModeHarness();
+  Object.assign(ctx, {
     runId: "wait-backpressure",
     sessionId: "wait-session",
-  };
-  const tools = createCodeModeTools(ctx);
+  });
   const probe = pluginToolWithExecute("probe", "Wait queue probe", async (_id, input) =>
     jsonResult(input),
   );

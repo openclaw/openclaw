@@ -42,6 +42,12 @@ function run(manager: SessionManager) {
   };
 }
 
+async function saveCell(owner: ReturnType<typeof run>, key: string, value: unknown) {
+  const cell = owner.cell();
+  await cell.save(key, value, false);
+  await cell.commit();
+}
+
 describe("Code Mode session store", () => {
   it("appends one hidden entry per cell and replays writes, deletes, and provenance in the next run", async () => {
     const manager = SessionManager.inMemory();
@@ -75,25 +81,19 @@ describe("Code Mode session store", () => {
   it("replays only the selected branch, preserves earlier values through compaction, and forks that path", async () => {
     const manager = SessionManager.inMemory();
     const rootRun = run(manager);
-    const rootCell = rootRun.cell();
-    await rootCell.save("inherited", "root", false);
-    await rootCell.commit();
+    await saveCell(rootRun, "inherited", "root");
     const root = manager.getLeafId()!;
     rootRun.close();
 
     const branchA = run(manager);
-    const cellA = branchA.cell();
-    await cellA.save("branch", "A", false);
-    await cellA.commit();
+    await saveCell(branchA, "branch", "A");
     const leafA = manager.getLeafId()!;
     branchA.close();
 
     await manager.branchAsync(root);
     const branchB = run(manager);
     await expect(branchB.cell().load("branch")).resolves.toEqual({ networkContent: false });
-    const cellB = branchB.cell();
-    await cellB.save("branch", "B", false);
-    await cellB.commit();
+    await saveCell(branchB, "branch", "B");
     branchB.close();
     const kept = await manager.appendMessageAsync({
       role: "user",
@@ -115,9 +115,7 @@ describe("Code Mode session store", () => {
   it("keeps the projection unchanged after failed persistence and admits a later cell", async () => {
     const manager = SessionManager.inMemory();
     const owner = run(manager);
-    const seed = owner.cell();
-    await seed.save("key", "original", false);
-    await seed.commit();
+    await saveCell(owner, "key", "original");
     const failed = owner.cell();
     await failed.save("key", "lost", true);
     vi.spyOn(manager, "appendCustomEntryAsync").mockRejectedValueOnce(
@@ -183,9 +181,7 @@ describe("Code Mode session store", () => {
   it("retires old accesses on catalog restriction while keeping the session available to new cells", async () => {
     const manager = SessionManager.inMemory();
     const owner = run(manager);
-    const seed = owner.cell();
-    await seed.save("retained", true, false);
-    await seed.commit();
+    await saveCell(owner, "retained", true);
     const old = owner.cell();
     await old.save("discarded", true, false);
     owner.catalogRef.current!.entries.push({
