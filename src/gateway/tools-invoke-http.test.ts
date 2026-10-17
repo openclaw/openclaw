@@ -149,13 +149,15 @@ vi.mock("../agents/openclaw-tools.js", async () => {
     return err;
   };
 
-  function successfulTool(name: string, result: string) {
+  function fixtureTool<T>(name: string, execute: () => Promise<T>) {
     return {
       name,
       parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true, result }),
+      execute,
     };
   }
+  const successfulTool = (name: string, result: string) =>
+    fixtureTool(name, async () => ({ ok: true, result }));
 
   const pluginDoctor = {
     name: "plugin_doctor",
@@ -167,28 +169,16 @@ vi.mock("../agents/openclaw-tools.js", async () => {
   setPluginToolMeta(pluginDoctor, { pluginId: "test-plugin", optional: true });
   const tools = [
     ...createUploadToolFixtures(hookMocks.uploadToolExecute),
-    {
-      name: "session_status",
-      parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true }),
-    },
+    fixtureTool("session_status", async () => ({ ok: true })),
     {
       name: "agents_list",
       parameters: { type: "object", properties: { action: { type: "string" } } },
       execute: async () => ({ ok: true, result: [] }),
     },
-    {
-      name: "sessions_send",
-      parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true }),
-    },
-    {
-      name: "gateway",
-      parameters: { type: "object", properties: {} },
-      execute: async () => {
-        throw toolInputError("invalid args");
-      },
-    },
+    fixtureTool("sessions_send", async () => ({ ok: true })),
+    fixtureTool("gateway", async () => {
+      throw toolInputError("invalid args");
+    }),
     successfulTool("automations", "automations"),
     successfulTool("exec", "exec"),
     successfulTool("apply_patch", "apply_patch"),
@@ -315,21 +305,6 @@ beforeEach(() => {
 const gatewayAuthHeaders = () => ({ "x-openclaw-scopes": "operator.write" });
 const gatewayAdminHeaders = () => ({ "x-openclaw-scopes": "operator.admin" });
 
-const allowAgentsListForMain = () => {
-  cfg = {
-    ...cfg,
-    agents: {
-      entries: {
-        main: {
-          tools: {
-            allow: ["agents_list"],
-          },
-        },
-      },
-    },
-  };
-};
-
 const postToolsInvoke = async (params: {
   port: number;
   headers?: Record<string, string>;
@@ -341,23 +316,6 @@ const postToolsInvoke = async (params: {
     body: JSON.stringify(params.body),
   });
 
-const withOptionalSessionKey = (body: Record<string, unknown>, sessionKey?: string) => ({
-  ...body,
-  ...(sessionKey ? { sessionKey } : {}),
-});
-
-const invokeAgentsList = async (params: {
-  port: number;
-  headers?: Record<string, string>;
-  sessionKey?: string;
-}) => {
-  const body = withOptionalSessionKey(
-    { tool: "agents_list", action: "json", args: {} },
-    params.sessionKey,
-  );
-  return await postToolsInvoke({ port: params.port, headers: params.headers, body });
-};
-
 const invokeTool = async (params: {
   port: number;
   tool: string;
@@ -366,39 +324,34 @@ const invokeTool = async (params: {
   headers?: Record<string, string>;
   sessionKey?: string;
 }) => {
-  const body: Record<string, unknown> = withOptionalSessionKey(
-    {
-      tool: params.tool,
-      args: params.args ?? {},
-    },
-    params.sessionKey,
-  );
-  if (params.action) {
-    body.action = params.action;
-  }
+  const body = {
+    tool: params.tool,
+    args: params.args ?? {},
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.action ? { action: params.action } : {}),
+  };
   return await postToolsInvoke({ port: params.port, headers: params.headers, body });
 };
 
 const invokeAgentsListAuthed = async (params: { sessionKey?: string } = {}) =>
-  invokeAgentsList({
+  invokeTool({
+    tool: "agents_list",
+    action: "json",
     port: sharedPort,
     headers: gatewayAuthHeaders(),
     sessionKey: params.sessionKey,
   });
 
 const invokeAgentsListBearer = async () =>
-  await postToolsInvoke({
+  await invokeTool({
     port: sharedPort,
     headers: {
       authorization: "Bearer secret",
       "content-type": "application/json",
     },
-    body: {
-      tool: "agents_list",
-      action: "json",
-      args: {},
-      sessionKey: "main",
-    },
+    tool: "agents_list",
+    action: "json",
+    sessionKey: "main",
   });
 
 const invokeToolAuthed = async (params: {
@@ -463,17 +416,34 @@ const invokeToolsRpc = async (
 const setMainAllowedTools = (params: { allow: string[]; gatewayAllow?: string[] }) => {
   cfg = {
     ...cfg,
-    agents: {
-      entries: { main: { tools: { allow: params.allow } } },
-    },
+    agents: { entries: { main: { tools: { allow: params.allow } } } },
     ...(params.gatewayAllow
       ? {
-          gateway: {
-            tools: { allow: params.gatewayAllow },
-          },
+          gateway: { tools: { allow: params.gatewayAllow } },
         }
       : {}),
   };
+};
+const allowAgentsListForMain = () => setMainAllowedTools({ allow: ["agents_list"] });
+const profileAuth = (profile: { id: string; displayName: string | null; updatedAt: number }) => ({
+  profileId: profile.id,
+  displayName: profile.displayName,
+  hasAvatar: false,
+  updatedAt: profile.updatedAt,
+});
+const guestRole = (agents: string[] | "*", others: "view" | "none" = "view") => ({
+  default: "guest",
+  definitions: { guest: { agents, scopes: ["operator.write"], sessions: { others } } },
+});
+const sharedSession = async (sessionKey: string, sessionId: string, ownerId: string) => {
+  const entry = {
+    sessionId,
+    updatedAt: 1,
+    visibility: "shared" as const,
+    createdActor: { type: "human" as const, source: "profile" as const, id: ownerId },
+  };
+  await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+  sessionEntries.set(sessionKey, entry);
 };
 
 describe("POST /tools/invoke", () => {
@@ -509,16 +479,7 @@ describe("POST /tools/invoke", () => {
         agents: { entries: { main: { tools: { allow: ["sessions_spawn"] } } } },
         gateway: {
           tools: { allow: ["sessions_spawn"] },
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "view" },
-                agents: ["main", "guest-agent"],
-                scopes: ["operator.write"],
-              },
-            },
-          },
+          roles: guestRole(["main", "guest-agent"]),
         },
       };
 
@@ -531,12 +492,7 @@ describe("POST /tools/invoke", () => {
         ["operator.write"],
         undefined,
         undefined,
-        {
-          profileId: profile.id,
-          displayName: profile.displayName,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        },
+        profileAuth(profile),
       );
 
       expect(call?.[1]).toMatchObject({
@@ -558,28 +514,12 @@ describe("POST /tools/invoke", () => {
       await withToolsInvokeTestState(profileState, async () => {
         const owner = ensureGatewayOwnerProfile("Gateway Owner");
         const sessionKey = "agent:main:sysauth-primary";
-        const entry = {
-          sessionId: "sysauth-primary-session",
-          updatedAt: 1,
-          visibility: "shared" as const,
-          createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
-        };
-        await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
-        sessionEntries.set(sessionKey, entry);
+        await sharedSession(sessionKey, "sysauth-primary-session", owner.id);
         cfg = {
           agents: { entries: { main: { tools: { allow: [toolName] } } } },
           gateway: {
             tools: { allow: [toolName] },
-            roles: {
-              default: "guest",
-              definitions: {
-                guest: {
-                  sessions: { others: "view" },
-                  agents: ["guest-agent"],
-                  scopes: ["operator.write"],
-                },
-              },
-            },
+            roles: guestRole(["guest-agent"]),
           },
         };
 
@@ -588,14 +528,7 @@ describe("POST /tools/invoke", () => {
           ["operator.write"],
           undefined,
           undefined,
-          withProfile
-            ? {
-                profileId: owner.id,
-                displayName: owner.displayName,
-                hasAvatar: false,
-                updatedAt: owner.updatedAt,
-              }
-            : undefined,
+          withProfile ? profileAuth(owner) : undefined,
           { operatorRoleActor: { kind: "system" } },
         );
 
@@ -611,28 +544,12 @@ describe("POST /tools/invoke", () => {
       const guest = ensureProfileForEmail("guest@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const foreignKey = "agent:main:foreign";
-      const entry = {
-        sessionId: "foreign-session",
-        updatedAt: 1,
-        visibility: "shared" as const,
-        createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
-      };
-      await upsertSessionEntryCore({ agentId: "main", sessionKey: foreignKey }, entry);
-      sessionEntries.set(foreignKey, entry);
+      await sharedSession(foreignKey, "foreign-session", owner.id);
       cfg = {
         agents: { entries: { main: { tools: { allow: ["sessions_send"] } } } },
         gateway: {
           tools: { allow: ["sessions_send"] },
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "view" },
-                agents: "*",
-                scopes: ["operator.write"],
-              },
-            },
-          },
+          roles: guestRole("*"),
         },
       };
 
@@ -645,12 +562,7 @@ describe("POST /tools/invoke", () => {
         ["operator.write"],
         undefined,
         undefined,
-        {
-          profileId: guest.id,
-          displayName: guest.displayName,
-          hasAvatar: false,
-          updatedAt: guest.updatedAt,
-        },
+        profileAuth(guest),
       );
 
       expect(call?.[1]).toMatchObject({
@@ -672,27 +584,11 @@ describe("POST /tools/invoke", () => {
       ensureProfileForEmail("guest@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const sessionKey = "agent:main:foreign-primary";
-      const entry = {
-        sessionId: "foreign-primary-session",
-        updatedAt: 1,
-        visibility: "shared" as const,
-        createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
-      };
-      await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
-      sessionEntries.set(sessionKey, entry);
+      await sharedSession(sessionKey, "foreign-primary-session", owner.id);
       cfg = {
         agents: { entries: { main: { tools: { allow: ["agents_list"] } } } },
         gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                agents: "*",
-                scopes: ["operator.write"],
-                sessions: { others: "view" },
-              },
-            },
-          },
+          roles: guestRole("*"),
         },
       };
       vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({
@@ -752,40 +648,24 @@ describe("POST /tools/invoke", () => {
       tools: { profile: "minimal", alsoAllow: ["agents_list"] },
     };
 
-    const resProfile = await invokeAgentsListAuthed({ sessionKey: "main" });
-
-    expect(resProfile.status).toBe(200);
-    const profileBody = await resProfile.json();
-    expect(profileBody.ok).toBe(true);
+    await expectOkInvokeResponse(await invokeAgentsListAuthed({ sessionKey: "main" }));
 
     cfg = {
       ...cfg,
       tools: { alsoAllow: ["agents_list"] },
     };
 
-    const resImplicit = await invokeAgentsListAuthed({ sessionKey: "main" });
-    expect(resImplicit.status).toBe(200);
-    const implicitBody = await resImplicit.json();
-    expect(implicitBody.ok).toBe(true);
+    await expectOkInvokeResponse(await invokeAgentsListAuthed({ sessionKey: "main" }));
   });
 
   it("propagates owner-only HTTP denies into spawned session inheritance", async () => {
-    cfg = {
-      ...cfg,
-      agents: {
-        entries: { main: { tools: { allow: ["sessions_spawn", "cron", "gateway", "nodes"] } } },
-      },
-      gateway: { tools: { allow: ["sessions_spawn", "cron", "gateway", "nodes"] } },
-    };
-
-    const res = await invokeTool({
-      port: sharedPort,
-      headers: gatewayAuthHeaders(),
-      tool: "sessions_spawn",
-      sessionKey: "main",
+    setMainAllowedTools({
+      allow: ["sessions_spawn", "cron", "gateway", "nodes"],
+      gatewayAllow: ["sessions_spawn", "cron", "gateway", "nodes"],
     });
-
-    const body = await expectOkInvokeResponse(res);
+    const body = await expectOkInvokeResponse(
+      await invokeToolAuthed({ tool: "sessions_spawn", sessionKey: "main" }),
+    );
     expect(body.result?.inheritedToolDenylist).toEqual(
       expect.arrayContaining(["automations", "gateway", "nodes"]),
     );
@@ -798,15 +678,9 @@ describe("POST /tools/invoke", () => {
     });
 
     for (const tool of ["cron", "gateway", "nodes"]) {
-      const res = await invokeToolAuthed({
-        tool,
-        sessionKey: "main",
-      });
-
+      const res = await invokeToolAuthed({ tool, sessionKey: "main" });
       expect(res.status, tool).toBe(404);
-      const body = await res.json();
-      expect(body.ok, tool).toBe(false);
-      expect(body.error?.type, tool).toBe("not_found");
+      expect(await res.json(), tool).toMatchObject({ ok: false, error: { type: "not_found" } });
     }
   });
 
@@ -817,26 +691,15 @@ describe("POST /tools/invoke", () => {
         ownership: "explicit",
         defaults: { systemAgent: { agentId: "ops" } },
         entries: {
-          main: {
-            tools: {
-              deny: ["agents_list"],
-            },
-          },
-          ops: {
-            tools: {
-              allow: ["agents_list"],
-            },
-          },
+          main: { tools: { deny: ["agents_list"] } },
+          ops: { tools: { allow: ["agents_list"] } },
         },
       },
       session: { mainKey: "primary" },
     };
 
-    const resDefault = await invokeAgentsListAuthed();
-    expect(resDefault.status).toBe(200);
-
-    const resMain = await invokeAgentsListAuthed({ sessionKey: "main" });
-    expect(resMain.status).toBe(200);
+    expect((await invokeAgentsListAuthed()).status).toBe(200);
+    expect((await invokeAgentsListAuthed({ sessionKey: "main" })).status).toBe(200);
   });
 
   registerToolsInvokeErrorTests({
@@ -864,10 +727,10 @@ describe("POST /tools/invoke", () => {
     });
 
     expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body.ok).toBe(false);
-    expect(body.error?.type).toBe("forbidden");
-    expect(body.error?.message).toBe("missing scope: operator.write");
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { type: "forbidden", message: "missing scope: operator.write" },
+    });
   });
 
   it("treats shared-secret bearer auth as full operator access on /tools/invoke", async () => {
@@ -909,27 +772,11 @@ describe("POST /tools/invoke", () => {
     await withToolsInvokeTestState(profileState, async () => {
       const owner = ensureProfileForEmail("role-owner@example.test");
       const sessionKey = "agent:main:shared-secret-owner-session";
-      const entry = {
-        sessionId: "shared-secret-owner-session",
-        updatedAt: 1,
-        visibility: "shared" as const,
-        createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
-      };
-      await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
-      sessionEntries.set(sessionKey, entry);
+      await sharedSession(sessionKey, "shared-secret-owner-session", owner.id);
       cfg = {
         ...cfg,
         gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                agents: ["guest-agent"],
-                scopes: ["operator.write"],
-                sessions: { others: "none" },
-              },
-            },
-          },
+          roles: guestRole(["guest-agent"], "none"),
         },
       };
       vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
@@ -976,18 +823,9 @@ describe("POST /tools/invoke", () => {
   it("extends the HTTP deny list to high-risk execution and file tools", async () => {
     setMainAllowedTools({ allow: ["exec", "apply_patch", "nodes"] });
 
-    const execRes = await invokeToolAuthed({
-      tool: "exec",
-      sessionKey: "main",
-    });
-    const patchRes = await invokeToolAuthed({
-      tool: "apply_patch",
-      sessionKey: "main",
-    });
-    const nodesRes = await invokeToolAuthed({
-      tool: "nodes",
-      sessionKey: "main",
-    });
+    for (const tool of ["exec", "apply_patch", "nodes"]) {
+      expect((await invokeToolAuthed({ tool, sessionKey: "main" })).status, tool).toBe(404);
+    }
     const nodesAdminRes = await invokeTool({
       port: sharedPort,
       headers: gatewayAdminHeaders(),
@@ -995,9 +833,6 @@ describe("POST /tools/invoke", () => {
       sessionKey: "main",
     });
 
-    expect(execRes.status).toBe(404);
-    expect(patchRes.status).toBe(404);
-    expect(nodesRes.status).toBe(404);
     expect(nodesAdminRes.status).toBe(404);
   });
 });
@@ -1014,22 +849,18 @@ describe("tools.invoke Gateway RPC", () => {
     });
 
     expect(call?.[0]).toBe(true);
-    expect(call?.[1]?.ok).toBe(true);
-    expect(call?.[1]?.toolName).toBe("agents_list");
+    expect(call?.[1]).toMatchObject({ ok: true, toolName: "agents_list", source: "core" });
     expect(call?.[1]?.output).toEqual({ ok: true, result: [] });
-    expect((call?.[1] as { source?: unknown } | undefined)?.source).toBe("core");
     expect(lastCreateOpenClawToolsContext?.allowGatewaySubagentBinding).toBe(true);
     const hookArg = firstHookCallArg();
-    expect(hookArg.approvalMode).toBe("report");
-    expect(hookArg.toolName).toBe("agents_list");
-    expect(hookArg.toolCallId).toBe("rpc-delegated-rpc-tool-test");
-    const hookCtx = hookArg.ctx;
-    if (!hookCtx) {
-      throw new Error("Expected before-tool-call hook context");
-    }
-    expect(hookCtx.agentId).toBe("main");
+    expect(hookArg).toMatchObject({
+      approvalMode: "report",
+      toolName: "agents_list",
+      toolCallId: "rpc-delegated-rpc-tool-test",
+      ctx: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+    const hookCtx = expectDefined(hookArg.ctx, "before-tool-call hook context");
     expect(hookCtx.config).toBe(cfg);
-    expect(hookCtx.sessionKey).toBe("agent:main:main");
     expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("delegated");
   });
 
@@ -1166,18 +997,15 @@ describe("tools.invoke Gateway RPC", () => {
     });
 
     for (const tool of ["cron", "gateway", "nodes"]) {
-      const call = await invokeToolsRpc({
-        name: tool,
-        args: {},
-        sessionKey: "main",
-      });
+      const call = await invokeToolsRpc({ name: tool, args: {}, sessionKey: "main" });
 
       expect(call?.[0], tool).toBe(true);
-      expect(call?.[1]?.ok, tool).toBe(false);
       // Legacy "cron" requests canonicalize before dispatch and report the canonical id.
-      expect(call?.[1]?.toolName, tool).toBe(tool === "cron" ? "automations" : tool);
-      const error = call?.[1]?.error as { code?: string; message?: string } | undefined;
-      expect(error?.code, tool).toBe("not_found");
+      expect(call?.[1], tool).toMatchObject({
+        ok: false,
+        toolName: tool === "cron" ? "automations" : tool,
+        error: { code: "not_found" },
+      });
     }
     expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(false);
   });
@@ -1185,18 +1013,12 @@ describe("tools.invoke Gateway RPC", () => {
   it("keeps operator.admin RPC callers as owner for explicitly allowed owner-only tools", async () => {
     setMainAllowedTools({ allow: ["nodes"], gatewayAllow: ["nodes"] });
 
-    const call = await invokeToolsRpc(
-      {
-        name: "nodes",
-        args: {},
-        sessionKey: "main",
-      },
-      ["operator.admin"],
-    );
+    const call = await invokeToolsRpc({ name: "nodes", args: {}, sessionKey: "main" }, [
+      "operator.admin",
+    ]);
 
     expect(call?.[0]).toBe(true);
-    expect(call?.[1]?.ok).toBe(true);
-    expect(call?.[1]?.toolName).toBe("nodes");
+    expect(call?.[1]).toMatchObject({ ok: true, toolName: "nodes" });
     expect(call?.[1]?.output).toEqual({ ok: true, result: "nodes" });
     expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
   });
@@ -1220,12 +1042,12 @@ describe("tools.invoke Gateway RPC", () => {
     });
 
     expect(call?.[0]).toBe(true);
-    expect(call?.[1]?.ok).toBe(false);
-    expect(call?.[1]?.toolName).toBe("tools_invoke_test");
-    expect((call?.[1] as { requiresApproval?: unknown } | undefined)?.requiresApproval).toBe(true);
-    const error = call?.[1]?.error as { code?: string; message?: string } | undefined;
-    expect(error?.code).toBe("requires_approval");
-    expect(error?.message).toBe("Plugin approval required");
+    expect(call?.[1]).toMatchObject({
+      ok: false,
+      toolName: "tools_invoke_test",
+      requiresApproval: true,
+      error: { code: "requires_approval", message: "Plugin approval required" },
+    });
   });
 
   it("rejects mismatched session and agent scope", async () => {
@@ -1245,11 +1067,14 @@ describe("tools.invoke Gateway RPC", () => {
     });
 
     expect(call?.[0]).toBe(true);
-    expect(call?.[1]?.ok).toBe(false);
-    expect(call?.[1]?.toolName).toBe("agents_list");
-    const error = call?.[1]?.error as { code?: string; message?: string } | undefined;
-    expect(error?.code).toBe("validation_error");
-    expect(error?.message).toBe('agent "other" does not match session key agent "main"');
+    expect(call?.[1]).toMatchObject({
+      ok: false,
+      toolName: "agents_list",
+      error: {
+        code: "validation_error",
+        message: 'agent "other" does not match session key agent "main"',
+      },
+    });
   });
 
   it("accepts a non-canonical spelling of the session agent id", async () => {
@@ -1263,8 +1088,7 @@ describe("tools.invoke Gateway RPC", () => {
     });
 
     expect(call?.[0]).toBe(true);
-    expect(call?.[1]?.ok).toBe(true);
-    expect(call?.[1]?.toolName).toBe("agents_list");
+    expect(call?.[1]).toMatchObject({ ok: true, toolName: "agents_list" });
     expect(call?.[1]?.output).toEqual({ ok: true, result: [] });
   });
 
@@ -1272,9 +1096,10 @@ describe("tools.invoke Gateway RPC", () => {
     const call = await invokeToolsRpc({ name: "" });
 
     expect(call?.[0]).toBe(false);
-    const error = call?.[2] as { code?: string; message?: string } | undefined;
-    expect(error?.code).toBe("INVALID_REQUEST");
-    expect(error?.message).toContain("invalid tools.invoke params");
+    expect(call?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("invalid tools.invoke params"),
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

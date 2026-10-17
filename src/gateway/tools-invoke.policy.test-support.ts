@@ -73,19 +73,34 @@ export function registerToolsInvokeUploadTests({
   beforeAll(() => {
     uploadDir = dirs.make("custom-client-upload");
   });
+  const blockedUpload = {
+    ok: false,
+    error: { message: expect.stringContaining("gateway.uploads.enabled") },
+  };
+  const enableUploads = (enabled: boolean) => {
+    getConfig().gateway = { uploads: { enabled } };
+  };
+  const postAdmin = (body: Record<string, unknown>) =>
+    postToolsInvoke({ port: getPort(), headers: gatewayAdminHeaders(), body });
+  const registerMethod = (name: string, handler: GatewayRequestHandler, area: string) =>
+    setMethodRegistry(
+      createGatewayMethodRegistry([
+        {
+          name,
+          handler,
+          scope: "operator.admin",
+          owner: { kind: "core", area },
+          profileAccess: "independent",
+        },
+      ]),
+    );
   it.each([
-    {
-      label: "late-disabled",
-      initiallyEnabled: true,
-      enabled: false,
-      internal: false,
-      text: false,
-    },
-    { label: "enabled", initiallyEnabled: true, enabled: true, internal: false, text: false },
-    { label: "internal", initiallyEnabled: false, enabled: false, internal: true, text: false },
+    { label: "late-disabled", initiallyEnabled: true, enabled: false, internal: false },
+    { label: "enabled", initiallyEnabled: true, enabled: true, internal: false },
+    { label: "internal", initiallyEnabled: false, enabled: false, internal: true },
   ])("protects custom plugin final storage: $label", async (scenario) => {
     setMainAllowedTools({ allow: ["client_blob_fixture", "upload-fixture"] });
-    getConfig().gateway = { uploads: { enabled: scenario.initiallyEnabled } };
+    enableUploads(scenario.initiallyEnabled);
     const fileName = scenario.label + ".txt";
     const destination = path.join(uploadDir, fileName);
     await fs.writeFile(destination, "original");
@@ -94,16 +109,12 @@ export function registerToolsInvokeUploadTests({
     using opening = vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
       const opened = await nativeRoot(...args);
       if (args[0] === uploadDir) {
-        getConfig().gateway = { uploads: { enabled: scenario.enabled } };
+        enableUploads(scenario.enabled);
       }
       return opened;
     });
-    const args = {
-      directory: uploadDir,
-      fileName,
-      ...(scenario.text ? {} : { bytes: "client bytes" }),
-    };
-    const allowed = scenario.enabled || scenario.internal || scenario.text;
+    const args = { directory: uploadDir, fileName, bytes: "client bytes" };
+    const allowed = scenario.enabled || scenario.internal;
     if (scenario.internal) {
       const rpc = await withPluginRuntimeGatewayRequestScope(
         { client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
@@ -113,44 +124,22 @@ export function registerToolsInvokeUploadTests({
     } else {
       const res = await invokeToolAuthed({ tool: "client_blob_fixture", args });
       expect.soft(res.status).toBe(allowed ? 200 : 403);
-      const body: unknown = await res.json();
-      expect.soft(body).toMatchObject(
-        allowed
-          ? { ok: true }
-          : {
-              ok: false,
-              error: {
-                message: expect.stringContaining("gateway.uploads.enabled"),
-              },
-            },
-      );
+      expect.soft(await res.json()).toMatchObject(allowed ? { ok: true } : blockedUpload);
     }
-    expect(await fs.readFile(destination, "utf8")).toBe(
-      allowed && !scenario.text ? "client bytes" : "original",
-    );
+    expect(await fs.readFile(destination, "utf8")).toBe(allowed ? "client bytes" : "original");
     expect(await fs.readdir(uploadDir)).toEqual(before);
-    if (scenario.text) {
-      expect(opening).not.toHaveBeenCalled();
-    } else {
-      expect(opening).toHaveBeenCalledWith(uploadDir);
-    }
+    expect(opening).toHaveBeenCalledWith(uploadDir);
   });
   it.each([false, true])(
     "carries HTTP input policy into nested archive storage (disabled=%s)",
     async (disabled) => {
       setMainAllowedTools({ allow: ["file_write", "upload-fixture"] });
-      getConfig().gateway = { uploads: { enabled: true } };
+      enableUploads(true);
       getConfig().skills = { install: { allowUploadedArchives: true } };
-      setMethodRegistry(
-        createGatewayMethodRegistry([
-          {
-            name: "skills.upload.begin",
-            handler: expectDefined(skillsUploadHandlers["skills.upload.begin"], "upload begin"),
-            scope: "operator.admin",
-            owner: { kind: "core", area: "skills" },
-            profileAccess: "independent",
-          },
-        ]),
+      registerMethod(
+        "skills.upload.begin",
+        expectDefined(skillsUploadHandlers["skills.upload.begin"], "upload begin"),
+        "skills",
       );
       let reachedStorage = false;
       let invocationError: unknown;
@@ -160,7 +149,7 @@ export function registerToolsInvokeUploadTests({
         .mockImplementation(async (...args) => {
           await Promise.resolve();
           reachedStorage = true;
-          getConfig().gateway = { uploads: { enabled: !disabled } };
+          enableUploads(!disabled);
           return begin(...args);
         });
       const { db } = openOpenClawStateDatabase();
@@ -189,11 +178,7 @@ export function registerToolsInvokeUploadTests({
           throw error;
         }
       });
-      const response = await postToolsInvoke({
-        port: getPort(),
-        headers: gatewayAdminHeaders(),
-        body: { tool: "file_write", args: { contentBase64: "cHJvb2Y=" } },
-      });
+      const response = await postAdmin({ tool: "file_write", args: { contentBase64: "cHJvb2Y=" } });
       const body: unknown = await response.json();
       expect(
         reachedStorage,
@@ -202,10 +187,7 @@ export function registerToolsInvokeUploadTests({
       expect(beginning).toHaveBeenCalledOnce();
       if (disabled) {
         expect.soft(response.status).toBe(403);
-        expect.soft(body).toMatchObject({
-          ok: false,
-          error: { message: expect.stringContaining("gateway.uploads.enabled") },
-        });
+        expect.soft(body).toMatchObject(blockedUpload);
         expect(rows()).toEqual(before);
       } else {
         expect(response.status).toBe(200);
@@ -220,23 +202,16 @@ export function registerToolsInvokeUploadTests({
     { tool: "message", args: { action: "send", media: "data:image/png;base64,cHJvb2Y=" } },
   ])("blocks new bytes through HTTP and RPC for $tool $args", async ({ tool, args }) => {
     setConfig({ gateway: { uploads: { enabled: false } } });
-    const res = await postToolsInvoke({
-      port: getPort(),
-      headers: gatewayAdminHeaders(),
-      body: {
-        name: tool,
-        args,
-        conversationReadOrigin: "delegated",
-        internal: { syntheticClient: true },
-      },
+    const res = await postAdmin({
+      name: tool,
+      args,
+      conversationReadOrigin: "delegated",
+      internal: { syntheticClient: true },
     });
     expect(res.status).toBe(403);
     expect(await res.json()).toMatchObject({
-      ok: false,
-      error: {
-        type: "tool_call_blocked",
-        message: expect.stringContaining("gateway.uploads.enabled"),
-      },
+      ...blockedUpload,
+      error: { ...blockedUpload.error, type: "tool_call_blocked" },
     });
     const rpc = await invokeToolsRpc({ name: tool, args }, ["operator.admin"], {
       id: "gateway-client",
@@ -265,7 +240,7 @@ export function registerToolsInvokeUploadTests({
     },
   ])("preserves $label tool use", async ({ enabled, tool, args }) => {
     setMainAllowedTools({ allow: [tool, "upload-fixture"] });
-    getConfig().gateway = { uploads: { enabled } };
+    enableUploads(enabled);
     const res = await invokeToolAuthed({ tool, args });
     await expectOkInvokeResponse(res);
     const rpc = await invokeToolsRpc({ name: tool, args });
@@ -275,42 +250,26 @@ export function registerToolsInvokeUploadTests({
 
   it("rechecks current upload config after awaited tool preparation", async () => {
     setMainAllowedTools({ allow: ["file_write", "upload-fixture"] });
-    getConfig().gateway = { uploads: { enabled: true } };
+    enableUploads(true);
     hookMocks.runBeforeToolCallHook.mockImplementationOnce(async (input) => {
-      getConfig().gateway = { uploads: { enabled: false } };
+      enableUploads(false);
       return { blocked: false, params: input.params };
     });
     const res = await invokeToolAuthed({ tool: "file_write", args: { contentBase64: "cHJvb2Y=" } });
     expect(res.status).toBe(403);
-    expect(await res.json()).toMatchObject({
-      ok: false,
-      error: { message: expect.stringContaining("gateway.uploads.enabled") },
-    });
+    expect(await res.json()).toMatchObject(blockedUpload);
     expect(hookMocks.uploadToolExecute).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { hookAddsBytes: false, disabled: true },
-    { hookAddsBytes: true, disabled: true },
-  ])(
-    "retains upload policy through nested dispatch (hook=$hookAddsBytes, disabled=$disabled)",
-    async ({ hookAddsBytes, disabled }) => {
+  it.each([false, true])(
+    "retains disabled upload policy through nested dispatch (hook=%s)",
+    async (hookAddsBytes) => {
       setMainAllowedTools({ allow: ["file_write", "upload-fixture"] });
-      getConfig().gateway = { uploads: { enabled: true } };
+      enableUploads(true);
       const nodeDispatch = vi.fn<GatewayRequestHandler>(({ respond }) => {
         respond(true, { payload: { ok: true } });
       });
-      setMethodRegistry(
-        createGatewayMethodRegistry([
-          {
-            name: "node.invoke",
-            handler: nodeDispatch,
-            scope: "operator.admin",
-            owner: { kind: "core", area: "upload-policy-test" },
-            profileAccess: "independent",
-          },
-        ]),
-      );
+      registerMethod("node.invoke", nodeDispatch, "upload-policy-test");
       if (hookAddsBytes) {
         hookMocks.runBeforeToolCallHook.mockImplementationOnce(async (input) => {
           if (!isRecord(input.params)) {
@@ -325,7 +284,7 @@ export function registerToolsInvokeUploadTests({
         if (isRecord(args)) {
           delete args.contentBase64;
         }
-        getConfig().gateway = { uploads: { enabled: !disabled } };
+        enableUploads(false);
         await dispatchGatewayMethodInProcess("node.invoke", {
           nodeId: "upload-policy-node",
           command: "file.write",
@@ -334,25 +293,13 @@ export function registerToolsInvokeUploadTests({
         });
         return { content: [], details: {} };
       });
-      const res = await postToolsInvoke({
-        port: getPort(),
-        headers: gatewayAdminHeaders(),
-        body: {
-          tool: "file_write",
-          args: hookAddsBytes ? {} : { contentBase64: "cHJvb2Y=" },
-        },
+      const res = await postAdmin({
+        tool: "file_write",
+        args: hookAddsBytes ? {} : { contentBase64: "cHJvb2Y=" },
       });
-      if (disabled) {
-        expect.soft(res.status).toBe(403);
-        expect.soft(await res.json()).toMatchObject({
-          ok: false,
-          error: { message: expect.stringContaining("gateway.uploads.enabled") },
-        });
-        expect.soft(nodeDispatch).not.toHaveBeenCalled();
-      } else {
-        await expectOkInvokeResponse(res);
-        expect(nodeDispatch).toHaveBeenCalledOnce();
-      }
+      expect.soft(res.status).toBe(403);
+      expect.soft(await res.json()).toMatchObject(blockedUpload);
+      expect.soft(nodeDispatch).not.toHaveBeenCalled();
       expect(hookMocks.uploadToolExecute).toHaveBeenCalledOnce();
     },
   );
@@ -379,38 +326,22 @@ export function registerToolsInvokeErrorTests({
       },
     });
 
-    const inputRes = await invokeToolAuthed({
-      tool: "tools_invoke_test",
-      args: { mode: "input" },
-      sessionKey: "main",
-    });
-    expect(inputRes.status).toBe(400);
-    const inputBody = await readToolErrorResponse(inputRes);
-    expect(inputBody.ok).toBe(false);
-    expect(inputBody.error?.type).toBe("tool_error");
-    expect(inputBody.error?.message).toBe("mode invalid");
-
-    const authRes = await invokeToolAuthed({
-      tool: "tools_invoke_test",
-      args: { mode: "auth" },
-      sessionKey: "main",
-    });
-    expect(authRes.status).toBe(403);
-    const authBody = await readToolErrorResponse(authRes);
-    expect(authBody.ok).toBe(false);
-    expect(authBody.error?.type).toBe("tool_error");
-    expect(authBody.error?.message).toBe("mode forbidden");
-
-    const crashRes = await invokeToolAuthed({
-      tool: "tools_invoke_test",
-      args: { mode: "crash" },
-      sessionKey: "main",
-    });
-    expect(crashRes.status).toBe(500);
-    const crashBody = await readToolErrorResponse(crashRes);
-    expect(crashBody.ok).toBe(false);
-    expect(crashBody.error?.type).toBe("tool_error");
-    expect(crashBody.error?.message).toBe("tool execution failed");
+    for (const [mode, status, message] of [
+      ["input", 400, "mode invalid"],
+      ["auth", 403, "mode forbidden"],
+      ["crash", 500, "tool execution failed"],
+    ] as const) {
+      const res = await invokeToolAuthed({
+        tool: "tools_invoke_test",
+        args: { mode },
+        sessionKey: "main",
+      });
+      expect(res.status).toBe(status);
+      expect(await readToolErrorResponse(res)).toMatchObject({
+        ok: false,
+        error: { type: "tool_error", message },
+      });
+    }
   });
 }
 

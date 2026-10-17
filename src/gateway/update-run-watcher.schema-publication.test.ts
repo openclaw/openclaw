@@ -111,6 +111,13 @@ function expectVersion(db: SqlConnection, version: number) {
   ).toEqual({ schema_version: version });
 }
 
+async function expectPublicationAt(db: SqlConnection, remainingMs: number) {
+  await clock.advanceBy(remainingMs - 1);
+  expectVersion(db, 15);
+  await clock.advanceBy(1);
+  expectVersion(db, OPENCLAW_STATE_SCHEMA_VERSION);
+}
+
 async function startWatcher(runningRunId?: string) {
   const log = { warn: vi.fn() };
   const scheduled = createDeferredCore();
@@ -150,11 +157,7 @@ describe("Gateway schema publication timer", () => {
       entered.resolve();
       return publication.promise;
     });
-    watcher = startUpdateRunWatcher({
-      lifecycle,
-      broadcast: vi.fn(),
-      log: { warn: vi.fn() },
-    });
+    watcher = startUpdateRunWatcher({ lifecycle, broadcast: vi.fn(), log: { warn: vi.fn() } });
     await entered.promise;
     vi.mocked(getUpdateRunAsync).mockClear();
     vi.mocked(listUpdateRunsAsync).mockClear();
@@ -171,10 +174,7 @@ describe("Gateway schema publication timer", () => {
     clock.setTime(now + 2 * 60_000);
     const { log } = await startWatcher();
     expectVersion(db, 15);
-    await clock.advanceBy(3 * 60_000 - 1);
-    expectVersion(db, 15);
-    await clock.advanceBy(1);
-    expectVersion(db, OPENCLAW_STATE_SCHEMA_VERSION);
+    await expectPublicationAt(db, 3 * 60_000);
     expect(log.warn).not.toHaveBeenCalled();
   });
 
@@ -191,10 +191,7 @@ describe("Gateway schema publication timer", () => {
       "update.run.changed",
       expect.objectContaining({ runId, status: "succeeded" }),
     );
-    await clock.advanceBy(graceMs - 1);
-    expectVersion(db, 15);
-    await clock.advanceBy(1);
-    expectVersion(db, OPENCLAW_STATE_SCHEMA_VERSION);
+    await expectPublicationAt(db, graceMs);
     expect(log.warn).not.toHaveBeenCalled();
   });
 
@@ -221,10 +218,7 @@ describe("Gateway schema publication timer", () => {
     finishUpdateRun(next.runId, { status: "succeeded" });
     await publicationScheduled.promise;
     scheduling.mockRestore();
-    await clock.advanceBy(graceMs - 1);
-    expectVersion(db, 15);
-    await clock.advanceBy(1);
-    expectVersion(db, OPENCLAW_STATE_SCHEMA_VERSION);
+    await expectPublicationAt(db, graceMs);
     expect(log.warn).not.toHaveBeenCalled();
   });
 

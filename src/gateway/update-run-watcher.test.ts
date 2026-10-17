@@ -232,12 +232,8 @@ describe("Gateway update run watcher", () => {
     const finishedNotice = createDeferredCore();
     ledger.reconcile.mockReturnValueOnce(verification.promise);
     ledger.notice
-      .mockImplementationOnce(async () => {
-        activatingNotice.resolve();
-      })
-      .mockImplementationOnce(async () => {
-        finishedNotice.resolve();
-      });
+      .mockImplementationOnce(async () => activatingNotice.resolve())
+      .mockImplementationOnce(async () => finishedNotice.resolve());
     const broadcast = vi.fn();
     watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
     try {
@@ -452,9 +448,7 @@ describe("Gateway update run watcher", () => {
     const initial = createDeferredCore();
     const broadcast = vi.fn().mockImplementationOnce(() => initial.resolve());
     const delivered = createDeferredCore();
-    ledger.notice.mockImplementationOnce(async () => {
-      delivered.resolve();
-    });
+    ledger.notice.mockImplementationOnce(async () => delivered.resolve());
     watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
     await initial.promise;
     await nextPollSchedule();
