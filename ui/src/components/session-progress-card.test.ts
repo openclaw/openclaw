@@ -467,7 +467,7 @@ describe("renderSessionProgressCard", () => {
         transcript.scroll(y - previousY);
       }
     };
-    const drag = (...points: number[]) => {
+    const drag = (...points: [number, ...number[]]) => {
       touch("touchstart", points[0]);
       for (const point of points.slice(1)) {
         touch("touchmove", point);
