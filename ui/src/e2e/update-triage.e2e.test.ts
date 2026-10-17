@@ -40,6 +40,63 @@ const SCHEDULE = {
 const DIAGNOSTIC_REPLY =
   "I will inspect disk space and the recorded install failure before proposing a repair.";
 
+function diagnosticReply(sessionId: string, reply: string) {
+  return {
+    sequence: [
+      { sessionId, reply, action: "none", question: QUICK_ACTIONS_QUESTION },
+      { sessionId, reply: DIAGNOSTIC_REPLY, action: "none" },
+    ],
+  };
+}
+
+function questions(traffic: MockGatewayRequest[]) {
+  return traffic.filter(
+    ({ method, params }) =>
+      method === "openclaw.chat" &&
+      params !== null &&
+      typeof params === "object" &&
+      "message" in params,
+  );
+}
+
+async function expectFailureGuidance(page: Page) {
+  const status = page.locator("#config-section-update .settings-status");
+  await status.getByText("openclaw triage", { exact: false }).waitFor();
+  expect(await status.textContent()).toContain("ENOSPC");
+}
+
+async function withTriage(
+  name: string,
+  options: Parameters<typeof suite.withPage>[0],
+  scenario: (
+    page: Page,
+    traffic: MockGatewayRequest[],
+    capture: (name: string) => Promise<void>,
+  ) => Promise<void>,
+) {
+  const artifactDir = createControlUiE2eArtifactDir(name);
+  const viewport = { height: 1_000, width: 1_400 };
+  await suite.withPage(
+    {
+      ...options,
+      viewport,
+      recordVideo:
+        process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+          ? { dir: artifactDir, size: viewport }
+          : undefined,
+    },
+    async ({ page }) => {
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(String(error)));
+      const traffic = await recordUpdateTraffic(page);
+      await scenario(page, traffic, async (fileName) => {
+        await page.screenshot({ animations: "disabled", path: path.join(artifactDir, fileName) });
+      });
+      expect(errors).toEqual([]);
+    },
+  );
+}
+
 async function recordUpdateTraffic(page: Page): Promise<MockGatewayRequest[]> {
   const traffic: MockGatewayRequest[] = [];
   await page.exposeFunction("recordUpdateTraffic", (request: MockGatewayRequest) => {
@@ -74,24 +131,10 @@ suite.define(() => {
   it.each(["manual", "automatic", "missing triage module"])(
     "requires a button press to diagnose a pre-ledger %s failure without retrying the update",
     async (source) => {
-      const artifactDir = createControlUiE2eArtifactDir(
+      await withTriage(
         `update-triage-${source.replaceAll(" ", "-")}`,
-      );
-      await suite.withPage(
-        {
-          colorScheme: "dark",
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { height: 1_000, width: 1_400 },
-          recordVideo:
-            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-              ? { dir: artifactDir, size: { height: 1_000, width: 1_400 } }
-              : undefined,
-        },
-        async ({ page }) => {
-          const errors: string[] = [];
-          page.on("pageerror", (error) => errors.push(String(error)));
-          const traffic = await recordUpdateTraffic(page);
+        { colorScheme: "dark", locale: "en-US", serviceWorkers: "block" },
+        async (page, traffic, capture) => {
           if (source === "missing triage module") {
             // A replaced installation can retire the current document's lazy chunks.
             await page.route(
@@ -114,31 +157,13 @@ suite.define(() => {
                 issues: [],
               },
               "update.status": { sentinel: null, schedule: SCHEDULE },
-              "openclaw.chat": {
-                sequence: [
-                  {
-                    sessionId: "update-triage-session",
-                    reply: "I can help you maintain this Gateway.",
-                    action: "none",
-                    question: QUICK_ACTIONS_QUESTION,
-                  },
-                  {
-                    sessionId: "update-triage-session",
-                    reply: DIAGNOSTIC_REPLY,
-                    action: "none",
-                  },
-                ],
-              },
+              "openclaw.chat": diagnosticReply(
+                "update-triage-session",
+                "I can help you maintain this Gateway.",
+              ),
             },
           });
-          const questions = () =>
-            traffic.filter(
-              ({ method, params }) =>
-                method === "openclaw.chat" &&
-                params !== null &&
-                typeof params === "object" &&
-                "message" in params,
-            );
+          const readQuestions = () => questions(traffic);
           const updateRuns = () => traffic.filter(({ method }) => method === "update.run");
           expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
           await gateway.waitForRequest("update.status");
@@ -166,10 +191,7 @@ suite.define(() => {
               .click();
             await gateway.waitForRequest("update.run");
           }
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "01-before-failure.png"),
-          });
+          await capture("01-before-failure.png");
           await gateway.setMethodResponse("update.status", {
             sentinel: FAILURE,
             schedule: SCHEDULE,
@@ -193,12 +215,9 @@ suite.define(() => {
           await diagnose.waitFor();
           expect(await diagnose.isEnabled()).toBe(true);
           expect(await page.locator(".custodian__alert-card").count()).toBe(0);
-          expect(questions()).toHaveLength(0);
+          expect(readQuestions()).toHaveLength(0);
           expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "02-failure-awaiting-action.png"),
-          });
+          await capture("02-failure-awaiting-action.png");
           const replacementDocument =
             source === "missing triage module" ? page.waitForEvent("domcontentloaded") : null;
           await diagnose.click();
@@ -207,10 +226,8 @@ suite.define(() => {
             // page must retain the cause and host-side guidance if the chunk is still absent.
             await replacementDocument;
             await gateway.waitForRequest("update.status");
-            const status = page.locator("#config-section-update .settings-status");
-            await status.getByText("openclaw triage", { exact: false }).waitFor();
-            expect(await status.textContent()).toContain("ENOSPC");
-            expect(questions()).toHaveLength(0);
+            await expectFailureGuidance(page);
+            expect(readQuestions()).toHaveLength(0);
             expect(await page.locator(".custodian__alert-card").count()).toBe(0);
           } else {
             const panel = page.locator("openclaw-assistant-panel");
@@ -218,8 +235,8 @@ suite.define(() => {
               .locator(".custodian__alert-card")
               .getByText("Diagnose failed update", { exact: true })
               .waitFor();
-            await expect.poll(questions).toHaveLength(1);
-            const question = questions()[0]?.params;
+            await expect.poll(readQuestions).toHaveLength(1);
+            const question = readQuestions()[0]?.params;
             expect(question).toMatchObject({ message: expect.stringContaining("ENOSPC") });
             expect(question).toMatchObject({
               message: expect.stringContaining("Do not retry the update"),
@@ -228,32 +245,23 @@ suite.define(() => {
             await panel.getByText(DIAGNOSTIC_REPLY, { exact: true }).waitFor();
             expect(await panel.getByText(DIAGNOSTIC_REPLY, { exact: true }).count()).toBe(1);
           }
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "03-triage-outcome.png"),
-          });
+          await capture("03-triage-outcome.png");
           await expect.poll(updateRuns).toHaveLength(source === "automatic" ? 0 : 1);
           if (source !== "missing triage module") {
             // Loading the same retained failure never repeats the user's action.
             await page.reload();
             await gateway.waitForRequest("update.status");
-            const status = page.locator("#config-section-update .settings-status");
-            await status.getByText("openclaw triage", { exact: false }).waitFor();
-            expect(await status.textContent()).toContain("ENOSPC");
+            await expectFailureGuidance(page);
             expect(await page.locator(".custodian__alert-card").count()).toBe(0);
             expect(
               await page.locator("openclaw-assistant-panel .assistant-panel").isVisible(),
             ).toBe(false);
             expect(await page.locator("openclaw-assistant-panel-content").count()).toBe(0);
             expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-            expect(questions()).toHaveLength(1);
+            expect(readQuestions()).toHaveLength(1);
             expect(updateRuns()).toHaveLength(source === "automatic" ? 0 : 1);
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, "04-reloaded-without-replay.png"),
-            });
+            await capture("04-reloaded-without-replay.png");
           }
-          expect(errors).toEqual([]);
         },
       );
     },
@@ -262,19 +270,10 @@ suite.define(() => {
   it.each(["denied", "full"] as const)(
     "diagnoses only on demand even when session storage is %s",
     async (storageFailure) => {
-      const artifactDir = createControlUiE2eArtifactDir(`update-triage-storage-${storageFailure}`);
-      await suite.withPage(
-        {
-          viewport: { height: 1_000, width: 1_400 },
-          recordVideo:
-            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-              ? { dir: artifactDir, size: { height: 1_000, width: 1_400 } }
-              : undefined,
-        },
-        async ({ page }) => {
-          const errors: string[] = [];
-          page.on("pageerror", (error) => errors.push(String(error)));
-          const traffic = await recordUpdateTraffic(page);
+      await withTriage(
+        `update-triage-storage-${storageFailure}`,
+        {},
+        async (page, traffic, capture) => {
           await page.addInitScript((failure) => {
             if (failure === "denied") {
               Object.defineProperty(window, "sessionStorage", {
@@ -304,21 +303,7 @@ suite.define(() => {
             featureMethods: [...defaultControlUiFeatureMethods, "openclaw.chat"],
             methodResponses: {
               "update.status": { sentinel: FAILURE, schedule: SCHEDULE },
-              "openclaw.chat": {
-                sequence: [
-                  {
-                    sessionId: "storage-failure-session",
-                    reply: "Ready to help.",
-                    action: "none",
-                    question: QUICK_ACTIONS_QUESTION,
-                  },
-                  {
-                    sessionId: "storage-failure-session",
-                    reply: DIAGNOSTIC_REPLY,
-                    action: "none",
-                  },
-                ],
-              },
+              "openclaw.chat": diagnosticReply("storage-failure-session", "Ready to help."),
             },
           });
           await page.goto(`${suite.server.baseUrl}settings/updates`);
@@ -327,43 +312,23 @@ suite.define(() => {
               await page.reload();
             }
             await gateway.waitForRequest("update.status");
-            const status = page.locator("#config-section-update .settings-status");
-            await status.getByText("openclaw triage", { exact: false }).waitFor();
-            expect(await status.textContent()).toContain("ENOSPC");
+            await expectFailureGuidance(page);
             const diagnose = page.getByRole("button", { name: "Diagnose update", exact: true });
             await diagnose.waitFor();
             expect(await page.locator(".custodian__alert-card").count()).toBe(0);
             expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-            expect(
-              traffic.filter(
-                ({ method, params }) =>
-                  method === "openclaw.chat" &&
-                  params &&
-                  typeof params === "object" &&
-                  "message" in params,
-              ),
-            ).toHaveLength(load);
+            expect(questions(traffic)).toHaveLength(load);
             await diagnose.click();
             const panel = page.locator("openclaw-assistant-panel");
             await panel.getByText(DIAGNOSTIC_REPLY, { exact: true }).waitFor();
-            const messages = traffic.filter(
-              ({ method, params }) =>
-                method === "openclaw.chat" &&
-                params &&
-                typeof params === "object" &&
-                "message" in params,
-            );
+            const messages = questions(traffic);
             expect(messages).toHaveLength(load + 1);
             expect(messages.at(-1)?.params).toMatchObject({
               message: expect.stringContaining("ENOSPC"),
             });
             expect(traffic.filter(({ method }) => method === "update.run")).toHaveLength(0);
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, `0${load + 1}-failure-guidance.png`),
-            });
+            await capture(`0${load + 1}-failure-guidance.png`);
           }
-          expect(errors).toEqual([]);
         },
       );
     },

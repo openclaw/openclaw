@@ -1,6 +1,7 @@
 // Control UI tests cover the routed Updates settings page through a mocked Gateway.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -16,6 +17,44 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const pageOptions = {
+  colorScheme: "dark",
+  locale: "en-US",
+  serviceWorkers: "block",
+  viewport: { height: 900, width: 1280 },
+} as const;
+const configResponse = (config: object, hash: string) => ({
+  config,
+  hash,
+  issues: [],
+  raw: JSON.stringify(config),
+  runtimeConfig: config,
+  valid: true,
+});
+async function captureSection(page: Page, dir: string | null, file: string, focus: Locator) {
+  if (dir) {
+    await writeFile(
+      path.join(dir, file),
+      await takeControlUiViewportScreenshot(page, page.locator("#config-section-update"), [focus]),
+    );
+  }
+}
+async function capturePage(page: Page, dir: string | null, file: string) {
+  if (dir) {
+    await page.screenshot({ path: path.join(dir, file), animations: "disabled" });
+  }
+}
+async function expectRadiosDisabled(page: Page) {
+  expect(
+    await page
+      .getByRole("radiogroup")
+      .getByRole("radio")
+      .evaluateAll(
+        (radios) =>
+          radios.length > 0 && radios.every((radio) => (radio as HTMLInputElement).disabled),
+      ),
+  ).toBe(true);
+}
 
 suite.define(() => {
   it("shows an executing update ahead of a separately queued campaign", async () => {
@@ -28,14 +67,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           featureMethods: ["config.get", "update.run", "update.status", "update.hold"],
           methodResponses: {
-            "config.get": {
-              config,
-              hash: "updates-active-run",
-              issues: [],
-              raw: JSON.stringify(config),
-              runtimeConfig: config,
-              valid: true,
-            },
+            "config.get": configResponse(config, "updates-active-run"),
             "update.status": {
               activeRun: createUpdateRunFixture({
                 createdAtMs: now - 60_000,
@@ -70,12 +102,7 @@ suite.define(() => {
         const updating = page.getByRole("button", { name: "Updating…", exact: true });
         await updating.waitFor();
         await updating.scrollIntoViewIfNeeded();
-        if (artifactDir) {
-          await page.screenshot({
-            path: path.join(artifactDir, "active-run.png"),
-            animations: "disabled",
-          });
-        }
+        await capturePage(page, artifactDir, "active-run.png");
         const status = page
           .locator(".settings-row")
           .filter({ has: page.locator(".settings-row__title", { hasText: /^Status$/ }) });
@@ -99,10 +126,7 @@ suite.define(() => {
       : null;
     await suite.withPage(
       {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
+        ...pageOptions,
         ...(artifactDir
           ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
           : {}),
@@ -118,14 +142,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           featureMethods: ["config.get", "config.set", "update.run", "update.status"],
           methodResponses: {
-            "config.get": {
-              config,
-              hash: "automatic-update-config",
-              issues: [],
-              raw: JSON.stringify(config),
-              runtimeConfig: config,
-              valid: true,
-            },
+            "config.get": configResponse(config, "automatic-update-config"),
             "update.status": { sentinel: null, schedule },
           },
           operatorScopes: ["operator.read", "operator.admin"],
@@ -153,26 +170,11 @@ suite.define(() => {
         });
         const status = page.locator("#config-section-update .settings-status");
         await expect.poll(() => status.textContent()).toMatch(/Applying update|Update held/);
-        if (artifactDir) {
-          await writeFile(
-            path.join(artifactDir, "01-automatic-applying.png"),
-            await takeControlUiViewportScreenshot(page, page.locator("#config-section-update"), [
-              status,
-            ]),
-          );
-        }
+        await captureSection(page, artifactDir, "01-automatic-applying.png", status);
         expect(await status.textContent()).toContain("Applying update");
         expect(await policy.isDisabled()).toBe(true);
         expect(await checks.isDisabled()).toBe(true);
-        expect(
-          await page
-            .getByRole("radiogroup")
-            .getByRole("radio")
-            .evaluateAll(
-              (radios) =>
-                radios.length > 0 && radios.every((radio) => (radio as HTMLInputElement).disabled),
-            ),
-        ).toBe(true);
+        await expectRadiosDisabled(page);
         expect(
           await page.getByRole("button", { name: "Updating…", exact: true }).isDisabled(),
         ).toBe(true);
@@ -192,14 +194,7 @@ suite.define(() => {
         expect(await checks.isDisabled()).toBe(false);
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
         await status.scrollIntoViewIfNeeded();
-        if (artifactDir) {
-          await writeFile(
-            path.join(artifactDir, "02-automatic-recovery.png"),
-            await takeControlUiViewportScreenshot(page, page.locator("#config-section-update"), [
-              status,
-            ]),
-          );
-        }
+        await captureSection(page, artifactDir, "02-automatic-recovery.png", status);
         const geometry = await status.evaluate((element) => {
           const row = element.closest(".settings-row");
           const title = row?.querySelector(".settings-row__title");
@@ -225,22 +220,15 @@ suite.define(() => {
   });
 
   it("resumes disabled update checks through autosave and renders the live campaign", async () => {
-    if (captureProof) {
-      await mkdir(path.join(suite.artifactDir, "updates-settings"), { recursive: true });
+    const artifactDir = captureProof ? path.join(suite.artifactDir, "updates-settings") : null;
+    if (artifactDir) {
+      await mkdir(artifactDir, { recursive: true });
     }
     await suite.withPage(
       {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-        ...(captureProof
-          ? {
-              recordVideo: {
-                dir: path.join(suite.artifactDir, "updates-settings"),
-                size: { height: 900, width: 1280 },
-              },
-            }
+        ...pageOptions,
+        ...(artifactDir
+          ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
           : {}),
       },
       async ({ page }) => {
@@ -250,14 +238,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           featureMethods: ["config.get", "config.set", "config.apply", "update.run"],
           methodResponses: {
-            "config.get": {
-              config,
-              hash: "updates-config-1",
-              issues: [],
-              raw: JSON.stringify(config),
-              runtimeConfig: config,
-              valid: true,
-            },
+            "config.get": configResponse(config, "updates-config-1"),
             "update.run": {
               ok: false,
               result: { reason: "restart-disabled", status: "skipped" },
@@ -276,14 +257,7 @@ suite.define(() => {
         const checks = content.getByRole("switch", { name: "Check for updates", exact: true });
         const automatic = content.getByRole("switch", { name: "Automatic updates", exact: true });
         await expect.poll(() => automatic.isChecked()).toBe(true);
-        if (captureProof) {
-          await writeFile(
-            path.join(suite.artifactDir, "updates-settings", "00-updates-checks-disabled.png"),
-            await takeControlUiViewportScreenshot(page, page.locator("#config-section-update"), [
-              automatic,
-            ]),
-          );
-        }
+        await captureSection(page, artifactDir, "00-updates-checks-disabled.png", automatic);
         expect(await checks.isChecked()).toBe(false);
         expect(await automatic.isDisabled()).toBe(true);
         await content
@@ -328,14 +302,7 @@ suite.define(() => {
         await content.getByText("Gateway version", { exact: true }).waitFor();
         await content.getByText("Control UI commit", { exact: true }).waitFor();
 
-        if (captureProof) {
-          await writeFile(
-            path.join(path.join(suite.artifactDir, "updates-settings"), "01-updates-countdown.png"),
-            await takeControlUiViewportScreenshot(page, page.locator("#config-section-update"), [
-              timer,
-            ]),
-          );
-        }
+        await captureSection(page, artifactDir, "01-updates-countdown.png", timer);
 
         const writesBeforeChannelChange = (await gateway.getRequests("config.set")).length;
         await content.getByRole("radio", { name: "Beta", exact: true }).click();
@@ -358,129 +325,87 @@ suite.define(() => {
   });
 
   it("keeps the page readable and controls locked for non-admins", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page }) => {
-        const config = { update: { auto: { enabled: true }, channel: "beta" } };
-        const gateway = await installMockGateway(page, {
-          featureMethods: ["config.get", "update.run"],
-          methodResponses: {
-            "config.get": {
-              config,
-              hash: "updates-read-only-1",
-              issues: [],
-              raw: JSON.stringify(config),
-              runtimeConfig: config,
-              valid: true,
-            },
-          },
-          operatorScopes: ["operator.read"],
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const config = { update: { auto: { enabled: true }, channel: "beta" } };
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["config.get", "update.run"],
+        methodResponses: {
+          "config.get": configResponse(config, "updates-read-only-1"),
+        },
+        operatorScopes: ["operator.read"],
+      });
+
+      const response = await page.goto(`${suite.server.baseUrl}settings/updates`);
+      expect(response?.status()).toBe(200);
+      await gateway.waitForRequest("config.get");
+      await page.getByRole("note").waitFor();
+      expect(await page.getByRole("note").textContent()).toContain(
+        "Administrator access is required",
+      );
+      await expectRadiosDisabled(page);
+      expect(await page.getByRole("switch", { name: "Automatic updates" }).isDisabled()).toBe(true);
+      expect(await page.getByRole("switch", { name: "Check for updates" }).isDisabled()).toBe(true);
+      expect(await page.getByRole("button", { name: "Update now" }).isDisabled()).toBe(true);
+      expect(await gateway.getRequests("config.schema")).toHaveLength(0);
+
+      if (captureProof) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(
+            path.join(suite.artifactDir, "updates-settings"),
+            "02-updates-read-only.png",
+          ),
         });
-
-        const response = await page.goto(`${suite.server.baseUrl}settings/updates`);
-        expect(response?.status()).toBe(200);
-        await gateway.waitForRequest("config.get");
-        await page.getByRole("note").waitFor();
-        expect(await page.getByRole("note").textContent()).toContain(
-          "Administrator access is required",
-        );
-        expect(
-          await page
-            .getByRole("radiogroup")
-            .getByRole("radio")
-            .evaluateAll(
-              (radios) =>
-                radios.length > 0 && radios.every((radio) => (radio as HTMLInputElement).disabled),
-            ),
-        ).toBe(true);
-        expect(await page.getByRole("switch", { name: "Automatic updates" }).isDisabled()).toBe(
-          true,
-        );
-        expect(await page.getByRole("switch", { name: "Check for updates" }).isDisabled()).toBe(
-          true,
-        );
-        expect(await page.getByRole("button", { name: "Update now" }).isDisabled()).toBe(true);
-        expect(await gateway.getRequests("config.schema")).toHaveLength(0);
-
-        if (captureProof) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(
-              path.join(suite.artifactDir, "updates-settings"),
-              "02-updates-read-only.png",
-            ),
-          });
-        }
-      },
-    );
+      }
+    });
   });
 
   it("keeps a failed manual status check visible", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
-      async ({ page }) => {
-        const config = { update: { auto: { enabled: false }, channel: "stable" } };
-        const gateway = await installMockGateway(page, {
-          featureMethods: ["config.get", "update.run", "update.status"],
-          methodResponses: {
-            "config.get": {
-              config,
-              hash: "updates-status-error-1",
-              issues: [],
-              raw: JSON.stringify(config),
-              runtimeConfig: config,
-              valid: true,
-            },
-            "update.status": {
-              sentinel: {
-                kind: "update",
-                status: "error",
-                ts: Date.now(),
-                stats: { mode: "package", reason: "build-failed" },
-              },
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const config = { update: { auto: { enabled: false }, channel: "stable" } };
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["config.get", "update.run", "update.status"],
+        methodResponses: {
+          "config.get": configResponse(config, "updates-status-error-1"),
+          "update.status": {
+            sentinel: {
+              kind: "update",
+              status: "error",
+              ts: Date.now(),
+              stats: { mode: "package", reason: "build-failed" },
             },
           },
-          operatorScopes: ["operator.read", "operator.admin"],
-        });
+        },
+        operatorScopes: ["operator.read", "operator.admin"],
+      });
 
-        expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
-        await gateway.waitForRequest("update.status");
-        const checkStatus = page.getByRole("button", { name: "Check status", exact: true });
-        await checkStatus.waitFor();
-        await expect.poll(() => checkStatus.isDisabled()).toBe(false);
-        const discoveryRequests = () =>
-          gateway.getRequests("update.status", { refreshCheckout: true });
-        const statusRequestsBeforeCheck = (await discoveryRequests()).length;
+      expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
+      await gateway.waitForRequest("update.status");
+      const checkStatus = page.getByRole("button", { name: "Check status", exact: true });
+      await checkStatus.waitFor();
+      await expect.poll(() => checkStatus.isDisabled()).toBe(false);
+      const discoveryRequests = () =>
+        gateway.getRequests("update.status", { refreshCheckout: true });
+      const statusRequestsBeforeCheck = (await discoveryRequests()).length;
 
-        await gateway.deferNext("update.status");
-        await checkStatus.click();
-        await expect
-          .poll(async () => (await discoveryRequests()).length)
-          .toBe(statusRequestsBeforeCheck + 1);
-        expect(await checkStatus.isDisabled()).toBe(true);
+      await gateway.deferNext("update.status");
+      await checkStatus.click();
+      await expect
+        .poll(async () => (await discoveryRequests()).length)
+        .toBe(statusRequestsBeforeCheck + 1);
+      expect(await checkStatus.isDisabled()).toBe(true);
 
-        await gateway.rejectDeferred("update.status", {
-          code: "UNAVAILABLE",
-          message: "Gateway status is temporarily unavailable",
-        });
-        await page
-          .locator("#config-section-update .settings-status")
-          .filter({ hasText: "Gateway status is temporarily unavailable" })
-          .waitFor();
-        expect(await checkStatus.isDisabled()).toBe(false);
-      },
-    );
+      await gateway.rejectDeferred("update.status", {
+        code: "UNAVAILABLE",
+        message: "Gateway status is temporarily unavailable",
+      });
+      await page
+        .locator("#config-section-update .settings-status")
+        .filter({ hasText: "Gateway status is temporarily unavailable" })
+        .waitFor();
+      expect(await checkStatus.isDisabled()).toBe(false);
+    });
   });
 
   it("lets a named administrator review an update report and receive their browser handoff", async () => {
@@ -489,9 +414,7 @@ suite.define(() => {
       : null;
     await suite.withPage(
       {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
+        ...pageOptions,
         viewport: { height: 1000, width: 1400 },
       },
       async ({ page }) => {
@@ -517,14 +440,7 @@ suite.define(() => {
           ],
           operatorScopes: ["operator.read", "operator.write", "operator.admin"],
           methodResponses: {
-            "config.get": {
-              config,
-              runtimeConfig: config,
-              raw: JSON.stringify(config),
-              hash: "report-config",
-              valid: true,
-              issues: [],
-            },
+            "config.get": configResponse(config, "report-config"),
             "update.status": { activeRun: null, lastRun: run },
             "update.report": {
               status: "ready",
@@ -540,24 +456,14 @@ suite.define(() => {
         const report = page.getByRole("button", { name: "Report update failure", exact: true });
         await report.waitFor();
         await report.scrollIntoViewIfNeeded();
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "01-report-eligibility.png"),
-          });
-        }
+        await capturePage(page, artifactDir, "01-report-eligibility.png");
         expect(await report.isEnabled()).toBe(true);
         await report.click();
         await gateway.waitForRequest("update.report");
         const dialog = page.locator("openclaw-modal-dialog");
         await dialog.getByText(body, { exact: true }).waitFor();
         expect(await gateway.getRequests("update.report")).toHaveLength(1);
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "02-reviewed-consent.png"),
-          });
-        }
+        await capturePage(page, artifactDir, "02-reviewed-consent.png");
         await gateway.setMethodResponse("update.report", {
           status: "fallback",
           fallbackUrl,
@@ -575,12 +481,7 @@ suite.define(() => {
         await link.waitFor();
         expect(await link.getAttribute("target")).toBe("_blank");
         await link.scrollIntoViewIfNeeded();
-        if (artifactDir) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "03-browser-handoff.png"),
-          });
-        }
+        await capturePage(page, artifactDir, "03-browser-handoff.png");
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
       },
     );

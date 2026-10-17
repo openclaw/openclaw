@@ -1,7 +1,4 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
@@ -44,10 +41,6 @@ suite.define(() => {
       cumulativeTokens: 120 * (index + 1),
       cumulativeCost: 0,
     }));
-    const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const proofDir = artifactParent
-      ? createControlUiE2eArtifactDir("usage-tool-count", artifactParent)
-      : undefined;
     await suite.withPage(
       {
         locale: "en-US",
@@ -120,9 +113,6 @@ suite.define(() => {
         await handle.waitFor({ state: "visible" });
         const count = panel.locator(".session-summary-value").nth(1);
         await expect.poll(() => count.textContent()).toBe("3");
-        if (proofDir) {
-          await panel.screenshot({ path: path.join(proofDir, "whole-session.png") });
-        }
         await handle.scrollIntoViewIfNeeded();
         const handleBox = await handle.boundingBox();
         const chartBox = await panel.locator(".timeseries-svg").boundingBox();
@@ -140,9 +130,6 @@ suite.define(() => {
         await page.mouse.up();
         await panel.locator(".session-detail-indicator").waitFor({ state: "visible" });
         await expect.poll(() => panel.locator(".session-log-entry").count()).toBe(4);
-        if (proofDir) {
-          await panel.screenshot({ path: path.join(proofDir, "selected-range.png") });
-        }
         await expect.poll(() => count.textContent()).toBe("2");
         const readRow = panel.locator(".usage-list-item").filter({ hasText: "read" });
         expect(await readRow.locator(".usage-list-value > span").first().textContent()).toBe("2");
@@ -203,37 +190,16 @@ suite.define(() => {
           timeline: await panel.locator(".timeseries-summary").textContent(),
           conversation: await panel.locator(".session-log-content").allTextContents(),
         });
-        try {
-          await expect.poll(readDetails).toMatchObject({
-            timeline: expect.stringContaining("480"),
-            conversation: expect.arrayContaining([latestReply]),
+        await expect.poll(readDetails).toMatchObject({
+          timeline: expect.stringContaining("480"),
+          conversation: expect.arrayContaining([latestReply]),
+        });
+        for (const [index, method] of detailMethods.entries()) {
+          const requests = await gateway.getRequests(method, { key: "agent:main:tool-count" });
+          expect(requests).toHaveLength(previousDetailRequests[index]! + 1);
+          expect(requests.at(-1)?.params).toMatchObject({
+            key: "agent:main:tool-count",
           });
-          for (const [index, method] of detailMethods.entries()) {
-            const requests = await gateway.getRequests(method, { key: "agent:main:tool-count" });
-            expect(requests).toHaveLength(previousDetailRequests[index]! + 1);
-            expect(requests.at(-1)?.params).toMatchObject({
-              key: "agent:main:tool-count",
-            });
-          }
-        } finally {
-          if (proofDir) {
-            await panel.locator(".timeseries-summary").scrollIntoViewIfNeeded();
-            await page.screenshot({ path: path.join(proofDir, "manual-refresh.png") });
-            await panel.locator(".session-log-entry").last().scrollIntoViewIfNeeded();
-            await page.screenshot({ path: path.join(proofDir, "manual-conversation.png") });
-            await fs.writeFile(
-              path.join(proofDir, "manual-refresh.json"),
-              JSON.stringify(
-                {
-                  ...(await readDetails()),
-                  timelineRequests: await gateway.getRequests("sessions.usage.timeseries"),
-                  conversationRequests: await gateway.getRequests("sessions.usage.logs"),
-                },
-                null,
-                2,
-              ),
-            );
-          }
         }
       },
     );
