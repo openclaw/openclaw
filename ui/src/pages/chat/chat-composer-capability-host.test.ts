@@ -61,7 +61,7 @@ function capabilityHarness(
     context,
     state,
     session,
-    props: (refresh = false) => host.props(context, state, session, "main", refresh),
+    props: () => host.props(context, state, session, "main"),
   };
 }
 
@@ -402,7 +402,8 @@ describe("ChatComposerCapabilityHost", () => {
     };
     expect(props().toolsEffectiveLoading).toBe(false);
     expect(request).toHaveBeenCalledTimes(1);
-    expect(props(true).toolsEffectiveLoading).toBe(true);
+    props().onLoadView?.("tools:github");
+    expect(props().toolsEffectiveLoading).toBe(true);
 
     await vi.waitFor(() => expect(props().toolsEffectiveResult).toBe(secondResult));
     expect(request).toHaveBeenCalledTimes(2);

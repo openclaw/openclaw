@@ -10,6 +10,7 @@ import {
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
 import { applyLitellmConfig, LITELLM_BASE_URL, LITELLM_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -23,9 +24,7 @@ function applyLitellmBaseUrl(cfg: OpenClawConfig, baseUrl: unknown): OpenClawCon
     return cfg;
   }
   // Preserve authored settings even when the provider key uses different casing.
-  const existingProvider =
-    cfg.models?.providers?.[PROVIDER_ID] ??
-    findNormalizedProviderValue(cfg.models?.providers, PROVIDER_ID);
+  const existingProvider = resolveMergedModelProviderConfig(cfg, PROVIDER_ID);
   return {
     ...cfg,
     models: {
@@ -58,10 +57,7 @@ function validateProxyBaseUrl(value: string): string | undefined {
 
 async function promptLitellmBaseUrl(ctx: ProviderAuthContext): Promise<string | undefined> {
   const configured =
-    (
-      ctx.config.models?.providers?.[PROVIDER_ID] ??
-      findNormalizedProviderValue(ctx.config.models?.providers, PROVIDER_ID)
-    )?.baseUrl?.trim() ?? "";
+    resolveMergedModelProviderConfig(ctx.config, PROVIDER_ID)?.baseUrl?.trim() ?? "";
   const answer = await ctx.prompter.text({
     message: "LiteLLM proxy base URL",
     // Prefilling the default would make typed input append to it; hint it instead and

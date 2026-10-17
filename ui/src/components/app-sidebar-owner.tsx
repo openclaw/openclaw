@@ -60,7 +60,6 @@ import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
 import { Icon } from "./solid/icon.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
-import { SessionTitlePlaceholder } from "./solid/session-title-placeholder.tsx";
 import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
@@ -473,36 +472,19 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       />
     );
     return (
-      <>
-        <Show when={host().pendingSessionCreate()}>
-          {(pending) => (
-            <div class="sidebar-recent-session sidebar-recent-session--single-line sidebar-recent-session--active sidebar-recent-session--creating">
-              <div class="sidebar-recent-session__link" aria-current="page" aria-busy="true">
-                <span class="sidebar-recent-session__text">
-                  <span class="sidebar-recent-session__title-row">
-                    <Show when={pending().displayName} fallback={<SessionTitlePlaceholder />}>
-                      {(name) => <span class="sidebar-recent-session__name">{name()}</span>}
-                    </Show>
-                  </span>
-                </span>
-              </div>
-            </div>
-          )}
-        </Show>
-        <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
-          <SidebarAgentRoster
-            host={host()}
-            active={
-              host().navigationVisible &&
-              host().navigationView === "sessions" &&
-              !host().contextualSidebar
-            }
-            sections={sections()}
-            empty={visibleSessions().length === 0}
-            involvingMe={host().sessionInvolvingMeFilterActive}
-          />
-        </Show>
-      </>
+      <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
+        <SidebarAgentRoster
+          host={host()}
+          active={
+            host().navigationVisible &&
+            host().navigationView === "sessions" &&
+            !host().contextualSidebar
+          }
+          sections={sections()}
+          empty={visibleSessions().length === 0}
+          involvingMe={host().sessionInvolvingMeFilterActive}
+        />
+      </Show>
     );
   }
 

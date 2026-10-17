@@ -3,11 +3,8 @@ import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildExecApprovalCustomId, parseExecApprovalData } from "../approval-custom-id.js";
-import {
-  parseCustomId,
-  type BaseComponentInteraction,
-  type ComponentData,
-} from "../internal/discord.js";
+import { parseCustomId } from "../internal/components.base.js";
+import type { BaseComponentInteraction, ComponentData } from "../internal/discord.js";
 
 const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());
 

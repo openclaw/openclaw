@@ -279,13 +279,14 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
     }
     params.replyOptions ??= {};
-    if (shouldBypassPluginOwnedBindingForCommand(ctx, cfg, params.replyOptions)) {
-      logVerbose(
-        `plugin-bound inbound command escaped plugin binding (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to command processing`,
-      );
-    } else if (
-      state.sendPolicyDenied ||
-      (suppressDelivery && !state.suppressAutomaticSourceDelivery)
+    const bypassPluginBinding = shouldBypassPluginOwnedBindingForCommand(
+      ctx,
+      cfg,
+      params.replyOptions,
+    );
+    if (
+      !bypassPluginBinding &&
+      (state.sendPolicyDenied || (suppressDelivery && !state.suppressAutomaticSourceDelivery))
     ) {
       // Plugin-bound inbound handlers typically emit outbound replies we
       // cannot rewind. When automatic delivery is explicitly denied, skip the
@@ -295,10 +296,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       logVerbose(
         `plugin-bound inbound skipped under ${deliverySuppressionReason} (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to suppressed agent processing`,
       );
-    } else {
-      logVerbose(
-        `plugin-bound inbound routed to ${pluginOwnedBinding.pluginId} conversation=${pluginOwnedBinding.conversationId}`,
-      );
+    } else if (!bypassPluginBinding) {
       // Bound native runtimes need the current owner decision, not stale bind-time identity.
       // The resolver folds internal operator.admin authority into this owner decision.
       const bindingAuthorization = await resolveCommandAuthorizationAsync({

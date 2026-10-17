@@ -192,8 +192,6 @@ export const vitestWorkerDeclarationEntries = {
     "src/skills/library/persistence-runtime.test-support.ts",
   "snapshot/git-backup-command-runtime.test-support":
     "src/snapshot/git-backup-command-runtime.test-support.ts",
-  "state/openclaw-database-verify-runtime.test-support":
-    "src/state/openclaw-database-verify-runtime.test-support.ts",
   "state/openclaw-state-lease-runtime.test-support":
     "src/state/openclaw-state-lease-runtime.test-support.ts",
   "transcripts/library-timezone-runtime.test-support":

@@ -1,13 +1,13 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
-import { DockLayoutController } from "../dock-layout-controller.ts";
+import { createDockLayout } from "../dock-layout.ts";
 import { browserPanelLayout } from "../dock-panel-layout.ts";
 import { notifyPanelHostedTabsChanged } from "../panel-hosted-tabs.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
-import { SolidPanelController } from "../solid-panel-controller.ts";
+import { SolidPanelOwner } from "../solid-panel-owner.ts";
 import { browserRequestReferencedTabs, type BrowserDashboardTarget } from "./browser-client.ts";
 import { createBrowserPanel, type BrowserPanelHost } from "./browser-panel-owner.ts";
 import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
@@ -19,7 +19,7 @@ import {
 } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-export class BrowserPanelPresentation extends SolidPanelController implements BrowserPanelHost {
+export class BrowserPanelPresentation extends SolidPanelOwner implements BrowserPanelHost {
   /** Gateway client used for browser.request RPCs; null until connected. */
   client: GatewayBrowserClient | null = null;
   /** Whether the connected gateway advertises browser.request to this operator. */
@@ -53,13 +53,16 @@ export class BrowserPanelPresentation extends SolidPanelController implements Br
   private activeSessionTabsKey: string | undefined;
   private consumedPreferredRevision?: string;
   readonly browserPanelController = createBrowserPanel(this, () => this.invalidate());
-  readonly dockLayout = new DockLayoutController(this, {
+  readonly dockLayout = createDockLayout({
+    notify: () => this.invalidate(),
+    isEmbedded: () => this.embedded,
     layout: browserPanelLayout,
     reservationPrefix: "browser",
     isAvailable: () => this.available,
   });
 
   override connectedCallback(): void {
+    this.dockLayout.connect();
     super.connectedCallback();
     if (!this.embedded) {
       window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
@@ -75,6 +78,7 @@ export class BrowserPanelPresentation extends SolidPanelController implements Br
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
+    this.dockLayout.dispose();
   }
 
   override updated(changed: Map<PropertyKey, unknown>): void {
@@ -316,7 +320,7 @@ export type BrowserPanelElement = HTMLElement &
     | "handleToggleRequest"
     | "selectHostedTab"
     | "closeHostedTab"
-    | "requestUpdate"
+    | "invalidate"
     | "renderRoot"
     | "hasUpdated"
     | "hostedTabs"

@@ -30,6 +30,7 @@ import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 const SESSION_KEY = "agent:main:widget-restart-regression";
 const WIDGET_NAME = "restart-chart";
 const FINAL_MARKER = "WIDGET-RESTART-COMPLETE";
+const PROGRESS_MARKER = "Widget recovery is still working.";
 const FINAL_HTML = "<h1>Recovered chart</h1><p>Recovery completed.</p>";
 
 function writeToolCall(response: ServerResponse, name: string, args: unknown, ordinal: number) {
@@ -64,6 +65,8 @@ function writeToolCall(response: ServerResponse, name: string, args: unknown, or
 async function startWidgetProvider(signal: AbortSignal) {
   const recovered = createDeferred();
   const releaseRecovery = createDeferred();
+  const progressPersisted = createDeferred();
+  const progressResumed = createDeferred();
   const failed = createDeferred<never>();
   void failed.promise.catch(() => {});
   const calls: Array<{ recovering: boolean; tools: string[]; input: unknown }> = [];
@@ -162,6 +165,23 @@ async function startWidgetProvider(signal: AbortSignal) {
           recoveryCalls += 1;
           if (recoveryCalls === 1) {
             recovered.resolve();
+            const name = tools.includes("message") ? "message" : "dispatch_action";
+            const args = { action: "send", message: PROGRESS_MARKER, final: false };
+            writeToolCall(
+              response,
+              name,
+              name === "message" ? args : { id: "message", args },
+              calls.length,
+            );
+            return;
+          }
+          if (recoveryCalls === 2) {
+            // The next real provider request proves that the progress tool settled.
+            progressPersisted.resolve();
+            return;
+          }
+          if (recoveryCalls === 3) {
+            progressResumed.resolve();
             await withinTest(releaseRecovery.promise, signal);
             writeToolCall(
               response,
@@ -176,7 +196,7 @@ async function startWidgetProvider(signal: AbortSignal) {
             );
             return;
           }
-          expect(recoveryCalls).toBe(2);
+          expect(recoveryCalls).toBe(4);
           writeOpenAiResponsesText(response, {
             text: FINAL_MARKER,
             messageId: "msg_recovered_final",
@@ -193,6 +213,8 @@ async function startWidgetProvider(signal: AbortSignal) {
     calls,
     failed: failed.promise,
     recovered: recovered.promise,
+    progressPersisted: progressPersisted.promise,
+    progressResumed: progressResumed.promise,
     beginRecovery: () => {
       recovering = true;
     },
@@ -210,7 +232,7 @@ async function startWidgetProvider(signal: AbortSignal) {
 }
 
 it.skipIf(process.platform === "win32")(
-  "persists terminal completion after a widget turn recovers without an inline client",
+  "preserves recovered progress through a second cold restart without an inline client",
   { timeout: 180_000 },
   async ({ signal }) => {
     const provider = await startWidgetProvider(signal);
@@ -227,6 +249,9 @@ it.skipIf(process.platform === "win32")(
             OPENCLAW_SKIP_PROVIDERS: undefined,
             OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
             OPENCLAW_SKIP_CANVAS_HOST: "0",
+            // The synthetic provider is fixture-owned loopback, never an external service.
+            NO_PROXY: "127.0.0.1,localhost",
+            no_proxy: "127.0.0.1,localhost",
           },
           startTimeoutMs: 120_000,
           stopTimeoutMs: 10_000,
@@ -283,7 +308,7 @@ it.skipIf(process.platform === "win32")(
                   entries: { main: {} },
                 },
                 tools: {
-                  allow: ["exec", "process", "dashboard", "show_widget"],
+                  allow: ["exec", "process", "dashboard", "show_widget", "message"],
                   exec: { mode: "full", host: "gateway" },
                   codeMode: { enabled: false },
                 },
@@ -402,7 +427,26 @@ it.skipIf(process.platform === "win32")(
                 Promise.race([provider.recovered, provider.failed]),
                 AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
               );
+              await withinTest(Promise.race([provider.progressPersisted, provider.failed]), signal);
+              const progressHistory = await client.request("chat.history", {
+                sessionKey: SESSION_KEY,
+              });
+              expect(JSON.stringify(progressHistory)).toContain(PROGRESS_MARKER);
+              const recoveringProcess = instance.child;
+              if (!recoveringProcess?.pid) {
+                throw new Error("Owned recovery Gateway process unavailable");
+              }
+              await client.stopAndWait();
+              client = undefined;
+              const recoveryClosed = once(recoveringProcess, "close");
+              expect(recoveringProcess.kill("SIGKILL")).toBe(true);
+              await withinTest(recoveryClosed, signal);
+              await instance.startGateway();
+              expect(instance.child?.pid).not.toBe(recoveringProcess.pid);
+              client = await connect(false);
               await client.request("sessions.subscribe", { agentId: "main" });
+              // Socket readiness precedes admission of the new recovery lifecycle.
+              await withinTest(Promise.race([provider.progressResumed, provider.failed]), signal);
               const recoveryRunId = persisted()?.lifecycleRunId;
               expect(typeof recoveryRunId).toBe("string");
               const settled = client.request("agent.wait", {
@@ -453,10 +497,19 @@ it.skipIf(process.platform === "win32")(
                     extractAssistantPhaseText(message)?.trim() === FINAL_MARKER,
                 ),
               ).toHaveLength(1);
+              expect(
+                history.messages.filter(
+                  (message) =>
+                    message.role === "assistant" &&
+                    extractAssistantPhaseText(message)?.trim() === PROGRESS_MARKER,
+                ),
+              ).toHaveLength(1);
+              expect(instance.logs()).not.toContain("Session transcript keyed user is outside");
               expect(instance.logs()).toContain("startup-orphaned main session(s)");
               console.info(
                 JSON.stringify({
-                  proof: "widget-restart",
+                  proof: "widget-progress-double-restart",
+                  gatewayPids: [original.pid, recoveringProcess.pid, instance.child?.pid],
                   runtime: process.versions.bun ?? process.version,
                   durableStatus: durable?.status,
                   projectedStatus: rows.sessions.find((row) => row.key === SESSION_KEY)?.status,
