@@ -135,6 +135,8 @@ export type ConfigSnapshotReadOptions = {
   lowerPrecedenceEnv?: Readonly<Record<string, string>>;
   allowCurrentPluginMetadata?: boolean;
   recoverSuspicious?: boolean;
+  /** Admission can reject this source while retaining routing and dotenv effects. */
+  onSourceEnvApplied?: (restore: () => void) => void;
   allowSuspiciousRecovery?: (
     candidate: OpenClawConfig,
     current: OpenClawConfig,
