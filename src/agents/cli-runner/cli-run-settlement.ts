@@ -9,10 +9,6 @@ import {
   markAuthProfileSuccess,
   type AuthProfileStore,
 } from "../auth-profiles.js";
-import {
-  resolveCliRuntimeArtifactFingerprint,
-  resolveCliRuntimeOwnerFingerprint,
-} from "../cli-auth-epoch.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import {
   shouldClearFailedCliSessionBinding,
@@ -102,37 +98,6 @@ async function settleCliAuthProfile(params: {
 
 export function isClaudeCliBackend(provider: string): boolean {
   return provider.trim().toLowerCase() === "claude-cli";
-}
-
-export async function assertCliRuntimeBinding(context: PreparedCliRunContext): Promise<void> {
-  if (!context.runtimeArtifactFingerprint) {
-    return;
-  }
-  const currentArtifact = await resolveCliRuntimeArtifactFingerprint({
-    provider: context.params.provider,
-    config: context.params.config ?? context.contextEngineConfig,
-    agentId: context.params.agentId,
-    runtimeArtifactId: context.backendResolved.id,
-  });
-  if (currentArtifact !== context.runtimeArtifactFingerprint) {
-    throw new Error("CLI executable/package artifact changed during successful inference");
-  }
-  if (!context.runtimeOwnerFingerprint) {
-    return;
-  }
-  const currentOwner = await resolveCliRuntimeOwnerFingerprint({
-    provider: context.params.provider,
-    config: context.params.config ?? context.contextEngineConfig,
-    ...(context.agentDir ? { agentDir: context.agentDir } : {}),
-    agentId: context.params.agentId,
-    runtimeOwnerId: context.backendResolved.id,
-    ...(context.effectiveAuthProfileId ? { authProfileId: context.effectiveAuthProfileId } : {}),
-    ...(context.authBindingSkipsLocalCredential ? { skipLocalCredential: true } : {}),
-    runtimeArtifactFingerprint: currentArtifact,
-  });
-  if (currentOwner !== context.runtimeOwnerFingerprint) {
-    throw new Error("CLI runtime owner changed during successful inference");
-  }
 }
 
 export async function settleCliPreparationError(

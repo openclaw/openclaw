@@ -231,11 +231,7 @@ function serializeToolInput(args: unknown): string | undefined {
   if (typeof args === "string") {
     return args;
   }
-  try {
-    return JSON.stringify(args, null, 2);
-  } catch {
-    return typeof args === "bigint" ? String(args) : Object.prototype.toString.call(args);
-  }
+  return JSON.stringify(args, null, 2);
 }
 
 /** Rendering only: extraction and result retrieval retain the original card. */

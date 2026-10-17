@@ -357,6 +357,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     this.sessionSuggestionBusyIds.add(suggestion.id);
     if (resolution === "edit") {
       scope.state.handleChatDraftChange(suggestion.text, []);
+      // The native pane hands focus to the composer renderer after publishing the draft.
       queueMicrotask(() =>
         this.element.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
           preventScroll: true,

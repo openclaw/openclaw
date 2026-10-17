@@ -61,6 +61,17 @@ uses PostgreSQL, stop the Gateway through its service owner first. A running
 Gateway causes a refusal: “stop through the service owner, then rerun.” Backup
 never stops it automatically. The requirement also applies to `create --to`.
 
+Mixed-engine installations use the same commands and archive format. Each
+store's physical engine and selected shared connection determine its capture;
+the default engine alone does not determine backup behavior. Archive restore
+extracts the archived family selections and matching store artifacts into
+staging; it does not restore PostgreSQL rows or activate configuration. Matched
+PostgreSQL restore, including `backup git restore`, verifies the artifacts,
+loads fresh owned namespaces, and produces matching anchors. Activate recovered
+stores with their corresponding family selections before runtime admission.
+SQLite stores remain SQLite. Config includes, active fragments, and companion
+files retain their existing capture and verification rules.
+
 A PostgreSQL capture contains the original anchor, a sanitized SQLite export
 image, and a format-2 manifest with the profile, engine, store UUID, versions,
 active fragments, allocation facts, sizes, and hashes. The manifest contains no
@@ -238,6 +249,10 @@ exactly as recorded in the archive.
   `plugin-skills/` symlink index is also omitted; run `openclaw skills list` or
   start an agent session after activation to rebuild it from plugin metadata.
 </Warning>
+
+For PostgreSQL stores, archive extraction has not rolled back server rows.
+Complete matched restoration of the PostgreSQL exports into fresh owned
+namespaces before activating the extracted state and its family selections.
 
 Activation is a separate offline operator step. Stop the Gateway, move the
 restored state asset into place or point `OPENCLAW_STATE_DIR` at that asset,
@@ -434,6 +449,8 @@ backup creation does not scrub their history or remove them from later trees.
   Git history is durable. Without `--exclude-secrets`, snapshots include
   credential material and any pushed remote must be private.
 
+SQLite and PostgreSQL Git exports apply the same `--exclude-secrets` policy. PostgreSQL portable images retain empty table definitions so the matching provider can restore them; credential rows and catalog fields are removed before publication.
+
 `src/state/secret-state-tables.ts` is the source of truth for redaction. At this revision, `--exclude-secrets` omits these shared-state tables:
 
 - `audit_identity_keys`
@@ -452,6 +469,7 @@ backup creation does not scrub their history or remove them from later trees.
 - `mcp_oauth_stores`
 - `native_hook_relay_bridges`
 - `secret_store_entries`
+- `web_push_approval_deliveries` (dependent subscription receipts)
 - `web_push_subscriptions`
 - `worker_environment_credentials`
 

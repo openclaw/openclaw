@@ -428,6 +428,7 @@ async function assertHistoricalGatewayOwnerStopped(
         path.join(paths.stateDir, "state", "openclaw.sqlite"),
         undefined,
         describeGatewayLockHolder(payload, lockPath, owner === "alive" ? "live" : "unknown"),
+        { pid: payload.pid, role: payload.role },
       );
     }
   }

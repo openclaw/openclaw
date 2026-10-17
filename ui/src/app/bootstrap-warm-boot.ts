@@ -107,7 +107,7 @@ export function subscribeWarmBootConnection(
     if (
       pendingBootProfileId !== undefined &&
       (snapshot.lastErrorAuthReason ||
-        (typeof snapshot.lastErrorCode === "string" && snapshot.lastErrorCode !== "GATEWAY_BUSY"))
+        (snapshot.lastErrorCode !== null && snapshot.lastErrorCode !== "GATEWAY_BUSY"))
     ) {
       // A later transport failure cannot erase a rejected initial admission.
       // Retire this boot record, not drafts/outboxes or another Gateway’s cache.

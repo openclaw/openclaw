@@ -26,6 +26,7 @@ import {
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { runOfflineDatabaseBackup } from "../snapshot/database-backup.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import {
@@ -144,8 +145,7 @@ async function resolveOutputPath(params: {
   }
 
   try {
-    const stat = await fs.stat(resolved);
-    if (stat.isDirectory()) {
+    if ((await fs.stat(resolved)).isDirectory()) {
       return path.join(resolved, basename);
     }
   } catch {
@@ -234,10 +234,10 @@ export async function chooseBackupTempRoot(params: {
 }): Promise<string> {
   const systemTmp = os.tmpdir();
   const canonicalSystemTmp = await canonicalizePathForContainment(systemTmp);
-  const systemTmpInsideAsset = params.assets.some((asset) =>
+  const overlapping = params.assets.find((asset) =>
     isPathInside(asset.sourcePath, canonicalSystemTmp),
   );
-  if (!systemTmpInsideAsset) {
+  if (!overlapping) {
     return systemTmp;
   }
 
@@ -248,12 +248,9 @@ export async function chooseBackupTempRoot(params: {
   // Without an output path (offsite uploads stage into scratch), fall back to
   // the parent of the source that contains the system temp dir, e.g. when the
   // Gateway runs jobs with TMPDIR=~/.openclaw/tmp.
-  const overlapping = params.assets.find((asset) =>
-    isPathInside(asset.sourcePath, canonicalSystemTmp),
-  );
   const fallback = params.outputPath
     ? path.dirname(params.outputPath)
-    : path.dirname(overlapping!.sourcePath);
+    : path.dirname(overlapping.sourcePath);
   const canonicalFallback = await canonicalizePathForContainment(fallback);
   const fallbackInsideAsset = params.assets.find((asset) =>
     isPathInside(asset.sourcePath, canonicalFallback),
@@ -387,12 +384,24 @@ export async function createBackupArchive(
   return await withCommandProcessScope(() => createBackupArchiveInScope(opts), opts.signal);
 }
 
-async function createBackupArchiveInScope(opts: BackupCreateOptions): Promise<BackupCreateResult> {
+async function createBackupArchiveInScope(
+  opts: BackupCreateOptions,
+  preparedPlan?: Awaited<ReturnType<typeof resolveBackupPlanFromDisk>>,
+): Promise<BackupCreateResult> {
   const nowMs = resolveDateTimestampMs(opts.nowMs);
   const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
-  const plan = await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs });
+  const plan =
+    preparedPlan ?? (await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs }));
+  const selection = plan.databaseSelection;
+  if (!preparedPlan && !opts.dryRun && selection?.postgres && plan.databaseConfig) {
+    return runOfflineDatabaseBackup(
+      plan.stateDir,
+      () => createBackupArchiveInScope({ ...opts, nowMs }, plan),
+      { config: plan.databaseConfig, selection },
+    );
+  }
   const outputPath = await resolveOutputPath({
     output: opts.output,
     nowMs,

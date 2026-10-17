@@ -97,7 +97,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
         return this.intentHost.canRun();
       },
       hasTabs: () => this.tabs.length > 0,
-      requestUpdate: () => this.host.requestUpdate(),
+      requestUpdate: () => this.host.invalidate(),
       setBooting: (booting) => this.updateControllerState({ booting }),
       timeoutMs: () => this.host.catalogReadyTimeoutMs,
       showTimeout: () => {
@@ -129,7 +129,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
 
   private updateControllerState(state: Partial<TerminalPanelSessionControllerState>): void {
     Object.assign(this, state);
-    this.host.requestUpdate();
+    this.host.invalidate();
   }
 
   setError(text: string | null, retryAction?: TerminalPanelOpenAction): TerminalPanelError | null {

@@ -164,7 +164,6 @@
   color: var(--muted);
   box-shadow: var(--shell-chrome-control-shadow, var(--shadow-sm));
   backdrop-filter: var(--shell-chrome-control-backdrop, blur(10px));
-  -webkit-backdrop-filter: var(--shell-chrome-control-backdrop, blur(10px));
 }
 
 .shell-chrome-controls__button:hover:not(:disabled, [aria-disabled="true"]) {
@@ -874,7 +873,6 @@ openclaw-settings-save-indicator:empty {
   border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   background: color-mix(in srgb, var(--bg) 82%, transparent);
   backdrop-filter: blur(12px) saturate(1.6);
-  -webkit-backdrop-filter: blur(12px) saturate(1.6);
 }
 
 .topnav-shell {
@@ -1349,9 +1347,6 @@ openclaw-settings-save-indicator:empty {
   --sidebar-scroll-edge: right;
 
   /* The second layer keeps the native scrollbar out of the content fade. */
-  -webkit-mask:
-    var(--sidebar-body-mask),
-    linear-gradient(black, black) var(--sidebar-scroll-edge) / var(--scrollbar-size) 100% no-repeat;
   mask:
     var(--sidebar-body-mask),
     linear-gradient(black, black) var(--sidebar-scroll-edge) / var(--scrollbar-size) 100% no-repeat;

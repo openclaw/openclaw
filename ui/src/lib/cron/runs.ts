@@ -251,11 +251,11 @@ export function updateCronRunsFilter(
   if (patch.cronRunsRunId !== undefined) {
     state.cronRunsRunId = patch.cronRunsRunId;
   }
-  if (Array.isArray(patch.cronRunsStatuses)) {
+  if (patch.cronRunsStatuses !== undefined) {
     state.cronRunsStatuses = patch.cronRunsStatuses;
     state.cronRunsStatusFilter = patch.cronRunsStatuses[0] ?? "all";
   }
-  if (Array.isArray(patch.cronRunsDeliveryStatuses)) {
+  if (patch.cronRunsDeliveryStatuses !== undefined) {
     state.cronRunsDeliveryStatuses = patch.cronRunsDeliveryStatuses;
   }
   if (patch.cronRunsStatusFilter) {
@@ -263,7 +263,7 @@ export function updateCronRunsFilter(
     state.cronRunsStatuses =
       patch.cronRunsStatusFilter === "all" ? [] : [patch.cronRunsStatusFilter];
   }
-  if (typeof patch.cronRunsQuery === "string") {
+  if (patch.cronRunsQuery !== undefined) {
     state.cronRunsQuery = patch.cronRunsQuery;
   }
   state.cronRunsSortDir = patch.cronRunsSortDir ?? state.cronRunsSortDir;

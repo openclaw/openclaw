@@ -22,7 +22,10 @@ import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import "../../ai-transport-runtime-host.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import type { StreamFn } from "../../runtime/index.js";
-import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import {
+  castAgentMessage,
+  makeAgentAssistantMessage,
+} from "../../test-helpers/agent-message-fixtures.js";
 import {
   testing as extraParamsTesting,
   type WrapProviderStreamFnParams,
@@ -275,6 +278,84 @@ describe("prepareEmbeddedAttemptTransport", () => {
       { type: "compaction", compact_threshold: 140_000 },
     ]);
     expect(payloads[1]).not.toHaveProperty("context_management");
+  });
+
+  it.each(
+    (["openai-responses", "anthropic-messages"] as const).flatMap((api) =>
+      [
+        { owns: true, configured: undefined, suppressed: true },
+        { owns: true, configured: false, suppressed: true },
+        { owns: true, configured: true, suppressed: false },
+        { owns: false, configured: undefined, suppressed: false },
+        { owns: true, configured: true, suppressed: true, trigger: "memory" as const },
+      ]
+        .filter((scenario) => api === "openai-responses" || !scenario.trigger)
+        .map((scenario) =>
+          Object.assign(scenario, {
+            api,
+            suppressed: api === "openai-responses" && scenario.suppressed,
+          }),
+        ),
+    ),
+  )("respects OpenAI compaction ownership without changing Anthropic: %j", async (scenario) => {
+    const { input, session, streamFn } = createTransportFixture({
+      pruning: false,
+      apiKey: "sk-synthetic",
+    });
+    const responses = scenario.api === "openai-responses";
+    input.attempt.model = {
+      ...anthropicModel,
+      api: scenario.api,
+      provider: responses ? "openai" : "anthropic",
+      id: responses ? "gpt-5.4" : "claude-sonnet-4-6",
+      baseUrl: responses ? "https://api.openai.com/v1" : "https://api.anthropic.com",
+    };
+    input.attempt.provider = input.attempt.model.provider;
+    input.attempt.modelId = input.attempt.model.id;
+    input.attempt.trigger = scenario.trigger;
+    input.contextEngineInfo = {
+      id: "engine",
+      name: "Engine",
+      ownsCompaction: scenario.owns,
+    };
+    const parameter = responses ? "responsesServerCompaction" : "anthropicServerCompaction";
+    input.attempt.runtimePlan!.transport.resolveExtraParams = () => ({
+      [parameter]: scenario.configured,
+    });
+    const checkpoint = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "CE_SELECTED_HISTORY" }],
+      providerReplay: {
+        v: 1,
+        provider: input.attempt.model.provider,
+        api: input.attempt.model.api,
+        model: input.attempt.model.id,
+        data: "opaque-checkpoint",
+        baseUrlHash: "synthetic-endpoint-hash",
+        type: responses ? "openai-responses-compaction" : "anthropic-compaction",
+      },
+    });
+    const messages = [checkpoint];
+    streamFn.mockReturnValue(createAssistantMessageEventStream());
+    registerProviderStreamForModel.mockReturnValue(streamFn);
+
+    const prepared = await prepareEmbeddedAttemptTransport(input);
+    await session.agent.streamFn(input.attempt.model, { messages }, {});
+
+    expect(prepared.compactionReplayEnabled).toBe(
+      !scenario.suppressed && scenario.configured !== false,
+    );
+    expect(prepared.effectiveExtraParams[parameter]).toBe(
+      scenario.suppressed ? false : scenario.configured,
+    );
+    if (responses && scenario.suppressed) {
+      expect(prepared.effectiveExtraParams.responsesCompactEndpoint).toBe(false);
+    }
+    const sent = streamFn.mock.calls.at(-1)?.[1].messages.find((m) => m.role === "assistant");
+    expect(sent?.content).toEqual(checkpoint.content);
+    expect(sent?.providerReplay).toEqual(
+      scenario.suppressed ? undefined : checkpoint.providerReplay,
+    );
+    expect(checkpoint.providerReplay).toBeDefined();
   });
 
   it.each([{ source: "resolved run", resolvedApiKey: "sk-ant-oat01-synthetic-run" }])(

@@ -15,7 +15,8 @@ const pets = new WeakMap<HTMLElement, LobsterPetOwner>();
 export const LobsterPet = defineSolidBridge<LobsterPetProps>(
   "openclaw-lobster-pet",
   (props, host) => {
-    const pet = pets.get(host) ?? new LobsterPetOwner(host, () => (host.visitsEnabled = false));
+    const pet =
+      pets.get(host) ?? new LobsterPetOwner(host, () => (host.visitsEnabled = false), props);
     pets.set(host, pet);
     const state = projectOwner(pet, (owner) => owner.snapshot()).read;
     onSettled(() => {

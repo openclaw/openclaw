@@ -31,7 +31,7 @@ import {
   consumePluginHelpAutoOpen,
   dismissPluginHelpAutoOpen,
 } from "../pages/custodian/plugin-help-state.ts";
-import { DockLayoutController } from "./dock-layout-controller.ts";
+import { createDockLayout } from "./dock-layout.ts";
 import { assistantPanelLayout } from "./dock-panel-layout.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "../styles/rail-header.css";
@@ -85,21 +85,12 @@ export function createAssistantPanel(element: SolidBridgeElement<AssistantPanelP
   const notify = () => listeners.forEach((listener) => listener());
   const getContext = () => props.context ?? application;
   const contentLoader = createLazyCustomElementRequests(element);
-  // The shared layout owner still uses the controller contract; its lifetime is view-owned.
-  const dockLayout = new DockLayoutController(
-    {
-      get isConnected() {
-        return element.isConnected;
-      },
-      addController() {},
-      requestUpdate: notify,
-    },
-    {
-      layout: assistantPanelLayout,
-      reservationPrefix: "assistant",
-      isAvailable: available,
-    },
-  );
+  const dockLayout = createDockLayout({
+    layout: assistantPanelLayout,
+    reservationPrefix: "assistant",
+    isAvailable: available,
+    notify,
+  });
   function refresh(): void {
     if (refreshing) {
       return;

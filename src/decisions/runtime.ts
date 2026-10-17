@@ -231,11 +231,17 @@ async function evaluateVersion(
     if ((canDispatch && !canDispatch()) || (isAdmissible && !isAdmissible())) {
       return skipped({ status: "unavailable", reason: "disabled" });
     }
+    // Preparation consumes the caller's budget. The host still owns provider
+    // cancellation and waits for physical settlement after its deadline.
+    const timeoutMs = options.timeoutMs - (performance.now() - started);
+    if (timeoutMs <= 0) {
+      return skipped(entry.host.unavailable("deadline"));
+    }
     const result =
       version === 1
         ? await entry.host.evaluate(
             submitted as DecisionBatch, // SAFETY: V1 validation and structuredClone preserve the admitted V1 shape.
-            { ...options, signal },
+            { ...options, timeoutMs, signal },
             selected.model,
             config,
             registry,
@@ -244,7 +250,7 @@ async function evaluateVersion(
           )
         : await entry.host.evaluateV2(
             submitted as DecisionBatchV2, // SAFETY: V2 validation and structuredClone preserve the admitted V2 shape.
-            { ...options, signal },
+            { ...options, timeoutMs, signal },
             selected.model,
             config,
             registry,
