@@ -23,6 +23,8 @@ export type TelegramMediaRef = {
   path?: string;
   contentType?: string;
   fileName?: string;
+  /** Telegram source identity, stable across file-id changes and local restaging. */
+  fileUniqueId?: string;
   stickerMetadata?: StickerMetadata;
   sourceMessageId?: string;
   unavailable?: { reason: "oversize"; limit: string } | { reason: "download-failed" };
