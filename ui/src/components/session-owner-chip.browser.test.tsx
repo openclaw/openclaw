@@ -5,6 +5,7 @@ import { BUILTIN_THEME_IDS } from "../../../packages/gateway-protocol/src/theme-
 import "../test-helpers/load-styles.ts";
 import { resolveTheme, syncThemePaletteStylesheet, type ThemeName } from "../app/theme.ts";
 import { TYPEFACES, resolveTypefaces, syncTypefaceStylesheets } from "../app/typography.ts";
+import { runningRow } from "../test-helpers/app-sidebar-session-narration.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { renderSessionLeadingState } from "./solid/session-presentation.tsx";
 import "./solid/session-owner-chip.tsx";
@@ -30,7 +31,7 @@ function pixelLuminance(channels: Uint8ClampedArray): number {
   }, 0);
 }
 
-async function paintedCounterLuminance(face: HTMLElement): Promise<number> {
+async function captureFace(face: HTMLElement) {
   const base64 = await page.elementLocator(face).screenshot({ save: false });
   const image = new Image();
   image.src = `data:image/png;base64,${base64}`;
@@ -39,6 +40,11 @@ async function paintedCounterLuminance(face: HTMLElement): Promise<number> {
   canvas.width = image.width;
   canvas.height = image.height;
   const context = canvas.getContext("2d")!;
+  return { image, context };
+}
+
+async function paintedCounterLuminance(face: HTMLElement): Promise<number> {
+  const { image, context } = await captureFace(face);
   context.drawImage(image, 0, 0);
   // Sample below the text, clear of the unread badge and circular border.
   const scale = image.height / face.getBoundingClientRect().height;
@@ -76,14 +82,7 @@ async function applyTheme(theme: ThemeName, mode: "light" | "dark") {
 }
 
 async function expectCenteredInk(face: HTMLElement) {
-  const base64 = await page.elementLocator(face).screenshot({ save: false });
-  const image = new Image();
-  image.src = `data:image/png;base64,${base64}`;
-  await image.decode();
-  const canvas = document.createElement("canvas");
-  canvas.width = image.width;
-  canvas.height = image.height;
-  const context = canvas.getContext("2d")!;
+  const { image, context } = await captureFace(face);
   context.fillStyle = getComputedStyle(face).color;
   context.fillRect(0, 0, 1, 1);
   const foreground = context.getImageData(0, 0, 1, 1).data;
@@ -192,26 +191,11 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
                 {
                   renderSessionLeadingState({
                     session: {
-                      key: "agent:main:shared",
+                      ...runningRow("agent:main:shared"),
                       label: "Shared session",
                       renameValue: "Shared session",
-                      active: false,
-                      visuallyActive: false,
                       hasActiveRun: presence === "running",
-                      modelSelectionLocked: false,
-                      pinned: false,
-                      pinnable: true,
-                      cloudWorkerStopAction: null,
-                      hasAutomation: false,
                       unread: presence === "unread",
-                      attention: { kind: "none" },
-                      childSessionKeys: [],
-                      children: [],
-                      isChild: false,
-                      loadingChildren: false,
-                      containsActiveDescendant: false,
-                      runningChildCount: 0,
-                      failedChildCount: 0,
                       participants: [
                         { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
                       ],

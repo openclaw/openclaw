@@ -8,6 +8,27 @@ import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
 
 const SESSION_KEY = "agent:main:research";
+const DASHBOARD_KEY = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
+function row(displayName?: string, key = SESSION_KEY): GatewaySessionRow {
+  return { key, kind: "direct", displayName, updatedAt: Date.now() };
+}
+function publicContext(
+  rows: GatewaySessionRow[] = [],
+  origin = "https://chat.example",
+): ApplicationContext {
+  return {
+    ...sessionContext(rows),
+    runtimeConfig: {
+      state: {
+        configSnapshot: { runtimeConfig: { gateway: { publicOrigin: origin } } },
+      },
+    },
+  } as unknown as ApplicationContext;
+}
+async function refresh(titler: SessionLinkTitler) {
+  titler.refresh();
+  await vi.runAllTimersAsync();
+}
 
 function sessionContext(rows: GatewaySessionRow[] = []): ApplicationContext {
   return {
@@ -62,9 +83,7 @@ describe("SessionLinkTitler", () => {
   it.each([false, true])(
     "seeds roster titles while preserving navigation (label only: %s)",
     async (labelOnly) => {
-      const { host, request, titler } = createTitler([
-        { key: SESSION_KEY, kind: "direct", displayName: "Cached research", updatedAt: Date.now() },
-      ]);
+      const { host, request, titler } = createTitler([row("Cached research")]);
       const label = labelOnly ? document.createElement("span") : sessionAnchor();
       if (labelOnly) {
         label.dataset.sessionTitleOnly = "";
@@ -81,14 +100,7 @@ describe("SessionLinkTitler", () => {
       expect(label.parentElement).toBe(host);
       expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(!labelOnly);
       expect(request).not.toHaveBeenCalled();
-      titler.context = sessionContext([
-        {
-          key: SESSION_KEY,
-          kind: "direct",
-          displayName: "Current research",
-          updatedAt: Date.now(),
-        },
-      ]);
+      titler.context = sessionContext([row("Current research")]);
       await titler.decorate(label);
       expect(label.textContent).toBe("Current research");
       expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(!labelOnly);
@@ -125,14 +137,7 @@ describe("SessionLinkTitler", () => {
         expect(label.textContent).toBe("Research plan");
         label.textContent = "Updated by the producer";
         expect(first.textContent).toBe("Updated by the producer");
-        titler.context = sessionContext([
-          {
-            key: SESSION_KEY,
-            kind: "direct",
-            displayName: "Replacement Gateway",
-            updatedAt: Date.now(),
-          },
-        ]);
+        titler.context = sessionContext([row("Replacement Gateway")]);
         await titler.decorate(first, true);
         expect(first.firstElementChild).toBe(label);
         expect(first.textContent).toBe("Updated by the producer");
@@ -199,9 +204,9 @@ describe("SessionLinkTitler", () => {
   });
 
   it("retires a retained URL title when the replacement Gateway cannot resolve it", async () => {
-    const key = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
+    const key = DASHBOARD_KEY;
     const { host, titler, request } = createTitler(
-      [{ key, kind: "direct", displayName: "Previous Gateway", updatedAt: Date.now() }],
+      [row("Previous Gateway", key)],
       vi.fn().mockResolvedValue({ ok: false }),
     );
     host.innerHTML = toSanitizedMarkdownHtml(
@@ -251,24 +256,16 @@ describe("SessionLinkTitler", () => {
       displayName: undefined,
     },
   ])("titles a $kind outside the loaded roster", async ({ markdown, params, displayName }) => {
-    const key = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
+    const key = DASHBOARD_KEY;
     const request = vi.fn(async (method: string) =>
       method === "sessions.resolve"
         ? { ok: true, key, agentId: "main", ...(displayName ? { displayName } : {}) }
         : previewResponse({ sessionKey: key, title: undefined, derivedTitle: "Derived plan" }),
     );
     const { host, titler } = createTitler([], request);
-    titler.context = {
-      ...sessionContext(),
-      runtimeConfig: {
-        state: {
-          configSnapshot: { runtimeConfig: { gateway: { publicOrigin: "https://chat.example" } } },
-        },
-      },
-    } as unknown as ApplicationContext;
+    titler.context = publicContext();
     host.innerHTML = toSanitizedMarkdownHtml(markdown, { sessionLinks: true });
-    titler.refresh();
-    await vi.runAllTimersAsync();
+    await refresh(titler);
 
     const link = host.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
     expect(link.textContent).toBe(displayName ?? "Derived plan");
@@ -279,8 +276,7 @@ describe("SessionLinkTitler", () => {
 
     const observer = new MutationObserver(() => undefined);
     observer.observe(host, { attributes: true, childList: true, subtree: true });
-    titler.refresh();
-    await vi.runAllTimersAsync();
+    await refresh(titler);
     expect(observer.takeRecords()).toEqual([]);
     observer.disconnect();
     expect(request).toHaveBeenCalledTimes(displayName ? 1 : 2);
@@ -296,10 +292,8 @@ describe("SessionLinkTitler", () => {
     });
     const { host, titler } = createTitler([], request);
     host.innerHTML = toSanitizedMarkdownHtml("[Plan](/chat/main/d0effac9)", { sessionLinks: true });
-    titler.refresh();
-    await vi.runAllTimersAsync();
-    titler.refresh();
-    await vi.runAllTimersAsync();
+    await refresh(titler);
+    await refresh(titler);
 
     const link = host.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
     expect(link.textContent).toBe("Plan");
@@ -318,29 +312,15 @@ describe("SessionLinkTitler", () => {
   ])(
     "connects %s to the same hover identity without losing route intent",
     async (_kind, markdown) => {
-      const key = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
-      const row: GatewaySessionRow = {
-        key,
-        kind: "direct",
-        displayName: "Shared contract",
-        updatedAt: Date.now(),
-      };
+      const key = DASHBOARD_KEY;
+      const session = row("Shared contract", key);
       const rows: GatewaySessionRow[] = [];
       const { host, titler, request } = createTitler(rows);
-      titler.context = {
-        ...sessionContext(rows),
-        runtimeConfig: {
-          state: {
-            configSnapshot: {
-              runtimeConfig: { gateway: { publicOrigin: "https://CHAT.example:443/" } },
-            },
-          },
-        },
-      } as unknown as ApplicationContext;
+      titler.context = publicContext(rows, "https://CHAT.example:443/");
       host.innerHTML = toSanitizedMarkdownHtml(markdown, { sessionLinks: true, fileLinks: true });
       await titler.decorate(host.querySelector<HTMLElement>("[data-session-href]")!);
       expect(request).not.toHaveBeenCalled();
-      rows.push(row);
+      rows.push(session);
       titler.connect();
       await Promise.resolve();
       const link = host.querySelector<HTMLAnchorElement>("a.markdown-session-link");
@@ -357,7 +337,7 @@ describe("SessionLinkTitler", () => {
   );
 
   it("resolves newly loaded and ambiguous references without mutating unchanged links", () => {
-    const key = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
+    const key = DASHBOARD_KEY;
     const rows: GatewaySessionRow[] = [];
     const { host, titler, request } = createTitler(rows, vi.fn().mockResolvedValue({ ok: false }));
     host.innerHTML = toSanitizedMarkdownHtml(
@@ -370,7 +350,7 @@ describe("SessionLinkTitler", () => {
     const links = [...host.querySelectorAll<HTMLAnchorElement>("a.markdown-session-link")];
     expect(links.map((link) => link.dataset.sessionKey)).toEqual([undefined, undefined, undefined]);
     expect(links[0]?.getAttribute("href")).toBe("/chat/main/d0effac9?view=details#first");
-    rows.push({ key, kind: "direct", displayName: "Shared contract", updatedAt: Date.now() });
+    rows.push(row("Shared contract", key));
     titler.refresh();
     expect(links.map((link) => link.dataset.sessionKey)).toEqual([key, key, undefined]);
     const observer = new MutationObserver(() => undefined);

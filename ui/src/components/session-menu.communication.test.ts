@@ -24,6 +24,36 @@ import {
 import { waitForFast } from "../test-helpers/wait-for.ts";
 
 const policy = { send: "never", receive: "ask" } as const;
+const target = (name = "settings") => ({
+  target: { key: `agent:main:${name}`, ...(name === "settings" ? {} : { agentId: "main" }) },
+  sessionId: `${name}-id`,
+});
+function descriptor(
+  name = "settings",
+  effectiveCommunication: GatewaySessionRow["effectiveCommunication"] = policy,
+) {
+  return {
+    session: {
+      key: `agent:main:${name}`,
+      sessionId: `${name}-id`,
+      kind: "direct" as const,
+      updatedAt: 1,
+      effectiveCommunication,
+    },
+  };
+}
+const keydown = (shiftKey = false) =>
+  new KeyboardEvent("keydown", {
+    key: "Tab",
+    shiftKey,
+    bubbles: true,
+    composed: true,
+    cancelable: true,
+  });
+async function select(menu: Parameters<typeof selectMenuValue>[0], value: string) {
+  await selectMenuValue(menu, value);
+  await settleSessionMenu(menu);
+}
 
 function choice(menu: ParentNode, direction: "send" | "receive", mode: "always" | "ask" | "never") {
   const button = menu.querySelector<HTMLButtonElement>(
@@ -47,7 +77,7 @@ describe("session communication menu", () => {
     });
     const menu = await mountMenu({
       context,
-      session: { target: { key: "agent:main:old", agentId: "main" }, sessionId: "old-id" },
+      session: target("old"),
     });
     const advanced = await openSubmenu(menu, "Advanced");
     await waitForFast(() =>
@@ -57,11 +87,7 @@ describe("session communication menu", () => {
       }),
     );
     expect(choice(advanced, "send", "always").disabled).toBe(true);
-    menu.session = {
-      ...menu.session,
-      target: { key: "agent:main:next", agentId: "main" },
-      sessionId: "next-id",
-    };
+    menu.session = { ...menu.session, ...target("next") };
     await menu.updateComplete;
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("sessions.describe", {
@@ -69,28 +95,12 @@ describe("session communication menu", () => {
         agentId: "main",
       }),
     );
-    nextReply.resolve({
-      session: {
-        key: "agent:main:next",
-        sessionId: "next-id",
-        kind: "direct",
-        updatedAt: 1,
-        effectiveCommunication: { send: "ask", receive: "always" },
-      },
-    });
+    nextReply.resolve(descriptor("next", { send: "ask", receive: "always" }));
     await waitForFast(() =>
       expect(choice(advanced, "send", "ask").getAttribute("aria-pressed")).toBe("true"),
     );
     expect(choice(advanced, "send", "always").disabled).toBe(false);
-    oldReply.resolve({
-      session: {
-        key: "agent:main:old",
-        sessionId: "old-id",
-        kind: "direct",
-        updatedAt: 1,
-        effectiveCommunication: { send: "never", receive: "never" },
-      },
-    });
+    oldReply.resolve(descriptor("old", { send: "never", receive: "never" }));
     await oldReply.promise;
     await menu.updateComplete;
     expect(choice(advanced, "send", "ask").getAttribute("aria-pressed")).toBe("true");
@@ -105,7 +115,7 @@ describe("session communication menu", () => {
     );
     const menu = await mountMenu({
       context,
-      session: { target: { key: "agent:main:settings" }, sessionId: "settings-id" },
+      session: target(),
     });
     const advanced = await openSubmenu(menu, "Advanced");
     publish({ phase: "reconnecting" });
@@ -115,15 +125,7 @@ describe("session communication menu", () => {
     expect(advanced.querySelector('[role="alert"]')).toBeNull();
     const request = createGatewayRequestMock((method) =>
       method === "sessions.describe"
-        ? {
-            session: {
-              key: "agent:main:settings",
-              sessionId: "settings-id",
-              kind: "direct",
-              updatedAt: 1,
-              effectiveCommunication: { send: "ask", receive: "always" },
-            },
-          }
+        ? descriptor("settings", { send: "ask", receive: "always" })
         : sessionOwnerProfiles("Ada"),
     );
     publish({ phase: "connected", client: createTestGatewayClient(request) });
@@ -144,19 +146,11 @@ describe("session communication menu", () => {
         failed = true;
         throw new Error("Settings unavailable");
       }
-      return {
-        session: {
-          key: "agent:main:settings",
-          sessionId: "settings-id",
-          kind: "direct",
-          updatedAt: 1,
-          effectiveCommunication: policy,
-        },
-      };
+      return descriptor();
     });
     const menu = await mountMenu({
       context,
-      session: { target: { key: "agent:main:settings" }, sessionId: "settings-id" },
+      session: target(),
     });
     const advanced = await openSubmenu(menu, "Advanced");
     await waitForFast(() => expect(advanced.textContent).toContain("Settings unavailable"));
@@ -195,8 +189,7 @@ describe("session communication menu", () => {
       session: { effectiveCommunication: policy },
       onAction,
     });
-    await selectMenuValue(menu, "compact:open-advanced");
-    await settleSessionMenu(menu);
+    await select(menu, "compact:open-advanced");
     expect(menuItem(menu, "Back").getAttribute("data-value")).toBe("compact:back");
     expect(choice(menu, "receive", "ask").getAttribute("aria-pressed")).toBe("true");
     expect(menuPanel(menu).querySelector('[role="menu"]')).toBeNull();
@@ -208,34 +201,20 @@ describe("session communication menu", () => {
     }
     const appearance = menuItem(menu, "Icon & color");
     appearance.focus();
-    appearance.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, composed: true, cancelable: true }),
-    );
+    appearance.dispatchEvent(keydown());
     expect(document.activeElement).toBe(choice(menu, "send", "always"));
-    choice(menu, "send", "always").dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Tab",
-        shiftKey: true,
-        bubbles: true,
-        composed: true,
-        cancelable: true,
-      }),
-    );
+    choice(menu, "send", "always").dispatchEvent(keydown(true));
     expect(document.activeElement).toBe(menuItem(menu, "Open in"));
     for (const view of ["icon", "copy", "open-in"]) {
-      await selectMenuValue(menu, `compact:open-${view}`);
-      await settleSessionMenu(menu);
+      await select(menu, `compact:open-${view}`);
       expect(menuItem(menu, "Back").getAttribute("data-value")).toBe("compact:back-advanced");
-      await selectMenuValue(menu, "compact:back-advanced");
-      await settleSessionMenu(menu);
+      await select(menu, "compact:back-advanced");
       expect(choice(menu, "receive", "ask")).toBeTruthy();
     }
-    await selectMenuValue(menu, "compact:back");
-    await settleSessionMenu(menu);
+    await select(menu, "compact:back");
     expect(menuItemLabels(menu)).toContain("Advanced");
     expect(menu.querySelector('[role="group"]')).toBeNull();
-    await selectMenuValue(menu, "compact:open-advanced");
-    await settleSessionMenu(menu);
+    await select(menu, "compact:open-advanced");
     choice(menu, "receive", "never").click();
     expect(onAction).toHaveBeenCalledWith({
       kind: "set-communication",
@@ -253,8 +232,7 @@ describe("session communication menu", () => {
       onAction,
     });
     const advanced = await openSubmenu(menu, "Advanced");
-    expect(choice(advanced, "send", "always").disabled).toBe(true);
-    expect(choice(advanced, "send", "always").title).toBe(reason);
+    expect(choice(advanced, "send", "always")).toMatchObject({ disabled: true, title: reason });
     choice(advanced, "send", "always").click();
     const reset = menuItem(advanced, "Reset");
     expect(reset.disabled).toBe(true);
