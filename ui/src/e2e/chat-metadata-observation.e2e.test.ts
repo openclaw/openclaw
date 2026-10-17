@@ -12,6 +12,7 @@ import {
   installMockGateway,
   pauseVirtualClock,
   type MockGatewayControls,
+  type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -98,6 +99,35 @@ async function setDocumentVisibility(page: Page, visibility: DocumentVisibilityS
   }, visibility);
 }
 
+function installMetadata(page: Page, overrides: ControlUiMockGatewayScenario = {}) {
+  return installMockGateway(page, {
+    sessionKey: sessionKeys[0],
+    models: [model],
+    methodResponses: { "sessions.list": sessionsResponse() },
+    ...overrides,
+  });
+}
+const withPage = (run: Parameters<typeof suite.withPage>[1]) =>
+  suite.withPage({ viewport: { width: 1440, height: 900 } }, run);
+const countsAfter = (before: Record<string, number>, metadata: number, catalog: number) => ({
+  "chat.metadata": before["chat.metadata"] + metadata,
+  "models.list": before["models.list"] + catalog,
+});
+async function expectCatalogs(panes: Locator, name: string) {
+  for (const pane of await panes.all()) {
+    await expectCatalog(pane, name);
+  }
+}
+function startup(metadata = false) {
+  return {
+    sessionId: "metadata-session",
+    sessionInfo: { key: sessionKeys[0], kind: "direct" },
+    messages: [],
+    thinkingLevel: null,
+    ...(metadata ? { metadata: { commands: [], models: [model] } } : {}),
+  };
+}
+
 suite.define(() => {
   it.each([
     { paneCount: 1, wake: "early" },
@@ -106,7 +136,7 @@ suite.define(() => {
   ])(
     "delivers the cold catalog after visibility returns while commands remain pending ($paneCount panes, $wake wakeup)",
     async ({ paneCount, wake }) => {
-      await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      await withPage(async ({ page }) => {
         if (paneCount === 2) {
           await seedSharedSessionPanes(page);
         }
@@ -120,12 +150,7 @@ suite.define(() => {
           ],
           methodResponses: {
             "sessions.list": sessionsResponse(),
-            "chat.startup": {
-              sessionId: "metadata-session",
-              sessionInfo: { key: sessionKeys[0], kind: "direct" },
-              messages: [],
-              thinkingLevel: null,
-            },
+            "chat.startup": startup(),
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKeys[0]));
@@ -174,12 +199,8 @@ suite.define(() => {
   it.each(["config.changed", "chat.metadata.changed"])(
     "refreshes only the presented retained pane on %s and catches up on activation",
     async (event) => {
-      await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          sessionKey: sessionKeys[0],
-          models: [model],
-          methodResponses: { "sessions.list": sessionsResponse() },
-        });
+      await withPage(async ({ page }) => {
+        const gateway = await installMetadata(page);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKeys[0]));
         for (const [index, key] of sessionKeys.entries()) {
           if (index > 0) {
@@ -210,10 +231,7 @@ suite.define(() => {
             `${JSON.stringify({ event, before, after }, null, 2)}\n`,
           );
         }
-        expect(after).toEqual({
-          "chat.metadata": before["chat.metadata"] + 1,
-          "models.list": before["models.list"] + 1,
-        });
+        expect(after).toEqual(countsAfter(before, 1, 1));
         expect(await draft.inputValue()).toBe("Retain this draft");
 
         await page
@@ -228,10 +246,7 @@ suite.define(() => {
           page.locator('openclaw-chat-pane[aria-hidden="false"]'),
           freshModel.name,
         );
-        expect(await requestCounts(gateway)).toEqual({
-          "chat.metadata": after["chat.metadata"] + 1,
-          "models.list": after["models.list"] + 1,
-        });
+        expect(await requestCounts(gateway)).toEqual(countsAfter(after, 1, 1));
       });
     },
   );
@@ -239,7 +254,7 @@ suite.define(() => {
   it.each(["patch", "command-metadata"])(
     "coalesces a burst of %s events into one catalog refresh without reloading auth",
     async (reason) => {
-      await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      await withPage(async ({ page }) => {
         await seedSharedSessionPanes(page);
         const runtimeChoice = {
           agentRuntime: { id: "alternate", source: "model" },
@@ -274,10 +289,7 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKeys[0]));
         const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
         await expect.poll(() => panes.count()).toBe(2);
-        await Promise.all([
-          expectCatalog(panes.nth(0), model.name),
-          expectCatalog(panes.nth(1), model.name),
-        ]);
+        await expectCatalogs(panes, model.name);
         await gateway.waitForRequest("models.authStatus");
         await page.clock.install();
         await pauseVirtualClock(page);
@@ -298,16 +310,10 @@ suite.define(() => {
         expect.soft(await requestCounts(gateway)).toEqual(before);
         expect(await sessionFacts()).toHaveLength(factsBefore);
         await page.clock.runFor(2_500);
-        expect.soft(await requestCounts(gateway)).toEqual({
-          "chat.metadata": before["chat.metadata"],
-          "models.list": before["models.list"] + 1,
-        });
+        expect.soft(await requestCounts(gateway)).toEqual(countsAfter(before, 0, 1));
         expect(await gateway.getRequests("models.authStatus")).toHaveLength(authBefore);
         expect(await sessionFacts()).toHaveLength(factsBefore + 2);
-        await Promise.all([
-          expectCatalog(panes.nth(0), model.name),
-          expectCatalog(panes.nth(1), model.name),
-        ]);
+        await expectCatalogs(panes, model.name);
 
         await setDocumentVisibility(page, "hidden");
         const visibleCounts = await requestCounts(gateway);
@@ -321,10 +327,7 @@ suite.define(() => {
         expect(await sessionFacts()).toHaveLength(factsBefore + 2);
         await setDocumentVisibility(page, "visible");
         await page.clock.runFor(100);
-        expect(await requestCounts(gateway)).toEqual({
-          "chat.metadata": visibleCounts["chat.metadata"],
-          "models.list": visibleCounts["models.list"] + 1,
-        });
+        expect(await requestCounts(gateway)).toEqual(countsAfter(visibleCounts, 0, 1));
 
         // The direct catalog refresh catches unmarked selection changes. Explicit
         // selections carry the owner's hint and refresh before the debounce elapses.
@@ -355,14 +358,8 @@ suite.define(() => {
             ...(catalogChanged ? { catalogChanged: true } : {}),
           });
           await page.clock.runFor(catalogChanged ? 100 : 3_000);
-          await Promise.all([
-            expectCatalog(panes.nth(0), selectedModel.name),
-            expectCatalog(panes.nth(1), selectedModel.name),
-          ]);
-          expect(await requestCounts(gateway)).toEqual({
-            "chat.metadata": beforeAccount["chat.metadata"],
-            "models.list": beforeAccount["models.list"] + 1,
-          });
+          await expectCatalogs(panes, selectedModel.name);
+          expect(await requestCounts(gateway)).toEqual(countsAfter(beforeAccount, 0, 1));
           if (proof) {
             await page.screenshot({ path: path.join(proof, "after.png") });
           }
@@ -373,12 +370,8 @@ suite.define(() => {
   );
 
   it("recovers omitted follower startup commands without duplicating its pending catalog", async () => {
-    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        sessionKey: sessionKeys[0],
-        models: [model],
-        methodResponses: { "sessions.list": sessionsResponse() },
-      });
+    await withPage(async ({ page }) => {
+      const gateway = await installMetadata(page);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKeys[0]));
       const panes = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       await expectCatalog(panes, model.name);
@@ -390,12 +383,7 @@ suite.define(() => {
       for (const method of methods) {
         await gateway.waitForRequest(method, { after: before[method] });
       }
-      await gateway.setMethodResponse("chat.startup", {
-        sessionId: "metadata-session",
-        sessionInfo: { key: sessionKeys[0], kind: "direct" },
-        messages: [],
-        thinkingLevel: null,
-      });
+      await gateway.setMethodResponse("chat.startup", startup());
       await gateway.setMethodResponse("chat.metadata", {
         commands: [
           {
@@ -422,14 +410,9 @@ suite.define(() => {
             .count(),
         )
         .toBe(1);
-      expect(await requestCounts(gateway)).toEqual({
-        "chat.metadata": before["chat.metadata"] + 2,
-        "models.list": before["models.list"] + 1,
-      });
+      expect(await requestCounts(gateway)).toEqual(countsAfter(before, 2, 1));
       await gateway.resolveDeferred("models.list");
-      for (const pane of await panes.all()) {
-        await expectCatalog(pane, model.name);
-      }
+      await expectCatalogs(panes, model.name);
     });
   });
 
@@ -441,22 +424,16 @@ suite.define(() => {
     "late follower without metadata, metadata first",
     "late follower, catalog first",
   ])("coalesces fresh catalog reads after pending work (%s)", async (presentation) => {
-    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+    await withPage(async ({ page }) => {
       const paneCount = presentation === "shared" ? 2 : 1;
       if (presentation === "shared") {
         await seedSharedSessionPanes(page);
       }
-      const gateway = await installMockGateway(page, {
-        sessionKey: sessionKeys[0],
-        models: [model],
-        methodResponses: { "sessions.list": sessionsResponse() },
-      });
+      const gateway = await installMetadata(page);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKeys[0]));
       const panes = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       await expect.poll(() => panes.count()).toBe(paneCount);
-      for (const pane of await panes.all()) {
-        await expectCatalog(pane, model.name);
-      }
+      await expectCatalogs(panes, model.name);
       const before = await requestCounts(gateway);
       for (const method of methods) {
         await gateway.deferNext(method);
@@ -475,22 +452,14 @@ suite.define(() => {
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
       if (presentation.startsWith("late follower")) {
-        await gateway.setMethodResponse("chat.startup", {
-          sessionId: "metadata-session",
-          sessionInfo: { key: sessionKeys[0], kind: "direct" },
-          messages: [],
-          thinkingLevel: null,
-          ...(!presentation.includes("without metadata")
-            ? { metadata: { commands: [], models: [model] } }
-            : {}),
-        });
+        await gateway.setMethodResponse(
+          "chat.startup",
+          startup(!presentation.includes("without metadata")),
+        );
         await selectChatLayoutAction(page, "Open split view");
         await expect.poll(() => panes.count()).toBe(2);
       }
-      expect(await requestCounts(gateway)).toEqual({
-        "chat.metadata": before["chat.metadata"] + 1,
-        "models.list": before["models.list"] + 1,
-      });
+      expect(await requestCounts(gateway)).toEqual(countsAfter(before, 1, 1));
       const first = presentation.endsWith("metadata first")
         ? "chat.metadata"
         : presentation.endsWith("catalog first")
@@ -504,10 +473,7 @@ suite.define(() => {
               requestAnimationFrame(() => resolve());
             }),
         );
-        expect(await requestCounts(gateway)).toEqual({
-          "chat.metadata": before["chat.metadata"] + 1,
-          "models.list": before["models.list"] + 1,
-        });
+        expect(await requestCounts(gateway)).toEqual(countsAfter(before, 1, 1));
       }
       for (const method of methods) {
         if (method !== first) {
@@ -516,13 +482,9 @@ suite.define(() => {
       }
       await gateway.waitForRequest("models.list", { after: pendingCatalogCount });
       expect(await gateway.getRequests("models.list")).toHaveLength(before["models.list"] + 2);
-      for (const pane of await panes.all()) {
-        await expectCatalog(pane, model.name);
-      }
+      await expectCatalogs(panes, model.name);
       await gateway.resolveDeferred("models.list");
-      for (const pane of await panes.all()) {
-        await expectCatalog(pane, freshModel.name);
-      }
+      await expectCatalogs(panes, freshModel.name);
       expect(await requestCounts(gateway)).toEqual({
         "chat.metadata":
           before["chat.metadata"] +
@@ -535,12 +497,8 @@ suite.define(() => {
   });
 
   it("redeems document-hidden invalidations once when the document becomes visible", async () => {
-    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        sessionKey: sessionKeys[0],
-        models: [model],
-        methodResponses: { "sessions.list": sessionsResponse() },
-      });
+    await withPage(async ({ page }) => {
+      const gateway = await installMetadata(page);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKeys[0]));
       const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       await expectCatalog(pane, model.name);
@@ -552,15 +510,12 @@ suite.define(() => {
       expect(await requestCounts(gateway)).toEqual(before);
       await setDocumentVisibility(page, "visible");
       await expectCatalog(pane, freshModel.name);
-      expect(await requestCounts(gateway)).toEqual({
-        "chat.metadata": before["chat.metadata"] + 1,
-        "models.list": before["models.list"] + 1,
-      });
+      expect(await requestCounts(gateway)).toEqual(countsAfter(before, 1, 1));
     });
   });
 
   it("keeps a hidden global pane's metadata idle through shared agent selection", async () => {
-    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+    await withPage(async ({ page }) => {
       const sessions = sessionsResponse();
       const roster = {
         ...sessions,

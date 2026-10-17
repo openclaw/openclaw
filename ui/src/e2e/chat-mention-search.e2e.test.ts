@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -12,6 +13,18 @@ const people = [
   { profileId: "henry", displayName: "Henry", online: false },
 ];
 
+function installMentions(page: Page, deferred = false) {
+  return installMockGateway(page, {
+    featureMethods: [...defaultControlUiFeatureMethods, "users.mentionable"],
+    presenceUsers: [
+      { self: true, id: "sender", identity: { type: "profile", id: "sender" }, name: "Sender" },
+    ],
+    ...(deferred
+      ? { deferredMethods: ["users.mentionable"] }
+      : { methodResponses: { "users.mentionable": { users: people, truncated: false } } }),
+  });
+}
+
 suite.define(() => {
   for (const route of ["chat", "new"] as const) {
     const selector =
@@ -23,18 +36,7 @@ suite.define(() => {
         await suite.withPage(
           { viewport: { width: 1440, height: 900 }, colorScheme: "dark" },
           async ({ page }) => {
-            const gateway = await installMockGateway(page, {
-              featureMethods: [...defaultControlUiFeatureMethods, "users.mentionable"],
-              presenceUsers: [
-                {
-                  self: true,
-                  id: "sender",
-                  identity: { type: "profile", id: "sender" },
-                  name: "Sender",
-                },
-              ],
-              deferredMethods: ["users.mentionable"],
-            });
+            const gateway = await installMentions(page, true);
             await page.goto(`${suite.server.baseUrl}${route}`, { waitUntil: "domcontentloaded" });
             const input = page.locator(selector);
             const menu = page.getByRole("listbox", { name: "Mention a person" });
@@ -67,18 +69,7 @@ suite.define(() => {
       await suite.withPage(
         { viewport: { width: 1440, height: 900 }, colorScheme: "dark" },
         async ({ page }) => {
-          const gateway = await installMockGateway(page, {
-            featureMethods: [...defaultControlUiFeatureMethods, "users.mentionable"],
-            presenceUsers: [
-              {
-                self: true,
-                id: "sender",
-                identity: { type: "profile", id: "sender" },
-                name: "Sender",
-              },
-            ],
-            methodResponses: { "users.mentionable": { users: people, truncated: false } },
-          });
+          const gateway = await installMentions(page);
           await page.goto(`${suite.server.baseUrl}${route}`, { waitUntil: "domcontentloaded" });
           const input = page.locator(selector);
           const menu = page.getByRole("listbox", { name: "Mention a person" });
@@ -116,18 +107,7 @@ suite.define(() => {
     await suite.withPage(
       { viewport: { width: 1440, height: 900 }, colorScheme: "dark" },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          featureMethods: [...defaultControlUiFeatureMethods, "users.mentionable"],
-          presenceUsers: [
-            {
-              self: true,
-              id: "sender",
-              identity: { type: "profile", id: "sender" },
-              name: "Sender",
-            },
-          ],
-          methodResponses: { "users.mentionable": { users: people, truncated: false } },
-        });
+        const gateway = await installMentions(page);
         await page.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
         const input = page.locator(".agent-chat__composer-combobox textarea");
         await input.fill("@h");
@@ -155,18 +135,7 @@ suite.define(() => {
     await suite.withPage(
       { viewport: { width: 1440, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          featureMethods: [...defaultControlUiFeatureMethods, "users.mentionable"],
-          presenceUsers: [
-            {
-              self: true,
-              id: "sender",
-              identity: { type: "profile", id: "sender" },
-              name: "Sender",
-            },
-          ],
-          deferredMethods: ["users.mentionable"],
-        });
+        const gateway = await installMentions(page, true);
         await page.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
         await page.locator(".agent-chat__composer-combobox textarea").fill("@ha");
         await gateway.waitForRequest("users.mentionable");

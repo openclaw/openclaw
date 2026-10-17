@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Page, type Locator } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -39,6 +39,34 @@ const wideTable = `| Service | Owner | Region | Status | Version | Deploy | Inci
 let browser: Browser;
 let server: ControlUiE2eServer;
 
+function tableMessage(id: string, text: string, timestamp = Date.now()) {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    timestamp,
+    __openclaw: { id, seq: 1 },
+  };
+}
+async function screenshot(page: Page, name: string, animations?: "disabled") {
+  if (captureProof) {
+    await page.screenshot({ path: path.join(artifactDir, name), animations });
+  }
+}
+function expectFocused(locator: Locator) {
+  return expect
+    .poll(() => locator.evaluate((element) => element === document.activeElement))
+    .toBe(true);
+}
+function tableContext(width = 1280, height = 900) {
+  return browser.newContext({
+    colorScheme: "dark",
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport: { width, height },
+    ...(captureProof ? { recordVideo: { dir: artifactDir } } : {}),
+  });
+}
+
 describeControlUiE2e("Control UI Markdown table interactions", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -66,12 +94,9 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
     ).join("\n");
     await installMockGateway(page, {
       historyMessages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: `The surrounding explanation stays at the normal reading width.\n\n| Failure description | Recorded implementation status |\n| --- | --- |\n${rows}
+        tableMessage(
+          "wrapping-table",
+          `The surrounding explanation stays at the normal reading width.\n\n| Failure description | Recorded implementation status |\n| --- | --- |\n${rows}
 
 | A | B | C | D |
 | --- | --- | --- | --- |
@@ -86,11 +111,7 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
 | Gateway | Platform operations | eu-west-1 | Healthy | 2026.9.5 | Complete | 0 | Configuration validated and all connected clients recovered successfully after the restart. |
 
 ${auditMarkdownTable}`,
-            },
-          ],
-          timestamp: Date.now(),
-          __openclaw: { id: "wrapping-table", seq: 1 },
-        },
+        ),
       ],
     });
     try {
@@ -133,9 +154,7 @@ ${auditMarkdownTable}`,
             captureProof ? artifactDir : undefined,
           );
         }
-        if (captureProof) {
-          await page.screenshot({ path: path.join(artifactDir, `wrap-${width}.png`) });
-        }
+        await screenshot(page, `wrap-${width}.png`);
       }
       await page.setViewportSize({ width: 1440, height: 800 });
       await openChatSidePanelType(page, "Files");
@@ -176,9 +195,7 @@ ${auditMarkdownTable}`,
       expect(sticky.painted).toBe(true);
       expect(sticky.background).not.toBe("rgba(0, 0, 0, 0)");
       await page.keyboard.press("Escape");
-      await expect
-        .poll(() => expand.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      await expectFocused(expand);
     } finally {
       await context.close();
     }
@@ -194,12 +211,9 @@ ${auditMarkdownTable}`,
     const page = await context.newPage();
     await installMockGateway(page, {
       historyMessages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: `Keep this explanation at the saved reading width.
+        tableMessage(
+          "percentage-table",
+          `Keep this explanation at the saved reading width.
 
 | Failure | Recorded implementation author |
 | --- | --- |
@@ -207,11 +221,7 @@ ${auditMarkdownTable}`,
 | A warning survives an intentional no-reply response | Casey, exposing older fallback behavior |
 
 ${overflowTable}`,
-            },
-          ],
-          timestamp: Date.now(),
-          __openclaw: { id: "percentage-table", seq: 1 },
-        },
+        ),
       ],
     });
     try {
@@ -286,9 +296,7 @@ ${overflowTable}`,
       });
       await page.setViewportSize({ width: 1440, height: 1000 });
       await expect.poll(contained).toBe(true);
-      if (captureProof) {
-        await page.screenshot({ path: path.join(artifactDir, "saved-percentage.png") });
-      }
+      await screenshot(page, "saved-percentage.png");
       await openChatSidePanelType(page, "Files");
       await page.locator('.side-panel__panel[data-panel-slot="workspace"]').waitFor();
       await expect.poll(contained).toBe(true);
@@ -297,9 +305,7 @@ ${overflowTable}`,
           .locator(".markdown-table__viewport")
           .evaluate((element) => element.scrollWidth - element.clientWidth),
       ).toBeLessThanOrEqual(1);
-      if (captureProof) {
-        await page.screenshot({ path: path.join(artifactDir, "saved-percentage-files.png") });
-      }
+      await screenshot(page, "saved-percentage-files.png");
     } finally {
       await context.close();
     }
@@ -308,13 +314,7 @@ ${overflowTable}`,
   it.each(["chat", "assistant panel"])(
     "contains overflow and preserves copy, fullscreen focus, and web links in %s",
     async (surface) => {
-      const context = await browser.newContext({
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 800, width: surface === "chat" ? 760 : 1280 },
-        ...(captureProof ? { recordVideo: { dir: artifactDir } } : {}),
-      });
+      const context = await tableContext(surface === "chat" ? 760 : 1280, 800);
       await context.grantPermissions(["clipboard-read", "clipboard-write"], {
         origin: new URL(server.baseUrl).origin,
       });
@@ -357,14 +357,7 @@ ${overflowTable}`,
               },
             }
           : {}),
-        historyMessages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: wideTable }],
-            timestamp: Date.now(),
-            __openclaw: { id: "assistant-table", seq: 1 },
-          },
-        ],
+        historyMessages: [tableMessage("assistant-table", wideTable)],
       });
 
       try {
@@ -461,19 +454,12 @@ ${overflowTable}`,
         expect(await readStyles(fullscreenCell, cellProperties)).toEqual(
           await readStyles(inlineCell, cellProperties),
         );
-        if (captureProof) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, "dark-fullscreen.png"),
-          });
-        }
+        await screenshot(page, "dark-fullscreen.png", "disabled");
 
         // The viewport margin stays outside the dialog while its opening scale changes.
         await page.mouse.click(8, 8);
         await expect.poll(() => dialog.count()).toBe(0);
-        await expect
-          .poll(() => expand.evaluate((element) => element === document.activeElement))
-          .toBe(true);
+        await expectFocused(expand);
 
         const sourceUrl = page.url();
         await expand.click();
@@ -493,9 +479,7 @@ ${overflowTable}`,
         await dialog.waitFor({ state: "visible" });
         await page.keyboard.press("Escape");
         await expect.poll(() => dialog.count()).toBe(0);
-        await expect
-          .poll(() => expand.evaluate((element) => element === document.activeElement))
-          .toBe(true);
+        await expectFocused(expand);
       } catch (error) {
         await captureControlUiE2eFailureDiagnostics(page, {
           error: error instanceof Error ? error : new Error(String(error)),
@@ -503,9 +487,7 @@ ${overflowTable}`,
         });
         throw error;
       } finally {
-        if (captureProof) {
-          await page.screenshot({ path: path.join(artifactDir, "final-state.png") });
-        }
+        await screenshot(page, "final-state.png");
         await context.close();
       }
     },
@@ -516,13 +498,7 @@ ${overflowTable}`,
     async (overlay) => {
       const alphaKey = "agent:main:dashboard:table-alpha";
       const betaKey = "agent:main:dashboard:table-beta";
-      const context = await browser.newContext({
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { width: 1280, height: 900 },
-        ...(captureProof ? { recordVideo: { dir: artifactDir } } : {}),
-      });
+      const context = await tableContext();
       const page = await context.newPage();
       await installMockGateway(page, {
         sessionKey: alphaKey,
@@ -539,17 +515,7 @@ ${overflowTable}`,
             key,
             {
               messages: [
-                {
-                  role: "assistant",
-                  content: [
-                    {
-                      type: "text",
-                      text: `| Name | Task |\n| --- | --- |\n| ${name} table | ${other} |`,
-                    },
-                  ],
-                  timestamp: 1,
-                  __openclaw: { id, seq: 1 },
-                },
+                tableMessage(id, `| Name | Task |\n| --- | --- |\n| ${name} table | ${other} |`, 1),
               ],
             },
           ]),
@@ -607,18 +573,14 @@ ${overflowTable}`,
             await hovercard.getAttribute("id"),
           );
           await hovercard.hover();
-          if (captureProof) {
-            await page.screenshot({ path: path.join(artifactDir, "held-before-history-back.png") });
-          }
+          await screenshot(page, "held-before-history-back.png");
         }
         await page.goBack();
         await page.waitForURL(controlUiSessionUrl(server.baseUrl, alphaKey));
         await expect
           .poll(() => alphaPane.evaluate((pane) => pane?.getAttribute("aria-hidden")))
           .toBe("false");
-        if (captureProof) {
-          await page.screenshot({ path: path.join(artifactDir, "history-back-to-alpha.png") });
-        }
+        await screenshot(page, "history-back-to-alpha.png");
         await expect.poll(() => dialog.count()).toBe(0);
         await expectRetainedPanes(0);
         if (overlay === "held session hovercard") {
@@ -658,9 +620,7 @@ ${overflowTable}`,
         expect(await dialog.textContent()).toContain("Alpha table");
         await page.keyboard.press("Escape");
         await expect.poll(() => dialog.count()).toBe(0);
-        await expect
-          .poll(() => alphaExpand.evaluate((element) => element === document.activeElement))
-          .toBe(true);
+        await expectFocused(alphaExpand);
 
         await page.goForward();
         await page.waitForURL(controlUiSessionUrl(server.baseUrl, betaKey));
@@ -687,29 +647,17 @@ ${overflowTable}`,
   );
 
   it("restores overflow affordances when a retained table viewport narrows", async () => {
-    const context = await browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
-      ...(captureProof ? { recordVideo: { dir: artifactDir } } : {}),
-    });
+    const context = await tableContext();
     const page = await context.newPage();
     await installMockGateway(page, {
       historyMessages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: `| Service | Owner | Region | Status | Version | Reference |
+        tableMessage(
+          "retained-table",
+          `| Service | Owner | Region | Status | Version | Reference |
 | --- | --- | --- | --- | --- | --- |
 | Gateway | Platform | EU | Healthy | 1.0 | ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890123456789 |`,
-            },
-          ],
-          timestamp: 1,
-          __openclaw: { id: "retained-table", seq: 1 },
-        },
+          1,
+        ),
       ],
     });
     try {
@@ -752,9 +700,7 @@ ${overflowTable}`,
       expect(await shell.evaluate((element, original) => element === original, originalTable)).toBe(
         true,
       );
-      if (captureProof) {
-        await page.screenshot({ path: path.join(artifactDir, "retained-viewport-overflow.png") });
-      }
+      await screenshot(page, "retained-viewport-overflow.png");
     } finally {
       await context.close();
     }
@@ -801,29 +747,10 @@ ${overflowTable}`,
         ],
         sessionTranscripts: {
           [sourceKey]: {
-            messages: [
-              {
-                role: "assistant",
-                content: [
-                  {
-                    type: "text",
-                    text: table,
-                  },
-                ],
-                timestamp: 1,
-                __openclaw: { id: "table-links", seq: 1 },
-              },
-            ],
+            messages: [tableMessage("table-links", table, 1)],
           },
           [targetKey]: {
-            messages: [
-              {
-                role: "assistant",
-                content: [{ type: "text", text: "Linked task reached." }],
-                timestamp: 2,
-                __openclaw: { id: "linked-task", seq: 1 },
-              },
-            ],
+            messages: [tableMessage("linked-task", "Linked task reached.", 2)],
           },
         },
         methodResponses: {
@@ -891,9 +818,7 @@ ${overflowTable}`,
         );
         await activate(shell);
         await expectDestination(1);
-        if (captureProof) {
-          await page.screenshot({ path: path.join(artifactDir, "inline-control.png") });
-        }
+        await screenshot(page, "inline-control.png");
         await openSource();
         await shell.getByRole("button", { name: "Expand table" }).click();
         const dialog = page.locator(".markdown-table-dialog");
@@ -903,16 +828,10 @@ ${overflowTable}`,
           const close = dialog.getByRole("button", { name: "Close expanded table" });
           await sessionLink.focus();
           await page.keyboard.press("Tab");
-          await expect
-            .poll(() => close.evaluate((element) => element === document.activeElement))
-            .toBe(true);
+          await expectFocused(close);
           await page.keyboard.press("Shift+Tab");
-          await expect
-            .poll(() => sessionLink.evaluate((element) => element === document.activeElement))
-            .toBe(true);
-          if (captureProof) {
-            await page.screenshot({ path: path.join(artifactDir, "tab-cycle.png") });
-          }
+          await expectFocused(sessionLink);
+          await screenshot(page, "tab-cycle.png");
           await gateway.setMethodResponse("progressCard.get", {
             card: {
               markdown: "[Open build log](https://example.com/build)",
@@ -929,21 +848,15 @@ ${overflowTable}`,
             .locator(".session-progress-hovercard")
             .getByRole("link", { name: "Open build log" });
           await progressLink.waitFor({ state: "visible" });
-          if (captureProof) {
-            await page.screenshot({ path: path.join(artifactDir, "progress-before-tab.png") });
-          }
+          await screenshot(page, "progress-before-tab.png");
           await page.keyboard.press("Tab");
           await expect
             .poll(() => page.locator(".session-progress-hovercard a:focus").count())
             .toBe(1);
           expect(await dialog.isVisible()).toBe(true);
-          if (captureProof) {
-            await page.screenshot({ path: path.join(artifactDir, "progress-after-tab.png") });
-          }
+          await screenshot(page, "progress-after-tab.png");
           await page.keyboard.press("Shift+Tab");
-          await expect
-            .poll(() => sessionLink.evaluate((element) => element === document.activeElement))
-            .toBe(true);
+          await expectFocused(sessionLink);
           const popupPromise = context.waitForEvent("page");
           await sessionLink.click({ modifiers: ["ControlOrMeta"] });
           const popup = await popupPromise;
@@ -954,9 +867,7 @@ ${overflowTable}`,
           await shell.getByRole("button", { name: "Expand table" }).click();
           await dialog.waitFor({ state: "visible" });
         }
-        if (captureProof) {
-          await page.screenshot({ path: path.join(artifactDir, "expanded-before-action.png") });
-        }
+        await screenshot(page, "expanded-before-action.png");
         const before = (await gateway.getRequests("sessions.files.get")).length;
         await activate(dialog);
         await expectDestination(before + 1);

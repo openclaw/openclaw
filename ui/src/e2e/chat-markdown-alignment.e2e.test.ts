@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { BrowserContextOptions } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -8,6 +9,30 @@ const suite = createControlUiE2eSuite({
   name: "chat Markdown alignment",
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
+
+function withMarkdown(
+  options: BrowserContextOptions,
+  text: string,
+  run: Parameters<typeof suite.withPage>[1],
+  role = "assistant",
+) {
+  return suite.withPage(
+    { locale: "en-US", serviceWorkers: "block", ...options },
+    async (fixture) => {
+      await installMockGateway(fixture.page, {
+        historyMessages: [
+          {
+            role,
+            content: [{ type: "text", text }],
+            timestamp: Date.now(),
+          },
+        ],
+      });
+      await fixture.page.goto(`${suite.server.baseUrl}chat`);
+      return run(fixture);
+    },
+  );
+}
 
 suite.define(() => {
   it.each([
@@ -26,54 +51,14 @@ suite.define(() => {
   ])(
     "keeps disclosures compact and borderless on $name",
     async ({ colorScheme, width, reducedMotion }) => {
-      await suite.withPage(
+      await withMarkdown(
         {
           colorScheme,
           reducedMotion,
-          locale: "en-US",
-          serviceWorkers: "block",
           viewport: { height: 800, width },
         },
+        '## Alignment check\n\nこれは**（注記）**です\n\nsafe<br>break and unsafe<br class="wide">markup\n\n- Bullet item\n\n1. Numbered item\n\n- [ ] Unchecked task\n\n<details open>\n<summary>More details</summary>\n\nDisclosure body\n</details>\n\n<details>\n<summary>Collapsed details</summary>\nHidden body\n</details>',
         async ({ page }) => {
-          await installMockGateway(page, {
-            historyMessages: [
-              {
-                content: [
-                  {
-                    type: "text",
-                    text: [
-                      "## Alignment check",
-                      "",
-                      "これは**（注記）**です",
-                      "",
-                      'safe<br>break and unsafe<br class="wide">markup',
-                      "",
-                      "- Bullet item",
-                      "",
-                      "1. Numbered item",
-                      "",
-                      "- [ ] Unchecked task",
-                      "",
-                      "<details open>",
-                      "<summary>More details</summary>",
-                      "",
-                      "Disclosure body",
-                      "</details>",
-                      "",
-                      "<details>",
-                      "<summary>Collapsed details</summary>",
-                      "Hidden body",
-                      "</details>",
-                    ].join("\n"),
-                  },
-                ],
-                role: "assistant",
-                timestamp: Date.now(),
-              },
-            ],
-          });
-
-          await page.goto(`${suite.server.baseUrl}chat`);
           const markdown = page.locator(".chat-group.assistant .chat-text", {
             hasText: "Alignment check",
           });
@@ -214,38 +199,13 @@ suite.define(() => {
   );
 
   it("preserves inline code content and IPv6 links in assistant Markdown", async () => {
-    await suite.withPage(
+    await withMarkdown(
       {
         colorScheme: "light",
-        locale: "en-US",
-        serviceWorkers: "block",
         viewport: { height: 800, width: 1180 },
       },
+      "## Markdown parser fidelity\n\n`   `\n\n[foo `bar` baz`\n\n[IPv6 destination](http://[2001:db8::1]:1896/a[b]?x=[y])",
       async ({ page }) => {
-        await installMockGateway(page, {
-          historyMessages: [
-            {
-              content: [
-                {
-                  type: "text",
-                  text: [
-                    "## Markdown parser fidelity",
-                    "",
-                    "`   `",
-                    "",
-                    "[foo `bar` baz`",
-                    "",
-                    "[IPv6 destination](http://[2001:db8::1]:1896/a[b]?x=[y])",
-                  ].join("\n"),
-                },
-              ],
-              role: "assistant",
-              timestamp: Date.now(),
-            },
-          ],
-        });
-
-        await page.goto(`${suite.server.baseUrl}chat`);
         const markdown = page.locator(".chat-group.assistant .chat-text", {
           hasText: "Markdown parser fidelity",
         });
@@ -286,25 +246,13 @@ suite.define(() => {
   });
 
   it("keeps user block art preformatted", async () => {
-    await suite.withPage(
+    await withMarkdown(
       {
         colorScheme: "light",
-        locale: "en-US",
-        serviceWorkers: "block",
         viewport: { height: 800, width: 1180 },
       },
+      "```\n  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  \n```",
       async ({ page }) => {
-        await installMockGateway(page, {
-          historyMessages: [
-            {
-              content: [{ type: "text", text: "```\n  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  \n```" }],
-              role: "user",
-              timestamp: Date.now(),
-            },
-          ],
-        });
-
-        await page.goto(`${suite.server.baseUrl}chat`);
         const blockArt = page.locator(".chat-group.user code.markdown-block-art");
         await blockArt.waitFor();
         await expect
@@ -316,48 +264,19 @@ suite.define(() => {
           )
           .toEqual(["pre", "normal", "normal"]);
       },
+      "user",
     );
   });
 
   it("preserves Markdown marker and disclosure alignment in RTL transcripts", async () => {
-    await suite.withPage(
+    await withMarkdown(
       {
         colorScheme: "light",
         locale: "ar",
-        serviceWorkers: "block",
         viewport: { height: 800, width: 1180 },
       },
+      "## فحص المحاذاة\n\n- عنصر نقطي\n\n1. عنصر مرقم\n\n- [ ] مهمة غير مكتملة\n\n<details open>\n<summary>تفاصيل إضافية</summary>\n\nمحتوى التفاصيل\n</details>",
       async ({ page }) => {
-        await installMockGateway(page, {
-          historyMessages: [
-            {
-              content: [
-                {
-                  type: "text",
-                  text: [
-                    "## فحص المحاذاة",
-                    "",
-                    "- عنصر نقطي",
-                    "",
-                    "1. عنصر مرقم",
-                    "",
-                    "- [ ] مهمة غير مكتملة",
-                    "",
-                    "<details open>",
-                    "<summary>تفاصيل إضافية</summary>",
-                    "",
-                    "محتوى التفاصيل",
-                    "</details>",
-                  ].join("\n"),
-                },
-              ],
-              role: "assistant",
-              timestamp: Date.now(),
-            },
-          ],
-        });
-
-        await page.goto(`${suite.server.baseUrl}chat`);
         const markdown = page.locator(".chat-group.assistant .chat-text[dir='rtl']", {
           hasText: "فحص المحاذاة",
         });

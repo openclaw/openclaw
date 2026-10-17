@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -14,6 +15,31 @@ import {
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+function message(role: string, text: string, extra = {}, timestamp = Date.now()) {
+  return { role, content: [{ type: "text", text }], timestamp, ...extra };
+}
+const doneSession = () => ({
+  activeRunIds: [],
+  hasActiveRun: false,
+  key: "main",
+  kind: "direct",
+  status: "done",
+  updatedAt: Date.now(),
+});
+function proofDirectory(name: string) {
+  const root = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+  return root ? createControlUiE2eArtifactDir(name, root) : undefined;
+}
+function expectBubbleOrder(page: Page, texts: string[]) {
+  return expect
+    .poll(() =>
+      page.locator(".chat-thread-inner").evaluate((thread, values) => {
+        const rows = Array.from(thread.querySelectorAll(".chat-bubble"));
+        return values.map((text) => rows.findIndex((row) => row.textContent?.includes(text)));
+      }, texts),
+    )
+    .toEqual(texts.map((_, index) => index));
+}
 
 function canvasPreview(viewId: string) {
   return {
@@ -58,20 +84,13 @@ function canvasBlock(viewId: string) {
 suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
   it("renders each persisted Canvas view once after reload", async () => {
-    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("chat-canvas-history-stability", artifactRoot)
-      : undefined;
+    const artifactDir = proofDirectory("chat-canvas-history-stability");
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const documentIds = ["cv_first", "cv_second"];
     const finalText = "Both previews are ready.";
     const messages = [
-      {
-        role: "user",
-        timestamp: 1_000,
-        content: [{ type: "text", text: "Show both previews." }],
-      },
+      message("user", "Show both previews.", {}, 1_000),
       canvasToolResult("cv_first", "call-first", 1_001),
       canvasToolResult("cv_second", "call-second", 1_002),
       {
@@ -158,10 +177,7 @@ suite.define(() => {
   });
 
   it("keeps multiple live replies after their delayed prompt before history catches up", async () => {
-    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("chat-live-final-order", artifactRoot)
-      : undefined;
+    const artifactDir = proofDirectory("chat-live-final-order");
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -186,14 +202,7 @@ suite.define(() => {
             deltaCursor: "before-multi-reply",
             messages: [],
             sessionId: "session:agent:main:main",
-            sessionInfo: {
-              activeRunIds: [],
-              hasActiveRun: false,
-              key: "main",
-              kind: "direct",
-              status: "done",
-              updatedAt: Date.now(),
-            },
+            sessionInfo: doneSession(),
           },
         },
       });
@@ -205,7 +214,7 @@ suite.define(() => {
           seq: index + 1,
           sessionKey: "main",
           state: "final",
-          message: { role: "assistant", content: [{ type: "text", text }], timestamp: Date.now() },
+          message: message("assistant", text),
         });
         await page.locator(".chat-thread-inner").getByText(text, { exact: true }).waitFor();
       }
@@ -214,23 +223,11 @@ suite.define(() => {
         ["current-prompt", 11, "user", prompt, `${runId}:user`],
       ] as const) {
         await gateway.emitGatewayEvent("session.message", {
-          message: {
-            role,
-            content: [{ type: "text", text }],
-            __openclaw: { id, seq, idempotencyKey },
-            timestamp: Date.now(),
-          },
+          message: message(role, text, { __openclaw: { id, seq, idempotencyKey } }),
           messageId: id,
           messageSeq: seq,
           sessionKey: "main",
-          session: {
-            activeRunIds: [],
-            hasActiveRun: false,
-            key: "main",
-            kind: "direct",
-            status: "done",
-            updatedAt: Date.now(),
-          },
+          session: doneSession(),
         });
         await page.locator(".chat-thread-inner").getByText(text, { exact: true }).waitFor();
       }
@@ -242,17 +239,7 @@ suite.define(() => {
           ]),
         );
       }
-      await expect
-        .poll(() =>
-          page.locator(".chat-thread-inner").evaluate(
-            (thread, texts) => {
-              const rows = Array.from(thread.querySelectorAll(".chat-bubble"));
-              return texts.map((text) => rows.findIndex((row) => row.textContent?.includes(text)));
-            },
-            [previous, prompt, ...replies],
-          ),
-        )
-        .toEqual([0, 1, 2, 3]);
+      await expectBubbleOrder(page, [previous, prompt, ...replies]);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -265,12 +252,9 @@ suite.define(() => {
     const promptText = "Inspect the repository.";
     const boundaryText = "Checking the repository.";
     const finalText = "The repair is complete.";
-    const prompt = {
-      role: "user",
-      content: [{ type: "text", text: promptText }],
+    const prompt = message("user", promptText, {
       __openclaw: { id: "prompt", idempotencyKey: `${runId}:user`, seq: 1 },
-      timestamp: Date.now(),
-    };
+    });
     const toolBoundary = {
       role: "assistant",
       content: [
@@ -280,12 +264,9 @@ suite.define(() => {
       __openclaw: { id: "assistant-tool-boundary", runId, seq: 2 },
       timestamp: Date.now(),
     };
-    const persistedFinal = {
-      role: "assistant",
-      content: [{ type: "text", text: finalText }],
+    const persistedFinal = message("assistant", finalText, {
       __openclaw: { id: "assistant-final", runId, runTerminal: true, seq: 4 },
-      timestamp: Date.now(),
-    };
+    });
 
     try {
       const gateway = await installMockGateway(page, {
@@ -294,14 +275,7 @@ suite.define(() => {
           "chat.history": {
             messages: [],
             sessionId: "session:agent:main:main",
-            sessionInfo: {
-              activeRunIds: [],
-              hasActiveRun: false,
-              key: "main",
-              kind: "direct",
-              status: "done",
-              updatedAt: Date.now(),
-            },
+            sessionInfo: doneSession(),
           },
         },
       });
@@ -318,29 +292,14 @@ suite.define(() => {
         message: prompt,
         messageId: "prompt",
         messageSeq: 1,
-        session: {
-          activeRunIds: [],
-          hasActiveRun: false,
-          key: "main",
-          kind: "direct",
-          status: "done",
-          updatedAt: Date.now(),
-        },
+        session: doneSession(),
         sessionKey: "main",
       });
       await gateway.waitForRequest("chat.history", { after: historyBefore });
       await gateway.resolveDeferred("chat.history", {
         messages: [prompt, toolBoundary, persistedFinal],
         sessionId: "session:agent:main:main",
-        sessionInfo: {
-          activeRunIds: [],
-          hasActiveRun: false,
-          key: "main",
-          kind: "direct",
-          lastRunId: runId,
-          status: "done",
-          updatedAt: Date.now(),
-        },
+        sessionInfo: { ...doneSession(), lastRunId: runId },
       });
 
       const thread = page.locator(".chat-thread-inner");
@@ -350,17 +309,7 @@ suite.define(() => {
           thread.locator(".chat-group.assistant .chat-bubble", { hasText: finalText }).count(),
         )
         .toBe(1);
-      await expect
-        .poll(() =>
-          thread.evaluate(
-            (element, texts) => {
-              const rows = Array.from(element.querySelectorAll(".chat-bubble"));
-              return texts.map((text) => rows.findIndex((row) => row.textContent?.includes(text)));
-            },
-            [promptText, boundaryText, finalText],
-          ),
-        )
-        .toEqual([0, 1, 2]);
+      await expectBubbleOrder(page, [promptText, boundaryText, finalText]);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -374,24 +323,15 @@ suite.define(() => {
     const currentPrompt = "Why did this request fail?";
     const currentFinal = "The control layer failed before the retry.";
     const durableMessages = [
-      {
+      message("user", previousPrompt, {
         __openclaw: { id: "previous-user", seq: 369 },
-        content: [{ text: previousPrompt, type: "text" }],
-        role: "user",
-        timestamp: Date.now(),
-      },
-      {
+      }),
+      message("user", currentPrompt, {
         __openclaw: { id: "current-user", seq: 371 },
-        content: [{ text: currentPrompt, type: "text" }],
-        role: "user",
-        timestamp: Date.now(),
-      },
-      {
+      }),
+      message("assistant", currentFinal, {
         __openclaw: { id: "current-final", runId: currentRunId, seq: 372 },
-        content: [{ text: currentFinal, type: "text" }],
-        role: "assistant",
-        timestamp: Date.now(),
-      },
+      }),
     ];
     const historyDelta = {
       deltaCursor: "after-final",
@@ -417,14 +357,7 @@ suite.define(() => {
           sessionKey: "main",
         },
       ],
-      sessionInfo: {
-        activeRunIds: [],
-        hasActiveRun: false,
-        key: "main",
-        kind: "direct",
-        status: "done",
-        updatedAt: Date.now(),
-      },
+      sessionInfo: doneSession(),
     };
 
     try {
@@ -435,14 +368,7 @@ suite.define(() => {
             deltaCursor: "before-final",
             messages: [],
             sessionId: "session:agent:main:main",
-            sessionInfo: {
-              activeRunIds: [],
-              hasActiveRun: false,
-              key: "main",
-              kind: "direct",
-              status: "done",
-              updatedAt: Date.now(),
-            },
+            sessionInfo: doneSession(),
           },
         },
       });
@@ -451,11 +377,7 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
       await gateway.emitGatewayEvent("chat", {
         deltaText: "Checking request state...",
-        message: {
-          content: [{ text: "Checking request state...", type: "text" }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
+        message: message("assistant", "Checking request state..."),
         runId: currentRunId,
         seq: 1,
         sessionKey: "main",
@@ -469,14 +391,7 @@ suite.define(() => {
         message: durableMessages[1],
         messageId: "current-user",
         messageSeq: 371,
-        session: {
-          activeRunIds: [],
-          hasActiveRun: false,
-          key: "main",
-          kind: "direct",
-          status: "done",
-          updatedAt: Date.now(),
-        },
+        session: doneSession(),
         sessionKey: "main",
       });
       await gateway.waitForRequest("chat.history");
@@ -489,25 +404,14 @@ suite.define(() => {
         )
         .toBe(true);
 
-      const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-      const artifactDir = artifactRoot
-        ? createControlUiE2eArtifactDir("chat-live-final-order", artifactRoot)
-        : undefined;
+      const artifactDir = proofDirectory("chat-live-final-order");
       if (artifactDir) {
         await page.screenshot({
           path: path.join(artifactDir, "live-final-transcript-order.png"),
           fullPage: true,
         });
       }
-      const visibleTexts = [previousPrompt, currentPrompt, currentFinal];
-      await expect
-        .poll(() =>
-          page.locator(".chat-thread-inner").evaluate((thread, texts) => {
-            const rows = Array.from(thread.querySelectorAll(".chat-bubble"));
-            return texts.map((text) => rows.findIndex((row) => row.textContent?.includes(text)));
-          }, visibleTexts),
-        )
-        .toEqual([0, 1, 2]);
+      await expectBubbleOrder(page, [previousPrompt, currentPrompt, currentFinal]);
       await expect
         .poll(() => page.locator(".chat-group.assistant", { hasText: currentFinal }).count())
         .toBe(1);
