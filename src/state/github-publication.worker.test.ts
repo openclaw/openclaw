@@ -87,9 +87,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 beforeAll(() => {
   root = tempDirs.make("openclaw-publication-worker-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  const options = {
-    env: { ...process.env, OPENCLAW_STATE_DIR: root },
-  };
+  const options = { env: { ...process.env, OPENCLAW_STATE_DIR: root } };
   openOpenClawStateDatabase(options);
   context = captureOpenClawStateWorkerContext(options);
 });
@@ -154,6 +152,27 @@ function observeAuthority() {
     }),
   );
   return { facts, unknown };
+}
+
+function expectRows(row: RepositoryPublicationRow, rows: unknown[]) {
+  expect(read(row)).toMatchObject({ ok: true, rows });
+}
+
+function mutatePublication(
+  scope: ReturnType<typeof createScope>,
+  input: RepositoryPublicationMutation,
+  published: (receipt: PublicationMutationReceipt) => void = () => {},
+) {
+  return scope.mutate(command(input), context.admission.assertCurrent, published);
+}
+
+function waitForGate(
+  gate: PromiseLike<unknown>,
+  operation: PromiseLike<unknown>,
+  message: string,
+  signal: AbortSignal,
+) {
+  return withinTest(awaitGateBeforeSettlement(gate, operation, message), signal);
 }
 
 function repositoryRow(requestId: string): RepositoryPublicationRow {
@@ -234,11 +253,7 @@ async function sourceFixture(
   row.request_digest = repositoryGitHubPublicationDigest(row);
   const entry = await upsertSessionEntryCore(
     { agentId: row.agent_id, sessionKey: row.session_key },
-    {
-      sessionId: row.session_id,
-      updatedAt: 1000,
-      repositoryWorkspaceId: row.workspace_id,
-    },
+    { sessionId: row.session_id, updatedAt: 1000, repositoryWorkspaceId: row.workspace_id },
   );
   if (!entry) {
     throw new Error("Publication source session was not created");
@@ -357,12 +372,10 @@ it("creates the lazy shared schema and publishes lifecycle authority before its 
     source,
   );
   try {
-    await withinTest(
-      awaitGateBeforeSettlement(
-        Promise.all([reply.ready, committed.promise]),
-        inserting,
-        "lifecycle publication did not precede its insert reply",
-      ),
+    await waitForGate(
+      Promise.all([reply.ready, committed.promise]),
+      inserting,
+      "lifecycle publication did not precede its insert reply",
       signal,
     );
     expect(lifecycle.readCurrent).toThrow("lifecycle authority is unavailable");
@@ -415,12 +428,7 @@ it("does not cancel a newer personal GitHub authorization", async () => {
   for (const requestId of [first, second]) {
     await mutateUserGitHubConnection(
       owner,
-      {
-        kind: "start",
-        requestId,
-        createdAtMs,
-        expiresAtMs: createdAtMs + 900000,
-      },
+      { kind: "start", requestId, createdAtMs, expiresAtMs: createdAtMs + 900000 },
       () => {},
     );
   }
@@ -453,12 +461,10 @@ it("revokes personal source authority at commit before reply delivery without re
     const reply = holdNextReply("userGitHubConnections.mutate");
     const disconnected = mutateUserGitHubConnection(owner, { kind: "disconnect" }, () => {});
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          Promise.all([receipt.ready, reply.ready]),
-          disconnected,
-          "connection receipt and reply were not held",
-        ),
+      await waitForGate(
+        Promise.all([receipt.ready, reply.ready]),
+        disconnected,
+        "connection receipt and reply were not held",
         signal,
       );
       // Receipt and reply use separate ports; deliver the real commit facts before asserting.
@@ -480,7 +486,7 @@ it("revokes personal source authority at commit before reply delivery without re
     await expect(insertRepositoryGitHubPublicationAsync(row, source)).rejects.toThrow(
       "source authority changed",
     );
-    expect(read(row)).toMatchObject({ ok: true, rows: [] });
+    expectRows(row, []);
   } finally {
     await source.release();
   }
@@ -505,10 +511,7 @@ it("rejects a cold personal connection read overtaken by disconnect", async ({ s
   const preparing = prepareUserGitHubConnection(owner);
   const rejected = expect(preparing).rejects.toThrow("My GitHub connection changed");
   try {
-    await withinTest(
-      awaitGateBeforeSettlement(readReady.promise, preparing, "cold connection read was not held"),
-      signal,
-    );
+    await waitForGate(readReady.promise, preparing, "cold connection read was not held", signal);
     await mutateUserGitHubConnection(owner, { kind: "disconnect" }, () => {});
   } finally {
     release.resolve();
@@ -546,12 +549,10 @@ it("revokes cached personal authority when a committed disconnect loses its rece
   const disconnected = mutateUserGitHubConnection(owner, { kind: "disconnect" }, () => {});
   const refused = expect(disconnected).rejects.toThrow("connection write outcome is unknown");
   try {
-    await withinTest(
-      awaitGateBeforeSettlement(
-        Promise.all([receipt.ready, reply.ready]),
-        disconnected,
-        "connection receipt and reply were not held",
-      ),
+    await waitForGate(
+      Promise.all([receipt.ready, reply.ready]),
+      disconnected,
+      "connection receipt and reply were not held",
       signal,
     );
     reply.release(new Error("connection write outcome is unknown"));
@@ -586,7 +587,7 @@ it("runs policy writes before source reservation and refuses the changed source"
     await expect(insertRepositoryGitHubPublicationAsync(row, source)).rejects.toThrow(
       "source authority changed",
     );
-    expect(read(row)).toMatchObject({ ok: true, rows: [] });
+    expectRows(row, []);
   } finally {
     await source.release();
   }
@@ -600,7 +601,7 @@ it("rejects a requested branch that does not belong to the captured source", asy
     await expect(insertRepositoryGitHubPublicationAsync(row, source)).rejects.toThrow(
       "requested repository changed",
     );
-    expect(read(row)).toMatchObject({ ok: true, rows: [] });
+    expectRows(row, []);
   } finally {
     await source.release();
   }
@@ -630,7 +631,7 @@ it("does not use one session's source authority for another session's publicatio
         first.source,
       ),
     ).rejects.toThrow("source");
-    expect(read(second.row)).toMatchObject({ ok: true, rows: [{ last_effect: null }] });
+    expectRows(second.row, [{ last_effect: null }]);
   } finally {
     await first.source.release();
     await second.source.release();
@@ -649,17 +650,15 @@ it("publishes a committed receipt before a delayed ordinary worker reply", async
     authorityAtNotification.push(facts.get(key));
     committed.resolve();
   });
-  const claim = scope.mutate(
-    command({ operation: "claim", row, instanceId: "gateway", executionId: "execution" }),
-    context.admission.assertCurrent,
+  const claim = mutatePublication(
+    scope,
+    { operation: "claim", row, instanceId: "gateway", executionId: "execution" },
     published,
   );
-  await withinTest(
-    awaitGateBeforeSettlement(
-      Promise.all([reply.ready, committed.promise]),
-      claim,
-      "claim reply was not held through publication",
-    ),
+  await waitForGate(
+    Promise.all([reply.ready, committed.promise]),
+    claim,
+    "claim reply was not held through publication",
     signal,
   );
   expect(published).toHaveBeenCalledTimes(1);
@@ -680,30 +679,23 @@ it("publishes a committed receipt before a delayed ordinary worker reply", async
   });
   reply.release();
   await expect(claim).resolves.toMatchObject({ rows: [{ status: "publishing" }] });
-  await scope.mutate(
-    command({
-      operation: "complete",
-      row,
-      instanceId: "gateway",
-      executionId: "execution",
-      result: {
-        requestId: row.request_id,
-        status: "failed",
-        code: "no_changes",
-        message: "No changes to publish",
-        nextAction: "Retry publication",
-      },
-    }),
-    context.admission.assertCurrent,
-    () => {},
-  );
+  await mutatePublication(scope, {
+    operation: "complete",
+    row,
+    instanceId: "gateway",
+    executionId: "execution",
+    result: {
+      requestId: row.request_id,
+      status: "failed",
+      code: "no_changes",
+      message: "No changes to publish",
+      nextAction: "Retry publication",
+    },
+  });
   await expect(
     runGitHubPublicationMaintenanceAsync({ operation: "report", requestId: row.request_id }),
   ).resolves.toBeUndefined();
-  expect(read(row)).toMatchObject({
-    ok: true,
-    rows: [{ reported_at_ms: expect.any(Number) }],
-  });
+  expectRows(row, [{ reported_at_ms: expect.any(Number) }]);
 });
 
 it.for(["superseded", "closed"] as const)(
@@ -736,17 +728,15 @@ it.for(["superseded", "closed"] as const)(
     const receipt = holdNextReceipt();
     const reply = holdNextReply();
     const published = vi.fn();
-    const claim = scope.mutate(
-      command({ operation: "claim", row, instanceId: "gateway", executionId: "original" }),
-      context.admission.assertCurrent,
+    const claim = mutatePublication(
+      scope,
+      { operation: "claim", row, instanceId: "gateway", executionId: "original" },
       published,
     );
-    await withinTest(
-      awaitGateBeforeSettlement(
-        Promise.all([receipt.ready, reply.ready]),
-        claim,
-        "claim receipt was not held",
-      ),
+    await waitForGate(
+      Promise.all([receipt.ready, reply.ready]),
+      claim,
+      "claim receipt was not held",
       signal,
     );
     if (outcome === "superseded") {
@@ -783,10 +773,7 @@ it.for(["superseded", "closed"] as const)(
     }
     reply.release();
     await expect(claim).resolves.toMatchObject({ rows: [{ execution_id: "original" }] });
-    expect(read(row)).toMatchObject({
-      ok: true,
-      rows: [{ execution_id: outcome === "superseded" ? "replacement" : "original" }],
-    });
+    expectRows(row, [{ execution_id: outcome === "superseded" ? "replacement" : "original" }]);
     if (outcome === "closed") {
       expect(lifecycle.readCurrent).toThrow("lifecycle authority is unavailable");
       await expect(prepareGitHubPublicationSessionLifecycle(lifecycleInput)).rejects.toThrow(
@@ -847,12 +834,10 @@ it("revokes prepared sources when canonical deletion commits before its ordinary
     });
     const deletion = remove();
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          Promise.all([reply.ready, installed.promise]),
-          deletion,
-          "deletion receipt was not installed before its reply",
-        ),
+      await waitForGate(
+        Promise.all([reply.ready, installed.promise]),
+        deletion,
+        "deletion receipt was not installed before its reply",
         signal,
       );
       expect(checkedBeforeCommit).toBe(true);
@@ -861,7 +846,7 @@ it("revokes prepared sources when canonical deletion commits before its ordinary
       reply.release();
       await deletion;
     }
-    expect(read(row)).toMatchObject({ ok: true, rows: [] });
+    expectRows(row, []);
     runOpenClawStateWriteTransaction((database) =>
       insertRepositoryGitHubPublicationInDatabase(database, row, context.admission.assertCurrent),
     );
@@ -884,61 +869,40 @@ it("settles execution bookkeeping without source authority while distinguishing 
   });
   await execution.updateHead("d".repeat(40));
   await execution.recordEffect("push");
-  expect(read(row)).toMatchObject({
-    ok: true,
-    rows: [{ effect_state: "dispatched", pushed_head_commit: null }],
-  });
+  expectRows(row, [{ effect_state: "dispatched", pushed_head_commit: null }]);
   await execution.recordEffect("push", { headCommit: "d".repeat(40) });
   await execution.interrupt();
-  expect(read(row)).toMatchObject({
-    ok: true,
-    rows: [
-      {
-        status: "requested",
-        last_effect: "push",
-        effect_state: "observed",
-        pushed_head_commit: "d".repeat(40),
-      },
-    ],
-  });
+  expectRows(row, [
+    {
+      status: "requested",
+      last_effect: "push",
+      effect_state: "observed",
+      pushed_head_commit: "d".repeat(40),
+    },
+  ]);
 });
 
 it("refuses delayed observation from an execution replaced by a later claim", async () => {
   const scope = createScope();
   const row = seed("replaced-execution");
   const original = { row, instanceId: "gateway", executionId: "original" };
-  const receipt = await scope.mutate(
-    command({ operation: "claim", ...original }),
-    context.admission.assertCurrent,
-    () => undefined,
-  );
+  const receipt = await mutatePublication(scope, { operation: "claim", ...original });
   if (receipt.kind !== "repository" || !receipt.rows[0]) {
     throw new Error("Repository receipt missing");
   }
-  await scope.mutate(
-    command({
-      operation: "claim",
-      row: receipt.rows[0],
-      instanceId: "gateway",
-      executionId: "replacement",
-    }),
-    context.admission.assertCurrent,
-    () => undefined,
-  );
-  await expect(
-    scope.mutate(
-      command({
-        operation: "recordEffect",
-        effect: "push",
-        observed: { headCommit: "e".repeat(40) },
-        ...original,
-      }),
-      context.admission.assertCurrent,
-      () => undefined,
-    ),
-  ).rejects.toThrow("no longer current");
-  expect(read(row)).toMatchObject({
-    ok: true,
-    rows: [{ execution_id: "replacement", pushed_head_commit: null }],
+  await mutatePublication(scope, {
+    operation: "claim",
+    row: receipt.rows[0],
+    instanceId: "gateway",
+    executionId: "replacement",
   });
+  await expect(
+    mutatePublication(scope, {
+      operation: "recordEffect",
+      effect: "push",
+      observed: { headCommit: "e".repeat(40) },
+      ...original,
+    }),
+  ).rejects.toThrow("no longer current");
+  expectRows(row, [{ execution_id: "replacement", pushed_head_commit: null }]);
 });
