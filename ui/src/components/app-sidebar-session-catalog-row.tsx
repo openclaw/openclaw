@@ -185,7 +185,7 @@ export function renderCatalogSessionRow(
       onKeyDown={openMenuFromEvent}
     >
       <a
-        ref={(element) => (controls.link = element)}
+        ref={(node) => (controls.link = node)}
         href={target().href}
         class="sidebar-recent-session__link"
         aria-current={active() ? "page" : undefined}
@@ -222,7 +222,7 @@ export function renderCatalogSessionRow(
       <span class="sidebar-recent-session__aside session-row-aside">
         <span class="session-row-actions">
           <button
-            ref={(element) => (controls.catalogMenu = element)}
+            ref={(node) => (controls.catalogMenu = node)}
             class="session-action"
             data-catalog-session-menu="true"
             type="button"

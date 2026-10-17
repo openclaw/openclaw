@@ -280,9 +280,9 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
         <For each={props.tabs} keyed={(tab) => tab.id}>
           {(tab, index) => {
             // The keyed id is this node's lifetime identity.
-            const id = untrack(() => tab().id);
-            const ref = tabs.ref(id);
-            onCleanup(() => labels.delete(id));
+            const tabId = untrack(() => tab().id);
+            const ref = tabs.ref(tabId);
+            onCleanup(() => labels.delete(tabId));
             const selected = () => tab().id === props.activeId;
             const reorderId = () => tab().reorderId ?? tab().id;
             const draggable = () => Boolean(props.onReorder) && tab().draggable !== false;
@@ -316,7 +316,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                     {props.renderIcon ? props.renderIcon(tab) : tab().icon}
                   </span>
                 </Show>
-                <span class="tabstrip-tab__label" ref={(element) => labels.set(id, element)}>
+                <span class="tabstrip-tab__label" ref={(element) => labels.set(tabId, element)}>
                   {tab().label}
                 </span>
                 <Show when={tab().badge}>

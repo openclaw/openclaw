@@ -469,8 +469,8 @@ describe("CommandPalette search", () => {
       expect(scroll).toHaveBeenCalledExactlyOnceWith({ block: "nearest" });
     }
     const row = query<HTMLElement>('[role="option"]')!;
-    const scroll = vi.mocked(row.scrollIntoView);
-    scroll.mockClear();
+    const scroll = vi.fn();
+    Object.defineProperty(row, "scrollIntoView", { configurable: true, value: scroll });
     pressKey(paletteInput(palette), "ArrowDown");
     pressKey(paletteInput(palette), "Escape");
     await palette.updateComplete;
