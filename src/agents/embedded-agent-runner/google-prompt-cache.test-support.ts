@@ -1,16 +1,25 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, vi } from "vitest";
-import type { Context } from "../../llm/types.js";
 import * as providerFetch from "../provider-transport-fetch.js";
-import type { CustomEntry } from "../sessions/session-manager-types.js";
-import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { prepareGooglePromptCacheStreamFn } from "./google-prompt-cache.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-export type SessionCustomEntry = CustomEntry & { data: unknown };
+export type SessionCustomEntry = {
+  type: "custom";
+  id: string;
+  parentId: string | null;
+  timestamp: string;
+  customType: string;
+  data: unknown;
+};
+
+export type TestGooglePromptCacheSessionManager = {
+  appendCustomEntryAsync(customType: string, data: unknown): Promise<void>;
+  getEntries(): SessionCustomEntry[];
+};
 
 export function makeSessionManager(entries: SessionCustomEntry[] = []) {
   let counter = 0;
@@ -26,27 +35,41 @@ export function makeSessionManager(entries: SessionCustomEntry[] = []) {
         data,
       });
     },
-    getEntries: () => entries,
+    getEntries() {
+      return entries;
+    },
   };
 }
 
 export function makeGoogleModel(id = "gemini-3.1-pro-preview") {
-  return makeProviderModelFixture<"google-generative-ai">({
+  return {
     id,
+    name: id,
     api: "google-generative-ai",
     provider: "google",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128000,
     maxTokens: 8192,
     headers: { "X-Provider": "google" },
-  });
+  } satisfies Model<"google-generative-ai">;
 }
 
-export function createCacheFetchMock(name: string, expireTime = new Date(4_600_000).toISOString()) {
-  return vi.fn<typeof fetch>().mockResolvedValue(Response.json({ name, expireTime }));
+export function createCacheFetchMock(params: { name: string; expireTime: string }) {
+  return vi.fn().mockResolvedValue(
+    new Response(JSON.stringify(params), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  );
 }
 
-export function createOversizedJsonResponse() {
+export function createOversizedJsonResponse(): {
+  response: Response;
+  cancel: ReturnType<typeof vi.fn>;
+} {
   const cancel = vi.fn(async () => undefined);
   let pullCount = 0;
   const response = new Response(
@@ -57,41 +80,80 @@ export function createOversizedJsonResponse() {
       },
       cancel,
     }),
-    { headers: { "content-type": "application/json" } },
+    {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    },
   );
   return { response, cancel };
 }
 
 export function createCapturingStreamFn(result = "stream") {
   let capturedPayload: Record<string, unknown> | undefined;
-  const streamFn = vi.fn((...[model, _context, options]: Parameters<StreamFn>) => {
-    const payload: Record<string, unknown> = {};
-    void options?.onPayload?.(payload, model);
-    capturedPayload = payload;
-    return result as never;
-  });
-  return { streamFn, getCapturedPayload: () => capturedPayload };
+  const streamFn = vi.fn(
+    (
+      model: Parameters<StreamFn>[0],
+      _context: Parameters<StreamFn>[1],
+      options: Parameters<StreamFn>[2],
+    ) => {
+      const payload: Record<string, unknown> = {};
+      void options?.onPayload?.(payload, model);
+      capturedPayload = payload;
+      return result as never;
+    },
+  );
+  return {
+    streamFn,
+    getCapturedPayload: () => capturedPayload,
+  };
 }
 
-export function promptContext(overrides: Partial<Context> = {}): Context {
-  return {
-    systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
-    messages: [],
-    ...overrides,
+export function callArg(
+  mock: { mock: { calls: unknown[][] } },
+  callIndex: number,
+  argIndex: number,
+) {
+  const call = mock.mock.calls[callIndex];
+  if (!call || argIndex >= call.length) {
+    throw new Error(`Expected mock call ${callIndex} argument ${argIndex}`);
+  }
+  return call[argIndex];
+}
+
+export function fetchInit(fetchMock: { mock: { calls: unknown[][] } }, callIndex = 0): RequestInit {
+  const init = callArg(fetchMock, callIndex, 1);
+  if (!init || typeof init !== "object") {
+    throw new Error(`expected fetch init for call ${callIndex}`);
+  }
+  return init as RequestInit;
+}
+
+export function fetchUrl(fetchMock: { mock: { calls: unknown[][] } }, callIndex = 0): string {
+  return String(callArg(fetchMock, callIndex, 0));
+}
+
+export function streamContext(streamFn: { mock: { calls: unknown[][] } }, callIndex = 0) {
+  return callArg(streamFn, callIndex, 1) as {
+    systemPrompt?: unknown;
+    tools?: unknown;
   };
+}
+
+export function streamOptions(streamFn: { mock: { calls: unknown[][] } }, callIndex = 0) {
+  return callArg(streamFn, callIndex, 2) as Record<string, unknown>;
 }
 
 export function preparePromptCacheStream(params: {
   apiKey?: string;
   fetchMock?: typeof fetch;
   model?: ReturnType<typeof makeGoogleModel>;
-  now?: number;
-  sessionManager?: ReturnType<typeof makeSessionManager>;
+  now: number;
+  sessionManager: TestGooglePromptCacheSessionManager;
   signal?: AbortSignal;
   streamFn: StreamFn;
 }) {
   const model = params.model ?? makeGoogleModel();
-  vi.spyOn(Date, "now").mockReturnValue(params.now ?? 1_000_000);
+  vi.spyOn(Date, "now").mockReturnValue(params.now);
   if (params.fetchMock) {
     vi.spyOn(providerFetch, "buildGuardedModelFetch").mockReturnValue(params.fetchMock);
   }
@@ -101,30 +163,10 @@ export function preparePromptCacheStream(params: {
     model,
     modelId: model.id,
     provider: "google",
-    sessionManager: params.sessionManager ?? makeSessionManager(),
+    sessionManager: params.sessionManager,
     signal: params.signal,
     streamFn: params.streamFn,
   });
-}
-
-export async function setupPromptCache(
-  params: Omit<Parameters<typeof preparePromptCacheStream>[0], "streamFn"> & {
-    entries?: SessionCustomEntry[];
-    result?: string;
-  },
-) {
-  const { entries = [], result, ...options } = params;
-  const capture = createCapturingStreamFn(result);
-  const sessionManager = params.sessionManager ?? makeSessionManager(entries);
-  const wrapped = expectDefined(
-    await preparePromptCacheStream({
-      ...options,
-      sessionManager,
-      streamFn: capture.streamFn,
-    }),
-    "cache wrapper",
-  );
-  return { ...capture, entries, sessionManager, wrapped };
 }
 
 export async function createReadyGooglePromptCacheEntry(params: {
@@ -133,15 +175,24 @@ export async function createReadyGooglePromptCacheEntry(params: {
   expireTime?: string;
 }) {
   const entries: SessionCustomEntry[] = [];
-  const { wrapped } = await setupPromptCache({
+  const { streamFn } = createCapturingStreamFn();
+  const wrapped = await preparePromptCacheStream({
     now: params.now,
-    entries,
-    fetchMock: createCacheFetchMock(
-      params.cachedContent ?? "cachedContents/existing",
-      params.expireTime ?? new Date(params.now + 3_600_000).toISOString(),
-    ),
+    sessionManager: makeSessionManager(entries),
+    fetchMock: createCacheFetchMock({
+      name: params.cachedContent ?? "cachedContents/existing",
+      expireTime: params.expireTime ?? new Date(params.now + 3_600_000).toISOString(),
+    }),
+    streamFn,
   });
-  await wrapped(makeGoogleModel(), promptContext(), {});
+  if (!wrapped) {
+    throw new Error("Expected a Google prompt-cache wrapper");
+  }
+  await wrapped(
+    makeGoogleModel(),
+    { systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`, messages: [] },
+    {},
+  );
   const entry = entries[0];
   if (!entry?.data || typeof entry.data !== "object") {
     throw new Error("Expected the cache owner to persist a ready entry");
