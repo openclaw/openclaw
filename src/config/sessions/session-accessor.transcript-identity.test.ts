@@ -91,6 +91,16 @@ const readInventory = (
     prepareSessionStoreTargetInventory(config, [agent], env),
   ).withRead(async (result) => result.agents[0]?.result);
 
+async function expectCachedDiscovery<T>(select: () => Promise<T>, expected: T) {
+  const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
+  expect(await select()).toEqual(expected);
+  const count = reads.mock.calls.length;
+  expect(count).toBeGreaterThan(0);
+  expect(await select()).toEqual(expected);
+  expect(reads).toHaveBeenCalledTimes(count);
+  return () => expect(reads.mock.calls.length).toBeGreaterThan(count);
+}
+
 afterEach(() => vi.restoreAllMocks());
 
 it("resolves the current transcript and lifecycle revision across entry writes", async () => {
@@ -128,7 +138,6 @@ it("reuses a selected target until an owning registry write reassigns it", async
   const storePath = `${fixture.storePath()}.custom.json`;
   const databasePath = `${fixture.storePath()}.custom.sqlite`;
   openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-  const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
   const select = () =>
     withSessionStoreTarget(
       {
@@ -139,20 +148,15 @@ it("reuses a selected target until an owning registry write reassigns it", async
       },
       async (target, owner) => {
         owner.assertCurrent();
-        return target;
+        return target.database.path;
       },
     );
-  expect((await select()).database.path).toBe(databasePath);
-  const initialReads = reads.mock.calls.length;
-  expect(initialReads).toBeGreaterThan(0);
-  expect((await select()).database.path).toBe(databasePath);
-  expect(reads).toHaveBeenCalledTimes(initialReads);
+  const expectRefreshed = await expectCachedDiscovery(select, databasePath);
 
   unregisterOpenClawAgentDatabase({ agentId: "main", path: databasePath });
   registerOpenClawAgentDatabase({ agentId: "other", path: databasePath });
-  const reassigned = await select();
-  expect(reassigned.database.path).toBe(`${fixture.storePath()}.custom.main.sqlite`);
-  expect(reads.mock.calls.length).toBeGreaterThan(initialReads);
+  expect(await select()).toBe(`${fixture.storePath()}.custom.main.sqlite`);
+  expectRefreshed();
 });
 
 it.each(["fixed", "family"])(
@@ -167,28 +171,20 @@ it.each(["fixed", "family"])(
     } else {
       openOpenClawAgentDatabase({ agentId: "other", path: siblingPath });
     }
-    const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
     const select = () =>
       kind === "fixed"
         ? readInventory(config, "other")
         : prepareSessionStoreTargetInventoryRead(request).withRead(
             async (inventory) => inventory.agents[0]?.result,
           );
-    expect(await select()).toEqual({ available: true, targets: [] });
-    const initialReads = reads.mock.calls.length;
-    expect(initialReads).toBeGreaterThan(0);
-    expect(await select()).toEqual({ available: true, targets: [] });
-    expect(reads).toHaveBeenCalledTimes(initialReads);
+    const expectRefreshed = await expectCachedDiscovery(select, { available: true, targets: [] });
     const registry = readOpenClawAgentDatabaseRegistryToken();
     replaceSessionEntrySync(
       { agentId: "other", storePath: siblingPath, sessionKey: "agent:other:global" },
       { sessionId: "other-window", updatedAt: 2 },
     );
-    expect(await select()).toEqual({
-      available: true,
-      targets: [{ agentId: "other", storePath }],
-    });
-    expect(reads.mock.calls.length).toBeGreaterThan(initialReads);
+    expect(await select()).toEqual({ available: true, targets: [{ agentId: "other", storePath }] });
+    expectRefreshed();
     if (kind === "family") {
       expect(readOpenClawAgentDatabaseRegistryToken()).toBe(registry);
     }
@@ -252,10 +248,7 @@ it.each(["same owner", "state retirement"] as const)(
         reply.value.kind === "session-runtime-target"
       ) {
         reads++;
-        openOpenClawAgentDatabase({
-          ...databaseOptions,
-          agentId: "main",
-        });
+        openOpenClawAgentDatabase({ ...databaseOptions, agentId: "main" });
         if (change === "state retirement") {
           selected.resolve();
           await resume.promise;

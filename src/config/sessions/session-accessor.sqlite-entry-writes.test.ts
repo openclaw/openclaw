@@ -47,6 +47,19 @@ const withEntryFixture = (
 
 type Writer = Parameters<typeof writeSessionEntryPatchInDatabase>[0];
 type Patch = Parameters<typeof writeSessionEntryPatchInDatabase>[1];
+
+function expectAppend(scope: Parameters<typeof appendTranscriptMessageSync>[0], content: string) {
+  expect(appendTranscriptMessageSync(scope, { message: { role: "user", content } }).ok).toBe(true);
+}
+
+function readObservation(writer: Writer, sessionId: string) {
+  return writer.db
+    .prepare(
+      "SELECT transcript_observed_at, transcript_updated_at FROM session_windows WHERE session_id = ?",
+    )
+    .get(sessionId);
+}
+
 function patchEntry(
   writer: Writer,
   fresh: Patch["fresh"],
@@ -186,19 +199,9 @@ it("skips unchanged entry and snapshot writes while retaining current transcript
         skillsSnapshot,
       });
 
-      expect(
-        appendTranscriptMessageSync(
-          { ...scope, sessionId: "entry-noop" },
-          { message: { role: "user", content: "new transcript content" } },
-        ).ok,
-      ).toBe(true);
+      expectAppend({ ...scope, sessionId: "entry-noop" }, "new transcript content");
       const before = { ...sql.counts };
-      const watermark = () =>
-        database.db
-          .prepare(
-            "SELECT transcript_observed_at, transcript_updated_at FROM session_windows WHERE session_id = ?",
-          )
-          .get("entry-noop");
+      const watermark = () => readObservation(database, "entry-noop");
       const unobserved = watermark();
       expect(unobserved?.transcript_observed_at).not.toBe(unobserved?.transcript_updated_at);
       await patch(savedPatch());
@@ -315,14 +318,27 @@ it.each(["entry", "target"] as const)(
             expect(sql.counts).toEqual(before);
             return result;
           };
+          const expectView = (
+            view: ReturnType<typeof publish>,
+            ids: string[],
+            members: string[],
+            hasBoard: boolean,
+          ) => {
+            const current = view.current.get(key);
+            expect(current).toMatchObject({
+              participants: ids.map((id) => ({ identity: { type: "agent", id } })),
+              participantCount: ids.length,
+            });
+            expect(view.projection?.get(key)).toMatchObject({
+              membership: [key, null, members, expect.any(Object), "entry-postimage"],
+              hasBoard,
+            });
+            return current;
+          };
           const retained = publish(mutation, true);
-          const current = retained.current.get(key);
+          const current = expectView(retained, ["first"], ["first-member"], true);
           const skills = retained.fullEntries?.get(key)?.skillsSnapshot;
-          expect(current).toMatchObject({
-            lastRunError: "updated",
-            participants: [{ identity: { type: "agent", id: "first" } }],
-            participantCount: 1,
-          });
+          expect(current?.lastRunError).toBe("updated");
           expect(current).not.toHaveProperty("skillsSnapshot");
           expect(skills?.prompt).toBe("private saved prompt");
           for (const field of ["resolvedSkills", "discoverySkills"]) {
@@ -331,8 +347,6 @@ it.each(["entry", "target"] as const)(
           expect(current).not.toHaveProperty("owner");
           expect(retained.projection?.get(key)).toMatchObject({
             activitySummaryWatermark: { generation: null, maxSeq: null },
-            membership: [key, null, ["first-member"], expect.any(Object), "entry-postimage"],
-            hasBoard: true,
           });
 
           recordSessionParticipant(scope, {
@@ -351,29 +365,17 @@ it.each(["entry", "target"] as const)(
             throw new Error("Missing changed patch identity");
           }
           const refreshed = publish(changedMutation, true);
-          expect(refreshed.current.get(key)).toMatchObject({
-            participants: [
-              { identity: { type: "agent", id: "first" } },
-              { identity: { type: "agent", id: "later" } },
-            ],
-            participantCount: 2,
-          });
-          expect(refreshed.projection?.get(key)).toMatchObject({
-            membership: [key, null, [], expect.any(Object), "entry-postimage"],
-            hasBoard: false,
-          });
+          expectView(refreshed, ["first", "later"], [], false);
 
           const beforeAppend = readSnapshot(writer);
           const beforeAppendEntry = beforeAppend[0]?.entry;
           if (!beforeAppendEntry) {
             throw new Error("Missing entry before transcript append");
           }
-          expect(
-            appendTranscriptMessageSync(
-              { ...scope, sessionId: beforeAppendEntry.sessionId },
-              { message: { role: "user", content: "append after entry selection" } },
-            ).ok,
-          ).toBe(true);
+          expectAppend(
+            { ...scope, sessionId: beforeAppendEntry.sessionId },
+            "append after entry selection",
+          );
           const windowsBeforePatch = sql.counts.windows;
           const appendedMutation = patchEntry(writer, beforeAppend, {
             lastRunError: "after transcript append",
@@ -390,13 +392,7 @@ it.each(["entry", "target"] as const)(
           expect(appendedWindow?.transcript_observed_at).toBe(
             appendedWindow?.transcript_updated_at,
           );
-          expect(
-            writer.db
-              .prepare(
-                "SELECT transcript_observed_at, transcript_updated_at FROM session_windows WHERE session_id = ?",
-              )
-              .get(beforeAppendEntry.sessionId),
-          ).toEqual({
+          expect(readObservation(writer, beforeAppendEntry.sessionId)).toEqual({
             transcript_observed_at: appendedWindow?.transcript_observed_at,
             transcript_updated_at: appendedWindow?.transcript_updated_at,
           });

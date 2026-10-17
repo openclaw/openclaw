@@ -156,6 +156,7 @@ it.each(["metadata only", "lost result", "callback failure", "release failure"] 
       const { database, scope, replace, read } = setup("replacement-settlement");
       const options = { agentId: "main", path: database.path };
       const { sessionKey } = scope;
+      const members = new Set(["member"]);
       const metadataOnly = boundary.startsWith("metadata");
       const workerVisibility = metadataOnly ? "shared" : "read-only";
       const workerCategory = metadataOnly ? "before" : "worker";
@@ -242,14 +243,14 @@ it.each(["metadata only", "lost result", "callback failure", "release failure"] 
         if (metadataOnly) {
           expect(whileWaiting).toMatchObject({
             entry: { visibility: "shared" },
-            membership: new Set(["member"]),
+            membership: members,
           });
         } else {
           expect(whileWaiting).toBeUndefined();
         }
         expect(sharing.readCurrent()).toMatchObject({
           entry: { visibility: workerVisibility },
-          membership: new Set(["member"]),
+          membership: members,
         });
         generation.assertCurrent();
         expect(mutations).toEqual([]);
@@ -342,9 +343,7 @@ it("refreshes inline maintenance rows", async () => {
     writeSessionEntry(database, archivedKey, original);
     const { sharing } = retainSharing(database, archivedKey, original);
     const config = {
-      session: {
-        maintenance: { mode: "enforce" as const, maxEntries: 1, pruneAfter: "1000000d" },
-      },
+      session: { maintenance: { mode: "enforce" as const, maxEntries: 1, pruneAfter: "1000000d" } },
     };
     setRuntimeConfigSnapshot(config, config);
     const projection = await createSessionRowProjection({ cfg: config, modelCatalog: [] });

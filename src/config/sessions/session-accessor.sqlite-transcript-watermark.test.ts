@@ -273,12 +273,7 @@ it("keeps a raw empty frontier distinct from a missing transcript after replacem
     reason: "generation_mismatch",
   });
   const empty = rawPage(target);
-  expect(empty).toMatchObject({
-    kind: "page",
-    events: [],
-    hasMore: false,
-    serializedBytes: 0,
-  });
+  expect(empty).toMatchObject({ kind: "page", events: [], hasMore: false, serializedBytes: 0 });
   const cursor = JSON.parse(Buffer.from(empty.cursor, "base64url").toString("utf8")) as object;
   expect(cursor).toMatchObject({ lastSeq: -1 });
   const beyondEmpty = Buffer.from(JSON.stringify({ ...cursor, lastSeq: 0 })).toString("base64url");
@@ -365,10 +360,7 @@ it("reads hot and cold watermarks once while preserving a WAL snapshot and forei
       peer.exec("COMMIT");
       expect(read()).toEqual(before);
     });
-    const archived = {
-      generation: "peer-generation",
-      maxSeq: 0,
-    };
+    const archived = { generation: "peer-generation", maxSeq: 0 };
     expect(read()).toEqual(archived);
     expect(readSessionTranscriptWatermark(target)).toEqual(archived);
     expect(readSessionTranscriptHotWatermark(database, target.sessionId)).toEqual({

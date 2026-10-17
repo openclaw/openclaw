@@ -78,13 +78,6 @@ async function seed(label: string, overrides: Partial<SessionEntry> = {}) {
   return scope;
 }
 
-async function seedPair(label: string) {
-  const scope = await seed(label, sessionEntry("first", "before"));
-  const sibling = { ...scope, sessionKey: `${scope.sessionKey}-sibling` };
-  await upsertSessionEntryCore(sibling, sessionEntry("second", "sibling"));
-  return { scope, sibling };
-}
-
 function insertRaw(db: DatabaseSync, sessionKey: string, value: SessionEntry) {
   db.prepare(
     "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
@@ -107,6 +100,10 @@ function listingEntries(scope: SessionScope, clone = false) {
   return new Map(
     listSessionEntriesCore({ ...scope, clone }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
+}
+
+function listedEntry(scope: SessionScope) {
+  return listSessionEntriesCore({ ...scope, clone: false })[0]?.entry;
 }
 
 function savedPrompts(prompt: string) {
@@ -313,10 +310,7 @@ it("omits saved prompts from usage inventory while preserving full transcript re
     listed!.entry.worktree!.branch = "changed by reader";
     listed!.entry.deviceFolder!.path = "/mutated-copy";
     expect(listSessionTranscriptInstances(scope, options)[0]?.entry).toEqual(
-      expect.objectContaining({
-        worktree,
-        deviceFolder,
-      }),
+      expect.objectContaining({ worktree, deviceFolder }),
     );
   }
 });
@@ -324,7 +318,7 @@ it("omits saved prompts from usage inventory while preserving full transcript re
 it("keeps same-path caches isolated by live connection", async () => {
   const scope = await seed("connection-identity");
   const primary = openOpenClawAgentDatabase(scope);
-  const first = listSessionEntriesCore({ ...scope, clone: false });
+  const first = listedEntry(scope);
   const opened = openOpenClawAgentDatabaseReadOnly(scope);
   if (!opened.found) {
     throw new Error("Expected the existing agent database");
@@ -345,10 +339,7 @@ it("keeps same-path caches isolated by live connection", async () => {
     expect(alternateEntry?.label).toBe("connection-identity");
     expectOneParse();
 
-    expectCached(
-      () => listSessionEntriesCore({ ...scope, clone: false })[0]?.entry,
-      first[0]?.entry,
-    );
+    expectCached(() => listedEntry(scope), first);
     expectCached(
       () => readSessionEntryCache(alternateDatabase, { cache: true }).entries.get(scope.sessionKey),
       alternateEntry,
@@ -361,7 +352,9 @@ it("keeps same-path caches isolated by live connection", async () => {
 });
 
 it("does not revalidate session nodes after a same-connection transcript write", async () => {
-  const { scope, sibling } = await seedPair("transcript-write");
+  const scope = await seed("transcript-write", sessionEntry("first", "before"));
+  const sibling = { ...scope, sessionKey: `${scope.sessionKey}-sibling` };
+  await upsertSessionEntryCore(sibling, sessionEntry("second", "sibling"));
   // Seed maintenance must settle before measuring a same-connection cache write.
   await closeOpenClawAgentDatabasesAsync(scope.env.OPENCLAW_STATE_DIR);
   openOpenClawAgentDatabase(scope);
@@ -425,7 +418,7 @@ it("rejects a transcript write after its persisted owner changes", async () => {
 it("bypasses the cache in a transaction and reuses the persisted snapshot after rollback", async () => {
   const scope = await seed("transaction-rollback", sessionEntry("rollback", "before"));
   expect(loadSessionEntry(scope)?.label).toBe("before");
-  const borrowedBefore = listSessionEntriesCore({ ...scope, clone: false })[0]!.entry;
+  const borrowedBefore = listedEntry(scope)!;
   expect(borrowedBefore.label).toBe("before");
 
   expect(() =>
@@ -442,9 +435,9 @@ it("bypasses the cache in a transaction and reuses the persisted snapshot after 
   ).toThrow("roll back cache probe");
 
   parseSessionEntryCalls.mockClear();
-  const borrowedAfter = listSessionEntriesCore({ ...scope, clone: false })[0]?.entry;
+  const borrowedAfter = listedEntry(scope);
   expect(borrowedAfter).toStrictEqual(borrowedBefore);
   expect(borrowedAfter?.label).toBe("before");
   expect(parseSessionEntryCalls).toHaveBeenCalledTimes(1);
-  expectCached(() => listSessionEntriesCore({ ...scope, clone: false })[0]?.entry, borrowedAfter);
+  expectCached(() => listedEntry(scope), borrowedAfter);
 });

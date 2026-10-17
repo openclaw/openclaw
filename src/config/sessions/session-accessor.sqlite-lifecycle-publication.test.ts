@@ -39,9 +39,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 import { loadSessionTranscriptEvents as loadTranscriptEvents } from "./session-transcript-events.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
 
-const failures = vi.hoisted(() => ({
-  publication: undefined as Error | undefined,
-}));
+const failures = vi.hoisted(() => ({ publication: undefined as Error | undefined }));
 
 vi.mock("./session-accessor.sqlite-identity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-identity.js")>();
@@ -230,13 +228,12 @@ it.each(["publication", "writer return", "rollback"] as const)(
                 throw failure;
               }
             : undefined,
-        ...(outcome === "rollback"
-          ? {
-              beforeCommitInTransaction: () => {
+        beforeCommitInTransaction:
+          outcome === "rollback"
+            ? () => {
                 throw failure;
-              },
-            }
-          : {}),
+              }
+            : undefined,
       });
       await expect(operation).rejects.toBe(failure);
       expect(committed).toHaveBeenCalledTimes(outcome === "rollback" ? 0 : 1);
@@ -266,12 +263,7 @@ it("publishes confirmed removals before identity and row observers without archi
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const storePath = path.join(stateDir, "sessions.json");
   const scope = { sessionId: "session-1", sessionKey: "agent:main:preserve", storePath };
-  await upsertSessionEntryCore(scope, {
-    restartRecoveryDeliveryContext: { channel: "whatsapp", to: "+15551234567" },
-    restartRecoveryDeliveryRunId: "old-run",
-    sessionId: scope.sessionId,
-    updatedAt: 10,
-  });
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
   const owner = { id: "lifecycle-owner", type: "human" as const };
   assignSessionOwner(scope, { assignedBy: owner, owner });
   await replaceTranscriptEvents(scope, transcript);
