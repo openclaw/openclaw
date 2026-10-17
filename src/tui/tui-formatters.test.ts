@@ -1,4 +1,3 @@
-// Covers formatting helpers used by TUI status and message rendering.
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
@@ -22,18 +21,30 @@ const attachment = (kind: string, url: string, label: string) => ({
 });
 const assistantText = (content: unknown, fields: Record<string, unknown> = {}) =>
   extractTextFromMessage({ role: "assistant", content, ...fields });
-
-describe("resolveFinalAssistantText", () => {
-  it("hides complete HTML error pages after an HTTP reason phrase", () => {
-    const raw = "HTTP 502 Bad Gateway\n\n<!doctype html><html><body>down</body></html>";
-
-    const rendered = resolveFinalAssistantText({ errorMessage: raw });
-
-    expect(rendered).toBe(
-      "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
-    );
-    expect(rendered).not.toContain("<html>");
+const userText = (content: unknown, fields: Record<string, unknown> = {}) =>
+  extractTextFromMessage({ role: "user", content, ...fields });
+const footer = (
+  sessionInfo: Parameters<typeof formatTuiFooter>[0]["sessionInfo"],
+  fields: Partial<Parameters<typeof formatTuiFooter>[0]> = {},
+) =>
+  formatTuiFooter({
+    agentLabel: "Main",
+    sessionLabel: "main",
+    deliver: false,
+    sessionInfo,
+    ...fields,
   });
+const metadata = (label: string, json: string) =>
+  `${markInboundContextLabel(label)}\n\`\`\`json\n${json}\n\`\`\`\n\n`;
+
+it("hides complete HTML error pages after an HTTP reason phrase", () => {
+  const rendered = resolveFinalAssistantText({
+    errorMessage: "HTTP 502 Bad Gateway\n\n<!doctype html><html><body>down</body></html>",
+  });
+  expect(rendered).toBe(
+    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+  );
+  expect(rendered).not.toContain("<html>");
 });
 
 describe("formatTuiFooter", () => {
@@ -41,10 +52,8 @@ describe("formatTuiFooter", () => {
     "shows %s and session modes in one compact summary",
     (fastMode) => {
       expect(
-        formatTuiFooter({
-          agentLabel: "Main",
-          sessionLabel: "work",
-          sessionInfo: {
+        footer(
+          {
             model: "gpt-5.6-luna@openai:setup-64cddea3-938c-431e-be3b-aa47090577c7",
             fastMode,
             verboseLevel: "full",
@@ -53,9 +62,12 @@ describe("formatTuiFooter", () => {
             totalTokens: 1_200,
             contextTokens: 128_000,
           },
-          thinkingLevel: "high",
-          deliver: true,
-        }),
+          {
+            sessionLabel: "work",
+            thinkingLevel: "high",
+            deliver: true,
+          },
+        ),
       ).toBe(
         `agent Main | session work | gpt-5.6-luna high | fast:${fastMode} | verbose full | trace:raw | reasoning:stream | deliver:on | tokens 1.2k/128k (1%)`,
       );
@@ -63,14 +75,9 @@ describe("formatTuiFooter", () => {
   );
 
   it("keeps disabled session modes hidden while reporting disabled delivery", () => {
-    expect(
-      formatTuiFooter({
-        agentLabel: "Main",
-        sessionLabel: "main",
-        sessionInfo: { model: "fixture-model" },
-        deliver: false,
-      }),
-    ).toBe("agent Main | session main | fixture-model | deliver:off | tokens ?");
+    expect(footer({ model: "fixture-model" })).toBe(
+      "agent Main | session main | fixture-model | deliver:off | tokens ?",
+    );
   });
 
   it("sanitizes terminal controls and collapses footer fields to one line", () => {
@@ -82,25 +89,27 @@ describe("formatTuiFooter", () => {
       "\u009b2K",
       "\u009d0;footer-c1-title\u009c",
     ];
-    const footer = formatTuiFooter({
-      agentLabel: `agent-start${attacks[0]}agent-end\nمرحبا`,
-      sessionLabel: `session-start${attacks[2]}session-end\r\nשלום`,
-      sessionInfo: {
+    const rendered = footer(
+      {
         model: `provider/model-start${attacks[1]}middle${attacks[3]}${attacks[4]}${attacks[5]}model-end\tUnicode`,
       },
-      deliver: true,
-    });
+      {
+        agentLabel: `agent-start${attacks[0]}agent-end\nمرحبا`,
+        sessionLabel: `session-start${attacks[2]}session-end\r\nשלום`,
+        deliver: true,
+      },
+    );
 
-    expect(footer).toContain("agent-startagent-end");
-    expect(footer).toContain("مرحبا");
-    expect(footer).toContain("session-startsession-end");
-    expect(footer).toContain("שלום");
-    expect(footer).toContain("model-startmiddlemodel-end Unicode");
-    expect(footer).toContain("\u2067");
-    expect(footer).toContain("\u2069");
-    expect(footer).not.toMatch(/[\r\n\t]/u);
+    expect(rendered).toContain("agent-startagent-end");
+    expect(rendered).toContain("مرحبا");
+    expect(rendered).toContain("session-startsession-end");
+    expect(rendered).toContain("שלום");
+    expect(rendered).toContain("model-startmiddlemodel-end Unicode");
+    expect(rendered).toContain("\u2067");
+    expect(rendered).toContain("\u2069");
+    expect(rendered).not.toMatch(/[\r\n\t]/u);
     for (const attack of attacks) {
-      expect(footer).not.toContain(attack);
+      expect(rendered).not.toContain(attack);
     }
   });
 
@@ -108,10 +117,8 @@ describe("formatTuiFooter", () => {
     ["active", 12_000, 30_000, "Pursuing goal (12k/30k)"],
     ["blocked", 0, undefined, "Goal blocked (/goal resume)"],
   ] as const)("renders %s goals", (status, tokensUsed, tokenBudget, expected) => {
-    const footer = formatTuiFooter({
-      agentLabel: "Main",
-      sessionLabel: "main",
-      sessionInfo: {
+    expect(
+      footer({
         goal: {
           schemaVersion: 1,
           id: "goal-1",
@@ -124,11 +131,8 @@ describe("formatTuiFooter", () => {
           tokenBudget,
           continuationTurns: 0,
         },
-      },
-      deliver: false,
-    });
-
-    expect(footer).toContain(expected);
+      }),
+    ).toContain(expected);
   });
 });
 
@@ -143,7 +147,7 @@ describe("extractTextFromMessage", () => {
       "Attached image\nAttached file: report.pdf",
     ],
   ] as const)("renders attachment-only user content %j", (content, expected) => {
-    expect(extractTextFromMessage({ role: "user", content })).toBe(expected);
+    expect(userText(content)).toBe(expected);
   });
 
   it.each([
@@ -156,21 +160,12 @@ describe("extractTextFromMessage", () => {
       "Attached image\nAttached file",
     ],
   ] as const)("renders canonical media %j for an empty user turn", (media, expected) => {
-    expect(
-      extractTextFromMessage({
-        role: "user",
-        content: "",
-        __openclaw: { media },
-      }),
-    ).toBe(expected);
+    expect(userText("", { __openclaw: { media } })).toBe(expected);
   });
 
   it("sanitizes the display name of an attachment-only user turn", () => {
     expect(
-      extractTextFromMessage({
-        role: "user",
-        content: [attachment("document", "/report.pdf", "\u001b[31mreport.pdf\u001b[0m\u0000")],
-      }),
+      userText([attachment("document", "/report.pdf", "\u001b[31mreport.pdf\u001b[0m\u0000")]),
     ).toBe("Attached file: report.pdf");
   });
 
@@ -179,10 +174,7 @@ describe("extractTextFromMessage", () => {
     [{ type: "audio", source: { type: "base64", data: "secret-audio" } }, "Attached audio"],
     [{ type: "video", url: "file:///Users/operator/private/clip.mp4" }, "Attached video"],
     [{ type: "file", url: "file:///etc/passwd", title: "private.txt" }, "Attached file"],
-    [
-      attachment("audio", "file:///Users/operator/private/audio.ogg", "private.ogg"),
-      "Attached audio",
-    ],
+    [attachment("audio", "file:///private/audio.ogg", "private.ogg"), "Attached audio"],
     [
       { type: "image_url", image_url: { url: "https://secret.test/image?ticket=secret" } },
       "Attached image",
@@ -195,9 +187,7 @@ describe("extractTextFromMessage", () => {
 
   it("renders canonical and legacy assistant media without exposing references", () => {
     expect(
-      extractTextFromMessage({
-        role: "assistant",
-        content: [],
+      assistantText([], {
         __openclaw: {
           media: [
             { kind: "image", path: "/private/generated.png" },
@@ -209,9 +199,7 @@ describe("extractTextFromMessage", () => {
       }),
     ).toBe("Attached image\nAttached audio\nAttached video\nAttached file");
     expect(
-      extractTextFromMessage({
-        role: "assistant",
-        content: [],
+      assistantText([], {
         mediaUrl: "file:///private/one.png",
         mediaUrls: ["https://secret.test/two.mp3?ticket=secret"],
       }),
@@ -219,34 +207,21 @@ describe("extractTextFromMessage", () => {
   });
 
   it("prefers final_answer text over commentary text for assistant messages", () => {
-    const text = assistantText([
-      {
-        type: "text",
-        text: "Commentary that should not render",
-        textSignature: JSON.stringify({ v: 1, id: "c1", phase: "commentary" }),
-      },
-      {
-        type: "text",
-        text: "Final answer for the TUI",
-        textSignature: JSON.stringify({ v: 1, id: "f1", phase: "final_answer" }),
-      },
-    ]);
-
-    expect(text).toBe("Final answer for the TUI");
+    const content = ["commentary", "final_answer"].map((phase) => ({
+      type: "text",
+      text: `text:${phase}`,
+      textSignature: JSON.stringify({ v: 1, id: `id:${phase}`, phase }),
+    }));
+    expect(assistantText(content)).toBe("text:final_answer");
   });
 
   it.each([
-    {
-      errorMessage:
-        '429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\\u0027s rate limit. Please try again later."},"request_id":"req_123"}',
-      expected: [
-        "HTTP 429",
-        "rate_limit_error",
-        "This request would exceed your account's rate limit.",
-      ],
-    },
-    { errorMessage: "", expected: ["unknown error"] },
-  ])("renders an empty assistant error turn: $errorMessage", ({ errorMessage, expected }) => {
+    [
+      '429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\\u0027s rate limit. Please try again later."},"request_id":"req_123"}',
+      ["HTTP 429", "rate_limit_error", "This request would exceed your account's rate limit."],
+    ],
+    ["", ["unknown error"]],
+  ] as const)("renders an empty assistant error turn: %s", (errorMessage, expected) => {
     const text = assistantText([], { stopReason: "error", errorMessage });
 
     for (const fragment of expected) {
@@ -302,49 +277,26 @@ describe("extractTextFromMessage", () => {
   ])("strips leading inbound metadata for $message (#59871)", ({ message, body }) => {
     const text = extractTextFromMessage({
       ...message,
-      content: [
-        markInboundContextLabel("Conversation info:"),
-        "```json",
-        "{",
-        '  "message_id": "abc123"',
-        "}",
-        "```",
-        "",
-        markInboundContextLabel("Sender:"),
-        "```json",
-        "{",
-        '  "label": "Someone"',
-        "}",
-        "```",
-        "",
+      content:
+        metadata("Conversation info:", '{\n  "message_id": "abc123"\n}') +
+        metadata("Sender:", '{\n  "label": "Someone"\n}') +
         body,
-      ].join("\n"),
     });
 
     expect(text).toBe(body);
   });
 
   it("keeps metadata-like blocks for non-user messages", () => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content: [
-        markInboundContextLabel("Conversation info:"),
-        "```json",
-        '{"message_id":"abc123"}',
-        "```",
-        "",
-        "Assistant body",
-      ].join("\n"),
-    });
+    const text = assistantText(
+      metadata("Conversation info:", '{"message_id":"abc123"}') + "Assistant body",
+    );
 
     expect(text).toContain(markInboundContextLabel("Conversation info:"));
     expect(text).toContain("Assistant body");
   });
 
   it("strips trailing untrusted context metadata suffix blocks for user messages", () => {
-    const text = extractTextFromMessage({
-      role: "user",
-      content: `Hello world
+    const text = userText(`Hello world
 
 ${markInboundContextLabel("Context:")}
 <<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>
@@ -353,75 +305,60 @@ Source: Channel metadata
 Channel metadata (guildchat)
 Sender labels:
 example
-<<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>`,
-    });
+<<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>`);
 
     expect(text).toBe("Hello world");
   });
 });
 
-describe("extractContentFromMessage", () => {
-  it("renders error text when stopReason is error and content is not an array", () => {
-    const text = extractContentFromMessage({
-      role: "assistant",
-      stopReason: "error",
-      errorMessage: '429 {"error":{"message":"rate limit"}}',
-    });
-
-    expect(text).toContain("HTTP 429");
+it("renders error text when stopReason is error and content is not an array", () => {
+  const text = extractContentFromMessage({
+    role: "assistant",
+    stopReason: "error",
+    errorMessage: '429 {"error":{"message":"rate limit"}}',
   });
+
+  expect(text).toContain("HTTP 429");
 });
 
-describe("isCommandMarkedMessage", () => {
-  it("detects command-marked messages", () => {
-    expect(isCommandMarkedMessage({ command: true })).toBe(true);
-    expect(isCommandMarkedMessage({ command: false })).toBe(false);
-    expect(isCommandMarkedMessage({})).toBe(false);
-  });
+it("detects command-marked messages", () => {
+  expect(isCommandMarkedMessage({ command: true })).toBe(true);
+  expect(isCommandMarkedMessage({ command: false })).toBe(false);
+  expect(isCommandMarkedMessage({})).toBe(false);
 });
 
-describe("formatTuiErrorMessage", () => {
-  it("redacts and sanitizes terminal escapes in nested error causes", () => {
-    const secret = "sk-abcdefghijklmnopqrstuv";
-    const cause = new Error(`\u001b[31mAuthorization: Bearer ${secret}\u001b[0m`);
+it("redacts and sanitizes terminal escapes in nested error causes", () => {
+  const secret = "sk-abcdefghijklmnopqrstuv";
+  const cause = new Error(`\u001b[31mAuthorization: Bearer ${secret}\u001b[0m`);
 
-    const formatted = formatTuiErrorMessage(new Error("gateway down", { cause }));
+  const formatted = formatTuiErrorMessage(new Error("gateway down", { cause }));
 
-    expect(formatted).toContain("gateway down");
-    expect(formatted).toContain("Authorization: Bearer");
-    expect(formatted).not.toContain(secret);
-    expect(formatted).not.toContain("\u001b");
-  });
+  expect(formatted).toContain("gateway down");
+  expect(formatted).toContain("Authorization: Bearer");
+  expect(formatted).not.toContain(secret);
+  expect(formatted).not.toContain("\u001b");
 });
 
-describe("sanitizeRenderableText", () => {
-  const cjk =
-    "MotherTeresa特蕾莎修女是一个极端投入极有宗教信念愿意亲身服务底层苦难者的人但她不是现代公共卫生意义上的慈善改革者";
-  const code = [
-    "Run this:",
-    "```bash",
-    "sudo cp -a /var/lib/machines/fc41/etc/systemd/network/. \\",
-    "           /var/lib/machines/fc43/etc/systemd/network/",
-    "```",
-    "Done.",
-  ].join("\n");
-  it.each([
-    ["C1 CSI and OSC", "before\u009b@middle\u009d0;title\u009cafter", "beforemiddleafter"],
-    ["long tokens", "a".repeat(140), "a".repeat(140)],
-    ["CJK prose", cjk, cjk],
-    ["mixed direction lines", "hello\nمرحبا", "hello\n\u2067مرحبا\u2069"],
-    ["existing isolation", "\u2067مرحبا\u2069", "\u2067مرحبا\u2069"],
-    ["bidi overrides", "\u202eمرحبا\u202c", "\u2067مرحبا\u2069"],
-    ["bidi marks", "\u061cمرحبا\u200f", "\u2067مرحبا\u2069"],
-    [
-      "inline code (#48432)",
-      "- `requireConfirmationForMutatingActions: false`",
-      "- `requireConfirmationForMutatingActions: false`",
-    ],
-    ["fenced code", code, code],
-  ])("sanitizes %s without changing safe text", (_name, input, expected) => {
-    expect(sanitizeRenderableText(input)).toBe(expected);
-  });
+const cjk =
+  "MotherTeresa特蕾莎修女是一个极端投入极有宗教信念愿意亲身服务底层苦难者的人但她不是现代公共卫生意义上的慈善改革者";
+const code =
+  "Run this:\n```bash\nsudo cp -a /var/lib/machines/fc41/etc/systemd/network/. \\\n           /var/lib/machines/fc43/etc/systemd/network/\n```\nDone.";
+it.each([
+  ["C1 CSI and OSC", "before\u009b@middle\u009d0;title\u009cafter", "beforemiddleafter"],
+  ["long tokens", "a".repeat(140), "a".repeat(140)],
+  ["CJK prose", cjk, cjk],
+  ["mixed direction lines", "hello\nمرحبا", "hello\n\u2067مرحبا\u2069"],
+  ["existing isolation", "\u2067مرحبا\u2069", "\u2067مرحبا\u2069"],
+  ["bidi overrides", "\u202eمرحبا\u202c", "\u2067مرحبا\u2069"],
+  ["bidi marks", "\u061cمرحبا\u200f", "\u2067مرحبا\u2069"],
+  [
+    "inline code (#48432)",
+    "- `requireConfirmationForMutatingActions: false`",
+    "- `requireConfirmationForMutatingActions: false`",
+  ],
+  ["fenced code", code, code],
+])("sanitizes %s without changing safe text", (_name, input, expected) => {
+  expect(sanitizeRenderableText(input)).toBe(expected);
 });
 
 describe("Markdown display safety", () => {
@@ -447,33 +384,29 @@ describe("Markdown display safety", () => {
   });
 });
 
-describe("isTerminalSafeAutocompleteValue", () => {
-  it("accepts ordinary Unicode and rejects terminal or bidi controls", () => {
-    expect(isTerminalSafeAutocompleteValue("/tmp/مرحبا-東京.txt")).toBe(true);
-    expect(isTerminalSafeAutocompleteValue("👩🏽‍💻/cafe\u0301.txt")).toBe(true);
-    for (const value of [
-      "bad\x1b[31m",
-      "bad\tvalue",
-      "bad\rvalue",
-      "bad\nvalue",
-      "bad\u007fvalue",
-      "bad\u0085value",
-      "bad\u009bvalue",
-      "bad\u200evalue",
-      "bad\u202evalue",
-      "bad\u2066value",
-      "bad\u2069value",
-    ]) {
-      expect(isTerminalSafeAutocompleteValue(value)).toBe(false);
-    }
-  });
+it("accepts ordinary Unicode and rejects terminal or bidi controls", () => {
+  expect(isTerminalSafeAutocompleteValue("/tmp/مرحبا-東京.txt")).toBe(true);
+  expect(isTerminalSafeAutocompleteValue("👩🏽‍💻/cafe\u0301.txt")).toBe(true);
+  for (const value of [
+    "bad\x1b[31m",
+    "bad\tvalue",
+    "bad\rvalue",
+    "bad\nvalue",
+    "bad\u007fvalue",
+    "bad\u0085value",
+    "bad\u009bvalue",
+    "bad\u200evalue",
+    "bad\u202evalue",
+    "bad\u2066value",
+    "bad\u2069value",
+  ]) {
+    expect(isTerminalSafeAutocompleteValue(value)).toBe(false);
+  }
 });
 
-describe("sanitizeRenderableLine", () => {
-  it.each([
-    ["left\r\nمرحبا\tשלום right", "\u2067left مرحبا שלום right\u2069"],
-    [`safe\x1b]52;c;Y2xpcGJvYXJk\x07\r\n${"�".repeat(20)}\tمرحبا`, "safe [binary data omitted]"],
-  ])("sanitizes and collapses %j", (input, expected) => {
-    expect(sanitizeRenderableLine(input)).toBe(expected);
-  });
+it.each([
+  ["left\r\nمرحبا\tשלום right", "\u2067left مرحبا שלום right\u2069"],
+  [`safe\x1b]52;c;Y2xpcGJvYXJk\x07\r\n${"�".repeat(20)}\tمرحبا`, "safe [binary data omitted]"],
+])("sanitizes and collapses %j", (input, expected) => {
+  expect(sanitizeRenderableLine(input)).toBe(expected);
 });
