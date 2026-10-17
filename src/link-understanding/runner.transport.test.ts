@@ -17,7 +17,6 @@ import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive, readPidFile } from "../test-utils/process-tree.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { applyLinkUnderstanding } from "./apply.js";
-import { runLinkUnderstanding } from "./runner.js";
 
 const mocks = vi.hoisted(() => ({
   bodyCancel: vi.fn(),
@@ -121,7 +120,9 @@ it("cancels a non-OK response body before releasing its guarded transport", asyn
       response.write("error");
     },
     async (base) => {
-      const resultPromise = runLinkUnderstanding({
+      const context: MsgContext = { Body: `see ${base}/error` };
+      const before = { ...context };
+      const resultPromise = applyLinkUnderstanding({
         cfg: {
           tools: {
             links: {
@@ -130,11 +131,12 @@ it("cancels a non-OK response body before releasing its guarded transport", asyn
             },
           },
         },
-        ctx: { Body: `see ${base}/error` },
+        ctx: context,
       });
 
-      const result = await withinTest(resultPromise, signal);
-      expect(result).toEqual([]);
+      await withinTest(resultPromise, signal);
+      expect(context).toEqual(before);
+      expect(context.LinkUnderstanding).toBeUndefined();
       await withinTest(requestSocketClosed.promise, signal);
 
       expect(mocks.bodyCancel).toHaveBeenCalledOnce();
