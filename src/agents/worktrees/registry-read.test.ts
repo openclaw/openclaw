@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -20,6 +25,7 @@ import {
   getRegistryWorktreeProvisionedChunk,
   readLiveRegistryWorktreeByOwner,
   readLiveRegistryWorktreeIds,
+  readRegistryWorktree,
   readRegistryWorktrees,
   readSessionWorktreeBinding,
 } from "./registry-read.js";
@@ -35,6 +41,51 @@ import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 import { interceptWorktreeWorkerOperation } from "./worker-operation.test-support.js";
+
+const writerGate = vi.hoisted(() => ({ buffer: undefined as SharedArrayBuffer | undefined }));
+vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/worker-cpu.js")>();
+  const preload = `
+      import { DatabaseSync } from 'node:sqlite';
+      import { workerData } from 'node:worker_threads';
+      const prepare = DatabaseSync.prototype.prepare;
+      DatabaseSync.prototype.prepare = function(sql) {
+        const statement = prepare.call(this, sql);
+        if (workerData.testWorktreeWriteGate && /^update "worktrees" /i.test(sql.trim())) {
+          for (const method of ["all", "get", "iterate", "run"]) {
+            const execute = statement[method].bind(statement);
+            statement[method] = (...args) => {
+              const gate = new Int32Array(workerData.testWorktreeWriteGate);
+              if (Atomics.load(gate, 0) === 1) {
+                Atomics.store(gate, 1, 1);
+                Atomics.notify(gate, 1);
+                while (Atomics.load(gate, 0) === 1) Atomics.wait(gate, 0, 1);
+              }
+              return execute(...args);
+            };
+          }
+        }
+        return statement;
+      };
+    `;
+  return {
+    ...actual,
+    createCpuTrackedWorker(
+      filename: string | URL,
+      options: ConstructorParameters<typeof Worker>[1],
+    ) {
+      return actual.createCpuTrackedWorker(filename, {
+        ...options,
+        execArgv: [
+          ...(options?.execArgv ?? []),
+          "--import",
+          `data:text/javascript,${encodeURIComponent(preload)}`,
+        ],
+        workerData: { ...options?.workerData, testWorktreeWriteGate: writerGate.buffer },
+      });
+    },
+  };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const initializeRepository = useManagedWorktreeTestRepository();
@@ -91,10 +142,59 @@ function holdPublication(type: "worktrees.insert" | "worktrees.update", afterCom
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  writerGate.buffer = undefined;
   vi.restoreAllMocks();
 });
 
 describe("managed worktree registry worker reads", () => {
+  it("serves committed worktree rows while a background write is blocked", async ({ signal }) => {
+    const root = tempDirs.make("worktree-reader-writer-isolation-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    const gate = new Int32Array(new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT));
+    writerGate.buffer = gate.buffer;
+    const record: ManagedWorktreeRecord = {
+      id: "independent-read",
+      name: "independent-read",
+      repoFingerprint: "0123456789abcdef",
+      repoRoot: path.join(root, "repo"),
+      path: path.join(root, "independent-read"),
+      branch: "openclaw/independent-read",
+      baseRef: "HEAD",
+      ownerKind: "session",
+      ownerId: "agent:main:reader",
+      createdAt: 1,
+      lastActiveAt: 1,
+    };
+    await insertRegistryWorktree(env, record);
+    const context = captureOpenClawStateWorkerContext({ env });
+    Atomics.store(gate, 0, 1);
+    const write = updateRegistryWorktree(env, record.id, { lastActiveAt: 2 });
+    void write.catch(() => {});
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          Promise.resolve(Atomics.waitAsync(gate, 1, 0).value),
+          write,
+          "Writer never reached SQL",
+        ),
+        signal,
+      );
+      expect(await withinTest(readRegistryWorktree(context, record.id), signal)).toEqual(record);
+      expect(
+        await withinTest(
+          readLiveRegistryWorktreeByOwner(context, "session", record.ownerId!),
+          signal,
+        ),
+      ).toEqual(record);
+      expect(await withinTest(readRegistryWorktrees(env), signal)).toEqual([record]);
+    } finally {
+      Atomics.store(gate, 0, 0);
+      Atomics.notify(gate, 0);
+      await write;
+    }
+    expect(await readRegistryWorktree(context, record.id)).toEqual({ ...record, lastActiveAt: 2 });
+  });
+
   it("retains the original store across missing-checkout retirement", async () => {
     const originalRoot = tempDirs.make("worktree-original-store-");
     const replacementRoot = tempDirs.make("worktree-replacement-store-");
@@ -325,7 +425,9 @@ describe("managed worktree registry worker reads", () => {
     ).toBeUndefined();
     expect(await service.listRegistryRecords()).toEqual([]);
     expect(await readLiveRegistryWorktreeIds(env)).toEqual([]);
-    expect((await fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).isFile()).toBe(true);
+    await expect(fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     sql.expectIdle();
 
     const older: ManagedWorktreeRecord = {

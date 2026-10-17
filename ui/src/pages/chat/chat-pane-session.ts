@@ -82,6 +82,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
 
   protected subscribeSessionRepositoryContext(): void {
     const sessionPullRequests = sessionPullRequestsForGateway(this.context.gateway);
+    // Publications reconcile watched request ownership and admission, not only displayed rows.
     this.chatState.addCleanup(
       sessionPullRequests.subscribe(() => {
         void this.refreshSessionPullRequests();

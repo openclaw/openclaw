@@ -126,6 +126,7 @@ function createCiDetails(
     (gateway) => {
       connection.transition(gateway?.snapshot ?? { client: null, phase: "stopped" });
       reset();
+      // Revoke in-flight request scopes on every connection edge, before later acknowledgments.
       const stop = gateway?.subscribe((snapshot) => {
         if (connection.transition(snapshot)) {
           reset();

@@ -172,7 +172,7 @@ suite.define(() => {
       expect(
         await disclosure.getByText("A new recovery event arrived.", { exact: true }).isVisible(),
       ).toBe(true);
-      await page.keyboard.press("Control+f");
+      await page.keyboard.press("ControlOrMeta+f");
       const search = page.getByRole("textbox", { name: "Search messages", exact: true });
       await search.fill("workspace connection");
       await expect.poll(() => disclosure.count()).toBe(0);

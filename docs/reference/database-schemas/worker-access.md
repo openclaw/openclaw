@@ -6152,8 +6152,11 @@ new worktree operations and joins accepted settlement before worker teardown,
 independently of scheduler cancellation. Registry creation, activity, and lifecycle
 publication use the same transaction and receipt owner. Command lookup retains
 its physical store and selected binding through run-lease admission; replacement
-refuses the run. Source preparation, listing, and ordinary service lookups await
-the existing registry reader. Git and filesystem effects retain SQL-free registry
+refuses the run. Source preparation, listing, and ordinary service lookups use
+the existing read-only worker against committed registry rows, independently of
+the shared-state writer queue. Session binding keeps its exact-row and owner
+fallback in one read transaction. Missing registry reads return empty results
+without creating a database. Git and filesystem effects retain SQL-free registry
 generation guards from the worktree lifecycle owner. Rebinding holds the same
 mutation lease as checkout effects. Registry, snapshot, and lease writers revoke
 affected generations at transaction admission, retain their own commit authority,

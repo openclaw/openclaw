@@ -490,7 +490,12 @@ suite.define(() => {
           ]),
         );
       }
-      await rows.locator(".chat-pr__actions-trigger").click();
+      await rows
+        .getByRole("button", {
+          name: "Actions for pull request synthetic/publication-demo#44",
+          exact: true,
+        })
+        .click();
       await page
         .getByRole("menuitem", {
           name: "Dismiss pull request synthetic/publication-demo#44",

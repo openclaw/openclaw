@@ -52,14 +52,15 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
-  startupJsRequests: 18,
-  // Optimized chat/new captures use 30/27 requests; retain two above the larger route.
-  routeBootJsRequests: 32,
-  // Post-Cron deferral measured 1,582,400 / 1,279,674 B; retain under 0.9% headroom.
-  chatBootJsGzipBytes: 1_590_000,
-  newBootJsGzipBytes: 1_290_000,
+  // Combined deferrals use 7/27/22 requests; retain two per path.
+  startupJsRequests: 9,
+  chatBootJsRequests: 29,
+  newBootJsRequests: 24,
+  // Measured 1,566,022 / 1,119,513 B; retain under 1% headroom.
+  chatBootJsGzipBytes: 1_580_000,
+  newBootJsGzipBytes: 1_130_000,
   startupCssRequests: 1,
-  startupJsGzipBytes: 340_000,
+  startupJsGzipBytes: 339_000,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
@@ -308,7 +309,7 @@ export function evaluateControlUiPerformanceBudgets(
         [
           `${route} boot JS requests`,
           metrics.routeBoot[route].js.requests,
-          budgets.routeBootJsRequests,
+          budgets[`${route}BootJsRequests`],
           "count",
         ],
         [
@@ -458,7 +459,7 @@ export function formatControlUiPerformanceReport(
     for (const route of ["chat", "new"] as const) {
       const boot = metrics.routeBoot[route];
       lines.push(
-        `  ${route} boot JS: ${formatAssetSummary(boot.js)} (${boot.js.gzipBytes - metrics.startup.js.gzipBytes} B beyond initial-entry JS; limits: ${formatRequestCount(budgets.routeBootJsRequests)}, ${budgets[`${route}BootJsGzipBytes`]} B gzip)`,
+        `  ${route} boot JS: ${formatAssetSummary(boot.js)} (${boot.js.gzipBytes - metrics.startup.js.gzipBytes} B beyond initial-entry JS; limits: ${formatRequestCount(budgets[`${route}BootJsRequests`])}, ${budgets[`${route}BootJsGzipBytes`]} B gzip)`,
         `  ${route} boot CSS: ${formatAssetSummary(boot.css)}`,
       );
       if (baseMetrics) {

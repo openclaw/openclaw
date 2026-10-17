@@ -141,7 +141,10 @@ function hydrateCanonicalRepairEntry(row: CanonicalRepairRow): SessionEntry {
   return projectSqliteSessionOwner(entry, row);
 }
 
-function canonicalRepairQuery(database: Pick<OpenClawAgentDatabase, "db">) {
+function canonicalRepairQuery(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  includeSnapshots = true,
+) {
   const db = getSessionKysely(database.db);
   return db
     .selectFrom("session_nodes")
@@ -161,7 +164,7 @@ function canonicalRepairQuery(database: Pick<OpenClawAgentDatabase, "db">) {
       "current_window.primary_conversation_id",
     )
     .selectAll("session_nodes")
-    .select(sessionEntrySnapshotColumns)
+    .$if(includeSnapshots, (query) => query.select(sessionEntrySnapshotColumns))
     .select([
       "current_window_owner.session_key as current_window_owner_session_key",
       "current_window.started_at as current_started_at",
@@ -182,6 +185,7 @@ function canonicalRepairQuery(database: Pick<OpenClawAgentDatabase, "db">) {
 function scanCanonicalSessionFactsFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   selectedKeys?: ReadonlySet<string>,
+  includeSnapshots = true,
 ): {
   facts: CanonicalSessionRepairFact[];
   inventoryToken: string;
@@ -194,7 +198,10 @@ function scanCanonicalSessionFactsFromDatabase(
   >();
   const validSessionKeysById = new Map<string, string[]>();
   const inventoriedSessionKeys = new Set<string>();
-  for (const row of iterateSqliteQuerySync(database.db, canonicalRepairQuery(database))) {
+  for (const row of iterateSqliteQuerySync(
+    database.db,
+    canonicalRepairQuery(database, includeSnapshots),
+  )) {
     inventoriedSessionKeys.add(row.session_key);
     const persistedEntry = parseSessionEntryJson(row);
     if (row.entry_valid === 1 && persistedEntry) {
@@ -386,18 +393,23 @@ export function scanDoctorSessionEntriesTolerant(
 ): number {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    // Eligibility uses hot identity/delivery fields; load cold snapshots only in the visitor pass.
     const eligible = new Set(
-      scanCanonicalSessionFactsFromDatabase(database).facts.map((fact) => fact.sessionKey),
+      scanCanonicalSessionFactsFromDatabase(database, undefined, false).facts.map(
+        (fact) => fact.sessionKey,
+      ),
     );
     let count = 0;
     for (const row of iterateSqliteQuerySync(database.db, canonicalRepairQuery(database))) {
+      const persistedEntry = parseSessionEntryJson(row);
+      // Excluded tombstones still participate in malformed-snapshot refusal.
+      const entry = persistedEntry ?? hydrateCanonicalRepairEntry(row);
       if (!eligible.has(row.session_key) || isInternalSessionEffectsKey(row.session_key)) {
         continue;
       }
-      const entry = parseSessionEntryJson(row);
       visit({
-        entry: entry ?? hydrateCanonicalRepairEntry(row),
-        recoveredFromProjections: entry === null,
+        entry,
+        recoveredFromProjections: persistedEntry === null,
         sessionKey: row.session_key,
       });
       count += 1;

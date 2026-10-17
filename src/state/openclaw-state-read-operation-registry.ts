@@ -1,3 +1,4 @@
+import { worktreeReadOperations } from "../agents/worktrees/registry-read.kernel.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { sessionUpstreamReadOperations } from "../sessions/session-upstream-links.kernel.js";
@@ -23,6 +24,8 @@ const loaders = {
     import("./config-machine-state.read.worker.js").then((m) => m.machineStateReadOperations),
   projects: () =>
     import("../projects/project-registry.kernel.js").then((m) => m.projectRegistryReadOperations),
+  // Cleanup-state reads already require this kernel in the same read-worker graph.
+  worktrees: async () => worktreeReadOperations,
   agentDeletion: () =>
     import("../agents/agent-delete-session-store-safety.kernel.js").then(
       (m) => m.agentDeletionSessionStoreReadOperations,
