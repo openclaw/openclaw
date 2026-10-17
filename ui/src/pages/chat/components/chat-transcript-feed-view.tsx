@@ -240,7 +240,9 @@ function ToolGroup(props: { entry: Extract<Entry, { kind: "tools" }> }) {
             </strong>
             <For each={overview().outcomes} keyed={(outcome) => outcome.kind}>
               {(outcome) => (
-                <span class={`chat-task-feed__outcome chat-task-feed__outcome--${outcome().kind}`}>
+                <span
+                  class={["chat-task-feed__outcome", `chat-task-feed__outcome--${outcome().kind}`]}
+                >
                   {outcome().label}{" "}
                 </span>
               )}
@@ -295,7 +297,7 @@ function FeedEntry(props: { entry: Entry }) {
             markdownOptions={{}}
           />
         ) : (
-          <div class={`chat-task-feed__${props.entry.kind}`}>{props.entry.text}</div>
+          <div class={[`chat-task-feed__${props.entry.kind}`]}>{props.entry.text}</div>
         )}
       </div>
       {props.entry.timestamp !== null && (

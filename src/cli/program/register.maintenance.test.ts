@@ -115,26 +115,29 @@ describe("registered maintenance commands", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it.each([{ args: ["--fix", "--force"], repair: true, force: true, yes: false }])(
-    "dispatches Doctor mutation posture $args",
-    async ({ args, repair, force, yes }) => {
-      await runCli(["doctor", ...args]);
-      expect(doctorCommand).toHaveBeenCalledExactlyOnceWith(
-        runtime,
-        expect.objectContaining({
-          repair,
-          force,
-          yes,
-          workspaceSuggestions: !args.includes("--no-workspace-suggestions"),
-          allowExec: args.includes("--allow-exec"),
-          nonInteractive: args.includes("--non-interactive"),
-        }),
-        undefined,
-      );
-      expect(runDoctorLintCli).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(0);
-    },
-  );
+  it.each([
+    { args: ["--fix", "--force"], repair: true, force: true, yes: false },
+    { args: ["--fix", "--full-integrity-check"], repair: true, force: false, yes: false },
+  ])("dispatches Doctor mutation posture $args", async ({ args, repair, force, yes }) => {
+    await runCli(["doctor", ...args]);
+    expect(doctorCommand).toHaveBeenCalledExactlyOnceWith(
+      runtime,
+      expect.objectContaining({
+        repair,
+        force,
+        yes,
+        workspaceSuggestions: !args.includes("--no-workspace-suggestions"),
+        allowExec: args.includes("--allow-exec"),
+        nonInteractive: args.includes("--non-interactive"),
+      }),
+      undefined,
+    );
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(doctorCommand.mock.calls[0]?.[1].fullIntegrityCheck).toBe(
+      args.includes("--full-integrity-check") ? true : undefined,
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
 
   it("redacts credentials in machine-mode Doctor failures", async () => {
     const token = "sk-abcdefghijklmnopqrstuv";

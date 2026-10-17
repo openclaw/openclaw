@@ -71,6 +71,7 @@ export function CloudWorkersPage() {
       ] as const,
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
+  // Refresh the Gateway profile catalog for the current connection and config receipt.
   createEffect(catalogKey, (key) => {
     const appliedHash = key[3];
     const controller = new AbortController();

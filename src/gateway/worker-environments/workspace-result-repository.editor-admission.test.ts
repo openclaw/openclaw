@@ -15,8 +15,12 @@ import { placements, SESSION_ID, sessionTarget } from "./worker-turn-launcher.te
 import { useRepositoryWorkspaceResultFixture } from "./workspace-result-repository.test-support.js";
 
 // mock-isolation: This fixture clones a local Git origin without GitHub credentials.
-vi.mock("./worker-github-binding.js", () => ({
-  prepareGitHubPublicationFact: async () => undefined,
+vi.mock("./repository-github-identity.js", () => ({
+  prepareRepositoryGitHubIdentity: async (_agentId: string, assertCurrent: () => void) => ({
+    token: undefined,
+    assertSelected: assertCurrent,
+    start: async (start: () => Promise<unknown>) => await start(),
+  }),
 }));
 
 describe("repository workspace editor admission", () => {

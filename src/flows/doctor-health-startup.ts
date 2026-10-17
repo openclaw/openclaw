@@ -158,6 +158,7 @@ export async function prepareDoctorMaintenanceArchives(
 export async function prepareDoctorStateSchema(
   schemas: DoctorDatabasePreflight,
   shouldRepair: boolean,
+  integrityCheck?: "quick" | "full",
 ) {
   if (!shouldRepair || !schemas.pendingMigrations?.some((entry) => entry.kind === "state")) {
     return undefined;
@@ -165,7 +166,7 @@ export async function prepareDoctorStateSchema(
   const { prepareLegacyStateDatabaseSchema } = await import("../infra/state-migrations.doctor.js");
   const { throwIfDoctorStateMigrationRefused } =
     await import("../infra/state-migrations.messages.js");
-  const receipt = await prepareLegacyStateDatabaseSchema(process.env);
+  const receipt = await prepareLegacyStateDatabaseSchema(process.env, integrityCheck);
   throwIfDoctorStateMigrationRefused([receipt]);
   return receipt;
 }

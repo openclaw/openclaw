@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { appendSessionManagerActor } from "../../agents/sessions/session-manager-actor-append.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
@@ -8,7 +8,11 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { observeSessionEntryMaintenanceAgeChanges } from "./session-accessor.sqlite-maintenance-age.js";
-import type { SessionActorAuthority } from "./session-actor-contract.js";
+import type {
+  SessionActor,
+  SessionActorAuthority,
+  SessionActorCommandContext,
+} from "./session-actor-contract.js";
 import { createDurableSessionActorFactory } from "./session-actor-durable.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
@@ -25,6 +29,30 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
+const activity = (
+  commandId: string,
+  updatedAt: number,
+  context: Partial<SessionActorCommandContext> = {},
+): Parameters<SessionActor["patch"]>[0] => ({
+  commandId,
+  phaseId: "turn",
+  reducers: [{ kind: "activity", updatedAt }],
+  ...context,
+});
+const messageAppend = (actor: SessionActor, sessionId: string, message: unknown) => ({
+  kind: "message" as const,
+  input: {
+    scope: {
+      agentId: "main",
+      storePath:
+        actor.target.database.kind === "file" ? actor.target.database.nativeLocation : "unused",
+      sessionKey: actor.target.sessionKey,
+      sessionId,
+    },
+    cwd: "/synthetic",
+    messageJson: JSON.stringify(message),
+  },
+});
 
 it("publishes actor initialization from its absent transaction preimage", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -168,11 +196,7 @@ it.each([false, true])(
       try {
         const beforeEntry = fixture.read();
         const revoked = await actor.patch(
-          {
-            commandId: "durable-revoked-transfer",
-            phaseId: "transfer-revocation",
-            reducers: [{ kind: "activity", updatedAt: 542 }],
-          },
+          activity("durable-revoked-transfer", 542, { phaseId: "transfer-revocation" }),
           {
             assertCurrent() {},
             authorize(stage) {
@@ -196,28 +220,18 @@ it.each([false, true])(
           matches: (before, after) => before?.updatedAt === after?.updatedAt,
         });
         using _ = { [Symbol.dispose]: retained.release };
-        const result = await actor.patch(
-          {
-            commandId: "durable",
-            phaseId: "turn",
-            reducers: [{ kind: "activity", updatedAt: 543 }],
+        const result = await actor.patch(activity("durable", 543), authority, {
+          committed: () => {
+            expect(retained.isCurrent()).toBe(false);
+            expect(ageChanges).toHaveBeenCalledExactlyOnceWith({
+              sessionKey: fixture.scope.sessionKey,
+              entry: expect.objectContaining({ updatedAt: 543 }),
+              previousEntry: expect.objectContaining({ updatedAt: beforeEntry?.updatedAt }),
+            });
           },
-          authority,
-          {
-            committed: () => {
-              expect(retained.isCurrent()).toBe(false);
-              expect(ageChanges).toHaveBeenCalledExactlyOnceWith({
-                sessionKey: fixture.scope.sessionKey,
-                entry: expect.objectContaining({ updatedAt: 543 }),
-                previousEntry: expect.objectContaining({ updatedAt: beforeEntry?.updatedAt }),
-              });
-            },
-          },
-        );
+        });
         expect(result.kind).toBe("committed");
-        if (result.kind !== "committed") {
-          throw new Error("Expected the durable executor to reconstruct its transferred outcome");
-        }
+        assert(result.kind === "committed");
         expect(result.receipt.postimage.transcript.idempotency).toEqual([]);
         expect(result.receipt.postimage.transcript.anchors).toEqual([]);
         expect(actor.snapshot(authority)?.entry?.sessionId).toBe(fixture.scope.sessionId);
@@ -259,20 +273,14 @@ it("recovers a transferred native commit after ordinary reply loss without repla
     seedTransferEntry();
     fault.reply = "lost";
     const result = await actor.patch(
-      {
-        commandId: "lost-transfer-reply",
-        phaseId: "activity",
-        reducers: [{ kind: "activity", updatedAt: 600 }],
-      },
+      activity("lost-transfer-reply", 600, { phaseId: "activity" }),
       authority,
     );
     expect(result).toMatchObject({
       kind: "committed",
       failure: { origin: "response", message: "Ordinary reply lost" },
     });
-    if (result.kind !== "committed") {
-      throw new Error("Expected native transfer evidence to recover the committed outcome");
-    }
+    assert(result.kind === "committed");
     expect(result.receipt.postimage.entry?.skillsSnapshot?.prompt.length).toBeGreaterThan(
       1024 * 1024,
     );
@@ -280,11 +288,7 @@ it("recovers a transferred native commit after ordinary reply loss without repla
     expect(readEntry()?.updatedAt).toBe(600);
     fault.settlementLost = true;
     const retained = await actor.patch(
-      {
-        commandId: "lost-transfer-settlement",
-        phaseId: "activity",
-        reducers: [{ kind: "activity", updatedAt: 602 }],
-      },
+      activity("lost-transfer-settlement", 602, { phaseId: "activity" }),
       authority,
     );
     expect(retained).toMatchObject({
@@ -303,11 +307,7 @@ it("does not publish a candidate when its outcome transfer is incomplete", async
     fault.incompleteOutcomeTransfer = true;
     const observer = { committed: vi.fn() };
     const result = await actor.patch(
-      {
-        commandId: "incomplete-transfer",
-        phaseId: "activity",
-        reducers: [{ kind: "activity", updatedAt: 601 }],
-      },
+      activity("incomplete-transfer", 601, { phaseId: "activity" }),
       authority,
       observer,
     );
@@ -384,9 +384,7 @@ it("installs a cold command and stale preimage without a separate read request",
       reducers: [{ kind: "activity" as const, updatedAt: 601 }],
     };
     const first = await actor.patch(input, authority);
-    if (first.kind !== "committed") {
-      throw new Error("Expected first command to adopt its current preimage");
-    }
+    assert(first.kind === "committed");
     expect(actor.snapshot(authority)).toEqual(first.receipt.postimage);
     retireGeneration();
     let revoked = false;
@@ -411,9 +409,7 @@ it("installs a cold command and stale preimage without a separate read request",
     expect(actor.snapshot(authority)).toBeUndefined();
     delete fault.onExecuted;
     const stale = await actor.patch({ ...input, expected: first.receipt.afterVersion }, authority);
-    if (stale.kind !== "stale-version") {
-      throw new Error("Expected the retired worker version to be stale");
-    }
+    assert(stale.kind === "stale-version");
     expect(stale.postimage.entry?.updatedAt).toBe(601);
     expect(actor.snapshot(authority)).toEqual(stale.postimage);
     const next = await actor.patch(
@@ -506,9 +502,7 @@ it("installs the full append receipt and releases FIFO before retained follow-up
       authority,
     );
     expect(result.kind).toBe("committed");
-    if (result.kind !== "committed") {
-      throw new Error("Expected committed append");
-    }
+    assert(result.kind === "committed");
     expect(result.receipt.commandId).toBe("model-event");
     const installed = actor.snapshot(authority);
     expect(installed).toEqual(result.receipt.postimage);
@@ -539,12 +533,7 @@ it("preserves native commit through worker publication, reply, and observer fail
     let initial = await actor.read(authority);
     fault.workerPublicationFailure = true;
     const workerFailure = await actor.patch(
-      {
-        commandId: "worker-publication",
-        phaseId: "turn",
-        expected: initial.version,
-        reducers: [{ kind: "activity", updatedAt: 122 }],
-      },
+      activity("worker-publication", 122, { expected: initial.version }),
       authority,
     );
     expect(workerFailure).toMatchObject({
@@ -559,12 +548,7 @@ it("preserves native commit through worker publication, reply, and observer fail
       throw new Error("Publication rejected");
     });
     const result = await actor.patch(
-      {
-        commandId: "lost",
-        phaseId: "turn",
-        expected: initial.version,
-        reducers: [{ kind: "activity", updatedAt: 123 }],
-      },
+      activity("lost", 123, { expected: initial.version }),
       authority,
       { committed: observer },
     );
@@ -624,27 +608,14 @@ it("shares actor revisions and isolates explicit policy copies", async () => {
 it("admits tool appends once per transaction boundary without transferring transcript indexes", async () => {
   await withActor(async ({ actor, admissions }) => {
     const initial = await actor.read(authority);
-    const append = {
-      kind: "message" as const,
-      input: {
-        scope: {
-          agentId: "main",
-          storePath:
-            actor.target.database.kind === "file" ? actor.target.database.nativeLocation : "unused",
-          sessionKey: actor.target.sessionKey,
-          sessionId: initial.entry!.sessionId,
-        },
-        cwd: "/synthetic",
-        messageJson: JSON.stringify({
-          role: "toolResult",
-          toolCallId: "call",
-          toolName: "synthetic",
-          content: [{ type: "text", text: "tool output" }],
-          isError: false,
-          timestamp: 1,
-        }),
-      },
-    };
+    const append = messageAppend(actor, initial.entry!.sessionId, {
+      role: "toolResult",
+      toolCallId: "call",
+      toolName: "synthetic",
+      content: [{ type: "text", text: "tool output" }],
+      isError: false,
+      timestamp: 1,
+    });
     admissions.length = 0;
     const result = await actor.appendToolResult(
       { commandId: "tool", phaseId: "turn", append },
@@ -706,33 +677,20 @@ it.each([false, true])(
         actor,
         toolResult,
         assertCurrent: () => authority.assertCurrent(),
-        append: {
-          kind: "message",
-          input: {
-            scope: {
-              agentId: "main",
-              storePath:
-                actor.target.database.kind === "file"
-                  ? actor.target.database.nativeLocation
-                  : "unused",
-              sessionKey: actor.target.sessionKey,
-              sessionId,
-            },
-            cwd: "/synthetic",
-            messageJson: JSON.stringify(
-              toolResult
-                ? {
-                    role: "toolResult",
-                    toolCallId: "prepared-tool",
-                    toolName: "synthetic",
-                    content: [{ type: "text", text: "prepared result" }],
-                    isError: false,
-                    timestamp: 2,
-                  }
-                : { role: "user", content: "prepared input", timestamp: 2 },
-            ),
-          },
-        },
+        append: messageAppend(
+          actor,
+          sessionId,
+          toolResult
+            ? {
+                role: "toolResult",
+                toolCallId: "prepared-tool",
+                toolName: "synthetic",
+                content: [{ type: "text", text: "prepared result" }],
+                isError: false,
+                timestamp: 2,
+              }
+            : { role: "user", content: "prepared input", timestamp: 2 },
+        ),
       });
       expect(result.failure).toBeUndefined();
       expect(result.committed).toMatchObject({
@@ -763,34 +721,21 @@ it("retains rollback state and fences unknown commits until an explicit read", a
       matches: (before, after) => before?.sessionId === after?.sessionId,
     });
     using _ = { [Symbol.dispose]: retained.release };
-    const rejected = await actor.patch(
-      {
-        commandId: "refused",
-        phaseId: "turn",
-        expected: initial.version,
-        reducers: [{ kind: "activity", updatedAt: 123 }],
+    const rejected = await actor.patch(activity("refused", 123, { expected: initial.version }), {
+      assertCurrent() {},
+      authorize(stage) {
+        if (stage === "commit") {
+          throw new Error("Authority revoked");
+        }
       },
-      {
-        assertCurrent() {},
-        authorize(stage) {
-          if (stage === "commit") {
-            throw new Error("Authority revoked");
-          }
-        },
-      },
-    );
+    });
     expect(rejected.kind).toBe("rolled-back");
     const rolledBack = actor.snapshot(authority) ?? (await actor.read(authority));
     expect(rolledBack.entry?.updatedAt).toBe(initial.entry?.updatedAt);
     expect(retained.isCurrent()).toBe(true);
     fault.reply = "unknown";
     const unknown = await actor.patch(
-      {
-        commandId: "unknown",
-        phaseId: "turn",
-        expected: rolledBack.version,
-        reducers: [{ kind: "activity", updatedAt: 456 }],
-      },
+      activity("unknown", 456, { expected: rolledBack.version }),
       authority,
     );
     expect(unknown.kind).toBe("unknown");
@@ -870,9 +815,7 @@ it("refuses cancelled admission while an accepted phase settles its committed re
     continuePhase.resolve();
     const result = await operation;
     expect(result.kind).toBe("committed");
-    if (result.kind !== "committed") {
-      throw new Error("Expected accepted commit");
-    }
+    assert(result.kind === "committed");
     expect(result.receipt.postimage.entry?.updatedAt).toBe(790);
     expect(commands).toEqual(["session.actor.read", "session.actor.patch"]);
   });

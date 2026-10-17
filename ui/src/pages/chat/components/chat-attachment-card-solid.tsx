@@ -42,7 +42,9 @@ export function CompactAttachmentCard(
   );
 }
 
-export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
+export function AttachmentCardHeader(
+  props: AttachmentCardHeaderOptions & { expandRef?: (element: HTMLButtonElement) => void },
+) {
   const view = createMemo(() => prepareAttachmentCardHeader(props, t));
   return (
     <div
@@ -129,6 +131,7 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
                 "chat-assistant-attachment-card__action--labeled": !view().compactPreview,
               },
             ]}
+            ref={props.expandRef}
             aria-label={view().expandLabel}
             title={view().expandLabel}
             onClick={() => props.onExpand?.()}

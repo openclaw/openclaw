@@ -111,7 +111,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     ensureInitialData: () => queueMicrotask(() => void load()),
     onPageActivation: () => void load(),
   });
-
+  // Config receipts and permissions invalidate the Gateway environment inventory.
   createEffect(
     () =>
       [

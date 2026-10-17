@@ -160,6 +160,7 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
     () => context,
     () => props.host,
   );
+  // Route changes retire the cron owner's transcript reads and retarget Gateway job queries.
   createEffect(
     () => props.routeSearch ?? "",
     (search) => page.setRouteSearch(search),

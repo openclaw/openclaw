@@ -10,10 +10,122 @@ import { preflightOpenClawDatabaseSchemas } from "../state/openclaw-database-pre
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
+import { createCacheExpiryIndexPhysicalDrift } from "../state/sqlite-index-drift.test-support.js";
 import { assertSqliteMigrationScopePreserved } from "../state/sqlite-migration-scope.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { restoreDoctorMigrationBackup } from "./doctor-migration-backup-restore.js";
 import { prepareDoctorDatabaseMigrations } from "./doctor-schema-migrations.js";
+
+it("refuses damaged indexes before same-version additive repair with quick requested", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    openOpenClawStateDatabase({ env: state.env });
+    const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
+    await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+      {
+        using database = new DatabaseSync(pathname);
+        ensureOpenClawAgentDatabaseSchema(database, {
+          agentId: "main",
+          path: pathname,
+          env: state.env,
+        });
+        database.exec("ALTER TABLE session_nodes DROP COLUMN project_id");
+      }
+      createCacheExpiryIndexPhysicalDrift(pathname);
+      using database = new DatabaseSync(pathname);
+      expect(() =>
+        ensureOpenClawAgentDatabaseSchema(database, {
+          agentId: "main",
+          path: pathname,
+          env: state.env,
+          integrityCheck: "quick",
+        }),
+      ).toThrow(/integrity_check.*idx_agent_cache_expiry/su);
+      expect(database.prepare("PRAGMA table_info(session_nodes)").all()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "project_id" })]),
+      );
+      expect(database.prepare("SELECT value_json FROM cache_entries NOT INDEXED").all()).toEqual([
+        { value_json: "{}" },
+      ]);
+    });
+  });
+});
+
+it.each([undefined, "full"] as const)(
+  "uses the requested upgrade integrity coverage before changing the schema (%s)",
+  async (check) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      openOpenClawStateDatabase({ env: state.env });
+      const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
+      fs.mkdirSync(path.dirname(pathname), { recursive: true });
+      {
+        using database = new DatabaseSync(pathname);
+        database.exec(
+          fs.readFileSync(
+            new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
+            "utf8",
+          ),
+        );
+        database.exec(`
+          PRAGMA user_version = 26;
+          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+          VALUES ('primary', 'agent', 26, 'main', 1, 1);
+          DROP INDEX idx_agent_cache_updated;
+          CREATE INDEX idx_agent_cache_updated ON cache_entries(scope, key, updated_at);
+          INSERT INTO cache_entries (scope, key, value_json, updated_at)
+          VALUES ('retained', 'history', '"untouched"', 1);
+        `);
+        database.enableDefensive?.(false);
+        database.exec("PRAGMA writable_schema = ON");
+        database
+          .prepare("UPDATE sqlite_schema SET sql = ? WHERE name = 'idx_agent_cache_updated'")
+          .run(
+            "CREATE INDEX idx_agent_cache_updated ON cache_entries(scope, updated_at DESC, key)",
+          );
+        database.exec("PRAGMA writable_schema = OFF");
+      }
+      const migration = {
+        kind: "agent" as const,
+        agentId: "main",
+        path: pathname,
+        foundVersion: 26,
+        supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+      };
+      const maintenance = createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent: () => {},
+      });
+      try {
+        const result = maintenance.run(() =>
+          prepareDoctorDatabaseMigrations({
+            env: state.env,
+            check,
+            pendingDatabasePaths: [pathname],
+            pendingMigrations: [migration],
+            databasePaths: [pathname],
+            agentDatabaseTargets: [
+              { agentId: "main", path: pathname, realPath: pathname, source: "disk" },
+            ],
+          }),
+        );
+        if (check === "full") {
+          await expect(result).rejects.toThrow(/integrity_check.*idx_agent_cache_updated/su);
+        } else {
+          await expect(result).resolves.toMatchObject({ warnings: [] });
+        }
+      } finally {
+        await maintenance.close();
+      }
+      using database = new DatabaseSync(pathname, { readOnly: true });
+      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        check === "full" ? 26 : OPENCLAW_AGENT_SCHEMA_VERSION,
+      );
+      expect(database.prepare("SELECT value_json FROM cache_entries").get()?.value_json).toBe(
+        '"untouched"',
+      );
+    });
+  },
+);
 
 it("excludes an older database that is both pending and indeterminate from version receipts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

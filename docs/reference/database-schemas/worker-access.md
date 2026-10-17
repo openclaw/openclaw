@@ -110,10 +110,13 @@ runtime generation, environment, working directory, and spawn-broker owner.
 Compatible requests serialize on their slot and pass their database identity,
 command, and artifact-preserving scope on every request. Closing a caller scope
 cancels and joins its reads; it does not close an idle pooled process. Each read
-releases its native readers before its reply. Idle processes retire after one
-minute, and failed or cancelled processes retire before another request reuses
-that slot. Runtimes without qualified native SQLite close still require process
-retirement before releasing snapshot custody.
+releases its native readers before its reply. These independent processes do not
+receive the Gateway's shared-memory writer invalidations, so their local admission
+facts retire with the final native reader. Canonical auth reads can use the compact
+owner-supplied schema projection; other reads perform native admission. Idle
+processes retire after one minute, and failed or cancelled processes retire before
+another request reuses that slot. Runtimes without qualified native SQLite close
+still require process retirement before releasing snapshot custody.
 Unconfirmed native cleanup quarantines its slot without releasing that custody.
 Reads use remaining healthy capacity; four quarantined slots reject visibly
 instead of launching another process or waiting indefinitely.
@@ -182,9 +185,10 @@ agent store. Canceling a discovery request stops its wait, not schema preparatio
 
 The Gateway is the single runtime owner of its databases. Load physical format,
 schema, integrity, and canonical-index facts through the shared admission owner,
-then reuse them across handles and workers while admission retains a live
-reference. An idle reopen can reuse facts retained by another handle; closing
-the final handle retires those facts, so the next open admits the database again.
+then reuse them across handles and workers for the process lifetime. Closing
+the final handle retires its active generation, row caches, and pathname bindings,
+while explicitly process-lived physical facts remain in descriptor custody.
+Reopen identifies the file and installs those facts into a new active generation.
 Replacement files also require new admission; migration and repair owners publish
 replacement facts after committed DDL. Doctor and explicit verification retain
 their checks. See [integrity admission](/reference/database-schemas/integrity-and-recovery).
@@ -225,7 +229,8 @@ handles and settling callers. This covers durable COMMIT followed by a crash
 before receipt publication, including writes without a separate domain grant.
 The operation owner still handles unknown-outcome recovery.
 Quarantine and schema changes still invalidate their admission facts and scoped
-receipts. Final-handle closure still retires facts for physical-file readmission.
+receipts. Final-handle closure retires row facts while retaining physical validation
+and owner-published quarantine decisions.
 Canonical validation compares admitted catalog facts with the pending-table DDL
 from the schema source; fresh workers do not bootstrap a comparison database.
 Receipt metadata follows retained session scopes rather than all deleted sessions;
@@ -4271,6 +4276,15 @@ another registered path observes the executor's single maintenance claim. Alias
 registrations retain cleanup locators without creating independent maintenance
 owners, so a nested scope cannot close an executor retained by its parent.
 
+Losing an already-open native execution worker retires that native generation,
+not the logical database references held by unrelated active chats. The failed
+operation is returned without replay, and previously captured native claims stay
+invalid. Later work can open a replacement only after native exit and lease
+cleanup settle, under the same physical-file constraints and current caller
+authority. Initial opening failures retain their conservative logical retirement;
+explicit database or shared-state revocation remains terminal. Worker-backed
+adapters still receive their terminal-loss notification after accepted work settles.
+
 Personal skill-library catalog, revision disclosure, and fresh selection reads use
 the shared-state read worker. The host captures the physical store, profile and
 role authority before yielding; prepared defaults and activation check the
@@ -4616,9 +4630,10 @@ tombstones in one synchronous transaction. Transaction and commit grants recheck
 current caller authority. Only acknowledged results reach the Gateway broadcast;
 unknown outcomes never replay or fall back to host SQL. The request lifecycle joins
 accepted persistence before database teardown, independently of scheduler
-cancellation. Incognito uses the memory actor; durable atomic reset retains its
-existing row kernel. No
-schema, SDK, retention, durability, or update migration is required.
+cancellation. Incognito uses the memory actor. Durable single and batched resets
+clear the card in their existing worker transaction, preserving reset atomicity;
+the shared row kernel also serves exclusive maintenance and Doctor repair.
+No schema, SDK, retention, durability, or update migration is required.
 
 Native creation, adoption, compaction, and child-spawn signals use the existing shared-state
 writer. Their callers join recording before releasing their lifecycle; embedded
@@ -5144,20 +5159,20 @@ before deleting its own link; uncertain outcomes are never replayed. Session del
 removes its upstream link and signal state in the existing cleanup transaction,
 capturing one physical store and revoking ambient reads before yielding. The released
 synchronous upsert/delete SDK methods and native initializer's `link` method remain
-deprecated compatibility paths until the next Plugin SDK major. Schemas, stored
+deprecated compatibility paths through December 31, 2026. Schemas, stored
 data, retention, and update behavior are unchanged. See
 [await session upstream links](/plugins/sdk-migration/how-to-migrate#await-session-upstream-links).
 
-Gateway branch listing and fork selection prepare upstream links through the existing shared-state
-reader. Rewind and branch switch need no preliminary link lookup. Local history
-mutations check current link absence at transaction and commit; repository and
-native-harness preparation also retain their effect-boundary checks. These guards
-keep the original physical shared store and use current read-only admission, rather
-than opening a writable store for each lookup. A failed read is not link absence.
-The synchronous final-authority reads remain necessary while released SDK writers can change links without publishing complete revocation
-facts. Retiring them requires the next Plugin SDK major's writer cutover and
-complete source-revocation publication. Rollback and accepted-write settlement
-retain their original custody after forward authority is revoked.
+Gateway branch listing, fork, rewind, and branch switch prepare upstream links through
+the existing shared-state reader. Local history mutations check current link absence
+at their existing transaction, commit, repository, and native-harness effect boundaries
+without SQL. The preparation subscribes to committed presence facts before reading;
+a late read cannot replace a newer writer receipt. Upsert, delete, settlement, and
+session cleanup publish through the shared row kernels, including the deprecated
+synchronous SDK methods. These guards retain the captured admission, including its
+promotion when an initially absent database is created. A failed read or unknown
+write outcome is not link absence. Rollback and accepted-write
+settlement retain their original custody after forward authority is revoked.
 
 The reader connection retains one exact row or absence at the existing admitted
 read revision; writer receipts, schema changes, and close invalidate

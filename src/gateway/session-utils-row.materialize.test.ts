@@ -13,9 +13,11 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
+import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { readRecentSessionUsageFromTranscriptAsync } from "./session-transcript-usage.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import {
+  buildGatewaySessionRow,
   materializeSessionRow,
   presentSessionRow,
   readSessionRowInputs,
@@ -392,6 +394,36 @@ afterEach(() => {
   resetConfigRuntimeState();
   resetPluginRuntimeStateForTest();
   vi.restoreAllMocks();
+});
+
+test("projects the configured reasoning default a session inherits", () => {
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: { reasoningDefault: "stream" },
+      entries: { main: {}, ops: { reasoningDefault: "on" } },
+    },
+  };
+  setRuntimeConfigSnapshot(cfg);
+  setActivePluginRegistry(createEmptyPluginRegistry());
+  const row = (agentId: string) => {
+    const key = `agent:${agentId}:main`;
+    return buildGatewaySessionRow({
+      cfg,
+      agentId,
+      key,
+      entry: BASE_ENTRY,
+      store: { [key]: BASE_ENTRY },
+      storePath: "",
+      now: START,
+      skipTranscriptUsageFallback: true,
+      lightweightListRow: true,
+    });
+  };
+
+  const opsRow = row("ops");
+  expect(opsRow.reasoningDefault).toBe("on");
+  expect(buildGatewaySessionSnapshot({ sessionRow: opsRow }).reasoningDefault).toBe("on");
+  expect(row("main").reasoningDefault).toBe("stream");
 });
 
 test("preserves complete base rows across time and caller presentation fixtures", async () => {

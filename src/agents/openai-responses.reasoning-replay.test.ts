@@ -84,7 +84,7 @@ function buildAssistantMessage(params: {
   };
 }
 
-async function runAbortedOpenAIResponsesStream(params: {
+async function captureOpenAIResponsesPayload(params: {
   messages: Array<
     AssistantMessage | ToolResultMessage | { role: "user"; content: string; timestamp: number }
   >;
@@ -97,9 +97,7 @@ async function runAbortedOpenAIResponsesStream(params: {
   usePolicyReplayDefault?: boolean;
   model?: Model<"openai-responses">;
 }) {
-  // Abort after payload capture so tests inspect serialization without network I/O.
-  const controller = new AbortController();
-  controller.abort();
+  // Stop at payload capture so tests inspect serialization without network I/O.
   let payload: Record<string, unknown> | undefined;
 
   const responseStream = stream(
@@ -114,14 +112,19 @@ async function runAbortedOpenAIResponsesStream(params: {
       ...(params.usePolicyReplayDefault
         ? {}
         : { replayResponsesItemIds: params.replayResponsesItemIds ?? true }),
-      signal: controller.signal,
       onPayload: (nextPayload: unknown) => {
         payload = nextPayload as Record<string, unknown>;
+        throw new Error("stop after payload capture");
       },
     } as never,
   );
 
-  await responseStream.result();
+  const result = await responseStream.result();
+  if (!payload) {
+    throw new Error(
+      `Provider payload callback was not invoked; stream ended with ${result.stopReason}: ${result.errorMessage ?? "no error"}`,
+    );
+  }
   const input = extractInput(payload);
   return {
     input,
@@ -158,7 +161,7 @@ describe("openai-responses reasoning replay", () => {
       timestamp: Date.now(),
     };
 
-    const { input, types } = await runAbortedOpenAIResponsesStream({
+    const { input, types } = await captureOpenAIResponsesPayload({
       model: buildStorelessCustomModel(),
       usePolicyReplayDefault: true,
       messages: [
@@ -230,7 +233,7 @@ describe("openai-responses reasoning replay", () => {
       timestamp: Date.now(),
     };
 
-    const { input, types } = await runAbortedOpenAIResponsesStream({
+    const { input, types } = await captureOpenAIResponsesPayload({
       messages: [
         {
           role: "user",
@@ -283,7 +286,7 @@ describe("openai-responses reasoning replay", () => {
         ],
       });
 
-      const { input, types } = await runAbortedOpenAIResponsesStream({
+      const { input, types } = await captureOpenAIResponsesPayload({
         messages: [
           { role: "user", content: "Hi", timestamp: Date.now() },
           assistantWithText,
@@ -320,7 +323,7 @@ describe("openai-responses reasoning replay", () => {
       ],
     });
 
-    const { input } = await runAbortedOpenAIResponsesStream({
+    const { input } = await captureOpenAIResponsesPayload({
       messages: [
         { role: "user", content: "Hi", timestamp: Date.now() },
         assistantWithPhaseOnly,
