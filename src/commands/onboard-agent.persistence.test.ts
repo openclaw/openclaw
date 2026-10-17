@@ -19,10 +19,7 @@ import { readTranscriptEventRows } from "../config/sessions/session-accessor.sql
 import { appendTranscriptEventInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { runSessionStartupMigration } from "../config/sessions/startup-migration.js";
 import { resetAgentRunRegistryForTest } from "../infra/agent-run-registry.js";
-import {
-  completeAgentDeletionJournalInDatabase,
-  readAgentDeletionJournal,
-} from "../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -33,7 +30,10 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import {
+  beginAgentDeletionJournal,
+  readAgentDeletionJournal,
+} from "../test-utils/agent-deletion-journal.js";
 import { readAgentProvenance } from "../test-utils/agent-provenance.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { ensureOnboardingAgent } from "./onboard-agent.js";

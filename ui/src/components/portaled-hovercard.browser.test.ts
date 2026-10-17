@@ -1,5 +1,5 @@
 import { describe, expect, it, onTestFinished } from "vitest";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 
 // Root test shards also collect browser files under jsdom, which has no layout or hit-testing.
 const hasPopoverApi = typeof HTMLElement.prototype.showPopover === "function";
@@ -88,7 +88,7 @@ describe.skipIf(!hasPopoverApi)("portaled hovercard placement", () => {
     const card = createPortaledHovercard("placement-preview", "placement-preview");
     card.style.cssText = `position: fixed; inset: auto; width: 294px; height: ${cardHeight}px;
       box-sizing: border-box; padding: 0; margin: 0; border: 0;`;
-    const controller = new PortaledHovercardController(() => controller.reset());
+    const controller = createPortaledHovercardOwner(() => controller.reset());
     onTestFinished(() => {
       controller.reset();
       trigger.remove();

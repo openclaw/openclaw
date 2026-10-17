@@ -159,6 +159,11 @@ export function captureAsyncWorkTracker(): typeof trackAsyncWork {
 
 /** Starts work its caller does not own, so the caller's scope neither waits for it nor closes under it. */
 export function runOutsideAsyncWorkScope<T>(run: () => T): T {
+  if (currentWorkScope.getStore() === undefined) {
+    return currentWorkScopeAncestry.getStore() === undefined
+      ? run()
+      : currentWorkScopeAncestry.exit(run);
+  }
   return currentWorkScope.exit(() => currentWorkScopeAncestry.exit(run));
 }
 

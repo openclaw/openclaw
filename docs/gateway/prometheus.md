@@ -104,6 +104,9 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_rpc_requests_total`                     | counter   | `method`                                                                                  |
 | `openclaw_models_list_requests_total`                     | counter   | `client_kind`, `source`, `view`, `scope`, `refresh`, `prepared_only`                      |
 | `openclaw_sessions_list_requests_total`                   | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`                            |
+| `openclaw_sessions_list_response_bytes_total`             | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`, `rows_outcome`            |
+| `openclaw_chat_history_requests_total`                    | counter   | `client_kind`, `source`, `shape`, `limit_bucket`, `outcome`                               |
+| `openclaw_chat_history_response_bytes_total`              | counter   | `client_kind`, `source`, `shape`, `limit_bucket`, `outcome`                               |
 | `openclaw_cron_list_requests_total`                       | counter   | `client_kind`, `source`, `scope`, `compact`, `page`                                       |
 | `openclaw_gateway_rpc_first_response_seconds`             | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_response_bytes`                     | histogram | `method`                                                                                  |
@@ -275,6 +278,29 @@ primary filter family: `search`, `children` (`spawnedBy`), `owner` (`ownerId`),
 Other selection and presentation options do not add labels. Counts include
 later-rejected requests and export no filter values, limits, offsets, or revision
 tokens. Each observed combination uses one sample in the existing shared cap.
+
+`openclaw_sessions_list_response_bytes_total` reuses these labels and adds
+`rows_outcome`: `unchanged` for `rowsUnchanged`, `delta` for `rowsDelta`,
+`full-no-base` for full sidebar replies when the request omits `ifRowsRevision`,
+or `full-with-base` when it supplies a revision. `full-with-base` includes
+stale or evicted bases and the rare case where every row changed.
+Non-sidebar row modes use `not-sidebar`. Diagnostics derives these labels from
+the request and existing response fields without changing the protocol payload.
+
+`openclaw_chat_history_requests_total` counts successful `chat.history` replies;
+`openclaw_chat_history_response_bytes_total` sums their encoded response bytes.
+Both use `client_kind` and `source` as above. `shape` uses the first matching
+selector: `receipt` for `inputRunIds`, `pending` for `pendingBefore`, `older` for
+a positive `offset`, `cursor` for `cursor`, `anchor` for `messageId`, otherwise
+`tail`. `limit_bucket` is
+`<=20`, `<=80`, `<=200`, or `>200`, with an omitted limit using the handler's
+default of 200. `outcome` is the response `kind` (`delta` or `reset`), or `page`
+for a normal history page. These counters exclude rejected, failed, and unsent
+responses; `chat.startup` remains separate. The byte counters reuse the exact
+UTF-8 JSON frame size from `openclaw_gateway_rpc_response_bytes`, before transport
+framing or compression, without another serialization or per-row work. No cursor,
+offset, identifier, text, or raw limit values become labels; each observed
+combination uses one sample in the shared cap.
 
 `openclaw_cron_list_requests_total` uses the same `client_kind` and `source`
 attribution for cron reads. `scope` records parameter presence: `session` when

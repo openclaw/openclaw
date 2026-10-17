@@ -26,6 +26,7 @@ import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-wo
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
+import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
@@ -230,7 +231,7 @@ export function enqueueSessionEventForHost(
     options.expectedTarget?.assertCurrent?.();
     const currentConfig = getSessionEventRuntimeConfig();
     resolveConfiguredAgentId(currentConfig, agentId);
-    if (isAgentDeletionBlocked(agentId)) {
+    if (isAgentDeletionBlocked(agentId, { env })) {
       throw new Error("Session event agent is being deleted");
     }
     if (
@@ -467,6 +468,7 @@ export function enqueueSessionEventForHost(
   void runWithoutOwnedSessionTranscriptWrites(() =>
     runWithGatewayDetachedWorkContinuation(async () => {
       admissionStarted = true;
+      await readAgentDeletionJournalStatusInWorker(agentId, { env }, signal);
       assertOwnerCurrent();
       ({ replyRunRegistry } = await import("./reply-run-registry.js"));
       const { dispatchInboundMessageWithRoutedChannelDispatcher } = await import("../dispatch.js");

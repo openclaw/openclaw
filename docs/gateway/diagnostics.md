@@ -821,7 +821,24 @@ include `source`, `rowMode` (`compact` or `full`), `limit`, `offset`, and
 `filterKind`. The caller source is a bounded Control UI tag or `unspecified`;
 filter kinds contain parameter names, never search text, identities, or paths.
 The optimized WebSocket journal also records fast `sessions.list` responses of
-at least 200 KiB. Metric labels remain unchanged.
+at least 200 KiB. `openclaw_sessions_list_requests_total` counts requests by
+`client_kind`, `source`, `caller_source`, `row_mode`, and `filter`;
+`openclaw_sessions_list_response_bytes_total` attributes successful response
+bytes to the same dimensions plus `rows_outcome` (`unchanged`, `delta`,
+`full-no-base`, `full-with-base`, or `not-sidebar`). Full sidebar replies use
+`full-no-base` when the request omits `ifRowsRevision`; `full-with-base` covers
+stale or evicted bases and the rare case where every row changed. Attribution
+uses the request and existing response fields without changing the protocol payload.
+
+`openclaw_chat_history_requests_total` and
+`openclaw_chat_history_response_bytes_total` attribute successful `chat.history`
+responses by `client_kind`, `source`, `shape`, `limit_bucket`, and `outcome`.
+Shapes distinguish receipt recovery, pending-input paging, older pages, cursor
+reads, message-anchored windows, and tail reads; outcomes are `delta`, `reset`, or
+`page`. Both byte counters
+reuse the encoded frame size above without serializing again or inspecting rows.
+Only bounded labels are recorded, never parameter values, identifiers, or text.
+See [Prometheus metrics](/gateway/prometheus) for bucket and precedence rules.
 
 `openclaw_gateway_rpc_handler_heap_delta_bytes` samples main-thread
 `process.memoryUsage().heapUsed` immediately around handler execution. A sample

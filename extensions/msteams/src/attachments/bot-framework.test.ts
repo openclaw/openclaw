@@ -1,6 +1,8 @@
+import { useAttachmentTestTransport } from "./transport.test-support.js";
+const installAttachmentTestTransport = useAttachmentTestTransport();
 import { expectDefined } from "@openclaw/normalization-core";
 import { saveResponseMedia } from "openclaw/plugin-sdk/media-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getMSTeamsRuntime, setMSTeamsRuntime } from "../runtime.js";
 import {
   downloadMSTeamsBotFrameworkAttachments as downloadAttachments,
@@ -8,12 +10,9 @@ import {
 } from "./bot-framework.js";
 import type { MSTeamsAccessTokenProvider } from "./types.js";
 
-vi.mock("node:dns/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:dns/promises")>()),
-  lookup: async () => ({ address: "93.184.216.34" }),
-}));
-
-afterEach(() => vi.unstubAllGlobals());
+beforeEach(() => {
+  installAttachmentTestTransport({ resolveFn: async () => ({ address: "93.184.216.34" }) });
+});
 
 function downloadMSTeamsBotFrameworkAttachments({
   fetchFn,

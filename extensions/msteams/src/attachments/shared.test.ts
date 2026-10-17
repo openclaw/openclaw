@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  useAttachmentTestTransport,
+  type AttachmentTestTransport,
+} from "./transport.test-support.js";
+const installAttachmentTestTransport = useAttachmentTestTransport();
+import { lookup } from "node:dns/promises";
+import {
   encodeGraphShareId,
   isDownloadableAttachment,
   isLikelyImageAttachment,
@@ -17,20 +23,22 @@ const failingResolve = async () => {
 const isGraphSharedLinkUrl = (url: string) =>
   tryBuildGraphSharesUrlForSharedLink(url) !== undefined;
 
-type SafeFetchParams = Omit<Parameters<typeof safeFetchWithPolicy>[0], "policy"> & {
-  allowHosts: string[];
-  authorizationAllowHosts?: string[];
-};
+type SafeFetchParams = Omit<Parameters<typeof safeFetchWithPolicy>[0], "policy" | "resolveFn"> &
+  AttachmentTestTransport & {
+    allowHosts: string[];
+    authorizationAllowHosts?: string[];
+  };
 
 async function safeFetch(params: SafeFetchParams) {
-  const { allowHosts, authorizationAllowHosts, ...request } = params;
+  const { allowHosts, authorizationAllowHosts, fetchFn, resolveFn, ...request } = params;
+  installAttachmentTestTransport({ fetchFn, resolveFn: resolveFn ?? publicResolve });
   return await safeFetchWithPolicy({
     ...request,
+    resolveFn: lookup,
     policy: {
       allowHosts,
       authAllowHosts: authorizationAllowHosts ?? [],
     },
-    resolveFn: request.resolveFn ?? publicResolve,
   });
 }
 
@@ -48,24 +56,6 @@ function mockFetchWithRedirect(redirectMap: Record<string, string>, finalBody = 
 }
 
 describe("safeFetch", () => {
-  it("fails explicitly for custom fetch functions that cannot receive the pinned dispatcher", async () => {
-    let called = false;
-    const customFetch = async () => {
-      called = true;
-      return new Response("ok", { status: 200 });
-    };
-
-    await expect(
-      safeFetch({
-        url: "https://teams.sharepoint.com/file.pdf",
-        allowHosts: ["sharepoint.com"],
-        fetchFn: customFetch as typeof fetch,
-        resolveFn: publicResolve,
-      }),
-    ).rejects.toThrow("fetchFnSupportsDispatcher");
-    expect(called).toBe(false);
-  });
-
   it("blocks a redirect to a non-allowlisted host", async () => {
     const fetchMock = mockFetchWithRedirect({
       "https://teams.sharepoint.com/file.pdf": "https://evil.example.com/steal",

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sanitizeEnvVars } from "../agents/sandbox/sanitize-env-vars.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as pluginConfigState from "../plugins/config-state.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
@@ -353,6 +354,22 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(
       resolveProviderAuthLookupMaps({ config: { plugins: {} } }).authEvidenceMap["workspace-cloud"],
     ).toBeUndefined();
+  });
+
+  it("reuses lookup maps only for immutable configs", () => {
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(
+      metadataSnapshot(LOAD_PATH_PROVIDER_PLUGIN),
+    );
+    const frozen: OpenClawConfig = Object.freeze({ plugins: Object.freeze({}) });
+    expect(resolveProviderAuthLookupMaps({ config: frozen })).toBe(
+      resolveProviderAuthLookupMaps({ config: frozen }),
+    );
+
+    // A mutable config can change in place, so every read recomputes its maps.
+    const mutable: OpenClawConfig = { plugins: {} };
+    expect(resolveProviderAuthLookupMaps({ config: mutable })).not.toBe(
+      resolveProviderAuthLookupMaps({ config: mutable }),
+    );
   });
 
   it("keeps explicitly trusted workspace plugin auth evidence", () => {

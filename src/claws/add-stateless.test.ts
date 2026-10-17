@@ -4,16 +4,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
-import {
-  completeAgentDeletionJournalInDatabase,
-  readAgentDeletionJournal,
-} from "../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import {
+  beginAgentDeletionJournal,
+  readAgentDeletionJournal,
+} from "../test-utils/agent-deletion-journal.js";
 import { applyClawAddPlanStateless } from "./add-stateless.js";
 import { buildGatewayClawAddPlan } from "./gateway-add-plan.js";
 import { CLAW_MCP_REF_SCHEMA_VERSION, type PersistedClawMcpServerRef } from "./mcp-records.js";

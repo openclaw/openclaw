@@ -8,6 +8,7 @@ import { i18n, t } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
 import { clearLinkPreviews, loadLinkPreview } from "../lib/link-preview.ts";
 import { anchorFromNavigationEvent, composedParent } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { subscribeToSharedRequest } from "../lib/shared-request-subscription.ts";
 import "../styles/link-reader-hovercard.css";
 import { linkReaderErrorMessage } from "./link-reader-error.ts";
@@ -38,7 +39,7 @@ import {
   type PageHoverTarget,
   type LinkReaderTarget,
 } from "./link-reader-target.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 
 registerLinkReaderEnglish();
 
@@ -219,7 +220,7 @@ export class HovercardOwner {
   // the portaled card (e.g. clicking the title link) can hold it open, so a
   // pointer-driven open still fully releases on mouse-out (see handleCardPointerLeave).
   private activeTrigger: "focus" | "pointer" | null = null;
-  private readonly hovercard = new PortaledHovercardController(() => this.close());
+  private readonly hovercard = createPortaledHovercardOwner(() => this.close());
   private stopI18n: (() => void) | null = null;
   private previewRequest: {
     controller: AbortController;
@@ -517,9 +518,12 @@ export class HovercardOwner {
     if (existing) {
       this.hovercard.position();
     } else {
-      card.addEventListener("pointerleave", this.handleCardPointerLeave);
+      const stopPointerLeave = listen(card, "pointerleave", this.handleCardPointerLeave);
       this.hovercard.markTrigger(anchor);
-      this.hovercard.mount(anchor, card, "vertical", true, () => disposePreview(card));
+      this.hovercard.mount(anchor, card, "vertical", true, () => {
+        stopPointerLeave();
+        disposePreview(card);
+      });
     }
   }
 

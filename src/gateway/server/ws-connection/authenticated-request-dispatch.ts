@@ -142,7 +142,10 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       req.method,
       getMethodRegistry,
       extraHandlers,
-      req.method === "models.list" || req.method === "sessions.list" || req.method === "cron.list"
+      req.method === "models.list" ||
+        req.method === "sessions.list" ||
+        req.method === "cron.list" ||
+        req.method === "chat.history"
         ? {
             clientKind: client.connect.client.id,
             source: sendResponse === send ? "wire" : "internal",
@@ -315,6 +318,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           diagnostics?.response(
             sendResult.kind === "sent" ? (responseOk ? "ok" : "error") : "unavailable",
             sendResult.kind === "sent" ? sendResult.bytes : undefined,
+            { payload, params: req.params },
           );
           let logMeta = meta;
           if (

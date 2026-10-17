@@ -42,14 +42,16 @@ import { registerMemoryCapability } from "../../plugins/memory-state.js";
 import { getPluginRegistryState } from "../../plugins/runtime-state.js";
 import { disposePluginRegistryInstances } from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
-import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
 import * as agentDatabases from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecutions from "../../state/openclaw-agent-execution.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
-import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
+import {
+  beginAgentDeletionJournal,
+  readAgentDeletionJournal,
+} from "../../test-utils/agent-deletion-journal.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
