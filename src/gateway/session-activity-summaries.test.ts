@@ -108,6 +108,33 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       completeModel: complete,
     });
 
+  const holdCompletion = () => {
+    const completion = createDeferred<ReturnType<typeof result>>();
+    const started = createDeferred();
+    complete.mockImplementationOnce(() => {
+      started.resolve();
+      return withinTest(completion.promise, testSignal);
+    });
+    return { completion, started };
+  };
+
+  const describedRecap = (state: string, text: string) => ({
+    session: { key: target.key, sessionId: scope.sessionId, activitySummary: { state, text } },
+  });
+
+  const seedConversation = async (
+    session: typeof scope,
+    content: string,
+    entry: Partial<SessionEntry> = {},
+    eventId = `event-${session.sessionKey}`,
+  ) => {
+    await upsertSessionEntryCore(session, { sessionId: session.sessionId, updatedAt: 1, ...entry });
+    await persistSessionTranscriptTurn(session, {
+      messages: [{ eventId, message: { role: "user", content } }],
+      touchSessionEntry: false,
+    });
+  };
+
   const awaitPublication = async (
     start: () => unknown,
     ready = () => view()?.state === "current",
@@ -186,15 +213,9 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         sessionKey: key,
         sessionId: entry?.sessionId ?? key.replaceAll(":", "-"),
       };
-      await upsertSessionEntryCore(excluded, {
-        sessionId: excluded.sessionId,
+      await seedConversation(excluded, "Private work", {
         lifecycleRevision: "lifecycle-1",
-        updatedAt: 1,
         ...entry,
-      });
-      await persistSessionTranscriptTurn(excluded, {
-        messages: [{ eventId: `event-${key}`, message: { role: "user", content: "Private work" } }],
-        touchSessionEntry: false,
       });
       expect(await ensureRecap({ key, agentId: "main" })).toEqual({ state: "unavailable" });
       expect(prepare).not.toHaveBeenCalled();
@@ -321,13 +342,9 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     const completion = createDeferred<ReturnType<typeof result>>();
     try {
       // Prime the real resident projection with the older, valid current summary.
-      expect(await describeSession()).toMatchObject({
-        session: {
-          key: target.key,
-          sessionId: scope.sessionId,
-          activitySummary: { state: "current", text: "Only the request is recorded." },
-        },
-      });
+      expect(await describeSession()).toMatchObject(
+        describedRecap("current", "Only the request is recorded."),
+      );
       expect(read()?.activitySummary).toMatchObject({
         ...previousWatermark,
         coveredMessages: 1,
@@ -338,13 +355,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       const latestWatermark = readSessionTranscriptWatermark(scope);
       expect(latestWatermark.maxSeq).not.toBe(previousWatermark.maxSeq);
       service.handleTranscript({ target: { ...scope }, lifecycleRevision: "lifecycle-1" });
-      const updating = {
-        session: {
-          key: target.key,
-          sessionId: scope.sessionId,
-          activitySummary: { state: "updating", text: "Only the request is recorded." },
-        },
-      };
+      const updating = describedRecap("updating", "Only the request is recorded.");
       expect(await describeSession()).toMatchObject(updating);
 
       terminal(service);
@@ -364,13 +375,9 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         state: "current",
         text: "Completed the first turn.",
       });
-      expect(await describeSession()).toMatchObject({
-        session: {
-          key: target.key,
-          sessionId: scope.sessionId,
-          activitySummary: { state: "current", text: "Completed the first turn." },
-        },
-      });
+      expect(await describeSession()).toMatchObject(
+        describedRecap("current", "Completed the first turn."),
+      );
       expect(read()?.activitySummary).toMatchObject({
         ...latestWatermark,
         sessionId: scope.sessionId,
@@ -419,16 +426,11 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     const prompt = "Saved recap prompt marker. ".repeat(40_000);
     await patchSessionEntryCore(scope, () => ({ skillsSnapshot: { prompt, skills: [] } }));
     const before = read()!;
-    const completion = createDeferred<ReturnType<typeof result>>();
-    const completionStarted = createDeferred();
-    complete.mockImplementationOnce(() => {
-      completionStarted.resolve();
-      return withinTest(completion.promise, testSignal);
-    });
+    const { completion, started } = holdCompletion();
     residentProjection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
     await residentProjection.ensureMaterialized();
     await ensureRecap(target);
-    await withinTest(completionStarted.promise, testSignal);
+    await withinTest(started.promise, testSignal);
     expect(complete).toHaveBeenCalledTimes(1);
     const queries = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
     const parse = vi.spyOn(JSON, "parse");
@@ -626,15 +628,10 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await awaitPublication(() => ensureRecap(target));
     expect(view()?.state).toBe("current");
     await messages(2, 2);
-    const completion = createDeferred<ReturnType<typeof result>>();
-    const completionStarted = createDeferred();
-    complete.mockImplementationOnce(() => {
-      completionStarted.resolve();
-      return withinTest(completion.promise, testSignal);
-    });
+    const { completion, started } = holdCompletion();
     try {
       await ensureRecap(target);
-      await withinTest(completionStarted.promise, testSignal);
+      await withinTest(started.promise, testSignal);
       expect(complete).toHaveBeenCalledTimes(2);
 
       const materializationStarted = createDeferred();
@@ -689,13 +686,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     cfg.agents!.entries = { main: {}, other: { utilityModel: "test/other" } };
     for (const other of [secondTarget, thirdTarget]) {
       const otherScope = { agentId: other.agentId, sessionKey: other.key, sessionId: other.key };
-      await upsertSessionEntryCore(otherScope, { sessionId: other.key, updatedAt: 1 });
-      await persistSessionTranscriptTurn(otherScope, {
-        messages: [
-          { eventId: `event-${other.key}`, message: { role: "user", content: "Summarize" } },
-        ],
-        touchSessionEntry: false,
-      });
+      await seedConversation(otherScope, "Summarize");
     }
     const firstPreparations = createDeferred<typeof prepared>();
     const nextPreparation = createDeferred<typeof prepared>();
@@ -777,15 +768,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       entry,
     }));
     for (const conversation of conversations) {
-      await upsertSessionEntryCore(conversation.scope, {
-        sessionId: conversation.scope.sessionId,
-        updatedAt: 1,
-        ...conversation.entry,
-      });
-      await persistSessionTranscriptTurn(conversation.scope, {
-        messages: [{ eventId: "request", message: { role: "user", content: "Check the build." } }],
-        touchSessionEntry: false,
-      });
+      await seedConversation(conversation.scope, "Check the build.", conversation.entry, "request");
     }
     const published = createDeferred();
     changed.mockImplementation(() => {
@@ -886,13 +869,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   it("normalizes alias ownership in list projection and catches context-only terminal outcomes", async () => {
     const aliasTarget = { key: "agent:main:main", agentId: "main" };
     const aliasScope = { sessionKey: aliasTarget.key, agentId: "main", sessionId: "alias-session" };
-    await upsertSessionEntryCore(aliasScope, { sessionId: aliasScope.sessionId, updatedAt: 1 });
-    await persistSessionTranscriptTurn(aliasScope, {
-      messages: [
-        { eventId: "alias-request", message: { role: "user", content: "Prepare deployment" } },
-      ],
-      touchSessionEntry: false,
-    });
+    await seedConversation(aliasScope, "Prepare deployment", {}, "alias-request");
     const completion = createDeferred<ReturnType<typeof result>>();
     complete.mockImplementationOnce(() => completion.promise);
     service.handleTranscript({

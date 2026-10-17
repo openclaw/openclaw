@@ -49,6 +49,61 @@ async function preservedSessionKeys() {
   }
 }
 
+function createRuntime(
+  placements: ReturnType<typeof createWorkerSessionPlacementStore>,
+  environments: ReturnType<typeof workerEnvironmentSupport.createService>,
+  scheduler = createTestGatewayScheduler(),
+  initialPlacements: Parameters<
+    typeof createGatewayWorkerPlacementRuntime
+  >[0]["initialPlacements"] = [],
+  evidence: "current" | "absent" = "current",
+) {
+  runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => evidence);
+  runtimeFactoryMocks.createDiskSpace.mockReturnValue({
+    read: vi.fn(),
+    version: vi.fn(() => 0),
+    invalidate: vi.fn(),
+    nextSweepAtMs: () => Infinity,
+    sweep: vi.fn().mockResolvedValue(undefined),
+  });
+  return createGatewayWorkerPlacementRuntime({
+    initialPlacements,
+    scheduler,
+    placements,
+    environments,
+    getCommittedRuntimeConfig: getRuntimeConfig,
+    cancelSessionWork: vi.fn(async () => {}),
+    gatewayNamespace: "gateway-test",
+    revokeSessionAuthority: vi.fn(),
+    warn: vi.fn(),
+  });
+}
+
+async function startRuntime(runtime: ReturnType<typeof createRuntime>) {
+  const sidecar = await runtime.startRuntime({
+    isClosePreludeStarted: () => false,
+    registerSidecar: vi.fn(),
+    unregisterSidecar: vi.fn(),
+  });
+  if (!sidecar) {
+    throw new Error("worker placement runtime did not start");
+  }
+  return sidecar;
+}
+
+async function requestProvisioningTeardown(environmentId: string, provisionOperationId: string) {
+  const store = workerEnvironmentSupport.testState.store;
+  const intent = await store.createIntent({
+    environmentId,
+    provisionOperationId,
+    providerId: "fake",
+    profileId: "development",
+    profileSnapshot: { settings: { region: "test" } },
+  });
+  await store.transition({ environmentId, from: intent.state, to: "provisioning" });
+  await store.requestDestroy({ environmentId, state: "provisioning" });
+}
+
 describe("worker placement startup cleanup ownership", () => {
   workerEnvironmentSupport.setupWorkerEnvironmentServiceSuite();
 
@@ -64,33 +119,9 @@ describe("worker placement startup cleanup ownership", () => {
     const placements = createWorkerSessionPlacementStore({
       database: workerEnvironmentSupport.testState.stateDb,
     });
-    runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => "absent");
-    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-      read: vi.fn(),
-      version: vi.fn(() => 0),
-      invalidate: vi.fn(),
-      nextSweepAtMs: () => Infinity,
-      sweep: vi.fn().mockResolvedValue(undefined),
-    });
-    const runtime = createGatewayWorkerPlacementRuntime({
-      initialPlacements: [],
-      scheduler,
-      getCommittedRuntimeConfig: getRuntimeConfig,
-      cancelSessionWork: vi.fn(async () => {}),
-      placements,
-      environments,
-      gatewayNamespace: "gateway-test",
-      revokeSessionAuthority: vi.fn(),
-      warn: vi.fn(),
-    });
-    const sidecar = await runtime.startRuntime({
-      isClosePreludeStarted: () => false,
-      registerSidecar: vi.fn(),
-      unregisterSidecar: vi.fn(),
-    });
-    if (!sidecar) {
-      throw new Error("worker placement runtime did not start");
-    }
+    const sidecar = await startRuntime(
+      createRuntime(placements, environments, scheduler, [], "absent"),
+    );
     await time.advanceBy(60_000);
     for (const sessionId of ["shutdown-first", "shutdown-next"]) {
       await placements.startDispatch({
@@ -163,33 +194,7 @@ describe("worker placement startup cleanup ownership", () => {
     const placements = createWorkerSessionPlacementStore({
       database: workerEnvironmentSupport.testState.stateDb,
     });
-    runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => "current");
-    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-      read: vi.fn(),
-      version: vi.fn(() => 0),
-      invalidate: vi.fn(),
-      nextSweepAtMs: () => Infinity,
-      sweep: vi.fn().mockResolvedValue(undefined),
-    });
-    const runtime = createGatewayWorkerPlacementRuntime({
-      initialPlacements: [],
-      scheduler,
-      getCommittedRuntimeConfig: getRuntimeConfig,
-      cancelSessionWork: vi.fn(async () => {}),
-      placements,
-      environments,
-      gatewayNamespace: "gateway-test",
-      revokeSessionAuthority: vi.fn(),
-      warn: vi.fn(),
-    });
-    const sidecar = await runtime.startRuntime({
-      isClosePreludeStarted: () => false,
-      registerSidecar: vi.fn(),
-      unregisterSidecar: vi.fn(),
-    });
-    if (!sidecar) {
-      throw new Error("worker placement runtime did not start");
-    }
+    const sidecar = await startRuntime(createRuntime(placements, environments, scheduler));
     let stopping: Promise<void> | undefined;
     let stopped = false;
     try {
@@ -312,22 +317,7 @@ describe("worker placement startup cleanup ownership", () => {
       const environments = workerEnvironmentSupport.createService(
         workerEnvironmentSupport.createProvider({ provision, inspect, destroy }),
       );
-      const requestedEnvironment = await workerEnvironmentSupport.testState.store.createIntent({
-        environmentId,
-        providerId: "fake",
-        profileId: "development",
-        profileSnapshot: { settings: { region: "test" } },
-        provisionOperationId: "provision:startup-fenced",
-      });
-      await workerEnvironmentSupport.testState.store.transition({
-        environmentId,
-        from: requestedEnvironment.state,
-        to: "provisioning",
-      });
-      await workerEnvironmentSupport.testState.store.requestDestroy({
-        environmentId,
-        state: "provisioning",
-      });
+      await requestProvisioningTeardown(environmentId, "provision:startup-fenced");
       const placements = createWorkerSessionPlacementStore({
         database: workerEnvironmentSupport.testState.stateDb,
         now: () => workerEnvironmentSupport.testState.nowMs,
@@ -387,30 +377,9 @@ describe("worker placement startup cleanup ownership", () => {
       if (!failedSessionKey) {
         throw new Error("failed placement fixture is missing its session key");
       }
-      runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => "current");
-      runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-        read: vi.fn(),
-        version: vi.fn(() => 0),
-        invalidate: vi.fn(),
-        nextSweepAtMs: () => Infinity,
-        sweep: vi.fn().mockResolvedValue(undefined),
-      });
-      const runtime = createGatewayWorkerPlacementRuntime({
-        initialPlacements: await placements.listAsync(),
-        scheduler: createTestGatewayScheduler(),
-        getCommittedRuntimeConfig: getRuntimeConfig,
-        cancelSessionWork: vi.fn(async () => {}),
-        placements,
-        environments,
-        gatewayNamespace: "gateway-test",
-        revokeSessionAuthority: vi.fn(),
-        warn: vi.fn(),
-      });
-      const sidecar = await runtime.startRuntime({
-        isClosePreludeStarted: () => false,
-        registerSidecar: vi.fn(),
-        unregisterSidecar: vi.fn(),
-      });
+      const sidecar = await startRuntime(
+        createRuntime(placements, environments, undefined, await placements.listAsync()),
+      );
       try {
         expect(sidecar).not.toBeNull();
         expect((await preservedSessionKeys()).has(failedSessionKey)).toBe(true);
@@ -451,22 +420,7 @@ describe("worker placement startup cleanup ownership", () => {
     const environments = workerEnvironmentSupport.createService(
       workerEnvironmentSupport.createProvider({ provision, resolveAllocation, destroy }),
     );
-    const intent = await workerEnvironmentSupport.testState.store.createIntent({
-      environmentId,
-      providerId: "fake",
-      profileId: "development",
-      profileSnapshot: { settings: { region: "test" } },
-      provisionOperationId: operationId,
-    });
-    await workerEnvironmentSupport.testState.store.transition({
-      environmentId,
-      from: intent.state,
-      to: "provisioning",
-    });
-    await workerEnvironmentSupport.testState.store.requestDestroy({
-      environmentId,
-      state: "provisioning",
-    });
+    await requestProvisioningTeardown(environmentId, operationId);
     const placements = createWorkerSessionPlacementStore({
       database: workerEnvironmentSupport.testState.stateDb,
       now: () => workerEnvironmentSupport.testState.nowMs,
@@ -495,25 +449,12 @@ describe("worker placement startup cleanup ownership", () => {
       turnClaim: null,
       activeOwnerEpoch: null,
     });
-    runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => "current");
-    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-      read: vi.fn(),
-      version: vi.fn(() => 0),
-      invalidate: vi.fn(),
-      nextSweepAtMs: () => Infinity,
-      sweep: vi.fn().mockResolvedValue(undefined),
-    });
-    const runtime = createGatewayWorkerPlacementRuntime({
-      initialPlacements: await placements.listAsync(),
-      scheduler: createTestGatewayScheduler(),
-      getCommittedRuntimeConfig: getRuntimeConfig,
-      cancelSessionWork: vi.fn(async () => {}),
+    const runtime = createRuntime(
       placements,
       environments,
-      gatewayNamespace: "gateway-test",
-      revokeSessionAuthority: vi.fn(),
-      warn: vi.fn(),
-    });
+      undefined,
+      await placements.listAsync(),
+    );
     let registeredSidecar: { stop: () => Promise<void> } | undefined;
     const starting = runtime.startRuntime({
       isClosePreludeStarted: () => false,

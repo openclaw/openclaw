@@ -10,6 +10,7 @@ import { createWorkerRuntimeInstallProgressPublisher } from "./server-worker-run
 import type { WorkerEnvironmentRecord } from "./worker-environments/environment-record.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
+import { localPlacement } from "./worker-environments/placement-suite.test-support.js";
 
 afterEach(() => resetDiagnosticRunActivityForTest());
 
@@ -47,27 +48,27 @@ function placement(
   sessionId = environmentId,
 ): Extract<WorkerSessionPlacementRecord, { state: "provisioning" }> {
   return {
-    sessionId,
+    ...localPlacement(sessionId),
     environmentId,
-    agentId: "main",
-    sessionKey: `agent:main:${sessionId}`,
     state: "provisioning",
-    generation: 1,
-    executionMode: "worker-turn",
-    turnClaim: null,
-    createdAtMs: 1,
-    updatedAtMs: 1,
-    stateChangedAtMs: 1,
-    activeOwnerEpoch: null,
-    workspaceBaseManifestRef: null,
-    remoteWorkspaceDir: null,
-    workerBundleHash: null,
-    lastTranscriptAckCursor: null,
-    lastLiveEventAckCursor: null,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
   };
+}
+
+function markWaiting(record: WorkerSessionPlacementRecord) {
+  markDiagnosticRunProgress({
+    sessionId: record.sessionId,
+    sessionKey: record.sessionKey,
+    reason: "global_lane:waiting",
+  });
+}
+
+function expectPublished(events: ReturnType<typeof vi.fn>, sessionKey: string) {
+  expect(events).toHaveBeenCalledExactlyOnceWith({
+    sessionKey,
+    agentId: "main",
+    reason: "worker-runtime-install",
+    scope: "runtime",
+  });
 }
 
 function createHarness(
@@ -118,6 +119,11 @@ function createHarness(
       await publisher.stop();
       unsubscribe();
     },
+    async finish() {
+      release.resolve();
+      await published.promise;
+      await publisher.stop();
+    },
   };
 }
 
@@ -143,16 +149,9 @@ it("coalesces changes and emits only for sessions still attached to the node's n
     expect(await harness.entered.promise).not.toContain("other-node");
     active.attachedSessionIds = ["active"];
     moved.nodeDeviceId = "node-2";
-    harness.release.resolve();
-    await harness.published.promise;
-    await harness.publisher.stop();
+    await harness.finish();
     expect(harness.readProjection).toHaveBeenCalledOnce();
-    expect(harness.events).toHaveBeenCalledExactlyOnceWith({
-      sessionKey: "agent:main:active",
-      agentId: "main",
-      reason: "worker-runtime-install",
-      scope: "runtime",
-    });
+    expectPublished(harness.events, "agent:main:active");
   } finally {
     await harness.close();
   }
@@ -188,13 +187,7 @@ it("touches only observed provisioning activity and leaves refresh waits to turn
   const observed = placement("observed");
   const unobserved = placement("unobserved");
   const records = [waiting, observed, unobserved];
-  for (const record of records) {
-    markDiagnosticRunProgress({
-      sessionId: record.sessionId,
-      sessionKey: record.sessionKey,
-      reason: "global_lane:waiting",
-    });
-  }
+  records.forEach(markWaiting);
   const harness = createHarness(
     records.map(({ sessionId }) => environment(sessionId)),
     records,
@@ -203,9 +196,7 @@ it("touches only observed provisioning activity and leaves refresh waits to turn
   try {
     harness.publisher.changed("node-1", ["observed"]);
     await harness.entered.promise;
-    harness.release.resolve();
-    await harness.published.promise;
-    await harness.publisher.stop();
+    await harness.finish();
     expect(harness.events).toHaveBeenCalledTimes(3);
     expect(getDiagnosticSessionActivitySnapshot(observed)).toMatchObject({
       lastProgressReason: "worker:runtime_install",
@@ -234,11 +225,7 @@ it.each([
       sshEndpoint: null,
     };
     const record = placement("provisioning");
-    markDiagnosticRunProgress({
-      sessionId: record.sessionId,
-      sessionKey: record.sessionKey,
-      reason: "global_lane:waiting",
-    });
+    markWaiting(record);
     const harness = createHarness(
       [
         provisioning,
@@ -253,14 +240,8 @@ it.each([
       harness.publisher.changed("node-1", ["provisioning"]);
       await Promise.resolve();
       expect(harness.readProjection).toHaveBeenCalledWith(["provisioning"], { current: true });
-      await harness.published.promise;
-      await harness.publisher.stop();
-      expect(harness.events).toHaveBeenCalledExactlyOnceWith({
-        sessionKey: record.sessionKey,
-        agentId: "main",
-        reason: "worker-runtime-install",
-        scope: "runtime",
-      });
+      await harness.finish();
+      expectPublished(harness.events, record.sessionKey);
       expect(getDiagnosticSessionActivitySnapshot(record)).toMatchObject({
         lastProgressReason: inFlight ? "worker:runtime_install" : "global_lane:waiting",
       });
