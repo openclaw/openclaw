@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildGatewayClawAddPlan, projectGatewayClawAddPlan } from "./gateway-add-plan.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { readClawManifestFile } from "./reader.js";
+import type { ClawReadResult } from "./types.js";
 
 const preflightClawPackage = vi.hoisted(() => vi.fn(async () => ({ ok: false, code: "fixture" })));
 // mock-isolation: Package preflight is fixed to test agent-ID allocation without network access.
@@ -13,6 +14,22 @@ vi.mock("./packages.js", () => ({ preflightClawPackage }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
+
+async function readGatewayPackageFixture(fixture: string): Promise<ClawReadResult> {
+  const source = await readClawManifestFile(fixture);
+  if (!source.ok) {
+    return source;
+  }
+  return {
+    ...source,
+    source: {
+      ...source.source,
+      kind: "package",
+      name: "@openclaw/gateway-plan-fixture",
+      integrityKind: "artifact",
+    },
+  };
+}
 
 describe("Gateway Claw Add plan", () => {
   it("allocates the next numbered ordinary agent without reusing a missing suffix", async () => {
@@ -76,7 +93,7 @@ describe("Gateway Claw Add plan", () => {
 
   it("uses the canonical planner and keeps source paths out of reviewed facts", async () => {
     const fixture = path.resolve("src/claws/fixtures/workspace-agent.claw.json");
-    const source = await readClawManifestFile(fixture);
+    const source = await readGatewayPackageFixture(fixture);
     expect(source.ok).toBe(true);
     if (!source.ok) {
       return;
@@ -89,7 +106,7 @@ describe("Gateway Claw Add plan", () => {
     });
     const projected = projectGatewayClawAddPlan(
       plan,
-      source.source.packageRoot,
+      source,
       {
         riskAcknowledgementRequired: false,
         trustRecord: {
@@ -113,7 +130,7 @@ describe("Gateway Claw Add plan", () => {
 
   it("returns a blocked preview when the requested agent ID already exists", async () => {
     const fixture = path.resolve("src/claws/fixtures/workspace-agent.claw.json");
-    const source = await readClawManifestFile(fixture);
+    const source = await readGatewayPackageFixture(fixture);
     expect(source.ok).toBe(true);
     if (!source.ok) {
       return;
@@ -128,7 +145,7 @@ describe("Gateway Claw Add plan", () => {
 
     const projected = projectGatewayClawAddPlan(
       plan,
-      source.source.packageRoot,
+      source,
       {
         riskAcknowledgementRequired: false,
         trustRecord: {
@@ -202,7 +219,7 @@ describe("Gateway Claw Add plan", () => {
     const retained = path.join(stateDir, "workspace-workflow-operator");
     mkdirSync(retained);
     writeFileSync(path.join(retained, "USER.md"), "retained operator note");
-    const source = await readClawManifestFile(
+    const source = await readGatewayPackageFixture(
       path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
     );
     expect(source.ok).toBe(true);
@@ -218,7 +235,7 @@ describe("Gateway Claw Add plan", () => {
     });
     const projected = projectGatewayClawAddPlan(
       plan,
-      source.source.packageRoot,
+      source,
       {
         riskAcknowledgementRequired: false,
         trustRecord: {
@@ -312,7 +329,7 @@ describe("Gateway Claw Add plan", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const base = path.join(stateDir, "workspace-workflow-operator");
     mkdirSync(base);
-    const source = await readClawManifestFile(
+    const source = await readGatewayPackageFixture(
       path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
     );
     expect(source.ok).toBe(true);
@@ -332,12 +349,7 @@ describe("Gateway Claw Add plan", () => {
       agentId: "workflow-operator",
       sourceMcpServers: {},
     });
-    const reviewedProjection = projectGatewayClawAddPlan(
-      reviewed,
-      source.source.packageRoot,
-      trust,
-      config,
-    );
+    const reviewedProjection = projectGatewayClawAddPlan(reviewed, source, trust, config);
 
     mkdirSync(`${base}-2`);
     const current = await buildGatewayClawAddPlan(source, {
@@ -345,12 +357,7 @@ describe("Gateway Claw Add plan", () => {
       agentId: "workflow-operator",
       sourceMcpServers: {},
     });
-    const currentProjection = projectGatewayClawAddPlan(
-      current,
-      source.source.packageRoot,
-      trust,
-      config,
-    );
+    const currentProjection = projectGatewayClawAddPlan(current, source, trust, config);
 
     expect(reviewedProjection.target.workspace).toBe(`${base}-2`);
     expect(currentProjection.target.workspace).toBe(`${base}-3`);
@@ -474,7 +481,7 @@ describe("Gateway Claw Add plan", () => {
 
   it("reviews configured access and recurring work without exposing source secrets", async () => {
     const fixture = path.resolve("src/claws/fixtures/incident-response.claw.json");
-    const source = await readClawManifestFile(fixture);
+    const source = await readGatewayPackageFixture(fixture);
     expect(source.ok).toBe(true);
     if (!source.ok) {
       return;
@@ -491,7 +498,7 @@ describe("Gateway Claw Add plan", () => {
     });
     const projected = projectGatewayClawAddPlan(
       plan,
-      source.source.packageRoot,
+      source,
       {
         riskAcknowledgementRequired: false,
         trustRecord: {
@@ -530,7 +537,10 @@ describe("Gateway Claw Add plan", () => {
         },
       ],
     });
-    const response = JSON.stringify(projected);
+    // The source document keeps public env references; reviewed facts disclose only names.
+    expect(projected.manifestDisclosure?.source.packageName).toBe("@openclaw/gateway-plan-fixture");
+    expect(projected.manifestDisclosure?.manifestJson).toContain("${STATUSPAGE_TOKEN}");
+    const response = JSON.stringify({ ...projected, manifestDisclosure: undefined });
     expect(response).not.toContain(source.source.packageRoot);
     expect(response).toContain('"sourceName":"STATUSPAGE_TOKEN"');
     expect(response).not.toContain("${STATUSPAGE_TOKEN}");
@@ -538,7 +548,7 @@ describe("Gateway Claw Add plan", () => {
 
     const changed = projectGatewayClawAddPlan(
       plan,
-      source.source.packageRoot,
+      source,
       {
         riskAcknowledgementRequired: false,
         trustRecord: {

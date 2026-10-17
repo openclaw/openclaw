@@ -155,7 +155,7 @@ describe("chat pane placement", () => {
       expect(state.lastError).toBe(
         outcome === "refresh failure" ? "Worker session refresh unavailable" : null,
       );
-      expect(pane.headerPlacementRestartingKey).toBeNull();
+      expect(pane.headerPresentation.placementRestartingKey).toBeNull();
     },
   );
 

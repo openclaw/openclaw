@@ -14,7 +14,7 @@ import { isLoopbackHost } from "../../gateway/net.js";
 import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../../tts/provider-registry.js";
 import type { TtsResult } from "../../tts/tts-runtime-types.js";
-import { isTtsConfigReservedKey, resolveTtsPersonaList } from "../../tts/tts-settings.js";
+import { resolveTtsPersonaList } from "../../tts/tts-settings.js";
 import {
   getTtsProviderAsync,
   listTtsPersonas,
@@ -198,14 +198,10 @@ async function injectTtsAuthProfileApiKey(params: {
     ...(isObjectRecord(existing?.value) ? existing.value : {}),
     apiKey: auth.apiKey,
   };
-  if (existing?.container === "direct") {
-    tts[key] = providerConfig;
-  } else {
-    tts.providers = {
-      ...(isObjectRecord(tts.providers) ? tts.providers : {}),
-      [key]: providerConfig,
-    };
-  }
+  tts.providers = {
+    ...(isObjectRecord(tts.providers) ? tts.providers : {}),
+    [key]: providerConfig,
+  };
   return channelProvider && channelKey && isObjectRecord(channel)
     ? { ...cfg, channels: { ...cfg.channels, [channelKey]: { ...channel, tts } } }
     : { ...cfg, tts };
@@ -215,29 +211,20 @@ function findTtsProviderConfig(
   tts: unknown,
   providerId: string,
   cfg: OpenClawConfig,
-): { container: "providers" | "direct"; key: string; value: unknown } | undefined {
+): { key: string; value: unknown } | undefined {
   if (!isObjectRecord(tts)) {
     return undefined;
   }
   const providers = isObjectRecord(tts.providers) ? tts.providers : undefined;
   const exact = providers?.[providerId];
   if (exact !== undefined) {
-    return { container: "providers", key: providerId, value: exact };
+    return { key: providerId, value: exact };
   }
-  for (const [container, entries] of [
-    ["providers", providers],
-    ["direct", tts],
-  ] as const) {
-    for (const [key, value] of Object.entries(entries ?? {})) {
-      if (container === "direct" && isTtsConfigReservedKey(key)) {
-        continue;
-      }
-      if (
-        normalizeLowercaseStringOrEmpty(canonicalizeSpeechProviderId(key, cfg) ?? key) ===
-        providerId
-      ) {
-        return { container, key, value };
-      }
+  for (const [key, value] of Object.entries(providers ?? {})) {
+    if (
+      normalizeLowercaseStringOrEmpty(canonicalizeSpeechProviderId(key, cfg) ?? key) === providerId
+    ) {
+      return { key, value };
     }
   }
   return undefined;

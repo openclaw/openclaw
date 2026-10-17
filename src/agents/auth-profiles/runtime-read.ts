@@ -7,7 +7,10 @@ import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
-import type { ExternalCliOverlayOptions } from "./external-auth.js";
+import type {
+  ExternalCliOverlayOptions,
+  WithPreparedExternalAuthProfiles,
+} from "./external-auth.js";
 import {
   assertAuthProfileMigrationCandidates,
   assertAuthProfileMigrationStateAtDatabasePath,
@@ -97,6 +100,7 @@ type RuntimeReadHost = {
     env?: NodeJS.ProcessEnv,
     readPreparedStore?: (databasePath: string) => AuthProfileStore,
   ) => AuthProfileStore;
+  withPreparedExternalAuthProfiles: WithPreparedExternalAuthProfiles;
   captureScope: () => {
     isolated: boolean;
     run: <T>(agentDir: string | undefined, env: NodeJS.ProcessEnv, run: () => T) => T;
@@ -145,6 +149,7 @@ export function createAuthProfileStoreRuntimeReader({
   resolveRuntimeAuthProfileLoadOptions,
   loadAuthProfileStoreForAgent,
   loadRuntimeAuthProfileStore,
+  withPreparedExternalAuthProfiles,
   captureScope,
 }: RuntimeReadHost) {
   /** Capture sources once; the store owner decides which persisted facts it needs. */
@@ -491,8 +496,13 @@ export function createAuthProfileStoreRuntimeReader({
             return prepared.value;
           },
         );
-      const store = inCapturedScope(load);
-      return materializePersonalProfile(store);
+      return withPreparedExternalAuthProfiles(
+        { config: resolveExternalCliOverlayOptions(capturedOptions).config, env },
+        async () => {
+          assertCurrent();
+          return materializePersonalProfile(inCapturedScope(load));
+        },
+      );
     };
     try {
       const value = await withAuthProfileReaderCleanup(

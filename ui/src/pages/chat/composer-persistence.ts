@@ -488,9 +488,8 @@ export class ChatComposerPersistence {
       }
       state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
       state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-      state.requestUpdate?.();
     },
-    () => this.getState()?.requestUpdate?.(),
+    () => this.persistChangedState(),
   );
 
   constructor(

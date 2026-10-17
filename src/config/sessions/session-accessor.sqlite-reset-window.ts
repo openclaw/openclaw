@@ -69,7 +69,9 @@ type ResetMessageWindowCacheEntry = {
 // History readers span compactions (their window closes only at a reset). The preflight
 // fuse must measure the transcript the model will actually see, which a compaction rewrites
 // too; measuring it on the history scope keeps the fuse latched after the first compaction.
-type BoundaryWindowScope = "history" | "context";
+// Reset-window cursors close only at a reset, like history, but keep every retained message
+// role, like context, so context engines receive retained tool calls with their results.
+type BoundaryWindowScope = "history" | "context" | "reset";
 
 function isWindowBoundary(eventType: unknown, scope: BoundaryWindowScope): boolean {
   return eventType === "reset" || (scope === "context" && eventType === "compaction");
@@ -218,7 +220,12 @@ function readLatestActiveBoundaryMetadataByType(
                 .onRef("identity.session_id", "=", "active.session_id")
                 .onRef("identity.seq", "=", "active.event_seq"),
             )
-            .select(["active.active_position", "identity.event_type", "identity.seq"])
+            .select([
+              "active.active_position",
+              "identity.event_id",
+              "identity.event_type",
+              "identity.seq",
+            ])
             .where("active.session_id", "=", projection.resolved.sessionId)
             .where("identity.event_type", "=", eventType)
             .$if(beforeRawSeq !== undefined, (query) =>
@@ -240,10 +247,19 @@ function readLatestActiveBoundaryMetadataByType(
   return unindexed && (!indexed || unindexed.event_seq > indexed.seq)
     ? {
         active_position: unindexed.active_position,
+        ...(typeof unindexed.event.id === "string" ? { event_id: unindexed.event.id } : {}),
         event_type: eventType,
         seq: unindexed.event_seq,
       }
     : indexed;
+}
+
+/** Reads the latest active-path reset row without resolving its retained tail. */
+export function readLatestActiveResetBoundary(
+  projection: CurrentTranscriptProjection,
+  beforeRawSeq?: number,
+): { active_position: number; event_id?: string; seq: number } | undefined {
+  return readLatestActiveBoundaryMetadataByType(projection, "reset", beforeRawSeq);
 }
 
 function readLatestActiveBoundaryMetadata(
@@ -252,7 +268,7 @@ function readLatestActiveBoundaryMetadata(
   beforeRawSeq?: number,
 ) {
   const reset = readLatestActiveBoundaryMetadataByType(projection, "reset", beforeRawSeq);
-  if (scope === "history") {
+  if (scope !== "context") {
     return reset;
   }
   const compaction = readLatestActiveBoundaryMetadataByType(projection, "compaction", beforeRawSeq);
@@ -402,7 +418,7 @@ function findLatestResetMessageWindow(
           continue;
         }
         const role = row.event.message.role;
-        if (scope === "context" || role === "user" || role === "assistant") {
+        if (scope !== "history" || role === "user" || role === "assistant") {
           keptMessagePositions.push(row.message_position);
         }
       }
@@ -450,78 +466,6 @@ export function resolveTranscriptBoundaryWindow(
     window,
   });
   return window;
-}
-
-export type ClosedResetInterval = {
-  startExclusiveActivePosition: number;
-  endInclusiveActivePosition: number;
-};
-
-function selectActiveResetRows(projection: CurrentTranscriptProjection) {
-  return getActiveTranscriptKysely(projection.database)
-    .selectFrom("session_transcript_active_events as active")
-    .innerJoin("transcript_event_identities as identity", (join) =>
-      join
-        .onRef("identity.session_id", "=", "active.session_id")
-        .onRef("identity.seq", "=", "active.event_seq"),
-    )
-    .select("active.active_position")
-    .where("active.session_id", "=", projection.resolved.sessionId)
-    .where("identity.event_type", "=", "reset");
-}
-
-/** Closed interval (previous reset, this reset] for an active-path event outside the latest window. */
-export function resolveClosedResetInterval(
-  projection: CurrentTranscriptProjection,
-  target: { activePosition: number; eventType: string },
-): ClosedResetInterval | undefined {
-  let closing =
-    target.eventType === "reset"
-      ? { active_position: target.activePosition }
-      : executeSqliteQueryTakeFirstSync(
-          projection.database.db,
-          selectActiveResetRows(projection)
-            .where("active.active_position", ">", target.activePosition)
-            .orderBy("active.active_position", "asc")
-            .limit(1),
-        );
-  const unindexedResets = readUnindexedHistoryControls(projection).filter(
-    (row) => row.event.type === "reset",
-  );
-  if (target.eventType !== "reset") {
-    const unindexedClosing = unindexedResets.find(
-      (row) => row.active_position > target.activePosition,
-    );
-    if (
-      unindexedClosing &&
-      (!closing || unindexedClosing.active_position < closing.active_position)
-    ) {
-      closing = unindexedClosing;
-    }
-  }
-  if (!closing) {
-    return undefined;
-  }
-  let opening = executeSqliteQueryTakeFirstSync(
-    projection.database.db,
-    selectActiveResetRows(projection)
-      .where("active.active_position", "<", closing.active_position)
-      .orderBy("active.active_position", "desc")
-      .limit(1),
-  );
-  const unindexedOpening = unindexedResets.findLast(
-    (row) => row.active_position < closing.active_position,
-  );
-  if (
-    unindexedOpening &&
-    (!opening || unindexedOpening.active_position > opening.active_position)
-  ) {
-    opening = unindexedOpening;
-  }
-  return {
-    startExclusiveActivePosition: opening?.active_position ?? -1,
-    endInclusiveActivePosition: closing.active_position,
-  };
 }
 
 export function resolveVisibleMessagePositions(

@@ -132,8 +132,6 @@ type ChatAbortRunState = ChatAbortTargetState & {
   chatRunError?: ChatRunError | null;
   chatQueue?: readonly ChatQueueItem[];
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
-  /** Retained until the separately owned chatError accessor has a projection. */
-  requestUpdate?: () => void;
   /** Reloads history and the authoritative session row. */
   refreshCurrentChat?: () => Promise<void>;
 };
@@ -285,7 +283,6 @@ async function settleChatAbortResponse(
         setChatRunError(state, message, intent.runId ?? undefined, result.errorKind);
       } else if (state.chatRunId) {
         setChatError(state, message);
-        state.requestUpdate?.();
       } else {
         setChatRunError(state, message, intent.runId ?? undefined, "stop");
       }

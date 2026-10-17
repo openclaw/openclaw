@@ -58,7 +58,6 @@ import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
@@ -82,6 +81,10 @@ import {
   scanTranscriptRows,
   scanTrajectoryRows,
 } from "./state-migrations.media-persistence-database.js";
+import {
+  hasMediaRowsMigrationReceipt,
+  inspectPostgresMediaPersistence,
+} from "./state-migrations.media-persistence-inspection.js";
 import {
   listTranscriptArchives,
   prepareAgentDatabaseMigrationDiscovery,
@@ -114,6 +117,9 @@ async function migrateAgentDatabase(params: {
   preparedArchives?: ReadonlySet<string>;
   migratedFromVersion?: number;
 }) {
+  if (agentEngineInput()) {
+    return inspectPostgresMediaPersistence(params);
+  }
   const database = openNodeSqliteDatabase(params.pathname);
   const nativeVersionMigration = params.migratedFromVersion !== undefined && !agentEngineInput();
   const schemaWarnings: string[] = [];
@@ -298,15 +304,7 @@ async function migrateAgentDatabase(params: {
     assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode);
     const legacyTextStorage = userVersion < AGENT_STORAGE_SCHEMA_VERSION;
     const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
-    const needsRepair =
-      mediaSchemaUpgrade ||
-      !executeSqliteQueryTakeFirstSync(
-        database,
-        db
-          .selectFrom("schema_meta")
-          .select("schema_version")
-          .where("meta_key", "=", MEDIA_ROWS_MIGRATION_META_KEY),
-      );
+    const needsRepair = mediaSchemaUpgrade || !hasMediaRowsMigrationReceipt(database);
     let rewritten = { rewrittenSessions: 0, rewrittenTrajectoryRows: 0 };
     let preserved = false;
     const beforeRewrite = () => {

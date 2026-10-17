@@ -46,6 +46,7 @@ export type OpenClawStateReadCompletion = Promise<OpenClawStateReadReply | undef
 type Selection = {
   pathname: string;
   snapshot?: {
+    postgresSnapshot?: string;
     location: string;
     cleanClose?: boolean;
     cleanupRoot?: string;
@@ -214,10 +215,11 @@ export function startOpenClawStateReadOperation(
           : (prepared?.location ?? snapshot?.location ?? pathname),
         checkFreshAdmission: !borrowed,
         expectedIdentity:
-          (!snapshot && !prepared) || snapshot?.cleanClose
+          (!snapshot && !prepared) || snapshot?.cleanClose || snapshot?.postgresSnapshot
             ? context.admission.identity.key
             : undefined,
         snapshotRoot: prepared?.cleanupRoot ?? snapshot?.cleanupRoot,
+        postgresSnapshot: snapshot?.postgresSnapshot,
       },
       authority,
     );

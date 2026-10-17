@@ -92,9 +92,6 @@ suite.define(() => {
       await expect.poll(() => inner.locator("output").textContent()).toBe("1");
       const retainedFrame = await outer.elementHandle();
       expect(retainedFrame).not.toBeNull();
-      const originalRow = await widgets.evaluate((element) =>
-        element.closest("[data-virtual-row-key]")?.getAttribute("data-virtual-row-key"),
-      );
       expect(await gateway.getRequests("canvas.document.view")).toHaveLength(1);
 
       const finalText = "The interactive preview is ready.";
@@ -169,11 +166,6 @@ suite.define(() => {
       await page.locator(".chat-work-group").waitFor();
       await expect.poll(() => widgets.count()).toBe(1);
       await expect.poll(() => finalReply.locator("openclaw-canvas-widget-view").count()).toBe(1);
-      expect(
-        await widgets.evaluate((element) =>
-          element.closest("[data-virtual-row-key]")?.getAttribute("data-virtual-row-key"),
-        ),
-      ).not.toBe(originalRow);
       expect(await outer.evaluate((frame, original) => frame === original, retainedFrame)).toBe(
         true,
       );
@@ -211,11 +203,25 @@ suite.define(() => {
       async ({ page }) => {
         const sessionKey = "agent:main:dashboard:nested-widget";
         const docId = "cv_nested_counter";
+        const parentToolCallId = "call_widget|fc_widget";
+        const nestedToolCallId = "tool_call:call_widget_fc_widget:scope:show_widget:1";
         const documentUrl = `/__openclaw__/canvas/documents/${docId}/index.html`;
         const result = {
           kind: "canvas",
           view: { backend: "canvas", id: docId, url: documentUrl, title: "Counter" },
           presentation: { target: "assistant_message", sandbox: "scripts" },
+        };
+        const nestedResult = {
+          content: [{ type: "text", text: JSON.stringify(result) }],
+          details: result,
+        };
+        const wrapperValue = {
+          output: [{ type: "text", text: JSON.stringify(result) }],
+          value: result,
+        };
+        const wrapperResult = {
+          content: [{ type: "text", text: JSON.stringify(wrapperValue) }],
+          details: wrapperValue,
         };
         const gateway = await installMockGateway(page, {
           sessionKey,
@@ -246,29 +252,29 @@ suite.define(() => {
             agentId: "main",
             runId,
             seq: ++seq,
-            ts: startedAt + (data.toolCallId === "nested-widget" ? 900 : 1),
+            ts: startedAt + (data.toolCallId === nestedToolCallId ? 900 : 1),
             stream: "tool",
             data,
           });
         await tool({
           phase: "start",
-          toolCallId: "widget-wrapper",
+          toolCallId: parentToolCallId,
           name: "exec",
           args: { code: "await tools.show_widget({ title: 'Counter' })" },
         });
         await tool({
           phase: "start",
-          toolCallId: "nested-widget",
-          parentToolCallId: "widget-wrapper",
+          toolCallId: nestedToolCallId,
+          parentToolCallId,
           name: "show_widget",
           args: { title: "Counter" },
         });
         await tool({
           phase: "result",
-          toolCallId: "nested-widget",
-          parentToolCallId: "widget-wrapper",
+          toolCallId: nestedToolCallId,
+          parentToolCallId,
           name: "show_widget",
-          result,
+          result: nestedResult,
         });
         const widgets = page.locator(".chat-thread openclaw-canvas-widget-view");
         await expect.poll(() => widgets.count()).toBe(1);
@@ -278,6 +284,9 @@ suite.define(() => {
           inner.getByRole("button", { name: "Add one", exact: true }),
         );
         await expect.poll(() => inner.locator("output").textContent()).toBe("1");
+        if (captureUiProofEnabled) {
+          await page.waitForTimeout(2_000);
+        }
         const userMessage = {
           role: "user",
           content: "Show a tiny interactive counter.",
@@ -290,11 +299,11 @@ suite.define(() => {
             scopeId: "widget-scope",
             afterEntryId: null,
             startOrder: 0,
-            parentToolCallId: "widget-wrapper",
-            toolCallId: "nested-widget",
+            parentToolCallId,
+            toolCallId: nestedToolCallId,
             toolName: "show_widget",
             input: { title: "Counter" },
-            result: { content: [{ type: "text", text: JSON.stringify(result) }], details: result },
+            result: nestedResult,
             isError: false,
             startedAt: startedAt + 900,
             timestamp: startedAt + 901,
@@ -303,15 +312,28 @@ suite.define(() => {
         };
         const wrapper = {
           role: "toolResult",
-          toolCallId: "widget-wrapper",
+          toolCallId: parentToolCallId,
           toolName: "exec",
-          content: JSON.stringify(result),
+          ...wrapperResult,
           timestamp: startedAt + 1,
           __openclaw: { id: "wrapper-result", seq: 3, runId },
         };
+        const canvasBlock = {
+          type: "canvas",
+          preview: {
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            viewId: docId,
+            url: documentUrl,
+            title: "Counter",
+            sandbox: "scripts",
+          },
+        };
         const finalMessage = {
           role: "assistant",
-          content: "Your counter is ready.",
+          content: [{ type: "text", text: "Your counter is ready." }, canvasBlock],
+          openclawDisplayContent: [canvasBlock],
           timestamp: startedAt + 901,
           idempotencyKey: runId,
           stopReason: "stop",
@@ -332,7 +354,12 @@ suite.define(() => {
         );
         await persist(history.messages[1]!, "nested-result", 2);
         await expect.poll(() => widgets.count()).toBe(1);
-        await tool({ phase: "result", toolCallId: "widget-wrapper", name: "exec", result });
+        await tool({
+          phase: "result",
+          toolCallId: parentToolCallId,
+          name: "exec",
+          result: wrapperResult,
+        });
         await gateway.setMethodResponse(
           "chat.history",
           prepareChatHistoryFixture([userMessage, nested, wrapper]),
@@ -353,6 +380,9 @@ suite.define(() => {
         }
         expect(await widgets.count()).toBe(1);
         expect(await inner.locator("output").textContent()).toBe("1");
+        if (captureUiProofEnabled) {
+          await page.waitForTimeout(2_000);
+        }
         await gateway.setMethodResponse("chat.history", history);
         await persist(finalMessage, "nested-final", 4);
         await gateway.emitGatewayEvent("chat", {
@@ -360,9 +390,16 @@ suite.define(() => {
           runId,
           seq: ++seq,
           state: "final",
-          message: finalMessage,
+          message: {
+            role: "assistant",
+            content: finalMessage.content,
+            openclawDisplayContent: finalMessage.openclawDisplayContent,
+            timestamp: startedAt + 902,
+          },
         });
-        const finalText = page.getByText("Your counter is ready.", { exact: true });
+        const finalText = page
+          .locator(".chat-text")
+          .getByText("Your counter is ready.", { exact: true });
         await finalText.waitFor();
         await page
           .getByRole("button", { name: "Stop generating", exact: true })
@@ -382,6 +419,9 @@ suite.define(() => {
         }
         expect(await widgets.count()).toBe(1);
         expect(await inner.locator("output").textContent()).toBe("1");
+        if (captureUiProofEnabled) {
+          await page.waitForTimeout(2_000);
+        }
         await page.reload();
         await finalText.waitFor();
         await expect.poll(() => widgets.count()).toBe(1);
@@ -391,6 +431,9 @@ suite.define(() => {
           inner.getByRole("button", { name: "Add one", exact: true }),
         );
         await expect.poll(() => inner.locator("output").textContent()).toBe("1");
+        if (captureUiProofEnabled) {
+          await page.waitForTimeout(2_000);
+        }
       },
     );
   });

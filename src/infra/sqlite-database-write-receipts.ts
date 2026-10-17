@@ -4,11 +4,7 @@ import { toUSVString } from "node:util";
 import { threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
-import {
-  isPostgresSqlConnection,
-  sqlPublicationAnchor,
-  type EngineConnection,
-} from "./sql-connection.js";
+import { sqlPublicationAnchor, type EngineConnection } from "./sql-connection.js";
 import {
   isSqliteDatabaseAdmissionRetired as isRetired,
   readSqliteDatabaseGeneration,
@@ -314,13 +310,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     scope: string | readonly SqliteDatabaseWriteScope[],
   ): string | undefined {
     const database = sqlPublicationAnchor(connection);
-    // PG publishes one broad revision at COMMIT; SQLite tracks native mutation scopes.
-    const pending = isPostgresSqlConnection(connection)
-      ? connection.isTransaction
-        ? null
-        : undefined
-      : state.pendingWriteScopes.get(database);
-    return readScopedWriteToken(database, scope, pending);
+    return readScopedWriteToken(database, scope, state.pendingWriteScopes.get(database));
   }
 
   /** Host row caches retain a physical identity and receipt without opening SQLite. */

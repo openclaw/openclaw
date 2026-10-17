@@ -8,6 +8,7 @@ import {
   isExpectedCliError,
   isGatewayCredentialsCliError,
 } from "../../cli/failure-output.js";
+import { prepareCliGatewayStateAccess } from "../../cli/gateway-rpc.runtime.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { withProgress } from "../../cli/progress.js";
 import { callGateway } from "../../gateway/call.js";
@@ -70,6 +71,7 @@ export async function channelsStatusCommand(
           params,
           timeoutMs: remainingMs,
           sharedStateMode: "read-only",
+          beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
         });
       },
     );

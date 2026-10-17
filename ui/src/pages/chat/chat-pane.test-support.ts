@@ -33,8 +33,6 @@ import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
-import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
-import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import { createNavigationPreferencesFixture } from "../../test-helpers/application-context.ts";
 import {
@@ -56,14 +54,11 @@ import {
 } from "./chat-pane-runtime.test-support.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import type { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
-import type {
-  ChatTypingActorState,
-  ChatTypingActorView,
-  ChatTypingOverflow,
-} from "./chat-typing-presence.ts";
+import type { ChatTypingActorState, ChatTypingActorView } from "./chat-typing-presence.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
@@ -74,6 +69,8 @@ import type {
 import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
+
+export { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 type PaneHeaderWorkspace = ReturnType<typeof createChatPaneRails>["sessionWorkspace"];
 
@@ -129,7 +126,13 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   render: ChatPaneRuntime["render"];
   readonly transcript: ChatTranscript;
   readonly history: ChatPaneRuntime["history"];
+  readonly tasks: ChatPaneRuntime["tasks"];
+  readonly repository: ChatPaneRuntime["repository"];
+  readonly headerPresentation: ChatPaneRuntime["headerPresentation"];
+  readonly collaboration: ChatPaneRuntime["collaboration"];
+  readonly presence: ChatPaneRuntime["presence"];
   readonly sessionDiscussion: ChatPaneRuntime["sessionDiscussion"];
+  readonly swarm: ChatPaneRuntime["swarm"];
   active: boolean;
   presented: boolean;
   presentationId: string;
@@ -182,18 +185,13 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   sessionPullRequests: ControlUiSessionPullRequest[];
   sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   githubRepo: MarkdownRenderOptions["githubRepo"];
-  taskSuggestions: TaskSuggestion[];
   suggestionChatProps: (
     connected: boolean,
     archived: boolean,
     multiIdentity: boolean,
   ) => ChatTaskSuggestionTrayProps;
-  presencePayload?: { presence: unknown[] };
-  sessionSuggestionAddOperation: symbol | undefined;
-  sessionSuggestionRole: "admin" | "owner" | "member" | "viewer" | undefined;
   addCurrentSessionSuggestion: () => Promise<void>;
   resetSessionSuggestions: () => void;
-  sessionSuggestions: SessionSuggestion[];
   sessionSuggestionsRequestVersion: number;
   sessionSuggestionsRefreshPromise: Promise<void> | undefined;
   sessionSuggestionTargetSignature: string;
@@ -203,7 +201,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   clearTypingActorForSessionMessage: (payload: unknown) => void;
   pruneTypingActors: () => void;
   typingActors: Map<string, ChatTypingActorState>;
-  typingOverflow?: ChatTypingOverflow;
   clearTypingActors: () => void;
   typingActorViews: () => ChatTypingActorView[];
   sendTypingState: (typing: boolean, preview?: string, cursor?: number) => void;
@@ -235,8 +232,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   readReplyMessage: (messageId: string) => unknown;
   hasOlderMessages: () => boolean;
   olderCursorsSeen: Set<string>;
-  headerRenameSession: Pick<GatewaySessionRow, "key" | "sessionId" | "label"> | null;
-  headerRenameValue: string;
   beginHeaderRename: (row: GatewaySessionRow) => void;
   handleHeaderSessionAction: (action: HeaderMenuAction, row: GatewaySessionRow) => Promise<void>;
   onboarding: boolean;
@@ -254,9 +249,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
   ) => Promise<void>;
-  headerPlacementMovingKey: string | null;
-  headerPlacementReclaimingKey: string | null;
-  headerPlacementRestartingKey: string | null;
   changeHeaderPlacement: (
     row: GatewaySessionRow,
     mode: "move" | "recover" | "reclaim",
@@ -407,35 +399,6 @@ export function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
     content: [{ type: "text", text }],
     __openclaw: { seq },
   };
-}
-
-type SessionCapabilityFixtureOverrides = Omit<Partial<SessionCapability>, "patch" | "state"> & {
-  patch?: (...args: Parameters<NonNullable<SessionCapability["patch"]>>) => unknown;
-  state?: Partial<SessionCapability["state"]>;
-};
-
-export function createSessionCapabilityFixture(
-  overrides: SessionCapabilityFixtureOverrides = {},
-): SessionCapability {
-  const archiveState = createSessionArchiveState(
-    (key) => overrides.state?.result?.sessions.find((row) => row.key === key),
-    () => {},
-    createSessionRowProvenance(),
-  );
-  return {
-    get presentation() {
-      return { result: overrides.state?.result ?? null, agentId: overrides.state?.agentId ?? null };
-    },
-    captureConnectionScope: () => null,
-    isConnectionScopeCurrent: () => false,
-    subscribe: () => () => undefined,
-    deletionState: () => undefined,
-    think: () => undefined,
-    settingsPreview: () => undefined,
-    archiveVisibility: archiveState.visibility,
-    beginArchive: archiveState.beginPending,
-    ...overrides,
-  } as typeof overrides & SessionCapability;
 }
 
 export function createSessionContext(

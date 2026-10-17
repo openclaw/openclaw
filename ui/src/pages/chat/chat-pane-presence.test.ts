@@ -3,7 +3,7 @@
 
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { PresenceEntry } from "../../api/types.ts";
-import type { PresencePayload } from "../../app/user-profile.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -30,28 +30,36 @@ function person(id: string, overrides: Partial<PresenceEntry> = {}): PresenceEnt
 }
 
 async function createPane(presence: PresenceEntry[]) {
-  const pane = createRenderTestChatPane() as unknown as Omit<
-    ReturnType<typeof createRenderTestChatPane>,
-    "presencePayload"
+  const pane = createRenderTestChatPane() as unknown as ReturnType<
+    typeof createRenderTestChatPane
   > & {
-    presencePayload: PresencePayload | undefined;
     performUpdate: () => void;
     chatState: ReturnType<typeof createChatState<ChatPageHost>>;
   };
   const context = createInitializationContext(
     createGatewayBrowserClientFixture({ instanceId: "self-tab" }),
   );
+  const gatewayListeners = new Set<Parameters<ApplicationContext["gateway"]["subscribe"]>[0]>();
+  context.gateway.subscribe = (listener) => {
+    gatewayListeners.add(listener);
+    return () => gatewayListeners.delete(listener);
+  };
+  const publishGateway = () => {
+    for (const listener of gatewayListeners) {
+      listener(context.gateway.snapshot);
+    }
+  };
   const state = pane.initialize(context);
   pane.sessionKey = sessionKey;
   state.sessionKey = sessionKey;
   state.chatMessages = [{ role: "assistant", content: "Retained conversation", timestamp: 1 }];
-  pane.presencePayload = { presence };
+  pane.presence.update({ presence });
   connectPaneTestView(pane);
   state.renderLifecycle = pane.chatState.createRenderLifecycle();
   pane.chatState.attach(state);
   await settleLitElement(pane);
   onTestFinished(() => pane.disconnectedCallback());
-  return { pane, context, state, update: vi.spyOn(pane, "render") };
+  return { pane, context, state, publishGateway, update: vi.spyOn(pane, "render") };
 }
 
 it.each([
@@ -119,19 +127,21 @@ it.each([
   async ({ previous, next, updates = 1 }) => {
     const { pane, update } = await createPane(previous);
     const payload = { presence: next };
-    pane.presencePayload = payload;
+    pane.presence.update(payload);
     vi.advanceTimersToNextFrame();
     await settleLitElement(pane);
     expect(update).toHaveBeenCalledTimes(updates);
-    expect(pane.presencePayload).toBe(payload);
-    expect(pane.presencePayload?.presence).toBe(next);
+    expect(pane.presence.snapshot).toBe(payload);
+    expect(pane.presence.snapshot?.presence).toBe(next);
     expect(pane.chatProps?.userName).toBe("self");
   },
 );
 
 it("refreshes the fallback self identity and defers to the authoritative profile", async () => {
-  const { pane, context, update } = await createPane([person("self", { watchedSessions: [] })]);
-  pane.presencePayload = {
+  const { pane, context, publishGateway, update } = await createPane([
+    person("self", { watchedSessions: [] }),
+  ]);
+  pane.presence.update({
     presence: [
       person("self", {
         watchedSessions: [],
@@ -143,7 +153,7 @@ it("refreshes the fallback self identity and defers to the authoritative profile
         },
       }),
     ],
-  };
+  });
   vi.advanceTimersToNextFrame();
   await settleLitElement(pane);
   expect(update).toHaveBeenCalledOnce();
@@ -155,14 +165,14 @@ it("refreshes the fallback self identity and defers to the authoritative profile
     identity: { type: "profile", id: "self" },
     name: "Authoritative self",
   };
-  pane.invalidate();
+  publishGateway();
   await settleLitElement(pane);
   update.mockClear();
-  pane.presencePayload = {
+  pane.presence.update({
     presence: [
       person("self", { watchedSessions: [], user: { id: "self", name: "Old tab label" } }),
     ],
-  };
+  });
   vi.advanceTimersToNextFrame();
   await settleLitElement(pane);
   expect(update).not.toHaveBeenCalled();

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { inspect } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
@@ -16,9 +17,14 @@ import { withSessionTranscriptWriteAssertion } from "../../config/sessions/trans
 import { applyLoggingConfig, resetLogger } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
+import {
+  readSessionTranscriptVisibleMessageDelta,
+  readVisibleSessionTranscriptMessageEntries,
+} from "../../plugin-sdk/session-transcript-runtime.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { rewriteTranscriptEntriesInSessionManager } from "../embedded-agent-runner/transcript-rewrite.js";
 import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
 import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
 import { withSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
@@ -386,4 +392,139 @@ it("refuses synchronous SDK writes before view mutation or tool-result hooks", a
   expect(beforeWrite).not.toHaveBeenCalled();
   expect(read).not.toHaveBeenCalled();
   await manager.appendCustomEntryAsync("still writable", {});
+});
+
+type DeltaParams = Parameters<typeof readSessionTranscriptVisibleMessageDelta>[0];
+// Drains every visible-delta page the way a context engine would.
+async function drainVisible(params: DeltaParams) {
+  const ids: string[] = [];
+  let cursor = params.cursor;
+  for (;;) {
+    const next = await readSessionTranscriptVisibleMessageDelta({ ...params, cursor });
+    if (next.kind !== "page") {
+      return { ids, cursor, reset: next.kind === "reset" ? next.reason : next.kind };
+    }
+    ids.push(...next.entries.map((entry) => entry.entryId));
+    cursor = next.cursor;
+    if (!next.hasMore) {
+      return { ids, cursor };
+    }
+  }
+}
+const toolCall = {
+  role: "assistant",
+  content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+  stopReason: "toolUse",
+  timestamp: 2,
+};
+const toolResult = (toolCallId: string, text: string) => ({
+  role: "toolResult",
+  toolCallId,
+  toolName: "read",
+  content: [{ type: "text", text }],
+  isError: false,
+  timestamp: 3,
+});
+const answer = (text: string, timestamp: number) => ({
+  role: "assistant",
+  content: [{ type: "text", text }],
+  timestamp,
+});
+
+it("drains incognito reset windows with retained tool pairs and reports later resets", async () => {
+  const { target } = await create("reset-window");
+  const manager = await SessionManager.openAsync(target);
+  const append = async (message: unknown) =>
+    expectDefined(
+      await manager.appendMessageAsync(message as Parameters<SessionManager["appendMessage"]>[0]),
+      "appended entry id",
+    );
+  const oldUser = await append(makeUserMessage("old question", 1));
+  const oldAnswer = await append(answer("old answer", 1));
+  const kept = await append(makeUserMessage("read the file", 2));
+  const call = await append(toolCall);
+  const paired = await append(toolResult("call_1", "paired"));
+  const orphan = await append(toolResult("orphan-call", "orphan"));
+  const summary = await append(answer("summary", 4));
+  await manager.appendResetBoundaryAsync("idle", kept);
+  const current = await append(makeUserMessage("current question", 5));
+
+  // The default start is unchanged and still includes pre-reset history.
+  await expect(drainVisible({ ...target, maxMessages: 3 })).resolves.toMatchObject({
+    ids: [oldUser, oldAnswer, kept, call, paired, orphan, summary, current],
+  });
+  // The retained tail keeps the paired tool result and drops the orphan.
+  const windowed = await drainVisible({ ...target, maxMessages: 2, start: "reset-window" });
+  expect(windowed.ids).toEqual([kept, call, paired, summary, current]);
+
+  await manager.appendResetBoundaryAsync("reset");
+  const fresh = await append(makeUserMessage("fresh question", 6));
+  await expect(
+    drainVisible({ ...target, cursor: windowed.cursor, start: "reset-window" }),
+  ).resolves.toMatchObject({ ids: [], reset: "session_reset" });
+  await expect(drainVisible({ ...target, start: "reset-window" })).resolves.toMatchObject({
+    ids: [fresh],
+  });
+});
+
+it("records the replaced entry id on repeated incognito rewrites", async () => {
+  const { target } = await create("rewrite-markers");
+  const manager = await SessionManager.openAsync(target);
+  const ids: string[] = [];
+  for (const message of [
+    makeUserMessage("read file", 1),
+    toolCall,
+    toolResult("call_1", "large original result"),
+    answer("summary", 4),
+  ]) {
+    ids.push(
+      expectDefined(
+        await manager.appendMessageAsync(message as Parameters<SessionManager["appendMessage"]>[0]),
+        "appended entry id",
+      ),
+    );
+  }
+  const [userId, callId, toolId, tailId] = ids;
+  const markers = async () => {
+    const visible = await readVisibleSessionTranscriptMessageEntries(target);
+    const delta = await drainVisible(target);
+    // Both plugin read paths project the same marker.
+    expect(delta.ids).toEqual(visible.map((entry) => entry.entryId));
+    return visible.map((entry) => [entry.entryId, entry.supersedesEntryId]);
+  };
+  const rewriteTool = async (sessionManager: SessionManager, entryId: string, text: string) => {
+    await rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [{ entryId, message: toolResult("call_1", text) as never }],
+    });
+    return sessionManager
+      .getBranch()
+      .slice(2)
+      .map((entry) => entry.id);
+  };
+  const [toolCopy, tailCopy] = await rewriteTool(
+    manager,
+    expectDefined(toolId, "tool id"),
+    "short",
+  );
+  await expect(markers()).resolves.toEqual([
+    [userId, undefined],
+    [callId, undefined],
+    [toolCopy, toolId],
+    [tailCopy, tailId],
+  ]);
+
+  // A reopened view matches its committed rows, so a later rewrite chains from the copy.
+  const reopened = await SessionManager.openAsync(target);
+  const [toolSecond, tailSecond] = await rewriteTool(
+    reopened,
+    expectDefined(toolCopy, "copy id"),
+    "shorter",
+  );
+  await expect(markers()).resolves.toEqual([
+    [userId, undefined],
+    [callId, undefined],
+    [toolSecond, toolCopy],
+    [tailSecond, tailCopy],
+  ]);
 });

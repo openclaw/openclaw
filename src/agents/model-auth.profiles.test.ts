@@ -112,9 +112,11 @@ vi.mock("./model-auth-env-vars.js", () => {
   };
 });
 
+// mock-isolation: Profile and environment precedence fixtures define every credential source, excluding live provider overlays.
 vi.mock("../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: () => [],
+    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
   }),
 }));
 

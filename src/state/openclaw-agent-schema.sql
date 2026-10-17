@@ -832,42 +832,6 @@ END;
 
 INSERT OR IGNORE INTO memory_index_state (id, revision) VALUES (1, 0);
 
-CREATE TRIGGER IF NOT EXISTS memory_index_sources_revision_after_insert
-AFTER INSERT ON memory_index_sources
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-END;
-
-CREATE TRIGGER IF NOT EXISTS memory_index_sources_revision_after_update
-AFTER UPDATE ON memory_index_sources
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-END;
-
-CREATE TRIGGER IF NOT EXISTS memory_index_sources_revision_after_delete
-AFTER DELETE ON memory_index_sources
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-END;
-
-CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_insert
-AFTER INSERT ON memory_index_chunks
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-END;
-
-CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_update
-AFTER UPDATE ON memory_index_chunks
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-END;
-
-CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_delete
-AFTER DELETE ON memory_index_chunks
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-END;
-
 CREATE INDEX IF NOT EXISTS idx_memory_embedding_cache_updated_at
   ON memory_embedding_cache(updated_at);
 

@@ -76,6 +76,7 @@ type TestChatPane = HTMLElement & {
   presentedChanged: (presented: boolean) => void;
   sessionKey: string;
   resetConfirmation: object | undefined;
+  swarm: ChatPaneRuntime["swarm"];
   routeFace: "chat" | "dashboard";
   dashboardExpanded: boolean;
   onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
@@ -428,12 +429,7 @@ describe("chat pane board shell", () => {
         },
       },
     } as unknown as ApplicationContext;
-    Reflect.set(pane, "swarmHydrator", null);
     await vi.dynamicImportSettled();
-    const frames: FrameRequestCallback[] = [];
-    const requestFrame = vi.fn((callback: FrameRequestCallback) => frames.push(callback));
-    vi.stubGlobal("requestAnimationFrame", requestFrame);
-    const invalidate = vi.spyOn(pane, "invalidate");
 
     try {
       for (let index = 0; index < 3; index += 1) {
@@ -441,33 +437,19 @@ describe("chat pane board shell", () => {
       }
       await vi.dynamicImportSettled();
 
-      expect(invalidate).not.toHaveBeenCalled();
-      expect(pane.state.requestUpdate).not.toHaveBeenCalled();
-      expect(requestFrame).toHaveBeenCalledTimes(1);
-      frames[0]?.(0);
-      expect(pane.state.requestUpdate).toHaveBeenCalledOnce();
-      expect(Reflect.get(pane, "swarmHydrator")).toBeInstanceOf(SwarmRosterHydrator);
-      expect(Reflect.get(pane, "swarmEnabled")).toBe(true);
+      expect(pane.swarm.hydrator).toBeInstanceOf(SwarmRosterHydrator);
+      expect(pane.swarm.enabled).toBe(true);
 
-      const hydrator = Reflect.get(pane, "swarmHydrator");
-      const enabled = !Reflect.get(pane, "swarmEnabled");
+      const hydrator = pane.swarm.hydrator;
+      const enabled = !pane.swarm.enabled;
       configSnapshot.config = { tools: { swarm: { enabled } } };
-      requestFrame.mockClear();
-      frames.length = 0;
-      vi.mocked(pane.state.requestUpdate).mockClear();
       pane.refreshSwarmRoster();
       await vi.dynamicImportSettled();
 
-      expect(Reflect.get(pane, "swarmHydrator")).toBe(hydrator);
-      expect(Reflect.get(pane, "swarmEnabled")).toBe(enabled);
-      expect(requestFrame).toHaveBeenCalledOnce();
-      frames[0]?.(0);
-      expect(pane.state.requestUpdate).toHaveBeenCalledOnce();
+      expect(pane.swarm.hydrator).toBe(hydrator);
+      expect(pane.swarm.enabled).toBe(enabled);
     } finally {
-      const hydrator = Reflect.get(pane, "swarmHydrator") as InstanceType<
-        typeof SwarmRosterHydrator
-      > | null;
-      hydrator?.dispose();
+      pane.swarm.hydrator?.dispose();
       vi.useRealTimers();
     }
   });

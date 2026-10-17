@@ -53,7 +53,12 @@ it("settles the real repair handoff without closing a parent lease before Doctor
     );
     vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", "external");
     const agentDir = state.agentDir("owner");
-    const auth = createAuthProfileStoreRuntime(createExternalAuthRuntime(() => []));
+    const auth = createAuthProfileStoreRuntime(
+      createExternalAuthRuntime(
+        () => [],
+        async (_params, run) => run(),
+      ),
+    );
     const seed = createOpenClawDatabaseMaintenanceScope();
     try {
       seed.run(() =>

@@ -221,6 +221,7 @@ export async function buildBrowserGatewayConnectPlan({
           "hello-health-on-demand",
           "session-scoped-events",
           "presence-deltas",
+          ...(!nativeAuth ? ["session-row-deltas"] : []),
           "inline-widgets",
           "model-selection-policy",
           "model-wait-status",

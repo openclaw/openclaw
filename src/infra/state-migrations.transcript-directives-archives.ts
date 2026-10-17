@@ -4,10 +4,13 @@ import {
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
 import { renewAgentDatabaseMaintenanceAuthorityIfPresent } from "../state/openclaw-agent-db-lease.js";
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-maintenance-authority.js";
+import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { SESSION_TRANSCRIPT_ARCHIVES_TABLE } from "../state/openclaw-agent-session-transcript-archive-schema.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { sha256Hex } from "./crypto-digest.js";
 import {
@@ -21,6 +24,7 @@ import {
   MIGRATION_WARNING_EXAMPLE_LIMIT,
 } from "./migration-warning-summary.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { withPreparedSqliteSnapshot } from "./sqlite-readonly-location-cleanup.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
@@ -61,15 +65,16 @@ export type ArchiveSessionLineTransform = (
 
 type ArchiveMigrationOptions = {
   agentId: string;
-  database: DatabaseSync;
   pathname: string;
   start: ArchiveCursor;
   signal?: AbortSignal;
   verification?: { key: string; prepared?: ReadonlySet<string>; collect?: Set<string> };
-  verifyOnly?: boolean;
   beforeRewrite?: () => void;
   writeCursor?: (cursor: ArchiveCursor | { phase: "complete" }) => void;
-};
+} & (
+  | { database: EngineConnection; verifyOnly: true }
+  | { database: DatabaseSync; verifyOnly?: false }
+);
 
 type ArchiveMigrationResult = {
   rewrittenArchives: number;
@@ -119,17 +124,13 @@ function readArchiveEncoding(value: string, owner: string): "identity" | "zstd" 
   throw new Error(`${owner} has unsupported transcript archive encoding ${value}`);
 }
 
-function hasArchiveTable(database: DatabaseSync): boolean {
+function hasArchiveTable(database: EngineConnection): boolean {
   // The archive table was added lazily at agent schema v17, so valid v17 databases may omit it.
-  return Boolean(
-    database
-      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
-      .get(SESSION_TRANSCRIPT_ARCHIVES_TABLE),
-  );
+  return tableExists(database, SESSION_TRANSCRIPT_ARCHIVES_TABLE);
 }
 
 async function listArchiveBatch(
-  database: DatabaseSync,
+  database: EngineConnection,
   cursor: ArchiveCursor | undefined,
   transformLine: ArchiveSessionLineTransform,
   options?: {
@@ -218,7 +219,7 @@ async function listArchiveBatch(
 }
 
 export async function transcriptDirectiveArchivesNeedMigration(
-  database: DatabaseSync,
+  database: EngineConnection,
   start: ArchiveCursor,
   transformLine: ArchiveSessionLineTransform = transformArchiveDirectiveLine,
 ): Promise<boolean> {
@@ -248,7 +249,7 @@ export async function transcriptDirectiveArchivesNeedMigration(
   }
 }
 
-export function transcriptDirectiveArchiveRecoveryPending(database: DatabaseSync): boolean {
+export function transcriptDirectiveArchiveRecoveryPending(database: EngineConnection): boolean {
   return readTranscriptArchiveRecoveryJournal(database) !== undefined;
 }
 
@@ -320,8 +321,11 @@ export async function migrateCanonicalTranscriptArchives(
         pathname: params.pathname,
         signal,
       });
-  const write = <T>(operationLabel: string, operation: () => T): T =>
-    runSqliteImmediateTransactionSync(
+  const write = <T>(operationLabel: string, operation: () => T): T => {
+    if (params.verifyOnly) {
+      throw new Error("Archive verification cannot write database state");
+    }
+    return runSqliteImmediateTransactionSync(
       params.database,
       () => {
         signal?.throwIfAborted();
@@ -337,6 +341,7 @@ export async function migrateCanonicalTranscriptArchives(
         operationLabel,
       },
     );
+  };
   const checkpoint = params.verifyOnly ? undefined : params.writeCursor;
   let missingCopies = 0;
   const missingCopyExamples: string[] = [];
@@ -562,6 +567,31 @@ export async function prepareCanonicalTranscriptArchiveMigrations(
   const prepared = new Set<string>();
   discovery.preparedTranscriptArchives = prepared;
   for (const target of discovery.discovery.targets) {
+    const verify = (database: EngineConnection) =>
+      migrateCanonicalTranscriptArchives({
+        agentId: target.agentId,
+        pathname: target.path,
+        database,
+        start: { generation: "", sessionId: "" },
+        verifyOnly: true,
+        verification: { key: MEDIA_ARCHIVE_VERIFICATION_KEY, collect: prepared },
+        transformLine: transformMediaArchiveContent,
+      });
+    if (agentEngineInput()) {
+      const retained = retainOpenClawAgentDatabaseReadOnly({
+        agentId: target.agentId,
+        path: target.realPath,
+      });
+      if (!retained.found) {
+        throw new Error(`Agent database is unavailable for archive inspection: ${target.path}`);
+      }
+      try {
+        await verify(retained.database.db);
+      } finally {
+        retained.claim.release();
+      }
+      continue;
+    }
     const snapshot = await prepareSqliteReadOnlyLocation(target.realPath, {
       preserveSourceArtifacts: true,
       allowLiveOwner: true,
@@ -569,15 +599,7 @@ export async function prepareCanonicalTranscriptArchiveMigrations(
     await withPreparedSqliteSnapshot(snapshot, async (location) => {
       const database = openNodeSqliteDatabase(location, { readOnly: true });
       try {
-        await migrateCanonicalTranscriptArchives({
-          agentId: target.agentId,
-          pathname: target.path,
-          database,
-          start: { generation: "", sessionId: "" },
-          verifyOnly: true,
-          verification: { key: MEDIA_ARCHIVE_VERIFICATION_KEY, collect: prepared },
-          transformLine: transformMediaArchiveContent,
-        });
+        await verify(database);
       } finally {
         clearNodeSqliteKyselyCacheForDatabase(database);
         database.close();

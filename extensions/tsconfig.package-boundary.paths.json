@@ -994,6 +994,9 @@
       ],
       "openclaw/plugin-sdk/node-crypto-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/node-crypto-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/path-existence-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/path-existence-runtime.d.ts"
       ]
     }
   }

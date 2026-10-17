@@ -17,6 +17,7 @@ import {
 import {
   ASYNC_DIAGNOSTIC_EVENT_NAMES,
   PRIORITY_ASYNC_DIAGNOSTIC_EVENT_NAMES,
+  PUBLIC_EXCLUDED_DIAGNOSTIC_EVENT_NAMES,
 } from "./diagnostic-event-queue-policy.js";
 import {
   cloneDiagnosticValueForListener,
@@ -1589,17 +1590,7 @@ export function hasPendingInternalDiagnosticEvent(
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
   return onInternalDiagnosticEvent((event) => listener(event), {
     includeTrusted: [],
-    exclude: [
-      "log.record",
-      "gateway.rpc",
-      "sessions.list.retention",
-      "gateway.ws.event",
-      "gateway.ws.connections",
-      "gateway.event_loop.sample",
-      "gateway.main_thread.stall",
-      "gateway.http.cancelled",
-      "diagnostic.gc",
-    ],
+    exclude: PUBLIC_EXCLUDED_DIAGNOSTIC_EVENT_NAMES,
   });
 }
 

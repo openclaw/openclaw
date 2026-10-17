@@ -418,6 +418,31 @@ or protocol-version change.
 - `plugin.approval.requested` / `plugin.approval.resolved`: plugin approval
   lifecycle.
 
+## Session event row deltas
+
+The web Control UI advertises `session-row-deltas` in connect `caps`. For that
+connection, full `session` and `ancestorSessions` row slots in `sessions.changed`
+and `session.message` use either `{ key, agentId?, version, full }` or
+`{ key, agentId?, base, version, set, remove }`. Other clients retain the existing
+payloads. Ancestor references, top-level receipts, and message bodies are unchanged.
+
+The decoder replaces changed top-level fields from `set` and deletes fields named
+by `remove`; nested objects and arrays replace whole. A patch requires the same
+agent/key identity and exact held `base` version. The browser reconstructs full
+legacy payloads once before dispatching any event listener. A missing or invalid
+base discards the event and reconnects through the normal subscription recovery.
+
+First delivery, changed generation, eviction, or a patch no smaller than its full
+wrapper sends `full`. Both ends retain at most 1,024 rows in delivery-order LRU.
+The server also bounds its field-hash vectors to 2 MiB per connection; `retain:
+false` on a full wrapper instructs both ends to discard that baseline. No row-byte
+charge is sent. Subscription changes invalidate ancestor certification but preserve
+wire baselines: a response can follow a newly delivered row on the same socket.
+Connection retirement clears the state. A dropped event invalidates server
+baselines; subsequent rows are full, and sequence gaps trigger the existing
+reconnect behavior. List/describe replies
+do not establish event baselines or overwrite the decoder's held rows.
+
 ## Node helper methods
 
 Nodes may call `skills.bins` to fetch the current list of skill executables

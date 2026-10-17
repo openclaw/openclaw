@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { setImmediate as nextFrame } from "node:timers/promises";
+import { createEffect, createMemo, flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
@@ -10,6 +11,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { projectsForGateway } from "../../lib/projects.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
@@ -17,6 +19,8 @@ import {
 import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-owner.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { projectChatFields } from "./chat-field-projection.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import {
@@ -258,10 +262,22 @@ describe("chat pane pushed pull request state", () => {
       status: "ready" as const,
     };
     emitSnapshot(emitGatewayEvent, state.sessionKey, snapshot);
-    const redraw = vi.spyOn(pane, "invalidate");
+    const redraw = vi.fn();
+    mountSolid(() => {
+      projectChatFields(pane.repository);
+      const source = createMemo(() => {
+        const target = pane.repository.target;
+        return target && projectOwner(target.store, (owner) => owner.get(target.key), Object.is);
+      });
+      createEffect(() => source()?.read(), redraw);
+      return null;
+    });
+    flush();
+    redraw.mockClear();
     notified.mockClear();
 
     emitSnapshot(emitGatewayEvent, "agent:main:unwatched", snapshot);
+    flush();
     expect.soft(notified).not.toHaveBeenCalled();
     expect.soft(redraw).not.toHaveBeenCalled();
     notified.mockClear();
@@ -271,6 +287,7 @@ describe("chat pane pushed pull request state", () => {
       ...snapshot,
       pullRequests: [pullRequest(2, "merged")],
     });
+    flush();
     expect(notified).toHaveBeenCalledOnce();
     expect.soft(redraw).not.toHaveBeenCalled();
     expect(pane.sessionPullRequests).toEqual(snapshot.pullRequests);
@@ -281,12 +298,14 @@ describe("chat pane pushed pull request state", () => {
       rateLimited: false,
       status: "unavailable",
     });
+    flush();
     expect(redraw).toHaveBeenCalledOnce();
     expect(pane.sessionPullRequests).toEqual(snapshot.pullRequests);
     redraw.mockClear();
 
     state.sessionKey = otherKey;
     pane.refreshSessionPullRequests();
+    flush();
     expect(redraw).toHaveBeenCalledOnce();
     expect(pane.sessionPullRequests).toEqual([pullRequest(2, "merged")]);
   });

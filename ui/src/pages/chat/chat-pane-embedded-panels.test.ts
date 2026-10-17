@@ -448,7 +448,6 @@ describe("chat pane embedded panels", () => {
         fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
         loadFullAssistantMessage: createSidebarFullMessageLoader(state, context.gateway),
         connectionEpoch: state.connectionEpoch,
-        onRequestUpdate: renderAttachment,
         mediaOwner: renderAttachment,
       } as ChatProps;
       const [current, setCurrent] = createSignal(chat);

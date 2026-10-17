@@ -91,6 +91,17 @@ export function createDiagnosticsMetrics(
       `${metricNamePrefix}sessions.list.retained_bytes`,
       { unit: "By", description: "Estimated memory retained by session-list views" },
     ),
+    sessionEventRowsRetainedEntriesGauge: meter.createGauge(
+      `${metricNamePrefix}session_event_rows_retained_entries`,
+      {
+        unit: "1",
+        description: "Session-event field-hash vectors retained across all connections",
+      },
+    ),
+    sessionEventRowsRetainedBytesGauge: meter.createGauge(
+      `${metricNamePrefix}session_event_rows_retained_bytes`,
+      { unit: "By", description: "Estimated memory retained by session-event field-hash vectors" },
+    ),
     gatewayRpcOutcomesCounter: createCounter(
       "gateway.rpc.outcomes",
       "Gateway RPC observations by phase and outcome",

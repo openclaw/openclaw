@@ -9,8 +9,14 @@ export function registerMessageReadEditDeleteCommands(
     .withMessageBase(message.command("read").description("Read recent messages"), "required")
     .option("--limit <n>", "Result limit")
     .option("--message-id <id>", "Read a specific message id")
-    .option("--before <id>", "Read/search before id")
-    .option("--after <id>", "Read/search after id")
+    .option(
+      "--before <id>",
+      "Read/search before id (Matrix: nextBatch/prevBatch token from a previous read)",
+    )
+    .option(
+      "--after <id>",
+      "Read/search after id (Matrix: nextBatch/prevBatch token from a previous read)",
+    )
     .option("--around <id>", "Read around id")
     .option("--thread-id <id>", "Thread id (Slack thread timestamp)")
     .addOption(new Option("--include-thread").hideHelp())

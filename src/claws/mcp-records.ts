@@ -21,10 +21,10 @@ export type PersistedClawMcpServerRef = {
   updatedAtMs: number;
 };
 
-export type McpDatabase = Pick<DB, "claw_mcp_server_refs">;
-export type McpRefRow = Selectable<DB["claw_mcp_server_refs"]>;
+type McpDatabase = Pick<DB, "claw_mcp_server_refs">;
+type McpRefRow = Selectable<DB["claw_mcp_server_refs"]>;
 
-export function selectMcpRefs(db: EngineConnection) {
+function selectMcpRefs(db: EngineConnection) {
   return getNodeSqliteKysely<McpDatabase>(db)
     .selectFrom("claw_mcp_server_refs")
     .select([
@@ -42,23 +42,7 @@ export function selectMcpRefs(db: EngineConnection) {
     ]);
 }
 
-export function refToRow(ref: PersistedClawMcpServerRef): McpRefRow {
-  return {
-    agent_id: ref.agentId,
-    name: ref.name,
-    schema_version: ref.schemaVersion,
-    config_digest: ref.configDigest,
-    relationship: ref.relationship,
-    origin: ref.origin,
-    independent_owner: ref.independentOwner ? 1 : 0,
-    status: ref.status,
-    error: ref.error ?? null,
-    created_at_ms: ref.createdAtMs,
-    updated_at_ms: ref.updatedAtMs,
-  };
-}
-
-export function rowToRef(row: McpRefRow): PersistedClawMcpServerRef {
+function rowToRef(row: McpRefRow): PersistedClawMcpServerRef {
   return {
     schemaVersion: CLAW_MCP_REF_SCHEMA_VERSION,
     agentId: row.agent_id,
