@@ -22,11 +22,12 @@ const targetSha = "1".repeat(40);
 const sourceSha = "2".repeat(40);
 const tagSha = "3".repeat(40);
 const version = "2026.9.7";
-const npmVersion = "11.20.0";
 const integrity = `sha512-${Buffer.alloc(64, 1).toString("base64")}`;
 const tarball = `https://registry.npmjs.org/openclaw/-/openclaw-${version}.tgz`;
 const identity = { targetSha, version, sourceSha, integrity, tarball };
 const invalidRelease = /Invalid string|Invalid.*format|regular stable OpenClaw release/u;
+const invalidTarball = /tarball|registry|qualification target/u;
+const wrongIntegrity = `sha512-${Buffer.alloc(64, 3).toString("base64")}`;
 
 afterEach(() => {
   command.mockReset();
@@ -53,26 +54,23 @@ function fixture(options: { annotatedTag?: boolean } = {}) {
   const root = tempDirs.make("ios-release-gateway-");
   const selectionDir = path.join(root, "selection");
   const installDir = path.join(root, "install");
-  const selectionSignal = new AbortController().signal;
   const state = {
-    metadata: { name: "openclaw", version, dist: { integrity, tarball } },
-    sourceSha,
-    npmVersion,
+    ...identity,
+    lockIntegrity: integrity,
+    npmVersion: "11.20.0",
     installedVersion: version,
     installedCommit: sourceSha,
     installExitCode: 0,
     cancelInstall: undefined as AbortController | undefined,
   };
-  const lock = {
-    name: "ios-release-gateway-fixture",
-    version: "1.0.0",
+  const lock = () => ({
     lockfileVersion: 3,
     packages: {
       "": { dependencies: { openclaw: version } },
       "node_modules/openclaw": {
         version,
-        resolved: tarball,
-        integrity,
+        resolved: state.tarball,
+        integrity: state.lockIntegrity,
         dependencies: { "fixture-transitive": "^1.0.0" },
       },
       "node_modules/fixture-transitive": {
@@ -81,12 +79,16 @@ function fixture(options: { annotatedTag?: boolean } = {}) {
         integrity: `sha512-${Buffer.alloc(64, 2).toString("base64")}`,
       },
     },
-  };
+  });
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     const authorization = new Headers(init?.headers).get("Authorization");
     if (url === "https://registry.npmjs.org/openclaw/latest") {
       expect(authorization).toBeNull();
-      return Response.json(state.metadata);
+      return Response.json({
+        name: "openclaw",
+        version: state.version,
+        dist: { integrity: state.integrity, tarball: state.tarball },
+      });
     }
     if (
       process.env.GH_TOKEN === "synthetic-ios-github-token" &&
@@ -134,7 +136,7 @@ function fixture(options: { annotatedTag?: boolean } = {}) {
         expect(readJson(path.join(cwd, "package.json")).dependencies).toEqual({
           openclaw: version,
         });
-        writeJson(path.join(cwd, "package-lock.json"), lock);
+        writeJson(path.join(cwd, "package-lock.json"), lock());
         return 0;
       }
       if (args.includes("ci")) {
@@ -168,11 +170,11 @@ function fixture(options: { annotatedTag?: boolean } = {}) {
       stderr.end();
     }
   });
-  const selection = { selectionDir, targetSha, signal: selectionSignal };
+  const selection = { selectionDir, targetSha, signal: new AbortController().signal };
   const select = () => selectIOSReleaseGateway(selection);
   const prepare = (overrides: Partial<Parameters<typeof prepareIOSReleaseGateway>[0]> = {}) =>
     prepareIOSReleaseGateway({ ...selection, installDir, ...overrides });
-  return { selectionDir, installDir, state, lock, fetch, installs, select, prepare };
+  return { selectionDir, installDir, state, fetch, installs, select, prepare };
 }
 
 describe("iOS stable Gateway package qualification", () => {
@@ -203,27 +205,14 @@ describe("iOS stable Gateway package qualification", () => {
   });
 
   it.each([
-    ["integrity", invalidRelease],
-    ["source SHA", invalidRelease],
-    ["prerelease", invalidRelease],
-    ["nonregistry tarball", /tarball|registry|qualification target/u],
-    ["lock integrity", /package lock does not match/u],
-  ] as const)("rejects invalid published %s", async (invalid, error) => {
+    ["integrity", { integrity: "not-an-integrity" }, invalidRelease],
+    ["source SHA", { sourceSha: "main" }, invalidRelease],
+    ["prerelease", { version: "2026.9.8-beta.1" }, invalidRelease],
+    ["nonregistry tarball", { tarball: "https://example.invalid/openclaw.tgz" }, invalidTarball],
+    ["lock integrity", { lockIntegrity: wrongIntegrity }, /package lock does not match/u],
+  ] as const)("rejects invalid published %s", async (_name, overrides, error) => {
     const f = fixture();
-    if (invalid === "integrity") {
-      f.state.metadata.dist.integrity = "not-an-integrity";
-    } else if (invalid === "source SHA") {
-      f.state.sourceSha = "main";
-    } else if (invalid === "prerelease") {
-      f.state.metadata.version = "2026.9.8-beta.1";
-    } else if (invalid === "nonregistry tarball") {
-      const wrongTarball = "https://example.invalid/openclaw.tgz";
-      f.state.metadata.dist.tarball = wrongTarball;
-      f.lock.packages["node_modules/openclaw"].resolved = wrongTarball;
-    } else {
-      f.lock.packages["node_modules/openclaw"].integrity =
-        `sha512-${Buffer.alloc(64, 3).toString("base64")}`;
-    }
+    Object.assign(f.state, overrides);
     await expect(f.prepare()).rejects.toThrow(error);
     expect(f.installs).toHaveLength(0);
     expect(existsSync(path.join(f.selectionDir, "selection.json"))).toBe(false);

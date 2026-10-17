@@ -35,9 +35,9 @@ const DEVICES = {
   watch: "Apple Watch Ultra 3 (49mm)",
 };
 
-function provenance(targetSha = TARGET_SHA) {
+function provenance() {
   return {
-    targetSha,
+    targetSha: TARGET_SHA,
     workflowSha: WORKFLOW_SHA,
     runId: "12345",
     runAttempt: 2,
@@ -62,25 +62,16 @@ function writeCombinedSource(root: string, selectedFamily: Family = "iphone", re
       fs.writeFileSync(path.join(screenshots, `${device}-${name}.png`), PNG);
       if (family !== "watch") {
         const retried = family === selectedFamily && retry === name;
-        captureAttempts.push({
-          deviceName: device,
-          screenshotName: name,
-          attempt: 1,
-          captureOutcome: retried ? "failed" : "succeeded",
-        });
-        const attemptOne = path.join(xcresults, `${device}-${name}-attempt-1.xcresult`);
-        fs.mkdirSync(attemptOne, { recursive: true });
-        fs.writeFileSync(path.join(attemptOne, "summary.txt"), "pass");
-        if (retried) {
+        for (const attempt of retried ? [1, 2] : [1]) {
           captureAttempts.push({
             deviceName: device,
             screenshotName: name,
-            attempt: 2,
-            captureOutcome: "succeeded",
+            attempt,
+            captureOutcome: retried && attempt === 1 ? "failed" : "succeeded",
           });
-          const attemptTwo = path.join(xcresults, `${device}-${name}-attempt-2.xcresult`);
-          fs.mkdirSync(attemptTwo, { recursive: true });
-          fs.writeFileSync(path.join(attemptTwo, "summary.txt"), "pass");
+          const result = path.join(xcresults, `${device}-${name}-attempt-${attempt}.xcresult`);
+          fs.mkdirSync(result, { recursive: true });
+          fs.writeFileSync(path.join(result, "summary.txt"), "pass");
         }
       }
     }
@@ -92,28 +83,24 @@ function writeCombinedSource(root: string, selectedFamily: Family = "iphone", re
   return { device: DEVICES[selectedFamily], screenshots, xcresults };
 }
 
-function containerName(targetSha = TARGET_SHA) {
-  return `ios-release-screenshot-capture-${targetSha}`;
+function containerName() {
+  return `ios-release-screenshot-capture-${TARGET_SHA}`;
 }
 
-function familyDirectory(input: string, family: Family, targetSha = TARGET_SHA) {
-  return path.join(input, containerName(targetSha), family);
+function familyDirectory(input: string, family: Family) {
+  return path.join(input, containerName(), family);
 }
 
-function manifestPath(input: string, family: Family, targetSha = TARGET_SHA) {
-  return path.join(familyDirectory(input, family, targetSha), "manifest.json");
+function manifestPath(input: string, family: Family) {
+  return path.join(familyDirectory(input, family), "manifest.json");
 }
 
-function collectAll(
-  root: string,
-  targetSha = TARGET_SHA,
-  runAttempts: Partial<Record<Family, number>> = {},
-) {
+function collectAll(root: string, runAttempts: Partial<Record<Family, number>> = {}) {
   const output = path.join(root, "collected");
   const source = writeCombinedSource(root);
-  collect(source, path.join(output, containerName(targetSha)), targetSha);
+  collect(source, path.join(output, containerName()));
   for (const [family, runAttempt] of Object.entries(runAttempts)) {
-    const filePath = manifestPath(output, family as Family, targetSha);
+    const filePath = manifestPath(output, family as Family);
     const manifest = JSON.parse(fs.readFileSync(filePath, "utf8"));
     manifest.runAttempt = runAttempt;
     fs.writeFileSync(filePath, JSON.stringify(manifest));
@@ -124,13 +111,12 @@ function collectAll(
 function collect(
   source: ReturnType<typeof writeCombinedSource>,
   outputDirectory = path.join(path.dirname(source.screenshots), "collected"),
-  targetSha = TARGET_SHA,
 ) {
   return collectIosScreenshotEvidence({
     screenshotDirectory: source.screenshots,
     xcresultDirectory: source.xcresults,
     outputDirectory,
-    provenance: provenance(targetSha),
+    provenance: provenance(),
     readXcresultSummary: (resultPath) =>
       fs.readFileSync(path.join(resultPath, "summary.txt"), "utf8") === "pass"
         ? { testResult: "Passed", failedTests: 0 }
@@ -142,7 +128,7 @@ function collected(runAttempts: Partial<Record<Family, number>> = {}) {
   const root = tempDirs.make("ios-screenshot-evidence-");
   return {
     root,
-    input: collectAll(root, TARGET_SHA, runAttempts),
+    input: collectAll(root, runAttempts),
     output: path.join(root, "reduced"),
   };
 }

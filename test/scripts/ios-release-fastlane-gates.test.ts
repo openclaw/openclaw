@@ -21,6 +21,7 @@ const snapshotUITestPath = path.join(
 const rootTabsPath = path.join(process.cwd(), "apps", "ios", "Sources", "RootTabs.swift");
 const ciWorkflowPath = path.join(process.cwd(), ".github", "workflows", "ci.yml");
 const gemfilePath = path.join(process.cwd(), "apps", "ios", "Gemfile");
+type ScenarioRow = { scenario: string; error: string | null };
 
 function rubyJson<T>(source: string, args: string[] = [], bundled = false, isolated = false): T {
   const useBundle = bundled && process.env.OPENCLAW_TEST_FASTLANE_BUNDLE === "1";
@@ -192,13 +193,11 @@ end
 puts JSON.generate(rows)
 `;
     const rows = rubyJson<
-      {
-        scenario: string;
+      (ScenarioRow & {
         events: string[];
-        error: string | null;
         selected: string | null;
         notes: string;
-      }[]
+      })[]
     >(source, [fastfilePath], true);
     for (const row of rows) {
       if (["success", "retry", "first"].includes(row.scenario)) {
@@ -226,15 +225,13 @@ puts JSON.generate(rows)
           "missing-selection-readback": "staging readback did not match",
         };
         expect(row.error).toContain(expectedErrors[row.scenario]);
-        const expectedEvents =
-          row.scenario === "notes-failure"
-            ? ["notes"]
-            : ["selection-failure", "readback-failure", "missing-selection-readback"].includes(
-                  row.scenario,
-                )
-              ? ["notes", "select"]
-              : [];
-        expect(row.events).toEqual(expectedEvents);
+        const expectedEvents: Record<string, string[]> = {
+          "notes-failure": ["notes"],
+          "selection-failure": ["notes", "select"],
+          "readback-failure": ["notes", "select"],
+          "missing-selection-readback": ["notes", "select"],
+        };
+        expect(row.events).toEqual(expectedEvents[row.scenario] ?? []);
       }
     }
   });
@@ -246,10 +243,7 @@ require "tempfile"
 ${rubyError}
 module TestUI
   def self.user_error!(message); raise message; end
-  def self.success(*); end
-  def self.important(*); end
-  def self.message(*); end
-  def self.header(*); end
+  %i[success important message header].each { |name| define_singleton_method(name) { |*| } }
 end
 # Fastlane evaluates its Fastfile in an instance binding and exposes UI only
 # through its namespace, not Object. Neither constant scope leaks into helpers.
@@ -357,13 +351,12 @@ rows = Tempfile.create(["openclaw-beta-plan", ".json"]) do |plan|
       File.write(plan.path, JSON.generate({ destination: "testflight", appStoreVersion: "2026.7.21", buildNumber: 3, testflight: beta_plan }))
       File.write(result.path, "")
       build = Build.new("uploaded", "3", "2026.7.21", scenario == "processing" ? "PROCESSING" : "VALID", scenario == "expired", Detail.new(states.fetch(scenario, "READY_FOR_BETA_SUBMISSION"), false), [])
-      case scenario
-      when "adopt-retry"
-        build.localizations = [Localization.new("en-US", nil, nil, "Saved beta notes.")]
-      when "adopt-changed-notes"
-        build.localizations = [Localization.new("en-US", nil, nil, "Existing beta attempt notes.")]
-      when "adopt-other-locale"
-        build.localizations = [Localization.new("sv-SE", nil, nil, "Existing localized beta notes.")]
+      if (localization = {
+        "adopt-retry" => ["en-US", "Saved beta notes."],
+        "adopt-changed-notes" => ["en-US", "Existing beta attempt notes."],
+        "adopt-other-locale" => ["sv-SE", "Existing localized beta notes."]
+      }[scenario])
+        build.localizations = [Localization.new(localization[0], nil, nil, localization[1])]
       end
       $builds = [build]
       $builds << Build.new("other", "2", "2026.7.21", "VALID", false, Detail.new("IN_BETA_REVIEW", true), []) if scenario == "pending-other"
@@ -384,13 +377,11 @@ puts JSON.generate(rows)
 `;
     // Node CI needs only Ruby; this opt-in also proves the pinned Fastlane runtime.
     const rows = rubyJson<
-      {
-        scenario: string;
-        error: string | null;
+      (ScenarioRow & {
         options: Record<string, unknown> | null;
         result: { outcome: string; externalState: string } | null;
         facts: { selectedForAppStore: boolean; hasBetaNotes: boolean } | null;
-      }[]
+      })[]
     >(source, [fastfilePath], true);
     const outcomes: Record<string, string> = {
       submit: "awaiting-review",
@@ -533,14 +524,12 @@ rows = {
 end
 puts JSON.generate(rows)
 `;
-    const rows = rubyJson<
-      {
-        scenario: string;
-        events: string[];
-        error: string | null;
-        xcconfig: string | null;
-      }[]
-    >(source, [fastfilePath], false, true);
+    const rows = rubyJson<(ScenarioRow & { events: string[]; xcconfig: string | null })[]>(
+      source,
+      [fastfilePath],
+      false,
+      true,
+    );
     const steps =
       "signing plan baseline notes store-preflight ref-preflight screenshots source archive recheck baseline-recheck metadata upload record stage".split(
         " ",
@@ -718,19 +707,17 @@ end
 puts JSON.generate(rows)
 `;
     const rows = rubyJson<
-      {
-        scenario: string;
+      (ScenarioRow & {
         calls: number;
         checks: number;
         uninstalls: string[][];
-        error: string | null;
         xcodeArguments: string[];
         attempts: { attempt: number; captureOutcome: string }[];
         ledgerKeys: string[];
         archived: string;
         evidenceEntries: string[];
         log: string;
-      }[]
+      })[]
     >(source);
     expect(
       rows.map(({ scenario, calls, checks, error }) => ({ scenario, calls, checks, error })),
@@ -961,10 +948,8 @@ end
 puts JSON.generate(results)
 `;
     const rows = rubyJson<
-      {
-        scenario: string;
+      (ScenarioRow & {
         builds: string[];
-        error: string | null;
         installed: string | null;
         pngs: number;
         xcresults: number;
@@ -976,7 +961,7 @@ puts JSON.generate(results)
         versions: string[][];
         owned: string[];
         lifecycle: string[][];
-      }[]
+      })[]
     >(source, [fastfilePath]);
     const row = (scenario: string) => rows.find((entry) => entry.scenario === scenario)!;
     const versionArgs = ["--version", "2026.9.1", "--revision", "2", "--build-number", "123"];
@@ -998,12 +983,6 @@ puts JSON.generate(results)
       ],
       logs: ["build.log"],
       versions: [versionArgs],
-    });
-    expect(row("iphone")).toMatchObject({
-      builds: ["snapshot"],
-      error: null,
-      installed: null,
-      pngs: 8,
     });
     expect(row("combined").ledgerKeys).toEqual(["attempts", "schemaVersion"]);
     expect(row("combined").diagnostics).toBeNull();
@@ -1032,12 +1011,18 @@ puts JSON.generate(results)
       pngs: 1,
       versions: [versionArgs],
     });
-    expect(row("standalone-build-failure")).toMatchObject({
-      builds: ["watch"],
-      error: "Watch build failed",
-      installed: null,
-      pngs: 0,
-    });
+    for (const [scenario, build, error, pngs] of [
+      ["iphone", "snapshot", null, 8],
+      ["standalone-build-failure", "watch", "Watch build failed", 0],
+      ["build-failure", "snapshot", "snapshot build failed", 0],
+    ] as const) {
+      expect(row(scenario), scenario).toMatchObject({
+        builds: [build],
+        error,
+        installed: null,
+        pngs,
+      });
+    }
     for (const scenario of ["missing", "invalid-plist", "invalid-install"]) {
       expect(row(scenario), scenario).toMatchObject({
         builds: ["snapshot"],
@@ -1049,13 +1034,7 @@ puts JSON.generate(results)
     expect(row("missing").error).toContain("Watch screenshot build did not produce");
     expect(row("invalid-plist").error).toContain("Expected Info.plist");
     expect(row("invalid-install").error).toBe("simulator rejected Watch product");
-    expect(row("build-failure")).toMatchObject({
-      builds: ["snapshot"],
-      error: "snapshot build failed",
-      installed: null,
-      pngs: 0,
-      xcresults: 0,
-    });
+    expect(row("build-failure").xcresults).toBe(0);
     expect(row("combined").lifecycle.map(([operation]) => operation)).toEqual(
       Array.from({ length: 3 }, () => ["create", "bootstatus", "shutdown", "delete"]).flat(),
     );
@@ -1192,15 +1171,11 @@ end
 
   it("captures all screenshot families once without changing runner authorization", () => {
     const workflow = readFileSync(ciWorkflowPath, "utf8");
-    const iosJobStart = workflow.indexOf("\n  ios-build:\n");
-    const iosJobEnd = workflow.indexOf("\n  ios-screenshot-capture:\n", iosJobStart);
-    const iosJob = workflow.slice(iosJobStart, iosJobEnd);
-    const captureJobStart = iosJobEnd;
-    const captureJobEnd = workflow.indexOf("\n  ios-screenshot-evidence:\n", captureJobStart);
-    const captureJob = workflow.slice(captureJobStart, captureJobEnd);
-    const reducerJobStart = captureJobEnd;
-    const reducerJobEnd = workflow.indexOf("\n  android:\n", reducerJobStart);
-    const reducerJob = workflow.slice(reducerJobStart, reducerJobEnd);
+    const [iosJob, captureJob, reducerJob] = [
+      "ios-build",
+      "ios-screenshot-capture",
+      "ios-screenshot-evidence",
+    ].map((name) => sourceSection(workflow, `\n  ${name}:\n`, /\n {2}\S/u));
 
     expect(workflow).toContain('IOS_SCREENSHOT_NODE_VERSION: "24.16.0"');
     expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"');
