@@ -794,6 +794,39 @@ const failure = (errorMessage: string, fields: Record<string, unknown> = {}) =>
     ...fields,
   });
 
+it("projects replay rejection guidance without losing completed work or mutating history", () => {
+  const completed = {
+    role: "toolResult",
+    toolCallId: "completed-call",
+    toolName: "read",
+    content: [{ type: "text", text: "Completed inspection." }],
+  };
+  const error = {
+    role: "assistant",
+    stopReason: "error",
+    content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+    errorMessage:
+      "Codex error: Persisted response contains hosted-tool, compaction, or unverifiable hidden reasoning state that Rustponses cannot replay. Start a new response or use the Python Responses service for this continuation. PRIVATE_PROVIDER_DETAIL",
+  };
+  const raw = [completed, error];
+  const original = structuredClone(raw);
+  const projected = projectChatDisplayMessages(raw);
+  expect(projected[0]).toMatchObject(completed);
+  expect(projected[1]).toMatchObject({
+    content: [
+      {
+        type: "text",
+        text: "The AI service couldn't continue this conversation from its saved state. Some actions may already have completed; check their results before retrying. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.",
+      },
+    ],
+  });
+  expect(JSON.stringify(projected)).not.toMatch(
+    /PRIVATE_PROVIDER_DETAIL|Rustponses|Python Responses/,
+  );
+  expect(raw).toEqual(original);
+  expect(projectChatDisplayMessages(projected)).toEqual(projected);
+});
+
 it("retains the actual schema rejection without leaking the response envelope", () => {
   const projected = failure("Invalid service_tier argument", {
     errorType: "invalid_request_error",

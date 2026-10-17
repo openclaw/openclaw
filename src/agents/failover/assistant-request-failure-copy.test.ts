@@ -14,6 +14,37 @@ describe("renderAssistantRequestFailureCopy", () => {
   const runFailure =
     "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
 
+  it.each(["plain", "wrapped", "body"])(
+    "explains a saved-state replay rejection in live and recorded replies (%s)",
+    (form) => {
+      const rejection =
+        "Codex error: Persisted response contains hosted-tool, compaction, or unverifiable hidden reasoning state that Rustponses cannot replay. Start a new response or use the Python Responses service for this continuation.";
+      const diagnostic = `${rejection} PRIVATE_PROVIDER_DETAIL`;
+      const wrapped = JSON.stringify({
+        error: { type: "invalid_request_error", message: diagnostic },
+      });
+      const assistant = makeAssistantMessageFixture({
+        ...target,
+        errorMessage:
+          form === "plain" ? diagnostic : form === "wrapped" ? wrapped : "Request failed",
+        ...(form === "body" ? { errorBody: wrapped } : {}),
+      });
+      const expected =
+        "The AI service couldn't continue this conversation from its saved state. Some actions may already have completed; check their results before retrying. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
+      expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
+      expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+    },
+  );
+
+  it("does not interpret an arbitrary Rustponses diagnostic as a replay rejection", () => {
+    const assistant = makeAssistantMessageFixture({
+      ...target,
+      errorMessage: "Rustponses returned PRIVATE_PROVIDER_DETAIL",
+    });
+    expect(formatUserFacingAssistantErrorText(assistant)).toBe(runFailure);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBeUndefined();
+  });
+
   it.each([" | INVALID_REQUEST"])(
     "preserves approval-expiry guidance in assistant history with suffix %j",
     (suffix) => {

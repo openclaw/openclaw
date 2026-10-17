@@ -25,6 +25,7 @@ import {
   renderAssistantRequestFailureCopy,
   renderFormatErrorCopy,
   renderModelLoadFailureCopy,
+  renderProviderReplayFailureCopy,
 } from "../failover/assistant-request-failure-copy.js";
 import { failoverReasonFromClassification } from "../failover/classification-rules.js";
 import {
@@ -134,6 +135,10 @@ export function formatAssistantErrorText(
   const classifiedFacts = facts ?? classifyAssistantErrorFacts(msg, opts);
   if (classifiedFacts.storageFailure) {
     return renderAssistantRequestFailureCopy(classifiedFacts);
+  }
+  const replayCopy = renderProviderReplayFailureCopy(msg);
+  if (replayCopy) {
+    return replayCopy;
   }
   const {
     reason: failoverReason,

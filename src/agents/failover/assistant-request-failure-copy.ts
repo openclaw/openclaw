@@ -43,6 +43,27 @@ type AssistantRequestFailureCopyFacts = {
 export const ERROR_DETAILS_HINT =
   "For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
 
+/** Presentation only: recognizing this rejection must not widen replay or retry policy. */
+export function renderProviderReplayFailureCopy(message: {
+  errorMessage?: unknown;
+  errorBody?: unknown;
+}): string | undefined {
+  for (const raw of [message.errorMessage, message.errorBody]) {
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const diagnostic = parseApiErrorInfo(raw)?.message ?? raw;
+    if (
+      diagnostic.includes(
+        "Persisted response contains hosted-tool, compaction, or unverifiable hidden reasoning state that Rustponses cannot replay.",
+      )
+    ) {
+      return `The AI service couldn't continue this conversation from its saved state. Some actions may already have completed; check their results before retrying. ${ERROR_DETAILS_HINT}`;
+    }
+  }
+  return undefined;
+}
+
 const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
   SQLITE_BUSY:
     "OpenClaw is busy saving your conversation. Wait a moment, then check the conversation before trying again.",
@@ -273,6 +294,10 @@ export function renderRecordedAssistantFailureCopy(message: {
   );
   if (approvalMessage) {
     return `⚠️ ${approvalMessage}`;
+  }
+  const replayCopy = renderProviderReplayFailureCopy(message);
+  if (replayCopy) {
+    return replayCopy;
   }
   const raw = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
   if (raw === "Worker inference result exceeds the transcript message limit.") {
