@@ -233,7 +233,12 @@ function trackSchemaChanges(
     const iterator = phase !== "bind" && !snapshot && !owner.capturing ? {} : undefined;
     const newSnapshot = snapshot && snapshot !== owner.snapshot && !owner.capturing;
     if (newSnapshot) {
-      if (!owner.transactionCatalogBound && database.isTransaction && owner.transactionRead) {
+      if (
+        !owner.transactionCatalogBound &&
+        database.isTransaction &&
+        owner.transactionRead &&
+        owner.processRevision !== getSqliteDatabaseSchemaRevision(database)
+      ) {
         invalidate(owner);
         owner.transactionalFacts = true;
       } else {
@@ -255,12 +260,13 @@ function trackSchemaChanges(
     }
     const wasTransaction = database.isTransaction;
     if (
-      writable &&
+      (writable || owner.processRevision === undefined) &&
       !wasTransaction &&
       (control?.kind === "BEGIN" || control?.kind === "SAVEPOINT")
     ) {
-      // Discover the physical admission before SQLite holds a transaction lock.
-      getSqliteDatabaseSchemaRevision(database);
+      // Capture the physical revision before this batch can pin a native snapshot.
+      const processRevision = getSqliteDatabaseSchemaRevision(database);
+      owner.processRevision ??= processRevision;
     }
     const openingMutationRevision =
       !wasTransaction && control?.kind === "BEGIN" && control.single
@@ -323,6 +329,11 @@ function trackSchemaChanges(
       owner.unmanagedSnapshots.add(iterator);
     }
     return {
+      stepped: () => {
+        if (snapshot && database.isTransaction) {
+          owner.transactionCatalogBound = true;
+        }
+      },
       finish: (succeeded, abandoned) => {
         if (iterator && owner.unmanagedSnapshots.delete(iterator) && owner.iteratorFacts) {
           invalidate(owner);
@@ -684,7 +695,10 @@ export function getAdmittedSqliteSchemaFacts(
   }
   const snapshot = getSqlitePinnedReadSnapshot(database);
   const unknownSnapshot =
-    (database.isTransaction && owner.transactionRead && !owner.transactionCatalogBound) ||
+    (database.isTransaction &&
+      owner.transactionRead &&
+      !owner.transactionCatalogBound &&
+      owner.processRevision !== getSqliteDatabaseSchemaRevision(database)) ||
     owner.unmanagedSnapshots.size > 0;
   const scopeChanged = observeSchemaLifetime(database, owner, snapshot);
   if (!owner.facts) {
