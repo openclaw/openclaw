@@ -13,7 +13,7 @@ import type { SystemAgentOverview } from "../../system-agent/overview.js";
 import { readTranscriptTailAsync } from "../../system-agent/transcript-store.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import type { GatewayClient } from "./types.js";
 
 const overview: SystemAgentOverview = {
   config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: "hash" },
@@ -27,13 +27,9 @@ const overview: SystemAgentOverview = {
     apiKeys: { openai: false, anthropic: false },
   },
   gateway: { url: "ws://127.0.0.1:18789", source: "test", reachable: true },
-  references: {
-    docsUrl: "https://docs.openclaw.ai",
-    sourceUrl: "https://github.com/openclaw/openclaw",
-  },
+  references: { docsUrl: "https://docs.test", sourceUrl: "https://source.test" },
 };
 
-const greetingText = "I'm OpenClaw. Channel health is unavailable.";
 const engines = vi.hoisted(() => [] as Array<ReturnType<typeof makeEngine>>);
 
 function makeEngine() {
@@ -51,7 +47,7 @@ function makeEngine() {
     resolveOperatorApproval: async () => null,
     dispose: vi.fn(async () => undefined),
     loadOverview: async () => overview,
-    planGreeting: vi.fn(async () => ({ text: greetingText, modelRef: "openai/gpt-5.5" })),
+    planGreeting: vi.fn(async () => ({ text: "I'm OpenClaw.", modelRef: "openai/gpt-5.5" })),
     decorateRejoinReply: (reply: unknown) => reply,
   };
 }
@@ -82,42 +78,58 @@ const client = {
   connect: { device: { id: "audit-worker-device" } },
 } as GatewayClient;
 
-afterEach(async () => {
+afterEach(() => {
   vi.restoreAllMocks();
-  await closeOpenClawStateDatabaseAsync();
   vi.unstubAllEnvs();
   engines.length = 0;
   resetCommandQueueStateForTest();
 });
 
-it("persists real chat, greeting, and reset flows through the audit owner", async () => {
+async function withAuditState(
+  run: (store: ReturnType<typeof createSqliteAuditRecordStore>) => Promise<void>,
+) {
   await withTestDir({ prefix: "system-agent-audit-worker-" }, async (stateDir) => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const transcript = createSqliteAuditRecordStore({
-      scope: "system-agent-transcript",
-      maxEntries: 1_000,
-    });
+    try {
+      await run(
+        createSqliteAuditRecordStore({ scope: "system-agent-transcript", maxEntries: 1_000 }),
+      );
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
+}
+
+function chatRequest(current?: () => boolean) {
+  const sessions = new Map<string, SystemAgentChatSession>();
+  const respond = vi.fn();
+  const chat = (params: SystemAgentChatParams) =>
+    expectDefined(
+      systemAgentHandlers["openclaw.chat"],
+      "chat handler",
+    )({
+      params,
+      client,
+      context: { systemAgentSessions: sessions },
+      respond,
+      ...(current ? { hasCurrentClientAuthority: current } : {}),
+    } as never);
+  return { chat, respond, sessions };
+}
+
+it("persists real chat, greeting, and reset flows through the audit owner", async () => {
+  await withAuditState(async (transcript) => {
     transcript.upsert("seed", { role: "user", text: "Earlier question", at: 1 }, 1);
-    const sessions = new Map<string, SystemAgentChatSession>();
-    const context = { systemAgentSessions: sessions } as unknown as GatewayRequestContext;
+    const { chat, respond } = chatRequest();
     const callChat = async (params: SystemAgentChatParams) => {
-      const respond = vi.fn();
-      await expectDefined(
-        systemAgentHandlers["openclaw.chat"],
-        "chat handler",
-      )({
-        params,
-        client,
-        context,
-        respond,
-      } as never);
-      expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      await chat(params);
+      expect(respond).toHaveBeenLastCalledWith(true, expect.any(Object), undefined);
     };
 
     const sql: string[] = [];
-    const observers = (["get", "all", "run", "iterate"] as const).map((method) => {
+    (["get", "all", "run", "iterate"] as const).forEach((method) => {
       const original = StatementSync.prototype[method];
-      return vi.spyOn(StatementSync.prototype, method).mockImplementation(
+      vi.spyOn(StatementSync.prototype, method).mockImplementation(
         new Proxy(original, {
           apply(target, receiver: StatementSync, args) {
             if (/\bdiagnostic_events\b/.test(receiver.sourceSQL)) {
@@ -128,87 +140,63 @@ it("persists real chat, greeting, and reset flows through the audit owner", asyn
         }),
       );
     });
-    try {
-      await callChat({ sessionId: "conversation", message: "Record this turn" });
-      expect(engines[0]?.seedHistory).toHaveBeenCalledWith([
-        { role: "user", text: "Earlier question" },
-      ]);
-      await callChat({ sessionId: "welcome" });
-      expect(engines[1]?.planGreeting).toHaveBeenCalledOnce();
-      await callChat({ sessionId: "cached-welcome" });
-      expect(engines[2]?.planGreeting).not.toHaveBeenCalled();
-      await callChat({ sessionId: "conversation", reset: true });
-      expect(engines[0]?.dispose).toHaveBeenCalledOnce();
-      expect(engines[3]?.seedHistory).not.toHaveBeenCalled();
-      const persisted = await readTranscriptTailAsync(30);
-      expect(persisted.map(({ text }) => text)).toEqual([
-        "Earlier question",
-        expect.any(String),
-        "Record this turn",
-        "Recorded answer",
-      ]);
-      expect(await readTranscriptTailAsync(30, { afterLastReset: true })).toEqual([]);
-      expect(sql).toEqual([]);
-    } finally {
-      observers.forEach((observer) => observer.mockRestore());
-      await closeOpenClawStateDatabaseAsync();
-    }
+    await callChat({ sessionId: "conversation", message: "Record this turn" });
+    expect(engines[0]?.seedHistory).toHaveBeenCalledWith([
+      { role: "user", text: "Earlier question" },
+    ]);
+    await callChat({ sessionId: "welcome" });
+    expect(engines[1]?.planGreeting).toHaveBeenCalledOnce();
+    await callChat({ sessionId: "cached-welcome" });
+    expect(engines[2]?.planGreeting).not.toHaveBeenCalled();
+    await callChat({ sessionId: "conversation", reset: true });
+    expect(engines[0]?.dispose).toHaveBeenCalledOnce();
+    expect(engines[3]?.seedHistory).not.toHaveBeenCalled();
+    const persisted = await readTranscriptTailAsync(30);
+    expect(persisted.map(({ text }) => text)).toEqual([
+      "Earlier question",
+      expect.any(String),
+      "Record this turn",
+      "Recorded answer",
+    ]);
+    expect(await readTranscriptTailAsync(30, { afterLastReset: true })).toEqual([]);
+    expect(sql).toEqual([]);
   });
 });
 
 it.each(["failed", "revoked"] as const)(
   "disposes the unseeded engine after %s worker history",
   async (outcome) => {
-    await withTestDir({ prefix: `system-agent-audit-${outcome}-` }, async (stateDir) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      try {
-        const store = createSqliteAuditRecordStore({
-          scope: "system-agent-transcript",
-          maxEntries: 1_000,
-        });
-        store.upsert("private", { role: "assistant", text: "Private history", at: 1 }, 1);
-        expect(await readTranscriptTailAsync(10)).toEqual([
-          { role: "assistant", text: "Private history", at: 1 },
-        ]);
-        let current = true;
-        if (outcome === "failed") {
-          openOpenClawStateDatabase()
-            .db.prepare("UPDATE diagnostic_events SET payload_json = ? WHERE scope = ?")
-            .run("invalid-json", "system-agent-transcript");
-        } else {
-          const read = stateReader.executeExistingOpenClawStateRead;
-          vi.spyOn(stateReader, "executeExistingOpenClawStateRead").mockImplementation(
-            async (...args) => {
-              const result = await read(...args);
-              if (args[1].type === "diagnostic.latest") {
-                current = false;
-              }
-              return result;
-            },
-          );
-        }
-        const respond = vi.fn();
-        const sessions = new Map<string, SystemAgentChatSession>();
-        const reading = expectDefined(
-          systemAgentHandlers["openclaw.chat"],
-          "chat handler",
-        )({
-          params: { sessionId: "refused-seed" },
-          client,
-          context: { systemAgentSessions: sessions },
-          respond,
-          hasCurrentClientAuthority: () => current,
-        } as never);
-        await expect(reading).rejects.toThrow(
-          outcome === "revoked" ? "Gateway requester authority changed" : /JSON|Unexpected token/,
+    await withAuditState(async (store) => {
+      store.upsert("private", { role: "assistant", text: "Private history", at: 1 }, 1);
+      expect(await readTranscriptTailAsync(10)).toEqual([
+        { role: "assistant", text: "Private history", at: 1 },
+      ]);
+      let current = true;
+      if (outcome === "failed") {
+        openOpenClawStateDatabase()
+          .db.prepare("UPDATE diagnostic_events SET payload_json = ? WHERE scope = ?")
+          .run("invalid-json", "system-agent-transcript");
+      } else {
+        const read = stateReader.executeExistingOpenClawStateRead;
+        vi.spyOn(stateReader, "executeExistingOpenClawStateRead").mockImplementation(
+          async (...args) => {
+            const result = await read(...args);
+            if (args[1].type === "diagnostic.latest") {
+              current = false;
+            }
+            return result;
+          },
         );
-        expect(respond).not.toHaveBeenCalled();
-        expect(sessions.size).toBe(0);
-        expect(engines[0]?.seedHistory).not.toHaveBeenCalled();
-        expect(engines[0]?.dispose).toHaveBeenCalledOnce();
-      } finally {
-        await closeOpenClawStateDatabaseAsync();
       }
+      const { chat, respond, sessions } = chatRequest(() => current);
+      const reading = chat({ sessionId: "refused-seed" });
+      await expect(reading).rejects.toThrow(
+        outcome === "revoked" ? "Gateway requester authority changed" : /JSON|Unexpected token/,
+      );
+      expect(respond).not.toHaveBeenCalled();
+      expect(sessions.size).toBe(0);
+      expect(engines[0]?.seedHistory).not.toHaveBeenCalled();
+      expect(engines[0]?.dispose).toHaveBeenCalledOnce();
     });
   },
 );

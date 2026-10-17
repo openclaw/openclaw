@@ -68,6 +68,14 @@ const libraryError = (code: string, details = {}) => [
   expect.objectContaining({ details: { code, ...details } }),
 ];
 
+const edit = (entry: SkillsLibraryReceipt["entry"], overrides: Record<string, unknown> = {}) => ({
+  skillId: entry.skillId,
+  slug: entry.slug,
+  expectedRevision: entry.revision,
+  content,
+  ...overrides,
+});
+
 async function expectNoImage(root: string) {
   const files = await fs.readdir(root, { recursive: true, withFileTypes: true });
   expect(files.filter((entry) => entry.isFile() && entry.name === "pixel.png")).toEqual([]);
@@ -79,7 +87,10 @@ function retainedFilesHarness() {
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const alice = ensureProfileForEmail("alice@example.test");
   const bob = ensureProfileForEmail("bob@example.test");
-  const cfg = { gateway: { uploads: { enabled: true } } };
+  const cfg = {
+    gateway: { uploads: { enabled: true } },
+    agents: { entries: { main: { workspace: path.join(root, "workspace") } } },
+  };
   const actor = (profileId: string): SkillLibraryAuthority => ({
     profileId,
     scopes: ["operator.read", "operator.write"],
@@ -95,7 +106,12 @@ function retainedFilesHarness() {
       profileAccess: "independent" as const,
     })),
   );
-  const call = async (method: string, params: Record<string, unknown>, profileId = alice.id) => {
+  const invoke = async (
+    method: string,
+    params: Record<string, unknown>,
+    profileId: string,
+    dispatched: boolean,
+  ) => {
     const client: GatewayClient = {
       authenticatedUserProfile: { profileId, displayName: null, hasAvatar: false, updatedAt: 1 },
       connect: {
@@ -107,7 +123,8 @@ function retainedFilesHarness() {
       },
     };
     const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
-    await handleGatewayRequest({
+    const options: GatewayRequestHandlerOptions = {
+      params,
       req: { type: "req", id: "retained-files", method, params },
       respond,
       client,
@@ -116,13 +133,26 @@ function retainedFilesHarness() {
         getRuntimeConfig: () => cfg,
         getCommittedRuntimeConfig: () => cfg,
       } as GatewayRequestHandlerOptions["context"],
-      methodRegistry,
-    });
+    };
+    if (dispatched) {
+      await handleGatewayRequest({ ...options, methodRegistry });
+    } else {
+      await skillsLibraryHandlers[method]!(options);
+    }
     return respond.mock.calls[0]!;
   };
+  const call = (method: string, params: Record<string, unknown>, profileId = alice.id) =>
+    invoke(method, params, profileId, true);
+  const direct = (method: string, params: Record<string, unknown>, profileId = alice.id) =>
+    invoke(method, params, profileId, false);
   const create = (slug: string, files: Parameters<typeof saveSkillLibrary>[1]["files"] = [image]) =>
     call("skills.library.save", { slug, content, expectedRevision: null, files });
-  return { alice, bob, actor, cfg, call, create, root };
+  const save = (
+    slug: string,
+    profileId = alice.id,
+    files?: Parameters<typeof saveSkillLibrary>[1]["files"],
+  ) => saveSkillLibrary(actor(profileId), { slug, content, expectedRevision: null, files });
+  return { alice, bob, actor, cfg, call, create, save, direct, root };
 }
 
 describe("skill library retained support files", () => {
@@ -200,13 +230,10 @@ describe("skill library retained support files", () => {
     expect(created[0]).toBe(true);
     const entry = (created[1] as SkillsLibraryReceipt).entry;
     cfg.gateway.uploads.enabled = false;
-    const params = {
-      skillId: entry.skillId,
-      slug: entry.slug,
-      expectedRevision: entry.revision,
+    const params = edit(entry, {
       content: content + "Edited instructions.\n",
       retainFiles: [image.path, executable.path],
-    };
+    });
     const saved = await call("skills.library.save", params);
     expect(saved[0]).toBe(true);
     const revision = (saved[1] as SkillsLibraryReceipt).entry.revision;
@@ -257,13 +284,9 @@ describe("skill library retained support files", () => {
     const created = await create("retained-files");
     expect(created[0]).toBe(true);
     const entry = (created[1] as SkillsLibraryReceipt).entry;
-    const params = {
-      skillId: entry.skillId,
-      slug: entry.slug,
-      expectedRevision: entry.revision,
-      content,
+    const params = edit(entry, {
       retainFiles: [image.path],
-    };
+    });
     cfg.gateway.uploads.enabled = false;
     for (const invalid of [
       { slug: entry.slug, content, expectedRevision: entry.revision, retainFiles: [image.path] },
@@ -290,21 +313,13 @@ describe("skill library retained support files", () => {
   });
 
   it("never retains another profile's private files or grants a shared reader write access", async () => {
-    const { alice, bob, actor, cfg, call } = retainedFilesHarness();
-    const saved = await saveSkillLibrary(actor(alice.id), {
-      slug: "alice-files",
-      content,
-      expectedRevision: null,
-      files: [image],
-    });
+    const { alice, bob, actor, cfg, call, save } = retainedFilesHarness();
+    const saved = await save("alice-files", alice.id, [image]);
     cfg.gateway.uploads.enabled = false;
-    const params = {
-      skillId: saved.entry.skillId,
-      slug: saved.entry.slug,
-      expectedRevision: saved.entry.revision,
+    const params = edit(saved.entry, {
       content: content + "Unauthorized edit.\n",
       retainFiles: [image.path],
-    };
+    });
     expect(await call("skills.library.save", params, bob.id)).toEqual(
       libraryError("SKILL_LIBRARY_NOT_FOUND"),
     );
@@ -317,8 +332,7 @@ describe("skill library retained support files", () => {
       libraryError("SKILL_LIBRARY_FORBIDDEN"),
     );
     const read = await call("skills.library.read", { skillId: saved.entry.skillId });
-    expect((read[1] as SkillsLibraryReadResult).content).toBe(content);
-    expect((read[1] as SkillsLibraryReadResult).entry.revision).toBe(saved.entry.revision);
+    expect(read[1]).toMatchObject({ content, entry: { revision: saved.entry.revision } });
   });
 });
 
@@ -326,13 +340,9 @@ describe("session skill library projection and activation", () => {
   it.each(["pins", "plugin ownership"])(
     "does not disclose a selected revision after %s changes during its file read",
     async (change) => {
-      const { alice, actor, cfg, call } = retainedFilesHarness();
+      const { alice, actor, cfg, call, save } = retainedFilesHarness();
       setRuntimeConfigSnapshot(cfg);
-      const saved = await saveSkillLibrary(actor(alice.id), {
-        slug: "selected-revision",
-        content,
-        expectedRevision: null,
-      });
+      const saved = await save("selected-revision");
       const key = "agent:main:selected-revision";
       const scope = { agentId: "main", sessionKey: key };
       await upsertSessionEntryCore(scope, {
@@ -372,7 +382,7 @@ describe("session skill library projection and activation", () => {
   it.each(["success", "missing session", "invalid selection"])(
     "releases activation authorization after %s",
     async (outcome) => {
-      const { alice, cfg } = retainedFilesHarness();
+      const { cfg, direct } = retainedFilesHarness();
       setRuntimeConfigSnapshot(cfg);
       const key = "agent:main:library-activation";
       await upsertSessionEntryCore(
@@ -399,22 +409,11 @@ describe("session skill library projection and activation", () => {
           return { ...result, authorization: { ...result.authorization, release } };
         });
       try {
-        const respond = vi.fn();
-        await skillsLibraryHandlers["skills.library.activate"]!({
-          params,
-          req: { type: "req", id: "activation", method: "skills.library.activate", params },
-          client: {
-            authenticatedUserProfile: { profileId: alice.id },
-            connect: { scopes: ["operator.read", "operator.write"] },
-          },
-          context: { getRuntimeConfig: () => cfg },
-          respond,
-        } as unknown as GatewayRequestHandlerOptions);
-        expect(respond).toHaveBeenCalledWith(
+        expect(await direct("skills.library.activate", params)).toEqual([
           outcome === "success",
           outcome === "success" ? expect.objectContaining({ selections: [] }) : undefined,
           outcome === "success" ? undefined : expect.any(Object),
-        );
+        ]);
         expect(resolved).toHaveBeenCalledOnce();
         expect(release).toHaveBeenCalledOnce();
       } finally {
@@ -424,30 +423,11 @@ describe("session skill library projection and activation", () => {
   );
 
   it("exposes exact private pins only while session access remains current", async () => {
-    const root = temps.make();
-    currentStateDir = root;
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    const alice = ensureProfileForEmail("alice@example.test");
-    const bob = ensureProfileForEmail("bob@example.test");
+    const { alice, bob, actor, cfg, direct, save } = retainedFilesHarness();
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    const cfg = { agents: { entries: { main: { workspace: path.join(root, "workspace") } } } };
     setRuntimeConfigSnapshot(cfg);
-    const actor = (profileId: string): SkillLibraryAuthority => ({
-      profileId,
-      scopes: ["operator.read", "operator.write"],
-      getConfig: () => cfg,
-      assertCurrent: () => {},
-    });
-    const saved = await saveSkillLibrary(actor(alice.id), {
-      slug: "alice-procedure",
-      content,
-      expectedRevision: null,
-    });
-    const bobSkill = await saveSkillLibrary(actor(bob.id), {
-      slug: "bob-procedure",
-      content,
-      expectedRevision: null,
-    });
+    const saved = await save("alice-procedure");
+    const bobSkill = await save("bob-procedure", bob.id);
     const pins = await seedSkillLibrarySelection(actor(alice.id));
     const key = "agent:main:library-session";
     await upsertSessionEntryCore(
@@ -460,26 +440,12 @@ describe("session skill library projection and activation", () => {
         skillLibrarySelections: pins,
       },
     );
-    const newer = await saveSkillLibrary(actor(alice.id), {
-      skillId: saved.entry.skillId,
-      slug: "alice-procedure",
-      content: content + "New instructions.\n",
-      expectedRevision: saved.entry.revision,
-    });
-    const call = async (method: string, params: Record<string, unknown>) => {
-      const respond = vi.fn();
-      await skillsLibraryHandlers[method]!({
-        params,
-        req: { type: "req", id: "test", method, params },
-        client: {
-          authenticatedUserProfile: { profileId: bob.id },
-          connect: { scopes: ["operator.read", "operator.write"] },
-        },
-        context: { getRuntimeConfig: () => cfg },
-        respond,
-      } as unknown as GatewayRequestHandlerOptions);
-      return respond.mock.calls[0]!;
-    };
+    const newer = await saveSkillLibrary(
+      actor(alice.id),
+      edit(saved.entry, { content: content + "New\n" }),
+    );
+    const call = (method: string, params: Record<string, unknown>) =>
+      direct(method, params, bob.id);
     const executeRead = stateReads.executeExistingOpenClawStateRead;
     using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     const listed = await call("skills.library.list", { sessionKey: key, scope: "team" });
@@ -530,12 +496,7 @@ describe("session skill library projection and activation", () => {
     const scope = { agentId: "main", sessionKey: key };
     await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
     await addSessionMemberInWorker(scope, { identityId: bob.id, addedBy: alice.id });
-    await saveSkillLibrary(actor(bob.id), {
-      skillId: bobSkill.entry.skillId,
-      slug: bobSkill.entry.slug,
-      content: content + "Updated instructions.\n",
-      expectedRevision: bobSkill.entry.revision,
-    });
+    await saveSkillLibrary(actor(bob.id), edit(bobSkill.entry, { content: content + "Updated\n" }));
     let revoked = false;
     reads.mockImplementation(async (...args) => {
       const result = await executeRead(...args);

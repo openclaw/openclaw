@@ -1,5 +1,3 @@
-// System-agent session lifecycle tests cover ownership, eviction, and reset boundaries.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -7,9 +5,7 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-const inferenceFallbackMocks = vi.hoisted(() => ({
-  verifySystemAgentInferenceWithFallback: vi.fn(),
-}));
+const inferenceFallbackMocks = vi.hoisted(() => ({ verify: vi.fn() }));
 const transcriptStoreMocks = vi.hoisted(() => ({
   appendReset: vi.fn(),
   appendTurn: vi.fn(),
@@ -19,8 +15,7 @@ const transcriptStoreMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../system-agent/inference-fallback.js", () => ({
-  verifySystemAgentInferenceWithFallback:
-    inferenceFallbackMocks.verifySystemAgentInferenceWithFallback,
+  verifySystemAgentInferenceWithFallback: inferenceFallbackMocks.verify,
 }));
 // mock-isolation: Keep audit persistence local while testing hosted session ownership and disposal.
 vi.mock("../../system-agent/transcript-store.js", () => ({
@@ -41,8 +36,6 @@ vi.mock("../../system-agent/greeting.js", () => ({
   acknowledgeSystemAgentGreetingDelivery: vi.fn(),
   buildSystemAgentGreetingQuestion: vi.fn(() => undefined),
   loadSystemAgentGreetingFacts: vi.fn(() => ({
-    updateAvailable: null,
-    channelHealth: { available: true, degraded: [] },
     recentExternalEdit: false,
     auditSequence: 0,
   })),
@@ -53,8 +46,6 @@ type FakeEngine = ReturnType<typeof makeEngine>;
 
 function makeEngine() {
   return {
-    answerWizard: vi.fn(),
-    cancelWizard: vi.fn(),
     decorateRejoinReply: vi.fn((reply: Record<string, unknown>) => reply),
     dispose: vi.fn(async () => undefined),
     getPendingOperatorProposal: vi.fn(() => null),
@@ -63,29 +54,23 @@ function makeEngine() {
     historySince: vi.fn(() => []),
     loadOverview: vi.fn(async () => ({})),
     noteAssistantMessage: vi.fn(),
-    resolveOperatorApproval: vi.fn(async () => null),
     seedHistory: vi.fn(),
   };
 }
 
 const createdEngines = vi.hoisted(() => [] as FakeEngine[]);
 
-vi.mock("../../system-agent/chat-engine.js", () => {
-  class FakeSystemAgentWizardAnswerError extends Error {}
-  return {
-    SystemAgentWizardAnswerError: FakeSystemAgentWizardAnswerError,
-    SystemAgentChatEngine: function FakeSystemAgentChatEngine(this: FakeEngine) {
-      const engine = makeEngine();
-      createdEngines.push(engine);
-      Object.assign(this, engine);
-    },
-  };
-});
+vi.mock("../../system-agent/chat-engine.js", () => ({
+  SystemAgentWizardAnswerError: class extends Error {},
+  SystemAgentChatEngine: function FakeSystemAgentChatEngine(this: FakeEngine) {
+    const engine = makeEngine();
+    createdEngines.push(engine);
+    Object.assign(this, engine);
+  },
+}));
 vi.mock("../../system-agent/overview.js", () => ({
   formatSystemAgentStartupMessage: vi.fn(() => "welcome text"),
 }));
-
-type RespondCall = { ok: boolean; payload?: unknown; error?: unknown };
 
 const defaultClient = {
   connId: "conn-test",
@@ -96,16 +81,15 @@ function makeContext(sessions: Map<string, SystemAgentChatSession>): GatewayRequ
   return { systemAgentSessions: sessions } as unknown as GatewayRequestContext;
 }
 
-function seededSession(params?: {
-  engine?: FakeEngine;
-  lastUsedAt?: number;
-  ownerKey?: string;
-}): SystemAgentChatSession {
+function seededSession(
+  overrides: Omit<Partial<SystemAgentChatSession>, "engine"> & { engine?: FakeEngine } = {},
+): SystemAgentChatSession {
   return {
-    engine: params?.engine ?? makeEngine(),
+    engine: makeEngine(),
     welcome: "welcome text",
-    lastUsedAt: params?.lastUsedAt ?? 1,
-    ownerKey: params?.ownerKey ?? "device:device-test",
+    lastUsedAt: 1,
+    ownerKey: "device:device-test",
+    ...overrides,
   } as unknown as SystemAgentChatSession;
 }
 
@@ -120,18 +104,23 @@ function fullSessions(oldest: SystemAgentChatSession) {
 }
 
 const welcomeQuestion = { id: "welcome-q", header: "Welcome", options: [] };
+const chatHandler = expectDefined(systemAgentHandlers["openclaw.chat"], "chat handler");
 
 async function callChat(
   context: GatewayRequestContext,
   params: Record<string, unknown>,
-): Promise<RespondCall> {
-  const calls: RespondCall[] = [];
-  const respond: RespondFn = (ok, payload, error) => calls.push({ ok, payload, error });
-  await expectDefined(
-    systemAgentHandlers["openclaw.chat"],
-    'systemAgentHandlers["openclaw.chat"] test invariant',
-  )({ params, client: defaultClient, context, respond } as never);
-  return expectDefined(calls[0], "system-agent response");
+  hasCurrentClientAuthority = () => true,
+  respond = vi.fn<RespondFn>(),
+) {
+  await chatHandler({
+    params,
+    client: defaultClient,
+    context,
+    respond,
+    hasCurrentClientAuthority,
+  } as never);
+  const [ok, payload, error] = expectDefined(respond.mock.calls[0], "system-agent response");
+  return { ok, payload, error };
 }
 
 const waitOneTask = () =>
@@ -141,10 +130,7 @@ const waitOneTask = () =>
 
 beforeEach(() => {
   createdEngines.length = 0;
-  inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockResolvedValue({
-    ok: true,
-    binding: {},
-  });
+  inferenceFallbackMocks.verify.mockResolvedValue({ ok: true, binding: {} });
   transcriptStoreMocks.appendReset.mockReset();
   transcriptStoreMocks.appendTurn.mockReset();
   transcriptStoreMocks.readTranscriptTailAsync.mockReset().mockResolvedValue([]);
@@ -156,48 +142,43 @@ afterEach(() => {
 });
 
 describe("openclaw.chat session lifecycle", () => {
-  it("projects the live wizard interaction on a welcome-only rejoin", async () => {
-    const engine = makeEngine();
-    const liveQuestion = { id: "wizard-q", header: "Pick", options: [{ label: "A" }] };
-    const liveStep = { id: "step-1", type: "text", message: "Enter a value" };
-    engine.decorateRejoinReply = vi.fn((reply: Record<string, unknown>) => ({
-      ...reply,
-      sensitive: true,
-      wizardInputPending: true,
-      question: liveQuestion,
-      step: liveStep,
-    }));
-    const session = seededSession({ engine });
-    session.optionalWelcome = true;
-    (session as { welcomeQuestion?: unknown }).welcomeQuestion = welcomeQuestion;
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", session]]);
-
-    const call = await callChat(makeContext(sessions), { sessionId: "s1" });
-
-    // A reconnecting client must re-render the answer controls the session
-    // still awaits; the live interaction outranks the stale welcome question.
-    expect(call.ok).toBe(true);
-    expect(call.payload).toMatchObject({
-      sessionId: "s1",
-      sensitive: true,
-      optionalWelcome: false,
-      wizardInputPending: true,
-      question: liveQuestion,
-      step: liveStep,
-    });
-  });
-
-  it("falls back to the welcome question when no interaction is live", async () => {
-    const session = seededSession();
-    (session as { welcomeQuestion?: unknown }).welcomeQuestion = welcomeQuestion;
-    const sessions = new Map<string, SystemAgentChatSession>([["s1", session]]);
-
-    const call = await callChat(makeContext(sessions), { sessionId: "s1" });
-
-    expect(call.ok).toBe(true);
-    expect(call.payload).toMatchObject({ question: { id: "welcome-q" } });
-    expect((call.payload as { step?: unknown }).step).toBeUndefined();
-  });
+  it.each([false, true])(
+    "rejoins with the current wizard interaction when live=%s",
+    async (live) => {
+      const engine = makeEngine();
+      const liveQuestion = { id: "wizard-q", header: "Pick", options: [{ label: "A" }] };
+      const liveStep = { id: "step-1", type: "text", message: "Enter a value" };
+      const interaction = {
+        sensitive: true,
+        wizardInputPending: true,
+        question: liveQuestion,
+        step: liveStep,
+      };
+      if (live) {
+        engine.decorateRejoinReply = vi.fn((reply: Record<string, unknown>) => ({
+          ...reply,
+          ...interaction,
+        }));
+      }
+      const session = seededSession({ engine, optionalWelcome: true });
+      (session as { welcomeQuestion?: unknown }).welcomeQuestion = welcomeQuestion;
+      const sessions = new Map<string, SystemAgentChatSession>([["s1", session]]);
+      const call = await callChat(makeContext(sessions), { sessionId: "s1" });
+      expect(call).toMatchObject({
+        ok: true,
+        payload: live
+          ? {
+              sessionId: "s1",
+              optionalWelcome: false,
+              ...interaction,
+            }
+          : { question: welcomeQuestion },
+      });
+      if (!live) {
+        expect((call.payload as { step?: unknown }).step).toBeUndefined();
+      }
+    },
+  );
 
   it("keeps the session map bounded during concurrent unique initialization", async () => {
     const evictionStarted = createDeferred();
@@ -230,16 +211,12 @@ describe("openclaw.chat session lifecycle", () => {
     });
     const sessions = fullSessions(oldest);
     const respond = vi.fn();
-    const pending = expectDefined(
-      systemAgentHandlers["openclaw.chat"],
-      "chat handler",
-    )({
-      params: { sessionId: "unpublished" },
-      client: defaultClient,
-      context: makeContext(sessions),
+    const pending = callChat(
+      makeContext(sessions),
+      { sessionId: "unpublished" },
+      () => current,
       respond,
-      hasCurrentClientAuthority: () => current,
-    } as never);
+    );
 
     await expect(pending).rejects.toThrow("Gateway requester authority changed");
     expect(oldest.engine.dispose).toHaveBeenCalledOnce();
@@ -264,18 +241,18 @@ describe("openclaw.chat session lifecycle", () => {
       expectDefined(createdEngines[0], "replacement engine").seedHistory,
     ).not.toHaveBeenCalled();
 
-    transcriptStoreMocks.readTranscriptTailAsync.mockResolvedValue([
-      { role: "user", text: "After reset", at: 3 },
-      { role: "assistant", text: "Fresh answer", at: 4 },
-    ]);
+    const turns = [
+      { role: "user", text: "After reset" },
+      { role: "assistant", text: "Fresh answer" },
+    ] as const;
+    transcriptStoreMocks.readTranscriptTailAsync.mockResolvedValue(
+      turns.map((turn, at) => ({ ...turn, at })),
+    );
     const fresh = await callChat(context, { sessionId: "fresh-after-reset" });
     const freshEngine = expectDefined(createdEngines.at(-1), "fresh engine");
 
     expect(fresh.ok).toBe(true);
-    expect(freshEngine.seedHistory).toHaveBeenCalledWith([
-      { role: "user", text: "After reset" },
-      { role: "assistant", text: "Fresh answer" },
-    ]);
+    expect(freshEngine.seedHistory).toHaveBeenCalledWith(turns);
     expect(transcriptStoreMocks.readTranscriptTailAsync).toHaveBeenLastCalledWith(30, {
       afterLastReset: true,
     });
