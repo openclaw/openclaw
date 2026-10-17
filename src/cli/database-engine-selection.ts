@@ -156,6 +156,47 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
     isConfigReadFailure,
   } = await import("../config/io.invalid-config.js");
   if (
+    ["onboard", "setup", "crestodian"].includes(invocation.primary ?? "") &&
+    !hasFlag(argv, "--non-interactive") &&
+    !isConfigReadFailure(snapshot) &&
+    snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
+  ) {
+    const [{ offerInvalidConfigRecovery }, { prepareDoctorEngineSelection }, { defaultRuntime }] =
+      await Promise.all([
+        import("./invalid-config-recovery.js"),
+        import("../commands/doctor-engine-selection.js"),
+        import("../runtime.js"),
+      ]);
+    defaultRuntime.error(
+      createInvalidConfigError(snapshot.path, formatInvalidConfigDetails(snapshot.issues)).message,
+    );
+    const recovered = await offerInvalidConfigRecovery({
+      runtime: defaultRuntime,
+      runDoctor: async () => {
+        // No database is authoritative until file-only Doctor recovery resolves the target.
+        snapshot = await prepareDoctorEngineSelection({
+          argv: ["node", "openclaw", "doctor", "--fix"],
+          snapshot,
+          readSnapshot,
+        });
+      },
+      retry: async () => {
+        if (isConfigReadFailure(snapshot)) {
+          throw createConfigReadError(snapshot);
+        }
+        if (snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")) {
+          throw createInvalidConfigError(
+            snapshot.path,
+            formatInvalidConfigDetails(snapshot.issues),
+          );
+        }
+      },
+    });
+    if (!recovered) {
+      defaultRuntime.exit(1);
+    }
+  }
+  if (
     invocation.primary === "doctor" &&
     snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
   ) {

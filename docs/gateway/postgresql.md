@@ -149,6 +149,10 @@ worker access outside synchronous admission and migrations. Setup starts any
 temporary or foreground Gateway in a separate process with its own admission;
 the setup process keeps its one-shot role throughout.
 
+If existing config cannot be parsed, interactive setup offers Doctor's file-only
+repair before selecting a database. Declining repair or leaving the config
+unparseable stops setup without creating application state.
+
 If the connection SecretRef is unavailable, `config set`, `config patch`, and
 `config unset` can still repair paths under `database` while the Gateway is
 stopped. These repairs leave database files untouched. A batch that also changes

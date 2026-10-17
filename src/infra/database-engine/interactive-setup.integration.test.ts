@@ -39,8 +39,14 @@ async function answer(run: PtyRun, prompt: string, input = "\r") {
 
 for (const engine of ["sqlite", "postgres"] as const) {
   describe.skipIf(engine === "postgres" && !connection)(`${engine} interactive setup`, () => {
-    for (const entry of ["onboard", "setup", "crestodian"] as const) {
-      it(`${entry} saves interactive setup and releases ownership for a Gateway`, async () => {
+    const scenarios = [
+      { entry: "onboard", recoverConfig: false },
+      { entry: "setup", recoverConfig: false },
+      { entry: "crestodian", recoverConfig: false },
+      ...(engine === "postgres" ? [{ entry: "onboard", recoverConfig: true } as const] : []),
+    ] as const;
+    for (const { entry, recoverConfig } of scenarios) {
+      it(`${entry}${recoverConfig ? " recovers malformed config, then" : ""} saves interactive setup and releases ownership for a Gateway`, async () => {
         const root = roots.make(`interactive-${entry}-${engine}-`);
         const runtimeRoot = createBuiltRuntime(root);
         const stateDir = path.join(root, ".openclaw");
@@ -70,27 +76,28 @@ for (const engine of ["sqlite", "postgres"] as const) {
           NO_COLOR: "1",
         };
         await fs.mkdir(stateDir);
+        const initialConfig = JSON.stringify({
+          ...(engine === "postgres"
+            ? {
+                database: {
+                  engine,
+                  postgres: {
+                    connection: {
+                      source: "env",
+                      provider: "default",
+                      id: "OPENCLAW_TEST_INTERACTIVE_DSN",
+                    },
+                    schemaPrefix: prefix,
+                  },
+                },
+              }
+            : {}),
+          logging: { file: path.join(root, "gateway.log") },
+          plugins: { enabled: false },
+        });
         await fs.writeFile(
           configPath,
-          JSON.stringify({
-            ...(engine === "postgres"
-              ? {
-                  database: {
-                    engine,
-                    postgres: {
-                      connection: {
-                        source: "env",
-                        provider: "default",
-                        id: "OPENCLAW_TEST_INTERACTIVE_DSN",
-                      },
-                      schemaPrefix: prefix,
-                    },
-                  },
-                }
-              : {}),
-            logging: { file: path.join(root, "gateway.log") },
-            plugins: { enabled: false },
-          }),
+          `${recoverConfig ? "synthetic warning\n" : ""}${initialConfig}`,
         );
         const client =
           engine === "postgres" ? new pg.Client({ connectionString: connection }) : undefined;
@@ -122,6 +129,19 @@ for (const engine of ["sqlite", "postgres"] as const) {
                   workspace,
                 ];
           const setup = await start(args);
+          if (recoverConfig) {
+            await setup.waitForOutput('Run "openclaw doctor --fix" now?');
+            expect(
+              (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
+                file.endsWith(".sqlite"),
+              ),
+            ).toEqual([]);
+            expect(await fs.readFile(configPath, "utf8")).toBe(
+              `synthetic warning\n${initialConfig}`,
+            );
+            await setup.write("\r");
+            await setup.waitForOutput("Removed non-JSON prefix");
+          }
           await answer(setup, "Continue?");
           await answer(setup, "No thanks");
           if (entry === "crestodian") {
