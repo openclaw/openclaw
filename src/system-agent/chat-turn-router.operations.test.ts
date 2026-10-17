@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { extractToolResultText } from "../agents/embedded-agent-tool-results.js";
 import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
-import type { SystemAgentTurnRunner } from "./agent-turn.js";
+import type { SystemAgentTurnDirective, SystemAgentTurnRunner } from "./agent-turn.js";
 import {
   operationMocks,
   fakeOverviewLoader,
@@ -49,6 +49,9 @@ const approvedPortChange = {
     operation: { kind: "config-set", path: "gateway.port", value: "19001" },
   },
 } as const;
+const directiveTurn =
+  (directive: SystemAgentTurnDirective, text = "Opening setup.") =>
+  async () => ({ text, directive });
 
 function mockSnapshot(overrides: Partial<ReturnType<typeof configSnapshot>>) {
   mocks.readConfigFileSnapshot.mockResolvedValue({
@@ -91,8 +94,13 @@ function expectRepair(turn: ReturnType<typeof repairTurn>, error: string) {
 }
 
 function createRouterHarness(
-  options: ConstructorParameters<typeof ChatTurnRouter>[0],
-  internals: {
+  runAgentTurn: SystemAgentTurnRunner,
+  {
+    executeOperation,
+    wizardDependencies,
+    loadOverview,
+    ...options
+  }: ConstructorParameters<typeof ChatTurnRouter>[0] & {
     executeOperation?: NonNullable<
       ConstructorParameters<typeof ChatTurnRouter>[1]["executeOperation"]
     >;
@@ -107,20 +115,20 @@ function createRouterHarness(
     "shared verified inference test fixture",
   );
   return new ChatTurnRouter(
-    options,
-    { executeOperation: internals.executeOperation ?? (async () => ({ applied: true })) },
+    { ...options, runAgentTurn },
+    { executeOperation: executeOperation ?? (async () => ({ applied: true })) },
     { sessionId: "openclaw-operations-router-test", verifiedInference, proposalRef: {} },
     new ChatWizardHost({
       surface: options.surface,
       beforePersistentApply: async () => {},
-      dependencies: internals.wizardDependencies,
+      dependencies: wizardDependencies,
     }),
     {
       requireVerifiedInference: async () => verifiedInference.execution,
       requirePersistentApplyInference: async () => verifiedInference.execution,
       rebindVerifiedInference: () => {},
       getVerifiedInference: () => verifiedInference,
-      loadOverview: internals.loadOverview ?? fakeOverviewLoader(),
+      loadOverview: loadOverview ?? fakeOverviewLoader(),
       verifyConfigAfterWrite: async () => null,
     },
   );
@@ -130,18 +138,10 @@ describe("SystemAgentChatEngine operations", () => {
   it("keeps a utility-only agent handoff in setup", async () => {
     const agentId = "helper";
     const router = createRouterHarness(
-      {
-        runAgentTurn: async () => ({
-          text: "Opening your agent.",
-          directive: { kind: "open-tui", agentId },
-        }),
-      },
+      directiveTurn({ kind: "open-tui", agentId }, "Opening your agent."),
       {
         loadOverview: async () => ({
-          ...(await fakeOverviewLoader({
-            defaultModel: "fixture/primary",
-            setupModel: undefined,
-          })()),
+          ...(await fakeOverviewLoader({ defaultModel: "fixture/primary" })()),
           agents: [
             { id: "main", isDefault: true, model: "fixture/primary" },
             { id: agentId, isDefault: false, utilityModel: "fixture/utility" },
@@ -173,15 +173,12 @@ describe("SystemAgentChatEngine operations", () => {
     async ({ args, operation, description }) => {
       const requesterAgentId = args.action === "create_team" ? "planner" : undefined;
       const executeOperation = vi.fn(async () => ({ applied: true }));
-      const router = createRouterHarness(
-        {
-          surface: "gateway",
-          operatorApprovalOnly: true,
-          ...(requesterAgentId ? { requesterAgentId } : {}),
-          runAgentTurn: toolTurn(args),
-        },
-        { executeOperation },
-      );
+      const router = createRouterHarness(toolTurn(args), {
+        surface: "gateway",
+        operatorApprovalOnly: true,
+        ...(requesterAgentId ? { requesterAgentId } : {}),
+        executeOperation,
+      });
       await router.resolveTurn("I want that option");
       const proposal = expectDefined(router.getPendingOperatorProposal(), "creation proposal");
       expect(proposal.operation).toEqual(operation);
@@ -217,12 +214,9 @@ describe("SystemAgentChatEngine operations", () => {
         workspace: "/tmp/openclaw-no-workspace",
       }));
       const router = createRouterHarness(
+        async () => (source === "tool" ? { text: "Opening setup.", directive } : null),
         {
           operatorApprovalOnly: true,
-          runAgentTurn: async () =>
-            source === "tool" ? { text: "Opening setup.", directive } : null,
-        },
-        {
           wizardDependencies: {
             runChannelSetupWizard: startWizard,
             runSkillsSetupWizard: startWizard,
@@ -252,8 +246,8 @@ describe("SystemAgentChatEngine operations", () => {
     const classifyApproval = vi.fn(async ({ message }: { message: string }) =>
       classifySystemAgentApprovalText(message),
     );
-    const router = createRouterHarness({
-      runAgentTurn: async (params) => {
+    const router = createRouterHarness(
+      async (params) => {
         turn += 1;
         armed.push(params.approvalArmed);
         if (turn === 1) {
@@ -266,8 +260,8 @@ describe("SystemAgentChatEngine operations", () => {
             }
           : { text: "Agent reply." };
       },
-      classifyApproval: classifyApproval as never,
-    });
+      { classifyApproval: classifyApproval as never },
+    );
 
     await router.resolveTurn("prepare a change");
     const handoff = await router.resolveTurn("please hand me back now");
@@ -284,12 +278,7 @@ describe("SystemAgentChatEngine operations", () => {
 
   it("surfaces a failed hosted wizard directive", async () => {
     const router = createRouterHarness(
-      {
-        runAgentTurn: async () => ({
-          text: "Opening setup.",
-          directive: { kind: "channel-setup" as const, channel: "telegram" },
-        }),
-      },
+      directiveTurn({ kind: "channel-setup", channel: "telegram" }),
       {
         wizardDependencies: {
           runChannelSetupWizard: async () => {
@@ -307,16 +296,7 @@ describe("SystemAgentChatEngine operations", () => {
   it("rejects an agent directive when the verified route changes during its turn", async () => {
     const baseConfig = {
       agents: { defaults: { model: "openai/gpt-5.5" } },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "test-key",
-            auth: "api-key",
-            models: [],
-          },
-        },
-      },
+      models: sharedVerifiedInferenceConfig.models,
     } satisfies OpenClawConfig;
     const changedConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
@@ -330,13 +310,11 @@ describe("SystemAgentChatEngine operations", () => {
     const runChannelSetupWizard = vi.fn(async () => {});
     const engine = createEngine({
       verifiedInference,
-      runAgentTurn: async () => ({
-        text: "Telegram it is.",
-        directive: { kind: "channel-setup" as const, channel: "telegram" },
-      }),
-      deps: {
-        readConfigFileSnapshot: readConfigFileSnapshot as never,
-      },
+      runAgentTurn: directiveTurn(
+        { kind: "channel-setup", channel: "telegram" },
+        "Telegram it is.",
+      ),
+      deps: { readConfigFileSnapshot: readConfigFileSnapshot as never },
       runChannelSetupWizard,
     });
 
@@ -401,12 +379,7 @@ describe("SystemAgentChatEngine operations", () => {
       }
     });
     operationMocks.runConfigSet.mockImplementation(
-      async (params: {
-        path?: string;
-        value?: string;
-        cliOptions: object;
-        beforePersistentApply?: () => void;
-      }) => {
+      async (params: Parameters<typeof operationMocks.runConfigSet>[0]) => {
         await Promise.resolve();
         if (closeDuringPreparation) {
           authorityOpen = false;
@@ -438,11 +411,9 @@ describe("SystemAgentChatEngine operations", () => {
 
   it("quotes plugin references only on the submitted turn without replacing the question", async () => {
     const inputs: string[] = [];
-    const router = createRouterHarness({
-      runAgentTurn: async ({ input }) => {
-        inputs.push(input);
-        return { text: "answer" };
-      },
+    const router = createRouterHarness(async ({ input }) => {
+      inputs.push(input);
+      return { text: "answer" };
     });
     const plugin = {
       id: "example",
@@ -476,12 +447,9 @@ describe("SystemAgentChatEngine operations", () => {
       ...baseConfig,
       agents: {
         ...baseConfig.agents,
-        entries: Object.fromEntries(
-          Object.entries(baseConfig.agents.entries).map(([id, agent]) => [
-            id,
-            { ...agent, model: "openai/gpt-5.6-sol" },
-          ]),
-        ),
+        entries: {
+          main: { ...baseConfig.agents.entries.main, model: "openai/gpt-5.6-sol" },
+        },
       },
     } satisfies OpenClawConfig;
     const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
@@ -546,15 +514,13 @@ describe("SystemAgentChatEngine operations", () => {
     const validationError =
       "Config validation failed: gateway.port: Invalid input: expected number, received string";
     const runAgentTurn = repairTurn();
-    const router = createRouterHarness(
-      { yes: true, runAgentTurn },
-      {
-        executeOperation: async (_operation, runtime) => {
-          runtime.error(validationError);
-          throw new SystemAgentOperationExitError(1);
-        },
+    const router = createRouterHarness(runAgentTurn, {
+      yes: true,
+      executeOperation: async (_operation, runtime) => {
+        runtime.error(validationError);
+        throw new SystemAgentOperationExitError(1);
       },
-    );
+    });
     const reply = await router.resolveTurn("config set gateway.port banana");
     expect(reply.text).toContain(validationError);
     expect(reply.text).not.toContain("operation exited");
@@ -741,10 +707,9 @@ describe("SystemAgentChatEngine handoff", () => {
   ] as const)(
     "hands personal accounts to the human from a $surface $source",
     async ({ surface, source }) => {
-      const runAgentTurn = vi.fn(async () => ({
-        text: "Let’s open your account controls.",
-        directive: { kind: "model-accounts" as const },
-      }));
+      const runAgentTurn = vi.fn(
+        directiveTurn({ kind: "model-accounts" }, "Let’s open your account controls."),
+      );
       const executeOperation = vi.fn();
       const engine = createEngine({ surface, runAgentTurn, executeOperation });
 

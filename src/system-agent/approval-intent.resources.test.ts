@@ -72,13 +72,13 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
         const finishCancel = createDeferred();
         const cancelStarted = createDeferred();
         const parent = new AsyncWorkScope();
-        const spies: Array<{ mockRestore(): void }> = [];
         let drained = false;
         let drainage: Promise<void> | undefined;
         try {
           const address = server.address();
           assert(address && typeof address !== "string", "Approval fixture has no TCP port");
           const profileId = `${fixture.providerId}:verified`;
+          const modelRef = `${fixture.providerId}/approval-model`;
           const writeCredentials = (key: string) =>
             state.writeAuthProfiles({
               version: 1,
@@ -88,10 +88,8 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
             agents: {
               defaults: {
                 workspace: state.workspaceDir,
-                model: `${fixture.providerId}/approval-model@${profileId}`,
-                models: {
-                  [`${fixture.providerId}/approval-model`]: { agentRuntime: { id: "openclaw" } },
-                },
+                model: `${modelRef}@${profileId}`,
+                models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
               },
             },
             auth: { profiles: { [profileId]: { provider: fixture.providerId, mode: "api_key" } } },
@@ -167,58 +165,53 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
             (await resolveSystemAgentVerifiedInferenceRoute(verifiedInference))?.provider,
           ).toBe(fixture.providerId);
           const builds = vi.spyOn(ModelRegistry, "fromCapturedSources");
-          spies.push(builds);
           if (mode === "cancel-drain") {
             const plugin = getAiTransportHost().plugin;
             const wrap = plugin.wrapSimpleCompletionStream;
             let first = true;
-            spies.push(
-              vi.spyOn(plugin, "wrapSimpleCompletionStream").mockImplementation((params) => {
-                const stream = wrap(params) ?? params.context.streamFn;
-                return (model, context, options) =>
-                  stream(model, context, {
-                    ...options,
-                    onResponse: async (response, responseModel) => {
-                      await options?.onResponse?.(response, responseModel);
-                      if (first) {
-                        first = false;
-                        throw new Error("fixture response rejected");
-                      }
-                    },
-                  });
-              }),
-            );
+            vi.spyOn(plugin, "wrapSimpleCompletionStream").mockImplementation((params) => {
+              const stream = wrap(params) ?? params.context.streamFn;
+              return (model, context, options) =>
+                stream(model, context, {
+                  ...options,
+                  onResponse: async (response, responseModel) => {
+                    await options?.onResponse?.(response, responseModel);
+                    if (first) {
+                      first = false;
+                      throw new Error("fixture response rejected");
+                    }
+                  },
+                });
+            });
             const fetch = process.versions.bun ? fetchWithRuntimeDispatcher : globalThis.fetch;
             let wrapped = false;
-            spies.push(
-              vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
-                const response = await fetch(...args);
-                if (wrapped || !response.url.startsWith(`http://127.0.0.1:${address.port}/`)) {
-                  return response;
-                }
-                wrapped = true;
-                const reader = response.body?.getReader();
-                assert(reader, "Approval response has no body");
-                return new Response(
-                  new ReadableStream<Uint8Array>({
-                    async pull(controller) {
-                      const { value, done } = await reader.read();
-                      if (done) {
-                        controller.close();
-                      } else {
-                        controller.enqueue(value);
-                      }
-                    },
-                    async cancel(reason) {
-                      cancelStarted.resolve();
-                      await finishCancel.promise;
-                      await reader.cancel(reason);
-                    },
-                  }),
-                  { status: response.status, headers: response.headers },
-                );
-              }),
-            );
+            vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
+              const response = await fetch(...args);
+              if (wrapped || !response.url.startsWith(`http://127.0.0.1:${address.port}/`)) {
+                return response;
+              }
+              wrapped = true;
+              const reader = response.body?.getReader();
+              assert(reader, "Approval response has no body");
+              return new Response(
+                new ReadableStream<Uint8Array>({
+                  async pull(controller) {
+                    const { value, done } = await reader.read();
+                    if (done) {
+                      controller.close();
+                    } else {
+                      controller.enqueue(value);
+                    }
+                  },
+                  async cancel(reason) {
+                    cancelStarted.resolve();
+                    await finishCancel.promise;
+                    await reader.cancel(reason);
+                  },
+                }),
+                { status: response.status, headers: response.headers },
+              );
+            });
           }
           const start = (managed = false) => {
             const run = () =>
@@ -234,9 +227,7 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
           const arrive = (index: number, result: Promise<unknown>) =>
             Promise.race([
               arrivals[index]!.promise,
-              result.then(() => {
-                throw new Error("Classifier settled before its provider request");
-              }),
+              result.then(() => assert.fail("Classifier settled before its provider request")),
             ]);
           const first = start(true);
           await arrive(1, first);
@@ -284,9 +275,7 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
           requests.forEach(finish);
           await Promise.allSettled(pending);
           await parent.drain();
-          for (const spy of spies) {
-            spy.mockRestore();
-          }
+          vi.restoreAllMocks();
           await resetPreparedModelRuntimeSnapshotsForTest();
           clearPluginMetadataLifecycleCaches();
           resetPluginLoaderTestStateForTest();

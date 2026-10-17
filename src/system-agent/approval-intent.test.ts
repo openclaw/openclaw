@@ -105,16 +105,14 @@ function completionDeps(replyText = "approve", binding = sharedVerifiedInference
   };
 }
 
-describe("classifySystemAgentApprovalText", () => {
-  it.each([
-    ["approve", ["yes", "Yes.", "sure", "ok!", "Okay,", "go ahead", "yes please", "do it"]],
-    ["decline", ["no", "no thanks", "not now", "cancel", "don't", "nah, later"]],
-    ["other", ["maybe", "what does that change?", "yes but use gpt instead", ""]],
-  ] as const)("classifies %s phrases", (intent, phrases) => {
-    for (const text of phrases) {
-      expect(classifySystemAgentApprovalText(text)).toBe(intent);
-    }
-  });
+it.each([
+  ["approve", ["yes", "Yes.", "sure", "ok!", "Okay,", "go ahead", "yes please", "do it"]],
+  ["decline", ["no", "no thanks", "not now", "cancel", "don't", "nah, later"]],
+  ["other", ["maybe", "what does that change?", "yes but use gpt instead", ""]],
+] as const)("classifySystemAgentApprovalText classifies %s phrases", (intent, phrases) => {
+  for (const text of phrases) {
+    expect(classifySystemAgentApprovalText(text)).toBe(intent);
+  }
 });
 
 describe("classifySystemAgentApprovalIntent", () => {

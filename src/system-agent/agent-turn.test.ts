@@ -676,12 +676,10 @@ describe("runSystemAgentTurn", () => {
         systemAgentTool: expect.objectContaining({ operatorApprovalOnly: true }),
       }),
     );
-    for (const text of ["requesting session's permission policy", "returns the final outcome"]) {
-      expect(reply?.text).toContain(text);
-    }
-    for (const text of ["OpenClaw operator UI", "ask the user to reply yes"]) {
-      expect(reply?.text).not.toContain(text);
-    }
+    expect(reply?.text).toContain("requesting session's permission policy");
+    expect(reply?.text).toContain("returns the final outcome");
+    expect(reply?.text).not.toContain("OpenClaw operator UI");
+    expect(reply?.text).not.toContain("ask the user to reply yes");
     // Staging still registers the exact proposal for host authorization.
     expect(session.proposalRef.current).toBeDefined();
   });
@@ -703,9 +701,9 @@ describe("runSystemAgentTurn", () => {
         readConfigFileSnapshot: readConfigFileSnapshot as never,
       }),
     ).rejects.toMatchObject({ message: expect.stringContaining("openclaw onboard") });
-    for (const unused of [readConfigFileSnapshot, runCliAgent, runEmbeddedAgent]) {
-      expect(unused).not.toHaveBeenCalled();
-    }
+    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(runCliAgent).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("converts route-planning failures to a typed error and clears session state", async () => {
