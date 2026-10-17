@@ -104,6 +104,21 @@ class SmsManager(
 
   companion object {
     private const val DEFAULT_SMS_LIMIT = 25
+
+    // Standard concatenated-SMS (UDH) segment sizes; used only when the platform
+    // divider throws (e.g. Samsung firmware gating EMS detection behind
+    // READ_PHONE_STATE, which this app does not request). GSM-7 parts fit 153
+    // septets; UCS-2 parts (needed once any non-GSM character is present) fit
+    // only 67 UTF-16 code units.
+    internal const val SMS_FALLBACK_CHUNK_SIZE = 153
+    internal const val SMS_FALLBACK_UCS2_CHUNK_SIZE = 67
+
+    // GSM 7-bit default alphabet (3GPP TS 23.038, basic table only). Any other
+    // character forces UCS-2 encoding, which uses the smaller chunk size above.
+    private const val GSM_7BIT_STRING =
+      "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ ÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?" +
+        "¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà"
+    private val GSM_7BIT_CHARS = GSM_7BIT_STRING.toSet()
     internal const val MAX_MIXED_BY_PHONE_CANDIDATE_WINDOW = 500
     private const val MMS_SMS_BY_PHONE_BASE = "content://mms-sms/messages/byphone"
     private const val MMS_CONTENT_BASE = "content://mms"
@@ -346,6 +361,45 @@ class SmsManager(
       return SendPlan(parts = parts, useMultipart = parts.size > 1)
     }
 
+    internal fun resolveSendPlan(
+      message: String,
+      fallbackChunkSize: Int = SMS_FALLBACK_CHUNK_SIZE,
+      primaryDivider: (String) -> List<String>,
+    ): SendPlan =
+      try {
+        buildSendPlan(message, primaryDivider)
+      } catch (e: SecurityException) {
+        buildSendPlan(message) { chunkForFallbackEncoding(it, fallbackChunkSize) }
+      }
+
+    internal fun isGsm7Encodable(message: String): Boolean = message.all { it in GSM_7BIT_CHARS }
+
+    // Chunks on encoding-appropriate boundaries: GSM-7 messages split by septet
+    // count (gsmChunkSize); anything else is UCS-2 and splits by UTF-16 code
+    // unit count, never separating a surrogate pair.
+    internal fun chunkForFallbackEncoding(
+      message: String,
+      gsmChunkSize: Int,
+    ): List<String> {
+      if (isGsm7Encodable(message)) {
+        return message.chunked(gsmChunkSize)
+      }
+      val parts = mutableListOf<String>()
+      var start = 0
+      while (start < message.length) {
+        var end = minOf(start + SMS_FALLBACK_UCS2_CHUNK_SIZE, message.length)
+        if (end < message.length &&
+          Character.isHighSurrogate(message[end - 1]) &&
+          Character.isLowSurrogate(message[end])
+        ) {
+          end -= 1
+        }
+        parts.add(message.substring(start, end))
+        start = end
+      }
+      return parts
+    }
+
     internal fun buildPayloadJson(
       ok: Boolean,
       to: String,
@@ -427,7 +481,7 @@ class SmsManager(
         context.getSystemService(AndroidSmsManager::class.java)
           ?: throw IllegalStateException("SMS_UNAVAILABLE: SmsManager not available")
 
-      val plan = buildSendPlan(params.message) { smsManager.divideMessage(it) }
+      val plan = resolveSendPlan(params.message) { smsManager.divideMessage(it) }
       if (plan.useMultipart) {
         smsManager.sendMultipartTextMessage(
           params.to,
