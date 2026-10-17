@@ -51,6 +51,65 @@ function completedAssistant(tokens?: number, withText = false) {
   return assistant;
 }
 
+type SubscribedHarness = ReturnType<
+  typeof import("../embedded-agent-subscribe.e2e-harness.js").createSubscribedSessionHarness
+>;
+function mockSubscribedAttempt(
+  use: (
+    attempt: EmbeddedRunAttemptInternalParams,
+    harness: SubscribedHarness,
+  ) => Promise<ReturnType<typeof makeAttemptResult>>,
+  full = true,
+  events = false,
+) {
+  mockedRunEmbeddedAttempt.mockImplementationOnce(async (input) => {
+    const attempt = input as EmbeddedRunAttemptInternalParams;
+    const { createSubscribedSessionHarness } =
+      await import("../embedded-agent-subscribe.e2e-harness.js");
+    const harness = createSubscribedSessionHarness({
+      runId: attempt.runId,
+      onContextAccountingEvent: attempt.onContextAccountingEvent,
+      ...(full
+        ? {
+            agentId: attempt.agentId,
+            sessionKey: attempt.sessionKey,
+            sessionExtras: { messages: [] },
+            compactionCountOwner: attempt.compactionCountOwner,
+            ...(events ? { onAgentEvent: attempt.onAgentEvent } : {}),
+          }
+        : {}),
+    });
+    try {
+      return await use(attempt, harness);
+    } finally {
+      harness.subscription.unsubscribe();
+    }
+  });
+}
+
+function emitCompaction(
+  attempt: EmbeddedRunAttemptInternalParams,
+  harness: SubscribedHarness,
+  tokensAfter: number,
+) {
+  // Private accounting commits; the public event only projects completion.
+  attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter });
+  harness.emit({
+    type: "compaction_end",
+    reason: "threshold",
+    outcome: {
+      status: "completed",
+      tokensBefore: 180_000,
+      tokensAfter,
+      willRetry: false,
+    },
+  });
+}
+
+function prepareCompaction(summary: string) {
+  mockedCompactDirect.mockResolvedValueOnce(makeCompactionSuccess({ summary, tokensAfter: 40 }));
+}
+
 describe("recovery cancellation through the public run owner", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let runEmbeddedAgent: TestRunEmbeddedAgent;
@@ -61,6 +120,16 @@ describe("recovery cancellation through the public run owner", () => {
   >;
   const readLatest = (target: Parameters<typeof sessionAccessor.loadSessionEntry>[0]) =>
     sessionAccessor.loadSessionEntry({ ...target, readConsistency: "latest" });
+  const detachedParams = (prefix: string) => {
+    const workspaceDir = tempDirs.make(prefix);
+    const sessionManager = SessionManager.inMemory(workspaceDir);
+    return {
+      ...createOverflowRunParams({ workspaceDir }),
+      sessionId: sessionManager.getSessionId(),
+      sessionManager,
+      sessionPersistence: "detached" as const,
+    };
+  };
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
     sessionAccessor = await import("../../config/sessions/session-accessor.js");
@@ -87,8 +156,6 @@ describe("recovery cancellation through the public run owner", () => {
   });
 
   it("fences retired foreground budget observers across physical retries", async () => {
-    const workspaceDir = tempDirs.make("openclaw-request-budget-retry-");
-    const sessionManager = SessionManager.inMemory(workspaceDir);
     const firstBudget = {
       contextWindow: 32_768,
       reserveTokens: 8_192,
@@ -106,9 +173,7 @@ describe("recovery cancellation through the public run owner", () => {
       retiredObserver?.(firstBudget);
       return makeAttemptResult({ promptError: makeOverflowError(), assistantTexts: [] });
     });
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({ summary: "Prior work", tokensAfter: 40 }),
-    );
+    prepareCompaction("Prior work");
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attempt: BudgetObservedAttempt) => {
       attempt.onCompactionRequestBudget?.(retryBudget);
       retiredObserver?.(firstBudget);
@@ -116,12 +181,9 @@ describe("recovery cancellation through the public run owner", () => {
     });
 
     await runEmbeddedAgent({
-      ...createOverflowRunParams({ workspaceDir }),
+      ...detachedParams("openclaw-request-budget-retry-"),
       provider: "anthropic",
       model: "test-model",
-      sessionId: sessionManager.getSessionId(),
-      sessionManager,
-      sessionPersistence: "detached",
       onCompactionRequestBudget: observed,
     });
     retiredObserver?.(firstBudget);
@@ -140,28 +202,22 @@ describe("recovery cancellation through the public run owner", () => {
     { owner: "caller", kind: "timeout", committed: true },
     { owner: "subscription", kind: "timeout", committed: false },
     { owner: "subscription", kind: "overflow", committed: true },
+    { owner: "writer-replaced", kind: "timeout", committed: true },
+    { owner: "admission-replaced", kind: "timeout", committed: true },
+    { owner: "deleted", kind: "timeout", committed: true },
   ] as const)(
-    "preserves $owner rejection and committed=$committed facts after $kind cancellation",
+    "settles $kind cancellation without stale $owner writes (committed=$committed)",
     async ({ owner, kind, committed }) => {
-      const workspaceDir = tempDirs.make("openclaw-recovery-cancel-");
-      const sessionManager = SessionManager.inMemory(workspaceDir);
+      const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
+      let replacement: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
       const abort = new AbortController();
       const callerError = new Error("caller stopped recovery");
       const onCompactionAccounting = vi.fn<(fact: CompactionAccountingFact | undefined) => void>();
-      if (owner === "subscription") {
+      if (owner !== "caller") {
         session = await createSharedRunIntegrationSession();
       }
-      const runParams = {
-        ...(session
-          ? session.runParams
-          : {
-              ...createOverflowRunParams({ workspaceDir }),
-              sessionId: sessionManager.getSessionId(),
-              sessionManager,
-              sessionPersistence: "detached" as const,
-            }),
-        abortSignal: abort.signal,
-      };
+      const runParams = session?.runParams ?? detachedParams("openclaw-recovery-cancel-");
+      const target = session?.runParams.sessionTarget;
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
         kind === "overflow"
           ? makeAttemptResult({
@@ -169,13 +225,36 @@ describe("recovery cancellation through the public run owner", () => {
               sessionIdUsed: runParams.sessionId,
               assistantTexts: [],
             })
-          : { ...timeoutAttempt(), sessionIdUsed: runParams.sessionId },
+          : timeoutAttempt(runParams.sessionId),
       );
       if (committed) {
-        mockedCompactDirect.mockResolvedValueOnce(
-          makeCompactionSuccess({ summary: "Committed before Stop", tokensAfter: 40 }),
-        );
+        prepareCompaction("Committed before Stop");
         mockedGlobalHookRunner.runAfterCompaction.mockImplementationOnce(async () => {
+          if (target && owner === "deleted") {
+            await sessionAccessor.deleteSessionEntryLifecycle({
+              agentId: target.agentId,
+              storePath: target.storePath,
+              archiveTranscript: false,
+              target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+            });
+          } else if (target && (owner === "writer-replaced" || owner === "admission-replaced")) {
+            await sessionAccessor.updateSessionEntry(target, () => ({
+              compactionCount: 7,
+              totalTokens: 999,
+            }));
+            if (owner === "writer-replaced") {
+              const { claimAgentSessionWriter } = await import("./run/session-bootstrap.js");
+              await claimAgentSessionWriter({ ...runParams, runId: "replacement-writer" });
+            } else {
+              replacement = prepareSystemAgentRunAdmission(
+                {},
+                runParams.runId,
+                "main",
+                "replacement",
+              );
+              await replacement.admit("embedded");
+            }
+          }
           abort.abort(callerError);
         });
       } else {
@@ -184,97 +263,39 @@ describe("recovery cancellation through the public run owner", () => {
           throw callerError;
         });
       }
-
-      const run =
-        owner === "caller"
-          ? runEmbeddedAgent({
-              ...runParams,
-              onCompactionAccounting,
-            })
-          : runEmbeddedAgent(runParams);
-      await expect(run).rejects.toBe(callerError);
-
-      expect(mockedCompactDirect).toHaveBeenCalledOnce();
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
-      if (session) {
-        const entry = readLatest(session.runParams.sessionTarget);
-        expect(entry).toMatchObject({ sessionId: runParams.sessionId });
-        expect(entry?.compactionCount ?? 0).toBe(committed ? 1 : 0);
-        expect(entry?.totalTokens).toBe(committed ? 40 : undefined);
-        expect(onCompactionAccounting).not.toHaveBeenCalled();
-      } else {
-        expect(onCompactionAccounting).toHaveBeenCalledExactlyOnceWith(
-          committed
-            ? { kind: "presentation-only", count: 1, currentContextSnapshot: { tokens: 40 } }
-            : undefined,
-        );
-      }
-    },
-  );
-
-  it.each(["writer-replaced", "admission-replaced", "deleted"] as const)(
-    "does not persist completed default facts after its owner is %s",
-    async (change) => {
-      session = await createSharedRunIntegrationSession();
-      const runParams = session.runParams;
-      const { sessionTarget } = runParams;
-      const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
-      let replacement: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
-      const abort = new AbortController();
-      const callerError = new Error("caller stopped after owner changed");
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(timeoutAttempt(runParams.sessionId));
-      mockedCompactDirect.mockResolvedValueOnce(
-        makeCompactionSuccess({ summary: "Committed before owner change", tokensAfter: 40 }),
-      );
-      mockedGlobalHookRunner.runAfterCompaction.mockImplementationOnce(async () => {
-        if (change !== "deleted") {
-          await sessionAccessor.updateSessionEntry(sessionTarget, () => ({
-            compactionCount: 7,
-            totalTokens: 999,
-          }));
-          if (change === "writer-replaced") {
-            const { claimAgentSessionWriter } = await import("./run/session-bootstrap.js");
-            await claimAgentSessionWriter({ ...runParams, runId: "replacement-writer" });
+      try {
+        const run = runEmbeddedAgent({
+          ...runParams,
+          abortSignal: abort.signal,
+          ...(owner === "caller" ? { onCompactionAccounting } : {}),
+        });
+        await expect(run).rejects.toBe(callerError);
+        expect(mockedCompactDirect).toHaveBeenCalledOnce();
+        expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+        if (target) {
+          const entry = readLatest(target);
+          if (owner === "deleted") {
+            expect(entry).toBeUndefined();
+          } else if (owner === "writer-replaced" || owner === "admission-replaced") {
+            expect(entry).toMatchObject({
+              compactionCount: 7,
+              totalTokens: 999,
+              activeWriterRunId:
+                owner === "writer-replaced" ? "replacement-writer" : runParams.runId,
+            });
           } else {
-            replacement = prepareSystemAgentRunAdmission(
-              {},
-              runParams.runId,
-              "main",
-              "replacement",
-            );
-            await replacement.admit("embedded");
+            expect(entry).toMatchObject({ sessionId: runParams.sessionId });
+            expect(entry?.compactionCount ?? 0).toBe(committed ? 1 : 0);
+            expect(entry?.totalTokens).toBe(committed ? 40 : undefined);
+            expect(onCompactionAccounting).not.toHaveBeenCalled();
           }
         } else {
-          await sessionAccessor.deleteSessionEntryLifecycle({
-            agentId: sessionTarget.agentId,
-            storePath: sessionTarget.storePath,
-            archiveTranscript: false,
-            target: {
-              canonicalKey: sessionTarget.sessionKey,
-              storeKeys: [sessionTarget.sessionKey],
-            },
-          });
+          expect(onCompactionAccounting).toHaveBeenCalledExactlyOnceWith(
+            committed
+              ? { kind: "presentation-only", count: 1, currentContextSnapshot: { tokens: 40 } }
+              : undefined,
+          );
         }
-        abort.abort(callerError);
-      });
-
-      try {
-        await expect(runEmbeddedAgent({ ...runParams, abortSignal: abort.signal })).rejects.toBe(
-          callerError,
-        );
-
-        const entry = readLatest(sessionTarget);
-        if (change !== "deleted") {
-          expect(entry).toMatchObject({
-            compactionCount: 7,
-            totalTokens: 999,
-            activeWriterRunId:
-              change === "writer-replaced" ? "replacement-writer" : runParams.runId,
-          });
-        } else {
-          expect(entry).toBeUndefined();
-        }
-        expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
       } finally {
         replacement?.close();
       }
@@ -286,66 +307,31 @@ describe("recovery cancellation through the public run owner", () => {
     async (settlement) => {
       session = await createSharedRunIntegrationSession();
       const attemptError = new Error("attempt cleanup failed after completed compaction");
-      const { createSubscribedSessionHarness } =
-        await import("../embedded-agent-subscribe.e2e-harness.js");
       const onAgentEvent = vi.fn();
-      mockedRunEmbeddedAttempt
-        .mockImplementationOnce(async (input) => {
-          const attempt = input as EmbeddedRunAttemptInternalParams;
-          const harness = createSubscribedSessionHarness({
-            agentId: attempt.agentId,
-            runId: attempt.runId,
-            sessionKey: attempt.sessionKey,
-            sessionExtras: { messages: [] },
-            compactionCountOwner: attempt.compactionCountOwner,
-            onContextAccountingEvent: attempt.onContextAccountingEvent,
-            onAgentEvent: attempt.onAgentEvent,
-          });
-          try {
-            // The attempt owns commitment; the public event only projects its completion.
-            attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter: 80 });
-            harness.emit({
-              type: "compaction_end",
-              reason: "threshold",
-              outcome: {
-                status: "completed",
-                tokensBefore: 180_000,
-                tokensAfter: 80,
-                willRetry: false,
-              },
-            });
-            await harness.subscription.waitForPendingEvents();
-            if (settlement === "thrown") {
-              throw attemptError;
-            }
-            return {
-              ...timeoutAttempt(attempt.sessionId),
-              compactionCount: harness.subscription.getCompactionCount(),
-              compactionTokensAfter: 80,
-            };
-          } finally {
-            harness.subscription.unsubscribe();
+      mockSubscribedAttempt(
+        async (attempt, harness) => {
+          emitCompaction(attempt, harness, 80);
+          await harness.subscription.waitForPendingEvents();
+          if (settlement === "thrown") {
+            throw attemptError;
           }
-        })
-        .mockImplementationOnce(async (input) => {
-          const attempt = input as EmbeddedRunAttemptInternalParams;
-          const harness = createSubscribedSessionHarness({
-            runId: attempt.runId,
-            onContextAccountingEvent: attempt.onContextAccountingEvent,
-          });
-          const assistant = completedAssistant(120);
-          try {
-            harness.emit({ type: "message_start", message: assistant });
-            harness.emit({ type: "message_end", message: assistant });
-            await harness.subscription.waitForPendingEvents();
-            return makeAttemptResult({ sessionIdUsed: attempt.sessionId });
-          } finally {
-            harness.subscription.unsubscribe();
-          }
-        });
-      mockedCompactDirect.mockResolvedValueOnce(
-        makeCompactionSuccess({ summary: "Outer timeout recovery", tokensAfter: 40 }),
+          return {
+            ...timeoutAttempt(attempt.sessionId),
+            compactionCount: harness.subscription.getCompactionCount(),
+            compactionTokensAfter: 80,
+          };
+        },
+        true,
+        true,
       );
+      mockSubscribedAttempt(async (attempt, harness) => {
+        const assistant = completedAssistant(120);
+        harness.emit({ type: "message_start", message: assistant });
+        harness.emit({ type: "message_end", message: assistant });
+        await harness.subscription.waitForPendingEvents();
+        return makeAttemptResult({ sessionIdUsed: attempt.sessionId });
+      }, false);
+      prepareCompaction("Outer timeout recovery");
 
       const run = runEmbeddedAgent({ ...session.runParams, onAgentEvent });
       if (settlement === "returned") {
@@ -378,18 +364,7 @@ describe("recovery cancellation through the public run owner", () => {
     const { runParams } = session;
     const facts = vi.fn<(fact: CompactionAccountingFact | undefined) => void>();
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "Done." }]);
-    const { createSubscribedSessionHarness } =
-      await import("../embedded-agent-subscribe.e2e-harness.js");
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (input) => {
-      const attempt = input as EmbeddedRunAttemptInternalParams;
-      const harness = createSubscribedSessionHarness({
-        agentId: attempt.agentId,
-        runId: attempt.runId,
-        sessionKey: attempt.sessionKey,
-        sessionExtras: { messages: [] },
-        compactionCountOwner: attempt.compactionCountOwner,
-        onContextAccountingEvent: attempt.onContextAccountingEvent,
-      });
+    mockSubscribedAttempt(async (attempt, harness) => {
       const assistant = completedAssistant(120, true);
       const emitModel = () => {
         const message =
@@ -399,35 +374,21 @@ describe("recovery cancellation through the public run owner", () => {
         harness.emit({ type: "message_start", message });
         harness.emit({ type: "message_end", message });
       };
-      try {
-        if (testCase.order === "model-then-compaction") {
-          emitModel();
-        }
-        attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter: 40 });
-        harness.emit({
-          type: "compaction_end",
-          reason: "threshold",
-          outcome: {
-            status: "completed",
-            tokensBefore: 180_000,
-            tokensAfter: 40,
-            willRetry: false,
-          },
-        });
-        if (testCase.order !== "model-then-compaction") {
-          emitModel();
-        }
-        await harness.subscription.waitForPendingEvents();
-        // Terminal copies can still describe the pre-compaction assistant.
-        return makeAttemptResult({
-          sessionIdUsed: runParams.sessionId,
-          lastAssistant: assistant,
-          compactionCount: harness.subscription.getCompactionCount(),
-          compactionTokensAfter: 40,
-        });
-      } finally {
-        harness.subscription.unsubscribe();
+      if (testCase.order === "model-then-compaction") {
+        emitModel();
       }
+      emitCompaction(attempt, harness, 40);
+      if (testCase.order !== "model-then-compaction") {
+        emitModel();
+      }
+      await harness.subscription.waitForPendingEvents();
+      // Terminal copies can still describe the pre-compaction assistant.
+      return makeAttemptResult({
+        sessionIdUsed: runParams.sessionId,
+        lastAssistant: assistant,
+        compactionCount: harness.subscription.getCompactionCount(),
+        compactionTokensAfter: 40,
+      });
     });
 
     const result = await runEmbeddedAgent({
@@ -557,8 +518,8 @@ describe("recovery cancellation through the public run owner", () => {
         expect(persisted).toEqual(beforeFinalization);
         expect(persisted).toMatchObject({ activeWriterRunId: "replacement-writer" });
       } else {
-        expect(persisted?.totalTokens).toBe(13_357);
         expect(persisted).toMatchObject({
+          totalTokens: 13_357,
           activeWriterRunId: runParams.runId,
           inputTokens: 3,
           outputTokens: 18,
@@ -600,16 +561,16 @@ describe("recovery cancellation through the public run owner", () => {
       mockedRunEmbeddedAttempt
         .mockImplementationOnce(async (input) => {
           const attempt = input as EmbeddedRunAttemptInternalParams;
-          const target = attempt.sessionTarget;
-          if (!target?.agentId || !target.sessionId || !target.sessionKey || !target.storePath) {
+          const { agentId, sessionId, sessionKey, storePath } = attempt.sessionTarget ?? {};
+          if (!agentId || !sessionId || !sessionKey || !storePath) {
             throw new Error("The public runner must resolve a complete durable target");
           }
           const durableTarget = {
-            ...target,
-            agentId: target.agentId,
-            sessionId: target.sessionId,
-            sessionKey: target.sessionKey,
-            storePath: target.storePath,
+            ...attempt.sessionTarget,
+            agentId,
+            sessionId,
+            sessionKey,
+            storePath,
           };
           expect(sessionAccessor.loadSessionEntry(durableTarget)).toBeUndefined();
           manager = await PersistentSessionManager.openAsync(durableTarget, state.workspaceDir);

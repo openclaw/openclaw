@@ -6,7 +6,7 @@ import { settleReplyDispatcher } from "../../auto-reply/dispatch-dispatcher.js";
 import * as replyPayloadRuntime from "../../auto-reply/reply-payload.js";
 import {
   createFollowupRun,
-  createMockTypingSignaler,
+  createRunAgentTurnParams,
   getExecuteAgentTurnForTest,
   setupAgentRunnerExecutionTestState,
   type FallbackRunnerParams,
@@ -257,9 +257,7 @@ describe("prepared harness source delivery", () => {
     }
     useOpenAIPlatformAuthFixture();
     let embeddedError: unknown;
-    let embeddedParams: unknown;
     runnerState.runEmbeddedAgentMock.mockImplementationOnce(async (params: unknown) => {
-      embeddedParams = params;
       try {
         return await runEmbeddedAgent(params as Parameters<typeof runEmbeddedAgent>[0]);
       } catch (error) {
@@ -280,36 +278,29 @@ describe("prepared harness source delivery", () => {
     }
     runnerState.runWithModelFallbackMock.mockImplementationOnce(
       async (params: FallbackRunnerParams) => {
-        if (testCase.candidatePath === "cli-failure-embedded") {
-          await runAdmittedAttempt(params, "anthropic", "cli-primary", {
+        const cliSucceeded = testCase.candidatePath === "embedded-failure-cli";
+        if (testCase.candidatePath !== "embedded") {
+          const [provider, model] = cliSucceeded
+            ? (["custom", "api-primary"] as const)
+            : (["anthropic", "cli-primary"] as const);
+          await runAdmittedAttempt(params, provider, model, {
             stage: "initial",
           }).catch(() => undefined);
         }
-        if (testCase.candidatePath === "embedded-failure-cli") {
-          await runAdmittedAttempt(params, "custom", "api-primary", {
-            stage: "initial",
-          }).catch(() => undefined);
-          return {
-            result: await runAdmittedAttempt(params, "anthropic", "cli-fallback", {
-              stage: "fallback",
-              fallbackReason: "unknown",
-            }),
-            provider: "anthropic",
-            model: "cli-fallback",
-            attempts: [],
-          };
-        }
+        const [provider, model] = cliSucceeded
+          ? (["anthropic", "cli-fallback"] as const)
+          : (["custom", "plugin-fallback"] as const);
         return {
           result: await runAdmittedAttempt(
             params,
-            "custom",
-            "plugin-fallback",
-            testCase.candidatePath === "cli-failure-embedded"
-              ? { stage: "fallback", fallbackReason: "unknown" }
-              : { stage: "initial" },
+            provider,
+            model,
+            testCase.candidatePath === "embedded"
+              ? { stage: "initial" }
+              : { stage: "fallback", fallbackReason: "unknown" },
           ),
-          provider: "custom",
-          model: "plugin-fallback",
+          provider,
+          model,
           attempts: [],
         };
       },
@@ -462,33 +453,16 @@ describe("prepared harness source delivery", () => {
       // a SQLite compatibility key and has no durable row for writer admission.
       sessionStoreMocks.currentEntry = undefined;
       const execution = await executeAgentTurn({
-        commandBody: "hello",
-        followupRun,
+        ...createRunAgentTurnParams(followupRun),
         sessionCtx: buildTestCtx({ Provider: "discord", MessageSid: "msg" }),
         opts: runtimeOpts,
-        typingSignals: createMockTypingSignaler(),
-        blockReplyPipeline: null,
         blockStreamingEnabled: true,
-        resolvedBlockStreamingBreak: "message_end",
-        applyReplyToMode: (payload) => payload,
-        shouldEmitToolResult: () => true,
-        shouldEmitToolOutput: () => false,
-        pendingToolTasks: new Set(),
-        isHeartbeat: false,
-        sessionKey: "main",
-        getActiveSessionEntry: () => undefined,
-        resolvedVerboseLevel: "off",
       });
       if (execution.kind !== "success") {
-        const failedParams = embeddedParams as {
-          sessionId?: string;
-          sessionKey?: string;
-          sessionTarget?: unknown;
-        };
         const embeddedErrorText =
           embeddedError instanceof Error ? embeddedError.stack : String(embeddedError);
         throw new Error(
-          `expected settled fallback execution: ${embeddedErrorText}; ${JSON.stringify({ execution, failedParams })}`,
+          `expected settled fallback execution: ${embeddedErrorText}; ${JSON.stringify(execution)}`,
         );
       }
       const payload = execution.runResult.payloads?.[0];

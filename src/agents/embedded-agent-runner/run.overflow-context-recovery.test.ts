@@ -138,7 +138,9 @@ const successfulCompaction = (): CompactionResult =>
 
 function makeAssistantMessage(
   input: Pick<AssistantMessage, "stopReason"> &
-    Partial<Pick<AssistantMessage, "errorMessage" | "usage">>,
+    Partial<
+      Pick<AssistantMessage, "errorMessage" | "usage" | "errorType" | "errorCode" | "diagnostics">
+    >,
 ): AssistantMessage {
   return {
     role: "assistant",
@@ -146,10 +148,10 @@ function makeAssistantMessage(
     api: "openai-responses",
     provider: "openai",
     model: "gpt-5.6-luna",
-    usage: input.usage ?? { ...createZeroUsageFixture(), input: 1, totalTokens: 1 },
-    stopReason: input.stopReason,
-    errorMessage: input.errorMessage,
     timestamp: 1,
+    ...input,
+    errorMessage: input.errorMessage,
+    usage: input.usage ?? { ...createZeroUsageFixture(), input: 1, totalTokens: 1 },
   };
 }
 
@@ -297,76 +299,50 @@ describe("recoverEmbeddedRunOverflow", () => {
   });
 
   it.each([
-    "400 Your input exceeds the context window of this model",
-    '400 " Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input. Error Data: n/a, Additional Data: n/a"',
-  ])("compacts and retries the classified assistant overflow: %s", async (errorMessage) => {
-    const assistantOverflowCandidate = makeAssistantMessage({
-      stopReason: "error",
-      errorMessage,
-    });
+    { errorMessage: "400 Your input exceeds the context window of this model" },
+    {
+      errorMessage:
+        '400 " Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input. Error Data: n/a, Additional Data: n/a"',
+    },
+    {
+      errorMessage:
+        "400 <400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
+      errorType: "invalid_request_error",
+      errorCode: "invalid_parameter_error",
+    },
+  ])("compacts and retries the classified assistant overflow: $errorMessage", async (failure) => {
+    const assistantOverflowCandidate = makeAssistantMessage({ stopReason: "error", ...failure });
     await expectCompactionRetry({ promptError: null, assistantOverflowCandidate }, true);
   });
 
   it.each([
-    "400 Invalid 'reasoning_effort' value: 'off'. Supported values: none, minimal, low, medium, high, xhigh.",
-    "400 Failed to apply prompt template. The model is loaded with context length of only 4096 tokens.",
-  ])("does not compact an unrelated local-server rejection: %s", async (errorMessage) => {
-    const input = makeInput({
-      promptError: null,
-      assistantOverflowCandidate: makeAssistantMessage({ stopReason: "error", errorMessage }),
-      assistantErrorText: errorMessage,
-    });
-
-    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "none" });
-    expect(mocks.compact).not.toHaveBeenCalled();
-    expect(mocks.markProviderPromptRejected).not.toHaveBeenCalled();
-  });
-
-  it("recovers a DashScope input-length range overflow as context overflow", async () => {
-    const assistantOverflowCandidate = makeAssistantMessage({
-      stopReason: "error",
+    {
       errorMessage:
-        "400 <400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
-    });
-    // The provider body also carries these structured fields; the text wording
-    // must outrank them so validation-shaped wrappers still recover.
-    assistantOverflowCandidate.errorType = "invalid_request_error";
-    assistantOverflowCandidate.errorCode = "invalid_parameter_error";
-    await expectCompactionRetry({ promptError: null, assistantOverflowCandidate }, true);
-  });
-
-  it("does not compact a validation rejection naming context_length_exceeded", async () => {
-    const assistantOverflowCandidate = makeAssistantMessage({
-      stopReason: "error",
+        "400 Invalid 'reasoning_effort' value: 'off'. Supported values: none, minimal, low, medium, high, xhigh.",
+    },
+    {
+      errorMessage:
+        "400 Failed to apply prompt template. The model is loaded with context length of only 4096 tokens.",
+    },
+    {
       errorMessage: "500 Unsupported parameter: context_length_exceeded",
-    });
-    assistantOverflowCandidate.errorType = "invalid_request_error";
-    assistantOverflowCandidate.errorCode = "unknown_parameter";
-    const input = makeInput({
-      promptError: null,
-      assistantOverflowCandidate,
-      assistantErrorText: assistantOverflowCandidate.errorMessage,
-    });
-
-    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "none" });
+      errorType: "invalid_request_error",
+      errorCode: "unknown_parameter",
+    },
+    {
+      errorMessage: "Anthropic refusal: prompt is too long.",
+      diagnostics: [{ type: "provider_refusal" as const, timestamp: 1 }],
+    },
+  ])("does not recover a rejected or refused assistant: $errorMessage", async (failure) => {
+    expect(
+      await recover({
+        promptError: null,
+        assistantOverflowCandidate: makeAssistantMessage({ stopReason: "error", ...failure }),
+        assistantErrorText: failure.errorMessage,
+      }),
+    ).toEqual({ action: "none" });
     expectNoCompaction();
     expect(mocks.markProviderPromptRejected).not.toHaveBeenCalled();
-  });
-
-  it("preserves a structured refusal alone", async () => {
-    const assistant = makeAssistantMessage({
-      stopReason: "error",
-      errorMessage: "Anthropic refusal: prompt is too long.",
-    });
-    assistant.diagnostics = [{ type: "provider_refusal", timestamp: 1 }];
-    const input = makeInput({
-      promptError: null,
-      assistantOverflowCandidate: assistant,
-      assistantErrorText: assistant.errorMessage,
-    });
-
-    expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "none" });
-    expectNoCompaction();
   });
 
   it("recovers a canonical zero-output length overflow", async () => {
