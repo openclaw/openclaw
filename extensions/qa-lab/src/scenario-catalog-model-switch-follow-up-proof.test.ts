@@ -46,79 +46,43 @@ function terminalReceipt(params: {
   };
 }
 
-async function runFollowUp(params?: {
-  alternateModel?: string;
-  alternateReceiptRunId?: string;
-  primaryReplyText?: string;
-  primaryOutboundText?: string;
-  primaryDelivery?: { status: string; resultCount: number } | null;
-  alternateReplyText?: string;
-  alternateOutboundText?: string;
-  alternateDelivery?: { status: string; resultCount: number } | null;
-  primaryResponseModel?: string;
-  primaryRerouted?: boolean;
-  primaryEffective?: { provider?: string; model?: string };
-  alternateResponseModel?: string;
-  alternateRerouted?: boolean;
-  alternateEffective?: { provider?: string; model?: string };
-  unrelatedPrimaryOutboundText?: string;
-  unrelatedLaterOutboundText?: string;
-  onRun?: () => void;
-}) {
+type TurnFixture = {
+  replyText?: string;
+  outboundText?: string;
+  responseModel?: string;
+  rerouted?: boolean;
+  effective?: { provider?: string; model?: string };
+};
+
+async function runFollowUp(params: { primary?: TurnFixture; alternate?: TurnFixture } = {}) {
   const state = createQaBusState();
   let call = 0;
   const runAgentPrompt = vi.fn(
     async (_env: unknown, prompt: { provider?: string; model?: string; message: string }) => {
-      params?.onRun?.();
       call += 1;
       const runId = `run-${call}`;
       const provider = prompt.provider ?? "openai";
       const model = prompt.model ?? "primary-model";
+      const turn = (call === 1 ? params.primary : params.alternate) ?? {};
       const replyText =
-        call === 1
-          ? (params?.primaryReplyText ?? "hello from the primary model")
-          : (params?.alternateReplyText ?? "the model switch handoff completed");
+        turn.replyText ??
+        (call === 1 ? "hello from the primary model" : "the model switch handoff completed");
       state.addOutboundMessage({
         accountId: "qa-channel",
         to: "dm:qa-operator",
-        text:
-          call === 1
-            ? (params?.primaryOutboundText ?? replyText)
-            : (params?.alternateOutboundText ?? replyText),
+        text: turn.outboundText ?? replyText,
       });
-      if (call === 1 && params?.unrelatedPrimaryOutboundText) {
-        state.addOutboundMessage({
-          accountId: "qa-channel",
-          to: "dm:qa-operator",
-          text: params.unrelatedPrimaryOutboundText,
-        });
-      }
-      if (call === 2 && params?.unrelatedLaterOutboundText) {
-        state.addOutboundMessage({
-          accountId: "qa-channel",
-          to: "dm:qa-operator",
-          text: params.unrelatedLaterOutboundText,
-        });
-      }
-      const terminalDelivery = call === 1 ? params?.primaryDelivery : params?.alternateDelivery;
       return {
         started: { runId },
         waited: {
           status: "ok",
-          ...(terminalDelivery === null
-            ? {}
-            : {
-                terminalDelivery: terminalDelivery ?? { status: "sent", resultCount: 1 },
-              }),
+          terminalDelivery: { status: "sent", resultCount: 1 },
           terminalReply: { disposition: "visible", text: replyText },
           terminalReceipt: terminalReceipt({
-            runId: call === 2 ? (params?.alternateReceiptRunId ?? runId) : runId,
+            runId,
             provider,
             model,
-            responseModel:
-              call === 1 ? params?.primaryResponseModel : params?.alternateResponseModel,
-            rerouted: call === 1 ? params?.primaryRerouted : params?.alternateRerouted,
-            effective: call === 1 ? params?.primaryEffective : params?.alternateEffective,
+            ...turn,
           }),
         },
       };
@@ -130,7 +94,7 @@ async function runFollowUp(params?: {
       env: {
         providerMode: "mock-openai",
         primaryModel: "openai/primary-model",
-        alternateModel: params?.alternateModel ?? "OPENAI/alternate-alias",
+        alternateModel: "OPENAI/alternate-alias",
         gateway: {},
       },
       runAgentPrompt,
@@ -146,14 +110,18 @@ async function runFollowUp(params?: {
 describe("model-switch follow-up terminal evidence", () => {
   it("invokes the canonical alias target and records exact run-owned evidence", async () => {
     const { result, runAgentPrompt } = await runFollowUp({
-      primaryReplyText: "hello **from the primary model**",
-      primaryOutboundText: "hello from the primary model",
-      alternateReplyText: "the **model switch** handoff completed",
-      alternateOutboundText: "the model switch handoff completed",
-      primaryResponseModel: "primary-model-concrete",
-      primaryRerouted: false,
-      alternateResponseModel: "alternate-model-concrete",
-      alternateRerouted: false,
+      primary: {
+        replyText: "hello **from the primary model**",
+        outboundText: "hello from the primary model",
+        responseModel: "primary-model-concrete",
+        rerouted: false,
+      },
+      alternate: {
+        replyText: "the **model switch** handoff completed",
+        outboundText: "the model switch handoff completed",
+        responseModel: "alternate-model-concrete",
+        rerouted: false,
+      },
     });
 
     expect(result.status).toBe("pass");
@@ -184,8 +152,8 @@ describe("model-switch follow-up terminal evidence", () => {
     effective?: { provider?: string; model?: string },
   ) =>
     run === "default"
-      ? { primaryRerouted: rerouted, primaryEffective: effective }
-      : { alternateRerouted: rerouted, alternateEffective: effective };
+      ? { primary: { rerouted, effective } }
+      : { alternate: { rerouted, effective } };
 
   it.each([
     { run: "default" as const, changed: "model", effective: { model: "fallback-model" } },

@@ -170,43 +170,28 @@ function createPlanningEvidenceFixture(
   const internalMarker =
     typeof config.internalMarker === "string" ? config.internalMarker : undefined;
 
-  if (scenario.execution.runtime === "codex" && expectedReply && internalMarker) {
-    return {
-      scenario,
-      outboundText: expectedReply,
-      failureMessage: "missing successful current-attempt progress_card update",
-      currentSummary: {
-        eventCursor: 9,
-        assistantMirrors: [{ identity: "current-turn:assistant", text: expectedReply }],
-        successfulToolCallCounts: { progress_card: 1 },
-      },
-    };
+  const codex = scenario.execution.runtime === "codex";
+  const hasReply = codex && expectedReply && internalMarker;
+  if (!hasReply && !(artifactFile && (codex || scenario.execution.runtime === "openclaw"))) {
+    throw new Error(`unsupported planning evidence metadata: ${scenario.id}`);
   }
-  if (scenario.execution.runtime === "codex" && artifactFile) {
-    const outboundText = `Built ${artifactFile}`;
-    return {
-      scenario,
-      outboundText,
-      failureMessage: "missing Codex harness progress_card signal",
-      currentSummary: {
-        eventCursor: 9,
-        assistantMirrors: [{ identity: "current-turn:assistant", text: outboundText }],
-        successfulToolCallCounts: { progress_card: 1 },
-      },
-    };
-  }
-  if (scenario.execution.runtime === "openclaw" && artifactFile) {
-    return {
-      scenario,
-      outboundText: `Built ${artifactFile}`,
-      failureMessage: "missing OpenClaw progress_card signal",
-      currentSummary: {
-        eventCursor: 9,
-        successfulToolCallCounts: { progress_card: 1 },
-      },
-    };
-  }
-  throw new Error(`unsupported planning evidence metadata: ${scenario.id}`);
+  const outboundText = hasReply && expectedReply ? expectedReply : `Built ${artifactFile}`;
+  return {
+    scenario,
+    outboundText,
+    failureMessage: hasReply
+      ? "missing successful current-attempt progress_card update"
+      : codex
+        ? "missing Codex harness progress_card signal"
+        : "missing OpenClaw progress_card signal",
+    currentSummary: {
+      eventCursor: 9,
+      ...(codex
+        ? { assistantMirrors: [{ identity: "current-turn:assistant", text: outboundText }] }
+        : {}),
+      successfulToolCallCounts: { progress_card: 1 },
+    },
+  };
 }
 
 function runPlanningEvidenceFixture(
@@ -277,13 +262,18 @@ describe("scenario-flow-runner", () => {
     assertTelegramRichObservationFlow,
   );
 
-  it("keeps live goal followthrough inside the active-goal context limit", async () => {
-    const state = createQaBusState();
-    const artifactFile = "goal-continuance-live-00000000.txt";
-    const artifactText = "Goal continuance advanced the concrete next step.";
-    const conversation = "dm:goal-followthrough-live-00000000";
+  const goalArtifactFile = "goal-continuance-live-00000000.txt";
+  const goalArtifactText = "Goal continuance advanced the concrete next step.";
+  const hasContinuation = (state: ReturnType<typeof createQaBusState>) =>
+    state
+      .getSnapshot()
+      .messages.some((message) => message.direction === "inbound" && message.text === "continue");
 
-    const sessionListCalls: string[] = [];
+  async function runGoalFollowthrough(
+    mode: "active" | "complete" | "early-artifact" = "active",
+    state = createQaBusState(),
+    sessionListCalls: string[] = [],
+  ) {
     const result = await runLoadedScenarioFlow("goal-followthrough-live", {
       state,
       api: {
@@ -297,8 +287,11 @@ describe("scenario-flow-runner", () => {
                 sessions: [
                   {
                     key: "agent:qa:main",
-                    hasActiveRun: sessionListCalls.length === 1,
-                    goal: { status: "active", objective: artifactFile },
+                    hasActiveRun: mode !== "complete" && sessionListCalls.length === 1,
+                    goal: {
+                      status: mode === "complete" ? "complete" : "active",
+                      objective: goalArtifactFile,
+                    },
                   },
                 ],
               };
@@ -308,13 +301,13 @@ describe("scenario-flow-runner", () => {
         path: { join: (...parts: string[]) => parts.join("/") },
         fs: {
           readFile: async (file: string) => {
-            const continued = state
-              .getSnapshot()
-              .messages.some(
-                (message) => message.direction === "inbound" && message.text === "continue",
-              );
-            if (file === `/qa-goal/${artifactFile}` && continued) {
-              return artifactText;
+            if (
+              (mode === "early-artifact" && sessionListCalls.length >= 2) ||
+              (mode === "active" &&
+                file === "/qa-goal/" + goalArtifactFile &&
+                hasContinuation(state))
+            ) {
+              return goalArtifactText;
             }
             throw new Error("goal artifact has not been written");
           },
@@ -327,13 +320,20 @@ describe("scenario-flow-runner", () => {
           .messages.findLast((message) => message.direction === "inbound");
         currentState.addOutboundMessage({
           accountId: "qa-channel",
-          to: conversation,
+          to: "dm:goal-followthrough-live-00000000",
           replyToId: currentInbound?.id,
-          text: waitCount === 1 ? "GOAL-CONTINUANCE-READY" : "GOAL-CONTINUANCE-DONE",
+          text:
+            mode === "active" && waitCount !== 1
+              ? "GOAL-CONTINUANCE-DONE"
+              : "GOAL-CONTINUANCE-READY",
         });
       },
     });
+    return { result, state, sessionListCalls };
+  }
 
+  it("keeps live goal followthrough inside the active-goal context limit", async () => {
+    const { result, state, sessionListCalls } = await runGoalFollowthrough();
     expect(result.status).toBe("pass");
     expect(sessionListCalls).toEqual(["sessions.list", "sessions.list", "sessions.list"]);
     const start = state
@@ -344,126 +344,33 @@ describe("scenario-flow-runner", () => {
     expect(start).toBeDefined();
     const objective = start?.text.slice("/goal start ".length) ?? "";
     expect(objective.length).toBeLessThanOrEqual(200);
-    expect(objective).toContain("GOAL-CONTINUANCE-READY");
-    expect(objective).toContain("GOAL-CONTINUANCE-DONE");
-    expect(objective).toContain(artifactFile);
-    expect(objective).toContain(artifactText);
-    expect(
-      state
-        .getSnapshot()
-        .messages.some((message) => message.direction === "inbound" && message.text === "continue"),
-    ).toBe(true);
+    for (const part of [
+      "GOAL-CONTINUANCE-READY",
+      "GOAL-CONTINUANCE-DONE",
+      goalArtifactFile,
+      goalArtifactText,
+    ]) {
+      expect(objective).toContain(part);
+    }
+    expect(hasContinuation(state)).toBe(true);
   });
 
   it("fails before continuation when the model prematurely completes a staged goal", async () => {
     const state = createQaBusState();
-    const artifactFile = "goal-continuance-live-00000000.txt";
-    const conversation = "dm:goal-followthrough-live-00000000";
-
-    await expect(
-      runLoadedScenarioFlow("goal-followthrough-live", {
-        state,
-        api: {
-          env: {
-            providerMode: "live-frontier",
-            gateway: {
-              workspaceDir: "/qa-goal",
-              call: async () => ({
-                sessions: [
-                  {
-                    key: "agent:qa:main",
-                    hasActiveRun: false,
-                    goal: { status: "complete", objective: artifactFile },
-                  },
-                ],
-              }),
-            },
-          },
-          path: { join: (...parts: string[]) => parts.join("/") },
-          fs: {
-            readFile: async () => {
-              throw new Error("goal artifact has not been written");
-            },
-          },
-        },
-        onWaitForOutboundMessage: ({ state: currentState }) => {
-          const currentInbound = currentState
-            .getSnapshot()
-            .messages.findLast((message) => message.direction === "inbound");
-          currentState.addOutboundMessage({
-            accountId: "qa-channel",
-            to: conversation,
-            replyToId: currentInbound?.id,
-            text: "GOAL-CONTINUANCE-READY",
-          });
-        },
-      }),
-    ).rejects.toThrow("goal closed before continue");
-    expect(
-      state
-        .getSnapshot()
-        .messages.some((message) => message.direction === "inbound" && message.text === "continue"),
-    ).toBe(false);
+    await expect(runGoalFollowthrough("complete", state)).rejects.toThrow(
+      "goal closed before continue",
+    );
+    expect(hasContinuation(state)).toBe(false);
   });
 
   it("rejects an artifact written after the ready preview but before the first goal turn settles", async () => {
     const state = createQaBusState();
-    const artifactFile = "goal-continuance-live-00000000.txt";
-    const conversation = "dm:goal-followthrough-live-00000000";
-    let sessionListCalls = 0;
-
-    await expect(
-      runLoadedScenarioFlow("goal-followthrough-live", {
-        state,
-        api: {
-          env: {
-            providerMode: "live-frontier",
-            gateway: {
-              workspaceDir: "/qa-goal",
-              call: async () => {
-                sessionListCalls += 1;
-                return {
-                  sessions: [
-                    {
-                      key: "agent:qa:main",
-                      hasActiveRun: sessionListCalls === 1,
-                      goal: { status: "active", objective: artifactFile },
-                    },
-                  ],
-                };
-              },
-            },
-          },
-          path: { join: (...parts: string[]) => parts.join("/") },
-          fs: {
-            readFile: async () => {
-              if (sessionListCalls >= 2) {
-                return "Goal continuance advanced the concrete next step.";
-              }
-              throw new Error("goal artifact has not been written");
-            },
-          },
-        },
-        onWaitForOutboundMessage: ({ state: currentState }) => {
-          const currentInbound = currentState
-            .getSnapshot()
-            .messages.findLast((message) => message.direction === "inbound");
-          currentState.addOutboundMessage({
-            accountId: "qa-channel",
-            to: conversation,
-            replyToId: currentInbound?.id,
-            text: "GOAL-CONTINUANCE-READY",
-          });
-        },
-      }),
-    ).rejects.toThrow("goal created the second-step artifact before continue");
-
-    expect(sessionListCalls).toBe(2);
-    expect(
-      state
-        .getSnapshot()
-        .messages.some((message) => message.direction === "inbound" && message.text === "continue"),
-    ).toBe(false);
+    const sessionListCalls: string[] = [];
+    await expect(runGoalFollowthrough("early-artifact", state, sessionListCalls)).rejects.toThrow(
+      "goal created the second-step artifact before continue",
+    );
+    expect(sessionListCalls).toHaveLength(2);
+    expect(hasContinuation(state)).toBe(false);
   });
 
   it.each(planningEvidenceFixtures)(
@@ -530,86 +437,59 @@ describe("scenario-flow-runner", () => {
     );
   });
 
-  it("supports qaImport inside flow expressions", async () => {
-    const result = await runScenarioFlow({
-      api: createImportApi("qa-import"),
-      scenarioTitle: "qa-import",
-      vars: { preparedValue: "ready" },
-      flow: {
-        steps: [
-          {
-            name: "uses qaImport",
-            actions: [
-              {
-                set: "basename",
-                value: {
-                  expr: '(await qaImport("node:path")).basename("/tmp/skill/SKILL.md")',
-                },
-              },
-              {
-                assert: {
-                  expr: 'basename === "SKILL.md"',
-                },
-              },
-              { assert: 'preparedValue === "ready"' },
-            ],
-            detailsExpr: "basename",
-          },
-        ],
-      },
+  const setExpr = (set: string, expr: string) => ({ set, value: { expr } });
+  function runImportFlow(
+    id: string,
+    step: QaScenarioFlow["steps"][number],
+    options: { vars?: Record<string, unknown>; runScenario?: FlowApi["runScenario"] } = {},
+  ) {
+    return runScenarioFlow({
+      api: createImportApi(id, options.runScenario),
+      scenarioTitle: id,
+      vars: options.vars,
+      flow: { steps: [step] },
     });
+  }
 
+  it("supports qaImport inside flow expressions", async () => {
+    const result = await runImportFlow(
+      "qa-import",
+      {
+        name: "uses qaImport",
+        actions: [
+          setExpr("basename", '(await qaImport("node:path")).basename("/tmp/skill/SKILL.md")'),
+          { assert: { expr: 'basename === "SKILL.md"' } },
+          { assert: 'preparedValue === "ready"' },
+        ],
+        detailsExpr: "basename",
+      },
+      { vars: { preparedValue: "ready" } },
+    );
     expect(result).toEqual({
       name: "qa-import",
       status: "pass",
-      steps: [
-        {
-          name: "uses qaImport",
-          status: "pass",
-          details: "SKILL.md",
-        },
-      ],
+      steps: [{ name: "uses qaImport", status: "pass", details: "SKILL.md" }],
     });
   });
 
   it("loads bundled QA runtime modules through qaImport", async () => {
-    const result = await runScenarioFlow({
-      api: createImportApi("qa-fixture-import"),
-      scenarioTitle: "qa-fixture-import",
-      flow: {
-        steps: [
-          {
-            name: "uses bundled fixture qaImport",
-            actions: [
-              {
-                set: "plugin",
-                value: {
-                  expr: 'await qaImport("./codex-plugin.fixture.js")',
-                },
-              },
-              {
-                set: "artifacts",
-                value: { expr: 'await qaImport("./suite-artifacts.js")' },
-              },
-              {
-                set: "redaction",
-                value: { expr: 'await qaImport("./gateway-log-redaction.js")' },
-              },
-              {
-                assert: {
-                  expr:
-                    'typeof plugin.evaluateCodexPluginLifecycle === "function" && ' +
-                    'typeof artifacts.publishQaSuiteArtifactFiles === "function" && ' +
-                    'typeof redaction.redactQaGatewayDebugText === "function"',
-                },
-              },
-            ],
-            detailsExpr: '"loaded"',
+    const result = await runImportFlow("qa-fixture-import", {
+      name: "uses bundled fixture qaImport",
+      actions: [
+        setExpr("plugin", 'await qaImport("./codex-plugin.fixture.js")'),
+        setExpr("artifacts", 'await qaImport("./suite-artifacts.js")'),
+        setExpr("redaction", 'await qaImport("./gateway-log-redaction.js")'),
+        {
+          assert: {
+            expr:
+              'typeof plugin.evaluateCodexPluginLifecycle === "function" && ' +
+              'typeof artifacts.publishQaSuiteArtifactFiles === "function" && ' +
+              'typeof redaction.redactQaGatewayDebugText === "function"',
           },
-        ],
-      },
+        },
+      ],
+      detailsExpr: '"loaded"',
     });
-
     expect(result.status).toBe("pass");
     expect(result.steps[0]?.details).toBe("loaded");
   });
@@ -617,48 +497,33 @@ describe("scenario-flow-runner", () => {
   it("passes an imported QA skip error through to runScenario", async () => {
     const message = "known-harness-gap flow import skip";
     let receivedError: unknown;
-
-    const result = await runScenarioFlow({
-      api: createImportApi("qa-skip-import", async (_name, steps) => {
-        try {
-          await steps[0]?.run();
-        } catch (error) {
-          receivedError = error;
-        }
-        return {
-          name: "qa-skip-import",
-          status: "skip" as const,
-          steps: [{ name: "throws imported skip", status: "skip" as const, details: message }],
-          details: message,
-        };
-      }),
-      scenarioTitle: "qa-skip-import",
-      flow: {
-        steps: [
-          {
-            name: "throws imported skip",
-            actions: [
-              {
-                call: "qaImport",
-                args: ["./errors.js"],
-                saveAs: "qaErrors",
-              },
-              {
-                throw: {
-                  expr: `new qaErrors.QaSuiteScenarioSkipError(${JSON.stringify(message)})`,
-                },
-              },
-            ],
-          },
+    const result = await runImportFlow(
+      "qa-skip-import",
+      {
+        name: "throws imported skip",
+        actions: [
+          { call: "qaImport", args: ["./errors.js"], saveAs: "qaErrors" },
+          { throw: { expr: `new qaErrors.QaSuiteScenarioSkipError(${JSON.stringify(message)})` } },
         ],
       },
-    });
-
+      {
+        runScenario: async (_name, steps) => {
+          try {
+            await steps[0]?.run();
+          } catch (error) {
+            receivedError = error;
+          }
+          return {
+            name: "qa-skip-import",
+            status: "skip",
+            steps: [{ name: "throws imported skip", status: "skip", details: message }],
+            details: message,
+          };
+        },
+      },
+    );
     expect(receivedError).toBeInstanceOf(QaSuiteScenarioSkipError);
-    expect(receivedError).toMatchObject({
-      name: "QaSuiteScenarioSkipError",
-      message,
-    });
+    expect(receivedError).toMatchObject({ name: "QaSuiteScenarioSkipError", message });
     expect(result.status).toBe("skip");
     expect(result.details).toBe(message);
   });
@@ -686,15 +551,7 @@ describe("scenario-flow-runner", () => {
   it("rejects reconnect follow-up replies that replay the first marker", async () => {
     await expect(
       runLoadedScenarioFlow("qa-channel-reconnect-dedupe", {
-        onWaitForOutboundMessage: ({ waitCount, state }) => {
-          if (waitCount === 1) {
-            state.addOutboundMessage({
-              accountId: "qa-channel",
-              to: "channel:qa-room",
-              text: "RECONNECT-FIRST-OK",
-            });
-            return;
-          }
+        onWaitForOutboundMessage: ({ state }) => {
           state.addOutboundMessage({
             accountId: "qa-channel",
             to: "channel:qa-room",

@@ -122,28 +122,25 @@ async function runCredentialHandoffScenario(options: HandoffOptions = {}) {
             : `${newKey}\n`;
         configText = `// operator-authored config\n${JSON.stringify({
           ...config,
-          ...(file
+          secrets: file
             ? {
-                secrets: {
-                  providers: {
-                    [provider]: {
-                      source: "file",
-                      path: providerPath,
-                      mode: file.mode ?? "singleValue",
-                    },
+                providers: {
+                  [provider]: {
+                    source: "file",
+                    path: providerPath,
+                    mode: file.mode ?? "singleValue",
                   },
                 },
               }
-            : {}),
-          ...(options.migrate || options.unrelatedMigration
-            ? {
-                meta: {
+            : undefined,
+          meta:
+            options.migrate || options.unrelatedMigration
+              ? {
                   migrations: options.unrelatedMigration
                     ? { unrelatedMarker: true }
                     : { modelPolicyAllowlist: true, utilityModelSeparation: true },
-                },
-              }
-            : {}),
+                }
+              : undefined,
         })}`;
         if (options.reply === "sent-key-echo" || options.reply === "edited-key-echo") {
           const message = send(
@@ -204,52 +201,26 @@ describe("operator key handoff scenario assertions", () => {
     },
   );
 
+  const errors = {
+    ordering:
+      "The assistant did not update the OpenClaw embeddings API key before the final reply.",
+    migration: "The assistant changed unrelated OpenClaw configuration while rotating the key.",
+    escaped: "The embeddings key file is outside the isolated QA Gateway state directory.",
+    relative: "The embeddings key file provider path is not absolute.",
+    symlink: "The embeddings key file is not a private regular file.",
+    array: "The embeddings key file provider payload is not a JSON object.",
+    provider: "The embeddings key references an invalid file provider.",
+  };
   it.each([
-    [
-      "final predates config",
-      { reply: "late-edited-final" },
-      "The assistant did not update the OpenClaw embeddings API key before the final reply.",
-    ],
-    [
-      "final predates key file",
-      { file: { mtimeMs: 250 } },
-      "The assistant did not update the OpenClaw embeddings API key before the final reply.",
-    ],
-    [
-      "unrelated migration",
-      { unrelatedMigration: true },
-      "The assistant changed unrelated OpenClaw configuration while rotating the key.",
-    ],
-    [
-      "escaped file",
-      { file: { realPath: "/outside/key.txt" } },
-      "The embeddings key file is outside the isolated QA Gateway state directory.",
-    ],
-    [
-      "relative path",
-      { file: { path: "~/state/secrets/key.txt" } },
-      "The embeddings key file provider path is not absolute.",
-    ],
-    [
-      "symlink",
-      { file: { isFile: false } },
-      "The embeddings key file is not a private regular file.",
-    ],
-    [
-      "array root",
-      { file: { mode: "json", payload: (key: string) => [{ key }] } },
-      "The embeddings key file provider payload is not a JSON object.",
-    ],
-    [
-      "invalid singleValue id",
-      { file: { id: "wrong" } },
-      "The embeddings key references an invalid file provider.",
-    ],
-    [
-      "invalid provider alias",
-      { file: { provider: "QA_KEY" } },
-      "The embeddings key references an invalid file provider.",
-    ],
+    ["final predates config", { reply: "late-edited-final" }, errors.ordering],
+    ["final predates key file", { file: { mtimeMs: 250 } }, errors.ordering],
+    ["unrelated migration", { unrelatedMigration: true }, errors.migration],
+    ["escaped file", { file: { realPath: "/outside/key.txt" } }, errors.escaped],
+    ["relative path", { file: { path: "~/state/secrets/key.txt" } }, errors.relative],
+    ["symlink", { file: { isFile: false } }, errors.symlink],
+    ["array root", { file: { mode: "json", payload: (key: string) => [{ key }] } }, errors.array],
+    ["invalid singleValue id", { file: { id: "wrong" } }, errors.provider],
+    ["invalid provider alias", { file: { provider: "QA_KEY" } }, errors.provider],
     [
       "invalid JSON pointer escape",
       {
@@ -259,7 +230,7 @@ describe("operator key handoff scenario assertions", () => {
           payload: (key: string) => ({ qa: { "~2key": key } }),
         },
       },
-      "The embeddings key references an invalid file provider.",
+      errors.provider,
     ],
   ] satisfies Array<[string, HandoffOptions, string]>)(
     "rejects %s",

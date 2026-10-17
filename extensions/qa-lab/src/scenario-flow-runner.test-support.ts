@@ -5,7 +5,7 @@ import path from "node:path";
 import timersPromises from "node:timers/promises";
 import { promisify } from "node:util";
 import { createOutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import type { TelegramUserbotUpdate } from "./live-transports/telegram/userbot-driver.runtime.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
@@ -221,6 +221,7 @@ export async function assertTelegramRichObservationFlow(
   const outputDir = await tempDirs.makeTempDir("telegram-rich-flow-");
   const plain = (text: string) => ({ "@type": "richTextPlain", text });
   const wrap = (kind: string, text: unknown) => ({ "@type": kind, text });
+  const texts = (...children: unknown[]) => ({ "@type": "richTexts", texts: children });
   const url = (text: unknown) => ({
     ...wrap("richTextUrl", text),
     url: "https://example.com/qa",
@@ -233,14 +234,13 @@ export async function assertTelegramRichObservationFlow(
   const list = { "@type": "pageBlockList", items: [{ blocks: [paragraph(styled)] }] };
   const math = { "@type": "richTextMathematicalExpression", expression: "x" };
   const annotation = (wrapper: (text: unknown) => unknown) =>
-    paragraph({
-      "@type": "richTexts",
-      texts: [
+    paragraph(
+      texts(
         wrapper(plain("\n")),
         wrap("richTextFixed", plain("user[Thu]")),
         wrapper(plain(" trailing")),
-      ],
-    });
+      ),
+    );
   const literalScope = (text: unknown) => ({
     "@type": "pageBlockDetails",
     header: plain("Scope"),
@@ -258,17 +258,15 @@ export async function assertTelegramRichObservationFlow(
     paragraph(wrap("richTextSpoiler", math)),
     annotation(url),
     annotation((text) => wrap("richTextBold", text)),
-    paragraph({
-      "@type": "richTexts",
-      texts: [
-        url({
-          "@type": "richTexts",
-          texts: [
+    paragraph(
+      texts(
+        url(
+          texts(
             plain("<custom><sup>"),
             wrap("richTextBold", plain("marked")),
             plain("</sup></custom>"),
-          ],
-        }),
+          ),
+        ),
         plain(" <b>"),
         wrap("richTextBold", plain("literal")),
         plain("</b> <i>alt</i> <b"),
@@ -276,12 +274,9 @@ export async function assertTelegramRichObservationFlow(
         plain(">tail <!A "),
         wrap("richTextBold", plain("declared")),
         plain(">"),
-      ],
-    }),
-    literalScope({
-      "@type": "richTexts",
-      texts: [plain("<sup>"), wrap("richTextBold", plain("x")), plain("</sup>")],
-    }),
+      ),
+    ),
+    literalScope(texts(plain("<sup>"), wrap("richTextBold", plain("x")), plain("</sup>"))),
   ];
   type Observation = Pick<
     TelegramUserbotUpdate,
@@ -503,6 +498,9 @@ export async function assertTelegramRichObservationFlow(
       "utf8",
     );
     const evidence = JSON.parse(exported);
+    const editCandidate = evidence.candidates.find(
+      (candidate: { phase: string }) => candidate.phase === "edit",
+    );
     if (testCase === "first-content-failed") {
       assert.equal(sends, 9, "content failure must not skip independent sends");
       assert.equal(edits, 1, "content failure must not skip the original-message edit");
@@ -518,25 +516,13 @@ export async function assertTelegramRichObservationFlow(
         false,
       );
       assert.equal(evidence.cases.at(-1).label, "message-9");
-      assert.deepEqual(
-        {
-          contentType: evidence.failures[0].contentType,
-          full: evidence.failures[0].full,
-          matchesPattern: evidence.failures[0].matchesPattern,
-          block: evidence.failures[0].richMessage.blocks[0],
-        },
-        {
-          contentType: "messageRichMessage",
-          full: true,
-          matchesPattern: false,
-          block: paragraph(plain("Download")),
-        },
-      );
-      assert.equal(
-        evidence.candidates.find((candidate: { phase: string }) => candidate.phase === "edit")
-          .observerIdStayedEqual,
-        true,
-      );
+      expect(evidence.failures[0]).toMatchObject({
+        contentType: "messageRichMessage",
+        full: true,
+        matchesPattern: false,
+      });
+      assert.deepEqual(evidence.failures[0].richMessage.blocks[0], paragraph(plain("Download")));
+      assert.equal(editCandidate.observerIdStayedEqual, true);
     }
     const contentFailure =
       flattenedIndex >= 0 ||
@@ -567,11 +553,7 @@ export async function assertTelegramRichObservationFlow(
       assert.equal(evidence.unmatched.count, 1);
     }
     if (testCase === "wrong-edit-id") {
-      assert.equal(
-        evidence.candidates.find((candidate: { phase: string }) => candidate.phase === "edit")
-          .observerIdStayedEqual,
-        false,
-      );
+      assert.equal(editCandidate.observerIdStayedEqual, false);
     }
     if (!rejects) {
       assert.equal(evidence.cases.length, 9);
@@ -581,11 +563,7 @@ export async function assertTelegramRichObservationFlow(
         ),
       );
       assert.equal(evidence.edit.completedWithBotReceipt, true);
-      assert.equal(
-        evidence.candidates.find((candidate: { phase: string }) => candidate.phase === "edit")
-          .observerIdStayedEqual,
-        true,
-      );
+      assert.equal(editCandidate.observerIdStayedEqual, true);
     }
     if (untyped) {
       assert.deepEqual(
