@@ -291,18 +291,18 @@ describe("plugin status reports", () => {
       });
       const report = setReport({ plugins: [createPluginRecord({ id: pluginId })] });
       const notices = status.buildPluginCompatibilityNotices({ report });
-      expect(notices).toEqual([
-        expect.objectContaining({
+      expect(notices).toMatchObject([
+        {
           pluginId,
           code: "deprecated-sdk-api",
           severity: "info",
           apis: [
-            expect.objectContaining({
+            {
               displayName: "getSessionEntry",
               replacement: "getSessionEntryAsync",
-            }),
+            },
           ],
-        }),
+        },
       ]);
       expect(inspect(pluginId, report).compatibility).toEqual(notices);
       expect(status.buildPluginCompatibilityWarnings({ report })).toEqual([

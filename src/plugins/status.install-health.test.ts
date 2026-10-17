@@ -409,27 +409,12 @@ const setupBundleInstallFixture = createBundleInstallFixtureFactory(makeTempDir)
 
 describe("buildPluginRegistrySnapshotReport", () => {
   it.each([
-    {
-      bundleFormat: "agent",
-      enabled: true,
-      registrySource: "derived",
-      capabilities: ["skills"],
-    },
-    {
-      bundleFormat: "claude",
-      enabled: false,
-      registrySource: "persisted",
-      capabilities: ["skills"],
-    },
-    {
-      bundleFormat: "cursor",
-      enabled: true,
-      registrySource: "persisted",
-      capabilities: ["skills", "commands"],
-    },
+    ["agent", true, "derived", ["skills"]],
+    ["claude", false, "persisted", ["skills"]],
+    ["cursor", true, "persisted", ["skills", "commands"]],
   ] as const)(
-    "preserves $bundleFormat bundle capabilities in $registrySource inventory (enabled=$enabled)",
-    async ({ bundleFormat, enabled, registrySource, capabilities }) => {
+    "preserves %s bundle capabilities (enabled=%s, inventory=%s)",
+    async (bundleFormat, enabled, registrySource, capabilities) => {
       const name = `${bundleFormat}-capability-fixture`;
       const { pluginDir, extensionsDir } = setupBundleInstallFixture({ bundleFormat, name });
       const stateDir = path.dirname(extensionsDir);
@@ -466,57 +451,50 @@ describe("buildPluginRegistrySnapshotReport", () => {
 
 describe("bundled dependency health", () => {
   it.each([
-    { pluginId: "bundled-demo", bundledDist: undefined, packageName: undefined, missing: false },
-    { pluginId: "source-external-demo", bundledDist: false, packageName: undefined, missing: true },
-    {
-      pluginId: "discord",
-      bundledDist: undefined,
-      packageName: "@openclaw/discord",
-      missing: true,
-    },
-  ] as const)("projects package-local dependencies for $pluginId", (identity) => {
-    const tempRoot = makeTempDir();
-    const bundledRoot = path.join(tempRoot, "bundled");
-    const pluginRoot = path.join(bundledRoot, identity.pluginId);
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    createColdPluginFixture({
-      rootDir: pluginRoot,
-      pluginId: identity.pluginId,
-      packageName: identity.packageName,
-    });
-    fs.writeFileSync(
-      path.join(pluginRoot, "package.json"),
-      JSON.stringify({
-        name: identity.packageName ?? "@example/bundled",
-        version: "1.0.0",
-        dependencies: { "missing-plugin-local-dependency": "1.0.0" },
-        openclaw: { extensions: ["./index.cjs"], build: { bundledDist: identity.bundledDist } },
-      }),
-    );
-    const report = buildPluginRegistrySnapshotReport({
-      config: { plugins: { entries: { [identity.pluginId]: { enabled: true } } } },
-      env: createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: bundledRoot }),
-    });
-    const plugin = report.plugins.find((entry) => entry.id === identity.pluginId);
-    expect(plugin).toMatchObject({
-      origin: "bundled",
-      status: identity.missing ? "error" : "loaded",
-    });
-    if (identity.missing) {
-      expect(plugin?.dependencyStatus).toMatchObject({
-        requiredInstalled: false,
-        missing: ["missing-plugin-local-dependency"],
+    ["bundled-demo", undefined, undefined, false],
+    ["source-external-demo", false, undefined, true],
+    ["discord", undefined, "@openclaw/discord", true],
+  ] as const)(
+    "projects package-local dependencies for %s",
+    (pluginId, bundledDist, packageName, missing) => {
+      const tempRoot = makeTempDir();
+      const bundledRoot = path.join(tempRoot, "bundled");
+      const pluginRoot = path.join(bundledRoot, pluginId);
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      createColdPluginFixture({
+        rootDir: pluginRoot,
+        pluginId,
+        packageName: packageName ?? "@example/bundled",
+        packageJson: { dependencies: { "missing-plugin-local-dependency": "1.0.0" } },
       });
-      expect(report.diagnostics).toContainEqual(
-        expect.objectContaining({
-          level: "error",
-          pluginId: identity.pluginId,
-          message: expect.stringContaining("required dependencies are missing"),
-        }),
-      );
-    } else {
-      expect(plugin?.dependencyStatus).toBeUndefined();
-      expect(report.diagnostics).toEqual([]);
-    }
-  });
+      patchPackage(pluginRoot, {
+        openclaw: { extensions: ["./index.cjs"], build: { bundledDist } },
+      });
+      const report = buildPluginRegistrySnapshotReport({
+        config: enabledConfig(pluginId),
+        env: createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: bundledRoot }),
+      });
+      const plugin = report.plugins.find((entry) => entry.id === pluginId);
+      expect(plugin).toMatchObject({
+        origin: "bundled",
+        status: missing ? "error" : "loaded",
+      });
+      if (missing) {
+        expect(plugin?.dependencyStatus).toMatchObject({
+          requiredInstalled: false,
+          missing: ["missing-plugin-local-dependency"],
+        });
+        expect(report.diagnostics).toContainEqual(
+          expect.objectContaining({
+            level: "error",
+            pluginId,
+            message: expect.stringContaining("required dependencies are missing"),
+          }),
+        );
+      } else {
+        expect(plugin?.dependencyStatus).toBeUndefined();
+        expect(report.diagnostics).toEqual([]);
+      }
+    },
+  );
 });

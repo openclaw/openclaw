@@ -24,8 +24,21 @@ function writeJson(root: string, file: string, value: unknown) {
   fs.writeFileSync(path.join(root, file), JSON.stringify(value));
 }
 
-function catalog(snapshot: ReturnType<typeof createPluginMetadataSnapshotFixture>) {
+type Snapshot = ReturnType<typeof createPluginMetadataSnapshotFixture>;
+
+function catalog(snapshot: Snapshot) {
   return withPluginMetadataSnapshotScope(snapshot, listPluginThemes);
+}
+
+function artwork(
+  snapshot: Snapshot,
+  pluginId: string,
+  kind: Parameters<typeof resolvePluginThemeArtwork>[2],
+  id: string,
+) {
+  return withPluginMetadataSnapshotScope(snapshot, () =>
+    resolvePluginThemeArtwork(pluginId, "neon", kind, id),
+  );
 }
 
 function fixture(themes?: unknown, id = "space") {
@@ -117,8 +130,9 @@ describe("manifest theme catalog", () => {
   it("retains captured palettes until publication and picks up edited JSON in the next metadata generation", () => {
     const plugin = fixture();
     const before = plugin.readSnapshot();
-    const readTheme = () => listPluginThemes().find((theme) => theme.id === "space/neon");
-    const entry = withPluginMetadataSnapshotScope(before, readTheme);
+    const readTheme = (snapshot: Snapshot) =>
+      catalog(snapshot).find((theme) => theme.id === "space/neon");
+    const entry = readTheme(before);
     expect(entry).toMatchObject({
       id: "space/neon",
       source: "plugin",
@@ -145,22 +159,17 @@ describe("manifest theme catalog", () => {
         dark: createThemePaletteFixture({ primary: "#ff33aa" }),
       }),
     );
-    expect(withPluginMetadataSnapshotScope(before, readTheme)?.definition?.dark?.primary).toBe(
-      "#b3ff33",
-    );
+    expect(readTheme(before)?.definition?.dark?.primary).toBe("#b3ff33");
     const after = plugin.readSnapshot();
     fs.unlinkSync(path.join(plugin.rootDir, "theme.json"));
-    expect(withPluginMetadataSnapshotScope(after, readTheme)).toMatchObject({
+    expect(readTheme(after)).toMatchObject({
       ...appearance,
       definition: { ...appearance, dark: { primary: "#ff33aa" } },
     });
-    expect(withPluginMetadataSnapshotScope(before, readTheme)?.definition?.dark?.primary).toBe(
-      "#b3ff33",
-    );
-    expect(withPluginMetadataSnapshotScope(before, readTheme)).not.toHaveProperty("mascot");
-    expect(withPluginMetadataSnapshotScope(before, readTheme)).not.toHaveProperty("workingPhrases");
-    expect(withPluginMetadataSnapshotScope(before, readTheme)).not.toHaveProperty("critters");
-    expect(withPluginMetadataSnapshotScope(before, readTheme)).not.toHaveProperty("avatarHat");
+    expect(readTheme(before)?.definition?.dark?.primary).toBe("#b3ff33");
+    for (const key of ["mascot", "workingPhrases", "critters", "avatarHat"]) {
+      expect(readTheme(before)).not.toHaveProperty(key);
+    }
   });
 
   it("projects captured artwork URLs and changes only the edited content revision on publication", () => {
@@ -222,19 +231,11 @@ describe("manifest theme catalog", () => {
         ["hat", "beret"],
         ["icon", "rocket"],
       ] as const) {
-        expect(
-          withPluginMetadataSnapshotScope(snapshot, () =>
-            resolvePluginThemeArtwork(plugin.id, "neon", kind, id)?.body.toString("utf8"),
-          ),
-        ).toBe(expected);
+        expect(artwork(snapshot, plugin.id, kind, id)?.body.toString("utf8")).toBe(expected);
       }
     }
     after.index.plugins[0]!.enabled = false;
-    expect(
-      withPluginMetadataSnapshotScope(after, () =>
-        resolvePluginThemeArtwork(plugin.id, "neon", "icon", "rocket"),
-      ),
-    ).toBeUndefined();
+    expect(artwork(after, plugin.id, "icon", "rocket")).toBeUndefined();
   });
 
   it("projects mode backgrounds and serves their captured raster bytes", () => {
@@ -254,10 +255,7 @@ describe("manifest theme catalog", () => {
         },
       },
     });
-    const resolve = (artId: string) =>
-      withPluginMetadataSnapshotScope(snapshot, () =>
-        resolvePluginThemeArtwork(plugin.id, "neon", "background", artId),
-      );
+    const resolve = (artId: string) => artwork(snapshot, plugin.id, "background", artId);
     expect(resolve("dark")?.body).toEqual(webp);
     expect(resolve("light")).toBeUndefined();
     expect(resolve("constructor")).toBeUndefined();
