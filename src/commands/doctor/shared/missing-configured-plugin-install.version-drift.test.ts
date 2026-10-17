@@ -129,7 +129,10 @@ function createDriftedInstalls({
   mocks.installPluginFromNpmSpec.mockImplementation(
     async ({ spec, expectedPluginId }: { spec: string; expectedPluginId: string }) => {
       const { name, version } = npmTarget(spec);
-      const targetDir = expectDefined(records[expectedPluginId]?.installPath, "fixture path");
+      const targetDir = expectDefined(
+        expectDefined(records[expectedPluginId], "installed plugin fixture").installPath,
+        "fixture path",
+      );
       writePackage(targetDir, name, version);
       return successfulInstall({ pluginId: expectedPluginId, npmSpec: name, version, targetDir });
     },

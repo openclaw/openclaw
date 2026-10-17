@@ -174,7 +174,7 @@ it("reads the command target in a worker and preserves missing-target lookup fac
   for (const [agentId, sessionKey, sessionId] of [
     ["main", sourceKey, "source"],
     ["work", targetKey, "target"],
-  ]) {
+  ] as const) {
     replaceSessionEntrySync({ agentId, sessionKey }, { sessionId, updatedAt: 1 });
   }
   const ctx = buildTestCtx({ SessionKey: sourceKey, CommandSource: "native" });

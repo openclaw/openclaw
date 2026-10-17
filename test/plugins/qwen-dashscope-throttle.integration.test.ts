@@ -323,17 +323,20 @@ it.each([
   ["openai", quotaCode, exceeded, "billing"],
   ["qwen", quotaCode, "Free allocated quota exceeded.", "billing"],
   ["qwen", quotaCode, "Unknown quota condition", "billing"],
-] as const)("%s %s (%s) classifies as %s", async (provider, code, message, reason, metadata) => {
-  const result = await runThroughFailureRecovery({
-    provider,
-    providerOwner:
-      provider === "openai"
-        ? undefined
-        : requireRegisteredProvider(
-            registeredProviders.get(provider === "openrouter" ? "openrouter" : "qwen") ?? [],
-            provider,
-          ),
-    fixture: { status: 429, code, message, ...(metadata ? { metadata } : {}) },
-  });
-  expectFailureState(result, reason, provider === "openrouter");
-});
+] as const)(
+  "%s %s (%s) classifies as %s",
+  async (...[provider, code, message, reason, metadata]) => {
+    const result = await runThroughFailureRecovery({
+      provider,
+      providerOwner:
+        provider === "openai"
+          ? undefined
+          : requireRegisteredProvider(
+              registeredProviders.get(provider === "openrouter" ? "openrouter" : "qwen") ?? [],
+              provider,
+            ),
+      fixture: { status: 429, code, message, ...(metadata ? { metadata } : {}) },
+    });
+    expectFailureState(result, reason, provider === "openrouter");
+  },
+);

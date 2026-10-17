@@ -63,10 +63,16 @@ beforeEach(() => {
     results: [sentMessage],
     receipt: createMessageReceiptFromOutboundResults({ results: [sentMessage] }),
   });
-  sendMessageDiscordMock.mockReset().mockResolvedValue(sentMessage);
+  sendMessageDiscordMock.mockReset().mockResolvedValue({
+    ...sentMessage,
+    receipt: createMessageReceiptFromOutboundResults({ results: [sentMessage] }),
+  });
   sendVoiceMessageDiscordMock.mockReset().mockResolvedValue({
     messageId: "voice-1",
     channelId: "channel-1",
+    receipt: createMessageReceiptFromOutboundResults({
+      results: [{ messageId: "voice-1", channelId: "channel-1" }],
+    }),
   });
 });
 
@@ -269,7 +275,7 @@ find /tmp -type f
   ],
   [
     "preserves presentation when text scrubs empty",
-    { text: "commentary: hidden", presentation: { title: "Action required" } },
+    { text: "commentary: hidden", presentation: { title: "Action required", blocks: [] } },
     undefined,
   ],
   ["preserves code-fenced examples of tool-call labels", { text: codeExample }, codeExample],

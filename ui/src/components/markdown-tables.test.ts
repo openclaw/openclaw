@@ -45,8 +45,8 @@ function deliverTableResize(target: HTMLElement): void {
 
 const renderOptions = { progressBars: true, sessionLinks: true };
 const interactiveOptions = { ...renderOptions, tableInteractions: "enabled" as const };
-function query<T extends HTMLElement = HTMLElement>(owner: ParentNode, selector: string): T {
-  return owner.querySelector<T>(selector)!;
+function query(owner: ParentNode, selector: string): HTMLElement {
+  return owner.querySelector<HTMLElement>(selector)!;
 }
 
 function interactiveOwner(content = table) {
@@ -68,13 +68,13 @@ function interactiveOwner(content = table) {
     owner,
     shell,
     viewport,
-    expand: query<HTMLButtonElement>(owner, ".markdown-table__expand"),
-    copy: query<HTMLButtonElement>(owner, ".markdown-table__copy"),
+    expand: owner.querySelector<HTMLButtonElement>(".markdown-table__expand")!,
+    copy: owner.querySelector<HTMLButtonElement>(".markdown-table__copy")!,
   };
 }
 
 async function openTable(owner: HTMLElement) {
-  query<HTMLButtonElement>(owner, ".markdown-table__expand").click();
+  owner.querySelector<HTMLButtonElement>(".markdown-table__expand")!.click();
   return waitForRenderedModalDialog(owner);
 }
 
@@ -218,7 +218,7 @@ describe("Markdown table interactions", () => {
 
     expand.click();
     const reopened = await waitForRenderedModalDialog(owner);
-    query<HTMLButtonElement>(reopened.modal, ".markdown-table-dialog__close").click();
+    reopened.modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
     expect(document.querySelector(".markdown-table-dialog")).toBeNull();
     expect(document.activeElement).toBe(expand);
   });
@@ -239,7 +239,7 @@ describe("Markdown table interactions", () => {
     const { modal } = await waitForRenderedModalDialog(owner);
     expect(owner.querySelectorAll(".markdown-table-modal")).toHaveLength(1);
     expect(modal.querySelector("table")?.textContent).toContain("Beta");
-    query<HTMLButtonElement>(modal, ".markdown-table-dialog__close").click();
+    modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
     await Promise.resolve();
     expect(document.activeElement).toBe(second);
   });

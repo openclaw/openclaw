@@ -19,9 +19,11 @@ vi.mock("node:child_process", async () => {
     { spawn: spawnMock },
   );
 });
+// mock-isolation: keep launcher scripts inside the test-owned temporary root.
 vi.mock("./tmp-openclaw-dir.js", () => ({
   resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
 }));
+// mock-isolation: launcher paths are supplied without probing the host Task Scheduler.
 vi.mock("../daemon/schtasks.js", () => ({ resolveTaskScriptPath: resolveTaskScriptPathMock }));
 vi.mock("./windows-encoding.js", async (original) => ({
   ...(await original<typeof import("./windows-encoding.js")>()),

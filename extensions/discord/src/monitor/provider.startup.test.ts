@@ -23,6 +23,7 @@ vi.mock("../internal/voice.js", () => ({
     }
   },
 }));
+// mock-isolation: startup tests control presence without starting live timers.
 vi.mock("./auto-presence.js", () => ({
   createDiscordAutoPresenceController: vi.fn(() => ({
     enabled: false,
@@ -31,10 +32,12 @@ vi.mock("./auto-presence.js", () => ({
     refresh: vi.fn(),
   })),
 }));
+// mock-isolation: startup tests own the synthetic gateway registration barrier.
 vi.mock("./gateway-plugin.js", () => ({
   createDiscordGatewayPlugin: vi.fn(() => gateway),
   waitForDiscordGatewayPluginRegistration: waitForRegistration,
 }));
+// mock-isolation: observe startup cleanup without starting a live supervisor.
 vi.mock("./gateway-supervisor.js", () => ({
   createDiscordGatewaySupervisor: vi.fn(() => supervisor),
 }));

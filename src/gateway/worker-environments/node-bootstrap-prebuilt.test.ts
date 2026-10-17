@@ -123,6 +123,30 @@ it.each([
   }
 });
 
+it("rebuilds duplicate image entries for concurrent consumers and cleans up on close", async () => {
+  const { options, built, builtBytes, archive } = await retainArchive();
+  const header = Buffer.alloc(512);
+  new tar.Header({ path: "package/duplicate", type: "File", mode: 0o600, size: 0 }).encode(header);
+  const invalidBytes = gzipSync(Buffer.concat([header, header, Buffer.alloc(1024)]));
+  await fs.writeFile(archive, invalidBytes);
+  const restarted = createProvider(options);
+  const enrollment = new AbortController();
+  try {
+    const [artifact, concurrent] = await Promise.all([
+      restarted.prepare(enrollment.signal),
+      restarted.prepare(),
+    ]);
+    expect(concurrent).toBe(artifact);
+    expect(artifact.tarballSha256).toBe(built.tarballSha256);
+    expect(await fs.readFile(artifact.tarballPath)).toEqual(builtBytes);
+    await restarted.close();
+    await expect(fs.access(artifact.tarballPath)).rejects.toHaveProperty("code", "ENOENT");
+    expect(await fs.readFile(archive)).toEqual(invalidBytes);
+  } finally {
+    enrollment.abort();
+  }
+});
+
 it.each([
   { owner: "built runtime", relative: "dist/shared.js" },
   { owner: "selected plugin", relative: "dist/extensions/remote-runtime/index.js" },

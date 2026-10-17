@@ -104,7 +104,7 @@ const installPathMocks = vi.hoisted(() => ({
   ),
   validatePluginId: vi.fn(() => null),
 }));
-export const mocks = vi.hoisted(() => ({
+const mocks = vi.hoisted(() => ({
   ...catalogMocks,
   ...installPathMocks,
   installPluginFromClawHub: vi.fn(),
@@ -125,7 +125,7 @@ export const mocks = vi.hoisted(() => ({
 
 export const { testEnv, tempDirs } = setupPluginInstallTestState();
 
-export const prepareManagedPluginArtifactConsentHandler = vi.hoisted(() =>
+const prepareManagedPluginArtifactConsentHandler = vi.hoisted(() =>
   vi.fn<
     typeof import("../../../plugins/capability-consent.js").prepareManagedPluginArtifactConsentHandler
   >(),
@@ -263,6 +263,7 @@ vi.mock("../../../plugins/manifest-registry.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: resolve installs into the fixture's private plugin roots.
 vi.mock("../../../plugins/install-paths.js", () => installPathMocks);
 
 vi.mock("../../../plugins/install.js", () => ({
@@ -388,3 +389,5 @@ export function setupPluginInstallSuite() {
 
   afterEach(() => vi.restoreAllMocks());
 }
+
+export { mocks, prepareManagedPluginArtifactConsentHandler };
