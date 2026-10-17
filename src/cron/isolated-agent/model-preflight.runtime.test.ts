@@ -2,31 +2,27 @@ import net from "node:net";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
 import {
-  preflightCronModelProvider,
+  preflightCronModelProvider as preflight,
   resetCronModelProviderPreflightCacheForTest,
 } from "./model-preflight.runtime.js";
 
 const connectMock = vi.spyOn(net, "connect");
 
 function makeLocalPreflightParams(provider: "ollama" | "vllm", baseUrl?: string) {
+  const local = provider === "ollama";
+  const config = {
+    api: local ? ("ollama" as const) : ("openai-completions" as const),
+    baseUrl: baseUrl ?? (local ? "http://localhost:11434" : "http://127.0.0.1:8000/v1"),
+    models: [],
+  };
   return {
-    cfg: {
-      models: {
-        providers: {
-          [provider]: {
-            api: provider === "ollama" ? ("ollama" as const) : ("openai-completions" as const),
-            baseUrl:
-              baseUrl ??
-              (provider === "ollama" ? "http://localhost:11434" : "http://127.0.0.1:8000/v1"),
-            models: [],
-          },
-        },
-      },
-    },
+    cfg: { models: { providers: { [provider]: config } } },
     provider,
-    model: provider === "ollama" ? "qwen3:32b" : "llama",
+    model: local ? "qwen3:32b" : "llama",
   };
 }
+const ollama = makeLocalPreflightParams("ollama");
+const vllm = makeLocalPreflightParams("vllm");
 
 function socketResult(error?: Error) {
   const socket = new net.Socket();
@@ -38,11 +34,11 @@ function mockEndpoint(error?: Error) {
   connectMock.mockImplementationOnce(() => socketResult(error));
 }
 
-type PreflightParams = Parameters<typeof preflightCronModelProvider>[0];
+type PreflightParams = Parameters<typeof preflight>[0];
 async function expectAvailable(params: PreflightParams) {
-  expect(await preflightCronModelProvider(params)).toEqual({ status: "available" });
+  expect(await preflight(params)).toEqual({ status: "available" });
 }
-function expectUnavailable(result: Awaited<ReturnType<typeof preflightCronModelProvider>>) {
+function expectUnavailable(result: Awaited<ReturnType<typeof preflight>>) {
   expect(result.status).toBe("unavailable");
   if (result.status !== "unavailable") {
     throw new Error(`expected preflight unavailable, got ${result.status}`);
@@ -50,6 +46,11 @@ function expectUnavailable(result: Awaited<ReturnType<typeof preflightCronModelP
   return result.reason;
 }
 const deadline = expect.stringContaining("preflight exceeded its configured 2500ms deadline");
+
+async function failureReason(error: Error) {
+  mockEndpoint(error);
+  return expectUnavailable(await preflight(ollama));
+}
 
 describe("preflightCronModelProvider", () => {
   beforeEach(() => {
@@ -66,21 +67,16 @@ describe("preflightCronModelProvider", () => {
 
   afterAll(() => connectMock.mockRestore());
 
-  it.each(["https://api.openai.com/v1"])(
-    "skips network checks for non-local provider URL %s",
-    async (baseUrl) => {
-      const params = makeLocalPreflightParams("vllm", baseUrl);
-      await expectAvailable(params);
-      expect(connectMock).not.toHaveBeenCalled();
-    },
-  );
+  it("skips network checks for remote providers", async () => {
+    await expectAvailable(makeLocalPreflightParams("vllm", "https://api.openai.com/v1"));
+    expect(connectMock).not.toHaveBeenCalled();
+  });
 
   it.each(["127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.0.222", "[::1]", "[::ffff:7f00:1]"])(
     "checks local endpoint host %s without retaining its socket or timer",
     async (host) => {
       mockEndpoint();
-      const params = makeLocalPreflightParams("vllm", `http://${host}:8000/v1`);
-      await expectAvailable(params);
+      await expectAvailable(makeLocalPreflightParams("vllm", `http://${host}:8000/v1`));
       expect(connectMock.mock.results[0]?.value.destroyed).toBe(true);
       expect(vi.getTimerCount()).toBe(0);
     },
@@ -91,25 +87,30 @@ describe("preflightCronModelProvider", () => {
     ["https://127.0.0.1/v1", 443],
   ] as const)("uses the protocol's default port for %s", async (baseUrl, port) => {
     mockEndpoint();
-    const params = makeLocalPreflightParams("vllm", baseUrl);
-    await expectAvailable(params);
+    await expectAvailable(makeLocalPreflightParams("vllm", baseUrl));
     expect(connectMock).toHaveBeenCalledWith(expect.objectContaining({ port }));
   });
 
   it("rejects non-HTTP provider protocols before connecting", async () => {
     const params = makeLocalPreflightParams("vllm", "ftp://127.0.0.1:8000");
-    expect(await preflightCronModelProvider(params)).toMatchObject({
+    expect(await preflight(params)).toMatchObject({
       status: "unavailable",
       reason: expect.stringContaining("Unsupported local provider protocol"),
     });
     expect(connectMock).not.toHaveBeenCalled();
   });
 
-  it("caches connection failures per endpoint while preserving each model's diagnostic", async () => {
+  it.each([false, true])("caches endpoint failures until expiry (expired=%s)", async (expired) => {
     mockEndpoint(new Error("ECONNREFUSED"));
-    const params = makeLocalPreflightParams("ollama");
-    const first = await preflightCronModelProvider({ ...params, nowMs: 1000 });
-    const second = await preflightCronModelProvider({ ...params, model: "second", nowMs: 2000 });
+    if (expired) {
+      mockEndpoint();
+    }
+    const first = await preflight({ ...ollama, nowMs: 1000 });
+    const second = await preflight({
+      ...ollama,
+      model: expired ? ollama.model : "second",
+      nowMs: expired ? 301001 : 2000,
+    });
     expect(first).toMatchObject({
       status: "unavailable",
       provider: "ollama",
@@ -118,62 +119,53 @@ describe("preflightCronModelProvider", () => {
       retryAfterMs: 300000,
       reason: expect.stringContaining("Last error: ECONNREFUSED"),
     });
-    expect(second).toMatchObject({ status: "unavailable", model: "second" });
-    expect(connectMock).toHaveBeenCalledOnce();
+    if (expired) {
+      expect(second).toEqual({ status: "available" });
+    } else {
+      expect(second).toMatchObject({ status: "unavailable", model: "second" });
+    }
+    expect(connectMock).toHaveBeenCalledTimes(expired ? 2 : 1);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("retries an unavailable endpoint after the cache ttl", async () => {
-    mockEndpoint(new Error("ECONNREFUSED"));
-    mockEndpoint();
-    const params = makeLocalPreflightParams("ollama");
-    expect(await preflightCronModelProvider({ ...params, nowMs: 1000 })).toMatchObject({
-      status: "unavailable",
-    });
-    await expectAvailable({ ...params, nowMs: 301001 });
-    expect(connectMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("closes timed-out connections and retries on the next run", async () => {
+  it.each(["socket", "DNS"])("bounds %s work by the preflight deadline", async (stage) => {
     const started = Promise.withResolvers<net.Socket>();
-    connectMock.mockImplementationOnce(() => {
-      const socket = new net.Socket();
-      started.resolve(socket);
-      return socket;
-    });
-    const params = makeLocalPreflightParams("vllm");
-    const pending = preflightCronModelProvider({ ...params, nowMs: 1000 });
-    const socket = await started.promise;
-    await vi.advanceTimersByTimeAsync(2500);
-    expect(await pending).toMatchObject({ status: "unavailable", reason: deadline });
-    expect(socket.destroyed).toBe(true);
-    mockEndpoint();
-    await expectAvailable({ ...params, nowMs: 2000 });
-    expect(connectMock).toHaveBeenCalledTimes(2);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("includes DNS resolution in the same deadline", async () => {
-    const lookup = vi
-      .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
-      .mockImplementationOnce((_hostname, options = {}) => {
-        const { signal } = options;
-        return new Promise((_resolve, reject) => {
-          signal?.addEventListener(
-            "abort",
-            () => reject(new Error("DNS lookup canceled", { cause: signal.reason })),
-            { once: true },
-          );
-        });
+    const lookup =
+      stage === "DNS"
+        ? vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementationOnce(
+            (_hostname, { signal } = {}) =>
+              new Promise((_resolve, reject) => {
+                signal?.addEventListener(
+                  "abort",
+                  () => reject(new Error("DNS lookup canceled", { cause: signal.reason })),
+                  { once: true },
+                );
+              }),
+          )
+        : undefined;
+    if (!lookup) {
+      connectMock.mockImplementationOnce(() => {
+        const socket = new net.Socket();
+        started.resolve(socket);
+        return socket;
       });
+    }
     try {
-      const pending = preflightCronModelProvider(makeLocalPreflightParams("ollama"));
+      const pending = preflight(lookup ? ollama : { ...vllm, nowMs: 1000 });
+      const socket = lookup ? undefined : await started.promise;
       await vi.advanceTimersByTimeAsync(2500);
       expect(await pending).toMatchObject({ status: "unavailable", reason: deadline });
-      expect(connectMock).not.toHaveBeenCalled();
+      if (socket) {
+        expect(socket.destroyed).toBe(true);
+        mockEndpoint();
+        await expectAvailable({ ...vllm, nowMs: 2000 });
+        expect(connectMock).toHaveBeenCalledTimes(2);
+      } else {
+        expect(connectMock).not.toHaveBeenCalled();
+      }
       expect(vi.getTimerCount()).toBe(0);
     } finally {
-      lookup.mockRestore();
+      lookup?.mockRestore();
     }
   });
 
@@ -182,20 +174,16 @@ describe("preflightCronModelProvider", () => {
       name: "ConnectError",
       code: "ECONNREFUSED",
     });
-    mockEndpoint(
+    const reason = await failureReason(
       Object.assign(new Error("request aborted", { cause: connectionError }), {
         name: "AbortError",
         code: "ABORT_ERR",
       }),
     );
-    const result = await preflightCronModelProvider(makeLocalPreflightParams("ollama"));
-    expect(result).toMatchObject({
-      status: "unavailable",
-      reason: expect.stringContaining(
-        "Last error: request aborted | ABORT_ERR | connect ECONNREFUSED | ECONNREFUSED",
-      ),
-    });
-    expect(result).not.toHaveProperty("reason", expect.stringContaining("exceeded"));
+    expect(reason).toContain(
+      "Last error: request aborted | ABORT_ERR | connect ECONNREFUSED | ECONNREFUSED",
+    );
+    expect(reason).not.toContain("exceeded");
   });
 
   it("bounds cyclic cause-chain inspection", async () => {
@@ -210,9 +198,7 @@ describe("preflightCronModelProvider", () => {
       errors[index]!.cause = errors[index + 1];
     }
     errors.at(-1)!.cause = errors[0];
-    mockEndpoint(errors[0]!);
-    const result = await preflightCronModelProvider(makeLocalPreflightParams("ollama"));
-    const reason = expectUnavailable(result);
+    const reason = await failureReason(errors[0]!);
     expect(reason.match(/failure-0/g)).toHaveLength(1);
     expect(reason).toContain("failure-7 | ELOOP7");
     expect(reason).toContain("failure-11 | ELOOP11");
@@ -220,9 +206,9 @@ describe("preflightCronModelProvider", () => {
   });
 
   it("bounds long diagnostics without splitting UTF-16 surrogate pairs", async () => {
-    mockEndpoint(new Error(`${"x".repeat(992)}😀truncated-detail`));
-    const result = await preflightCronModelProvider(makeLocalPreflightParams("ollama"));
-    const diagnostic = expectUnavailable(result).split("Last error: ")[1];
+    const diagnostic = (
+      await failureReason(new Error(`${"x".repeat(992)}😀truncated-detail`))
+    ).split("Last error: ")[1];
     expect(diagnostic).toHaveLength(1000);
     expect(diagnostic).toMatch(/^x{992}😀trunc…$/u);
     expect(diagnostic).not.toContain("truncated-detail");
@@ -240,7 +226,7 @@ describe("preflightCronModelProvider", () => {
       if (bypass) {
         mockEndpoint();
       }
-      await expectAvailable(makeLocalPreflightParams("vllm"));
+      await expectAvailable(vllm);
       expect(connectMock).toHaveBeenCalledTimes(bypass ? 1 : 0);
     },
   );
