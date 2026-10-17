@@ -256,24 +256,14 @@ function observeSend(h: ReturnType<typeof harness>) {
   return sent.promise;
 }
 
-it.each(["displayed-leaf", null])(
-  "preserves the displayed branch when admitting a split voice turn (%s)",
-  async (leaf) => {
-    const h = harness();
-    h.state.chatDisplayedLeafEntryId = leaf;
-    const sent = observeSend(h);
-    await h.state.toggleRealtimeTalk();
-    h.utterance();
-    await sent;
-    h.expectSend({ expectedLeafEntryId: leaf });
-    await h.state.toggleRealtimeTalk();
-  },
-);
-
-it.each(["openai", undefined])(
-  "routes configured split Talk through STT, chat and Gateway speech (provider: %s)",
-  async (provider) => {
+it.each([
+  { provider: "openai", leaf: "displayed-leaf" },
+  { provider: undefined, leaf: null },
+])(
+  "routes configured split Talk through STT, chat and Gateway speech (provider: $provider)",
+  async ({ provider, leaf }) => {
     const h = harness(provider);
+    h.state.chatDisplayedLeafEntryId = leaf;
     await h.state.toggleRealtimeTalk();
     expect(h.state.realtimeTalkStatus).toBe("listening");
     expect(h.request).toHaveBeenCalledWith("talk.session.create", {
@@ -286,7 +276,7 @@ it.each(["openai", undefined])(
     h.utterance();
     await sent;
     expect(expectDefined(tracks[0], "captured microphone track").stop).toHaveBeenCalledOnce();
-    h.expectSend();
+    h.expectSend({ expectedLeafEntryId: leaf });
     h.answer("Wrong answer", "unrelated");
     h.answer("The local model answered.");
     await h.speech.promise;
@@ -391,33 +381,14 @@ it.each(["Stop", "cleanup"])(
   },
 );
 
-it("keeps listening for the model answer after an empty final", async () => {
-  const h = harness();
-  const sent = observeSend(h);
-  await h.state.toggleRealtimeTalk();
-  h.utterance();
-  await sent;
-  const runId = h.getRunId();
-  h.emit("chat", { runId, state: "final" });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(h.state.realtimeTalkStatus).toBe("thinking");
-  expect(tracks).toHaveLength(1);
-  expect(h.request).toHaveBeenCalledWith("agent.wait", { runId, timeoutMs: 120_000 });
-  h.answer("The delayed answer.", runId);
-  await h.speech.promise;
-  await speechStarted.promise;
-  expect(h.request).toHaveBeenCalledWith("tts.speak", { text: "The delayed answer." });
-  expect(h.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
-});
-
-it.each(["text before", "empty before", "text after"])(
-  "waits for the model answer with an already-completed ACK (%s)",
+it.each(["started", "text before", "empty before", "text after"])(
+  "waits for the model answer across ACK/final ordering (%s)",
   async (sequence) => {
     const h = harness();
     const sent = createDeferred();
     h.intercept("chat.send", async (next) => {
       await next();
-      if (sequence !== "text after") {
+      if (sequence === "text before" || sequence === "empty before") {
         if (sequence === "text before") {
           h.answer("Already answered.");
         } else {
@@ -425,16 +396,31 @@ it.each(["text before", "empty before", "text after"])(
         }
       }
       sent.resolve();
-      return { runId: h.getRunId(), status: "ok" };
+      return { runId: h.getRunId(), status: sequence === "started" ? "started" : "ok" };
     });
     await h.state.toggleRealtimeTalk();
     h.utterance();
     await sent.promise;
+    if (sequence === "started") {
+      h.emit("chat", { runId: h.getRunId(), state: "final" });
+    }
     await vi.advanceTimersByTimeAsync(0);
     if (sequence !== "text before") {
       expect(h.state.realtimeTalkStatus).toBe("thinking");
+      if (sequence === "started") {
+        expect(tracks).toHaveLength(1);
+        expect(h.request).toHaveBeenCalledWith("agent.wait", {
+          runId: h.getRunId(),
+          timeoutMs: 120_000,
+        });
+      }
       h.answer("Already answered.");
       await vi.advanceTimersByTimeAsync(0);
+    }
+    if (sequence === "started") {
+      await h.speech.promise;
+      await speechStarted.promise;
+      expect(h.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
     }
     expect(h.request).toHaveBeenCalledWith("tts.speak", { text: "Already answered." });
   },
