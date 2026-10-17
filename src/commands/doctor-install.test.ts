@@ -1,78 +1,73 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { withTestDir } from "../test-helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { noteSourceInstallIssues } from "./doctor-install.js";
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note: vi.fn(),
-}));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
-async function writeFile(root: string, relativePath: string, content = "") {
-  const file = path.join(root, relativePath);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let root: string;
+beforeEach(() => {
+  root = tempDirs.make("openclaw-doctor-install-");
+  vi.mocked(note).mockReset();
+});
+
+async function writeFile(directory: string, relativePath: string, content = "") {
+  const file = path.join(directory, relativePath);
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, content, "utf8");
 }
 
 describe("noteSourceInstallIssues", () => {
-  beforeEach(() => {
-    vi.mocked(note).mockReset();
-  });
-
   it("reports the host owner instead of source package repair advice", async () => {
-    await withTestDir({ prefix: "openclaw-doctor-install-host-" }, async (root) => {
-      await writeSourceCheckout(root, "overrides: {openclaw: 'link:.'}\n");
-      await writeFile(
-        root,
-        "openclaw-install-owner.json",
-        JSON.stringify({
-          schemaVersion: 1,
-          owner: "macos-app",
-          displayName: "OpenClaw.app",
-          updateHint: "Update OpenClaw.app to update this Gateway.",
-        }),
-      );
+    await writeSourceCheckout(root, "overrides: {openclaw: 'link:.'}\n");
+    await writeFile(
+      root,
+      "openclaw-install-owner.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        owner: "macos-app",
+        displayName: "OpenClaw.app",
+        updateHint: "Update OpenClaw.app to update this Gateway.",
+      }),
+    );
 
-      await noteSourceInstallIssues(root);
+    await noteSourceInstallIssues(root);
 
-      expect(note).toHaveBeenCalledExactlyOnceWith(
-        "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
-        "Install",
-      );
-    });
+    expect(note).toHaveBeenCalledExactlyOnceWith(
+      "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
+      "Install",
+    );
   });
 
   it("warns source checkouts when node_modules was not installed by pnpm", async () => {
-    await withTestDir({ prefix: "openclaw-doctor-install-" }, async (root) => {
-      await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
-      await writeFile(root, "pnpm-workspace.yaml", "packages:\n  - .\n");
-      await writeFile(root, "src/entry.ts", "export {};\n");
+    await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+    await writeFile(root, "pnpm-workspace.yaml", "packages:\n  - .\n");
+    await writeFile(root, "src/entry.ts", "export {};\n");
 
-      await noteSourceInstallIssues(root);
+    await noteSourceInstallIssues(root);
 
-      expect(note).toHaveBeenCalledWith(
-        [
-          "- node_modules was not installed by pnpm (missing node_modules/.pnpm). Run: pnpm install so bundled plugins can load package-local dependencies.",
-          "- tsx binary is missing for source runs. Run: pnpm install.",
-        ].join("\n"),
-        "Install",
-      );
-    });
+    expect(note).toHaveBeenCalledWith(
+      [
+        "- node_modules was not installed by pnpm (missing node_modules/.pnpm). Run: pnpm install so bundled plugins can load package-local dependencies.",
+        "- tsx binary is missing for source runs. Run: pnpm install.",
+      ].join("\n"),
+      "Install",
+    );
   });
 });
 
-async function writeSourceCheckout(root: string, workspace: string) {
-  await writeFile(root, "src/entry.ts", "export {};\n");
-  await writeFile(root, "node_modules/.bin/tsx");
-  await fs.mkdir(path.join(root, "node_modules/.pnpm"), { recursive: true });
-  await writeFile(root, "package.json", JSON.stringify({ name: "openclaw" }));
-  await writeFile(root, "pnpm-workspace.yaml", workspace);
+async function writeSourceCheckout(directory: string, workspace: string) {
+  await writeFile(directory, "src/entry.ts", "export {};\n");
+  await writeFile(directory, "node_modules/.bin/tsx");
+  await fs.mkdir(path.join(directory, "node_modules/.pnpm"), { recursive: true });
+  await writeFile(directory, "package.json", JSON.stringify({ name: "openclaw" }));
+  await writeFile(directory, "pnpm-workspace.yaml", workspace);
 }
 
 describe("source self-link recovery", () => {
-  beforeEach(() => vi.mocked(note).mockReset());
-
   it.each([
     ...(
       [
@@ -103,41 +98,33 @@ describe("source self-link recovery", () => {
       ] as const
     ).map(([name, workspace]) => ({ name, workspace, selfLink: false })),
   ])("checks workspace self-links in $name", async ({ workspace, selfLink }) => {
-    await withTestDir({ prefix: "openclaw-doctor-self-link-" }, async (root) => {
-      await writeSourceCheckout(root, workspace);
-      await expect(noteSourceInstallIssues(root)).resolves.toBeUndefined();
-      if (selfLink) {
-        expect(note).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining("pnpm-workspace.yaml contains a self-referential"),
-          "Install",
-        );
-      } else {
-        expect(note).not.toHaveBeenCalled();
-      }
-    });
+    await writeSourceCheckout(root, workspace);
+    await expect(noteSourceInstallIssues(root)).resolves.toBeUndefined();
+    if (selfLink) {
+      expect(note).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("pnpm-workspace.yaml contains a self-referential"),
+        "Install",
+      );
+    } else {
+      expect(note).not.toHaveBeenCalled();
+    }
   });
 
   it.each(["dependencies", "devDependencies"])(
     "reports %s and selective three-file guidance",
     async (section) => {
-      await withTestDir({ prefix: "openclaw-doctor-self-link-" }, async (root) => {
-        await writeSourceCheckout(root, "packages: ['.']\n");
-        await writeFile(
-          root,
-          "package.json",
-          JSON.stringify({ [section]: { openclaw: "link:." } }),
-        );
-        await noteSourceInstallIssues(root);
-        expect(note).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining("package.json has a self-referential"),
-          "Install",
-        );
-        const warning = String(vi.mocked(note).mock.calls[0]?.[0]);
-        expect(warning).toContain("git diff -- package.json pnpm-workspace.yaml pnpm-lock.yaml");
-        expect(warning).toContain("missing override pins");
-        expect(warning).toContain("preserving unrelated edits in all three files");
-        expect(warning).toContain("pnpm install --frozen-lockfile");
-      });
+      await writeSourceCheckout(root, "packages: ['.']\n");
+      await writeFile(root, "package.json", JSON.stringify({ [section]: { openclaw: "link:." } }));
+      await noteSourceInstallIssues(root);
+      expect(note).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("package.json has a self-referential"),
+        "Install",
+      );
+      const warning = String(vi.mocked(note).mock.calls[0]?.[0]);
+      expect(warning).toContain("git diff -- package.json pnpm-workspace.yaml pnpm-lock.yaml");
+      expect(warning).toContain("missing override pins");
+      expect(warning).toContain("preserving unrelated edits in all three files");
+      expect(warning).toContain("pnpm install --frozen-lockfile");
     },
   );
 
@@ -145,90 +132,76 @@ describe("source self-link recovery", () => {
     { failure: "unreadable workspace", warning: "package-lock.json present" },
     { failure: "malformed manifest", warning: "pnpm-workspace.yaml contains" },
   ])("continues other install checks after $failure", async ({ failure, warning }) => {
-    await withTestDir({ prefix: "openclaw-doctor-self-link-" }, async (root) => {
-      await writeSourceCheckout(root, "overrides: {openclaw: 'link:.'}\n");
-      if (failure === "unreadable workspace") {
-        await fs.rm(path.join(root, "pnpm-workspace.yaml"));
-        await fs.mkdir(path.join(root, "pnpm-workspace.yaml"));
-        await writeFile(root, "package-lock.json", "{}");
-      } else {
-        await writeFile(root, "package.json", "{");
-      }
-      await expect(noteSourceInstallIssues(root)).resolves.toBeUndefined();
-      expect(note).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(warning), "Install");
-    });
+    await writeSourceCheckout(root, "overrides: {openclaw: 'link:.'}\n");
+    if (failure === "unreadable workspace") {
+      await fs.rm(path.join(root, "pnpm-workspace.yaml"));
+      await fs.mkdir(path.join(root, "pnpm-workspace.yaml"));
+      await writeFile(root, "package-lock.json", "{}");
+    } else {
+      await writeFile(root, "package.json", "{");
+    }
+    await expect(noteSourceInstallIssues(root)).resolves.toBeUndefined();
+    expect(note).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(warning), "Install");
   });
 
   it("ignores healthy manifest values, absent roots, and packaged self-link lookalikes", async () => {
     await noteSourceInstallIssues(null);
-    await withTestDir({ prefix: "openclaw-doctor-self-link-" }, async (root) => {
-      await writeSourceCheckout(root, "packages: ['.']\n");
-      await writeFile(
-        root,
-        "package.json",
-        JSON.stringify({
-          dependencies: { openclaw: "^2026.9.4" },
-          devDependencies: { openclaw: null },
-        }),
-      );
-      await noteSourceInstallIssues(root);
-      await fs.rm(path.join(root, "src/entry.ts"));
-      await writeFile(root, "pnpm-workspace.yaml", "overrides: {openclaw: 'link:.'}\n");
-      await writeFile(
-        root,
-        "package.json",
-        JSON.stringify({ dependencies: { openclaw: "link:." } }),
-      );
-      await noteSourceInstallIssues(root);
-      expect(note).not.toHaveBeenCalled();
-    });
+    await writeSourceCheckout(root, "packages: ['.']\n");
+    await writeFile(
+      root,
+      "package.json",
+      JSON.stringify({
+        dependencies: { openclaw: "^2026.9.4" },
+        devDependencies: { openclaw: null },
+      }),
+    );
+    await noteSourceInstallIssues(root);
+    await fs.rm(path.join(root, "src/entry.ts"));
+    await writeFile(root, "pnpm-workspace.yaml", "overrides: {openclaw: 'link:.'}\n");
+    await writeFile(root, "package.json", JSON.stringify({ dependencies: { openclaw: "link:." } }));
+    await noteSourceInstallIssues(root);
+    expect(note).not.toHaveBeenCalled();
   });
 });
 
 describe("self-link target and diagnostic accuracy", () => {
-  beforeEach(() => vi.mocked(note).mockReset());
-
   it.each(["link:../openclaw-fork", "link:packages/openclaw"])(
     "preserves legitimate local target %s in both dependency maps and overrides",
     async (link) => {
-      await withTestDir({ prefix: "openclaw-doctor-self-link-" }, async (root) => {
-        await writeSourceCheckout(root, `overrides: {openclaw: '${link}'}\n`);
-        await writeFile(
-          root,
-          "package.json",
-          JSON.stringify({ dependencies: { openclaw: link }, devDependencies: { openclaw: link } }),
-        );
-        await noteSourceInstallIssues(root);
-        expect(note).not.toHaveBeenCalled();
-      });
+      await writeSourceCheckout(root, `overrides: {openclaw: '${link}'}\n`);
+      await writeFile(
+        root,
+        "package.json",
+        JSON.stringify({ dependencies: { openclaw: link }, devDependencies: { openclaw: link } }),
+      );
+      await noteSourceInstallIssues(root);
+      expect(note).not.toHaveBeenCalled();
     },
   );
 
   it.each(["empty", "dot", "absolute", "symlink"])(
     "detects a %s link resolving to this checkout without claiming a lockfile error",
     async (kind) => {
-      await withTestDir({ prefix: "openclaw-doctor-self-link-" }, async (root) => {
-        if (kind === "symlink") {
-          await fs.symlink(
-            root,
-            path.join(root, "self"),
-            process.platform === "win32" ? "junction" : "dir",
-          );
-        }
-        const target =
-          kind === "empty" ? "" : kind === "dot" ? "." : kind === "absolute" ? root : "self";
-        const link = `link:${target}`;
-        await writeSourceCheckout(root, `overrides: {openclaw: '${link}'}\n`);
-        await writeFile(root, "package.json", JSON.stringify({ dependencies: { openclaw: link } }));
-        await noteSourceInstallIssues(root);
-        expect(note).toHaveBeenCalledOnce();
-        const warning = String(vi.mocked(note).mock.calls[0]?.[0]);
-        expect(warning).toContain("package.json has a self-referential");
-        expect(warning).toContain("pnpm-workspace.yaml contains a self-referential");
-        expect(warning).not.toContain("ERR_PNPM_LOCKFILE_CONFIG_MISMATCH");
-        expect(warning).toContain("can break frozen pnpm installs");
-        expect(warning).toContain("If the link is unintended");
-      });
+      if (kind === "symlink") {
+        await fs.symlink(
+          root,
+          path.join(root, "self"),
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      }
+      const target =
+        kind === "empty" ? "" : kind === "dot" ? "." : kind === "absolute" ? root : "self";
+      const link = `link:${target}`;
+      await writeSourceCheckout(root, `overrides: {openclaw: '${link}'}\n`);
+      await writeFile(root, "package.json", JSON.stringify({ dependencies: { openclaw: link } }));
+      await noteSourceInstallIssues(root);
+      expect(note).toHaveBeenCalledOnce();
+      const warning = String(vi.mocked(note).mock.calls[0]?.[0]);
+      expect(warning).toContain("package.json has a self-referential");
+      expect(warning).toContain("pnpm-workspace.yaml contains a self-referential");
+      expect(warning).not.toContain("ERR_PNPM_LOCKFILE_CONFIG_MISMATCH");
+      expect(warning).toContain("can break frozen pnpm installs");
+      expect(warning).toContain("If the link is unintended");
     },
   );
 });
