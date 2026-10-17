@@ -12,7 +12,6 @@ import {
 
 const readConfigFileSnapshotForWriteMock = vi.fn();
 const writeConfigFileMock = vi.fn();
-const persistedConfigResultMock = vi.fn((config: OpenClawConfig) => config);
 const runtimeApplication = { claimed: true };
 const validateConfigObjectWithPluginsMock = vi.fn();
 const prepareSecretsRuntimeSnapshotMock = vi.fn();
@@ -37,12 +36,11 @@ vi.mock("../../config/config.js", async () => {
       if (params.writeOptions && runtimeApplication.claimed) {
         getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
       }
-      const persistedConfig = persistedConfigResultMock(params.sourceConfig);
       return {
         path: "/tmp/openclaw.json",
         previousHash: "base-hash",
         snapshot: createConfigWriteSnapshot(params.sourceConfig),
-        nextConfig: persistedConfig,
+        nextConfig: params.sourceConfig,
         persistedHash: "next-hash",
         afterWrite: { mode: "auto" },
         followUp: { mode: "auto", requiresRestart: false },
@@ -93,13 +91,6 @@ function tokenAuthConfig(token: string): OpenClawConfig {
 
 function mockPreviousConfig(config: OpenClawConfig): void {
   readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(config));
-}
-
-async function runConfigPatch(
-  raw: unknown,
-  params: { sessionKey?: string; restartDelayMs?: number; replacePaths?: string[] } = {},
-) {
-  return runWrite("config.patch", raw, { restartDelayMs: 1_000, ...params });
 }
 
 function prepareWrite(
@@ -155,9 +146,7 @@ function mockDegradedTts(reason: string) {
   });
 }
 
-afterEach(() => {
-  vi.clearAllMocks();
-});
+afterEach(() => vi.clearAllMocks());
 
 beforeEach(() => {
   runtimeApplication.claimed = true;
@@ -170,8 +159,6 @@ beforeEach(() => {
       config,
     }),
   );
-  restartSentinelMocks.writeRestartSentinel.mockClear();
-  persistedConfigResultMock.mockImplementation((config: OpenClawConfig) => config);
 });
 
 describe("config shared auth disconnects", () => {
@@ -324,7 +311,8 @@ describe("config shared auth disconnects", () => {
       },
     });
 
-    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
+    const { disconnectClientsUsingSharedGatewayAuth } = await runWrite(
+      "config.patch",
       {
         gateway: {
           auth: {
@@ -335,7 +323,7 @@ describe("config shared auth disconnects", () => {
           },
         },
       },
-      { replacePaths: ["gateway.auth.trustedProxy.allowUsers"] },
+      { restartDelayMs: 1_000, replacePaths: ["gateway.auth.trustedProxy.allowUsers"] },
     );
 
     expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
@@ -345,7 +333,7 @@ describe("config shared auth disconnects", () => {
   it("defers restart-required changes to the watcher after legacy hot mode normalizes", async () => {
     mockPreviousConfig({ gateway: { reload: { mode: "hot" } } });
 
-    await runConfigPatch({ gateway: { port: 19001 } });
+    await runWrite("config.patch", { gateway: { port: 19001 } }, { restartDelayMs: 1_000 });
 
     expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
     expect(restartSentinelMocks.writeRestartSentinel).not.toHaveBeenCalled();

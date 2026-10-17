@@ -18,26 +18,20 @@ import { enrichAssistantTranscriptMediaForRun } from "./chat-transcript-persiste
 
 const RUN_ID = "generated-media-completion";
 const MESSAGE_ID = "completion-answer";
+const caption = "Here are four options.";
+const choice = "Pick 1, 2, 3, or 4.";
+const warningText = "Synthetic attachment warning.";
 const text = (value: string, textSignature?: string) => ({
   type: "text",
   text: value,
   ...(textSignature ? { textSignature } : {}),
 });
-const transcriptEvent = (
-  eventId: string,
-  role: string,
-  content: Record<string, unknown>[],
-  extra = {},
-) => ({
+type Content = Record<string, unknown>[];
+const transcriptEvent = (eventId: string, role: string, content: Content, extra = {}) => ({
   eventId,
   message: { role, content, ...extra },
 });
-const assistant = (
-  eventId: string,
-  content: Record<string, unknown>[],
-  runId = RUN_ID,
-  extra = {},
-) =>
+const assistant = (eventId: string, content: Content, runId = RUN_ID, extra = {}) =>
   transcriptEvent(eventId, "assistant", content, {
     stopReason: "stop",
     __openclaw: { runId },
@@ -88,7 +82,7 @@ async function seedTranscript(
     alt: "generated-sheet.png",
     mimeType: "image/png",
   };
-  const warning = text("Synthetic attachment warning.");
+  const warning = text(warningText);
   const mediaGroup = singleText ? [mediaBlock, warning] : [mediaBlock];
   const messages = [
     assistant("older-answer", [text("An earlier answer.")], "older-run"),
@@ -112,15 +106,15 @@ async function seedTranscript(
       singleText
         ? [
             text(
-              `[[reply_to_current]]\nHere are four options.\nMEDIA:${mediaUrl}\nMEDIA:${mediaUrl}\nPick 1, 2, 3, or 4.`,
+              `[[reply_to_current]]\n${caption}\nMEDIA:${mediaUrl}\nMEDIA:${mediaUrl}\n${choice}`,
               JSON.stringify({ v: 1, id: "answer", phase: "final_answer" }),
             ),
           ]
         : [
             { type: "thinking", thinking: "Synthetic reasoning.", thinkingSignature: "opaque" },
-            text("Here are four options.\n", "signed-caption"),
+            text(`${caption}\n`, "signed-caption"),
             text(`MEDIA:${mediaUrl}`, "signed-media"),
-            text("\nPick 1, 2, 3, or 4.", "signed-choice"),
+            text(`\n${choice}`, "signed-choice"),
           ],
       RUN_ID,
       { openclawDelivery: { replyToCurrent: true } },
@@ -133,12 +127,8 @@ async function seedTranscript(
     ),
   ];
   for (const [index, { eventId, message }] of messages.entries()) {
-    expect(
-      appendTranscriptMessageSync(scope, { eventId, message, now: 1_000 + index }),
-    ).toMatchObject({
-      ok: true,
-      value: { appended: true, messageId: eventId },
-    });
+    const result = appendTranscriptMessageSync(scope, { eventId, message, now: 1_000 + index });
+    expect(result).toMatchObject({ ok: true, value: { appended: true, messageId: eventId } });
   }
   const snapshot = () => {
     const database = openOpenClawAgentDatabase(scope);
@@ -162,15 +152,7 @@ async function seedTranscript(
         scope,
         runId,
         expectedLifecycleRevision: lifecycleRevision,
-        content: [
-          {
-            type: "text",
-            text: singleText
-              ? "Here are four options.\nPick 1, 2, 3, or 4."
-              : "Here are four options.\n\n\nPick 1, 2, 3, or 4.",
-          },
-          ...mediaGroup,
-        ],
+        content: [text([caption, choice].join(singleText ? "\n" : "\n\n\n")), ...mediaGroup],
         mediaBySource: new Map([[mediaUrl, mediaGroup]]),
         mediaUrls: [mediaUrl],
       }),
@@ -178,72 +160,54 @@ async function seedTranscript(
 }
 
 describe("generated-media transcript enrichment", () => {
-  it.each([null, "initial-revision"])(
-    "keeps a joined caption across authored blocks ordered without duplication through replay (revision=%s)",
-    async (revision) => {
-      await withTranscriptFixture(revision, async ({ enrich, snapshot, mediaBlock }) => {
-        const before = snapshot();
-        await expect(enrich()).resolves.toEqual({ messageId: MESSAGE_ID });
-        const after = snapshot();
-        expect(after.rows).toHaveLength(before.rows.length);
-        expect(after.watermark.maxSeq).toBe(before.watermark.maxSeq);
-        expect(after.watermark.generation).not.toBe(before.watermark.generation);
-        for (const [index, row] of before.rows.entries()) {
-          const rewritten = after.rows[index];
-          if (row.event.id !== MESSAGE_ID) {
-            expect(rewritten).toEqual(row);
-            continue;
+  it.each([
+    [null, false],
+    ["initial-revision", false],
+    ["initial-revision", true],
+  ] as const)(
+    "preserves signed captions, media order, warnings, and replay (revision=%s, singleText=%s)",
+    async (revision, singleText) => {
+      await withTranscriptFixture(
+        revision,
+        async ({ enrich, snapshot, mediaBlock }) => {
+          const before = snapshot();
+          await expect(enrich()).resolves.toEqual({ messageId: MESSAGE_ID });
+          const after = snapshot();
+          expect(after.rows).toHaveLength(before.rows.length);
+          expect(after.watermark.maxSeq).toBe(before.watermark.maxSeq);
+          expect(after.watermark.generation).not.toBe(before.watermark.generation);
+          for (const [index, row] of before.rows.entries()) {
+            const rewritten = after.rows[index];
+            if (row.event.id !== MESSAGE_ID) {
+              expect(rewritten).toEqual(row);
+              continue;
+            }
+            assert(rewritten && isRecord(row.event.message) && isRecord(rewritten.event.message));
+            const { message: _originalMessage, ...originalEnvelope } = row.event;
+            const { message: _rewrittenMessage, ...rewrittenEnvelope } = rewritten.event;
+            expect(rewritten.seq).toBe(row.seq);
+            expect(rewrittenEnvelope).toEqual(originalEnvelope);
+            expect(rewritten.event.message.content).toEqual(row.event.message.content);
+            expect(rewritten.event.message.openclawDelivery).toMatchObject({
+              replyToCurrent: true,
+            });
+            const display = rewritten.event.message.openclawDisplayContent;
+            assert(Array.isArray(display));
+            expect(display.filter((block) => isRecord(block) && block.type === "image")).toEqual([
+              mediaBlock,
+            ]);
+            expect(
+              displayOrder(display.filter((block) => isRecord(block) && block.type !== "thinking")),
+            ).toEqual([caption, "image", ...(singleText ? [warningText] : []), choice]);
           }
-          assert(rewritten && isRecord(row.event.message) && isRecord(rewritten.event.message));
-          const { message: _originalMessage, ...originalEnvelope } = row.event;
-          const { message: _rewrittenMessage, ...rewrittenEnvelope } = rewritten.event;
-          expect(rewritten.seq).toBe(row.seq);
-          expect(rewrittenEnvelope).toEqual(originalEnvelope);
-          expect(rewritten.event.message.content).toEqual(row.event.message.content);
-          expect(rewritten.event.message.openclawDelivery).toMatchObject({ replyToCurrent: true });
-          const display = rewritten.event.message.openclawDisplayContent;
-          assert(Array.isArray(display));
-          expect(display.filter((block) => isRecord(block) && block.type === "image")).toEqual([
-            mediaBlock,
-          ]);
-          expect(
-            displayOrder(display.filter((block) => isRecord(block) && block.type !== "thinking")),
-          ).toEqual(["Here are four options.", "image", "Pick 1, 2, 3, or 4."]);
-        }
 
-        await expect(enrich()).resolves.toEqual({ messageId: MESSAGE_ID });
-        expect(snapshot()).toEqual(after);
-      });
+          await expect(enrich()).resolves.toEqual({ messageId: MESSAGE_ID });
+          expect(snapshot()).toEqual(after);
+        },
+        singleText,
+      );
     },
   );
-
-  it("keeps a signed single-text reply, duplicate directives, and its warning ordered through replay", async () => {
-    await withTranscriptFixture(
-      "initial-revision",
-      async ({ enrich, snapshot }) => {
-        const before = snapshot();
-        await enrich();
-        const after = snapshot();
-        const original = before.rows.find((row) => row.event.id === MESSAGE_ID)?.event.message;
-        const rewritten = after.rows.find((row) => row.event.id === MESSAGE_ID)?.event.message;
-        assert(
-          isRecord(original) &&
-            isRecord(rewritten) &&
-            Array.isArray(rewritten.openclawDisplayContent),
-        );
-        expect(rewritten.content).toEqual(original.content);
-        expect(displayOrder(rewritten.openclawDisplayContent)).toEqual([
-          "Here are four options.",
-          "image",
-          "Synthetic attachment warning.",
-          "Pick 1, 2, 3, or 4.",
-        ]);
-        await enrich();
-        expect(snapshot()).toEqual(after);
-      },
-      true,
-    );
-  });
 
   it("leaves the transcript unchanged when the requested run has no assistant reply", async () => {
     await withTranscriptFixture("initial-revision", async ({ enrich, snapshot }) => {
@@ -261,11 +225,7 @@ describe("generated-media transcript enrichment", () => {
     "rejects stale media after %s",
     async (_label, captured, sessionId, lifecycleRevision) => {
       await withTranscriptFixture(captured, async ({ scope, enrich, snapshot }) => {
-        await replaceSessionEntry(scope, {
-          sessionId,
-          lifecycleRevision,
-          updatedAt: 2,
-        });
+        await replaceSessionEntry(scope, { sessionId, lifecycleRevision, updatedAt: 2 });
         const before = snapshot();
         await expect(enrich()).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
         expect(snapshot()).toEqual(before);

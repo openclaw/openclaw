@@ -97,13 +97,9 @@ describe("webchat audio blocks through assistant messages", () => {
   });
 
   it("rejects a local audio file outside configured localRoots", async () => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
-    const allowedRoot = path.join(tmpDir, "allowed");
-    const outsideRoot = path.join(tmpDir, "outside");
+    const { audioPath, localRoot } = writeAudioFixture([0x03]);
+    const allowedRoot = path.join(localRoot, "allowed");
     fs.mkdirSync(allowedRoot, { recursive: true });
-    fs.mkdirSync(outsideRoot, { recursive: true });
-    const audioPath = path.join(outsideRoot, "clip.mp3");
-    fs.writeFileSync(audioPath, Buffer.from([0x03]));
 
     const onLocalAudioAccessDenied = vi.fn();
     const blocks = await buildWebchatAudioBlocks(
@@ -142,11 +138,14 @@ describe("buildWebchatAssistantMessageFromReplyPayloads", () => {
     expect(message).toBeNull();
   });
 
-  it("preserves reply directives in transcript text for media replies", async () => {
-    const message = await buildImage(imageUrl, { replyToCurrent: true });
+  it.each([
+    [{ replyToCurrent: true }, "[[reply_to_current]]Image reply"],
+    [{ replyToId: "abc]]\n[[audio_as_voice]]" }, "[[reply_to:abcaudio_as_voice]]Image reply"],
+  ] as const)("preserves sanitized reply directives: %j", async (reply, transcriptText) => {
+    const message = await buildImage(imageUrl, reply);
     expect(message).toMatchObject({
-      transcriptText: "[[reply_to_current]]Image reply",
-      content: imageContent("[[reply_to_current]]Image reply"),
+      transcriptText,
+      content: imageContent(transcriptText),
     });
   });
 
@@ -162,26 +161,12 @@ describe("buildWebchatAssistantMessageFromReplyPayloads", () => {
     expect(message?.content).toContainEqual({ type: "input_image", image_url: spacedUrl.trim() });
   });
 
-  it("rejects invalid data image payload characters", async () => {
-    const message = await buildImage("data:image/png;base64,cG5n!", { text: "invalid" });
+  it.each([
+    ["invalid", "data:image/png;base64,cG5n!"],
+    ["remote", "https://example.com/final.png"],
+    ["svg", "data:image/svg+xml;base64,PHN2Zy8+"],
+  ])("rejects %s image payloads", async (text, mediaUrl) => {
+    const message = await buildImage(mediaUrl, { text });
     expect(message).toBeNull();
-  });
-
-  it("rejects remote image URLs", async () => {
-    const message = await buildImage("https://example.com/final.png", { text: "remote" });
-    expect(message).toBeNull();
-  });
-
-  it("rejects svg data URLs", async () => {
-    const message = await buildImage("data:image/svg+xml;base64,PHN2Zy8+", { text: "svg" });
-    expect(message).toBeNull();
-  });
-
-  it("sanitizes reply ids before embedding directive prefixes", async () => {
-    const message = await buildImage(imageUrl, { replyToId: "abc]]\n[[audio_as_voice]]" });
-    expect(message).toMatchObject({
-      transcriptText: "[[reply_to:abcaudio_as_voice]]Image reply",
-      content: imageContent("[[reply_to:abcaudio_as_voice]]Image reply"),
-    });
   });
 });

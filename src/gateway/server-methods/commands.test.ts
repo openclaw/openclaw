@@ -30,23 +30,25 @@ function chatCommand(
     ...overrides,
   };
 }
-const mockChatCommands: ChatCommandDefinition[] = [
+type CommandArg = NonNullable<ChatCommandDefinition["args"]>[number];
+const stringArg = (
+  name: string,
+  description: string,
+  choices: CommandArg["choices"],
+): CommandArg => ({ name, description, type: "string", choices });
+const baseChatCommands: ChatCommandDefinition[] = [
   chatCommand("model", "Set model", "options", {
     textAliases: ["/model", "/m"],
     acceptsArgs: true,
     args: [
-      {
-        name: "model",
-        description: "Model identifier",
-        type: "string",
-        choices: [{ value: "gpt-5.4", label: "GPT-5.4" }, "sonnet-4.6"],
-      },
+      stringArg("model", "Model identifier", [
+        { value: "gpt-5.4", label: "GPT-5.4" },
+        "sonnet-4.6",
+      ]),
     ],
   }),
   chatCommand("help", "Show help", "session"),
-  chatCommand("login", "Pair Codex login", "management", {
-    nativeProviders: ["telegram"],
-  }),
+  chatCommand("login", "Pair Codex login", "management", { nativeProviders: ["telegram"] }),
   chatCommand("commands", "List commands", "session", { nativeName: undefined, scope: "text" }),
   chatCommand("skill:code-review", "Run code review", "tools", {
     nativeName: "code_review",
@@ -56,17 +58,11 @@ const mockChatCommands: ChatCommandDefinition[] = [
   chatCommand("debug_prompt", "Show raw prompt", "tools", {
     textAliases: ["/debug"],
     acceptsArgs: false,
-    args: [
-      {
-        name: "target",
-        description: "Prompt target",
-        type: "string",
-        choices: () => [{ value: "last", label: "Last" }],
-      },
-    ],
+    args: [stringArg("target", "Prompt target", () => [{ value: "last", label: "Last" }])],
     scope: "native",
   }),
 ];
+let mockChatCommands = baseChatCommands;
 
 const mockPluginSpecs = [{ name: "tts", description: "Text to speech", acceptsArgs: false }];
 type RuntimeCommandRegistration = {
@@ -116,7 +112,11 @@ vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: vi.fn(channelPlugin),
 }));
 
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  type CommandEntry,
+} from "../../../packages/gateway-protocol/src/index.js";
 import {
   COMMAND_ALIAS_MAX_ITEMS,
   COMMAND_ARG_CHOICES_MAX_ITEMS,
@@ -133,20 +133,21 @@ import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-re
 import { commandsHandlers } from "./commands.js";
 
 function channelPlugin(provider: string) {
-  return provider === "discord"
-    ? {
-        commands: {
-          nativeCommandsAutoEnabled: true,
-          resolveNativeCommandName: ({
-            commandKey,
-            defaultName,
-          }: {
-            commandKey: string;
-            defaultName: string;
-          }) => (commandKey === "model" ? "set_model" : defaultName),
-        },
-      }
-    : undefined;
+  if (provider !== "discord") {
+    return undefined;
+  }
+  return {
+    commands: {
+      nativeCommandsAutoEnabled: true,
+      resolveNativeCommandName: ({
+        commandKey,
+        defaultName,
+      }: {
+        commandKey: string;
+        defaultName: string;
+      }) => (commandKey === "model" ? "set_model" : defaultName),
+    },
+  };
 }
 
 async function callHandler(params: Record<string, unknown> = {}) {
@@ -156,7 +157,7 @@ async function callHandler(params: Record<string, unknown> = {}) {
   };
   await expectDefined(
     commandsHandlers["commands.list"],
-    'commandsHandlers["commands.list"] test invariant',
+    "commands.list handler",
   )({
     params,
     respond,
@@ -165,20 +166,10 @@ async function callHandler(params: Record<string, unknown> = {}) {
     isWebchatConnect: () => false,
     context: { getRuntimeConfig: () => ({}) } as never,
   });
-  if (!result) {
-    throw new Error("expected commands.list response");
-  }
-  return result;
+  return expectDefined(result, "commands.list response");
 }
 
-type ListedCommand = Record<string, unknown> & {
-  name: string;
-  source: string;
-  scope?: string;
-  textAliases?: string[];
-  nativeName?: string;
-  args?: Array<Record<string, unknown>>;
-};
+type ListedCommand = CommandEntry;
 
 async function listCommands(params: Record<string, unknown> = {}): Promise<ListedCommand[]> {
   const { payload } = await callHandler(params);
@@ -186,11 +177,10 @@ async function listCommands(params: Record<string, unknown> = {}): Promise<Liste
 }
 
 function requireCommand<T extends { name: string }>(commands: T[], name: string): T {
-  const command = commands.find((entry) => entry.name === name);
-  if (!command) {
-    throw new Error(`expected ${name} command`);
-  }
-  return command;
+  return expectDefined(
+    commands.find((entry) => entry.name === name),
+    `expected ${name} command`,
+  );
 }
 
 async function pluginCommand(
@@ -213,32 +203,18 @@ function setGatewayRegistry(commands: RuntimeCommandRegistration[]): void {
   setActivePluginRegistry(createCommandRegistry(commands));
 }
 
-function providerFilteredPluginRegistrations(params: { nativeName?: string } = {}) {
-  return [
-    {
-      pluginId: "android-only",
-      command: {
-        name: "android_only",
-        description: "Android-only command",
-        channels: ["android"],
-      },
-    },
-    {
-      pluginId: "demo-control",
-      command: {
-        name: "demo",
-        description: "Demo command",
-        ...(params.nativeName ? { nativeNames: { discord: params.nativeName } } : {}),
-        channels: ["discord"],
-      },
-    },
-  ];
+function registration(
+  name: string,
+  overrides: Partial<RuntimeCommandRegistration["command"]> = {},
+): RuntimeCommandRegistration {
+  return { pluginId: name.trim(), command: { name, description: "Demo command", ...overrides } };
 }
 
 describe("commands.list handler", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     vi.clearAllMocks();
+    mockChatCommands = baseChatCommands.map((command) => Object.assign({}, command));
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -247,30 +223,20 @@ describe("commands.list handler", () => {
 
   it("projects legacy SDK categories into the current command catalog", async () => {
     const command = expectDefined(mockChatCommands[0], "model command fixture");
-    const category = command.category;
     command.category = "docks";
-    try {
-      const { ok, payload } = await callHandler();
-      expect(ok).toBe(true);
-      expect(Value.Check(CommandsListResultSchema, payload)).toBe(true);
-      expect(requireCommand(await listCommands(), "model").category).toBe("tools");
-    } finally {
-      command.category = category;
-    }
+    const { ok, payload } = await callHandler();
+    expect(ok).toBe(true);
+    expect(Value.Check(CommandsListResultSchema, payload)).toBe(true);
+    expect(requireCommand(await listCommands(), "model").category).toBe("tools");
   });
 
   it("serializes dynamic choices when acceptsArgs is true", async () => {
     const debugCmd = mockChatCommands.find((c) => c.key === "debug_prompt")!;
-    const saved = debugCmd.acceptsArgs;
     debugCmd.acceptsArgs = true;
-    try {
-      const debug = requireCommand(await listCommands(), "debug_prompt");
-      const arg = expectDefined(debug.args?.[0], "dynamic argument");
-      expect(arg.dynamic).toBe(true);
-      expect(arg.choices).toBeUndefined();
-    } finally {
-      debugCmd.acceptsArgs = saved;
-    }
+    const debug = requireCommand(await listCommands(), "debug_prompt");
+    const arg = expectDefined(debug.args?.[0], "dynamic argument");
+    expect(arg.dynamic).toBe(true);
+    expect(arg.choices).toBeUndefined();
   });
 
   it("limits provider-specific native commands while keeping login text-visible", async () => {
@@ -291,9 +257,7 @@ describe("commands.list handler", () => {
   it.each(["text", "native", "both"] as const)(
     "projects registered plugin commands without native support for scope=%s",
     async (scope) => {
-      setGatewayRegistry([
-        { pluginId: "demo", command: { name: "demo", description: "Demo command" } },
-      ]);
+      setGatewayRegistry([registration("demo")]);
       const commands = await listCommands({ provider: "whatsapp", scope });
       expect(commands.filter((command) => command.source === "plugin")).toEqual(
         scope === "text"
@@ -312,39 +276,32 @@ describe("commands.list handler", () => {
     },
   );
 
-  it("uses text-surface names when scope=text even with provider-native aliases", async () => {
-    const commands = await listCommands({ provider: "discord", scope: "text" });
-    const model = commands.find((c) => c.source === "native" && c.name === "model");
-    expect(model).toMatchObject({
-      name: "model",
-      nativeName: "set_model",
-      textAliases: ["/model", "/m"],
-    });
-    expect(commands.find((c) => c.name === "set_model")).toBeUndefined();
-  });
-
-  it("keeps plugin text names while exposing provider-native aliases for scope=text", async () => {
-    expect(await pluginCommand({ provider: "discord", scope: "text" })).toMatchObject({
-      name: "tts",
-      nativeName: "discord_tts",
-      textAliases: ["/tts"],
-    });
-  });
+  it.each([
+    ["native", "model", "set_model", ["/model", "/m"]],
+    ["plugin", "tts", "discord_tts", ["/tts"]],
+  ] as const)(
+    "keeps %s text names and provider-native aliases",
+    async (source, name, nativeName, textAliases) => {
+      const commands = await listCommands({ provider: "discord", scope: "text" });
+      expect(commands.find((c) => c.source === source && c.name === name)).toMatchObject({
+        name,
+        nativeName,
+        textAliases,
+      });
+      expect(commands.find((c) => c.name === nativeName)).toBeUndefined();
+    },
+  );
 
   it("reads plugin commands from the gateway registry before the global command table", async () => {
     setGatewayRegistry([
-      {
-        pluginId: "demo-control",
-        command: {
-          name: "  demo  ",
-          description: "  Demo command  ",
-          acceptsArgs: true,
-          clientPresentation: {
-            when: "no-arguments",
-            action: { kind: "device-pairing" },
-          },
+      registration("  demo  ", {
+        description: "  Demo command  ",
+        acceptsArgs: true,
+        clientPresentation: {
+          when: "no-arguments",
+          action: { kind: "device-pairing" },
         },
-      },
+      }),
     ]);
 
     const commands = await listCommands();
@@ -363,14 +320,8 @@ describe("commands.list handler", () => {
   it.each([false, true])(
     "lists only the request registry's plugin commands (empty=%s)",
     async (empty) => {
-      setGatewayRegistry([
-        { pluginId: "ambient", command: { name: "ambient", description: "Ambient command" } },
-      ]);
-      const scoped = createCommandRegistry(
-        empty
-          ? []
-          : [{ pluginId: "scoped", command: { name: "scoped", description: "Scoped command" } }],
-      );
+      setGatewayRegistry([registration("ambient")]);
+      const scoped = createCommandRegistry(empty ? [] : [registration("scoped")]);
       const commands = await withPluginRuntimeRegistryScope(scoped, () =>
         listCommands({ scope: "text" }),
       );
@@ -382,7 +333,10 @@ describe("commands.list handler", () => {
   );
 
   it("keeps provider-filtered native plugin names paired with their text aliases", async () => {
-    setGatewayRegistry(providerFilteredPluginRegistrations({ nativeName: "discord_demo" }));
+    setGatewayRegistry([
+      registration("android_only", { channels: ["android"] }),
+      registration("demo", { nativeNames: { discord: "discord_demo" }, channels: ["discord"] }),
+    ]);
 
     const commands = await listCommands({ provider: "discord" });
     const plugin = await pluginCommand({ provider: "discord" });
@@ -403,70 +357,55 @@ describe("commands.list handler", () => {
   });
 
   it("caps serialized command payload size and field lengths", async () => {
-    const originalCommands = [...mockChatCommands];
     const longToken = "x".repeat(COMMAND_NAME_MAX_LENGTH + 50);
     const aliasBase = "alias".repeat(20);
     const descriptionPrefix = "d".repeat(COMMAND_DESCRIPTION_MAX_LENGTH - 1);
     const longDescription = `${descriptionPrefix}😀tail`;
-    const oversizedArgs = Array.from({ length: COMMAND_ARGS_MAX_ITEMS + 5 }, (_, argIndex) => ({
-      name: `${longToken}-${argIndex}`,
-      description: longDescription,
-      type: "string" as const,
-      choices: Array.from({ length: COMMAND_ARG_CHOICES_MAX_ITEMS + 5 }, (_Local, choiceIndex) => ({
-        value: `${longToken}-${choiceIndex}`,
-        label: `${longToken}-${choiceIndex}`,
-      })),
-    }));
-    try {
-      mockChatCommands.length = 0;
-      for (let index = 0; index < COMMAND_LIST_MAX_ITEMS + 25; index += 1) {
-        const isFirst = index === 0;
-        mockChatCommands.push({
-          key: isFirst ? longToken : `cmd-${index}`,
-          description: isFirst ? longDescription : "short",
-          textAliases: isFirst
-            ? Array.from(
-                { length: COMMAND_ALIAS_MAX_ITEMS + 5 },
-                (_, aliasIndex) => `/${aliasBase}-${index}-${aliasIndex}`,
-              )
-            : [`/cmd-${index}`],
-          acceptsArgs: isFirst,
-          args: isFirst ? oversizedArgs : undefined,
-          scope: "both",
-          category: "tools",
-        });
-      }
+    const oversizedArgs = Array.from({ length: COMMAND_ARGS_MAX_ITEMS + 5 }, (_, argIndex) =>
+      stringArg(
+        `${longToken}-${argIndex}`,
+        longDescription,
+        Array.from({ length: COMMAND_ARG_CHOICES_MAX_ITEMS + 5 }, (_Local, choiceIndex) => ({
+          value: `${longToken}-${choiceIndex}`,
+          label: `${longToken}-${choiceIndex}`,
+        })),
+      ),
+    );
+    mockChatCommands = Array.from({ length: COMMAND_LIST_MAX_ITEMS + 25 }, (_, index) =>
+      chatCommand(`cmd-${index}`, "short", "tools", { nativeName: undefined }),
+    );
+    mockChatCommands[0] = chatCommand(longToken, longDescription, "tools", {
+      nativeName: undefined,
+      textAliases: Array.from(
+        { length: COMMAND_ALIAS_MAX_ITEMS + 5 },
+        (_, aliasIndex) => `/${aliasBase}-0-${aliasIndex}`,
+      ),
+      acceptsArgs: true,
+      args: oversizedArgs,
+    });
 
-      const commands = await listCommands();
-      expect(commands).toHaveLength(COMMAND_LIST_MAX_ITEMS);
-      const first = expectDefined(commands[0], "commands[0] test invariant");
-      expect(first.name.length).toBeLessThanOrEqual(COMMAND_NAME_MAX_LENGTH);
-      expect((first.description as string).length).toBeLessThanOrEqual(
-        COMMAND_DESCRIPTION_MAX_LENGTH,
-      );
-      expect(first.description).toBe(descriptionPrefix);
-      expect((first.textAliases as unknown[]).length).toBeLessThanOrEqual(COMMAND_ALIAS_MAX_ITEMS);
-      expect(first.args as unknown[]).toHaveLength(COMMAND_ARGS_MAX_ITEMS);
-      const firstArg = expectDefined(
-        (first.args as Array<Record<string, unknown>>)[0],
-        "(first.args as Array<Record<string, unknown>>)[0] test invariant",
-      );
-      expect(firstArg.choices as unknown[]).toHaveLength(COMMAND_ARG_CHOICES_MAX_ITEMS);
-    } finally {
-      mockChatCommands.length = 0;
-      mockChatCommands.push(...originalCommands);
-    }
+    const commands = await listCommands();
+    expect(commands).toHaveLength(COMMAND_LIST_MAX_ITEMS);
+    const first = expectDefined(commands[0], "commands[0] test invariant");
+    expect(first.name.length).toBeLessThanOrEqual(COMMAND_NAME_MAX_LENGTH);
+    expect(first.description).toBe(descriptionPrefix);
+    expect(expectDefined(first.textAliases, "aliases").length).toBeLessThanOrEqual(
+      COMMAND_ALIAS_MAX_ITEMS,
+    );
+    expect(first.args).toHaveLength(COMMAND_ARGS_MAX_ITEMS);
+    const firstArg = expectDefined(first.args?.[0], "first argument");
+    expect(firstArg.choices).toHaveLength(COMMAND_ARG_CHOICES_MAX_ITEMS);
   });
 
-  it("rejects unknown agentId", async () => {
-    const { ok, error } = await callHandler({ agentId: "nonexistent" });
+  it.each([
+    [
+      { agentId: "nonexistent" },
+      errorShape(ErrorCodes.INVALID_REQUEST, 'unknown agent id "nonexistent"'),
+    ],
+    [{ scope: "invalid" }, expect.objectContaining({ code: ErrorCodes.INVALID_REQUEST })],
+  ] as const)("rejects invalid command-list requests: %j", async (params, expected) => {
+    const { ok, error } = await callHandler(params);
     expect(ok).toBe(false);
-    expect(error).toEqual(errorShape(ErrorCodes.INVALID_REQUEST, 'unknown agent id "nonexistent"'));
-  });
-
-  it("rejects invalid params", async () => {
-    const { ok, error } = await callHandler({ scope: "invalid" });
-    expect(ok).toBe(false);
-    expect((error as { code: number }).code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(error).toEqual(expected);
   });
 });

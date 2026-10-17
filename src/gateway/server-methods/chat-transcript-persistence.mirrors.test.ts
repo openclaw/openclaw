@@ -24,13 +24,14 @@ import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayMetadataCloseFixture } from "../server-close.metadata.test-support.js";
 import {
-  rewriteAssistantTranscriptMessageByIdempotencyKey,
-  rewriteAssistantTranscriptMessageByTurnIndexAndMedia,
-  rewriteSourceReplyTranscriptMirrors,
+  rewriteAssistantTranscriptMessageByIdempotencyKey as rewriteByKey,
+  rewriteAssistantTranscriptMessageByTurnIndexAndMedia as rewriteByTurn,
+  rewriteSourceReplyTranscriptMirrors as rewriteMirrors,
 } from "./chat-transcript-persistence.js";
 
 const mediaUrl = "https://example.com/mirror.png";
-const content = [{ type: "text", text: "Corrected delivery." }];
+const correctedText = "Corrected delivery.";
+const content = [{ type: "text", text: correctedText }];
 const mirror = {
   idempotencyKey: "delivery-key",
   metadata: { sessionKey: "agent:main:mirrors", text: "Original delivery." },
@@ -45,11 +46,14 @@ const request = {
   },
 };
 
-async function withFixture(run: (fixture: Awaited<ReturnType<typeof seed>>) => Promise<void>) {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    setRuntimeConfigSnapshot({});
-    await run(await seed(env));
-  });
+function withFixture<T>(
+  run: (fixture: Awaited<ReturnType<typeof seed>>, value: T) => Promise<void>,
+) {
+  return (value: T) =>
+    withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      setRuntimeConfigSnapshot({});
+      await run(await seed(env), value);
+    });
 }
 
 async function seed(env: NodeJS.ProcessEnv) {
@@ -59,14 +63,8 @@ async function seed(env: NodeJS.ProcessEnv) {
     sessionKey: "agent:main:mirrors",
     env,
   };
-  await replaceSessionEntry(identity, {
-    sessionId: identity.sessionId,
-    updatedAt: 1,
-  });
-  const scope = {
-    ...identity,
-    storePath: openOpenClawAgentDatabase(identity).path,
-  };
+  await replaceSessionEntry(identity, { sessionId: identity.sessionId, updatedAt: 1 });
+  const scope = { ...identity, storePath: openOpenClawAgentDatabase(identity).path };
   const append = (eventId: string, message: Record<string, unknown>) =>
     expect(appendTranscriptMessageSync(scope, { eventId, message })).toMatchObject({ ok: true });
   for (const eventId of ["earlier", "selected"]) {
@@ -81,19 +79,10 @@ async function seed(env: NodeJS.ProcessEnv) {
   const snapshot = () => loadTranscriptEventsSync(scope);
   const initialGeneration = readSessionTranscriptWatermark(scope).generation;
   const keyed = (replacement = content) =>
-    rewriteAssistantTranscriptMessageByIdempotencyKey({
-      scope,
-      content: replacement,
-      idempotencyKey: " delivery-key ",
-    });
-  const source = () =>
-    rewriteSourceReplyTranscriptMirrors({ scope, candidates: [mirror], requests: [request] });
-  const indexed = (
-    overrides: Partial<
-      Parameters<typeof rewriteAssistantTranscriptMessageByTurnIndexAndMedia>[0]
-    > = {},
-  ) =>
-    rewriteAssistantTranscriptMessageByTurnIndexAndMedia({
+    rewriteByKey({ scope, content: replacement, idempotencyKey: " delivery-key " });
+  const source = () => rewriteMirrors({ scope, candidates: [mirror], requests: [request] });
+  const indexed = (overrides: Partial<Parameters<typeof rewriteByTurn>[0]> = {}) =>
+    rewriteByTurn({
       scope,
       content,
       afterSeq: 0,
@@ -111,16 +100,18 @@ const unselected = (events: Events) =>
   events.filter((event) => !isRecord(event) || event.id !== "selected");
 const selected = (events: Events) =>
   events.find((event) => isRecord(event) && event.id === "selected");
+const authoritativeMessage = {
+  role: "assistant",
+  content: [{ type: "text", text: "New authoritative delivery." }],
+};
+const correctedMessage = {
+  idempotencyKey: "delivery-key",
+  openclawDisplayContent: expect.arrayContaining(content),
+};
 const replaceSelected = (events: Events) =>
   events.map((event) =>
     isRecord(event) && event.id === "selected"
-      ? {
-          ...event,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "New authoritative delivery." }],
-          },
-        }
+      ? { ...event, message: authoritativeMessage }
       : event,
   );
 
@@ -148,77 +139,61 @@ function contentOnRead(text: string, action: () => void) {
 describe("durable transcript mirror corrections", () => {
   it.each(["keyed", "source", "indexed"] as const)(
     "corrects the selected %s reply without caller-thread SQL",
-    async (kind) => {
-      await withFixture(async (fixture) => {
-        const before = fixture.snapshot();
-        const hostSql = observeHostDataSql();
-        const retirementEntered = createDeferred();
-        const releaseRetirement = createDeferred();
-        let following: Promise<void> | undefined;
-        const waitForWriter = () => {
-          following ??= runOpenClawAgentWriteAdmission(
-            {
-              agentId: fixture.scope.agentId,
-              env: fixture.scope.env,
-              path: fixture.scope.storePath,
-            },
-            () => {},
-          );
-          retirementEntered.resolve();
-          return Promise.race([following, releaseRetirement.promise]);
-        };
-        const close = vi
-          .spyOn(historyLane.pool, "closeResources")
-          .mockImplementation(waitForWriter);
-        const rotate = vi.spyOn(historyLane.pool, "rotate").mockImplementation(waitForWriter);
-        const correcting = fixture[kind]();
-        try {
-          const result = await Promise.race([
-            correcting,
-            retirementEntered.promise.then(() => {
-              throw new Error("Correction reader cleanup waits on its own queued writer");
-            }),
-          ]);
-          expect(kind === "source" ? result : [result]).toMatchObject([{ messageId: "selected" }]);
-          const executions = hostSql.calls
-            .slice(1)
-            .reduce((count, call) => count + call.mock.calls.length, 0);
-          expect(hostSql.queries, `MAIN ${kind}: ${executions} SQL executions`).toEqual([]);
-        } finally {
-          releaseRetirement.resolve();
-          await Promise.allSettled([correcting, following]);
-          close.mockRestore();
-          rotate.mockRestore();
-          hostSql.restore();
-        }
-        const after = fixture.snapshot();
-        expect(unselected(after)).toEqual(unselected(before));
-        expect(after).toHaveLength(before.length);
-        expect(selected(after)).toMatchObject({
-          message: {
-            idempotencyKey: "delivery-key",
-            openclawDisplayContent: expect.arrayContaining(content),
-          },
-        });
-        if (kind === "keyed") {
-          await expect(fixture.keyed()).resolves.toEqual({ messageId: "selected" });
-          expect(fixture.snapshot()).toEqual(after);
-        }
-      });
-    },
+    withFixture(async (fixture, kind: "keyed" | "source" | "indexed") => {
+      const { agentId, env, storePath: path } = fixture.scope;
+      const before = fixture.snapshot();
+      const hostSql = observeHostDataSql();
+      const retirementEntered = createDeferred();
+      const releaseRetirement = createDeferred();
+      let following: Promise<void> | undefined;
+      const waitForWriter = () => {
+        following ??= runOpenClawAgentWriteAdmission({ agentId, env, path }, () => {});
+        retirementEntered.resolve();
+        return Promise.race([following, releaseRetirement.promise]);
+      };
+      const close = vi.spyOn(historyLane.pool, "closeResources").mockImplementation(waitForWriter);
+      const rotate = vi.spyOn(historyLane.pool, "rotate").mockImplementation(waitForWriter);
+      const correcting = fixture[kind]();
+      try {
+        const result = await Promise.race([
+          correcting,
+          retirementEntered.promise.then(() => {
+            throw new Error("Correction reader cleanup waits on its own queued writer");
+          }),
+        ]);
+        expect(kind === "source" ? result : [result]).toMatchObject([{ messageId: "selected" }]);
+        expect(hostSql.queries, `MAIN ${kind} SQL`).toEqual([]);
+      } finally {
+        releaseRetirement.resolve();
+        await Promise.allSettled([correcting, following]);
+        close.mockRestore();
+        rotate.mockRestore();
+        hostSql.restore();
+      }
+      const after = fixture.snapshot();
+      expect(unselected(after)).toEqual(unselected(before));
+      expect(after).toHaveLength(before.length);
+      expect(selected(after)).toMatchObject({ message: correctedMessage });
+      if (kind === "keyed") {
+        await expect(fixture.keyed()).resolves.toEqual({ messageId: "selected" });
+        expect(fixture.snapshot()).toEqual(after);
+      }
+    }),
   );
 
-  it("refuses a source mirror behind an unrelated active-tail message", async () => {
-    await withFixture(async ({ append, snapshot, source }) => {
+  it(
+    "refuses a source mirror behind an unrelated active-tail message",
+    withFixture(async ({ append, snapshot, source }) => {
       append("next-request", { role: "user", content: "A later turn." });
       const before = snapshot();
       await expect(source()).resolves.toEqual([]);
       expect(snapshot()).toEqual(before);
-    });
-  });
+    }),
+  );
 
-  it("requires the exact turn media, rejected count, and captured generation", async () => {
-    await withFixture(async ({ snapshot, indexed }) => {
+  it(
+    "requires the exact turn media, rejected count, and captured generation",
+    withFixture(async ({ snapshot, indexed }) => {
       const before = snapshot();
       for (const overrides of [
         { mediaUrls: ["https://example.com/another.png"] },
@@ -229,11 +204,12 @@ describe("durable transcript mirror corrections", () => {
         await expect(indexed(overrides)).resolves.toBeNull();
       }
       expect(snapshot()).toEqual(before);
-    });
-  });
+    }),
+  );
 
-  it("reports refusal when indexed correction loses its source generation", async () => {
-    await withFixture(async ({ scope, snapshot, indexed }) => {
+  it(
+    "reports refusal when indexed correction loses its source generation",
+    withFixture(async ({ scope, snapshot, indexed }) => {
       const retained = replaceSelected(snapshot());
       const replacement = contentOnRead("Stale correction.", () => {
         expect(replaceTranscriptEventsSync(scope, retained)).toBe(true);
@@ -242,13 +218,14 @@ describe("durable transcript mirror corrections", () => {
       expect(replacement.prepare).toHaveBeenCalledOnce();
       expect(result).toBeNull();
       expect(snapshot()).toEqual(retained);
-    });
-  });
+    }),
+  );
 
-  it("retains an unrelated append during indexed correction", async () => {
-    await withFixture(async ({ append, snapshot, indexed }) => {
+  it(
+    "retains an unrelated append during indexed correction",
+    withFixture(async ({ append, snapshot, indexed }) => {
       let retained = snapshot();
-      const replacement = contentOnRead("Corrected indexed delivery.", () => {
+      const replacement = contentOnRead(correctedText, () => {
         append("later", { role: "user", content: "Following turn." });
         retained = snapshot();
       });
@@ -261,49 +238,37 @@ describe("durable transcript mirror corrections", () => {
       expect(after.find((event) => isRecord(event) && event.id === "later")).toMatchObject({
         message: { role: "user", content: "Following turn." },
       });
-      expect(selected(after)).toMatchObject({
-        message: {
-          openclawDisplayContent: expect.arrayContaining([
-            { type: "text", text: "Corrected indexed delivery." },
-          ]),
-        },
-      });
-    });
-  });
+      expect(selected(after)).toMatchObject({ message: correctedMessage });
+    }),
+  );
 
   it.each(["rewrite", "revocation"] as const)(
     "rejects intervening %s during display preparation",
-    async (change) => {
-      await withFixture(async ({ scope, snapshot, keyed }) => {
-        let current = true;
-        let retained = snapshot();
-        const replacement = contentOnRead("Stale correction.", () => {
-          if (change === "rewrite") {
-            retained = replaceSelected(retained);
-            expect(replaceTranscriptEventsSync(scope, retained)).toBe(true);
-          } else {
-            current = false;
-          }
-        });
-        await expect(
-          withSessionTranscriptWriteAssertion(
-            scope,
-            () => {
-              if (!current) {
-                throw new Error("Delivery authority revoked");
-              }
-            },
-            () => keyed(replacement.content),
-          ),
-        ).rejects.toThrow(
-          change === "rewrite"
-            ? "SQLite transcript changed while preparing rewrite"
-            : "Delivery authority revoked",
-        );
-        expect(replacement.prepare).toHaveBeenCalledOnce();
-        expect(snapshot()).toEqual(retained);
+    withFixture(async ({ scope, snapshot, keyed }, change: "rewrite" | "revocation") => {
+      let current = true;
+      let retained = snapshot();
+      const replacement = contentOnRead("Stale correction.", () => {
+        if (change === "rewrite") {
+          retained = replaceSelected(retained);
+          expect(replaceTranscriptEventsSync(scope, retained)).toBe(true);
+        } else {
+          current = false;
+        }
       });
-    },
+      await expect(
+        withSessionTranscriptWriteAssertion(
+          scope,
+          () => assert(current, "Delivery authority revoked"),
+          () => keyed(replacement.content),
+        ),
+      ).rejects.toThrow(
+        change === "rewrite"
+          ? "SQLite transcript changed while preparing rewrite"
+          : "Delivery authority revoked",
+      );
+      expect(replacement.prepare).toHaveBeenCalledOnce();
+      expect(snapshot()).toEqual(retained);
+    }),
   );
 });
 
@@ -316,7 +281,7 @@ it("settles an accepted correction across the Gateway close prelude before closi
   const accepted = createDeferred();
   const prelude = createDeferred();
   let held: ReturnType<typeof patchSessionEntryCore> | undefined;
-  let correcting: ReturnType<typeof rewriteAssistantTranscriptMessageByIdempotencyKey> | undefined;
+  let correcting: ReturnType<typeof rewriteByKey> | undefined;
   let closing: Promise<void> | undefined;
   try {
     const port = await fixture.reservePort();
@@ -377,12 +342,7 @@ it("settles an accepted correction across the Gateway close prelude before closi
         )
         .get(scope.sessionId, "selected");
       assert(typeof row?.event_json === "string");
-      expect(JSON.parse(row.event_json)).toMatchObject({
-        message: {
-          idempotencyKey: "delivery-key",
-          openclawDisplayContent: expect.arrayContaining(content),
-        },
-      });
+      expect(JSON.parse(row.event_json)).toMatchObject({ message: correctedMessage });
     } finally {
       reopened.close();
     }

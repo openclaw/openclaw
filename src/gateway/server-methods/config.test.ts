@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { configFor, modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import { invalidateGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -31,10 +32,8 @@ vi.mock("../../config/io.js", async (importOriginal) => ({
 
 // This suite owns config patch/merge behavior, while plugin validation is covered by
 // config.plugin-validation.test.ts and validation.channel-metadata.test.ts.
-vi.mock("../../config/validation.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/validation.js")>(
-    "../../config/validation.js",
-  );
+vi.mock("../../config/validation.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/validation.js")>();
   const resolveValidationParams = (
     params: Parameters<typeof actual.validateConfigObjectWithPlugins>[1],
   ) =>
@@ -44,26 +43,16 @@ vi.mock("../../config/validation.js", async () => {
           ...params,
           pluginMetadataSnapshot: pluginValidationMocks.currentPluginMetadataSnapshot,
         };
+  const mockValidation = (validate: typeof actual.validateConfigObjectWithPlugins) =>
+    vi.fn((config: OpenClawConfig, params: Parameters<typeof validate>[1]) =>
+      pluginValidationMocks.currentPluginMetadataSnapshot
+        ? validate(config, resolveValidationParams(params))
+        : { ok: true, config, warnings: [] },
+    );
   return {
     ...actual,
-    validateConfigObjectRawWithPlugins: vi.fn(
-      (
-        config: OpenClawConfig,
-        params: Parameters<typeof actual.validateConfigObjectWithPlugins>[1],
-      ) =>
-        pluginValidationMocks.currentPluginMetadataSnapshot
-          ? actual.validateConfigObjectRawWithPlugins(config, resolveValidationParams(params))
-          : { ok: true, config, warnings: [] },
-    ),
-    validateConfigObjectWithPlugins: vi.fn(
-      (
-        config: OpenClawConfig,
-        params: Parameters<typeof actual.validateConfigObjectWithPlugins>[1],
-      ) =>
-        pluginValidationMocks.currentPluginMetadataSnapshot
-          ? actual.validateConfigObjectWithPlugins(config, resolveValidationParams(params))
-          : { ok: true, config, warnings: [] },
-    ),
+    validateConfigObjectRawWithPlugins: mockValidation(actual.validateConfigObjectRawWithPlugins),
+    validateConfigObjectWithPlugins: mockValidation(actual.validateConfigObjectWithPlugins),
   };
 });
 
@@ -85,9 +74,7 @@ vi.mock("./config-write-flow.js", async (importOriginal) => ({
   })),
 }));
 
-const { execOpenPathMock } = vi.hoisted(() => ({
-  execOpenPathMock: vi.fn(),
-}));
+const { execOpenPathMock } = vi.hoisted(() => ({ execOpenPathMock: vi.fn() }));
 
 vi.mock("./open-path.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./open-path.js")>()),
@@ -100,10 +87,6 @@ vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
   loadGatewayRuntimeConfigSchema: () => ({ schema: { type: "object" }, uiHints: undefined }),
 }));
 
-function mockOpenPathError(error: Error) {
-  execOpenPathMock.mockRejectedValue(error);
-}
-
 type Respond = ReturnType<typeof createConfigHandlerHarness>["respond"];
 function expectSuccess(respond: Respond, payload: unknown = expect.anything()) {
   expect(respond).toHaveBeenCalledWith(true, payload, undefined);
@@ -111,24 +94,17 @@ function expectSuccess(respond: Respond, payload: unknown = expect.anything()) {
 function expectFailure(respond: Respond, message: unknown) {
   expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ message }));
 }
-const modelsPatch = (models: { id: string; name: string }[]) => ({
-  models: { providers: { custom: { models } } },
+const modelsPatch = (models: { id: string; name: string }[], provider = "custom") => ({
+  models: { providers: { [provider]: { models } } },
 });
 const duplicateModels = [
   { id: "one", name: "First" },
   { id: "one", name: "Second" },
 ];
 function seedCustomModel() {
-  storedConfig = {
-    models: {
-      providers: {
-        custom: {
-          baseUrl: "https://example.invalid",
-          models: [{ id: "one", name: "One" }],
-        },
-      },
-    },
-  } as unknown as OpenClawConfig;
+  storedConfig = configFor("custom", "https://example.invalid", {
+    models: [modelDefinition("one", { name: "One" })],
+  });
 }
 
 let storedConfig: OpenClawConfig;
@@ -179,117 +155,110 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.useRealTimers();
   invalidateGatewayRuntimeConfigSchema();
   invalidateConfigGetResponseCache();
   resetPluginRuntimeStateForTest();
   vi.clearAllMocks();
 });
 
-describe("config.patch effective change receipt", () => {
-  it("does not report plugin defaults discovered after the write snapshot", async () => {
-    const pluginId = "defaulted-plugin";
-    modelNormalizationPluginMetadata = createPluginMetadataSnapshotFixture();
-    pluginValidationMocks.currentPluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: pluginId,
-          configSchema: {
-            type: "object",
-            properties: { mode: { type: "string", default: "auto" } },
-          },
+it("does not report plugin defaults discovered after the write snapshot", async () => {
+  const pluginId = "defaulted-plugin";
+  modelNormalizationPluginMetadata = createPluginMetadataSnapshotFixture();
+  pluginValidationMocks.currentPluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: pluginId,
+        configSchema: {
+          type: "object",
+          properties: { mode: { type: "string", default: "auto" } },
         },
-      ],
-    });
-    storedConfig = {
-      plugins: { entries: { [pluginId]: { enabled: true } } },
-      ui: { prefs: { sidebarEntries: ["route:usage"] } },
-    };
+      },
+    ],
+  });
+  storedConfig = {
+    plugins: { entries: { [pluginId]: { enabled: true } } },
+    ui: { prefs: { sidebarEntries: ["route:usage"] } },
+  };
 
-    const harness = await invokeConfigPatch({
-      raw: { ui: { prefs: { sidebarEntries: ["route:tasks"] } } },
-      replacePaths: ["ui.prefs.sidebarEntries"],
-    });
-
-    expectSuccess(
-      harness.respond,
-      expect.objectContaining({
-        changedPaths: expect.arrayContaining(["ui.prefs.sidebarEntries"]),
-      }),
-    );
-    expectSuccess(
-      harness.respond,
-      expect.not.objectContaining({
-        changedPaths: expect.arrayContaining([`plugins.entries.${pluginId}.config`]),
-      }),
-    );
+  const harness = await invokeConfigPatch({
+    raw: { ui: { prefs: { sidebarEntries: ["route:tasks"] } } },
+    replacePaths: ["ui.prefs.sidebarEntries"],
   });
 
-  it.each([
-    { nextToken: "synthetic-old-token", expectedPaths: [] },
-    {
-      nextToken: "synthetic-new-token",
-      expectedPaths: ["channels.matrix.accounts.sut.accessToken"],
-    },
-  ])(
-    "reports persisted secret changes without values: $expectedPaths",
-    async ({ nextToken, expectedPaths }) => {
-      storedConfig = {
-        channels: { matrix: { accounts: { sut: { accessToken: "synthetic-old-token" } } } },
-      };
-      const { respond } = await invokeConfigPatch({
-        raw: { channels: { matrix: { accounts: { sut: { accessToken: nextToken } } } } },
-        baseHash: "base-hash",
-      });
-      expectSuccess(respond, expect.objectContaining({ changedPaths: expectedPaths }));
-    },
+  expectSuccess(
+    harness.respond,
+    expect.objectContaining({
+      changedPaths: expect.arrayContaining(["ui.prefs.sidebarEntries"]),
+    }),
+  );
+  expectSuccess(
+    harness.respond,
+    expect.not.objectContaining({
+      changedPaths: expect.arrayContaining([`plugins.entries.${pluginId}.config`]),
+    }),
   );
 });
 
-describe("config application settlement", () => {
-  it.each([
-    { method: "config.patch", outcome: "applied-restart-required" },
-    { method: "config.apply", outcome: "restart-pending" },
-  ] as const)(
-    "reports $method $outcome without misrepresenting active config",
-    async ({ method, outcome }) => {
-      const queueFollowUp = vi.fn();
-      configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
-        path: "/tmp/openclaw.json",
-        config: { hooks: { enabled: true } },
-        hash: "restart-hash",
-        application: Promise.resolve(outcome),
-        queueFollowUp,
-      });
+it.each([
+  { nextToken: "synthetic-old-token", expectedPaths: [] },
+  {
+    nextToken: "synthetic-new-token",
+    expectedPaths: ["channels.matrix.accounts.sut.accessToken"],
+  },
+])(
+  "reports persisted secret changes without values: $expectedPaths",
+  async ({ nextToken, expectedPaths }) => {
+    storedConfig = {
+      channels: { matrix: { accounts: { sut: { accessToken: "synthetic-old-token" } } } },
+    };
+    const { respond } = await invokeConfigPatch({
+      raw: { channels: { matrix: { accounts: { sut: { accessToken: nextToken } } } } },
+      baseHash: "base-hash",
+    });
+    expectSuccess(respond, expect.objectContaining({ changedPaths: expectedPaths }));
+  },
+);
+it.each([
+  { method: "config.patch", outcome: "applied-restart-required" },
+  { method: "config.apply", outcome: "restart-pending" },
+] as const)(
+  "reports $method $outcome without misrepresenting active config",
+  async ({ method, outcome }) => {
+    const queueFollowUp = vi.fn();
+    configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
+      path: "/tmp/openclaw.json",
+      config: { hooks: { enabled: true } },
+      hash: "restart-hash",
+      application: Promise.resolve(outcome),
+      queueFollowUp,
+    });
 
-      const { harness, operation } = startConfigWrite(method, {
-        raw: { hooks: { enabled: true } },
-        baseHash: "base-hash",
-      });
-      await operation;
+    const { harness, operation } = startConfigWrite(method, {
+      raw: { hooks: { enabled: true } },
+      baseHash: "base-hash",
+    });
+    await operation;
 
-      const expectedMessage =
-        outcome === "restart-pending" ? "accepted for restart" : "updated the active Gateway";
-      const message = expect.stringContaining(expectedMessage);
-      expect(harness.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE", message }),
-      );
-      const excludedMessages =
-        outcome === "restart-pending"
-          ? ["updated the active Gateway", "recovery restart", "reapply"]
-          : ["was not applied", "reapply"];
-      for (const excluded of excludedMessages) {
-        expectFailure(harness.respond, expect.not.stringContaining(excluded));
-      }
-      expectFailure(harness.respond, expect.stringContaining("wait for the Gateway to restart"));
-      expect(harness.respond).toHaveBeenCalledOnce();
-      expect(queueFollowUp).toHaveBeenCalledOnce();
-    },
-  );
-});
-
+    const expectedMessage =
+      outcome === "restart-pending" ? "accepted for restart" : "updated the active Gateway";
+    const message = expect.stringContaining(expectedMessage);
+    expect(harness.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE", message }),
+    );
+    const excludedMessages =
+      outcome === "restart-pending"
+        ? ["updated the active Gateway", "recovery restart", "reapply"]
+        : ["was not applied", "reapply"];
+    for (const excluded of excludedMessages) {
+      expectFailure(harness.respond, expect.not.stringContaining(excluded));
+    }
+    expectFailure(harness.respond, expect.stringContaining("wait for the Gateway to restart"));
+    expect(harness.respond).toHaveBeenCalledOnce();
+    expect(queueFollowUp).toHaveBeenCalledOnce();
+  },
+);
 describe("config.openFile", () => {
   it("opens the configured file without shell interpolation", async () => {
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config $(touch pwned).json" }, async () => {
@@ -309,7 +278,9 @@ describe("config.openFile", () => {
     "returns actionable headless environment error when xdg-open is missing",
     async () => {
       await withEnvAsync({ OPENCLAW_CONFIG_PATH: "/tmp/config.json" }, async () => {
-        mockOpenPathError(Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }));
+        execOpenPathMock.mockRejectedValue(
+          Object.assign(new Error("spawn xdg-open ENOENT"), { code: "ENOENT" }),
+        );
 
         const { respond, logGateway } = await invokeConfigOpenFile();
 
@@ -329,7 +300,7 @@ describe("config.openFile", () => {
   it("does not split surrogate pairs when truncating the failed config path", async () => {
     const pathPrefix = `/tmp/${"a".repeat(111)}`;
     await withEnvAsync({ OPENCLAW_CONFIG_PATH: `${pathPrefix}😀tail.json` }, async () => {
-      mockOpenPathError(new Error("open failed"));
+      execOpenPathMock.mockRejectedValue(new Error("open failed"));
 
       const { logGateway } = await invokeConfigOpenFile();
 
@@ -340,49 +311,46 @@ describe("config.openFile", () => {
   });
 });
 
-describe("config write source preparation", () => {
-  it.each(["config.set", "config.apply", "config.patch"] as const)(
-    "%s distinguishes literal nulls from omitted values at its write boundary",
-    async (method) => {
-      const source: OpenClawConfig = {
-        gateway: { port: 18789 },
-        agents: { defaults: { params: { temperature: 0.2, topP: 0.8 } } },
-      };
-      const runtime: OpenClawConfig = {
-        ...source,
-        agents: { defaults: { ...source.agents?.defaults, maxConcurrent: 4 } },
-      };
-      storedConfig = source;
-      configWriteMocks.readConfigFileSnapshotForWrite.mockImplementationOnce(async () => {
-        const result = createConfigWriteSnapshot(source);
-        result.snapshot.config = runtime;
-        result.snapshot.runtimeConfig = runtime;
-        return result;
-      });
-      const params = { temperature: null, nested: { value: null } };
-      const harness = createConfigHandlerHarness({
-        method,
-        params: {
-          raw: JSON.stringify(
-            method === "config.patch"
-              ? { agents: { defaults: { params: { temperature: null, topP: null } } } }
-              : { ...runtime, agents: { defaults: { ...runtime.agents?.defaults, params } } },
-          ),
-          baseHash: storedHash,
-        },
-      });
+it.each(["config.set", "config.apply", "config.patch"] as const)(
+  "%s distinguishes literal nulls from omitted values at its write boundary",
+  async (method) => {
+    const source: OpenClawConfig = {
+      gateway: { port: 18789 },
+      agents: { defaults: { params: { temperature: 0.2, topP: 0.8 } } },
+    };
+    const runtime: OpenClawConfig = {
+      ...source,
+      agents: { defaults: { ...source.agents?.defaults, maxConcurrent: 4 } },
+    };
+    storedConfig = source;
+    configWriteMocks.readConfigFileSnapshotForWrite.mockImplementationOnce(async () => {
+      const result = createConfigWriteSnapshot(source);
+      result.snapshot.config = runtime;
+      result.snapshot.runtimeConfig = runtime;
+      return result;
+    });
+    const params = { temperature: null, nested: { value: null } };
+    const harness = createConfigHandlerHarness({
+      method,
+      params: {
+        raw: JSON.stringify(
+          method === "config.patch"
+            ? { agents: { defaults: { params: { temperature: null, topP: null } } } }
+            : { ...runtime, agents: { defaults: { ...runtime.agents?.defaults, params } } },
+        ),
+        baseHash: storedHash,
+      },
+    });
 
-      await expectDefined(configHandlers[method], "config write handler")(harness.options);
+    await expectDefined(configHandlers[method], "config write handler")(harness.options);
 
-      expectSuccess(harness.respond);
-      expect(storedConfig).toStrictEqual({
-        ...source,
-        agents: { defaults: { params: method === "config.patch" ? {} : params } },
-      });
-    },
-  );
-});
-
+    expectSuccess(harness.respond);
+    expect(storedConfig).toStrictEqual({
+      ...source,
+      agents: { defaults: { params: method === "config.patch" ? {} : params } },
+    });
+  },
+);
 describe("config.patch hash-free ui.prefs LWW", () => {
   it("rejects a mixed hash-free patch and names the guarded path", async () => {
     const { respond } = await invokeConfigPatch({
@@ -436,24 +404,13 @@ describe("config.patch hash-free ui.prefs LWW", () => {
     expect(storedConfig.ui?.prefs?.sidebarEntries).toEqual(["route:usage"]);
   });
 
-  it("surfaces a hash-free commit race without replaying stale intent", async () => {
+  it.each([true, false])("handles a config mutation conflict (retryable=%s)", async (retryable) => {
     configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async () => {
-      storedConfig = { ui: { prefs: { locale: "de" } } };
-      storedHash = "raced-hash";
-      throw new ConfigMutationConflictError("config changed since last load");
-    });
-
-    const { respond } = await invokeConfigPatch({
-      raw: { ui: { prefs: { theme: "knot" } } },
-    });
-
-    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
-    expectFailure(respond, expect.stringContaining("config changed since last load"));
-    expect(storedConfig.ui?.prefs).toEqual({ locale: "de" });
-  });
-
-  it("advises retry only for retryable mutation conflicts", async () => {
-    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async () => {
+      if (retryable) {
+        storedConfig = { ui: { prefs: { locale: "de" } } };
+        storedHash = "raced-hash";
+        throw new ConfigMutationConflictError("config changed since last load");
+      }
       throw new ConfigMutationConflictError("config path owned by another writer", {
         retryable: false,
       });
@@ -463,30 +420,33 @@ describe("config.patch hash-free ui.prefs LWW", () => {
       raw: { ui: { prefs: { theme: "knot" } } },
     });
 
-    expectFailure(respond, "config path owned by another writer");
+    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
+    expectFailure(
+      respond,
+      retryable
+        ? expect.stringContaining("config changed since last load")
+        : "config path owned by another writer",
+    );
+    if (retryable) {
+      expect(storedConfig.ui?.prefs).toEqual({ locale: "de" });
+    }
   });
 });
 
-describe("config.patch ID-keyed arrays", () => {
-  it("rejects duplicate IDs before applying an ID-merged array patch", async () => {
+it.each([false, true])(
+  "requires explicit replacement of duplicate model IDs (replace=%s)",
+  async (replace) => {
     seedCustomModel();
     const { respond } = await invokeConfigPatch({
       raw: modelsPatch(duplicateModels),
       baseHash: "base-hash",
+      ...(replace ? { replacePaths: ["models.providers.custom.models"] } : {}),
     });
-
-    expectFailure(respond, expect.stringContaining("duplicate ID one"));
-    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
-  });
-
-  it("allows duplicate IDs for an explicit array replacement", async () => {
-    seedCustomModel();
-    const { respond } = await invokeConfigPatch({
-      raw: modelsPatch(duplicateModels),
-      baseHash: "base-hash",
-      replacePaths: ["models.providers.custom.models"],
-    });
-
+    if (!replace) {
+      expectFailure(respond, expect.stringContaining("duplicate ID one"));
+      expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
+      return;
+    }
     expectSuccess(respond, expect.objectContaining({ ok: true, hash: "next-hash-1" }));
     expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
 
@@ -500,71 +460,52 @@ describe("config.patch ID-keyed arrays", () => {
       expect.stringContaining("current config contains duplicate ID one"),
     );
     expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
-  });
-});
-
-describe("config.patch model input normalization", () => {
-  it("uses write-snapshot policies before merging manifest-backed model IDs", async () => {
-    modelNormalizationPluginMetadata = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "myproxy-normalizer",
-          modelIdNormalization: {
-            providers: {
-              myproxy: { aliases: { latest: "modern-model" }, prefixWhenBare: "vendor" },
-            },
-          },
-        },
-      ],
-    });
-    storedConfig = {
-      models: {
-        providers: {
-          myproxy: {
-            baseUrl: "https://proxy.example/v1",
-            models: [
-              {
-                id: "vendor/modern-model",
-                name: "Before",
-                contextWindow: 200_000,
-                maxTokens: 8192,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                reasoning: false,
-              },
-            ],
-          },
-        },
-      },
-    };
-
-    const sourceConfig = structuredClone(storedConfig);
-    expectDefined(sourceConfig.models?.providers?.myproxy?.models[0], "source model").id = "latest";
-    configWriteMocks.readConfigFileSnapshotForWrite.mockImplementationOnce(async () => {
-      const result = currentWriteSnapshot();
-      result.snapshot.sourceConfig = sourceConfig;
-      result.snapshot.resolved = sourceConfig;
-      result.snapshot.parsed = sourceConfig;
-      result.snapshot.raw = JSON.stringify(sourceConfig);
-      return result;
-    });
-
-    const harness = await invokeConfigPatch({
-      raw: {
-        models: {
+  },
+);
+it("uses write-snapshot policies before merging manifest-backed model IDs", async () => {
+  modelNormalizationPluginMetadata = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "myproxy-normalizer",
+        modelIdNormalization: {
           providers: {
-            myproxy: { models: [{ id: "latest", name: "After" }] },
+            myproxy: { aliases: { latest: "modern-model" }, prefixWhenBare: "vendor" },
           },
         },
       },
-      baseHash: storedHash,
-    });
+    ],
+  });
+  storedConfig = configFor("myproxy", "https://proxy.example/v1", {
+    models: [
+      modelDefinition("vendor/modern-model", {
+        name: "Before",
+        contextWindow: 200_000,
+        reasoning: false,
+      }),
+    ],
+  });
 
-    expectSuccess(harness.respond);
-    expect(storedConfig.models?.providers?.myproxy?.models).toHaveLength(1);
-    expect(storedConfig.models?.providers?.myproxy?.models?.[0]).toMatchObject({
+  const sourceConfig = structuredClone(storedConfig);
+  expectDefined(sourceConfig.models?.providers?.myproxy?.models[0], "source model").id = "latest";
+  configWriteMocks.readConfigFileSnapshotForWrite.mockImplementationOnce(async () => {
+    const result = currentWriteSnapshot();
+    result.snapshot.sourceConfig = sourceConfig;
+    result.snapshot.resolved = sourceConfig;
+    result.snapshot.parsed = sourceConfig;
+    result.snapshot.raw = JSON.stringify(sourceConfig);
+    return result;
+  });
+
+  const harness = await invokeConfigPatch({
+    raw: modelsPatch([{ id: "latest", name: "After" }], "myproxy"),
+    baseHash: storedHash,
+  });
+
+  expectSuccess(harness.respond);
+  expect(storedConfig.models?.providers?.myproxy?.models).toMatchObject([
+    {
       id: "vendor/modern-model",
       name: "After",
-    });
-  });
+    },
+  ]);
 });

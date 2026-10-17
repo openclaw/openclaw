@@ -37,13 +37,6 @@ const authConfig = (
 });
 const runtimeConfig = authConfig("runtime-token");
 const authoredConfig = authConfig();
-function authChanged(
-  fallbackPrev: OpenClawConfig,
-  next = fallbackPrev,
-  fallbackSource?: OpenClawConfig,
-) {
-  return didActiveSharedGatewayAuthChange({ fallbackPrev, next, fallbackSource });
-}
 const hookConfig: OpenClawConfig = { hooks: { enabled: true } };
 const writeSnapshot = (exists = true) => ({
   path: "/tmp/openclaw.json",
@@ -140,43 +133,34 @@ describe("commitGatewayConfigWrite", () => {
   });
 });
 
-describe("didActiveSharedGatewayAuthChange", () => {
-  beforeEach(() => {
-    secretsMocks.activeSnapshot = null;
-  });
-
-  it("preserves runtime-only auth fields absent from the active secrets source", () => {
-    secretsMocks.activeSnapshot = { sourceConfig: {}, config: {} };
-
-    expect(authChanged(runtimeConfig)).toBe(false);
-  });
-
-  it("does not trust active secret values from a stale authored source", () => {
-    secretsMocks.activeSnapshot = {
-      sourceConfig: authConfig("token-a"),
-      config: authConfig("token-a"),
-    };
-    const current = authConfig("token-b");
-
-    expect(authChanged(current, authConfig("token-a"), current)).toBe(true);
-  });
-
-  it("preserves runtime-only siblings beside authored shared auth fields", () => {
-    secretsMocks.activeSnapshot = {
-      sourceConfig: authoredConfig,
-      config: authoredConfig,
-    };
-
-    expect(authChanged(runtimeConfig, runtimeConfig, authoredConfig)).toBe(false);
-  });
-
-  it("uses active secret-expanded values when the authored source still matches", () => {
-    const sourceConfig = authConfig({ source: "env", provider: "default", id: "GATEWAY_TOKEN" });
-    secretsMocks.activeSnapshot = {
-      sourceConfig,
-      config: authConfig("old-token"),
-    };
-
-    expect(authChanged(sourceConfig, authConfig("new-token"), sourceConfig)).toBe(true);
-  });
-});
+const tokenA = authConfig("token-a");
+const tokenB = authConfig("token-b");
+const secretRef = authConfig({ source: "env", provider: "default", id: "GATEWAY_TOKEN" });
+it.each([
+  ["runtime-only fields", {}, {}, runtimeConfig, runtimeConfig, undefined, false],
+  ["stale authored source", tokenA, tokenA, tokenB, tokenA, tokenB, true],
+  [
+    "runtime-only siblings",
+    authoredConfig,
+    authoredConfig,
+    runtimeConfig,
+    runtimeConfig,
+    authoredConfig,
+    false,
+  ],
+  [
+    "matching secret source",
+    secretRef,
+    authConfig("old-token"),
+    secretRef,
+    authConfig("new-token"),
+    secretRef,
+    true,
+  ],
+] as const)(
+  "compares shared auth with %s",
+  (_name, sourceConfig, config, fallbackPrev, next, fallbackSource, expected) => {
+    secretsMocks.activeSnapshot = { sourceConfig, config };
+    expect(didActiveSharedGatewayAuthChange({ fallbackPrev, next, fallbackSource })).toBe(expected);
+  },
+);

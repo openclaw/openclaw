@@ -75,8 +75,27 @@ async function invoke(
   } as GatewayRequestHandlerOptions);
   return respond.mock.calls[0];
 }
-async function succeeds(...args: Parameters<typeof invoke>) {
-  return (await invoke(...args))?.[0];
+function deferredInput(ownerSignal: AbortSignal, suspendAt = 1) {
+  const entered = createDeferredCore();
+  const prepared = createDeferredCore();
+  const owners: string[] = [];
+  const sideEffect = vi.fn();
+  const service = {
+    status: vi.fn(),
+    invoke: async (request: Parameters<GatewayComputerService["invoke"]>[0]) => {
+      owners.push(request.owner);
+      expect(request.ownerSignal).toBe(ownerSignal);
+      expect(request.ownerSignal).not.toBe(request.signal);
+      if (owners.length === suspendAt) {
+        entered.resolve();
+        await prepared.promise;
+      }
+      request.assertCurrent();
+      sideEffect();
+      return {};
+    },
+  };
+  return { service, entered, prepared, owners, sideEffect };
 }
 
 const snapshot = {
@@ -109,24 +128,7 @@ describe("Gateway computer RPC", () => {
       true,
       { available: false, configured: false },
     ]);
-    const owners: string[] = [];
-    const entered = createDeferredCore();
-    const prepared = createDeferredCore();
-    const sideEffect = vi.fn();
-    const service = {
-      status: vi.fn(),
-      invoke: async (request: Parameters<GatewayComputerService["invoke"]>[0]) => {
-        owners.push(request.owner);
-        expect(request.ownerSignal).toBe(grant.signal);
-        if (owners.length === 2) {
-          entered.resolve();
-          await prepared.promise;
-        }
-        request.assertCurrent();
-        sideEffect();
-        return {};
-      },
-    };
+    const { owners, entered, prepared, sideEffect, service } = deferredInput(grant.signal, 2);
     const dispatch = (params = snapshot) =>
       invoke("computer.invoke", params, service, { client: clientForRequest() });
     expect((await dispatch())?.[0]).toBe(true);
@@ -139,16 +141,15 @@ describe("Gateway computer RPC", () => {
     expect(sideEffect).toHaveBeenCalledOnce();
   });
   it("separates readable capability discovery from computer input authority", () => {
-    expect(authorizeOperatorScopesForMethod("computer.status", ["operator.read"])).toEqual({
-      allowed: true,
-    });
-    expect(authorizeOperatorScopesForMethod("computer.invoke", ["operator.read"])).toEqual({
-      allowed: false,
-      missingScope: "operator.write",
-    });
-    expect(authorizeOperatorScopesForMethod("computer.invoke", ["operator.write"])).toEqual({
-      allowed: true,
-    });
+    expect([
+      authorizeOperatorScopesForMethod("computer.status", ["operator.read"]),
+      authorizeOperatorScopesForMethod("computer.invoke", ["operator.read"]),
+      authorizeOperatorScopesForMethod("computer.invoke", ["operator.write"]),
+    ]).toEqual([
+      { allowed: true },
+      { allowed: false, missingScope: "operator.write" },
+      { allowed: true },
+    ]);
   });
 
   it.each([false, true])(
@@ -166,58 +167,62 @@ describe("Gateway computer RPC", () => {
     },
   );
 
-  it.each([{ probe: "false" }])("rejects malformed status probes: %j", async (params) => {
-    const status = vi.fn();
-    expect(await succeeds("computer.status", params, { status, invoke: vi.fn() })).toBe(false);
-    expect(status).not.toHaveBeenCalled();
-  });
-
-  it.each([{ probe: true }])("forwards status probe policy: %j", async (params) => {
+  it.each([
+    ["false", false],
+    [true, true],
+  ] as const)("validates status probe %s", async (probe, valid) => {
+    const params = { probe };
     const status = vi.fn(async () => ({ configured: false, available: false }));
-    expect(await succeeds("computer.status", params, { status, invoke: vi.fn() })).toBe(true);
-    expect(status).toHaveBeenCalledWith(params);
+    const result = await invoke("computer.status", params, { status, invoke: vi.fn() });
+    expect(result?.[0]).toBe(valid);
+    if (valid) {
+      expect(status).toHaveBeenCalledWith(params);
+    } else {
+      expect(status).not.toHaveBeenCalled();
+    }
   });
 
   it.each([
-    { ...snapshot, command: "system.run" },
-    { ...snapshot, owner: "forged-operator" },
-  ])("rejects malformed or authority-bearing wire requests: %j", async (params) => {
+    [{ ...snapshot, command: "system.run" }, false],
+    [{ ...snapshot, owner: "forged-operator" }, false],
+    [snapshot, true],
+  ] as const)("rejects malformed or unadmitted invocations: %j", async (params, synthetic) => {
+    const client = createClient();
+    if (synthetic) {
+      client.internal = { syntheticClient: true };
+    }
     const dispatch = vi.fn();
-    expect(
-      await invoke("computer.invoke", params, { status: vi.fn(), invoke: dispatch }),
-    ).toMatchObject([false, undefined, { code: ErrorCodes.INVALID_REQUEST }]);
+    const result = await invoke(
+      "computer.invoke",
+      params,
+      { status: vi.fn(), invoke: dispatch },
+      { client },
+    );
+    expect(result).toMatchObject([
+      false,
+      undefined,
+      {
+        code: synthetic ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+      },
+    ]);
     expect(dispatch).not.toHaveBeenCalled();
   });
 
   it.each(["invalidation", "disconnect", "revocation"] as const)(
     "prevents desktop dispatch after operator %s during preparation",
     async (retirement) => {
-      const started = createDeferredCore();
-      const prepared = createDeferredCore();
-      const sideEffect = vi.fn();
       const client = createClient();
       const controller = new AbortController();
       const requestController = new AbortController();
       client.connectionSignal = controller.signal;
+      const { entered, prepared, sideEffect, service } = deferredInput(controller.signal);
       let current = true;
-      const result = invoke(
-        "computer.invoke",
-        snapshot,
-        {
-          status: vi.fn(),
-          invoke: async (request) => {
-            expect(request.ownerSignal).toBe(controller.signal);
-            expect(request.ownerSignal).not.toBe(request.signal);
-            started.resolve();
-            await prepared.promise;
-            request.assertCurrent();
-            sideEffect();
-            return {};
-          },
-        },
-        { client, signal: requestController.signal, hasCurrentClientAuthority: () => current },
-      );
-      await started.promise;
+      const result = invoke("computer.invoke", snapshot, service, {
+        client,
+        signal: requestController.signal,
+        hasCurrentClientAuthority: () => current,
+      });
+      await entered.promise;
       if (retirement === "invalidation") {
         client.invalidated = true;
       } else if (retirement === "disconnect") {
@@ -272,19 +277,5 @@ describe("Gateway computer RPC", () => {
     });
     expect(closed?.[0]).toBe(true);
     expect(owners[2]).toBe(owners[0]);
-  });
-
-  it("rejects a synthetic client without an admitted run", async () => {
-    const client = createClient();
-    client.internal = { syntheticClient: true };
-    const dispatch = vi.fn();
-    const result = await succeeds(
-      "computer.invoke",
-      snapshot,
-      { status: vi.fn(), invoke: dispatch },
-      { client },
-    );
-    expect(result).toBe(false);
-    expect(dispatch).not.toHaveBeenCalled();
   });
 });
