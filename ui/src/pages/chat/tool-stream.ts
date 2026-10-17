@@ -183,8 +183,6 @@ function publishToolStreamEntry(host: ToolStreamHost, entry: ToolStreamEntry, fo
   }
   host.toolStreamSyncTimer = window.setTimeout(() => {
     flushToolStreamSync(host);
-    // The initial event rendered before this deferred projection existed.
-    host.requestUpdate?.();
   }, TOOL_STREAM_THROTTLE_MS);
 }
 

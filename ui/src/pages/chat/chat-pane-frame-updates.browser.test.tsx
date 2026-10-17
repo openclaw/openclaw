@@ -7,7 +7,7 @@ import {
   connectPaneTestView,
 } from "./chat-pane.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { requestChatPageUpdate } from "./chat-state-render.ts";
+import { publishChatRunState } from "./chat-state-render.ts";
 
 // mock-isolation: Exercise runtime commit cadence without initializing the full pane renderer.
 vi.mock("./chat-pane-layout-view.tsx", () => import("./chat-pane-layout.test-support.tsx"));
@@ -56,7 +56,10 @@ async function mountPane(presented = true) {
   // Use the existing lifecycle harness, with a small render to isolate cadence.
   Object.assign(pane, {
     render: () => ({
-      layout: { component: FrameLayout, props: { label: pane.paneLabel, id: pane.paneId } },
+      layout: {
+        component: FrameLayout,
+        props: { label: pane.history.catalogCursor ?? pane.paneLabel, id: pane.paneId },
+      },
     }),
     presentedChanged: () => {},
   });
@@ -73,6 +76,17 @@ async function mountPane(presented = true) {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+it("batches a projected history change with a legacy invalidation into one frame", async () => {
+  const { pane, updates } = await mountPane();
+  await task(() => {
+    pane.history.catalogCursor = "projected history";
+    pane.invalidate();
+  });
+  await pane.updateComplete;
+  expect(pane.textContent).toContain("projected history");
+  expect(updates).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])(
@@ -172,7 +186,7 @@ it("absorbs a queued stream frame into a property commit and accepts the next st
   });
   const updates = vi.spyOn(pane, "render");
   state.chatStream = "First stream revision";
-  requestChatPageUpdate(state, "animation-frame");
+  publishChatRunState(state, "animation-frame");
   const queuedFrame = frames.get(state.chatStreamRenderFrame!);
   expect(queuedFrame).toBeDefined();
 
@@ -188,7 +202,7 @@ it("absorbs a queued stream frame into a property commit and accepts the next st
   expect(updates).toHaveBeenCalledOnce();
 
   state.chatStream = "Next stream revision";
-  requestChatPageUpdate(state, "animation-frame");
+  publishChatRunState(state, "animation-frame");
   frames.get(state.chatStreamRenderFrame!)?.(0);
   await task(() => {});
   await pane.updateComplete;

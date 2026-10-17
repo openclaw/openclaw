@@ -205,7 +205,7 @@ describe("dynamic tool execution helpers", () => {
       config: undefined,
     });
     expect(fullWaitTimeoutMs).toBe(630_000);
-    expect(CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS).toBeGreaterThan(fullWaitTimeoutMs);
+    expect(fullWaitTimeoutMs).toBeLessThan(CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
   });
 
   it.each([{ name: "invalid fractional", timeoutSeconds: 1.5, expectedMs: 90_000 }])(

@@ -940,7 +940,6 @@ src/infra/dotenv-global-core.ts
 src/infra/dotenv-global.ts
 src/infra/dotenv.ts
 src/infra/ed25519-signature.ts
-src/infra/env-log.runtime.ts
 src/infra/env.ts
 src/infra/errno.ts
 src/infra/child-runtime-viability.ts
@@ -1906,6 +1905,7 @@ src/state/openclaw-agent-session-snapshots-schema.ts
 src/state/openclaw-agent-session-transcript-archive-schema.ts
 src/state/openclaw-agent-standing-intents-schema.ts
 src/state/openclaw-agent-storage-schema.ts
+src/state/openclaw-agent-trajectory-storage-migration.ts
 src/state/openclaw-agent-transcript-fts-schema-source.ts
 src/state/openclaw-agent-transcript-fts-schema.ts
 src/state/openclaw-agent-transcript-payload-migration.ts

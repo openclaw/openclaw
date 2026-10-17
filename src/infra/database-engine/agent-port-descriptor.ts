@@ -23,11 +23,13 @@ import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { withLegacyAgentPostgresIndexes } from "../../state/openclaw-agent-index-retirement-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
+import { withLegacyAgentPostgresTrajectoryStorage } from "../../state/openclaw-agent-trajectory-storage-migration.js";
 import { withLegacyAgentPostgresWriteLayout } from "../../state/openclaw-agent-write-layout-migration.js";
 import metadata from "../../state/postgres-schema.generated/agent-port.json" with { type: "json" };
 import { agentPostgresRuntime } from "../../state/postgres-schema.generated/agent-runtime.js";
 import { agentSearchPostgresRuntime } from "../../state/postgres-schema.generated/agent-search-runtime.js";
 import manifest from "../../state/postgres-schema.generated/manifest.json" with { type: "json" };
+import { readTrajectoryPayload } from "../../trajectory/runtime-payload.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -121,22 +123,30 @@ export async function loadAgentPortDescriptor(
     if (backup?.version === sourceVersion && backup.id === "agent") {
       return backup;
     }
-    // v27→29 changes only indexes in PostgreSQL. Pin the shared table catalog
-    // so a later column change needs its own predecessor descriptor.
+    // These predecessors share the table layout before the three appended
+    // trajectory columns. Pin the catalog so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 29 ||
-      (sourceVersion !== 27 && sourceVersion !== 28)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 30 ||
+      (sourceVersion !== 27 && sourceVersion !== 28 && sourceVersion !== 29)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
       );
     }
   }
-  const catalog = agentPostgresRuntime.expectedCatalog;
-  const columns = catalog.filter(
-    (fact): fact is typeof fact & { value: PortTable["columns"][number] } => fact.kind === "column",
+  const isColumn = (
+    fact: (typeof agentPostgresRuntime.expectedCatalog)[number],
+  ): fact is typeof fact & { value: PortTable["columns"][number] } => fact.kind === "column";
+  const historical = sourceVersion !== agentEngineSchema.version;
+  const catalog = agentPostgresRuntime.expectedCatalog.filter(
+    (fact) =>
+      !historical ||
+      fact.table !== "trajectory_runtime_events" ||
+      !isColumn(fact) ||
+      !["event_utf8_bytes", "event_payload", "event_codec"].includes(fact.value.name),
   );
+  const columns = catalog.filter(isColumn);
   const keys = catalog.filter(
     (fact): fact is typeof fact & { value: string[] } => fact.kind === "primaryKey",
   );
@@ -209,6 +219,25 @@ export async function loadAgentPortDescriptor(
       },
     ],
     decodeSqlite: {
+      trajectory_runtime_events(row) {
+        if (row.event_codec == null) {
+          return row;
+        }
+        if (!(row.event_payload instanceof Uint8Array) || typeof row.event_codec !== "string") {
+          throw new DatabasePortDataError("Invalid compressed trajectory payload");
+        }
+        return {
+          ...row,
+          event_json: readTrajectoryPayload({
+            event_json: "",
+            event_payload: row.event_payload,
+            event_codec: row.event_codec,
+            event_utf8_bytes: Number(row.event_utf8_bytes),
+          }),
+          event_payload: null,
+          event_codec: null,
+        };
+      },
       transcript_events(row) {
         if (row.event_zstd == null) {
           return row;
@@ -322,33 +351,38 @@ export async function loadAgentPortDescriptor(
       );
     },
   };
-  return sourceVersion === agentEngineSchema.version
-    ? descriptor
-    : {
-        ...descriptor,
-        version: sourceVersion,
-        sqlite: getOpenClawAgentMigrationSchema(sourceVersion).replace(
-          /^INSERT OR IGNORE INTO[^;]+;/gm,
-          "",
-        ),
-        postData:
-          sourceVersion < 28
-            ? withLegacyAgentPostgresWriteLayout(
-                withLegacyAgentPostgresIndexes(descriptor.postData),
-              )
-            : withLegacyAgentPostgresIndexes(descriptor.postData),
-        expectedCatalog: catalog.map((fact) =>
-          fact.kind === "indexes" &&
-          (fact.table === "session_nodes" || fact.table === "session_reactions")
-            ? { table: fact.table, kind: fact.kind, value: Number(fact.value) + 1 }
-            : sourceVersion < 28 &&
-                fact.table === "transcript_event_identities" &&
-                fact.kind === "indexes"
-              ? { table: fact.table, kind: fact.kind, value: 5 }
-              : fact,
-        ),
-        inspectSqliteSource: undefined,
-        migrateSqliteSource: undefined,
-        admit: undefined,
-      };
+  if (!historical) {
+    return descriptor;
+  }
+  let postData = withLegacyAgentPostgresTrajectoryStorage(descriptor.postData);
+  if (sourceVersion < 29) {
+    postData = withLegacyAgentPostgresIndexes(postData);
+  }
+  if (sourceVersion < 28) {
+    postData = withLegacyAgentPostgresWriteLayout(postData);
+  }
+  return {
+    ...descriptor,
+    version: sourceVersion,
+    sqlite: getOpenClawAgentMigrationSchema(sourceVersion).replace(
+      /^INSERT OR IGNORE INTO[^;]+;/gm,
+      "",
+    ),
+    preData: withLegacyAgentPostgresTrajectoryStorage(descriptor.preData),
+    postData,
+    expectedCatalog: catalog.map((fact) =>
+      sourceVersion < 29 &&
+      fact.kind === "indexes" &&
+      (fact.table === "session_nodes" || fact.table === "session_reactions")
+        ? { table: fact.table, kind: fact.kind, value: Number(fact.value) + 1 }
+        : sourceVersion < 28 &&
+            fact.table === "transcript_event_identities" &&
+            fact.kind === "indexes"
+          ? { table: fact.table, kind: fact.kind, value: 5 }
+          : fact,
+    ),
+    inspectSqliteSource: undefined,
+    migrateSqliteSource: undefined,
+    admit: undefined,
+  };
 }

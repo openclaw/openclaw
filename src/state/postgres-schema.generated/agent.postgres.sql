@@ -607,6 +607,9 @@ CREATE TABLE "trajectory_runtime_events" (
   "run_id" text COLLATE "C",
   "event_json" text COLLATE "C" NOT NULL,
   "created_at" bigint NOT NULL,
+  "event_utf8_bytes" bigint,
+  "event_payload" bytea,
+  "event_codec" text COLLATE "C",
   PRIMARY KEY ("session_id", "seq")
 );
 
@@ -741,7 +744,7 @@ CREATE INDEX "idx_standing_intents_lifecycle" ON "standing_intents" (("status") 
 
 CREATE INDEX "idx_standing_intents_scope" ON "standing_intents" (("status") ASC NULLS FIRST, ("channel_scope") ASC NULLS FIRST, ("sender_scope") ASC NULLS FIRST);
 
-CREATE INDEX "idx_agent_trajectory_runtime_run" ON "trajectory_runtime_events" (("session_id") ASC NULLS FIRST, ("run_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, (octet_length("event_json")) ASC NULLS FIRST);
+CREATE INDEX "idx_agent_trajectory_runtime_run" ON "trajectory_runtime_events" (("session_id") ASC NULLS FIRST, ("run_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, (coalesce("event_utf8_bytes", octet_length("event_json"))) ASC NULLS FIRST);
 
 CREATE INDEX "idx_agent_transcript_event_identity_sequence" ON "transcript_event_identities" (("session_id") ASC NULLS FIRST, ("seq") ASC NULLS FIRST);
 

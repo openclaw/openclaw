@@ -21,7 +21,14 @@ import {
 } from "../../../lib/navigation-click.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
-import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
+import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
+import {
+  getExpandedToolCards,
+  getExpandedUserMessages,
+  getExpansionStateVersion,
+  subscribeExpansionState,
+} from "../chat-thread.ts";
 import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
 import { ChatCommentPins } from "./chat-comment-pins.tsx";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
@@ -59,21 +66,52 @@ export function ChatThread(input: { props: ChatThreadProps; transcript: ChatTran
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
+  const presentation = createMemo(
+    () =>
+      input.transcript.renderSession(input.props.sessionKey, (session) => ({
+        session,
+        maps: [
+          getExpandedToolCards(input.props.sessionKey),
+          getExpandedUserMessages(input.props.sessionKey),
+          session.expandedAssistantMessages,
+        ],
+      })),
+    {
+      // Session caches can replace maps while the retained pane stays mounted.
+      equals: (previous, next) =>
+        previous.session === next.session &&
+        previous.maps.every((value, index) => value === next.maps[index]),
+    },
+  );
+  const expansions = createMemo(() =>
+    presentation().maps.map((values) =>
+      projectSource(values, {
+        read: getExpansionStateVersion,
+        subscribe: subscribeExpansionState,
+        equality: Object.is,
+      }),
+    ),
+  );
+  const expansionVersions = createParkedProjection(
+    () => expansions().map((expansion) => expansion.read()),
+    () => {
+      const visible = input.props.transcriptVisible ?? true;
+      return typeof visible === "object" ? visible.isPresented() : visible;
+    },
+  );
   const current = createMemo(() => {
     const searchState = search().read();
-    return input.transcript.renderSession(input.props.sessionKey, (session) => {
-      const projection = projectChatTranscript(input.props, session, searchState);
-      // Empty shells establish the baseline for first-submission animation.
-      if (projection.isEmpty || projection.showLoadingSkeleton) {
-        session.entryAnimations.sync(
-          EMPTY_ENTRY_KEYS,
-          input.props.announceTranscript !== false &&
-            !projection.searchOpen &&
-            !input.props.loading,
-        );
-      }
-      return { session, projection };
-    });
+    const { session } = presentation();
+    const projection = projectChatTranscript(input.props, session, searchState);
+    expansionVersions();
+    // Empty shells establish the baseline for first-submission animation.
+    if (projection.isEmpty || projection.showLoadingSkeleton) {
+      session.entryAnimations.sync(
+        EMPTY_ENTRY_KEYS,
+        input.props.announceTranscript !== false && !projection.searchOpen && !input.props.loading,
+      );
+    }
+    return { session, projection };
   });
   const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);
   const isEmpty = createMemo(() => current().projection.isEmpty);

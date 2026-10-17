@@ -247,7 +247,7 @@ it("counts matching children across cached serialized archive views", async () =
   });
 });
 
-it("yields while materializing only overlapping selected pages for concurrent list handlers", async () => {
+it("prepares the roster once and yields while enriching only overlapping selected pages", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
@@ -262,6 +262,7 @@ it("yields while materializing only overlapping selected pages for concurrent li
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     try {
       await projection.ensureMaterialized();
+      expect(projection.materializedCount).toBe(0);
       const context = bindSessionRowProjection(requestContext(cfg), () => projection);
       const before = projection.materializedCount;
       const reads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
@@ -315,6 +316,8 @@ it("yields while materializing only overlapping selected pages for concurrent li
         expect(Math.max(...materialized)).toBe(10);
         expect(reads).not.toHaveBeenCalled();
         expect(sql.queries).toEqual([]);
+        await projection.ensureMaterialized();
+        expect(projection.materializedCount).toBe(10);
       } finally {
         sql.restore();
       }

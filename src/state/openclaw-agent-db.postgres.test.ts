@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
+import fs from "node:fs";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import type { TranscriptTurnBoundary } from "../config/sessions/transcript-entry-anchor.js";
+import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import {
@@ -16,6 +19,7 @@ import {
 } from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import type { SearchSchema } from "../infra/database-engine/contract.js";
+import { openEngineStore } from "../infra/database-engine/open.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
@@ -24,89 +28,12 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { agentEngineSchema } from "./openclaw-agent-db-engine.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
+import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import { loadOwners } from "./openclaw-agent-db.postgres.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-
-async function loadOwners() {
-  const [
-    database,
-    readonly,
-    sessions,
-    transcripts,
-    hydration,
-    outbox,
-    drain,
-    auth,
-    authRead,
-    authWrite,
-    cleanup,
-    search,
-    inspection,
-    authBootstrap,
-    authOwnership,
-    reconcile,
-    lifecycle,
-    engine,
-    maintenance,
-    transcriptStore,
-    transcriptFts,
-  ] = await Promise.all([
-    import("./openclaw-agent-db.js"),
-    import("./openclaw-agent-db-readonly.js"),
-    import("../config/sessions/session-accessor.sqlite-entry.js"),
-    import("../config/sessions/session-accessor.sqlite-transcript-write.js"),
-    import("../config/sessions/session-transcript-hydration.js"),
-    import("../agents/harness/context-engine-turn-outbox-store.js"),
-    import("../agents/harness/context-engine-turn-outbox.js"),
-    import("../agents/auth-profiles/sqlite.js"),
-    import("../agents/auth-profiles/sqlite-read.js"),
-    import("../agents/auth-profiles/sqlite-json-write.js"),
-    import("../test-utils/session-state-cleanup.js"),
-    import("../config/sessions/session-transcript-search.js"),
-    import("./openclaw-agent-schema-inspection-worker.js"),
-    import("../agents/auth-profiles/shared-store-bootstrap-async.js"),
-    import("../agents/auth-profiles/path-resolve.js"),
-    import("../config/sessions/session-transcript-reconcile.js"),
-    import("../config/sessions/session-accessor.sqlite-lifecycle.js"),
-    import("./openclaw-agent-db-engine.js"),
-    import("./openclaw-agent-db-maintenance-lease.js"),
-    import("../config/sessions/session-accessor.sqlite-transcript-store.js"),
-    import("../config/sessions/session-transcript-fts.js"),
-  ]);
-  return {
-    openOpenClawAgentDatabase: database.openOpenClawAgentDatabase,
-    getOpenClawAgentDatabaseIfOpen: database.getOpenClawAgentDatabaseIfOpen,
-    closeOpenClawAgentDatabaseByPath: database.closeOpenClawAgentDatabaseByPath,
-    closeOpenClawAgentDatabaseByPathAsync: database.closeOpenClawAgentDatabaseByPathAsync,
-    runOpenClawAgentWriteTransaction: database.runOpenClawAgentWriteTransaction,
-    retainOpenClawAgentDatabaseReadOnly: readonly.retainOpenClawAgentDatabaseReadOnly,
-    upsertSessionEntryCore: sessions.upsertSessionEntryCore,
-    appendTranscriptMessage: transcripts.appendTranscriptMessage,
-    appendTranscriptEvent: transcripts.appendTranscriptEvent,
-    prepareSessionTranscriptHydration: hydration.prepareSessionTranscriptHydration,
-    openContextEngineTurnOutboxWorkerStore: outbox.openContextEngineTurnOutboxWorkerStore,
-    drainContextEngineTurnOutbox: drain.drainContextEngineTurnOutbox,
-    inspectPersistedAuthProfileStoreRaw: auth.inspectPersistedAuthProfileStoreRaw,
-    prepareAgentAuthProfileRowsRead: authRead.prepareAgentAuthProfileRowsRead,
-    writeAuthProfileJsonCell: authWrite.writeAuthProfileJsonCell,
-    cleanupSessionStateForTest: cleanup.cleanupSessionStateForTest,
-    searchSessionTranscripts: search.searchSessionTranscripts,
-    searchSessionTranscriptsReadOnlySync: search.searchSessionTranscriptsReadOnlySync,
-    createAgentSchemaInspectionWorker: inspection.createAgentSchemaInspectionWorker,
-    prepareFreshSharedAuthStoreWriteAsync: authBootstrap.prepareFreshSharedAuthStoreWriteAsync,
-    resolveSharedAuthStoreOwnership: authOwnership.resolveSharedAuthStoreOwnership,
-    waitForSessionTranscriptIndexReconcile: reconcile.waitForSessionTranscriptIndexReconcile,
-    reconcileSessionTranscriptIndexes: reconcile.reconcileSessionTranscriptIndexes,
-    deleteSessionEntryLifecycle: lifecycle.deleteSessionEntryLifecycle,
-    admitAgentEngineSearchExtensions: engine.admitAgentEngineSearchExtensions,
-    openAgentEngineStore: engine.openAgentEngineStore,
-    withAgentDatabaseMaintenanceLease: maintenance.withAgentDatabaseMaintenanceLease,
-    appendTranscriptEventsInTransaction: transcriptStore.appendTranscriptEventsInTransaction,
-    createSessionTranscriptFtsInserter: transcriptFts.createSessionTranscriptFtsInserter,
-    selectSessionTranscriptFtsRows: transcriptFts.selectSessionTranscriptFtsRows,
-  };
-}
 
 const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -252,13 +179,42 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       ).toEqual([{ id: "migration-memory", text: "café optional memory" }]);
     };
     const options = { agentId: target.agentId };
-    const database = withEngineStoreAdmission(() => owners.openOpenClawAgentDatabase(options));
-    try {
-      assert(isPostgresSqlConnection(database.db));
-      const facts = getPostgresPhysicalFacts(database.db);
-      assert(facts);
-      withEngineStoreAdmission(() =>
-        owners.runOpenClawAgentWriteTransaction(({ db }) => {
+    const databasePath = resolveOpenClawAgentSqlitePath(options);
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const migration = agentEngineSchema.postgresMigrations!.find((step) => step.version === 28)!;
+    const facts = withEngineStoreAdmission(() => {
+      using anchor = openNodeSqliteDatabase(databasePath);
+      const db = openEngineStore({
+        anchor,
+        schema: {
+          ...agentEngineSchema,
+          version: 27,
+          postgres: migration.fromSchema.postgres,
+          postgresMigrations: [],
+        },
+        input: { connection: connection!, schemaPrefix: prefix },
+        inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: false }),
+        prepareAnchor() {},
+        openSqlite() {
+          throw new Error("Expected PostgreSQL");
+        },
+      });
+      try {
+        assert(isPostgresSqlConnection(db));
+        db.runTransaction(() => {
+          db.exec(`INSERT INTO schema_meta VALUES ('primary', 'agent', 27, 'migration', NULL, 1, 1);
+            INSERT INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0);
+            INSERT INTO memory_index_state VALUES (1, 0);`);
+          db.prepare(`INSERT INTO session_nodes
+            (session_key, current_session_id, entry_json, entry_valid, updated_at)
+            VALUES (?, ?, ?, 1, 1)`).run(
+            target.sessionKey,
+            target.sessionId,
+            JSON.stringify({ sessionId: target.sessionId, updatedAt: 1 }),
+          );
+          db.prepare(`INSERT INTO session_windows
+            (session_id, session_key, created_at, updated_at, transcript_updated_at)
+            VALUES (?, ?, 1, 1, 1)`).run(target.sessionId, target.sessionKey);
           db.prepare(`INSERT INTO memory_entry_origins
             (entry_key, agent_id, session_id, session_key, origin_class, observed_at)
             VALUES (?, ?, ?, ?, 'agent', 1)`).run(
@@ -271,56 +227,53 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
             (chunk_rowid, id, path, start_line, end_line, hash, model, text, embedding, updated_at)
             VALUES (1, 'migration-memory', 'memory/migration.md', 1, 1, 'migration-hash',
               'text-only', 'café optional memory', ?, 1)`).run(new Uint8Array());
-        }, options),
-      );
-      withEngineStoreAdmission(() => {
+          const insert = createTranscriptEventInserter(db, target.sessionId);
+          for (const [seq, event] of [
+            {
+              type: "message",
+              id: "migration-user",
+              parentId: null,
+              message: { role: "user", content: "migration searchable archive" },
+            },
+            {
+              type: "message",
+              id: "migration-reply",
+              parentId: "migration-user",
+              message: { role: "assistant", content: "migration retained reply" },
+            },
+          ].entries()) {
+            insert({ seq, eventJson: JSON.stringify(event), createdAt: 1 });
+            db.prepare(`INSERT INTO transcript_event_identities
+              (session_id, event_id, seq, event_type, parent_id, created_at)
+              VALUES (?, ?, ?, 'message', ?, 1)`).run(
+              target.sessionId,
+              event.id,
+              seq,
+              event.parentId,
+            );
+          }
+          reconcileSessionTranscriptIndexInTransaction(db, target.sessionId);
+        });
         owners.admitAgentEngineSearchExtensions(
-          database.db,
+          db,
           { "memory.text": memorySearch },
           () => undefined,
         );
-        assertMemorySearch(database.db);
-      });
-      await owners.upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      await owners.appendTranscriptMessage(target, {
-        eventId: "migration-user",
-        parentId: null,
-        message: { role: "user", content: "migration searchable archive" },
-      });
-      await owners.appendTranscriptMessage(target, {
-        eventId: "migration-reply",
-        parentId: "migration-user",
-        message: { role: "assistant", content: "migration retained reply" },
-      });
+        assertMemorySearch(db);
+        const admitted = getPostgresPhysicalFacts(db);
+        assert(admitted);
+        return admitted;
+      } finally {
+        db.close();
+      }
+    });
+    try {
       const retained = await client.query(
         `SELECT session_id, event_id, parent_id FROM "${facts.namespace}".transcript_event_identities ORDER BY seq`,
       );
-      withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(database.path));
-      await owners.closeOpenClawAgentDatabaseByPathAsync(database.path);
-      await owners.cleanupSessionStateForTest({ stateDir: root });
-      retireSqliteDatabaseAdmissionForPath(database.path);
-      // Restore the historical catalog under exclusive fixture custody, including an unsealed marker.
-      await client.query(`BEGIN;
-        SET LOCAL search_path TO "${facts.namespace}";
-        ALTER FUNCTION openclaw_transcript_navigation_check(text)
-          CALLED ON NULL INPUT RESET search_path;
-        DROP INDEX idx_agent_session_windows_conversation;
-        CREATE INDEX idx_agent_session_windows_conversation
-          ON session_windows(primary_conversation_id ASC NULLS FIRST,
-            updated_at DESC NULLS LAST, session_id ASC NULLS FIRST)
-          WHERE primary_conversation_id IS NOT NULL;
-        CREATE INDEX idx_agent_transcript_event_parent
-          ON transcript_event_identities(session_id ASC NULLS FIRST, parent_id ASC NULLS FIRST)
-          WHERE parent_id IS NOT NULL;
-        CREATE INDEX idx_agent_session_nodes_last_interaction_at
-          ON session_nodes(last_interaction_at DESC NULLS LAST, session_key ASC NULLS FIRST);
-        CREATE INDEX idx_agent_session_reactions_message
-          ON session_reactions(session_key ASC NULLS FIRST,
-            session_id ASC NULLS FIRST, message_id ASC NULLS FIRST);
-        UPDATE schema_meta SET schema_version = 27;
-        UPDATE openclaw_schema_meta
-          SET version = 27, fingerprint = NULL, ddl_hash = NULL, server_major = NULL;
-        COMMIT;`);
+      retireSqliteDatabaseAdmissionForPath(databasePath);
+      await client.query(`UPDATE "${facts.namespace}".openclaw_schema_meta
+        SET fingerprint = NULL, ddl_hash = NULL, server_major = NULL;`);
       const owner = acquireGatewayStateOwner({ databasePath: resolveOpenClawStateSqlitePath() });
       const maintenance = createOpenClawDatabaseMaintenanceScope({
         schemaMaintenance: true,
@@ -332,13 +285,13 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
           owners.withAgentDatabaseMaintenanceLease(
             { env: process.env, processBound: true, schemaPolicy: "existing" },
             async (lease) => {
-              using anchor = openNodeSqliteDatabase(database.path);
+              using anchor = openNodeSqliteDatabase(databasePath);
               lease.assertOwned();
               withEngineStoreAdmission(() => {
                 const engine = owners.openAgentEngineStore(
                   anchor,
                   target.agentId,
-                  database.path,
+                  databasePath,
                   true,
                 );
                 if (engine !== anchor) {
@@ -414,15 +367,15 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       expect(
         await owners.searchSessionTranscripts({ ...target, query: "archive", env: process.env }),
       ).toMatchObject({ hits: [expect.objectContaining({ messageId: "migration-user" })] });
-      withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(database.path));
-      await owners.closeOpenClawAgentDatabaseByPathAsync(database.path);
-      retireSqliteDatabaseAdmissionForPath(database.path);
+      withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(databasePath));
+      await owners.closeOpenClawAgentDatabaseByPathAsync(databasePath);
+      retireSqliteDatabaseAdmissionForPath(databasePath);
       const reopened = withEngineStoreAdmission(() => owners.openOpenClawAgentDatabase(options));
       expect(getPostgresPhysicalFacts(reopened.db)?.version).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
       withEngineStoreAdmission(() => assertMemorySearch(reopened.db));
     } finally {
-      withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(database.path));
-      await owners.closeOpenClawAgentDatabaseByPathAsync(database.path);
+      withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(databasePath));
+      await owners.closeOpenClawAgentDatabaseByPathAsync(databasePath);
     }
   });
 
