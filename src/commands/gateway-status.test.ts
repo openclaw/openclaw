@@ -517,6 +517,42 @@ describe("gateway-status command", () => {
     });
   });
 
+  it("retains configured WSS identity only for the selected SSH route", async () => {
+    for (const scenario of [
+      { ssh: undefined, port: undefined, transport: undefined, retained: true },
+      { ssh: "me@studio", port: undefined, transport: undefined, retained: true },
+      { ssh: "me@other", port: undefined, transport: undefined, retained: false },
+      { ssh: "me@studio", port: "19080", transport: undefined, retained: false },
+      { ssh: "me@studio", port: undefined, transport: "direct" as const, retained: false },
+    ]) {
+      const { runtime } = createRuntimeCapture();
+      probeGateway.mockClear();
+      readBestEffortConfig.mockResolvedValueOnce({
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://localhost:19000/gateway?probe=1",
+            remotePort: 18789,
+            sshTarget: "me@studio",
+            tlsFingerprint: "sha256:remote-fingerprint",
+            token: "rtok",
+            transport: scenario.transport,
+          },
+        },
+      } as never);
+      await runGatewayStatus(runtime, {
+        timeout: "1000",
+        json: true,
+        ssh: scenario.ssh,
+        port: scenario.port,
+      });
+      const tunnelCall = readProbeCalls().find((call) => call.preparedSshTunnel);
+      expect(tunnelCall?.url).toBe(
+        scenario.retained ? "wss://localhost:19000/gateway?probe=1" : "ws://127.0.0.1:18789",
+      );
+    }
+  });
+
   it("uses local TLS target strategy and fingerprint for local loopback probes", async () => {
     const { runtime } = createRuntimeCapture();
     readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig("ltok", true) as never);
