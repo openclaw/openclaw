@@ -54,4 +54,4 @@ export type SessionsProps = {
   ) => void;
   onToggleDetails: (sessionKey: string) => void;
 } & TranscriptSearchProps &
-  SessionsAdvancedFiltersProps;
+  Omit<SessionsAdvancedFiltersProps, "archivedCount">;
