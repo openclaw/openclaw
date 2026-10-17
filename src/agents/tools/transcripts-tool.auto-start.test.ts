@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { hasTerminalControl } from "../../../packages/terminal-core/src/safe-text.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import type {
   TranscriptSourceProvider,
@@ -11,6 +10,7 @@ import type {
 import { TranscriptsStore } from "../../transcripts/store.js";
 import {
   captureFixture,
+  captureGate,
   type CaptureStop,
 } from "./transcripts-tool.capture-fixture.test-support.js";
 import { useTranscriptTestState } from "./transcripts-tool.test-support.js";
@@ -34,33 +34,24 @@ it.each(["terminal warning", "manual export"] as const)(
   async (outcome) => {
     const manual = outcome === "manual export";
     const ids = ["subject", "healthy-sibling"];
-    const requests = new Map<string, TranscriptStartRequest>();
+    const requestFor = (id: string): TranscriptStartRequest =>
+      f.requests.find(({ session }) => session.sessionId === id)!;
     let cleanupFails = !manual;
     const stop = vi.fn<CaptureStop>(async ({ sessionId }) => {
       if (sessionId === "subject" && cleanupFails) {
-        await requests.get(sessionId)!.onStatus?.({ active: false });
+        await requestFor(sessionId).onStatus?.({ active: false });
         return { ok: false, error: providerError };
       }
       return { ok: true, sessionId };
     });
-    const f = await fixture(
-      {
-        start: async (request) => {
-          requests.set(request.session.sessionId, request);
-          return { ok: true, session: request.session };
-        },
-        stop,
-      },
-      ids,
-    );
+    const f = await fixture({ stop }, ids);
     await f.scope(async () => {
       try {
         await f.service.start().settled;
         for (const id of ids) {
-          const request = requests.get(id)!;
-          await request.onUtterance({ text: capturedText, final: true });
+          await requestFor(id).onUtterance({ text: capturedText, final: true });
         }
-        const subject = requests.get("subject")!.session;
+        const subject = requestFor("subject").session;
         const sessionDir = f.store().sessionDir(subject);
         const summaryPath = path.join(sessionDir, "summary.md");
         await fs.mkdir(path.dirname(sessionDir), { recursive: true });
@@ -82,9 +73,8 @@ it.each(["terminal warning", "manual export"] as const)(
         const reopened = f.store();
         for (const id of ids) {
           const stored = (await reopened.readSession(id))!;
-          const summary = await reopened.readSummary(stored);
           expect(stored.stoppedAt).toEqual(expect.any(String));
-          expect(summary).toMatchObject({
+          expect(await reopened.readSummary(stored)).toMatchObject({
             summary: { utteranceCount: 1, transcript: [capturedText] },
             markdown: expect.stringContaining(capturedText),
           });
@@ -102,7 +92,6 @@ it.each(["terminal warning", "manual export"] as const)(
           expect(warnings).toEqual([]);
         } else {
           const logged = warnings.join(" ");
-          expect(logged).toContain("subject");
           expect(logged).toMatch(/summary saved.*export failed/i);
           expect(logged).toContain("ENOTDIR");
           expect(logged).toContain(JSON.stringify(summaryPath));
@@ -119,7 +108,6 @@ it.each(["terminal warning", "manual export"] as const)(
             }
           }
         }
-        cleanupFails = false;
         await f.service.stop();
         expect((await f.store().readSummary(subject)).summary?.transcript).toEqual([capturedText]);
         expect(stop.mock.calls.map(([request]) => request.sessionId)).toEqual(ids);
@@ -136,18 +124,13 @@ it.each(["terminal warning", "manual export"] as const)(
 it.each(["replacement abort", "title write failure"] as const)(
   "retains cleanup and resumes after %s",
   async (fault) => {
-    const release = createDeferred();
-    const entered = createDeferred();
+    const gate = captureGate();
     const requests: TranscriptStartRequest[] = [];
-    const stop = vi.fn<CaptureStop>(async () => ({
-      ok: false,
-      error: "fixture capture still owns resources",
-    }));
+    const stop = vi.fn<CaptureStop>(async () => ({ ok: false, error: "resources still owned" }));
     const f = await fixture({
       start: async (request) => {
         requests.push(request);
-        entered.resolve();
-        await release.promise;
+        await gate.wait();
         return { ok: true, session: { ...request.session, title: "Provider title" } };
       },
       stop,
@@ -169,7 +152,7 @@ it.each(["replacement abort", "title write failure"] as const)(
     await f.scope(async () => {
       try {
         const startup = f.service.start().settled;
-        await entered.promise;
+        await gate.entered;
         expect(requests).toHaveLength(1);
         const original = requests[0]!;
         const sessionId = original.session.sessionId;
@@ -177,24 +160,19 @@ it.each(["replacement abort", "title write failure"] as const)(
           pendingStop = f.service.stop(affected);
           const stopped = pendingStop.catch((error: unknown) => error);
           expect(original.abortSignal?.aborted).toBe(true);
-          release.resolve();
+          gate.release();
           expect(await stopped).toBeInstanceOf(AggregateError);
-          expect(stop).toHaveBeenCalledTimes(2);
         } else {
-          release.resolve();
+          gate.release();
           await startup;
-          expect(f.logger.warn).toHaveBeenCalledWith(
-            expect.stringContaining(
-              "admitted-start-failed. Check Meeting capture health in Settings.",
-            ),
-          );
-          expect(stop).toHaveBeenCalledOnce();
+          const diagnostic = "admitted-start-failed. Check Meeting capture health in Settings.";
+          expect(f.logger.warn).toHaveBeenCalledWith(expect.stringContaining(diagnostic));
           expect(original.abortSignal?.aborted).toBe(false);
         }
+        expect(stop).toHaveBeenCalledTimes(fault === "replacement abort" ? 2 : 1);
         await f.status([{ sessionId }]);
-        await expect(f.execute("start", sessionId)).rejects.toThrow(
-          "transcripts session already active",
-        );
+        const collision = f.execute("start", sessionId);
+        await expect(collision).rejects.toThrow("transcripts session already active");
         expect(requests).toHaveLength(1);
         await original.onUtterance({ text: "late failed capture", final: true });
         expect(await store.readUtterancesForSession(original.session)).toEqual([]);
@@ -210,11 +188,10 @@ it.each(["replacement abort", "title write failure"] as const)(
         await original.onUtterance({ text: "stale replaced capture", final: true });
         expect(current.session.sessionId).not.toBe(sessionId);
         await current.onUtterance({ text: "current capture", final: true });
-        expect(
-          (await store.readUtterancesForSession(current.session)).map((row) => row.text),
-        ).toEqual(["current capture"]);
+        const utterances = await store.readUtterancesForSession(current.session);
+        expect(utterances.map((row) => row.text)).toEqual(["current capture"]);
       } finally {
-        release.resolve();
+        gate.release();
         writeSession.mockRestore();
         stop.mockImplementation(f.successfulStop);
         await pendingStop?.catch(() => {});

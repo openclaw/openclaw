@@ -43,19 +43,13 @@ function requireDetails(result: { details?: unknown }): Record<string, unknown> 
   return result.details as Record<string, unknown>;
 }
 
+const isConfigured = () => true;
 function provider(
   id: string,
   model: string,
   overrides: Pick<VideoGenerationProvider, "generateVideo"> & Partial<VideoGenerationProvider>,
 ): VideoGenerationProvider {
-  return {
-    id,
-    defaultModel: model,
-    models: [model],
-    isConfigured: () => true,
-    capabilities: {},
-    ...overrides,
-  };
+  return { id, defaultModel: model, models: [model], isConfigured, capabilities: {}, ...overrides };
 }
 
 function video(fileName: string, source: { buffer?: Buffer; url?: string }) {
@@ -70,16 +64,12 @@ describe("video generation invocation QA", () => {
     const referenceBytes = createSolidPngBuffer(2, 2, { r: 32, g: 112, b: 224 });
     const referencePath = path.join(root, "reference.png");
     await fs.writeFile(referencePath, referenceBytes);
-
     const generatedVideo = createMp4Fixture();
     let primaryGenerateCalls = 0;
     let fallbackRequest: VideoGenerationRequest | undefined;
+    const declaredOptions = { seed: "number", draft: "boolean" } as const;
     const capabilities: VideoGenerationProvider["capabilities"] = {
-      imageToVideo: {
-        enabled: true,
-        maxInputImages: 1,
-        providerOptions: { seed: "number", draft: "boolean" },
-      },
+      imageToVideo: { enabled: true, maxInputImages: 1, providerOptions: declaredOptions },
     };
     const primaryProvider = provider("qa-limited-video", "limited-v1", {
       capabilities,
@@ -99,12 +89,11 @@ describe("video generation invocation QA", () => {
         };
       },
     });
-    const providers = [primaryProvider, fallbackProvider];
     const config = createConfig("qa-limited-video/limited-v1", ["qa-capable-video/capable-v1"]);
     const providerOptions = { seed: 17, draft: true };
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(root, "state") }, async () => {
-      const tool = createTool(root, config, providers);
+      const tool = createTool(root, config, [primaryProvider, fallbackProvider]);
       const result = await tool.execute("qa-video-invocation", {
         prompt: "Animate the reference image into a short QA clip.",
         image: referencePath,
@@ -115,11 +104,8 @@ describe("video generation invocation QA", () => {
       const details = requireDetails(result);
 
       expect(primaryGenerateCalls).toBe(0);
-      expect(fallbackRequest).toMatchObject({
-        provider: "qa-capable-video",
-        model: "capable-v1",
-        providerOptions,
-      });
+      const selected = { provider: "qa-capable-video", model: "capable-v1" };
+      expect(fallbackRequest).toMatchObject({ ...selected, providerOptions });
       expect(
         resolveVideoGenerationModeCapabilities({
           provider: fallbackProvider,
@@ -136,11 +122,7 @@ describe("video generation invocation QA", () => {
           role: "first_frame",
         },
       ]);
-      expect(details).toMatchObject({
-        provider: "qa-capable-video",
-        model: "capable-v1",
-        count: 1,
-      });
+      expect(details).toMatchObject({ ...selected, count: 1 });
       expect(details.attempts).toEqual([
         {
           provider: "qa-limited-video",
@@ -174,10 +156,7 @@ describe("video generation invocation QA", () => {
         videos: [
           video("first.mp4", { url: "https://media.example/first.mp4" }),
           video("middle.mp4", { buffer: savedVideo }),
-          video("last.mp4", {
-            buffer: oversizedVideo,
-            url: "https://media.example/last.mp4",
-          }),
+          video("last.mp4", { buffer: oversizedVideo, url: "https://media.example/last.mp4" }),
         ],
       }),
     });
