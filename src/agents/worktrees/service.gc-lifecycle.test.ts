@@ -29,8 +29,10 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { createWorktreeGitMaintenance } from "./git-maintenance.js";
 import { requireGit } from "./git.js";
 import { createManagedWorktreeOwnerPolicy } from "./owner-protection.js";
+import * as registryReads from "./registry-read.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import * as removal from "./removal-git.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
@@ -102,7 +104,7 @@ it("releases session mutation admission during Git while the registry claim fenc
   };
   await replaceSessionEntry({ agentId: "main", sessionKey, storePath, env }, entry);
   await fs.writeFile(path.join(record.path, "draft.txt"), "preserved draft\n");
-  const service = new ManagedWorktreeService({ env, now: () => 2 });
+  const service = new ManagedWorktreeService({ env });
   const entered = createDeferred();
   const release = createDeferred();
   const checkoutRemoved = createDeferred();
@@ -241,8 +243,7 @@ it("bounds Git housekeeping without delaying orphan cleanup or newly registered 
     names: ["first", "second", "third"],
     now: 1,
   });
-  let now = 3;
-  const service = new ManagedWorktreeService({ env, now: () => now });
+  const service = new ManagedWorktreeService({ env });
   const commands = vi.spyOn(gitExec, "executeGitCommand");
   const maintenanceRoots = () =>
     commands.mock.calls.flatMap(([cwd, , options]) =>
@@ -255,7 +256,6 @@ it("bounds Git housekeeping without delaying orphan cleanup or newly registered 
 
   const orphan = path.join(env.OPENCLAW_STATE_DIR, "worktrees", "unregistered", "empty");
   await fs.mkdir(orphan, { recursive: true });
-  now += WORKTREE_GC_INTERVAL_MS - 1;
   expect(await service.gc()).toMatchObject({ orphansDeleted: 1, outcome: "completed" });
   await expect(fs.access(orphan)).rejects.toMatchObject({ code: "ENOENT" });
   expect(maintenanceRoots()).toEqual([]);
@@ -266,19 +266,37 @@ it("bounds Git housekeeping without delaying orphan cleanup or newly registered 
     repoRoot: otherRepo,
     stateDir: otherRepo,
     names: ["new-repo"],
-    now,
+    now: Date.now(),
   });
   await service.gc();
   expect(new Set(maintenanceRoots())).toEqual(new Set([otherRepo]));
   commands.mockClear();
 
-  now += 1;
-  await service.gc();
-  expect(new Set(maintenanceRoots())).toEqual(new Set([repo]));
-  commands.mockClear();
   await service.gc({ retryDeferred: true });
   expect(new Set(maintenanceRoots())).toEqual(new Set([repo, otherRepo]));
   commands.mockClear();
   await service.gc();
   expect(maintenanceRoots()).toEqual([]);
+
+  // Registry preparation and native leases finish before the cadence-only clock scope.
+  const records = await registryReads.readRegistryWorktrees(env);
+  await closeOpenClawStateDatabaseAsync();
+  const inventory = vi.spyOn(registryReads, "readRegistryWorktrees").mockResolvedValue(records);
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    const maintain = createWorktreeGitMaintenance(env);
+    await maintain({});
+    expect(new Set(maintenanceRoots())).toEqual(new Set([repo, otherRepo]));
+    commands.mockClear();
+    now += WORKTREE_GC_INTERVAL_MS - 1;
+    await maintain({});
+    expect(maintenanceRoots()).toEqual([]);
+    now += 1;
+    await maintain({});
+    expect(new Set(maintenanceRoots())).toEqual(new Set([repo, otherRepo]));
+  } finally {
+    clock.mockRestore();
+    inventory.mockRestore();
+  }
 });
