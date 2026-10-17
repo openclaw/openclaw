@@ -244,7 +244,6 @@ export class SwarmRosterHydrator {
   }
 
   private applyParent(parent: GatewaySessionRow | null): void {
-    const previous = this.parentRow;
     const summary = JSON.stringify([
       parent?.sessionId,
       parent?.childSessions,
@@ -252,23 +251,7 @@ export class SwarmRosterHydrator {
       parent?.swarm?.otherActiveGroups,
     ]);
     const changed = this.parentSummary !== summary;
-    // Roster/event summaries omit members. Equal summary facts retain the detailed
-    // read's membership; changed groups are re-read through the same row observation.
-    this.parentRow =
-      parent && !changed && previous?.swarm && parent.swarm
-        ? {
-            ...parent,
-            swarm: {
-              ...parent.swarm,
-              groups: parent.swarm.groups.map((group) => ({
-                ...group,
-                children:
-                  group.children ??
-                  previous.swarm?.groups.find((entry) => entry.groupId === group.groupId)?.children,
-              })),
-            },
-          }
-        : parent;
+    this.parentRow = parent;
     this.parentSummary = summary;
     this.rows = this.parentRow ? mergeSwarmSessionRows(this.childRows, [this.parentRow]) : [];
     this.refreshNewChildren();
@@ -391,7 +374,7 @@ export class SwarmRosterHydrator {
     );
     const changedMembers = result.sessions.filter((row) => {
       const previous = previousChildren.get(row.key);
-      return previous?.swarmGroupId !== row.swarmGroupId || previous?.status !== row.status;
+      return previous?.swarmGroupId !== row.swarmGroupId;
     });
     const initialGroupSizes = new Map<string, number>();
     const initialUnlistedActiveGroups = new Set<string>();
@@ -437,10 +420,8 @@ export class SwarmRosterHydrator {
           return false;
         }
       }
-      return (
-        row.swarmGroupId &&
-        (member?.groupId !== row.swarmGroupId || (row.status && member?.status !== row.status))
-      );
+      // Provider status cannot settle a collector; its parent summary owns progress.
+      return row.swarmGroupId && member?.groupId !== row.swarmGroupId;
     });
     if (
       this.parentRow &&
