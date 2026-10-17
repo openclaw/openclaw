@@ -167,7 +167,7 @@ vi.mock("./update-command-service-drain.js", () => ({
     await stop(),
 }));
 vi.mock("../../daemon/systemd-maintenance.js", () => ({
-  prepareSystemdGatewayMaintenance: async () => false,
+  prepareSystemdGatewayMaintenance: async () => ({ kind: "unchanged" }),
 }));
 vi.mock("../../daemon/systemd-definition-mutation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd-definition-mutation.js")>()),

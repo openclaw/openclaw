@@ -76,7 +76,7 @@ vi.mock("../cli/update-cli/update-command-service-drain.js", () => ({
     await stop(),
 }));
 vi.mock("../daemon/systemd-maintenance.js", () => ({
-  prepareSystemdGatewayMaintenance: async () => false,
+  prepareSystemdGatewayMaintenance: async () => ({ kind: "unchanged" }),
 }));
 
 vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
