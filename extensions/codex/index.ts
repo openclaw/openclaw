@@ -154,6 +154,10 @@ export default definePluginEntry({
     const lazyBindingStateStore: Parameters<typeof createLazyCodexAppServerBindingStore>[0] = {
       // Final effect guards retain raw SDK revocations through 2026-12-31.
       lookup: (key) => openBindingStateStore().lookup(key),
+      prepareRead: async (key) => {
+        const { preparePluginStateRead } = await import("openclaw/plugin-sdk/plugin-state-runtime");
+        return await preparePluginStateRead(openBindingMutationStore(), key);
+      },
       asyncReads: {
         lookup: (key) => openBindingMutationStore().lookup(key),
         lookupMany: (keys) => openBindingMutationStore().lookupMany(keys),
