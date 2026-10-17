@@ -286,7 +286,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: MemorySearchResponse and AgentsWorkspaceGetResult type-only contracts
       // for the plugin-owned indexed Memory search presentation.
       // +5: maintainer-requested context-engine transcript watermark reader, its types, and fence error.
-      3805,
+      3807,
+      // +2: #154043 adds runWithMcpRequestMetadata and the McpServerRequestContext type.
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -327,7 +328,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same boot-selected family lookup.
       // +1: the same shared auth-patch application.
       // +1: maintainer-requested context-engine transcript watermark reader.
-      2206,
+      2207,
+      // +1: #154043 adds runWithMcpRequestMetadata.
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

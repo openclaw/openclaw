@@ -6,8 +6,10 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 export async function startRequesterScopedMcpProofServer(): Promise<{
   url: string;
   session: { current?: string; closed?: string; calls: number };
+  requests: http.IncomingHttpHeaders[];
   close: () => Promise<void>;
 }> {
+  const requests: http.IncomingHttpHeaders[] = [];
   const server = new McpServer({ name: "openclaw-requester-proof", version: "1.0.0" });
   const session: { current?: string; closed?: string; calls: number } = { calls: 0 };
   const transport = new StreamableHTTPServerTransport({
@@ -29,6 +31,7 @@ export async function startRequesterScopedMcpProofServer(): Promise<{
   );
   await server.connect(transport);
   const httpServer = http.createServer((request, response) => {
+    requests.push({ ...request.headers });
     if (request.url !== "/mcp" || request.headers.authorization !== "Bearer proof-token") {
       response.writeHead(404).end();
       return;
@@ -50,6 +53,7 @@ export async function startRequesterScopedMcpProofServer(): Promise<{
   return {
     url: `http://127.0.0.1:${address.port}/mcp`,
     session,
+    requests,
     close: async () => {
       await server.close();
       httpServer.closeAllConnections();

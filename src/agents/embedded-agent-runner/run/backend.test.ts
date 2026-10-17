@@ -4,6 +4,7 @@ import {
   createOperationalRunInstanceRef,
   prepareSystemAgentRunAdmission,
 } from "../../admitted-run-context.js";
+import { getMcpRequestContext, runWithMcpRequestMetadata } from "../../mcp-request-context.js";
 import {
   getCoreTtsAttemptResultMediaUrls,
   markCoreTtsAttemptResult,
@@ -38,6 +39,22 @@ vi.mock("../../harness/selection.js", () => ({
   runAgentHarnessAttempt: harnessMocks.runAttempt,
   runAgentHarnessSettledTurnFinalization: vi.fn(),
 }));
+
+it("binds MCP attribution to the attempted run while preserving caller metadata", async () => {
+  harnessMocks.runAttempt.mockImplementation(async () => {
+    expect(getMcpRequestContext()).toEqual({
+      runId: "actual-turn",
+      sessionId: "actual-session",
+      sessionKey: "actual-key",
+      metadata: { traceparent: "trace-from-caller" },
+    });
+    return {};
+  });
+  await runWithMcpRequestMetadata({ traceparent: "trace-from-caller" }, () =>
+    runBackend({ runId: "actual-turn", sessionId: "actual-session", sessionKey: "actual-key" }),
+  );
+  expect(getMcpRequestContext()).toBeUndefined();
+});
 
 it("carries child receipts only across the same admitted instance", async () => {
   const instance = createOperationalRunInstanceRef("parent");
