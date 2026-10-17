@@ -41,13 +41,14 @@ function createSubscriptionState(options?: {
   const subscribeMessages = options?.subscribeMessages ?? vi.fn<Subscribe>(async () => selected);
   const unsubscribeMessages =
     options?.unsubscribeMessages ?? vi.fn<Unsubscribe>(async () => undefined);
+  const host = makeChatHost({ requestHandlers: {}, sessionKey: selected.key });
   const state = {
-    ...makeChatHost({ requestHandlers: {}, sessionKey: selected.key }),
+    ...host,
     connectionEpoch: 1,
     chatError: null as string | null,
     chatSessionMessageSubscriptionRequestedKey: options?.previous?.key ?? null,
     chatSessionMessageSubscription: options?.previous ?? null,
-    sessions: { subscribeMessages, unsubscribeMessages },
+    sessions: { ...host.sessions, subscribeMessages, unsubscribeMessages },
   } satisfies Parameters<typeof syncSelectedSessionMessageSubscription>[0];
   const publishedLoads: Array<ReturnType<typeof getChatHistoryLoadState>> = [];
   const dispose = createRoot((stop) => {
@@ -84,7 +85,11 @@ it.each(["dispose", "selection", "capability", "deadline"] as const)(
     } else if (change === "selection") {
       state.sessionKey = "agent:main:new";
     } else if (change === "capability") {
-      state.sessions = { subscribeMessages: vi.fn(), unsubscribeMessages: vi.fn() };
+      state.sessions = {
+        ...state.sessions,
+        subscribeMessages: vi.fn(),
+        unsubscribeMessages: vi.fn(),
+      };
     }
     await vi.advanceTimersByTimeAsync(change === "deadline" ? 60_000 : 500);
     await expect(pending).resolves.toBe(false);
