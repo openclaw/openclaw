@@ -96,6 +96,7 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
       output: p.output,
       cacheRead: p.cacheRead,
       cacheWrite: p.cacheWrite,
+      totalTokens: p.totalTokens,
       cost: p.cost,
       value: isCumulative
         ? cumTokens
@@ -567,7 +568,9 @@ function TimeSeriesChart(props: {
             {model().formatAxisTimestamp(model().rangeStartTs)}–
             {model().formatAxisTimestamp(model().rangeEndTs)}
             {" · "}
-            {formatUsageTokens(model().totalTypeTokens)}
+            {formatUsageTokens(
+              model().filteredPoints.reduce((sum, point) => sum + point.totalTokens, 0),
+            )}
             {" · "}
             {formatUsageCost(model().filteredPoints.reduce((s, p) => s + (p.cost || 0), 0))}
           </>
