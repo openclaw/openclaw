@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDisplayStringFormatter } from "./display-string.js";
+import { renderTable } from "./table.js";
 
 function stubHome(home: string, openclawHome = ""): void {
   vi.stubEnv("HOME", home);
@@ -59,20 +60,62 @@ describe("createDisplayStringFormatter", () => {
   });
 
   it.skipIf(process.platform !== "win32")(
-    "shortens real Windows home casing aliases inside table display text",
+    "shortens real Windows home casing and separator aliases inside table display text",
     () => {
       const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-home-display-"));
       try {
         const homeAlias = home.toUpperCase();
+        const forwardAlias = homeAlias.replaceAll("\\", "/");
+        const mixedAlias = homeAlias.replace("\\", "/");
         expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
+        expect(fs.statSync(forwardAlias).isDirectory()).toBe(true);
+        expect(fs.statSync(mixedAlias).isDirectory()).toBe(true);
+        const fileUri = `file:${forwardAlias}`;
+        expect(fs.statSync(new URL(fileUri)).isDirectory()).toBe(true);
         stubHome(home);
         const displayString = createDisplayStringFormatter();
 
         expect(displayString(`Workspace: ${homeAlias}\\project`)).toBe("Workspace: ~\\project");
         expect(displayString(`İ Workspace: ${homeAlias}\\project`)).toBe("İ Workspace: ~\\project");
+        expect(displayString(`İ Workspace: ${forwardAlias}/project`)).toBe(
+          "İ Workspace: ~/project",
+        );
+        expect(displayString(`${mixedAlias}/one ${forwardAlias}\\two`)).toBe("~/one ~\\two");
+        expect(displayString(forwardAlias)).toBe("~");
+        expect(displayString(`URI: ${fileUri}/project`)).toBe(`URI: ${fileUri}/project`);
+        expect(displayString(`Path:${homeAlias}\\project`)).toBe("Path:~\\project");
+        expect(displayString(`Path: ${forwardAlias}/project`)).toBe("Path: ~/project");
+        expect(displayString(`${forwardAlias}2/project`)).toBe(`${forwardAlias}2/project`);
+        expect(displayString(`prefix${forwardAlias}/project`)).toBe(
+          `prefix${forwardAlias}/project`,
+        );
+        expect(
+          renderTable({
+            border: "none",
+            columns: [{ key: "Path", header: "Path" }],
+            rows: [{ Path: `${forwardAlias}/project` }],
+          }),
+        ).toBe("Path\n~/project\n");
       } finally {
         fs.rmSync(home, { recursive: true, force: true });
       }
     },
   );
+
+  it.skipIf(process.platform !== "win32")("shortens Windows UNC separator aliases", () => {
+    stubHome("\\\\server\\share\\alice");
+    const displayString = createDisplayStringFormatter();
+
+    expect(displayString("//SERVER/share/alice/project")).toBe("~/project");
+    expect(displayString("//SERVER/share/alice2/project")).toBe("//SERVER/share/alice2/project");
+    for (const scheme of ["https", "file", "git+ssh"]) {
+      const url = `${scheme}://server/share/alice/project`;
+      expect(displayString(`URL: ${url}`)).toBe(`URL: ${url}`);
+    }
+    expect(displayString("Path: //SERVER/share/alice/project")).toBe("Path: ~/project");
+    stubHome("", "\\\\server\\share\\alice");
+    expect(createDisplayStringFormatter()("//SERVER/share/alice/project")).toBe(
+      "$OPENCLAW_HOME/project",
+    );
+  });
 });
