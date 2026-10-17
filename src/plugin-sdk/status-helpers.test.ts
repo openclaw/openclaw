@@ -1,4 +1,3 @@
-// Status helper tests cover plugin status normalization and user-facing summaries.
 import { describe, expect, it } from "vitest";
 import { evaluateChannelHealth } from "../gateway/channel-health-policy.js";
 import {
@@ -80,20 +79,6 @@ const defaultRuntimeState = {
   lastError: null,
 };
 
-type ExpectedAccountSnapshot = {
-  accountId: string;
-  name?: string;
-  enabled?: boolean;
-  configured?: boolean;
-  running: boolean;
-  lastStartAt: number | null;
-  lastStopAt: number | null;
-  lastError: string | null;
-  probe?: unknown;
-  lastInboundAt: number | null;
-  lastOutboundAt: number | null;
-} & Record<string, unknown>;
-
 const defaultChannelSummary = {
   configured: false,
   ...defaultRuntimeState,
@@ -107,7 +92,7 @@ const defaultTokenChannelSummary = {
   lastProbeAt: null,
 };
 
-const defaultAccountSnapshot: ExpectedAccountSnapshot = {
+const defaultAccountSnapshot = {
   accountId: "default",
   name: undefined,
   enabled: undefined,
@@ -117,15 +102,6 @@ const defaultAccountSnapshot: ExpectedAccountSnapshot = {
   lastInboundAt: null,
   lastOutboundAt: null,
 };
-
-function expectedAccountSnapshot(
-  overrides: Partial<ExpectedAccountSnapshot> = {},
-): ExpectedAccountSnapshot {
-  return {
-    ...defaultAccountSnapshot,
-    ...overrides,
-  };
-}
 
 const adapterAccount = {
   accountId: "default",
@@ -140,18 +116,15 @@ const adapterRuntime = {
 
 const adapterProbe = { ok: true };
 
-function expectedAdapterAccountSnapshot() {
-  return {
-    ...expectedAccountSnapshot({
-      enabled: true,
-      configured: true,
-      running: true,
-      probe: adapterProbe,
-    }),
-    profileUrl: adapterAccount.profileUrl,
-    connected: true,
-  };
-}
+const expectedAdapterAccountSnapshot = {
+  ...defaultAccountSnapshot,
+  enabled: true,
+  configured: true,
+  running: true,
+  probe: adapterProbe,
+  profileUrl: adapterAccount.profileUrl,
+  connected: true,
+};
 
 function resolveAccountSnapshot({
   account,
@@ -185,45 +158,34 @@ function createAsyncStatusAdapter() {
   });
 }
 
-describe("buildComputedAccountStatusSnapshot", () => {
-  it("builds account status when configured is computed outside resolver", () => {
-    expect(
-      buildComputedAccountStatusSnapshot({
-        accountId: "default",
-        enabled: true,
-        configured: false,
-      }),
-    ).toEqual(
-      expectedAccountSnapshot({
-        enabled: true,
-        stateReason: "not configured",
-      }),
-    );
+it("builds account status when configured is computed outside resolver", () => {
+  expect(
+    buildComputedAccountStatusSnapshot({
+      accountId: "default",
+      enabled: true,
+      configured: false,
+    }),
+  ).toEqual({
+    ...defaultAccountSnapshot,
+    enabled: true,
+    stateReason: "not configured",
   });
 });
 
 describe("computed account status adapters", () => {
-  it.each([
-    {
-      name: "async",
-      createStatus: createAsyncStatusAdapter,
-    },
-  ])(
-    "builds account snapshots from $name computed account metadata and extras",
-    async ({ createStatus }) => {
-      const status = createStatus();
-      await expect(
-        Promise.resolve(
-          status.buildAccountSnapshot?.({
-            account: adapterAccount,
-            cfg: {} as never,
-            runtime: adapterRuntime,
-            probe: adapterProbe,
-          }),
-        ),
-      ).resolves.toEqual(expectedAdapterAccountSnapshot());
-    },
-  );
+  it("builds account snapshots from async computed account metadata and extras", async () => {
+    const status = createAsyncStatusAdapter();
+    await expect(
+      Promise.resolve(
+        status.buildAccountSnapshot?.({
+          account: adapterAccount,
+          cfg: {} as never,
+          runtime: adapterRuntime,
+          probe: adapterProbe,
+        }),
+      ),
+    ).resolves.toEqual(expectedAdapterAccountSnapshot);
+  });
 
   it("preserves ingress failure for channel health evaluation", async () => {
     const status = createComputedStatusAdapter();
@@ -249,46 +211,30 @@ describe("computed account status adapters", () => {
 });
 
 describe("buildRuntimeAccountStatusSnapshot", () => {
+  const connectivity = {
+    connected: true,
+    restartPending: true,
+    reconnectAttempts: 3,
+    lastConnectedAt: 11,
+    lastDisconnect: { at: 12, error: "boom" },
+    lastEventAt: 13,
+    lastTransportActivityAt: 14,
+    healthState: "reconnecting",
+    lifecycle: "recovering" as const,
+    ingressUnavailable: true as const,
+    busy: true,
+    activeRuns: 2,
+    lastRunActivityAt: 15,
+    activeRunStartedAt: 16,
+    running: true,
+  };
   it.each([
     {
       name: "preserves runtime connectivity metadata",
-      input: {
-        runtime: {
-          connected: true,
-          restartPending: true,
-          reconnectAttempts: 3,
-          lastConnectedAt: 11,
-          lastDisconnect: { at: 12, error: "boom" },
-          lastEventAt: 13,
-          lastTransportActivityAt: 14,
-          healthState: "reconnecting",
-          lifecycle: "recovering" as const,
-          ingressUnavailable: true as const,
-          busy: true,
-          activeRuns: 2,
-          lastRunActivityAt: 15,
-          activeRunStartedAt: 16,
-          running: true,
-        },
-      },
-      extra: undefined,
+      input: { runtime: structuredClone(connectivity) },
       expected: {
         ...defaultRuntimeState,
-        running: true,
-        connected: true,
-        restartPending: true,
-        reconnectAttempts: 3,
-        lastConnectedAt: 11,
-        lastDisconnect: { at: 12, error: "boom" },
-        lastEventAt: 13,
-        lastTransportActivityAt: 14,
-        healthState: "reconnecting",
-        lifecycle: "recovering",
-        ingressUnavailable: true,
-        busy: true,
-        activeRuns: 2,
-        lastRunActivityAt: 15,
-        activeRunStartedAt: 16,
+        ...connectivity,
         probe: undefined,
       },
     },
@@ -301,7 +247,6 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
           terminalDisconnect: true,
         },
       },
-      extra: undefined,
       expected: {
         ...defaultRuntimeState,
         running: false,
@@ -310,12 +255,22 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
         probe: undefined,
       },
     },
-  ])("$name", ({ input, extra, expected }) => {
-    expect(buildRuntimeAccountStatusSnapshot(input, extra)).toEqual(expected);
+  ])("$name", ({ input, expected }) => {
+    expect(buildRuntimeAccountStatusSnapshot(input)).toEqual(expected);
   });
 });
 
 describe("buildTokenChannelStatusSummary", () => {
+  const supplied = {
+    configured: true,
+    tokenSource: "env",
+    running: true,
+    lastStartAt: 1,
+    lastStopAt: 2,
+    lastError: "boom",
+    probe: { ok: true },
+    lastProbeAt: 3,
+  };
   it.each([
     {
       name: "includes token/probe fields with mode by default",
@@ -325,104 +280,70 @@ describe("buildTokenChannelStatusSummary", () => {
     },
     {
       name: "can omit mode for channels without a mode state",
-      input: {
-        configured: true,
-        tokenSource: "env",
-        running: true,
-        lastStartAt: 1,
-        lastStopAt: 2,
-        lastError: "boom",
-        probe: { ok: true },
-        lastProbeAt: 3,
-      },
+      input: structuredClone(supplied),
       options: { includeMode: false },
-      expected: {
-        configured: true,
-        tokenSource: "env",
-        running: true,
-        lastStartAt: 1,
-        lastStopAt: 2,
-        lastError: "boom",
-        probe: { ok: true },
-        lastProbeAt: 3,
-      },
+      expected: supplied,
     },
   ])("$name", ({ input, options, expected }) => {
     expect(buildTokenChannelStatusSummary(input, options)).toEqual(expected);
   });
 });
 
-describe("buildWebhookChannelStatusSummary", () => {
-  it("defaults mode to webhook and keeps supplied extras", () => {
-    expect(
-      buildWebhookChannelStatusSummary(
-        {
-          configured: true,
-          running: true,
-        },
-        {
-          secretSource: "env",
-        },
-      ),
-    ).toEqual({
-      configured: true,
-      running: true,
-      lastStartAt: null,
-      lastStopAt: null,
-      lastError: null,
-      mode: "webhook",
-      secretSource: "env",
-    });
+it("defaults mode to webhook and keeps supplied extras", () => {
+  expect(
+    buildWebhookChannelStatusSummary({ configured: true, running: true }, { secretSource: "env" }),
+  ).toEqual({
+    ...defaultChannelSummary,
+    configured: true,
+    running: true,
+    mode: "webhook",
+    secretSource: "env",
   });
 });
 
-describe("createDependentCredentialStatusIssueCollector", () => {
-  it("uses source metadata from sanitized snapshots to pick the missing field", () => {
-    const collect = createDependentCredentialStatusIssueCollector({
+it("uses source metadata from sanitized snapshots to pick the missing field", () => {
+  const collect = createDependentCredentialStatusIssueCollector({
+    channel: "line",
+    dependencySourceKey: "tokenSource",
+    missingPrimaryMessage: "LINE channel access token not configured",
+    missingDependentMessage: "LINE channel secret not configured",
+  });
+
+  expect(
+    collect([
+      { accountId: "default", configured: false, tokenSource: "none" },
+      { accountId: "work", configured: false, tokenSource: "env" },
+      { accountId: "ok", configured: true, tokenSource: "env" },
+    ]),
+  ).toEqual([
+    {
       channel: "line",
-      dependencySourceKey: "tokenSource",
-      missingPrimaryMessage: "LINE channel access token not configured",
-      missingDependentMessage: "LINE channel secret not configured",
-    });
-
-    expect(
-      collect([
-        { accountId: "default", configured: false, tokenSource: "none" },
-        { accountId: "work", configured: false, tokenSource: "env" },
-        { accountId: "ok", configured: true, tokenSource: "env" },
-      ]),
-    ).toEqual([
-      {
-        channel: "line",
-        accountId: "default",
-        kind: "config",
-        message: "LINE channel access token not configured",
-      },
-      {
-        channel: "line",
-        accountId: "work",
-        kind: "config",
-        message: "LINE channel secret not configured",
-      },
-    ]);
-  });
+      accountId: "default",
+      kind: "config",
+      message: "LINE channel access token not configured",
+    },
+    {
+      channel: "line",
+      accountId: "work",
+      kind: "config",
+      message: "LINE channel secret not configured",
+    },
+  ]);
 });
 
-describe("collectStatusIssuesFromLastError", () => {
-  it("returns runtime issues only for non-empty string lastError values", () => {
-    expect(
-      collectStatusIssuesFromLastError("demo-channel", [
-        { accountId: "default", lastError: " timeout " },
-        { accountId: "silent", lastError: "   " },
-        { accountId: "typed", lastError: { message: "boom" } },
-      ]),
-    ).toEqual([
-      {
-        channel: "demo-channel",
-        accountId: "default",
-        kind: "runtime",
-        message: "Channel error: timeout",
-      },
-    ]);
-  });
+it("returns runtime issues only for non-empty string lastError values", () => {
+  expect(
+    collectStatusIssuesFromLastError("demo-channel", [
+      { accountId: "default", lastError: " timeout " },
+      { accountId: "silent", lastError: "   " },
+      { accountId: "typed", lastError: { message: "boom" } },
+    ]),
+  ).toEqual([
+    {
+      channel: "demo-channel",
+      accountId: "default",
+      kind: "runtime",
+      message: "Channel error: timeout",
+    },
+  ]);
 });

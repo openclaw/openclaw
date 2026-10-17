@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, afterEach, beforeEach } from "vitest";
+import { assert, describe, expect, it, afterEach, beforeEach } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { resolveSessionTranscriptDatabasePath } from "../config/sessions/session-accessor.js";
 import {
@@ -35,7 +35,6 @@ import {
   withSessionTranscriptWriteLock as withWriteLock,
   type SessionTranscriptMessageEntry,
   type SessionTranscriptReadParams,
-  appendSessionTranscriptMessageByIdentity,
 } from "./session-transcript-runtime.js";
 
 const identity = {
@@ -47,6 +46,22 @@ const configuredText = "Message from the configured store";
 const defaultText = "Competing message with the same session id";
 const appendedText = "Appended through the SDK";
 const message = { role: "assistant", content: appendedText };
+const delivery = {
+  replyToId: "42",
+  audioAsVoice: true,
+  mediaUrls: ["/tmp/voice.ogg"],
+  tts: {
+    tagged: true,
+    text: "Spoken answer",
+    directives: [{ provider: "test", values: { voice: "synthetic" } }],
+  },
+};
+function assistantMessage(text: string, timestamp: number, openclawDelivery?: unknown) {
+  return { role: "assistant", content: [{ type: "text", text }], timestamp, openclawDelivery };
+}
+function jsonlMessage(id: string, entry: ReturnType<typeof assistantMessage>) {
+  return JSON.stringify({ type: "message", id, message: entry });
+}
 
 function messageContents(events: readonly unknown[]): unknown[] {
   return events.flatMap((event) => {
@@ -215,9 +230,7 @@ describe("configured SDK transcript store parity", () => {
         ...configured,
         message: { role: "user", content: "admitted turn" },
       });
-      if (!admitted?.anchor) {
-        throw new Error("expected admission anchor");
-      }
+      assert(admitted?.anchor, "expected admission anchor");
       const receipt = {
         ...admitted.anchor,
         logicalTurnId: "configured-read-fence",
@@ -260,7 +273,7 @@ describe("configured SDK transcript store parity", () => {
 
 describe("assistant transcript delivery projection", () => {
   let tempDir: string;
-  let storePath: string;
+  let scope: SessionTranscriptReadParams & { sessionFile: string };
   let state: OpenClawTestState;
 
   beforeEach(async () => {
@@ -269,7 +282,13 @@ describe("assistant transcript delivery projection", () => {
       applyEnv: false,
     });
     tempDir = state.root;
-    storePath = path.join(tempDir, "sessions.json");
+    scope = {
+      agentId: "main",
+      sessionFile: path.join(tempDir, "mirror-target.jsonl"),
+      sessionId: "mirror-session",
+      sessionKey: "agent:main:main",
+      storePath: path.join(tempDir, "sessions.json"),
+    };
   });
 
   afterEach(async () => {
@@ -280,26 +299,8 @@ describe("assistant transcript delivery projection", () => {
   it.each([
     {
       name: "persisted delivery facts",
-      stored: {
-        replyToId: "42",
-        audioAsVoice: true,
-        mediaUrls: ["/tmp/voice.ogg"],
-        tts: {
-          tagged: true,
-          text: "Spoken answer",
-          directives: [{ provider: "test", values: { voice: "synthetic" } }],
-        },
-      },
-      projected: {
-        replyToId: "42",
-        audioAsVoice: true,
-        mediaUrls: ["/tmp/voice.ogg"],
-        tts: {
-          tagged: true,
-          text: "Spoken answer",
-          directives: [{ provider: "test", values: { voice: "synthetic" } }],
-        },
-      },
+      stored: structuredClone(delivery),
+      projected: delivery,
     },
     {
       name: "malformed and non-delivery fields",
@@ -319,21 +320,9 @@ describe("assistant transcript delivery projection", () => {
       },
     },
   ])("appends scoped messages and reads exact text with $name", async ({ stored, projected }) => {
-    const scope = {
-      agentId: "main",
-      sessionFile: path.join(tempDir, "mirror-target.jsonl"),
-      sessionId: "mirror-session",
-      sessionKey: "agent:main:main",
-      storePath,
-    };
-    const deliveredMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "    hello()\n\n" }],
-      openclawDelivery: stored,
-      timestamp: 1,
-    };
+    const deliveredMessage = assistantMessage("    hello()\n\n", 1, stored);
 
-    const appended = await appendSessionTranscriptMessageByIdentity({
+    const appended = await appendMessage({
       ...scope,
       message: deliveredMessage,
     });
@@ -364,24 +353,9 @@ describe("assistant transcript delivery projection", () => {
     fs.writeFileSync(
       sessionFile,
       [
-        {
-          type: "message",
-          id: "assistant-final",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text }],
-            timestamp: 123,
-            openclawDelivery,
-          },
-        },
-        {
-          type: "message",
-          id: "empty",
-          message: { role: "assistant", content: [{ type: "text", text: "  \n" }], timestamp: 124 },
-        },
-      ]
-        .map((entry) => JSON.stringify(entry))
-        .join("\n") + "\n",
+        jsonlMessage("assistant-final", assistantMessage(text, 123, openclawDelivery)),
+        jsonlMessage("empty", assistantMessage("  \n", 124)),
+      ].join("\n") + "\n",
     );
 
     await expect(readLatestAssistantTextFromSessionTranscript(sessionFile)).resolves.toEqual({

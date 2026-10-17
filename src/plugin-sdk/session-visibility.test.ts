@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { GatewayCredentialsRequiredError } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
@@ -10,6 +10,32 @@ import {
   createSessionVisibilityRowChecker,
 } from "./session-visibility.js";
 
+const defaults = {
+  action: "history",
+  requesterSessionKey: "agent:main:main",
+  visibility: "self",
+  a2aPolicy: createAgentToAgentPolicy({}),
+} as const;
+function direct(options: Partial<Parameters<typeof createSessionVisibilityChecker>[0]>) {
+  return createSessionVisibilityChecker({ ...defaults, spawnedKeys: null, ...options });
+}
+function rowChecker(options: Partial<Parameters<typeof createSessionVisibilityRowChecker>[0]>) {
+  return createSessionVisibilityRowChecker({ ...defaults, ...options });
+}
+const cleanups: Array<() => void> = [];
+afterEach(() => {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
+    cleanup();
+  }
+});
+function registerProvider(
+  ...args: Parameters<typeof createSessionVisibilityChecker.registerScopedAccessProvider>
+) {
+  const unregister = createSessionVisibilityChecker.registerScopedAccessProvider(...args);
+  cleanups.push(unregister);
+  return unregister;
+}
+
 describe("scoped session access providers", () => {
   const scopedRequest = {
     action: "history",
@@ -20,104 +46,79 @@ describe("scoped session access providers", () => {
   it("keeps synchronous checks fresh while the async companion reads current state", async () => {
     let expectedSessionId = "first-incarnation";
     const provider = () => ({ expectedSessionId });
-    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider(provider, {
+    registerProvider(provider, {
       resolveAsync: async () => ({ expectedSessionId: `async-${expectedSessionId}` }),
     });
-    try {
-      const params = {
-        ...scopedRequest,
-        visibility: "self" as const,
-        a2aPolicy: createAgentToAgentPolicy({}),
-      };
-      const checker = createSessionVisibilityChecker({ ...params, spawnedKeys: null });
-      const guard = await createSessionVisibilityGuard(params);
-      for (const incarnation of ["first-incarnation", "second-incarnation"]) {
-        expectedSessionId = incarnation;
-        expect(checker.check(scopedRequest.targetSessionKey)).toEqual({
-          allowed: true,
-          expectedSessionId,
-        });
-        expect(guard.check(scopedRequest.targetSessionKey)).toEqual({
-          allowed: true,
-          expectedSessionId,
-        });
-        expect(createSessionVisibilityChecker.resolveScopedAccess(scopedRequest)).toEqual({
-          expectedSessionId,
-        });
-        await expect(
-          createSessionVisibilityChecker.resolveScopedAccessAsync(scopedRequest),
-        ).resolves.toEqual({
-          expectedSessionId: `async-${incarnation}`,
-        });
-      }
-    } finally {
-      unregister();
+    const params = {
+      ...scopedRequest,
+      ...defaults,
+      requesterSessionKey: scopedRequest.requesterSessionKey,
+    };
+    const checker = direct(params);
+    const guard = await createSessionVisibilityGuard(params);
+    for (const incarnation of ["first-incarnation", "second-incarnation"]) {
+      expectedSessionId = incarnation;
+      expect(checker.check(scopedRequest.targetSessionKey)).toEqual({
+        allowed: true,
+        expectedSessionId,
+      });
+      expect(guard.check(scopedRequest.targetSessionKey)).toEqual({
+        allowed: true,
+        expectedSessionId,
+      });
+      expect(createSessionVisibilityChecker.resolveScopedAccess(scopedRequest)).toEqual({
+        expectedSessionId,
+      });
+      await expect(
+        createSessionVisibilityChecker.resolveScopedAccessAsync(scopedRequest),
+      ).resolves.toEqual({
+        expectedSessionId: `async-${incarnation}`,
+      });
     }
   });
 
   it("discards an awaited grant after unregister-and-replace of the same callback", async () => {
     const pending = createDeferred<{ expectedSessionId: string }>();
     const provider = () => ({ expectedSessionId: "sync-incarnation" });
-    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider(provider, {
+    const unregister = registerProvider(provider, {
       resolveAsync: () => pending.promise,
     });
-    let unregisterReplacement: (() => void) | undefined;
-    try {
-      const resolving = createSessionVisibilityChecker.resolveScopedAccessAsync(scopedRequest);
-      unregister();
-      unregisterReplacement = createSessionVisibilityChecker.registerScopedAccessProvider(
-        provider,
-        {
-          resolveAsync: async () => ({ expectedSessionId: "replacement-incarnation" }),
-        },
-      );
-      pending.resolve({ expectedSessionId: "retired-incarnation" });
-      await expect(resolving).resolves.toBeUndefined();
-      unregister();
-      await expect(
-        createSessionVisibilityChecker.resolveScopedAccessAsync(scopedRequest),
-      ).resolves.toEqual({ expectedSessionId: "replacement-incarnation" });
-    } finally {
-      unregister();
-      unregisterReplacement?.();
-    }
+    const resolving = createSessionVisibilityChecker.resolveScopedAccessAsync(scopedRequest);
+    unregister();
+    registerProvider(provider, {
+      resolveAsync: async () => ({ expectedSessionId: "replacement-incarnation" }),
+    });
+    pending.resolve({ expectedSessionId: "retired-incarnation" });
+    await expect(resolving).resolves.toBeUndefined();
+    unregister();
+    await expect(
+      createSessionVisibilityChecker.resolveScopedAccessAsync(scopedRequest),
+    ).resolves.toEqual({ expectedSessionId: "replacement-incarnation" });
   });
 
   it("preserves provider order and skips registrations retired while an earlier provider awaits", async () => {
     const pending = createDeferred<undefined>();
-    const unregisterFirst = createSessionVisibilityChecker.registerScopedAccessProvider(
-      () => undefined,
-      {
-        resolveAsync: () => pending.promise,
-      },
-    );
-    const unregisterSecond = createSessionVisibilityChecker.registerScopedAccessProvider(() => ({
+    registerProvider(() => undefined, {
+      resolveAsync: () => pending.promise,
+    });
+    const unregisterSecond = registerProvider(() => ({
       expectedSessionId: "retired-second",
     }));
-    const unregisterThird = createSessionVisibilityChecker.registerScopedAccessProvider(() => ({
+    registerProvider(() => ({
       expectedSessionId: "third",
     }));
-    try {
-      const resolving = createSessionVisibilityChecker.resolveScopedAccessAsync(scopedRequest);
-      unregisterSecond();
-      pending.resolve(undefined);
-      await expect(resolving).resolves.toEqual({ expectedSessionId: "third" });
-    } finally {
-      unregisterFirst();
-      unregisterSecond();
-      unregisterThird();
-    }
+    const resolving = createSessionVisibilityChecker.resolveScopedAccessAsync(scopedRequest);
+    unregisterSecond();
+    pending.resolve(undefined);
+    await expect(resolving).resolves.toEqual({ expectedSessionId: "third" });
   });
 
   it("does not assign an unscoped default-agent row to a non-default requester", () => {
-    const checker = createSessionVisibilityChecker({
-      action: "history",
+    const checker = direct({
       defaultAgentId: "main",
       requesterAgentId: "work",
       requesterSessionKey: "agent:work:main",
       visibility: "agent",
-      a2aPolicy: createAgentToAgentPolicy({}),
-      spawnedKeys: null,
     });
 
     expect(checker.check("main")).toEqual({
@@ -129,13 +130,10 @@ describe("scoped session access providers", () => {
   });
 
   it("fails closed for an unscoped row without configured ownership", () => {
-    const checker = createSessionVisibilityChecker({
-      action: "history",
+    const checker = direct({
       requesterAgentId: "work",
       requesterSessionKey: "agent:work:main",
       visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy({}),
-      spawnedKeys: null,
     });
 
     expect(checker.check("main")).toEqual({
@@ -146,11 +144,8 @@ describe("scoped session access providers", () => {
   });
 
   it("accepts a legacy Set spawnedKeys input on the exported checker", () => {
-    const checker = createSessionVisibilityChecker({
-      action: "history",
-      requesterSessionKey: "agent:main:main",
+    const checker = direct({
       visibility: "tree",
-      a2aPolicy: createAgentToAgentPolicy({}),
       spawnedKeys: new Set(["agent:main:subagent:child-1"]),
     });
 
@@ -164,12 +159,10 @@ describe("scoped session access providers", () => {
   });
 
   it("gives the canonical main session agent-wide access under tree visibility", () => {
-    const checker = createSessionVisibilityRowChecker({
-      action: "history",
+    const checker = rowChecker({
       requesterSessionKey: "agent:main:work",
       mainSessionKey: "agent:main:work",
       visibility: "tree",
-      a2aPolicy: createAgentToAgentPolicy({}),
     });
 
     expect(checker.check({ key: "agent:main:telegram:group:unspawned" })).toEqual({
@@ -178,13 +171,9 @@ describe("scoped session access providers", () => {
   });
 
   it("keeps exact and current self aliases available without a configured default", () => {
-    const checker = createSessionVisibilityChecker({
-      action: "history",
+    const checker = direct({
       requesterAgentId: "work",
       requesterSessionKey: "main",
-      visibility: "self",
-      a2aPolicy: createAgentToAgentPolicy({}),
-      spawnedKeys: null,
     });
 
     expect(checker.check("main")).toEqual({ allowed: true });
@@ -192,13 +181,11 @@ describe("scoped session access providers", () => {
   });
 
   it("keeps explicit row ownership authoritative when a bare key matches the requester", () => {
-    const checker = createSessionVisibilityRowChecker({
-      action: "history",
+    const checker = rowChecker({
       defaultAgentId: "main",
       requesterAgentId: "work",
       requesterSessionKey: "main",
       visibility: "agent",
-      a2aPolicy: createAgentToAgentPolicy({}),
     });
 
     expect(checker.check({ key: "main", agentId: "main" })).toEqual({
@@ -210,13 +197,12 @@ describe("scoped session access providers", () => {
   });
 
   it("resolves a bare requester alias through the configured default before row metadata exists", () => {
-    const checker = createSessionVisibilityRowChecker({
+    const checker = rowChecker({
       action: "send",
       defaultAgentId: "main",
       requesterAgentId: "work",
       requesterSessionKey: "main",
       visibility: "agent",
-      a2aPolicy: createAgentToAgentPolicy({}),
     });
 
     expect(checker.check({ key: "main" })).toEqual({
@@ -229,12 +215,11 @@ describe("scoped session access providers", () => {
 
   it("grants only the exact requester, target, and action supplied by a provider", () => {
     const makeChecker = (action: "history" | "send") =>
-      createSessionVisibilityChecker({
+      direct({
         action,
         requesterAgentId: "main",
         requesterSessionKey: "agent:main:clickclack:channel:discussion",
         visibility: "tree",
-        a2aPolicy: createAgentToAgentPolicy({}),
         spawnedKeys: new Set(),
       });
     const history = makeChecker("history");
@@ -242,23 +227,20 @@ describe("scoped session access providers", () => {
     const target = "agent:main:main";
 
     expect(history.check(target).allowed).toBe(false);
-    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) =>
+    const unregister = registerProvider((request) =>
       request.action === "history" &&
       request.requesterSessionKey === "agent:main:clickclack:channel:discussion" &&
       request.targetSessionKey === target
         ? { expectedSessionId: "main-incarnation" }
         : undefined,
     );
-    try {
-      expect(history.check(target)).toEqual({
-        allowed: true,
-        expectedSessionId: "main-incarnation",
-      });
-      expect(send.check(target).allowed).toBe(false);
-      expect(history.check("agent:main:other").allowed).toBe(false);
-    } finally {
-      unregister();
-    }
+    expect(history.check(target)).toEqual({
+      allowed: true,
+      expectedSessionId: "main-incarnation",
+    });
+    expect(send.check(target).allowed).toBe(false);
+    expect(history.check("agent:main:other").allowed).toBe(false);
+    unregister();
     expect(history.check(target).allowed).toBe(false);
   });
 
@@ -270,52 +252,35 @@ describe("scoped session access providers", () => {
       status: "forbidden",
       error: `Session not visible from session tools: ${targetSessionKey}`,
     } as const;
-    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider(() => ({
+    registerProvider(() => ({
       expectedSessionId: "incognito-incarnation",
     }));
-    try {
-      const direct = createSessionVisibilityChecker({
-        action: "history",
-        requesterSessionKey,
-        mainSessionKey: requesterSessionKey,
-        visibility: "tree",
-        a2aPolicy: createAgentToAgentPolicy({}),
-        spawnedKeys: new Set([targetSessionKey]),
-      });
-      const row = createSessionVisibilityRowChecker({
-        action: "history",
-        requesterSessionKey,
-        mainSessionKey: requesterSessionKey,
-        visibility: "tree",
-        a2aPolicy: createAgentToAgentPolicy({}),
-      });
+    const checker = direct({
+      requesterSessionKey,
+      mainSessionKey: requesterSessionKey,
+      visibility: "tree",
+      spawnedKeys: new Set([targetSessionKey]),
+    });
+    const row = rowChecker({
+      requesterSessionKey,
+      mainSessionKey: requesterSessionKey,
+      visibility: "tree",
+    });
 
-      expect(direct.check(targetSessionKey)).toEqual(expected);
-      expect(row.check({ key: targetSessionKey, spawnedBy: requesterSessionKey })).toEqual(
-        expected,
-      );
-    } finally {
-      unregister();
-    }
+    expect(checker.check(targetSessionKey)).toEqual(expected);
+    expect(row.check({ key: targetSessionKey, spawnedBy: requesterSessionKey })).toEqual(expected);
   });
 
   it("fails closed when a provider throws", () => {
-    const unregister = createSessionVisibilityChecker.registerScopedAccessProvider(() => {
+    registerProvider(() => {
       throw new Error("provider failure");
     });
-    try {
-      const checker = createSessionVisibilityChecker({
-        action: "status",
-        requesterAgentId: "main",
-        requesterSessionKey: "agent:main:requester",
-        visibility: "self",
-        a2aPolicy: createAgentToAgentPolicy({}),
-        spawnedKeys: null,
-      });
-      expect(checker.check("agent:main:target").allowed).toBe(false);
-    } finally {
-      unregister();
-    }
+    const checker = direct({
+      action: "status",
+      requesterAgentId: "main",
+      requesterSessionKey: "agent:main:requester",
+    });
+    expect(checker.check("agent:main:target").allowed).toBe(false);
   });
 });
 
@@ -344,7 +309,7 @@ describe("directed send matcher", () => {
       ["agent", narrow],
       ["all", broad],
     ] as const) {
-      const checker = createSessionVisibilityRowChecker({
+      const checker = rowChecker({
         action: "send",
         requesterSessionKey: "agent:research:main",
         visibility,
