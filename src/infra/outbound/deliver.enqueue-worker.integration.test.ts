@@ -130,7 +130,7 @@ describe("enqueue publication custody through the real sender", () => {
         ...deliveryParams(),
         payloads: [{ text: textBody }],
       });
-      observe(delivery);
+      void observe(delivery);
       await withinTest(
         awaitGateBeforeSettlement(
           reply.held,

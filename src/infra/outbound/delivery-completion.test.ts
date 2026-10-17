@@ -52,7 +52,7 @@ function observeActorCommands(
   vi.spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
     (...args) => {
       const owner = capture(...args);
-      const runExisting = owner.runExisting;
+      const runExisting = owner.runExisting.bind(owner);
       owner.runExisting = (source, run, options) =>
         runExisting(
           source,
