@@ -778,11 +778,11 @@ describe("secrets runtime state", () => {
         runtimeLocalProfileIds: ["anthropic:stable", "openai:default"],
       });
     activateSnapshot(snapshot("sk-old", 19_001));
-    const previous = getActiveSecretsRuntimeSnapshotState()!;
+    const previous = getSnapshot()!;
     const candidate = snapshot("sk-candidate", 19_002);
     expect(activateSnapshotIfCurrent(candidate)).toBe(true);
     for (let index = 0; index < 300; index += 1) {
-      noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
+      noteAuthMutation(agentDir, {
         credentialsChanged: true,
         stateChanged: false,
         profileIds: [`openai:unrelated-${index}`],
@@ -790,7 +790,7 @@ describe("secrets runtime state", () => {
     }
 
     expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
+    expect(getAuthStore(agentDir)).toBeUndefined();
   });
 
   it.each(["owner", "profile"] as const)(

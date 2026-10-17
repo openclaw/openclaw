@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cliRecoveryEntrypoints } from "../cli/cli-entrypoint.test-support.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -41,7 +42,6 @@ import {
 import type { CaptureEventRecord } from "./types.js";
 
 const roots: string[] = [];
-const redactedPrefix = "first [REDACTED] café";
 afterEach(() => {
   closeDebugProxyCaptureStore();
   vi.restoreAllMocks();
@@ -139,32 +139,6 @@ function pendingResponse(chunks: Buffer[]) {
   return { response, controller: controller!, ...observePendingCapture(response, chunks.length) };
 }
 
-function storeFixture() {
-  const root = stateRoot();
-  const settings = captureSettings(root);
-  const store = new DebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } });
-  const getStore = vi.fn(() => store);
-  return { settings, store, getStore, deps: { getStore } };
-}
-
-function captureResponse(
-  response: Response,
-  settings: DebugProxySettings,
-  deps: DebugProxyCaptureRuntimeDeps,
-  params: Partial<Parameters<typeof captureHttpExchange>[0]> = {},
-) {
-  captureHttpExchange(
-    { url: "https://example.test/pending", method: "GET", ...params, response },
-    settings,
-    deps,
-  );
-}
-
-function closeStore(store: DebugProxyCaptureStore) {
-  store.close();
-  closeOpenClawStateDatabaseByPath(store.dbPath);
-}
-
 describe("capture store lifecycle", () => {
   it.each([
     { storage: "shared", close: "direct" },
@@ -186,8 +160,11 @@ describe("capture store lifecycle", () => {
     };
     registerSecretValueForRedaction("fixture-secret-value");
     const bytes = Buffer.from("first fixture-secret-value caf\u00e9");
-    const chunks = [bytes.subarray(0, 15), bytes.subarray(15, -1), bytes.subarray(-1)];
-    const stream = pendingResponse(chunks);
+    const stream = pendingResponse([
+      bytes.subarray(0, 15),
+      bytes.subarray(15, -1),
+      bytes.subarray(-1),
+    ]);
     const terminals: CaptureEventRecord[] = [];
     const record = store.recordEvent.bind(store);
     const recording = vi.spyOn(store, "recordEvent").mockImplementation((event) => {
@@ -206,7 +183,11 @@ describe("capture store lifecycle", () => {
         sourceScope: "openclaw",
         sourceProcess: "fixture",
       });
-      captureResponse(stream.response, settings, deps);
+      captureHttpExchange(
+        { url: "https://example.test/pending", method: "GET", response: stream.response },
+        settings,
+        deps,
+      );
       await stream.pending;
       lease.release();
       expect(store.isClosed).toBe(false);
@@ -221,7 +202,7 @@ describe("capture store lifecycle", () => {
       expect(terminals[0]).toMatchObject({
         kind: "response",
         status: 200,
-        dataText: redactedPrefix,
+        dataText: "first [REDACTED] caf\u00e9",
       });
       expect(JSON.parse(terminals[0]!.metaJson!)).toMatchObject({ bodyCapture: "finalized" });
       expect(end).toHaveBeenCalledExactlyOnceWith(settings.sessionId);
@@ -241,7 +222,9 @@ describe("capture store lifecycle", () => {
       try {
         expect(reopened.store.listSessions()[0]?.endedAt).toBeTypeOf("number");
         expect(reopened.store.getSessionEvents(settings.sessionId)).toHaveLength(2);
-        expect(reopened.store.readBlob(terminals[0]!.dataBlobId!)).toBe(redactedPrefix);
+        expect(reopened.store.readBlob(terminals[0]!.dataBlobId!)).toBe(
+          "first [REDACTED] caf\u00e9",
+        );
       } finally {
         reopened.release();
       }
@@ -249,14 +232,18 @@ describe("capture store lifecycle", () => {
       recording.mockRestore();
       lease.release();
       sibling.release();
-      closeStore(store);
+      store.close();
+      closeOpenClawStateDatabaseByPath(store.dbPath);
     }
   });
 
   it.each(["error", "finalize"] as const)(
     "records one terminal through a pending-read %s race",
     async (mode) => {
-      const { settings, store, deps } = storeFixture();
+      const root = stateRoot();
+      const settings = captureSettings(root);
+      const store = new DebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } });
+      const deps: DebugProxyCaptureRuntimeDeps = { getStore: () => store };
       const stream = pendingResponse([Buffer.from("prefix")]);
       const terminals: CaptureEventRecord[] = [];
       const done = createDeferredCore();
@@ -271,7 +258,11 @@ describe("capture store lifecycle", () => {
       registerSecretValueForRedaction("fixture-error-secret");
       const reason = new Error("fixture read failure: fixture-error-secret");
       try {
-        captureResponse(stream.response, settings, deps);
+        captureHttpExchange(
+          { url: "https://example.test/race", method: "GET", response: stream.response },
+          settings,
+          deps,
+        );
         await stream.pending;
         if (mode === "error") {
           stream.controller.error(reason);
@@ -298,7 +289,8 @@ describe("capture store lifecycle", () => {
         expect(terminals).toHaveLength(1);
       } finally {
         await stream.response.body?.cancel().catch(() => undefined);
-        closeStore(store);
+        store.close();
+        closeOpenClawStateDatabaseByPath(store.dbPath);
       }
     },
   );
@@ -306,8 +298,15 @@ describe("capture store lifecycle", () => {
   it.each(["event", "retired"] as const)(
     "settles sibling reads and closes after %s persistence fails",
     async (surface) => {
-      const { settings, store, getStore, deps } = storeFixture();
-      const streams = ["one", "two"].map((text) => pendingResponse([Buffer.from(text)]));
+      const root = stateRoot();
+      const settings = captureSettings(root);
+      const store = new DebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } });
+      const getStore = vi.fn(() => store);
+      const deps: DebugProxyCaptureRuntimeDeps = { getStore };
+      const streams = [
+        pendingResponse([Buffer.from("one")]),
+        pendingResponse([Buffer.from("two")]),
+      ];
       const failure = new Error("fixture storage failure");
       const attempted: string[] = [];
       const record = store.recordEvent.bind(store);
@@ -322,7 +321,16 @@ describe("capture store lifecycle", () => {
       });
       try {
         for (const [index, stream] of streams.entries()) {
-          captureResponse(stream.response, settings, deps, { flowId: index === 0 ? "one" : "two" });
+          captureHttpExchange(
+            {
+              url: "https://example.test/sibling",
+              method: "GET",
+              response: stream.response,
+              flowId: index === 0 ? "one" : "two",
+            },
+            settings,
+            deps,
+          );
         }
         await Promise.all(streams.map((stream) => stream.pending));
         if (surface === "retired") {
@@ -353,7 +361,8 @@ describe("capture store lifecycle", () => {
           await stream.response.body?.cancel();
           await stream.settled;
         }
-        closeStore(store);
+        store.close();
+        closeOpenClawStateDatabaseByPath(store.dbPath);
       }
     },
   );
@@ -426,6 +435,10 @@ describe("capture store lifecycle", () => {
           assert.equal(store.isClosed, true);
           finalizeDebugProxyCapture(settings, deps);
           finalizeDebugProxyCapture(settings, deps);
+          assert.equal(acquired, 1);
+          assert.equal(terminals, 1);
+          assert.equal(ended, 1);
+          assert.equal(failures, 1);
           process.stdout.write(JSON.stringify({ acquired, terminals, ended, failures }));
         });
         process.exit(0);
@@ -435,8 +448,12 @@ describe("capture store lifecycle", () => {
         `[proxy-capture] Capture persistence failed: fixture ${failure} persistence failure: [REDACTED]\n`,
       );
       expect(child.status).toBe(0);
-      const expectedCounts = { acquired: 1, terminals: 1, ended: 1, failures: 1 };
-      expect(JSON.parse(child.stdout)).toEqual(expectedCounts);
+      expect(JSON.parse(child.stdout)).toEqual({
+        acquired: 1,
+        terminals: 1,
+        ended: 1,
+        failures: 1,
+      });
       const reopened =
         storage === "shared"
           ? new DebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } })
@@ -447,7 +464,8 @@ describe("capture store lifecycle", () => {
         expect(events).toHaveLength(3);
         expect(events[0]).toMatchObject({ kind: "response", dataText: "prefix-two" });
       } finally {
-        closeStore(reopened);
+        reopened.close();
+        closeOpenClawStateDatabaseByPath(reopened.dbPath);
       }
     },
   );
@@ -472,11 +490,17 @@ describe("capture admission generation", () => {
     try {
       for (const [index, value] of settings.entries()) {
         selected = stores[index]!;
-        captureResponse(streams[index]!.response, value, deps, {
-          method: "POST",
-          flowId: `database-${index}`,
-          requestBody: `request-${index}`,
-        });
+        captureHttpExchange(
+          {
+            url: "https://example.test/identity",
+            method: "POST",
+            flowId: `database-${index}`,
+            requestBody: `request-${index}`,
+            response: streams[index]!.response,
+          },
+          value,
+          deps,
+        );
       }
       await Promise.all(streams.map((stream) => stream.pending));
       expect(
@@ -513,7 +537,15 @@ describe("capture admission generation", () => {
           dataText: `database-${index}`,
         });
         const recorded = recordings[index]!.mock.calls.length;
-        captureResponse(new Response("late"), settings[index]!, deps);
+        captureHttpExchange(
+          {
+            url: "https://example.test/delayed",
+            method: "GET",
+            response: new Response("late"),
+          },
+          settings[index],
+          deps,
+        );
         expect(recordings[index]).toHaveBeenCalledTimes(recorded);
         if (index === first) {
           expect(stores[second]!.isClosed).toBe(false);
@@ -530,7 +562,8 @@ describe("capture admission generation", () => {
         stream.controller.close();
         await stream.response.body?.cancel();
         await stream.settled;
-        closeStore(stores[index]!);
+        stores[index]!.close();
+        closeOpenClawStateDatabaseByPath(stores[index]!.dbPath);
       }
     }
   });
@@ -624,6 +657,73 @@ describe("capture admission generation", () => {
     expect(child.status).toBe(0);
     expect(JSON.parse(child.stdout)).toEqual([true, true, true]);
   });
+
+  it.each(
+    (["patched", "guarded"] as const).flatMap((route) =>
+      (["success", "rejection"] as const).map((outcome) => ({ route, outcome })),
+    ),
+  )(
+    "does not attach a delayed $route $outcome to a replacement owner",
+    async ({ route, outcome }) => {
+      const root = stateRoot();
+      const settings = captureSettings(root, `generation-${route}-${outcome}`);
+      vi.stubEnv("OPENCLAW_STATE_DIR", root);
+      vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
+      vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", settings.sessionId);
+      const admitted = createDeferredCore();
+      const transport = createDeferredCore<Response>();
+      const fetchImpl = vi.fn(async () => {
+        admitted.resolve();
+        return await transport.promise;
+      });
+      const target = { ...globalThis, fetch: fetchImpl } as typeof globalThis;
+      const deps = { fetchTarget: target };
+      initializeDebugProxyCapture("first", settings, deps);
+      const firstStore = acquireDebugProxyCaptureStore();
+      const operation =
+        route === "patched"
+          ? target.fetch("https://example.test/delayed").then((response) => ({
+              response,
+              release: async () => {},
+            }))
+          : fetchWithSsrFGuard({ url: "https://example.test/delayed", fetchImpl });
+      const result = operation.then(
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error }),
+      );
+      await admitted.promise;
+      finalizeDebugProxyCapture(settings, deps);
+      expect(firstStore.store.isClosed).toBe(true);
+      initializeDebugProxyCapture("replacement", settings, deps);
+      const replacement = acquireDebugProxyCaptureStore();
+      const record = vi.spyOn(replacement.store, "recordEvent");
+      const response = new Response("late");
+      const error = new Error("fixture late transport failure");
+      try {
+        if (outcome === "success") {
+          transport.resolve(response);
+        } else {
+          transport.reject(error);
+        }
+        const completed = await result;
+        if (outcome === "success") {
+          expect(completed.error).toBeUndefined();
+          expect(completed.value?.response).toBe(response);
+          expect(await completed.value!.response.text()).toBe("late");
+          await completed.value!.release();
+        } else {
+          expect(completed.error).toBe(error);
+        }
+        expect(record).not.toHaveBeenCalled();
+        expect(replacement.store.getSessionEvents(settings.sessionId)).toEqual([]);
+      } finally {
+        finalizeDebugProxyCapture(settings, deps);
+        firstStore.release();
+        replacement.release();
+        closeOpenClawStateDatabaseByPath(replacement.store.dbPath);
+      }
+    },
+  );
 });
 
 describe("async capture lifecycle", () => {
@@ -653,11 +753,9 @@ describe("async capture lifecycle", () => {
       process.kill(process.pid, ${JSON.stringify(signal)});
     `;
       const child = runRuntimeScript(root, script, [], { HOME: root, XDG_CACHE_HOME: root });
-      expect([child.error, child.signal, child.status], child.stderr).toEqual([
-        undefined,
-        null,
-        exitCode,
-      ]);
+      expect(child.error, child.stderr).toBeUndefined();
+      expect(child.signal, child.stderr).toBeNull();
+      expect(child.status, child.stderr).toBe(exitCode);
       const persisted = withExistingOpenClawStateDatabaseReadOnly(
         ({ db }) => {
           const events = readDebugProxyCaptureSessionEvents(db, settings.sessionId);
@@ -745,21 +843,26 @@ describe("async capture lifecycle", () => {
       });
       try {
         const rows = (await reader.store.getSessionEvents(settings.sessionId)).toReversed();
-        expect(rows).toMatchObject([
-          { kind: "ws-frame", dataText: "websocket original" },
-          { kind: "request", dataText: "request original" },
-          { kind: "response", flowId: "http-prefix", dataText: redactedPrefix, status: 200 },
-        ]);
-        const [ws, , http] = rows;
-        expect(JSON.parse(ws!.metaJson!)).toEqual({
+        expect(rows).toHaveLength(3);
+        expect(rows.map((row) => row.kind)).toEqual(["ws-frame", "request", "response"]);
+        expect(rows[0]).toMatchObject({ dataText: "websocket original" });
+        expect(JSON.parse(String(rows[0]!.metaJson))).toEqual({
           provider: "fixture",
           detail: { phase: "accepted" },
         });
-        expect(JSON.parse(http!.metaJson!)).toEqual({
+        expect(rows[1]).toMatchObject({ dataText: "request original" });
+        expect(rows[2]).toMatchObject({
+          flowId: "http-prefix",
+          dataText: "first [REDACTED] café",
+          status: 200,
+        });
+        expect(JSON.parse(String(rows[2]!.metaJson))).toEqual({
           detail: { phase: "accepted" },
           bodyCapture: "finalized",
         });
-        expect(await reader.store.readBlob(String(rows[2]!.dataBlobId))).toBe(redactedPrefix);
+        expect(await reader.store.readBlob(String(rows[2]!.dataBlobId))).toBe(
+          "first [REDACTED] café",
+        );
         expect((await reader.store.listSessions())[0]?.endedAt).toBeTypeOf("number");
       } finally {
         await reader.release();

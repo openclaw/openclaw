@@ -42,7 +42,7 @@ describe("application update campaign overlays", () => {
       sentinel: updateSentinel("build-failed", 62_000, { mode: "git" }),
       schedule: { channel: "stable", autoEnabled: true },
     }));
-    const { harness, expectState } = automaticTest(request);
+    const { harness, overlays, expectState } = automaticTest(request);
     harness.emitEvent("update.available", {
       schedule: automaticSchedule({ state: "applying", updatedAtMs: 61_000 }),
     });
@@ -53,8 +53,8 @@ describe("application update campaign overlays", () => {
     expectState({
       updateStatusBanner: { text: expect.stringContaining("build-failed") },
       recordedUpdateAttempt: { timestampMs: 62_000, status: "error", reason: "build-failed" },
-      updateSchedule: { campaign: undefined },
     });
+    expect(overlays.snapshot.updateSchedule?.campaign).toBeUndefined();
     const statusRequests = request.mock.calls.filter(([method]) => method === "update.status");
     await vi.advanceTimersByTimeAsync(10_000);
     expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(
@@ -207,7 +207,7 @@ describe("application update campaign overlays", () => {
           : {},
       ),
     );
-    const { harness, expectState } = gatewayTest(
+    const { harness, overlays, expectState } = gatewayTest(
       request,
       updateHello(
         campaign(
@@ -223,9 +223,9 @@ describe("application update campaign overlays", () => {
     await flushMicrotasks();
     expect(request.mock.calls.filter(([method]) => method === "update.status")).toHaveLength(2);
     expectState({
-      updateSchedule: { campaign: undefined },
       updateStatusBanner: { text: expect.stringContaining("build-failed") },
     });
+    expect(overlays.snapshot.updateSchedule?.campaign).toBeUndefined();
 
     await vi.advanceTimersByTimeAsync(10_000);
     await flushMicrotasks();

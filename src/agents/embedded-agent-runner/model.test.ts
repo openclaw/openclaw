@@ -362,6 +362,7 @@ describe("resolveModel", () => {
   it("replaces models-add metadata with a preferred prepared model", async () => {
     const prepareProviderDynamicModel = vi.fn(async () => ({
       ...makeModel("prepared-model"),
+      input: ["text" as const],
       provider: "acme",
       name: "Prepared Model",
       api: "openai-completions" as const,

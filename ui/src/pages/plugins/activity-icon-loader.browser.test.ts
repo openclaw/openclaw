@@ -161,17 +161,23 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
+  it.each<[string, string, string]>([
     ["package PNG", "image/png", "png"],
     ["active SVG", "image/svg+xml", svg("<script>alert(1)</script>")],
     ["oversized element tree", "image/svg+xml", svg("<path/>".repeat(4))],
-    ...[
-      ["event attribute", 'viewBox="0 0 24 24" onload="alert(1)"'],
-      ["unknown attribute", 'viewBox="0 0 24 24" href="https://example.test/icon"'],
-      ["namespaced attribute", 'viewBox="0 0 24 24" xmlns:other="urn:other" other:width="24"'],
-      ["oversized view box", 'viewBox="0 0 4097 24"'],
-      ["oversized dimensions", 'width="24" height="4097"'],
-    ].map(([name, attributes]) => [name, "image/svg+xml", svg(square, attributes)]),
+    ...(
+      [
+        ["event attribute", 'viewBox="0 0 24 24" onload="alert(1)"'],
+        ["unknown attribute", 'viewBox="0 0 24 24" href="https://example.test/icon"'],
+        ["namespaced attribute", 'viewBox="0 0 24 24" xmlns:other="urn:other" other:width="24"'],
+        ["oversized view box", 'viewBox="0 0 4097 24"'],
+        ["oversized dimensions", 'width="24" height="4097"'],
+      ] satisfies Array<[string, string]>
+    ).map(([name, attributes]): [string, string, string] => [
+      name,
+      "image/svg+xml",
+      svg(square, attributes),
+    ]),
   ])("keeps %s out of compact activity", async (_name, contentType, body) => {
     vi.spyOn(globalThis, "fetch").mockImplementation(
       async () => new Response(body, { headers: { "content-type": contentType } }),

@@ -171,7 +171,7 @@ it.each([
 });
 
 it("does not wait for a stalled response cancellation before auth fallback", async () => {
-  const cancellation = createDeferred<void>();
+  const cancellation = createDeferred();
   const cancel = vi.fn(() => cancellation.promise);
   const fetchMock = vi
     .fn()

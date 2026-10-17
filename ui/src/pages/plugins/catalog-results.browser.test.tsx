@@ -18,10 +18,8 @@ import pluginStyles from "../../styles/plugins.css?inline";
 import settingsStyles from "../../styles/settings.css?inline";
 
 const views = new WeakMap<Element, { unmount: () => void }>();
-const find = <T extends HTMLElement = HTMLElement>(
-  selector: string,
-  root: ParentNode = container,
-) => root.querySelector<T>(selector)!;
+const find = (selector: string, root: ParentNode = container) =>
+  root.querySelector<HTMLElement>(selector)!;
 const detail = (props: Partial<Parameters<typeof renderPluginDetailShell>[0]>) =>
   renderPluginDetailShell({
     id: "demo",
@@ -133,7 +131,7 @@ it.each([263, 362])(
       await nextFrame();
       const card = find(".plugin-catalog-card");
       const identity = find(".installed-plugins-card__identity", card);
-      const action = find<HTMLButtonElement>("button", card);
+      const action = card.querySelector("button")!;
       const bounds = identity.getBoundingClientRect();
       for (const text of identity.querySelectorAll<HTMLElement>("h3,.plugin-card-author")) {
         const right = text.getBoundingClientRect().right;
@@ -223,7 +221,7 @@ it.each([
       .toBe(true);
     const loadedCard = find('[data-plugin-id="loaded-artwork"]');
     const failedCard = find('[data-plugin-id="failed-artwork"]');
-    const loadedImage = find<HTMLImageElement>(".plugins-icon", loadedCard);
+    const loadedImage = loadedCard.querySelector<HTMLImageElement>(".plugins-icon")!;
     await expect.poll(() => failedCard.querySelector("img")).toBeNull();
     expect(loadedImage.hidden).toBe(false);
     expect(failedCard.querySelector(".plugins-tile--fallback")?.textContent?.trim()).toBe("BA");
@@ -237,7 +235,7 @@ it.each([
     expect(failedCard.querySelector("img")).toBeNull();
     expect(failedCard.querySelector(".plugins-tile--fallback")?.textContent?.trim()).toBe("BA");
     if (whiteBackground) {
-      const image = find<HTMLImageElement>(".plugins-icon");
+      const image = container.querySelector<HTMLImageElement>(".plugins-icon")!;
       expect(image.parentElement!.classList.contains("plugins-tile--white")).toBe(true);
       expect(getComputedStyle(image.parentElement!).backgroundColor).toBe("rgb(255, 255, 255)");
       expect(getComputedStyle(image).padding).toBe("4px");
@@ -245,7 +243,7 @@ it.each([
     }
     for (const selector of [".installed-plugins-card__art", ".plugin-catalog-detail__icon"]) {
       const frame = find(selector);
-      const image = find<HTMLImageElement>("img", frame);
+      const image = frame.querySelector("img")!;
       expect(image.naturalWidth).toBe(width);
       const frameBounds = frame.getBoundingClientRect();
       const imageBounds = image.getBoundingClientRect();

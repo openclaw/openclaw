@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AsyncPreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
@@ -202,6 +203,7 @@ it("retains the borrowed source through pending preparation and failed published
   await started.promise;
   const closing = closePath(options.path).catch((error: unknown) => error);
   expectCalls(0, release, mock.read);
+  assert(finishProducer);
   finishProducer();
   expect(await closing).toMatchObject({
     message: expect.stringMatching(/snapshot cleanup failed/),

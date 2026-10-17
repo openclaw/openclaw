@@ -158,7 +158,7 @@ describe("MeetingSessionRuntime startup custody", () => {
       spoken,
       finish: async (pending: Array<Promise<unknown> | undefined>) => {
         connectAllowed.resolve();
-        await Promise.all(pending);
+        await Promise.all(pending.filter((operation) => operation !== undefined));
         await runtime.leave(session.id);
       },
     };

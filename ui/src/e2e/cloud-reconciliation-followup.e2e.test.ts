@@ -98,8 +98,8 @@ suite.define(() => {
         sessionKey,
         sessions: [reconciling],
       });
-      const setHistory = async <T extends { sessionInfo: ReturnType<typeof session> }>(
-        history: T,
+      const setHistory = async (
+        history: { sessionInfo: ReturnType<typeof session> },
         reason: "send" | "placement",
       ) => {
         await gateway.setMethodResponse("chat.history", history);
@@ -133,14 +133,12 @@ suite.define(() => {
         status: "started",
       });
 
-      await setHistory(
-        {
-          ...reconcilingHistory,
-          pendingInputs: { items: [{ ...pendingInput, runId }], total: 1 },
-          sessionInfo: session("active", true, true, runId),
-        },
-        "send",
-      );
+      const pendingHistory = {
+        ...reconcilingHistory,
+        pendingInputs: { items: [{ ...pendingInput, runId }], total: 1 },
+        sessionInfo: session("active", true, true, runId),
+      };
+      await setHistory(pendingHistory, "send");
       await waiting.waitFor();
       await expect.poll(() => followUp.count()).toBe(1);
 

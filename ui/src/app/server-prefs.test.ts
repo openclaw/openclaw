@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 /* @vitest-environment jsdom */
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
@@ -33,7 +33,7 @@ const scope = "ws://gw";
 type Request = (method: string, params?: unknown) => Promise<unknown>;
 let request: RequestMock;
 let client: ReturnType<typeof createClient>;
-let onApplied: ReturnType<typeof vi.fn>;
+let onApplied: Mock<ApplyHooks["onApplied"]>;
 type ApplyHooks = Parameters<typeof applyServerUiPrefs>[1];
 const hooks = (): ApplyHooks => ({ scope, onApplied });
 const storePending = (prefs: Record<string, unknown>, gateway = scope) =>
@@ -54,7 +54,7 @@ beforeEach(() => {
   resetServerUiPrefsSync();
   request = vi.fn<Request>(async () => ({}));
   client = createClient(request);
-  onApplied = vi.fn();
+  onApplied = vi.fn<ApplyHooks["onApplied"]>();
 });
 
 afterEach(() => {
