@@ -49,7 +49,7 @@ export function useHermesFixture(cleanup?: (root: string) => void | Promise<void
     get paths() {
       return paths;
     },
-    context(overrides: Partial<Parameters<typeof makeContext>[0]> = {}) {
+    context: (overrides: Partial<Parameters<typeof makeContext>[0]> = {}) => {
       const { source, stateDir, workspaceDir } = paths;
       return makeContext({ source, stateDir, workspaceDir, ...overrides });
     },

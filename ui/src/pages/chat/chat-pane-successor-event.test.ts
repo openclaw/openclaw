@@ -9,7 +9,6 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   installTranscriptDomMocks,
@@ -21,66 +20,31 @@ import { readChatSessionSnapshot } from "./session-message-cache.ts";
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-function sessionRow(
-  name: string,
-  sessionId: string,
-  extra: Partial<GatewaySessionRow> = {},
-): GatewaySessionRow {
-  return {
-    key: `agent:main:${name}`,
-    agentId: "main",
-    sessionId,
-    kind: "direct",
-    updatedAt: 1,
-    ...extra,
-  };
-}
-
-function message(content: string, id: string, seq: number, role = "assistant") {
-  return { role, content, __openclaw: { id, seq } };
-}
-
-function historyFixture(
-  previous: GatewaySessionRow,
-  readHistory: GatewayRequestHandler,
-  readList: GatewayRequestHandler,
-) {
-  return createMountedPanes([previous], "main", undefined, {
-    "sessions.list": readList,
-    "chat.history": readHistory,
-    "chat.startup": readHistory,
-  });
-}
-
-function expectTranscript(state: ChatPageHost, sessionId: string | undefined, messages: unknown[]) {
-  expect(state.currentSessionId).toBe(sessionId);
-  expect(getChatSessionProjection(state).scope.sessionId).toBe(sessionId);
-  expect(state.chatMessages).toEqual(messages);
-}
-
-function currentHistoryLoad(state: ChatPageHost) {
-  const load = getChatHistoryLoadState(state);
-  expect(load.phase).toBe("in-flight");
-  return load.phase === "in-flight" ? load.promise : undefined;
-}
-
 it.each(["branch-switch", "rewind"] as const)(
   "refreshes successor history when canonical admission follows the %s event",
   async (reason) => {
-    const previous = sessionRow("delayed-successor", "previous-session");
+    const previous: GatewaySessionRow = {
+      key: "agent:main:delayed-successor",
+      agentId: "main",
+      sessionId: "previous-session",
+      kind: "direct",
+      updatedAt: 1,
+    };
     const successor = { ...previous, sessionId: "successor-session", updatedAt: 2 };
+    const message = (text: string, seq: number) => ({
+      role: "assistant",
+      content: text,
+      __openclaw: { id: text, seq },
+    });
     const initial = {
-      messages: [
-        message("Earlier branch", "Earlier branch", 1),
-        message("Old branch ending", "Old branch ending", 2),
-      ],
+      messages: [message("Earlier branch", 1), message("Old branch ending", 2)],
       sessionId: previous.sessionId,
       sessionInfo: previous,
       deltaCursor: "previous-cursor",
       hasMore: false,
     } satisfies ChatHistoryResult;
     const authoritative = {
-      messages: [message("Selected branch", "Selected branch", 1)],
+      messages: [message("Selected branch", 1)],
       sessionId: successor.sessionId,
       sessionInfo: successor,
       deltaCursor: "successor-cursor",
@@ -101,7 +65,16 @@ it.each(["branch-switch", "rewind"] as const)(
       historyRequested.resolve();
       return successorHistory.promise;
     });
-    const { sessions, mount, emitGatewayEvent } = historyFixture(previous, readHistory, readList);
+    const { sessions, mount, emitGatewayEvent } = createMountedPanes(
+      [previous],
+      "main",
+      undefined,
+      {
+        "sessions.list": readList,
+        "chat.history": readHistory,
+        "chat.startup": readHistory,
+      },
+    );
     let loading: Promise<unknown> | undefined;
     try {
       await sessions.refresh({ agentId: "main", force: true });
@@ -137,7 +110,11 @@ it.each(["branch-switch", "rewind"] as const)(
       expect(pane.state.currentSessionId).toBe(previous.sessionId);
       await historyRequested.promise;
       expect(readHistory).toHaveBeenCalledOnce();
-      loading = currentHistoryLoad(pane.state);
+      const historyLoad = getChatHistoryLoadState(pane.state);
+      expect(historyLoad.phase).toBe("in-flight");
+      if (historyLoad.phase === "in-flight") {
+        loading = historyLoad.promise;
+      }
       successorHistory.resolve(authoritative);
       await loading;
       expect(pane.state.chatMessages).toEqual(authoritative.messages);
@@ -156,7 +133,14 @@ it.each(["branch-switch", "rewind"] as const)(
 it.each([false, true])(
   "delivers the successor-admitting frame only to its current transcript (reentrant newer incarnation: %s)",
   async (reentrant) => {
-    const previous = sessionRow("event-successor", "predecessor-session", { label: "Predecessor" });
+    const previous: GatewaySessionRow = {
+      key: "agent:main:event-successor",
+      agentId: "main",
+      sessionId: "predecessor-session",
+      kind: "direct",
+      updatedAt: 1,
+      label: "Predecessor",
+    };
     const successor = {
       ...previous,
       sessionId: "successor-session",
@@ -169,7 +153,11 @@ it.each([false, true])(
       updatedAt: 3,
       label: "Newer incarnation",
     };
-    const persisted = message("Already accepted successor transcript", "successor-history", 1);
+    const persisted = {
+      role: "assistant",
+      content: "Already accepted successor transcript",
+      __openclaw: { id: "successor-history", seq: 1 },
+    };
     const history: ChatHistoryResult = {
       messages: [persisted],
       sessionId: successor.sessionId,
@@ -195,9 +183,16 @@ it.each([false, true])(
       newerHistory.resolve(authoritative);
       await loading;
     });
-    // A canonical predecessor would fence different-ID events until a later list.
-    const { sessions, mount, emitGatewayEvent } = historyFixture(previous, readHistory, () =>
-      sessionsResult([], 1),
+    const { sessions, mount, emitGatewayEvent } = createMountedPanes(
+      [previous],
+      "main",
+      undefined,
+      {
+        // A canonical predecessor would fence different-ID events until a later list.
+        "sessions.list": () => sessionsResult([], 1),
+        "chat.history": readHistory,
+        "chat.startup": readHistory,
+      },
     );
     await sessions.refresh({ agentId: "main", force: true });
     expect(sessions.state.result?.sessions).toEqual([]);
@@ -219,14 +214,15 @@ it.each([false, true])(
     expect(sessions.captureReconcile()(previous, undefined, { resultAgentId: "main" })).toBe(true);
     expect(sessions.state.result?.sessions[0]).toMatchObject(previous);
     expect(selectedChatSessionRow(pane.state)).toMatchObject(previous);
-    expectTranscript(pane.state, successor.sessionId, [persisted]);
+    expect(pane.state.currentSessionId).toBe(successor.sessionId);
+    expect(getChatSessionProjection(pane.state).scope.sessionId).toBe(successor.sessionId);
+    expect(pane.state.chatMessages).toEqual([persisted]);
     const messagesBefore = pane.state.chatMessages;
-    const input = message(
-      "The first frame that also admits the successor row",
-      "successor-event-message",
-      2,
-      "user",
-    );
+    const message = {
+      role: "user",
+      content: "The first frame that also admits the successor row",
+      __openclaw: { id: "successor-event-message", seq: 2 },
+    };
     admitNewer = reentrant;
     readHistory.mockClear();
     emitGatewayEvent("session.message", {
@@ -235,7 +231,7 @@ it.each([false, true])(
       sessionId: successor.sessionId,
       messageId: "successor-event-message",
       messageSeq: 2,
-      message: input,
+      message,
       session: successor,
       ancestorSessions: [],
     });
@@ -250,14 +246,18 @@ it.each([false, true])(
       expect(pane.state.chatMessages).toBe(messagesBefore);
       expect(pane.state.chatMessages).toEqual([persisted]);
       await historyRequested.promise;
-      loading = currentHistoryLoad(pane.state);
+      const historyLoad = getChatHistoryLoadState(pane.state);
+      if (historyLoad.phase === "in-flight") {
+        loading = historyLoad.promise;
+      }
       expect(readHistory).toHaveBeenCalledOnce();
+      expect(historyLoad.phase).toBe("in-flight");
       newerHistory.resolve(authoritative);
       await loading;
       expect(pane.state.chatMessages).toEqual(authoritative.messages);
       expect(pane.state.currentSessionId).toBe(newer.sessionId);
     } else {
-      expect(pane.state.chatMessages).toEqual([persisted, expect.objectContaining(input)]);
+      expect(pane.state.chatMessages).toEqual([persisted, expect.objectContaining(message)]);
     }
   },
 );
@@ -265,19 +265,24 @@ it.each([false, true])(
 it.each(["event", "list"] as const)(
   "waits for authoritative successor history after %s admission before replacing a predecessor transcript",
   async (admission) => {
-    const previous = sessionRow("lagging-transcript", "predecessor-session");
+    const previous: GatewaySessionRow = {
+      key: "agent:main:lagging-transcript",
+      agentId: "main",
+      sessionId: "predecessor-session",
+      kind: "direct",
+      updatedAt: 1,
+    };
     const successor = { ...previous, sessionId: "successor-session", updatedAt: 2 };
-    const predecessorMessage = message(
-      "Predecessor transcript remains displayed until its replacement is read",
-      "predecessor-history",
-      1,
-    );
-    const successorMessage = message(
-      "Successor input must never be appended into the predecessor",
-      "successor-input",
-      2,
-      "user",
-    );
+    const predecessorMessage = {
+      role: "assistant",
+      content: "Predecessor transcript remains displayed until its replacement is read",
+      __openclaw: { id: "predecessor-history", seq: 1 },
+    };
+    const successorMessage = {
+      role: "user",
+      content: "Successor input must never be appended into the predecessor",
+      __openclaw: { id: "successor-input", seq: 2 },
+    };
     const initial: ChatHistoryResult = {
       messages: [predecessorMessage],
       sessionId: previous.sessionId,
@@ -285,11 +290,11 @@ it.each(["event", "list"] as const)(
     };
     const authoritative = {
       messages: [
-        message(
-          "Earlier successor transcript supplied by authoritative history",
-          "successor-history",
-          1,
-        ),
+        {
+          role: "assistant",
+          content: "Earlier successor transcript supplied by authoritative history",
+          __openclaw: { id: "successor-history", seq: 1 },
+        },
         successorMessage,
       ],
       sessionId: successor.sessionId,
@@ -308,8 +313,15 @@ it.each(["event", "list"] as const)(
       return successorReads === 1 ? successorHistory.promise : authoritative;
     });
     let listedRows: GatewaySessionRow[] = [];
-    const { sessions, mount, emitGatewayEvent } = historyFixture(previous, history, () =>
-      sessionsResult(listedRows, 2),
+    const { sessions, mount, emitGatewayEvent } = createMountedPanes(
+      [previous],
+      "main",
+      undefined,
+      {
+        "sessions.list": () => sessionsResult(listedRows, 2),
+        "chat.history": history,
+        "chat.startup": history,
+      },
     );
     let refresh: ReturnType<typeof loadChatHistory> | undefined;
     try {
@@ -322,7 +334,9 @@ it.each(["event", "list"] as const)(
       );
       const state = pane.state;
       expect(selectedChatSessionRow(state)).toMatchObject(previous);
-      expectTranscript(state, previous.sessionId, initial.messages);
+      expect(state.currentSessionId).toBe(previous.sessionId);
+      expect(getChatSessionProjection(state).scope.sessionId).toBe(previous.sessionId);
+      expect(state.chatMessages).toEqual(initial.messages);
       const displayed = state.chatMessages;
       holdHistory = true;
       history.mockClear();
@@ -373,7 +387,9 @@ it.each(["event", "list"] as const)(
           : authoritative,
       );
       await refresh;
-      expectTranscript(state, successor.sessionId, authoritative.messages);
+      expect(state.currentSessionId).toBe(successor.sessionId);
+      expect(getChatSessionProjection(state).scope.sessionId).toBe(successor.sessionId);
+      expect(state.chatMessages).toEqual(authoritative.messages);
       expect(
         readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey: successor.key }),
       ).toMatchObject({ sessionId: successor.sessionId, messages: authoritative.messages });

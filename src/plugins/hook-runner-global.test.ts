@@ -37,7 +37,7 @@ function runPolicy(runner: HookRunner, hookName: "before_tool_call" | "before_in
       );
 }
 
-async function initialize(registry: Parameters<Global["initializeGlobalHookRunner"]>[0]) {
+async function initialize(registry: Parameters<typeof setActivePluginRegistry>[0]) {
   const mod = await importGlobal();
   setActivePluginRegistry(registry);
   mod.initializeGlobalHookRunner(registry);

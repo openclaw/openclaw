@@ -260,8 +260,8 @@ it.each(["success", "request-abort", "disconnected"] as const)(
         });
       const authority = operatorAuthority(["test-provider/test-model"]);
       const deniedAuthority = operatorAuthority([]);
-      const syncOpen = SessionManager.open;
-      const asyncOpen = SessionManager.openAsync;
+      const syncOpen = SessionManager.open.bind(SessionManager);
+      const asyncOpen = SessionManager.openAsync.bind(SessionManager);
       const hydrationSqlCounts: number[] = [];
       const observeHydration = () => {
         const sql = observeMainThreadSql();
@@ -270,22 +270,24 @@ it.each(["success", "request-abort", "disconnected"] as const)(
           sql.restore();
         };
       };
-      vi.spyOn(SessionManager, "open").mockImplementation((...args) => {
+      const syncOpenSpy = vi.spyOn(SessionManager, "open").mockImplementation((...args) => {
         const finish = observeHydration();
         try {
-          return syncOpen.apply(SessionManager, args);
+          return syncOpen(...args);
         } finally {
           finish();
         }
       });
-      vi.spyOn(SessionManager, "openAsync").mockImplementation(async (...args) => {
-        const finish = observeHydration();
-        try {
-          return await asyncOpen.apply(SessionManager, args);
-        } finally {
-          finish();
-        }
-      });
+      const asyncOpenSpy = vi
+        .spyOn(SessionManager, "openAsync")
+        .mockImplementation(async (...args) => {
+          const finish = observeHydration();
+          try {
+            return await asyncOpen(...args);
+          } finally {
+            finish();
+          }
+        });
       try {
         for (const question of ["What is it doing?", "What did I ask before?"]) {
           const respond = await invoke(question);
@@ -306,8 +308,8 @@ it.each(["success", "request-abort", "disconnected"] as const)(
           ask(deniedAuthority, "Use another model?", "denied-connection"),
         ).rejects.toThrow("Side chat");
       } finally {
-        vi.mocked(SessionManager.open).mockRestore();
-        vi.mocked(SessionManager.openAsync).mockRestore();
+        syncOpenSpy.mockRestore();
+        asyncOpenSpy.mockRestore();
       }
       expect(observedModels).toEqual([
         { model: "utility-model", authority: undefined },

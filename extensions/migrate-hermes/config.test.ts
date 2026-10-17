@@ -9,7 +9,9 @@ import { makeConfigRuntime, writeFile } from "./test/provider-helpers.js";
 
 const migrationProvider = buildHermesMigrationProvider();
 
-const fixture = useHermesFixture(() => vi.unstubAllEnvs());
+const fixture = useHermesFixture(() => {
+  vi.unstubAllEnvs();
+});
 const makeTestContext = fixture.context;
 
 async function writeConfig(value: unknown) {
