@@ -13,6 +13,21 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+const runScript = (script: string) => defaultCommandRunner(process.execPath, ["-e", script], {});
+
+function copyArtifacts(
+  runner: CommandRunner,
+  inspect: Parameters<typeof copyCrabboxArtifacts>[0]["inspect"],
+) {
+  return copyCrabboxArtifacts({
+    cwd: "/repo",
+    env: {},
+    inspect: { host: "proof.example", sshKey: "/tmp/key", sshUser: "proof", ...inspect },
+    outputDir: "/output",
+    remoteOutputDir: "/remote",
+    runner,
+  });
+}
 
 describe("Mantis Crabbox binary admission", () => {
   it.each(["relative explicit", "relative PATH", "bare explicit"])(
@@ -133,11 +148,7 @@ describe("Crabbox command runner", () => {
   );
 
   it("keeps large successful JSON complete", async () => {
-    const result = await defaultCommandRunner(
-      process.execPath,
-      ["-e", 'process.stdout.write(JSON.stringify("测".repeat(20000)))'],
-      {},
-    );
+    const result = await runScript('process.stdout.write(JSON.stringify("测".repeat(20000)))');
     expect(JSON.parse(result.stdout)).toBe("测".repeat(20000));
   });
 
@@ -151,7 +162,7 @@ describe("Crabbox command runner", () => {
       }, 25);
     `;
 
-    await expect(defaultCommandRunner(process.execPath, ["-e", childScript], {})).resolves.toEqual({
+    await expect(runScript(childScript)).resolves.toEqual({
       stdout: "😀",
       stderr: "测",
     });
@@ -159,11 +170,7 @@ describe("Crabbox command runner", () => {
 
   it("keeps captured stderr in command failures", async () => {
     await expect(
-      defaultCommandRunner(
-        process.execPath,
-        ["-e", 'process.stderr.write("Permission denied (publickey)\\n"); process.exit(255)'],
-        {},
-      ),
+      runScript('process.stderr.write("Permission denied (publickey)\\n"); process.exit(255)'),
     ).rejects.toThrow("Permission denied (publickey)");
   });
 
@@ -192,27 +199,12 @@ describe("Crabbox command runner", () => {
       }
       return { stderr: "", stdout: "" };
     };
-    await copyCrabboxArtifacts({
-      cwd: "/repo",
-      env: {},
-      inspect: {
-        host: "proof.example",
-        ...inspect,
-        sshKey: "/tmp/key",
-        sshUser: "proof",
-      },
-      outputDir: "/output",
-      remoteOutputDir: "/remote",
-      runner,
-    });
+    await copyArtifacts(runner, inspect);
 
     const expectedProbes = ports.length === 1 ? [] : ports;
-    expect(calls.filter((call) => call.command === "ssh").map((call) => call.args[3])).toEqual(
-      expectedProbes,
-    );
-    expect(calls.filter((call) => call.command === "ssh").map((call) => call.args[12])).toEqual(
-      expectedProbes.map(() => `proof@${host}`),
-    );
+    const probes = calls.filter((call) => call.command === "ssh");
+    expect(probes.map((call) => call.args[3])).toEqual(expectedProbes);
+    expect(probes.map((call) => call.args[12])).toEqual(expectedProbes.map(() => `proof@${host}`));
     expect(calls.filter((call) => call.command === "rsync")).toEqual([
       {
         args: expect.arrayContaining([expect.stringContaining(`-p ${ports.at(-1)}`)]),
@@ -232,20 +224,7 @@ describe("Crabbox command runner", () => {
     };
 
     await expect(
-      copyCrabboxArtifacts({
-        cwd: "/repo",
-        env: {},
-        inspect: {
-          host: "proof.example",
-          sshFallbackPorts: ["22"],
-          sshKey: "/tmp/key",
-          sshPort: "2222",
-          sshUser: "proof",
-        },
-        outputDir: "/output",
-        remoteOutputDir: "/remote",
-        runner,
-      }),
+      copyArtifacts(runner, { sshFallbackPorts: ["22"], sshPort: "2222" }),
     ).rejects.toThrow("Permission denied");
     expect(probes).toEqual(["2222"]);
   });

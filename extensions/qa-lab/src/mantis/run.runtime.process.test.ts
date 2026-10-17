@@ -13,7 +13,7 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeLegacyMantisWorktrees, removeMantisWorktree } from "./run-cleanup.runtime.js";
 import { defaultMantisCommandRunner } from "./run-command.runtime.js";
-import { runMantisBeforeAfter } from "./run.runtime.js";
+import { runMantisBeforeAfter, type MantisBeforeAfterOptions } from "./run.runtime.js";
 import { successfulCommandResult, type StubCommandResult } from "./run.test-support.js";
 
 let receipts: FixtureReceiptChannel;
@@ -184,6 +184,88 @@ async function listGitWorktreePaths(repoRoot: string) {
     .map((entry) => entry.slice("worktree ".length));
 }
 
+async function withProcessTree(
+  params: {
+    repoRoot: string;
+    signal: AbortSignal;
+    shim: string;
+    prefix?: readonly string[];
+    outputLine?: string;
+    options: MantisBeforeAfterOptions;
+    abortWhenReady?: boolean;
+    error: string;
+  },
+  verify?: () => Promise<void>,
+) {
+  const { repoRoot, signal } = params;
+  const binDir = path.join(repoRoot, "bin");
+  const parentPidPath = path.join(repoRoot, "parent.pid");
+  const descendantPidPath = path.join(repoRoot, "descendant.pid");
+  await fs.mkdir(binDir, { recursive: true });
+  await writeCommandShim(
+    path.join(binDir, params.shim),
+    [
+      "#!/bin/sh",
+      ...(params.prefix ?? []),
+      ...stubbornProcessTreeShellLines({
+        descendantPidPath,
+        parentPidPath,
+        outputLine: params.outputLine,
+      }),
+    ].join("\n"),
+  );
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
+  const controller = new AbortController();
+  let parentPid: number | undefined;
+  let descendantPid: number | undefined;
+  const settled = runMantisBeforeAfter({
+    baseline: "baseline-ref",
+    candidate: "candidate-ref",
+    repoRoot,
+    signal: controller.signal,
+    skipBuild: true,
+    skipInstall: true,
+    ...params.options,
+  }).then(
+    () => ({ status: "fulfilled" as const }),
+    (error: unknown) => ({ error, status: "rejected" as const }),
+  );
+  try {
+    [parentPid, descendantPid] = await withinTest(
+      Promise.all([
+        readPidBeforeSettled(parentPidPath, "parent", settled),
+        readPidBeforeSettled(descendantPidPath, "descendant", settled),
+      ]),
+      signal,
+    );
+    if (params.abortWhenReady) {
+      controller.abort();
+    }
+    const result = await withinTest(settled, signal);
+    expect(result.status).toBe("rejected");
+    if (result.status === "rejected") {
+      expect(result.error).toBeInstanceOf(Error);
+      expect(result.error).toHaveProperty("message", expect.stringContaining(params.error));
+    }
+    await Promise.all([waitForDead(parentPid, signal), waitForDead(descendantPid, signal)]);
+    await verify?.();
+  } finally {
+    controller.abort();
+    killKnownProcessPids([parentPid, descendantPid]);
+    try {
+      await settled;
+    } finally {
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+      killKnownProcessPids([parentPid, descendantPid]);
+    }
+  }
+}
+
 describe("mantis before/after process runtime", () => {
   let repoRoot: string;
 
@@ -350,16 +432,14 @@ process.exit(result.status ?? 1);
   it.skipIf(process.platform === "win32")(
     "stops a default-runner lane command process tree when aborted",
     async ({ signal }) => {
-      const controller = new AbortController();
-      const binDir = path.join(repoRoot, "bin");
-      const parentPidPath = path.join(repoRoot, "abort-parent.pid");
-      const descendantPidPath = path.join(repoRoot, "abort-descendant.pid");
-      const gitShimPath = path.join(binDir, "git");
-      await fs.mkdir(binDir, { recursive: true });
-      await writeCommandShim(
-        gitShimPath,
-        [
-          "#!/bin/sh",
+      await withProcessTree({
+        repoRoot,
+        signal,
+        shim: "git",
+        abortWhenReady: true,
+        error: "baseline worktree-add aborted",
+        options: { outputDir: ".artifacts/qa-e2e/mantis/default-runner-abort" },
+        prefix: [
           'if [ "$1" = worktree ] && [ "$2" = remove ]; then exit 1; fi',
           'if [ "$1" = worktree ] && [ "$2" = list ]; then exit 0; fi',
           'if [ "$1" != worktree ] || [ "$2" != add ]; then',
@@ -368,58 +448,8 @@ process.exit(result.status ?? 1);
           "  printf '\\n' >&2",
           "  exit 1",
           "fi",
-          ...stubbornProcessTreeShellLines({ descendantPidPath, parentPidPath }),
-        ].join("\n"),
-      );
-
-      const previousPath = process.env.PATH;
-      process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
-      let parentPid: number | undefined;
-      let descendantPid: number | undefined;
-      const run = runMantisBeforeAfter({
-        baseline: "baseline-ref",
-        candidate: "candidate-ref",
-        outputDir: ".artifacts/qa-e2e/mantis/default-runner-abort",
-        repoRoot,
-        signal: controller.signal,
-        skipBuild: true,
-        skipInstall: true,
+        ],
       });
-      const settled = run.then(
-        () => ({ status: "fulfilled" as const }),
-        (error: unknown) => ({ error, status: "rejected" as const }),
-      );
-      try {
-        [parentPid, descendantPid] = await withinTest(
-          Promise.all([
-            readPidBeforeSettled(parentPidPath, "parent", settled),
-            readPidBeforeSettled(descendantPidPath, "descendant", settled),
-          ]),
-          signal,
-        );
-        controller.abort();
-
-        const result = await withinTest(settled, signal);
-        expect(result.status).toBe("rejected");
-        if (result.status === "rejected") {
-          expect(result.error).toBeInstanceOf(Error);
-          expect((result.error as Error).message).toContain("baseline worktree-add aborted");
-        }
-        await Promise.all([waitForDead(parentPid, signal), waitForDead(descendantPid, signal)]);
-      } finally {
-        controller.abort();
-        killKnownProcessPids([parentPid, descendantPid]);
-        try {
-          await settled;
-        } finally {
-          if (previousPath === undefined) {
-            delete process.env.PATH;
-          } else {
-            process.env.PATH = previousPath;
-          }
-          killKnownProcessPids([parentPid, descendantPid]);
-        }
-      }
     },
     15_000,
   );
@@ -428,91 +458,35 @@ process.exit(result.status ?? 1);
     "cleans up a real git worktree after a noisy QA deadline kills its process tree",
     async ({ signal }) => {
       const qaTimeoutMs = 2_500;
-      const binDir = path.join(repoRoot, "bin");
-      const parentPidPath = path.join(repoRoot, "qa-parent.pid");
-      const descendantPidPath = path.join(repoRoot, "qa-descendant.pid");
-      const pnpmShimPath = path.join(binDir, "pnpm");
       await initializeGitRepo(repoRoot);
-      await fs.mkdir(binDir, { recursive: true });
-      await writeCommandShim(
-        pnpmShimPath,
-        [
-          "#!/bin/sh",
-          ...stubbornProcessTreeShellLines({
-            descendantPidPath,
-            outputLine: "qa still working",
-            parentPidPath,
-          }),
-        ].join("\n"),
-      );
-
-      const previousPath = process.env.PATH;
-      process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
-      const controller = new AbortController();
       const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", "real-qa-timeout");
-      let parentPid: number | undefined;
-      let descendantPid: number | undefined;
-      const run = runMantisBeforeAfter({
-        baseline: "HEAD",
-        candidate: "HEAD",
-        // Keep the tested deadline after process-tree readiness under loaded CI while still short.
-        commandTimeouts: { qa: qaTimeoutMs, "worktree-cleanup": 5_000 },
-        outputDir: ".artifacts/qa-e2e/mantis/real-qa-timeout",
-        repoRoot,
-        signal: controller.signal,
-        skipBuild: true,
-        skipInstall: true,
-      });
-      const settled = run.then(
-        () => ({ status: "fulfilled" as const }),
-        (error: unknown) => ({ error, status: "rejected" as const }),
-      );
-      try {
-        [parentPid, descendantPid] = await withinTest(
-          Promise.all([
-            readPidBeforeSettled(parentPidPath, "parent", settled),
-            readPidBeforeSettled(descendantPidPath, "descendant", settled),
-          ]),
+      const error = `baseline qa timed out after ${qaTimeoutMs}ms`;
+      await withProcessTree(
+        {
+          repoRoot,
           signal,
-        );
-
-        const result = await withinTest(settled, signal);
-        expect(result.status).toBe("rejected");
-        if (result.status === "rejected") {
-          expect(result.error).toBeInstanceOf(Error);
-          expect((result.error as Error).message).toContain(
-            `baseline qa timed out after ${qaTimeoutMs}ms`,
+          shim: "pnpm",
+          outputLine: "qa still working",
+          error,
+          options: {
+            baseline: "HEAD",
+            candidate: "HEAD",
+            // Keep the tested deadline after process-tree readiness under loaded CI while still short.
+            commandTimeouts: { qa: qaTimeoutMs, "worktree-cleanup": 5_000 },
+            outputDir: ".artifacts/qa-e2e/mantis/real-qa-timeout",
+          },
+        },
+        async () => {
+          const worktreeEntries = await listGitWorktreePaths(repoRoot);
+          await expect(fs.realpath(worktreeEntries[0] ?? "")).resolves.toBe(
+            await fs.realpath(repoRoot),
           );
-        }
-        await Promise.all([waitForDead(parentPid, signal), waitForDead(descendantPid, signal)]);
-        const worktreeList = await runGit(repoRoot, ["worktree", "list", "--porcelain"]);
-        const worktreeEntries = worktreeList.stdout
-          .split(/\r?\n/u)
-          .filter((entry) => entry.startsWith("worktree "))
-          .map((entry) => entry.slice("worktree ".length));
-        await expect(fs.realpath(worktreeEntries[0] ?? "")).resolves.toBe(
-          await fs.realpath(repoRoot),
-        );
-        expect(worktreeEntries).toHaveLength(1);
-        await expect(fs.readdir(`${outputDir}.worktrees`)).resolves.toEqual([]);
-        const errorPath = path.join(outputDir, "error.txt");
-        await expect(fs.readFile(errorPath, "utf8")).resolves.toContain(
-          `baseline qa timed out after ${qaTimeoutMs}ms`,
-        );
-      } finally {
-        controller.abort();
-        killKnownProcessPids([parentPid, descendantPid]);
-        try {
-          await settled;
-        } finally {
-          if (previousPath === undefined) {
-            delete process.env.PATH;
-          } else {
-            process.env.PATH = previousPath;
-          }
-          killKnownProcessPids([parentPid, descendantPid]);
-        }
-      }
+          expect(worktreeEntries).toHaveLength(1);
+          await expect(fs.readdir(`${outputDir}.worktrees`)).resolves.toEqual([]);
+          const errorPath = path.join(outputDir, "error.txt");
+          await expect(fs.readFile(errorPath, "utf8")).resolves.toContain(error);
+        },
+      );
     },
     18_000,
   );

@@ -1,4 +1,3 @@
-// Qa Lab tests cover discord smoke plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,10 +20,6 @@ function jsonResponse(payload: unknown, status = 200) {
   });
 }
 
-function emptyResponse(status = 204) {
-  return new Response(null, { status });
-}
-
 function fetchGuardCallsWithMethod(method: string) {
   return fetchWithSsrFGuard.mock.calls.filter(([request]) => {
     const init =
@@ -38,6 +33,50 @@ function fetchGuardCallsWithMethod(method: string) {
 describe("mantis discord smoke runtime", () => {
   let repoRoot: string;
   let tokenFile: string;
+
+  function mockDiscord({
+    listedChannel = "1456744319972282449",
+    channelGuild = "1456350064065904867",
+  } = {}) {
+    fetchWithSsrFGuard.mockImplementation(
+      async ({ url, init }: { url: string; init?: RequestInit }) => {
+        const pathname = new URL(url).pathname;
+        const method = init?.method ?? "GET";
+        const routes: Record<string, unknown> = {
+          "GET /api/v10/users/@me": { id: "1489650053747314748", username: "Mantis" },
+          "GET /api/v10/guilds/1456350064065904867": { id: "1456350064065904867", name: "Friends" },
+          "GET /api/v10/guilds/1456350064065904867/channels": [{ id: listedChannel }],
+          "GET /api/v10/channels/1456744319972282449": {
+            guild_id: channelGuild,
+            id: "1456744319972282449",
+            name: channelGuild === "1456350064065904867" ? "maintainers" : "wrong-guild-channel",
+            type: 0,
+          },
+          "POST /api/v10/channels/1456744319972282449/messages": {
+            id: "1500000000000000001",
+            channel_id: "1456744319972282449",
+          },
+        };
+        const reactionPaths = ["%F0%9F%91%80", "👀"].map(
+          (emoji) =>
+            `/api/v10/channels/1456744319972282449/messages/1500000000000000001/reactions/${emoji}/@me`,
+        );
+        const payload =
+          channelGuild !== "1456350064065904867" && method !== "GET"
+            ? undefined
+            : routes[`${method} ${pathname}`];
+        const response =
+          channelGuild === "1456350064065904867" &&
+          method === "PUT" &&
+          reactionPaths.includes(pathname)
+            ? new Response(null, { status: 204 })
+            : payload
+              ? jsonResponse(payload)
+              : jsonResponse({ message: `unexpected ${method} ${pathname}` }, 404);
+        return { response, release: vi.fn() };
+      },
+    );
+  }
 
   function runSmoke(options: NonNullable<Parameters<typeof runMantisDiscordSmoke>[0]>) {
     return runMantisDiscordSmoke({
@@ -56,58 +95,7 @@ describe("mantis discord smoke runtime", () => {
     tokenFile = path.join(repoRoot, "mantis-token");
     await fs.writeFile(tokenFile, "test-token", "utf8");
     fetchWithSsrFGuard.mockReset();
-    const reactionPaths = new Set([
-      "/api/v10/channels/1456744319972282449/messages/1500000000000000001/reactions/%F0%9F%91%80/@me",
-      "/api/v10/channels/1456744319972282449/messages/1500000000000000001/reactions/👀/@me",
-    ]);
-    fetchWithSsrFGuard.mockImplementation(
-      async ({ url, init }: { url: string; init?: RequestInit }) => {
-        const pathname = new URL(url).pathname;
-        const method = init?.method ?? "GET";
-        if (pathname === "/api/v10/users/@me") {
-          return {
-            response: jsonResponse({ id: "1489650053747314748", username: "Mantis" }),
-            release: vi.fn(),
-          };
-        }
-        if (pathname === "/api/v10/guilds/1456350064065904867") {
-          return {
-            response: jsonResponse({ id: "1456350064065904867", name: "Friends" }),
-            release: vi.fn(),
-          };
-        }
-        if (pathname === "/api/v10/guilds/1456350064065904867/channels") {
-          return { response: jsonResponse([{ id: "1456744319972282449" }]), release: vi.fn() };
-        }
-        if (pathname === "/api/v10/channels/1456744319972282449" && method === "GET") {
-          return {
-            response: jsonResponse({
-              guild_id: "1456350064065904867",
-              id: "1456744319972282449",
-              name: "maintainers",
-              type: 0,
-            }),
-            release: vi.fn(),
-          };
-        }
-        if (pathname === "/api/v10/channels/1456744319972282449/messages" && method === "POST") {
-          return {
-            response: jsonResponse({
-              id: "1500000000000000001",
-              channel_id: "1456744319972282449",
-            }),
-            release: vi.fn(),
-          };
-        }
-        if (reactionPaths.has(pathname) && method === "PUT") {
-          return { response: emptyResponse(), release: vi.fn() };
-        }
-        return {
-          response: jsonResponse({ message: `unexpected ${method} ${pathname}` }, 404),
-          release: vi.fn(),
-        };
-      },
-    );
+    mockDiscord();
   });
 
   afterEach(async () => {
@@ -187,42 +175,7 @@ describe("mantis discord smoke runtime", () => {
   });
 
   it("fails when the channel is not in the configured guild", async () => {
-    fetchWithSsrFGuard.mockImplementation(
-      async ({ url, init }: { url: string; init?: RequestInit }) => {
-        const pathname = new URL(url).pathname;
-        const method = init?.method ?? "GET";
-        if (pathname === "/api/v10/users/@me") {
-          return {
-            response: jsonResponse({ id: "1489650053747314748", username: "Mantis" }),
-            release: vi.fn(),
-          };
-        }
-        if (pathname === "/api/v10/guilds/1456350064065904867") {
-          return {
-            response: jsonResponse({ id: "1456350064065904867", name: "Friends" }),
-            release: vi.fn(),
-          };
-        }
-        if (pathname === "/api/v10/guilds/1456350064065904867/channels") {
-          return { response: jsonResponse([{ id: "1999999999999999999" }]), release: vi.fn() };
-        }
-        if (pathname === "/api/v10/channels/1456744319972282449" && method === "GET") {
-          return {
-            response: jsonResponse({
-              guild_id: "1999999999999999999",
-              id: "1456744319972282449",
-              name: "wrong-guild-channel",
-              type: 0,
-            }),
-            release: vi.fn(),
-          };
-        }
-        return {
-          response: jsonResponse({ message: `unexpected ${method} ${pathname}` }, 404),
-          release: vi.fn(),
-        };
-      },
-    );
+    mockDiscord({ listedChannel: "1999999999999999999", channelGuild: "1999999999999999999" });
 
     const result = await runSmoke({
       outputDir: ".artifacts/qa-e2e/mantis/wrong-guild",
@@ -269,42 +222,7 @@ describe("mantis discord smoke runtime", () => {
   });
 
   it("redacts response guild ids in mismatch failure artifacts", async () => {
-    fetchWithSsrFGuard.mockImplementation(
-      async ({ url, init }: { url: string; init?: RequestInit }) => {
-        const pathname = new URL(url).pathname;
-        const method = init?.method ?? "GET";
-        if (pathname === "/api/v10/users/@me") {
-          return {
-            response: jsonResponse({ id: "1489650053747314748", username: "Mantis" }),
-            release: vi.fn(),
-          };
-        }
-        if (pathname === "/api/v10/guilds/1456350064065904867") {
-          return {
-            response: jsonResponse({ id: "1456350064065904867", name: "Friends" }),
-            release: vi.fn(),
-          };
-        }
-        if (pathname === "/api/v10/guilds/1456350064065904867/channels") {
-          return { response: jsonResponse([{ id: "1456744319972282449" }]), release: vi.fn() };
-        }
-        if (pathname === "/api/v10/channels/1456744319972282449" && method === "GET") {
-          return {
-            response: jsonResponse({
-              guild_id: "1999999999999999999",
-              id: "1456744319972282449",
-              name: "wrong-guild-channel",
-              type: 0,
-            }),
-            release: vi.fn(),
-          };
-        }
-        return {
-          response: jsonResponse({ message: `unexpected ${method} ${pathname}` }, 404),
-          release: vi.fn(),
-        };
-      },
-    );
+    mockDiscord({ channelGuild: "1999999999999999999" });
 
     const result = await runSmoke({
       outputDir: ".artifacts/qa-e2e/mantis/wrong-guild-redacted",

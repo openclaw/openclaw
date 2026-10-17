@@ -25,9 +25,34 @@ vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async (importOriginal) 
 });
 
 const execFileAsync = promisify(execFile);
+const runFailureScript = (script: string) =>
+  defaultCommandRunner(process.execPath, ["-e", script], {}).catch((error: unknown) => error);
 
 describe("mantis desktop browser smoke runtime", () => {
   let repoRoot: string;
+
+  function runSmoke(options: Parameters<typeof runMantisDesktopBrowserSmoke>[0]) {
+    return runMantisDesktopBrowserSmoke({ crabboxBin: "/tmp/crabbox", repoRoot, ...options });
+  }
+
+  function inspectResult() {
+    return {
+      stdout: `${JSON.stringify({ host: "203.0.113.10", id: "cbx_decaf", provider: "hetzner", slug: "brisk-mantis", sshKey: "/tmp/key", sshPort: "2222", sshUser: "crabbox", state: "active" })}\n`,
+      stderr: "",
+    };
+  }
+
+  async function copyArtifacts(args: readonly string[], artifacts: Record<string, string>) {
+    const outputDir = args.at(-1);
+    expect(outputDir).toBeTypeOf("string");
+    if (!outputDir) {
+      throw new Error("Missing artifact destination");
+    }
+    await fs.mkdir(outputDir, { recursive: true });
+    for (const [name, content] of Object.entries(artifacts)) {
+      await fs.writeFile(path.join(outputDir, name), content);
+    }
+  }
 
   beforeEach(async () => {
     repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mantis-desktop-browser-smoke-"));
@@ -52,39 +77,25 @@ describe("mantis desktop browser smoke runtime", () => {
   }
 
   it("reports recovery candidates from the middle of verbose command failures", async () => {
-    const result = await defaultCommandRunner(
-      process.execPath,
-      [
-        "-e",
-        `
+    const result = await runFailureScript(`
       process.stdout.write('x'.repeat(40000));
       process.stderr.write('x'.repeat(20000) + '\\nleased cbx_0123456789ab slug=fixture server=1 type=tiny ip=private\\nprovisioned lease=cbx_abcdef012345 server=2 type=tiny\\nleased cbx_0123456789ab slug=fixture\\n' + 'x'.repeat(20000));
       process.exitCode = 1;
-    `,
-      ],
-      {},
-    ).catch((error: unknown) => error);
+    `);
     const description = await describeCommandFailure(result);
     expect(description.recoveryLeaseCandidates).toEqual(["cbx_0123456789ab", "cbx_abcdef012345"]);
     expect(JSON.stringify(description)).not.toContain("ip=private");
   });
 
   it("bounds recovery candidates and ignores non-acquisition lease text", async () => {
-    const error = await defaultCommandRunner(
-      process.execPath,
-      [
-        "-e",
-        `
+    const error = await runFailureScript(`
       process.stderr.write('requested cbx_aaaaaaaaaaaa\\nprovisioning lease=cbx_bbbbbbbbbbbb\\n');
       for (let index = 0; index < 10; index++) {
         const id = 'cbx_' + index.toString(16).padStart(12, '0');
         process.stderr.write('leased ' + id + ' slug=fixture\\nleased ' + id + ' slug=fixture\\n');
       }
       process.exitCode = 1;
-    `,
-      ],
-      {},
-    ).catch((failure: unknown) => failure);
+    `);
     const description = await describeCommandFailure(error);
     expect(description.recoveryLeaseCandidates).toEqual([
       "cbx_000000000002",
@@ -103,10 +114,9 @@ describe("mantis desktop browser smoke runtime", () => {
     vi.mocked(ensureManagedCrabboxBinary).mockRejectedValueOnce(new Error("release unavailable"));
 
     await expect(
-      runMantisDesktopBrowserSmoke({
+      runSmoke({
         commandRunner: runner,
         crabboxBin: "/tmp/outdated-crabbox",
-        repoRoot,
       }),
     ).rejects.toThrow("release unavailable");
     expect(runner).not.toHaveBeenCalled();
@@ -148,11 +158,9 @@ describe("mantis desktop browser smoke runtime", () => {
       vncCommand: "unallocated",
     });
 
-    const result = await runMantisDesktopBrowserSmoke({
+    const result = await runSmoke({
       commandRunner: runner,
-      crabboxBin: "/tmp/crabbox",
       env: {},
-      repoRoot,
     });
     expect(result.status).toBe("fail");
     const summaryText = await fs.readFile(result.summaryPath, "utf8");
@@ -194,12 +202,10 @@ describe("mantis desktop browser smoke runtime", () => {
         throw new Error("Stop at the warmup boundary");
       });
 
-      await runMantisDesktopBrowserSmoke({
+      await runSmoke({
         commandRunner: runner,
-        crabboxBin: "/tmp/crabbox",
         env: { OPENCLAW_MANTIS_CRABBOX_CLASS: envClass },
         machineClass,
-        repoRoot,
       });
 
       const args = runner.mock.calls[0]?.[1] ?? [];
@@ -230,36 +236,23 @@ describe("mantis desktop browser smoke runtime", () => {
           return { stdout: "ready lease cbx_abc123\n", stderr: "" };
         }
         if (command === "/tmp/crabbox" && args[0] === "inspect") {
-          return {
-            stdout: `${JSON.stringify({
-              host: "203.0.113.10",
-              id: "cbx_decaf",
-              provider: "hetzner",
-              slug: "brisk-mantis",
-              sshKey: "/tmp/key",
-              sshPort: "2222",
-              sshUser: "crabbox",
-              state: "active",
-            })}\n`,
-            stderr: "",
-          };
+          return inspectResult();
         }
         if (command === "rsync") {
-          const outputDir = args.at(-1);
-          expect(outputDir).toBeTypeOf("string");
-          await fs.mkdir(outputDir as string, { recursive: true });
-          await fs.writeFile(path.join(outputDir as string, "desktop-browser-smoke.png"), "png");
-          await fs.writeFile(path.join(outputDir as string, "desktop-browser-smoke.mp4"), "mp4");
-          await fs.writeFile(path.join(outputDir as string, "remote-metadata.json"), "{}\n");
-          await fs.writeFile(path.join(outputDir as string, "chrome.log"), "chrome\n");
-          await fs.writeFile(path.join(outputDir as string, "ffmpeg.log"), "ffmpeg\n");
+          await copyArtifacts(args, {
+            "desktop-browser-smoke.png": "png",
+            "desktop-browser-smoke.mp4": "mp4",
+            "remote-metadata.json": "{}\n",
+            "chrome.log": "chrome\n",
+            "ffmpeg.log": "ffmpeg\n",
+          });
           return { stdout: "", stderr: "" };
         }
         return { stdout: "", stderr: "" };
       },
     );
 
-    const result = await runMantisDesktopBrowserSmoke({
+    const result = await runSmoke({
       browserUrl: "https://openclaw.ai/docs",
       commandRunner: runner,
       crabboxBin: "/tmp/outdated-crabbox",
@@ -268,7 +261,6 @@ describe("mantis desktop browser smoke runtime", () => {
       leaseId,
       now: () => new Date("2026-05-04T12:00:00.000Z"),
       outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-test",
-      repoRoot,
     });
 
     expect(result.status).toBe("pass");
@@ -312,33 +304,35 @@ describe("mantis desktop browser smoke runtime", () => {
     expect(remoteScript).toContain('"browserBinary": "$browser_bin"');
     await expect(fs.readFile(result.screenshotPath ?? "", "utf8")).resolves.toBe("png");
     await expect(fs.readFile(result.videoPath ?? "", "utf8")).resolves.toBe("mp4");
-    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
-      browserUrl: string;
-      crabbox: { id: string; vncCommand: string };
-      htmlFile?: string;
-      status: string;
-    };
-    expect(summary.browserUrl).toMatch(/^file:\/\//u);
-    expect(summary.htmlFile).toBe(path.join(repoRoot, "qa-artifacts", "timeline.html"));
-    expect(summary.status).toBe("pass");
-    expect(summary.crabbox.id).toBe(leaseId ?? "cbx_abc123");
-    expect(summary.crabbox.vncCommand).toBe(
-      `/tmp/crabbox vnc --provider hetzner --id ${leaseId ?? "cbx_abc123"} --open`,
-    );
+    expect(JSON.parse(await fs.readFile(result.summaryPath, "utf8"))).toMatchObject({
+      browserUrl: expect.stringMatching(/^file:\/\//u),
+      htmlFile: path.join(repoRoot, "qa-artifacts", "timeline.html"),
+      status: "pass",
+      crabbox: {
+        id: leaseId ?? "cbx_abc123",
+        vncCommand: `/tmp/crabbox vnc --provider hetzner --id ${leaseId ?? "cbx_abc123"} --open`,
+      },
+    });
   });
 
-  it("rejects html files outside the repository", async () => {
+  it.each([
+    {
+      options: { htmlFile: "../outside.html" },
+      error: "Mantis desktop HTML file must be inside the repository",
+    },
+    {
+      options: { browserProfileArchiveEnv: "BAD-NAME" },
+      error: "Mantis browser profile archive env must be an environment variable name",
+    },
+    {
+      options: { browserProfileDir: "relative-profile" },
+      error: "Mantis browser profile dir must be an absolute path",
+    },
+  ])("rejects invalid input: $error", async ({ options, error }) => {
     const runner = vi.fn(async () => ({ stdout: "", stderr: "" }));
-
     await expect(
-      runMantisDesktopBrowserSmoke({
-        commandRunner: runner,
-        crabboxBin: "/tmp/crabbox",
-        htmlFile: "../outside.html",
-        outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-outside",
-        repoRoot,
-      }),
-    ).rejects.toThrow("Mantis desktop HTML file must be inside the repository");
+      runSmoke({ commandRunner: runner, outputDir: ".artifacts/invalid-input", ...options }),
+    ).rejects.toThrow(error);
     expect(runner).not.toHaveBeenCalled();
   });
 
@@ -390,58 +384,21 @@ describe("mantis desktop browser smoke runtime", () => {
           resolvedProfile = result.stdout;
         }
         if (command === "rsync") {
-          const outputDir = args.at(-1);
-          if (!outputDir) {
-            throw new Error("Missing artifact destination");
-          }
-          await fs.mkdir(outputDir, { recursive: true });
-          await fs.writeFile(path.join(outputDir, "desktop-browser-smoke.png"), "png");
+          await copyArtifacts(args, { "desktop-browser-smoke.png": "png" });
         }
         return { stdout: "", stderr: "" };
       });
-      const result = await runMantisDesktopBrowserSmoke({
+      const result = await runSmoke({
         browserProfileDir: profile,
         commandRunner: runner,
-        crabboxBin: "/tmp/crabbox",
         env: {},
         leaseId: "cbx_existing",
         outputDir: ".artifacts/profile-shell",
-        repoRoot,
       });
       expect(result.status).toBe("pass");
       expect(resolvedProfile).toBe(expected);
     },
   );
-
-  it("rejects unsafe browser profile archive env names", async () => {
-    const runner = vi.fn(async () => ({ stdout: "", stderr: "" }));
-
-    await expect(
-      runMantisDesktopBrowserSmoke({
-        browserProfileArchiveEnv: "BAD-NAME",
-        commandRunner: runner,
-        crabboxBin: "/tmp/crabbox",
-        outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-profile",
-        repoRoot,
-      }),
-    ).rejects.toThrow("Mantis browser profile archive env must be an environment variable name");
-    expect(runner).not.toHaveBeenCalled();
-  });
-
-  it("rejects relative browser profile dirs", async () => {
-    const runner = vi.fn(async () => ({ stdout: "", stderr: "" }));
-
-    await expect(
-      runMantisDesktopBrowserSmoke({
-        browserProfileDir: "relative-profile",
-        commandRunner: runner,
-        crabboxBin: "/tmp/crabbox",
-        outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-profile",
-        repoRoot,
-      }),
-    ).rejects.toThrow("Mantis browser profile dir must be an absolute path");
-    expect(runner).not.toHaveBeenCalled();
-  });
 
   it.each([["run", "cbx_existing", "cbx_existing", ["inspect", "run"]]] as const)(
     "retains the lease identity when %s fails",
@@ -456,29 +413,15 @@ describe("mantis desktop browser smoke runtime", () => {
           return { stdout: "ready lease cbx_abc123\n", stderr: "" };
         }
         if (command === "/tmp/crabbox" && args[0] === "inspect") {
-          return {
-            stdout: `${JSON.stringify({
-              host: "203.0.113.10",
-              id: "cbx_decaf",
-              provider: "hetzner",
-              slug: "brisk-mantis",
-              state: "active",
-              sshKey: "/tmp/key",
-              sshPort: "2222",
-              sshUser: "crabbox",
-            })}\n`,
-            stderr: "",
-          };
+          return inspectResult();
         }
         return { stdout: "", stderr: "" };
       });
 
-      const result = await runMantisDesktopBrowserSmoke({
+      const result = await runSmoke({
         commandRunner: runner,
-        crabboxBin: "/tmp/crabbox",
         leaseId,
         outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-fail",
-        repoRoot,
       });
 
       expect(result.status).toBe("fail");

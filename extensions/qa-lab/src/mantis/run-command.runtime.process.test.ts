@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it } from "vitest";
 import { removeMantisWorktree } from "./run-cleanup.runtime.js";
 import { defaultMantisCommandRunner, MantisCommandCleanupError } from "./run-command.runtime.js";
@@ -9,18 +9,16 @@ import { captureMantisDirectoryOwnership } from "./run-directory.runtime.js";
 import { runMantisBeforeAfter } from "./run.runtime.js";
 import { successfulCommandResult } from "./run.test-support.js";
 
-const roots: string[] = [];
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
-});
+const roots = useAutoCleanupTempDirTracker(afterEach);
+const makeRoot = (prefix: string) => fs.realpath(roots.make(prefix));
+function runBeforeAfter(options: Parameters<typeof runMantisBeforeAfter>[0]) {
+  return runMantisBeforeAfter({ skipBuild: true, skipInstall: true, ...options });
+}
 
 it.skipIf(process.platform === "win32")(
   "settles successful command descendants before returning ownership to worktree cleanup",
   async () => {
-    const cwd = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "mantis-command-owner-")),
-    );
-    roots.push(cwd);
+    const cwd = await makeRoot("mantis-command-owner-");
     const pidFile = path.join(cwd, "descendant.pid");
     const childScript = `
       const fs = require("node:fs");
@@ -88,17 +86,12 @@ it.skipIf(process.platform === "win32")(
 it.each(["returned", "thrown", "typed"])(
   "retains the worktree when command cleanup is %s as uncertain",
   async (mode) => {
-    const repoRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "mantis-uncertain-owner-")),
-    );
-    roots.push(repoRoot);
+    const repoRoot = await makeRoot("mantis-uncertain-owner-");
     const removals: string[] = [];
     const result = successfulCommandResult();
-    const run = runMantisBeforeAfter({
+    const run = runBeforeAfter({
       repoRoot,
       outputDir: ".artifacts/uncertain",
-      skipBuild: true,
-      skipInstall: true,
       commandRunner: async (_command, args, execution) => {
         if (execution.stage === "qa") {
           if (mode === "typed") {
@@ -127,8 +120,7 @@ it.each(["returned", "thrown", "typed"])(
 );
 
 it("retains uncertain Git removal without starting another verification command", async () => {
-  const repoRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "mantis-git-owner-")));
-  roots.push(repoRoot);
+  const repoRoot = await makeRoot("mantis-git-owner-");
   const worktreeDir = path.join(repoRoot, "worktree");
   await fs.mkdir(worktreeDir);
   const ownership = await captureMantisDirectoryOwnership({ directoryPath: worktreeDir, repoRoot });
@@ -161,17 +153,12 @@ it("retains uncertain Git removal without starting another verification command"
 it.each([false, true])(
   "charges interrupt settlement against cleanup budget (exhausted: %s)",
   async (exhausted) => {
-    const repoRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "mantis-interrupt-budget-")),
-    );
-    roots.push(repoRoot);
+    const repoRoot = await makeRoot("mantis-interrupt-budget-");
     const controller = new AbortController();
     const cleanupTimeouts: number[] = [];
-    const run = runMantisBeforeAfter({
+    const run = runBeforeAfter({
       repoRoot,
       outputDir: ".artifacts/budget",
-      skipBuild: true,
-      skipInstall: true,
       signal: controller.signal,
       commandTimeouts: { "worktree-cleanup": 200 },
       commandRunner: async (_command, args, execution) => {

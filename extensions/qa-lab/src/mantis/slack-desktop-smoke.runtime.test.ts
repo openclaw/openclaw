@@ -4,6 +4,7 @@ import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CommandRunner } from "./crabbox-runtime.js";
 import { runMantisSlackDesktopSmoke } from "./slack-desktop-smoke.runtime.js";
 import {
   SLACK_ARTIFACT_TEST_CHANNEL,
@@ -35,6 +36,63 @@ function inspectResponse(id: string, details: { slug?: string; state?: string } 
     })}\n`,
     stderr: "",
   };
+}
+
+type RecordedCommand = { args: readonly string[]; command: string; env?: NodeJS.ProcessEnv };
+
+function createRunner(
+  id: string,
+  options: {
+    details?: Parameters<typeof inspectResponse>[1];
+    created?: boolean;
+    qaReport?: boolean;
+    metadata?: Record<string, unknown>;
+    files?: Record<string, string>;
+    copy?: (outputDir: string) => Promise<void>;
+    beforeCommand?: (command: string, args: readonly string[]) => void;
+  } = {},
+) {
+  const commands: RecordedCommand[] = [];
+  const runner = vi.fn<CommandRunner>(async (command, args, runOptions) => {
+    commands.push({ command, args, env: runOptions.env });
+    options.beforeCommand?.(command, args);
+    if (options.created && command === "/tmp/crabbox" && args[0] === "warmup") {
+      return { stdout: `ready lease ${id}\n`, stderr: "" };
+    }
+    if (command === "/tmp/crabbox" && args[0] === "inspect") {
+      return inspectResponse(id, options.details);
+    }
+    if (command === "rsync") {
+      const outputDir = args.at(-1);
+      expect(outputDir).toBeTypeOf("string");
+      if (!outputDir) {
+        throw new Error("Missing artifact copy destination");
+      }
+      await fs.mkdir(outputDir, { recursive: true });
+      if (outputDir.endsWith("slack-qa/")) {
+        if (options.qaReport) {
+          await fs.writeFile(path.join(outputDir, "qa-suite-report.md"), "# Slack\n");
+        }
+      } else {
+        for (const [file, content] of Object.entries({
+          "slack-desktop-smoke.png": "png",
+          "remote-metadata.json": `${JSON.stringify(options.metadata ?? { qaExitCode: 0 })}\n`,
+          ...options.files,
+        })) {
+          await fs.writeFile(path.join(outputDir, file), content);
+        }
+        await options.copy?.(outputDir);
+      }
+    }
+    return { stdout: "", stderr: "" };
+  });
+  return { commands, runner };
+}
+
+function expectContains(value: unknown, expected: readonly string[]) {
+  for (const text of expected) {
+    expect(value).toContain(text);
+  }
 }
 
 function describeFetchInput(input: RequestInfo | URL) {
@@ -103,7 +161,6 @@ describe("mantis Slack desktop smoke runtime", () => {
   });
 
   it("leases a desktop box, runs Slack QA inside it, copies artifacts, and stops on pass", async () => {
-    const commands: { args: readonly string[]; command: string; env?: NodeJS.ProcessEnv }[] = [];
     const runtimeEnv = {
       PATH: process.env.PATH,
       OPENAI_API_KEY: "openai-runtime-key",
@@ -112,37 +169,17 @@ describe("mantis Slack desktop smoke runtime", () => {
       OPENCLAW_QA_SLACK_SUT_APP_TOKEN: "app-token",
       OPENCLAW_QA_SLACK_SUT_BOT_TOKEN: "sut-token",
     };
-    const runner = vi.fn(
-      async (command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
-        commands.push({ command, args, env: options.env });
-        if (command === "/tmp/crabbox" && args[0] === "warmup") {
-          return { stdout: "ready lease cbx_abc123\n", stderr: "" };
-        }
-        if (command === "/tmp/crabbox" && args[0] === "inspect") {
-          return inspectResponse("cbx_abc123", { slug: "bright-mantis", state: "active" });
-        }
-        if (command === "rsync") {
-          const outputDir = args.at(-1);
-          expect(outputDir).toBeTypeOf("string");
-          await fs.mkdir(outputDir as string, { recursive: true });
-          if (String(outputDir).endsWith("slack-qa/")) {
-            await fs.writeFile(path.join(outputDir as string, "qa-suite-report.md"), "# Slack\n");
-          } else {
-            await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
-            await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.mp4"), "mp4");
-            await fs.writeFile(
-              path.join(outputDir as string, "remote-metadata.json"),
-              `${JSON.stringify({ qaExitCode: 0 })}\n`,
-            );
-            await fs.writeFile(path.join(outputDir as string, "chrome.log"), "chrome\n");
-            await fs.writeFile(path.join(outputDir as string, "ffmpeg.log"), "ffmpeg\n");
-            await fs.writeFile(path.join(outputDir as string, "slack-desktop-command.log"), "qa\n");
-          }
-          return { stdout: "", stderr: "" };
-        }
-        return { stdout: "", stderr: "" };
+    const { commands, runner } = createRunner("cbx_abc123", {
+      created: true,
+      qaReport: true,
+      details: { slug: "bright-mantis", state: "active" },
+      files: {
+        "slack-desktop-smoke.mp4": "mp4",
+        "chrome.log": "chrome\n",
+        "ffmpeg.log": "ffmpeg\n",
+        "slack-desktop-command.log": "qa\n",
       },
-    );
+    });
 
     const result = await runSmoke({
       commandRunner: runner,
@@ -228,70 +265,60 @@ describe("mantis Slack desktop smoke runtime", () => {
         expect(log).not.toHaveBeenCalled();
       }
     }
-    expect(remoteScript).toContain("hydrate_mode='source'");
-    expect(remoteScript).toContain("${BROWSER:-}");
-    expect(remoteScript).toContain("${CHROME_BIN:-}");
-    expect(remoteScript).toContain("PNPM_STORE_DIR");
-    expect(remoteScript).toContain("build-essential python3");
-    expect(remoteScript).toContain("node_supports_type_stripping");
-    expect(remoteScript).toContain("scripts/crabbox-untrusted-bootstrap.sh");
-    expect(remoteScript).toContain(
+    expectContains(remoteScript, [
+      "hydrate_mode='source'",
+      "${BROWSER:-}",
+      "${CHROME_BIN:-}",
+      "PNPM_STORE_DIR",
+      "build-essential python3",
+      "node_supports_type_stripping",
+      "scripts/crabbox-untrusted-bootstrap.sh",
       "curl -fsSL --connect-timeout 10 --max-time 120 https://deb.nodesource.com/setup_22.x",
-    );
-    expect(remoteScript).toContain(
       'curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors "$node_base_url/SHASUMS256.txt"',
-    );
-    expect(remoteScript).toContain(
       'curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors "$node_base_url/$node_archive"',
-    );
-    expect(remoteScript).toContain('grep "  $node_archive$" SHASUMS256.txt | sha256sum -c -');
-    expect(remoteScript).toContain('export PATH="$node_root/bin:$PATH"');
-    expect(remoteScript).toContain("packageManager ??");
-    expect(remoteScript).toContain("[0-9a-f]{128}");
-    expect(remoteScript).toContain('console.log(match[1] + " " + match[2])');
-    expect(remoteScript).toContain('active_pnpm_version="$(pnpm --version 2>/dev/null || true)"');
-    expect(remoteScript).toContain(
+      'grep "  $node_archive$" SHASUMS256.txt | sha256sum -c -',
+      'export PATH="$node_root/bin:$PATH"',
+      "packageManager ??",
+      "[0-9a-f]{128}",
+      'console.log(match[1] + " " + match[2])',
+      'active_pnpm_version="$(pnpm --version 2>/dev/null || true)"',
       "curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors",
-    );
-    expect(remoteScript).toContain('"https://registry.npmjs.org/pnpm/-/pnpm-$pnpm_version.tgz"');
+      '"https://registry.npmjs.org/pnpm/-/pnpm-$pnpm_version.tgz"',
+      'sha512sum "$pnpm_archive"',
+      'chmod +x "$pnpm_cli"',
+      'ln -sfn "$pnpm_cli" "$pnpm_bin_dir/pnpm"',
+      'export PATH="$pnpm_bin_dir:$PATH"',
+      "Expected pnpm $pnpm_version, got $active_pnpm_version.",
+      "pnpm install --frozen-lockfile --prefer-offline",
+      "pnpm build",
+      "ffmpeg",
+      'sudo apt-get update -y >>"$out/apt.log" 2>&1 || true',
+      "slack-desktop-smoke.mp4",
+      "openclaw qa slack",
+      "--scenario 'slack-canary'",
+      'slack_qa_output_dir=".artifacts/qa-e2e/mantis/$(basename "$out")/slack-qa"',
+      '--output-dir "$slack_qa_output_dir"',
+      "copy_slack_qa_artifacts",
+      "remote_command_timeout_seconds=",
+      "remote-command-timeout.txt",
+      'timeout --kill-after=15s "${remote_command_timeout_seconds}s" bash -c run_mantis_remote_body >"$out/slack-desktop-command.log" 2>&1 &',
+      "MANTIS_REMOTE_HEARTBEAT",
+      "qa_status=$?",
+      "MANTIS_REMOTE_FAILURE_DIAGNOSTICS_BEGIN",
+      "$out/slack-qa/qa-suite-report.md",
+      "$out/slack-qa/qa-suite-summary.json",
+      "$out/slack-qa/qa-evidence.json",
+      'tail -n 200 "$diagnostic_file"',
+      "Slack desktop screenshot is missing or empty",
+      "OPENCLAW_MANTIS_SLACK_BROWSER_PROFILE_DIR",
+    ]);
     expect(remoteScript?.match(/--connect-timeout 10 --max-time 120/gu)?.length).toBe(4);
     expect(remoteScript?.match(/--retry 3 --retry-max-time 120 --retry-all-errors/gu)?.length).toBe(
       3,
     );
-    expect(remoteScript).toContain('sha512sum "$pnpm_archive"');
-    expect(remoteScript).toContain('chmod +x "$pnpm_cli"');
-    expect(remoteScript).toContain('ln -sfn "$pnpm_cli" "$pnpm_bin_dir/pnpm"');
-    expect(remoteScript).toContain('export PATH="$pnpm_bin_dir:$PATH"');
-    expect(remoteScript).toContain("Expected pnpm $pnpm_version, got $active_pnpm_version.");
-    expect(remoteScript).toContain("pnpm install --frozen-lockfile --prefer-offline");
-    expect(remoteScript).toContain("pnpm build");
-    expect(remoteScript).toContain("ffmpeg");
-    expect(remoteScript).toContain('sudo apt-get update -y >>"$out/apt.log" 2>&1 || true');
-    expect(remoteScript).toContain("slack-desktop-smoke.mp4");
     expect(remoteScript).not.toContain("-video_size");
-    expect(remoteScript).toContain("openclaw qa slack");
-    expect(remoteScript).toContain("--scenario 'slack-canary'");
-    expect(remoteScript).toContain(
-      'slack_qa_output_dir=".artifacts/qa-e2e/mantis/$(basename "$out")/slack-qa"',
-    );
-    expect(remoteScript).toContain('--output-dir "$slack_qa_output_dir"');
-    expect(remoteScript).toContain("copy_slack_qa_artifacts");
     expect(remoteScript).not.toContain('--output-dir "$out/slack-qa"');
-    expect(remoteScript).toContain("remote_command_timeout_seconds=");
-    expect(remoteScript).toContain("remote-command-timeout.txt");
-    expect(remoteScript).toContain(
-      'timeout --kill-after=15s "${remote_command_timeout_seconds}s" bash -c run_mantis_remote_body >"$out/slack-desktop-command.log" 2>&1 &',
-    );
-    expect(remoteScript).toContain("MANTIS_REMOTE_HEARTBEAT");
-    expect(remoteScript).toContain("qa_status=$?");
-    expect(remoteScript).toContain("MANTIS_REMOTE_FAILURE_DIAGNOSTICS_BEGIN");
-    expect(remoteScript).toContain("$out/slack-qa/qa-suite-report.md");
-    expect(remoteScript).toContain("$out/slack-qa/qa-suite-summary.json");
-    expect(remoteScript).toContain("$out/slack-qa/qa-evidence.json");
-    expect(remoteScript).toContain('tail -n 200 "$diagnostic_file"');
-    expect(remoteScript).toContain("Slack desktop screenshot is missing or empty");
     expect(remoteScript).not.toContain('test -s "$out/slack-desktop-smoke.png"');
-    expect(remoteScript).toContain("OPENCLAW_MANTIS_SLACK_BROWSER_PROFILE_DIR");
     expect(remoteScript)
       .toContain(`const response = await fetch("https://slack.com/api/auth.test", {
   method: "POST",
@@ -330,32 +357,13 @@ describe("mantis Slack desktop smoke runtime", () => {
   });
 
   it("runs approval checkpoint mode with default approval scenarios and records screenshots", async () => {
-    const commands: { args: readonly string[]; command: string }[] = [];
     const expectedScenarios = ["slack-approval-exec-native", "slack-approval-plugin-native"];
-    const runner = vi.fn(async (command: string, args: readonly string[]) => {
-      commands.push({ command, args });
-      if (command === "/tmp/crabbox" && args[0] === "warmup") {
-        return { stdout: "ready lease cbx_123abc\n", stderr: "" };
-      }
-      if (command === "/tmp/crabbox" && args[0] === "inspect") {
-        return inspectResponse("cbx_123abc", { state: "active" });
-      }
-      if (command === "rsync") {
-        const outputDir = args.at(-1);
-        await fs.mkdir(outputDir as string, { recursive: true });
-        if (String(outputDir).endsWith("slack-qa/")) {
-          await fs.writeFile(path.join(outputDir as string, "qa-suite-report.md"), "# Slack\n");
-        } else {
-          await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
-          await fs.writeFile(
-            path.join(outputDir as string, "remote-metadata.json"),
-            `${JSON.stringify({ qaExitCode: 0 })}\n`,
-          );
-          await fs.writeFile(path.join(outputDir as string, "slack-desktop-command.log"), "qa\n");
-          await writeApprovalCheckpointArtifacts(outputDir as string, expectedScenarios);
-        }
-      }
-      return { stdout: "", stderr: "" };
+    const { commands, runner } = createRunner("cbx_123abc", {
+      created: true,
+      qaReport: true,
+      details: { state: "active" },
+      files: { "slack-desktop-command.log": "qa\n" },
+      copy: (outputDir) => writeApprovalCheckpointArtifacts(outputDir, expectedScenarios),
     });
 
     const result = await runSmoke({
@@ -419,24 +427,8 @@ describe("mantis Slack desktop smoke runtime", () => {
   });
 
   it("supports prehydrated remote workspaces without installing or building inside the VM", async () => {
-    const commands: { args: readonly string[]; command: string }[] = [];
-    const runner = vi.fn(async (command: string, args: readonly string[]) => {
-      commands.push({ command, args });
-      if (command === "/tmp/crabbox" && args[0] === "inspect") {
-        return inspectResponse("cbx_warm");
-      }
-      if (command === "rsync") {
-        const outputDir = args.at(-1);
-        await fs.mkdir(outputDir as string, { recursive: true });
-        if (!String(outputDir).endsWith("slack-qa/")) {
-          await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
-          await fs.writeFile(
-            path.join(outputDir as string, "remote-metadata.json"),
-            `${JSON.stringify({ hydrateMode: "prehydrated", qaExitCode: 0 })}\n`,
-          );
-        }
-      }
-      return { stdout: "", stderr: "" };
+    const { commands, runner } = createRunner("cbx_warm", {
+      metadata: { hydrateMode: "prehydrated", qaExitCode: 0 },
     });
 
     const result = await runSmoke({
@@ -468,7 +460,6 @@ describe("mantis Slack desktop smoke runtime", () => {
     "releases Convex Slack credentials when $failure fails",
     async ({ expectedError, failure }) => {
       vi.useFakeTimers();
-      const commands: { args: readonly string[]; command: string; env?: NodeJS.ProcessEnv }[] = [];
       const events: string[] = [];
       const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = describeFetchInput(input);
@@ -498,51 +489,34 @@ describe("mantis Slack desktop smoke runtime", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
 
-      const runner = vi.fn(
-        async (command: string, args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
-          commands.push({ command, args, env: options.env });
+      const { commands, runner } = createRunner("cbx_c0ffee", {
+        created: true,
+        details: { state: "active" },
+        metadata: {
+          gatewayAlive: true,
+          gatewayPid: "1234",
+          openedUrl: "https://app.slack.com/client/TLEASED/CLEASED",
+          qaExitCode: 0,
+        },
+        files: { "slack-desktop-command.log": "qa\n" },
+        beforeCommand(command, args) {
           events.push(`${command}:${args[0]}`);
-          if (command === "/tmp/crabbox" && args[0] === "warmup") {
-            return { stdout: "ready lease cbx_c0ffee\n", stderr: "" };
-          }
-          if (command === "/tmp/crabbox" && args[0] === "inspect") {
-            return inspectResponse("cbx_c0ffee", { state: "active" });
-          }
           if (failure === "Crabbox stop" && command === "/tmp/crabbox" && args[0] === "stop") {
             throw new Error("Crabbox stop failed");
           }
-          if (command === "rsync") {
-            const outputDir = args.at(-1);
-            await fs.mkdir(outputDir as string, { recursive: true });
-            if (!String(outputDir).endsWith("slack-qa/")) {
-              await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
-              await fs.writeFile(
-                path.join(outputDir as string, "remote-metadata.json"),
-                `${JSON.stringify({
-                  gatewayAlive: true,
-                  gatewayPid: "1234",
-                  openedUrl: "https://app.slack.com/client/TLEASED/CLEASED",
-                  qaExitCode: 0,
-                })}\n`,
-              );
-              await fs.writeFile(
-                path.join(outputDir as string, "slack-desktop-command.log"),
-                "qa\n",
-              );
-              if (failure === "report write") {
-                await fs.mkdir(
-                  path.join(
-                    repoRoot,
-                    ".artifacts/qa-e2e/mantis/slack-desktop-convex",
-                    "mantis-slack-desktop-smoke-report.md",
-                  ),
-                );
-              }
-            }
-          }
-          return { stdout: "", stderr: "" };
         },
-      );
+        async copy() {
+          if (failure === "report write") {
+            await fs.mkdir(
+              path.join(
+                repoRoot,
+                ".artifacts/qa-e2e/mantis/slack-desktop-convex",
+                "mantis-slack-desktop-smoke-report.md",
+              ),
+            );
+          }
+        },
+      });
 
       await expect(
         runSmoke({
@@ -594,39 +568,15 @@ describe("mantis Slack desktop smoke runtime", () => {
   it.each(["run", "inspect"] as const)(
     "stops a created no-keep lease when %s fails",
     async (failure) => {
-      const commands: { args: readonly string[]; command: string }[] = [];
-      const runner = vi.fn(async (command: string, args: readonly string[]) => {
-        commands.push({ command, args });
-        if (command === "/tmp/crabbox" && args[0] === failure) {
-          throw new Error(`${failure} failed`);
-        }
-        if (command === "/tmp/crabbox" && args[0] === "warmup") {
-          return { stdout: "ready lease cbx_fade123\n", stderr: "" };
-        }
-        if (command === "/tmp/crabbox" && args[0] === "inspect") {
-          return {
-            stdout: `${JSON.stringify({
-              host: "203.0.113.10",
-              id: "cbx_fade123",
-              provider: "hetzner",
-              slug: "brisk-mantis",
-              state: "active",
-              sshKey: "/tmp/key",
-              sshPort: "2222",
-              sshUser: "crabbox",
-            })}\n`,
-            stderr: "",
-          };
-        }
-        if (command === "rsync") {
-          const outputDir = args.at(-1);
-          await fs.mkdir(outputDir as string, { recursive: true });
-          if (!String(outputDir).endsWith("slack-qa/")) {
-            await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
-            await fs.writeFile(path.join(outputDir as string, "remote-metadata.json"), "{}\n");
+      const { commands, runner } = createRunner("cbx_fade123", {
+        created: true,
+        details: { slug: "brisk-mantis", state: "active" },
+        metadata: {},
+        beforeCommand(command, args) {
+          if (command === "/tmp/crabbox" && args[0] === failure) {
+            throw new Error(`${failure} failed`);
           }
-        }
-        return { stdout: "", stderr: "" };
+        },
       });
 
       const result = await runMantisSlackDesktopSmoke({
@@ -657,33 +607,20 @@ describe("mantis Slack desktop smoke runtime", () => {
   );
 
   it("passes gateway setup when Crabbox returns non-zero after remote metadata proves success", async () => {
-    const runner = vi.fn(async (command: string, args: readonly string[]) => {
-      if (command === "/tmp/crabbox" && args[0] === "warmup") {
-        return { stdout: "ready lease cbx_cafe123\n", stderr: "" };
-      }
-      if (command === "/tmp/crabbox" && args[0] === "inspect") {
-        return inspectResponse("cbx_cafe123", { state: "active" });
-      }
-      if (command === "/tmp/crabbox" && args[0] === "run") {
-        throw new Error("remote command exited 1");
-      }
-      if (command === "rsync") {
-        const outputDir = args.at(-1);
-        await fs.mkdir(outputDir as string, { recursive: true });
-        if (!String(outputDir).endsWith("slack-qa/")) {
-          await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
-          await fs.writeFile(
-            path.join(outputDir as string, "remote-metadata.json"),
-            `${JSON.stringify({
-              gatewayAlive: true,
-              gatewayPid: "4321",
-              openedUrl: "https://app.slack.com/client/TOK/COK",
-              qaExitCode: 0,
-            })}\n`,
-          );
+    const { runner } = createRunner("cbx_cafe123", {
+      created: true,
+      details: { state: "active" },
+      metadata: {
+        gatewayAlive: true,
+        gatewayPid: "4321",
+        openedUrl: "https://app.slack.com/client/TOK/COK",
+        qaExitCode: 0,
+      },
+      beforeCommand(command, args) {
+        if (command === "/tmp/crabbox" && args[0] === "run") {
+          throw new Error("remote command exited 1");
         }
-      }
-      return { stdout: "", stderr: "" };
+      },
     });
 
     const result = await runSmoke({
@@ -711,24 +648,7 @@ describe("mantis Slack desktop smoke runtime", () => {
   });
 
   it("reports Slack QA failure from copied remote metadata when Crabbox run exits zero", async () => {
-    const runner = vi.fn(async (command: string, args: readonly string[]) => {
-      if (command === "/tmp/crabbox" && args[0] === "inspect") {
-        return inspectResponse("cbx_existing");
-      }
-      if (command === "rsync") {
-        const outputDir = args.at(-1);
-        await fs.mkdir(outputDir as string, { recursive: true });
-        if (String(outputDir).endsWith("slack-qa/")) {
-          return { stdout: "", stderr: "" };
-        }
-        await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
-        await fs.writeFile(
-          path.join(outputDir as string, "remote-metadata.json"),
-          `${JSON.stringify({ qaExitCode: 7 })}\n`,
-        );
-      }
-      return { stdout: "", stderr: "" };
-    });
+    const { runner } = createRunner("cbx_existing", { metadata: { qaExitCode: 7 } });
 
     const result = await runSmoke({
       commandRunner: runner,
