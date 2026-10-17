@@ -27,6 +27,9 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
+const sessionRow = (respond: ReturnType<typeof startCall>["respond"], catalog = 0) =>
+  respond.mock.calls[0]?.[1]?.catalogs[catalog]?.hosts[0]?.sessions[0];
+
 it("returns three fast catalogs within one second while an eight-second provider finishes later", async () => {
   const host = catalogHost();
   hoisted.activeRegistry.sessionCatalogs = [
@@ -241,19 +244,15 @@ it("never projects a cached adoption onto a replacement session identity", async
   hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("fixture", { list }) }];
   const config = {};
   const original = await call("sessions.catalog.list", {}, config);
-  expect(original.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0]?.sessionKey).toBe(
-    sessionKey,
-  );
+  expect(sessionRow(original)?.sessionKey).toBe(sessionKey);
   setSessionCatalogEntries([
     { sessionKey, entry: { sessionId: "replacement", pluginOwnerId: "fixture" } },
   ]);
   const stale = await call("sessions.catalog.list", {}, config);
-  expect(stale.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0]).toMatchObject({
+  expect(sessionRow(stale)).toMatchObject({
     threadId: "old-thread",
   });
-  expect(stale.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0]).not.toHaveProperty(
-    "sessionKey",
-  );
+  expect(sessionRow(stale)).not.toHaveProperty("sessionKey");
 });
 
 it.each([false, true])(
@@ -290,12 +289,8 @@ it.each([false, true])(
     try {
       await vi.advanceTimersByTimeAsync(1_000);
       await next.completion;
-      expect(next.respond.mock.calls[0]?.[1]?.catalogs[1]?.hosts[0]?.sessions[0]?.sessionKey).toBe(
-        keys[1],
-      );
-      expect(next.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0]?.sessionKey).toBe(
-        reusedKey ? undefined : keys[0],
-      );
+      expect(sessionRow(next.respond, 1)?.sessionKey).toBe(keys[1]);
+      expect(sessionRow(next.respond)?.sessionKey).toBe(reusedKey ? undefined : keys[0]);
     } finally {
       late.resolve([hosts[0]!]);
       await vi.advanceTimersByTimeAsync(0);

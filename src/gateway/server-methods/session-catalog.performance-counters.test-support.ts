@@ -61,7 +61,6 @@ const empty = () => ({
   sessionEntryReads: 0,
   sessionPayloadReads: 0,
   bindingAuthorityReads: 0,
-  otherSqliteReads: 0,
   fileReadCalls: 0,
   ownershipFileReadCalls: 0,
   fileOpenCalls: 0,
@@ -112,8 +111,6 @@ export function createCatalogIoCounters() {
           counts.sqliteFreshnessReads++;
         } else if (sql.includes("entry_json") || sql.includes("entry_list_json")) {
           counts.sessionPayloadReads++;
-        } else {
-          counts.otherSqliteReads++;
         }
       }
       return Reflect.apply(original, this, args);
@@ -131,14 +128,11 @@ export function createCatalogIoCounters() {
   ] as const) {
     const original = Reflect.get(target, method);
     replace(target, method, function (this: unknown, ...args: unknown[]) {
+      const opening = method === "open" || method === "openSync";
       if (workerCounter.enabled) {
-        if (method === "open" || method === "openSync") {
-          counts.fileOpenCalls++;
-        } else {
-          counts.fileReadCalls++;
-          if (isOwnershipFile(args[0])) {
-            counts.ownershipFileReadCalls++;
-          }
+        counts[opening ? "fileOpenCalls" : "fileReadCalls"]++;
+        if (!opening && isOwnershipFile(args[0])) {
+          counts.ownershipFileReadCalls++;
         }
       }
       const result = Reflect.apply(original, this, args);

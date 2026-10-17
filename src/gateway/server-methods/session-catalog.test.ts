@@ -43,6 +43,14 @@ function useCatalogs(...catalogs: ReturnType<typeof provider>[]) {
   hoisted.activeRegistry.sessionCatalogs = catalogs.map((catalog) => ({ provider: catalog }));
 }
 const noActions = { continueSession: false, archive: false };
+const createTarget = { model: "anthropic/claude-opus-4-8", agentRuntime: "claude-cli" };
+function useCreationTarget(
+  resolveCreateSession: ReturnType<typeof provider>["resolveCreateSession"],
+) {
+  hoisted.activeRegistry.sessionCatalogs = [
+    { pluginId: "anthropic", provider: provider("claude", { resolveCreateSession }) },
+  ];
+}
 
 describe("session catalog Gateway methods", () => {
   beforeEach(resetSessionCatalogTestState);
@@ -102,85 +110,93 @@ describe("session catalog Gateway methods", () => {
       }
     }));
 
-  it("returns catalog metadata without listing providers or acquiring session projection", async () => {
-    const list = vi.fn(async () => []);
-    const createListOperation = vi.fn(() => {
-      throw new Error("history unavailable");
-    });
-    useCatalogs(
-      provider("zeta", { createListOperation }),
-      provider("alpha", {
-        list,
-        openTerminal: async () => ({ kind: "local", argv: ["codex", "resume", "thread"] }),
-        resolveCreateSession: () => ({ model: "openai/gpt-5.6-sol", agentRuntime: "codex" }),
-        startTerminalSession: async ({ cwd }) => ({ kind: "local", argv: ["codex"], cwd }),
-      }),
-    );
-    const config = {};
-    const expected = {
-      catalogs: [
-        {
-          id: "alpha",
-          label: "ALPHA",
-          capabilities: {
-            ...noActions,
-            openTerminal: true,
-            startTerminal: true,
-            createSession: { model: "openai/gpt-5.6-sol", startTerminal: true },
+  it.each(["history unavailable", undefined])(
+    "isolates provider error %s and returns metadata without listing or projection",
+    async (failure) => {
+      const list = vi.fn(async () => []);
+      const createListOperation = vi.fn(() => {
+        throw new Error(failure);
+      });
+      useCatalogs(
+        provider("zeta", {
+          list,
+          openTerminal: async () => ({ kind: "local", argv: ["codex", "resume", "thread"] }),
+          resolveCreateSession: () => ({ model: "openai/gpt-5.6-sol", agentRuntime: "codex" }),
+          startTerminalSession: async ({ cwd }) => ({ kind: "local", argv: ["codex"], cwd }),
+        }),
+        provider(
+          "alpha",
+          failure === undefined
+            ? { list: async () => createListOperation() }
+            : { createListOperation },
+        ),
+      );
+      const config = {};
+      const expected = {
+        catalogs: [
+          {
+            id: "alpha",
+            label: "ALPHA",
+            capabilities: noActions,
+            hosts: [],
           },
-          hosts: [],
-        },
+          {
+            id: "zeta",
+            label: "ZETA",
+            capabilities: {
+              ...noActions,
+              openTerminal: true,
+              startTerminal: true,
+              createSession: { model: "openai/gpt-5.6-sol", startTerminal: true },
+            },
+            hosts: [],
+          },
+        ],
+      };
+
+      const readProjection = vi.fn(() => {
+        throw new Error("metadata must not acquire the session projection");
+      });
+      const broadcastToConnIds = vi.fn();
+      const context = bindSessionRowProjection(
+        { getRuntimeConfig: () => config, broadcastToConnIds },
+        readProjection,
+      );
+      const metadata = vi.fn();
+      const readMetadata = () =>
+        sessionCatalogHandlers["sessions.catalog.list"]!({
+          params: { metadataOnly: true, progressId: "metadata-progress" },
+          context,
+          respond: metadata,
+          client: { connId: "metadata-client" },
+        } as never);
+      await readMetadata();
+      expect(list).not.toHaveBeenCalled();
+      expect(createListOperation).not.toHaveBeenCalled();
+      expect(readProjection).not.toHaveBeenCalled();
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+      expect(metadata).toHaveBeenCalledWith(true, expected);
+
+      const full = await call("sessions.catalog.list", {}, config);
+      expect(list).toHaveBeenCalledOnce();
+      expect(createListOperation).toHaveBeenCalledOnce();
+      expectCatalogs(full, [
         {
-          id: "zeta",
-          label: "ZETA",
-          capabilities: noActions,
-          hosts: [],
+          ...expected.catalogs[0],
+          error: { code: "catalog_error", message: failure ?? "session catalog provider failed" },
         },
-      ],
-    };
+        expected.catalogs[1],
+      ]);
 
-    const readProjection = vi.fn(() => {
-      throw new Error("metadata must not acquire the session projection");
-    });
-    const broadcastToConnIds = vi.fn();
-    const context = bindSessionRowProjection(
-      { getRuntimeConfig: () => config, broadcastToConnIds },
-      readProjection,
-    );
-    const metadata = vi.fn();
-    const readMetadata = () =>
-      sessionCatalogHandlers["sessions.catalog.list"]!({
-        params: { metadataOnly: true, progressId: "metadata-progress" },
-        context,
-        respond: metadata,
-        client: { connId: "metadata-client" },
-      } as never);
-    await readMetadata();
-    expect(list).not.toHaveBeenCalled();
-    expect(createListOperation).not.toHaveBeenCalled();
-    expect(readProjection).not.toHaveBeenCalled();
-    expect(broadcastToConnIds).not.toHaveBeenCalled();
-    expect(metadata).toHaveBeenCalledWith(true, expected);
-
-    const full = await call("sessions.catalog.list", {}, config);
-    expect(list).toHaveBeenCalledOnce();
-    expect(createListOperation).toHaveBeenCalledOnce();
-    expectCatalogs(full, [
-      expected.catalogs[0],
-      {
-        ...expected.catalogs[1],
-        error: { code: "catalog_error", message: "history unavailable" },
-      },
-    ]);
-
-    metadata.mockClear();
-    await readMetadata();
-    expect(metadata).toHaveBeenCalledWith(true, expected);
-    expect(readProjection).not.toHaveBeenCalled();
-    expect(broadcastToConnIds).not.toHaveBeenCalled();
-    expect(list).toHaveBeenCalledOnce();
-    expect(createListOperation).toHaveBeenCalledOnce();
-  });
+      metadata.mockClear();
+      await readMetadata();
+      expect(metadata).toHaveBeenCalledWith(true, expected);
+      expect(readProjection).not.toHaveBeenCalled();
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+      expect(list).toHaveBeenCalledOnce();
+      expect(createListOperation).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps metadata selection bound to the current catalog registry and agent", async () => {
     const first = provider("alpha");
@@ -210,26 +226,6 @@ describe("session catalog Gateway methods", () => {
       message: "unknown session catalog: alpha",
     });
     expect(first.list).not.toHaveBeenCalled();
-  });
-
-  it("sorts catalogs and isolates provider failures", async () => {
-    useCatalogs(
-      provider("zeta"),
-      provider("alpha", {
-        list: vi.fn(async () => {
-          throw new Error();
-        }),
-      }),
-    );
-    const respond = await call("sessions.catalog.list", {});
-    expectCatalogs(respond, [
-      expect.objectContaining({
-        id: "alpha",
-        hosts: [],
-        error: { code: "catalog_error", message: "session catalog provider failed" },
-      }),
-      expect.objectContaining({ id: "zeta", hosts: [] }),
-    ]);
   });
 
   it("forwards one explicit multi-agent owner through list, read, continue, and archive", async () => {
@@ -462,23 +458,12 @@ describe("session catalog Gateway methods", () => {
   });
 
   it("memoizes create targets until config changes", async () => {
-    const metadataOnly = false;
-    let createSession: { model: string; agentRuntime: string } | undefined = {
-      model: "anthropic/claude-opus-4-8",
-      agentRuntime: "claude-cli",
-    };
+    let createSession: typeof createTarget | undefined = createTarget;
     const resolveCreateSession = vi.fn(() => createSession);
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        pluginId: "anthropic",
-        provider: provider("claude", {
-          resolveCreateSession,
-        }),
-      },
-    ];
+    useCreationTarget(resolveCreateSession);
     const config = {};
 
-    const respond = await call("sessions.catalog.list", { metadataOnly }, config);
+    const respond = await call("sessions.catalog.list", {}, config);
 
     expectCatalog(respond, {
       id: "claude",
@@ -489,7 +474,7 @@ describe("session catalog Gateway methods", () => {
     });
 
     createSession = undefined;
-    const cached = await call("sessions.catalog.list", { metadataOnly }, config);
+    const cached = await call("sessions.catalog.list", {}, config);
     expectCatalog(cached, {
       capabilities: expect.objectContaining({
         createSession: { model: "anthropic/claude-opus-4-8" },
@@ -497,7 +482,7 @@ describe("session catalog Gateway methods", () => {
     });
     expect(resolveCreateSession).toHaveBeenCalledOnce();
 
-    const refreshed = await call("sessions.catalog.list", { metadataOnly }, {});
+    const refreshed = await call("sessions.catalog.list", {}, {});
     expectCatalog(refreshed, {
       id: "claude",
       capabilities: noActions,
@@ -513,10 +498,7 @@ describe("session catalog Gateway methods", () => {
       .mockImplementationOnce(() => {
         throw new Error("provider warming");
       })
-      .mockReturnValue({
-        model: "anthropic/claude-opus-4-8",
-        agentRuntime: "claude-cli",
-      });
+      .mockReturnValue(createTarget);
     useCatalogs(provider("claude", { resolveCreateSession }));
     const config = {};
 
@@ -539,25 +521,17 @@ describe("session catalog Gateway methods", () => {
   });
 
   it("resolves creation capability for the requested agent", async () => {
-    const metadataOnly = true;
     const resolveCreateSession = vi.fn(({ agentId }: { agentId?: string }) =>
-      agentId === "research"
-        ? { model: "anthropic/claude-opus-4-8", agentRuntime: "claude-cli" }
-        : undefined,
+      agentId === "research" ? createTarget : undefined,
     );
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        pluginId: "anthropic",
-        provider: provider("claude", { resolveCreateSession }),
-      },
-    ];
+    useCreationTarget(resolveCreateSession);
 
     const available = await call(
       "sessions.catalog.list",
       {
         agentId: "research",
         catalogId: "claude",
-        metadataOnly,
+        metadataOnly: true,
       },
       { agents: { entries: { main: {}, research: {} } } },
     );
@@ -571,17 +545,7 @@ describe("session catalog Gateway methods", () => {
   });
 
   it("resolves the private runtime target separately from the public capability", () => {
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        pluginId: "anthropic",
-        provider: provider("claude", {
-          resolveCreateSession: () => ({
-            model: "anthropic/claude-opus-4-8",
-            agentRuntime: "claude-cli",
-          }),
-        }),
-      },
-    ];
+    useCreationTarget(() => createTarget);
 
     expect(resolveRegisteredCatalogCreateTarget("claude", "research", {})).toEqual({
       ok: true,
@@ -786,15 +750,6 @@ it("keeps a delayed source off the catalog RPC path", async () => {
       expectCatalogHost(warm.respond, { sessions: [expect.objectContaining(row)] });
     }
     expect(invokeNode).toHaveBeenCalledTimes(1);
-    console.log(
-      JSON.stringify({
-        clock: "fake",
-        baselineMs,
-        sourceDelayMs,
-        gatewayP99Ms: Math.max(...elapsed),
-        invocations: invokeNode.mock.calls.length,
-      }),
-    );
     const current = request(progressiveQuery, clients[0], broadcasts[0]);
     await current.completion;
     expect(current.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([row]);
