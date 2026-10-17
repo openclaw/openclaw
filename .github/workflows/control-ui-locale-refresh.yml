@@ -179,6 +179,41 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      # Freeze the canonical baseline before restore/sync changes these files.
+      # Source copy is deliberately excluded: the planner owns per-string freshness.
+      - name: Resolve locale memory cache
+        id: tm_cache_key
+        env:
+          LOCALE: ${{ matrix.locale }}
+          MEMORY_INPUTS: >-
+            ${{ hashFiles(
+              format('ui/src/i18n/.i18n/{0}.tm.jsonl', matrix.locale),
+              format('ui/src/i18n/.i18n/{0}.meta.json', matrix.locale),
+              format('extensions/**/i18n/.i18n/{0}.tm.jsonl', matrix.locale),
+              format('extensions/**/i18n/.i18n/{0}.meta.json', matrix.locale),
+              format('ui/src/i18n/.i18n/glossary.{0}.json', matrix.locale),
+              'scripts/control-ui-i18n.ts',
+              'scripts/lib/control-ui-i18n-catalog-values.ts',
+              'scripts/lib/control-ui-i18n-sync-plan.ts',
+              'scripts/lib/control-ui-i18n-config.ts',
+              'scripts/lib/control-ui-i18n-config.json',
+              'scripts/lib/control-ui-plugin-i18n-catalog.ts',
+              '.github/workflows/control-ui-locale-refresh.yml') }}
+        run: echo "prefix=control-ui-locale-tm-v1-${LOCALE}-${MEMORY_INPUTS}" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore completed locale memory
+        if: >-
+          success() && github.repository == 'openclaw/openclaw' &&
+          github.ref == 'refs/heads/main' && !inputs.full_refresh
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # No metadata, source, build artifacts or executable code is restored.
+          path: &locale_memory_paths |
+            ui/src/i18n/.i18n/${{ matrix.locale }}.tm.jsonl
+            extensions/**/i18n/.i18n/${{ matrix.locale }}.tm.jsonl
+          key: ${{ steps.tm_cache_key.outputs.prefix }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ steps.tm_cache_key.outputs.prefix }}-
+
       - name: Refresh locale translations
         env:
           OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
@@ -213,9 +248,27 @@ jobs:
           paths=("${locale_memory}" "${locale_metadata}"
             ":(glob)extensions/*/**/i18n/.i18n/${LOCALE}.tm.jsonl"
             ":(glob)extensions/*/**/i18n/.i18n/${LOCALE}.meta.json")
+          # Cache only complete workers; finalization still validates all locales together.
+          git ls-files --cached --others --exclude-standard -z -- "${locale_metadata}" \
+            ":(glob)extensions/*/**/i18n/.i18n/${LOCALE}.meta.json" | \
+            while IFS= read -r -d '' metadata; do
+              jq -e '.fallbackKeys == []' "${metadata}" > /dev/null
+            done
           # Workers must not patch shared translated.json or immutable build manifests.
           git ls-files --cached --others --exclude-standard -z -- "${paths[@]}" | xargs -0 -r git add -A --
           git diff --cached --binary --full-index -- "${paths[@]}" > "${artifact_dir}/${LOCALE}.patch"
+
+      # Save before fan-in/publication so stale deferral (or a failed sibling)
+      # does not discard this locale's completed work. New immutable attempts
+      # advance the seed; no broader restore prefix may cross canonical edits.
+      - name: Save completed locale memory
+        if: >-
+          success() && github.repository == 'openclaw/openclaw' &&
+          github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *locale_memory_paths
+          key: ${{ steps.tm_cache_key.outputs.prefix }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload locale artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

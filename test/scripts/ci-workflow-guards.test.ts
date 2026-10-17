@@ -2826,6 +2826,31 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           );
           continue;
         }
+        if (file === CONTROL_UI_LOCALE_REFRESH_WORKFLOW && jobId === "refresh") {
+          expect(step.uses).toBe(CACHE_SAVE_V5);
+          expect(step.with).toEqual({
+            path:
+              "ui/src/i18n/.i18n/${{ matrix.locale }}.tm.jsonl\n" +
+              "extensions/**/i18n/.i18n/${{ matrix.locale }}.tm.jsonl\n",
+            key: "${{ steps.tm_cache_key.outputs.prefix }}-${{ github.run_id }}-${{ github.run_attempt }}",
+          });
+          expect(step.if).toBe(
+            "success() && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'",
+          );
+          const localeSteps: WorkflowStep[] = readWorkflow(file).jobs.refresh.steps;
+          const prepare = expectDefined(
+            localeSteps.find((candidate) => candidate.name === "Prepare locale artifact"),
+            "locale artifact admission",
+          );
+          // control-ui-locale-refresh.test.ts executes this shell boundary with
+          // core/plugin fallbacks. A failed or skipped admission cannot seed the cache.
+          expect(prepare.if).toBeUndefined();
+          expect(prepare["continue-on-error"]).toBeUndefined();
+          expect(localeSteps.indexOf(prepare)).toBeLessThan(
+            localeSteps.findIndex((candidate) => candidate.name === step.name),
+          );
+          continue;
+        }
         if (step.with?.path === ".cache/openclaw-cross-os-npm-cache/_cacache") {
           expect([
             ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
