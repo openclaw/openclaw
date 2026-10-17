@@ -2,162 +2,17 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../api/gateway.ts";
-import type { ApplicationContext } from "../app/context.ts";
-import type { ApplicationGateway } from "../app/gateway.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { sessionProgressHoverTargetFromEvent } from "./session-progress-hovercard-target.ts";
-import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
-import "./session-progress-hovercard.runtime.tsx";
+import { createHovercard } from "./session-progress-hovercard.test-support.ts";
 
 function mountHovercard(sessionKey = "global", holdProgress = false) {
-  let selectedId = "research";
-  const selectionListeners = new Set<() => void>();
-  const eventListeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
-  const sessionListeners = new Set<() => void>();
-  let rowDetails: Partial<SidebarSessionHovercardRow> = {};
-  let releaseProgress: (() => void) | undefined;
-  const request = vi.fn(
-    async (
-      method: string,
-      params: { sessionKey?: string; sessionKeys?: string[]; agentId?: string },
-    ) => {
-      if (method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) {
-        return { sessions: {} };
-      }
-      if (method !== "progressCard.get") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      const ownerAtRequest = params.agentId ?? params.sessionKey?.split(":")[1];
-      if (holdProgress && ownerAtRequest === "research") {
-        await new Promise<void>((resolve) => {
-          releaseProgress = resolve;
-        });
-      }
-      return {
-        card: {
-          sessionKey: params.sessionKey?.startsWith("agent:")
-            ? params.sessionKey
-            : `agent:${params.agentId}:${params.sessionKey}`,
-          revision: 1,
-          updatedAt: 1,
-          markdown: `${ownerAtRequest} progress`,
-        },
-      };
-    },
-  );
-  const gateway = {
-    snapshot: {
-      phase: "connected",
-      assistantAgentId: "main",
-      client: { request },
-      hello: {
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["progressCard.get", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
-      },
-    },
-    connection: { token: "", password: "" },
-    subscribe: () => () => undefined,
-    subscribeEvents: (listener: Parameters<ApplicationGateway["subscribeEvents"]>[0]) => {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
-  } as unknown as ApplicationGateway;
-  const context = {
-    gateway,
-    basePath: "",
-    sessions: {
-      subscribe: (listener: () => void) => {
-        sessionListeners.add(listener);
-        return () => sessionListeners.delete(listener);
-      },
-    },
-    agentSelection: {
-      get state() {
-        return { selectedId, scopeId: selectedId };
-      },
-      subscribe: (listener: () => void) => {
-        selectionListeners.add(listener);
-        return () => selectionListeners.delete(listener);
-      },
-    },
-  } as unknown as ApplicationContext;
-  const provider = document.createElement(
-    "openclaw-session-progress-hovercard-provider",
-  ) as SessionProgressHovercardProvider;
-  provider.context = context;
-  provider.gateway = gateway;
-  const sidebar = Object.assign(document.createElement("openclaw-app-sidebar"), {
-    expandedAgentId: () => selectedId,
-    findSidebarHovercardRowByKey: () => ({
-      key: sessionKey,
-      agentId: selectedId,
-      label: `${selectedId} session`,
-      kind: "direct",
-      ...rowDetails,
-    }),
-  });
-  const row = document.createElement("div");
-  row.className = "sidebar-recent-session";
-  row.dataset.sessionKey = sessionKey;
-  const trigger = document.createElement("a");
-  trigger.className = "sidebar-recent-session__link";
-  trigger.href = "#";
-  trigger.textContent = "Session";
-  row.append(trigger);
-  sidebar.append(row);
-  provider.append(sidebar);
-  document.body.append(provider);
+  const h = createHovercard({ sessionKey, holdProgress });
+  document.body.append(h.provider);
   flush();
-  return {
-    provider,
-    gateway,
-    request,
-    updateRow: (details: Partial<SidebarSessionHovercardRow>) => {
-      rowDetails = { ...rowDetails, ...details };
-      for (const listener of sessionListeners) {
-        listener();
-      }
-    },
-    emitPullRequestStatus: (status: "ready" | "rate-limited" | "unavailable") => {
-      for (const listener of eventListeners) {
-        listener({
-          type: "event",
-          event: "controlUi.sessionPullRequests.changed",
-          payload: {
-            sessions: {
-              [sessionKey]: { status, rateLimited: status === "rate-limited", pullRequests: [] },
-            },
-          },
-        });
-      }
-    },
-    emitProgressChange: () => {
-      for (const listener of eventListeners) {
-        listener({
-          type: "event",
-          event: "progressCard.changed",
-          payload: { sessionKey, revision: 2 },
-        });
-      }
-    },
-    focus: async () => {
-      await provider.updateComplete;
-      trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
-    },
-    selectMain: () => {
-      selectedId = "main";
-      for (const listener of selectionListeners) {
-        listener();
-      }
-    },
-    releaseProgress: async () => {
-      releaseProgress?.();
-      await Promise.all(request.mock.results.map((result) => result.value));
-    },
-  };
+  return h;
 }
 
 const getPortal = () => document.querySelector(".session-progress-hovercard");
@@ -219,19 +74,17 @@ describe("sessionProgressHoverTargetFromEvent", () => {
 
 describe("session progress hovercard ownership", () => {
   it.each([
-    {
-      status: "rate-limited",
-      warning:
-        "GitHub API rate limit reached. Pull request status may be out of date until the limit resets.",
-    },
-    {
-      status: "unavailable",
-      warning:
-        "GitHub status could not be refreshed. Showing the last known state; check GitHub for the latest.",
-    },
+    [
+      "rate-limited",
+      "GitHub API rate limit reached. Pull request status may be out of date until the limit resets.",
+    ],
+    [
+      "unavailable",
+      "GitHub status could not be refreshed. Showing the last known state; check GitHub for the latest.",
+    ],
   ] as const)(
-    "updates a held hovercard when only PR lookup status becomes $status",
-    async ({ status, warning }) => {
+    "updates a held hovercard when only PR lookup status becomes %s",
+    async (status, warning) => {
       vi.useFakeTimers();
       const harness = mountHovercard("agent:research:main");
       await harness.focus();
@@ -356,7 +209,7 @@ describe("session progress hovercard ownership", () => {
       expect(harness.request).toHaveBeenCalledWith("progressCard.get", expect.anything()),
     );
     await expectPortalText("research session");
-    harness.selectMain();
+    harness.select("main");
     expect(getPortal()).toBeNull();
     await harness.focus();
     await expectPortalText("main progress");

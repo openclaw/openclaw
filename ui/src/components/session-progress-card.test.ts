@@ -14,7 +14,8 @@ import {
 } from "./session-progress-card.test-support.tsx";
 import type { ComposerProgressDisclosureContext } from "./session-progress-disclosure-binding.ts";
 
-const { mountCard, createContainer, render, transcriptCleanups } = progressCardFixture();
+const { mountCard, createView, createContainer, render, transcriptCleanups } =
+  progressCardFixture();
 
 function renderTranscriptCard(
   container: HTMLElement,
@@ -26,6 +27,8 @@ function renderTranscriptCard(
     container,
   );
 }
+
+const runWindow = { startedAt: RUN_STARTED_MS, endedAt: RUN_ENDED_MS };
 
 describe("renderSessionProgressCard", () => {
   it.each(["board", "composer"] as const)(
@@ -52,25 +55,18 @@ describe("renderSessionProgressCard", () => {
     },
   );
 
-  it.each([
-    [undefined, "Updated 2m ago"],
-    ["queued", "Updated 2m ago"],
-    ["running", "Updated 2m ago"],
-    ["done", "Updated 2m ago"],
-    ["failed", "Updated 2m ago"],
-    ["timeout", "Updated 2m ago"],
-    ["killed", "Updated 2m ago"],
-  ] as const)("maps canonical session status %s to %s", (status, expected) => {
-    const container = mountCard({ sessionStatus: status });
-
-    expect(container.querySelector("time")?.textContent).toBe(expected);
-  });
+  it.each([undefined, "queued", "running", "done", "failed", "timeout", "killed"] as const)(
+    "shows saved activity without a run window for %s",
+    (status) => {
+      const container = mountCard({ sessionStatus: status });
+      expect(container.querySelector("time")?.textContent).toBe("Updated 2m ago");
+    },
+  );
 
   it("uses endedAt for terminal wording and falls back to Updated without it", () => {
     const container = mountCard({
       sessionStatus: "done",
-      startedAt: RUN_STARTED_MS,
-      endedAt: RUN_ENDED_MS,
+      ...runWindow,
     });
     expect(container.querySelector("time")?.textContent).toBe("Completed just now");
     expect(container.querySelector("time")?.getAttribute("datetime")).toBe(
@@ -124,40 +120,28 @@ describe("renderSessionProgressCard", () => {
     expect(card?.querySelector("strong")?.textContent).toBe("Focused change");
     expect(card?.querySelector("progress")?.getAttribute("value")).toBe("1");
     expect(card?.querySelectorAll(".session-progress-card__count")).toHaveLength(0);
-    expect(
-      [...(card?.querySelectorAll(".session-progress-card__step") ?? [])].map((step) => ({
-        label: step.getAttribute("aria-label"),
-        marker: cardPart(step, "step-marker")?.innerHTML,
-        status: [...step.classList].find((name) =>
-          name.startsWith("session-progress-card__step--"),
-        ),
-      })),
-    ).toEqual([
-      {
-        label: "Inspect the route, completed",
-        marker: expect.stringContaining("<path"),
-        status: "session-progress-card__step--completed",
-      },
-      {
-        label: "Wire the checklist, in progress",
-        marker: expect.stringContaining("session-run-spinner"),
-        status: "session-progress-card__step--in_progress",
-      },
-      {
-        label: "Run focused tests, pending",
-        marker: expect.stringContaining("<polyline"),
-        status: "session-progress-card__step--pending",
-      },
-    ]);
-    expect(
-      cardPart(card, "step--completed .session-progress-card__step-marker path"),
-    ).not.toBeNull();
-    expect(
-      cardPart(card, "step--in_progress .session-progress-card__step-marker .session-run-spinner"),
-    ).not.toBeNull();
-    expect(
-      cardPart(card, "step--pending .session-progress-card__step-marker polyline"),
-    ).not.toBeNull();
+    const steps = card?.querySelectorAll(".session-progress-card__step") ?? [];
+    expect(steps).toHaveLength(3);
+    const expected = [
+      ["Inspect the route, completed", "completed", "path", "<path"],
+      [
+        "Wire the checklist, in progress",
+        "in_progress",
+        ".session-run-spinner",
+        "session-run-spinner",
+      ],
+      ["Run focused tests, pending", "pending", "polyline", "<polyline"],
+    ] as const;
+    expected.forEach(([label, status, selector, markup], index) => {
+      const step = steps[index]!;
+      expect(step.getAttribute("aria-label")).toBe(label);
+      expect(
+        [...step.classList].find((name) => name.startsWith("session-progress-card__step--")),
+      ).toBe(`session-progress-card__step--${status}`);
+      const marker = cardPart(step, "step-marker");
+      expect(marker?.innerHTML).toContain(markup);
+      expect(marker?.querySelector(selector)).not.toBeNull();
+    });
   });
 
   it.each([
@@ -188,14 +172,16 @@ describe("renderSessionProgressCard", () => {
   });
 
   it.each([
-    ["stale", RUN_STARTED_MS - 1, "paused", false],
-    ["current", RUN_STARTED_MS, "in_progress", true],
+    ["running", RUN_STARTED_MS - 1, "paused", false],
+    ["running", RUN_STARTED_MS, "in_progress", true],
+    [undefined, RUN_STARTED_MS - 1, "paused", false],
+    [undefined, RUN_STARTED_MS, "in_progress", true],
   ] as const)(
-    "treats %s progress as current only after the active run starts",
-    (_name, updatedAt, expectedStatus, expectedLive) => {
+    "maps status %s and update %s to %s during an active run",
+    (sessionStatus, updatedAt, expectedStatus, expectedLive) => {
       const container = mountCard({
         card: { ...progressCard, updatedAt },
-        sessionStatus: "running",
+        sessionStatus,
         startedAt: RUN_STARTED_MS,
         hasActiveRun: true,
       });
@@ -228,27 +214,6 @@ describe("renderSessionProgressCard", () => {
       ).not.toBeNull();
       expect(cardPart(container, "step--paused")).not.toBeNull();
       expect(container.querySelector(".session-run-spinner")).toBeNull();
-    },
-  );
-
-  it.each([
-    ["stale", RUN_STARTED_MS - 1, "paused", false],
-    ["current", RUN_STARTED_MS, "in_progress", true],
-  ] as const)(
-    "treats %s status-less progress as current only after the active run starts",
-    (_name, updatedAt, expectedStatus, expectedLive) => {
-      const container = mountCard({
-        card: { ...progressCard, updatedAt },
-        startedAt: RUN_STARTED_MS,
-        hasActiveRun: true,
-      });
-
-      expect(
-        container.querySelector(
-          `.session-progress-card__current-marker[data-status="${expectedStatus}"]`,
-        ),
-      ).not.toBeNull();
-      expect(container.querySelector(".session-run-spinner") !== null).toBe(expectedLive);
     },
   );
 
@@ -312,20 +277,17 @@ describe("renderSessionProgressCard", () => {
   });
 
   it("keeps the collapsed default at final unless manually opened", () => {
-    const container = createContainer();
-    const cardLifetime = {};
+    const { container, show } = createView({
+      startedAt: RUN_STARTED_MS,
+      collapseComposerByDefault: true,
+      composerDisclosureContext: { cardLifetime: {} },
+    });
     const renderStatus = (sessionStatus: "running" | "done") =>
-      render(
-        {
-          sessionStatus,
-          startedAt: RUN_STARTED_MS,
-          endedAt: sessionStatus === "done" ? RUN_ENDED_MS : undefined,
-          hasActiveRun: sessionStatus === "running",
-          collapseComposerByDefault: true,
-          composerDisclosureContext: { cardLifetime },
-        },
-        container,
-      );
+      show({
+        sessionStatus,
+        endedAt: sessionStatus === "done" ? RUN_ENDED_MS : undefined,
+        hasActiveRun: sessionStatus === "running",
+      });
     renderStatus("running");
     const card = container.querySelector("details")!;
     expect(card.open).toBe(false);
@@ -340,25 +302,20 @@ describe("renderSessionProgressCard", () => {
   it.each([false, true])(
     "keeps settled history collapse through completion (final in history: %s)",
     async (finalInHistory) => {
-      const container = createContainer();
       let currentCard = progressCard;
       const cardLifetime = {};
+      const { container, show } = createView({ startedAt: RUN_STARTED_MS, transcript: true });
       const renderStatus = (
         readingHistory: boolean,
         sessionStatus: "running" | "done" = "running",
       ) =>
-        render(
-          {
-            card: currentCard,
-            sessionStatus,
-            startedAt: RUN_STARTED_MS,
-            endedAt: sessionStatus === "done" ? RUN_ENDED_MS : undefined,
-            hasActiveRun: sessionStatus === "running",
-            composerDisclosureContext: { cardLifetime, readingHistory },
-            transcript: true,
-          },
-          container,
-        );
+        show({
+          card: currentCard,
+          sessionStatus,
+          endedAt: sessionStatus === "done" ? RUN_ENDED_MS : undefined,
+          hasActiveRun: sessionStatus === "running",
+          composerDisclosureContext: { cardLifetime, readingHistory },
+        });
       const wheel = (distance: number, pause = 0) => {
         advance(pause);
         transcript.wheel(distance);
@@ -580,8 +537,7 @@ describe("renderSessionProgressCard", () => {
   ] as const)("shows %s as %s in the closed summary", (status, expected) => {
     const container = mountCard({
       sessionStatus: status,
-      startedAt: RUN_STARTED_MS,
-      endedAt: RUN_ENDED_MS,
+      ...runWindow,
     });
 
     expect(cardPart(container, "summary-count--collapsed")?.textContent).toBe(expected);
@@ -590,8 +546,7 @@ describe("renderSessionProgressCard", () => {
   it("uses a terminal circle-x instead of pausing after the run stops", () => {
     const container = mountCard({
       sessionStatus: "killed",
-      startedAt: RUN_STARTED_MS,
-      endedAt: RUN_ENDED_MS,
+      ...runWindow,
       hasActiveRun: false,
     });
 
@@ -615,8 +570,7 @@ describe("renderSessionProgressCard", () => {
     const container = mountCard({
       card: { ...progressCard, updatedAt: RUN_STARTED_MS - 1 },
       sessionStatus: "failed",
-      startedAt: RUN_STARTED_MS,
-      endedAt: RUN_ENDED_MS,
+      ...runWindow,
     });
 
     expect(container.querySelector("time")?.textContent).toBe("Updated 3m ago");
@@ -671,8 +625,7 @@ describe("renderSessionProgressCard", () => {
           steps: progressCard.steps?.map(({ step }) => ({ step, status: "completed" as const })),
         },
         sessionStatus: "done",
-        startedAt: RUN_STARTED_MS,
-        endedAt: RUN_ENDED_MS,
+        ...runWindow,
         hasActiveRun: false,
         collapseComposerByDefault: collapseByDefault,
         composerDisclosureContext: { cardLifetime: {} },

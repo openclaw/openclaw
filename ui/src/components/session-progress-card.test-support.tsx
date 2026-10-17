@@ -149,6 +149,14 @@ export function progressCardFixture() {
     transcriptCleanups,
     createContainer,
     render,
+    createView(defaults: Partial<Input> = {}) {
+      const container = createContainer();
+      return {
+        container,
+        show: (input: Partial<Input> | null) =>
+          render(input && { ...defaults, ...input }, container),
+      };
+    },
     mountCard(input: Partial<Input>) {
       const container = createContainer();
       render(input, container);
