@@ -19,7 +19,11 @@ import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { prepareSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
-import { normalizeToolPolicyName, toolPolicyRestrictsTools } from "../agents/tool-policy.js";
+import {
+  normalizeToolPolicyName,
+  resolveRuntimeMessageProfileAllowlist,
+  toolPolicyRestrictsTools,
+} from "../agents/tool-policy.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import { hasSessionControlAuthority } from "../agents/tools/sessions-operator-authority.js";
 import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
@@ -339,6 +343,7 @@ async function constructMcpLoopbackTools(
     : undefined;
   const scopeOptions: Parameters<typeof resolveGatewayScopedTools>[0] = {
     ...context,
+    gatewayRequestedTools: resolveRuntimeMessageProfileAllowlist(toolsAllow),
     messageActionTurnCapability: params.messageActionTurnCapability,
     memoryAudience: params.memoryAudience,
     cfg: params.cfg,
