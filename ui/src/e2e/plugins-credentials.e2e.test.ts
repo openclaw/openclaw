@@ -1,9 +1,7 @@
-import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, type ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -18,39 +16,35 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 const credentialPath = ["plugins", "entries", "workboard", "config", "search", "apiKey"];
+const configHash = configMocks["config.get"].hash;
 const originalRef = { source: "file", provider: "team", id: "/search/apiKey" };
 const searchConfig = { apiKey: originalRef, mode: "web", otherSecret: REDACTED_SENTINEL };
 function configWithSearch(search: Record<string, unknown>) {
   return { plugins: { entries: { workboard: { enabled: true, config: { search } } } } };
 }
-const sourceConfig = configWithSearch(searchConfig);
 function objectSchema(properties: Record<string, unknown>, strict = false) {
   return { type: "object", ...(strict ? { additionalProperties: false } : {}), properties };
 }
-const schema = objectSchema({
-  plugins: objectSchema({
-    entries: objectSchema({
-      workboard: objectSchema({
-        config: objectSchema(
-          {
-            search: objectSchema(
-              {
-                apiKey: { type: ["string", "object"] },
-                mode: { type: "string" },
-                otherSecret: { type: "string" },
-              },
-              true,
-            ),
-          },
-          true,
-        ),
-      }),
-    }),
-  }),
-});
+const schema = ["search", "config", "workboard", "entries", "plugins"].reduce(
+  (child, key) => objectSchema({ [key]: child }, key === "search"),
+  objectSchema(
+    {
+      apiKey: { type: ["string", "object"] },
+      mode: { type: "string" },
+      otherSecret: { type: "string" },
+    },
+    true,
+  ),
+);
 
 function keyButton(page: Page, action: "Show" | "Hide") {
   return page.getByRole("button", { name: `${action} API key: Search API key`, exact: true });
+}
+async function expectMasked(input: Locator) {
+  expect([await input.inputValue(), await input.getAttribute("type")]).toEqual(["", "password"]);
+}
+function configSnapshot(config: ReturnType<typeof configWithSearch>, hash = configHash) {
+  return { ...configMocks["config.get"], config, raw: JSON.stringify(config), hash };
 }
 const prefix = "plugins.entries.workboard.config.search";
 const featureMethods = [
@@ -75,19 +69,11 @@ suite.define(() => {
       await suite.withPage(
         { colorScheme: "dark", viewport: { width, height: 900 } },
         async ({ page }) => {
-          const proofDir =
-            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-              ? createControlUiE2eArtifactDir(`plugin-credentials-${width}-${readOnly}`)
-              : undefined;
-          const initial = structuredClone(sourceConfig);
-          if (literal) {
-            Object.assign(initial.plugins.entries.workboard.config.search, {
-              apiKey: REDACTED_SENTINEL,
-            });
-          }
-          if (missing) {
-            Reflect.deleteProperty(initial.plugins.entries.workboard.config.search, "apiKey");
-          }
+          const { apiKey, ...siblings } = searchConfig;
+          const initial = configWithSearch({
+            ...siblings,
+            ...(!missing ? { apiKey: literal ? REDACTED_SENTINEL : apiKey } : {}),
+          });
           const gateway = await installMockGateway(page, {
             featureMethods,
             operatorScopes: readOnly ? ["operator.read"] : ["operator.read", "operator.admin"],
@@ -107,18 +93,14 @@ suite.define(() => {
                 ],
               },
               "plugins.credentials.inspect": {
-                baseHash: configMocks["config.get"].hash,
+                baseHash: configHash,
                 credential: missing
                   ? { kind: "missing" }
                   : literal
                     ? { kind: "literal" }
                     : { kind: "reference", ref: originalRef, unresolved: false },
               },
-              "config.get": {
-                ...configMocks["config.get"],
-                config: initial,
-                raw: JSON.stringify(initial),
-              },
+              "config.get": configSnapshot(initial),
               "config.schema": {
                 ...configMocks["config.schema"],
                 schema,
@@ -130,13 +112,19 @@ suite.define(() => {
               },
             },
           });
+          const inspect = (credential: Record<string, unknown>, baseHash = configHash) =>
+            gateway.setMethodResponse("plugins.credentials.inspect", { baseHash, credential });
+          const ref = (id: string) => ({
+            kind: "reference",
+            ref: { ...originalRef, id },
+            unresolved: false,
+          });
           await page.goto(`${suite.server.baseUrl}settings/plugins/workboard?view=settings`);
           await page.locator("openclaw-plugin-settings-editor").waitFor();
           if (literal || missing) {
             const input = page.getByLabel("Search API key", { exact: true });
             await input.waitFor();
-            expect(await input.inputValue()).toBe("");
-            expect(await input.getAttribute("type")).toBe("password");
+            await expectMasked(input);
             expect(
               await page
                 .getByRole("link", { name: "Get an API key", exact: true })
@@ -156,10 +144,7 @@ suite.define(() => {
               (await gateway.getRequests("plugins.credentials.inspect"))[0]?.params,
             ).not.toHaveProperty("reveal");
             if (literal) {
-              await gateway.setMethodResponse("plugins.credentials.inspect", {
-                baseHash: configMocks["config.get"].hash,
-                credential: { kind: "literal", value: "synthetic-stored-key" },
-              });
+              await inspect({ kind: "literal", value: "synthetic-stored-key" });
               await reveal.click();
               await expect.poll(() => input.inputValue()).toBe("synthetic-stored-key");
               expect(
@@ -167,7 +152,7 @@ suite.define(() => {
               ).toMatchObject({
                 pluginId: "workboard",
                 path: credentialPath,
-                baseHash: configMocks["config.get"].hash,
+                baseHash: configHash,
                 reveal: true,
               });
               await keyButton(page, "Hide").click();
@@ -191,17 +176,13 @@ suite.define(() => {
               }),
             );
             expect(await input.isDisabled()).toBe(true);
-            await gateway.setMethodResponse("plugins.credentials.inspect", {
-              baseHash: "mock-config-hash-1",
-              credential: { kind: "literal" },
-            });
+            await inspect({ kind: "literal" }, "mock-config-hash-1");
             await gateway.resolveDeferred("config.set");
             await expect.poll(() => input.inputValue()).toBe("");
             expect(await gateway.getRequests("config.set")).toHaveLength(1);
             await page.reload();
             await input.waitFor();
-            expect(await input.inputValue()).toBe("");
-            expect(await input.getAttribute("type")).toBe("password");
+            await expectMasked(input);
             return;
           }
           const reference = page.getByRole("button", {
@@ -210,8 +191,7 @@ suite.define(() => {
           });
           await reference.waitFor();
           const other = page.locator('input[aria-label$="Other secret"]');
-          expect(await other.getAttribute("type")).toBe("password");
-          expect(await other.inputValue()).toBe("");
+          await expectMasked(other);
           expect(await page.locator('input[aria-label$="Search mode"]').inputValue()).toBe("web");
           expect(await reference.count()).toBe(1);
           expect(await page.locator("body").textContent()).not.toContain(REDACTED_SENTINEL);
@@ -222,28 +202,25 @@ suite.define(() => {
             return;
           }
           await expect.poll(() => reference.isEnabled()).toBe(true);
-          if (proofDir) {
-            await page.screenshot({
-              path: path.join(proofDir, "settings.png"),
-              animations: "disabled",
-            });
-          }
           await reference.click();
           await page
             .getByRole("dialog", { name: "Secret reference: Search API key", exact: true })
             .waitFor();
           const dialog = page.locator("openclaw-modal-dialog");
+          const expectFailedDraft = async (message: string) => {
+            await expect.poll(() => dialog.getByRole("alert").textContent()).toContain(message);
+            expect(await dialog.isVisible()).toBe(true);
+            expect(await identifier.inputValue()).toBe("/search/failed");
+          };
           const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
           const save = dialog.getByRole("button", { name: "Save", exact: true });
-          expect(await dialog.getByLabel("Source", { exact: true }).inputValue()).toBe("file");
-          expect(await dialog.getByLabel("Provider", { exact: true }).inputValue()).toBe("team");
           const identifier = dialog.getByLabel("Identifier", { exact: true });
-          expect(await identifier.inputValue()).toBe("/search/apiKey");
-          if (proofDir) {
-            await page.screenshot({
-              path: path.join(proofDir, "reference.png"),
-              animations: "disabled",
-            });
+          for (const [label, value] of Object.entries({
+            Source: "file",
+            Provider: "team",
+            Identifier: "/search/apiKey",
+          })) {
+            expect(await dialog.getByLabel(label, { exact: true }).inputValue()).toBe(value);
           }
           await identifier.fill("/search/cancelled");
           await cancel.click();
@@ -265,10 +242,7 @@ suite.define(() => {
           expect(JSON.parse(String(asRecord(request.params).raw))).toEqual(
             configWithSearch({ ...searchConfig, apiKey: changedRef }),
           );
-          await gateway.setMethodResponse("plugins.credentials.inspect", {
-            baseHash: "mock-config-hash-1",
-            credential: { kind: "reference", ref: changedRef, unresolved: false },
-          });
+          await inspect(ref(changedRef.id), "mock-config-hash-1");
           await gateway.resolveDeferred("config.set");
           await dialog.waitFor({ state: "hidden" });
           expect(await gateway.getRequests("config.set")).toHaveLength(1);
@@ -288,10 +262,7 @@ suite.define(() => {
             code: width === 390 ? "INVALID_REQUEST" : "UNAVAILABLE",
             message: "Fixture write rejected",
           });
-          await expect
-            .poll(() => dialog.getByRole("alert").textContent())
-            .toContain("Fixture write rejected");
-          expect(await identifier.inputValue()).toBe("/search/failed");
+          await expectFailedDraft("Fixture write rejected");
           expect(await cancel.isEnabled()).toBe(true);
           if (width === 1174) {
             // Arm the failure and click in one task so a poll cannot consume Cancel's deferral.
@@ -312,35 +283,20 @@ suite.define(() => {
               code: "UNAVAILABLE",
               message: "Fixture config read unavailable",
             });
-            await expect
-              .poll(() => dialog.getByRole("alert").textContent())
-              .toContain("Fixture config read unavailable");
-            expect(await dialog.isVisible()).toBe(true);
-            expect(await identifier.inputValue()).toBe("/search/failed");
+            await expectFailedDraft("Fixture config read unavailable");
             await cancel.click();
-            await expect
-              .poll(() => dialog.getByRole("alert").textContent())
-              .toContain("The last save could not be confirmed");
-            expect(await dialog.isVisible()).toBe(true);
-            expect(await identifier.inputValue()).toBe("/search/failed");
+            await expectFailedDraft("The last save could not be confirmed");
             expect(await gateway.getRequests("config.set")).toHaveLength(writesBeforeFailure + 1);
             // A successful old snapshot cannot fence the unknown write. Its later
             // persisted bytes let Cancel reconcile without restoring the older reference.
-            const confirmedRaw = String(asRecord(uncertainWrite.params).raw);
-            await gateway.setMethodResponse("config.get", {
-              ...configMocks["config.get"],
-              config: JSON.parse(confirmedRaw),
-              raw: confirmedRaw,
-              hash: "confirmed-credential-write",
-            });
-            await gateway.setMethodResponse("plugins.credentials.inspect", {
-              baseHash: "confirmed-credential-write",
-              credential: {
-                kind: "reference",
-                ref: { ...originalRef, id: "/search/failed" },
-                unresolved: false,
-              },
-            });
+            await gateway.setMethodResponse(
+              "config.get",
+              configSnapshot(
+                JSON.parse(String(asRecord(uncertainWrite.params).raw)),
+                "confirmed-credential-write",
+              ),
+            );
+            await inspect(ref("/search/failed"), "confirmed-credential-write");
           }
           await cancel.click();
           await dialog.waitFor({ state: "hidden" });

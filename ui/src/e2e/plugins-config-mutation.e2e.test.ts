@@ -1,24 +1,15 @@
 // Control UI tests cover plugin mutations serialized behind pending config drafts.
-import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { PluginsInspectResult } from "../lib/plugins/index.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { inspection } from "./plugins-settings-admin.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI plugin config mutation mocked Gateway E2E",
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not available at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-});
-
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let uiProofArtifactDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    uiProofArtifactDir = createControlUiE2eArtifactDir("plugins-config-mutation");
-  }
 });
 
 function configResponse(fallback: string | undefined, workboardEnabled: boolean, hash: string) {
@@ -77,26 +68,12 @@ function workboardInspection(enabled: boolean): PluginsInspectResult {
       installed: true,
       enabled,
     },
-    declared: {
-      channels: [],
-      providers: [],
-      tools: [],
-      contracts: [],
-      hooks: [],
-      mcpServers: [],
-      cliCommands: [],
-      cliBackends: [],
-      skills: [],
-      dangerousConfigFlags: [],
-    },
+    declared: { ...inspection.declared, tools: [] },
     components: {
+      ...inspection.components,
       mapped: [],
       skills: [],
       mcpServers: [],
-      commands: [],
-      hooks: [],
-      lspServers: [],
-      unavailable: { capabilities: [], mcpServers: [], lspServers: [] },
     },
     grants: {
       hooks: {
@@ -117,6 +94,11 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
+        const pluginList = (enabled: boolean) => ({
+          plugins: [enabled ? workboardEnabled : workboardDisabled],
+          diagnostics: [],
+          mutationAllowed: true,
+        });
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "agents.list": {
@@ -127,11 +109,7 @@ suite.define(() => {
             },
             "config.get": configResponse(undefined, false, "config-hash-1"),
             "plugins.inspect": workboardInspection(false),
-            "plugins.list": {
-              plugins: [workboardDisabled],
-              diagnostics: [],
-              mutationAllowed: true,
-            },
+            "plugins.list": pluginList(false),
           },
         });
 
@@ -155,12 +133,6 @@ suite.define(() => {
         const workboardRow = page.locator('[data-plugin-id="workboard"]');
         await workboardRow.waitFor();
         const connects = (await gateway.getRequests("connect")).length;
-        if (captureUiProofEnabled) {
-          await workboardRow.screenshot({
-            animations: "disabled",
-            path: path.join(uiProofArtifactDir, "00-before-enable.png"),
-          });
-        }
 
         await workboardRow.click();
         await waitForControlUiRoute(page, {
@@ -182,11 +154,7 @@ suite.define(() => {
           "config.get",
           configResponse("anthropic/claude-sonnet-4-6", true, "config-hash-3"),
         );
-        await gateway.setMethodResponse("plugins.list", {
-          plugins: [workboardEnabled],
-          diagnostics: [],
-          mutationAllowed: true,
-        });
+        await gateway.setMethodResponse("plugins.list", pluginList(true));
         await gateway.setMethodResponse("plugins.inspect", workboardInspection(true));
         await gateway.resolveDeferred("plugins.setEnabled", {
           ok: true,
@@ -203,12 +171,6 @@ suite.define(() => {
           .toBeGreaterThanOrEqual(2);
         expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
         expect(await gateway.getRequests("connect")).toHaveLength(connects);
-        if (captureUiProofEnabled) {
-          await page.locator(".content").screenshot({
-            animations: "disabled",
-            path: path.join(uiProofArtifactDir, "01-after-enable.png"),
-          });
-        }
       },
     );
   });

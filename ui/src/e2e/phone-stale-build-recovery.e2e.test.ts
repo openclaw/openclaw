@@ -243,6 +243,7 @@ suite.define(() => {
         retryable: false,
       };
       const target = new URL("chat/main", proofServer.baseUrl);
+      const recovery = page.getByRole("button", { name: /Server updated/u });
 
       const observation: PhoneRecoveryObservation = {
         schemaVersion: 3,
@@ -264,45 +265,41 @@ suite.define(() => {
           initial: initialServiceWorker,
           final: initialServiceWorker,
         };
-        if (serviceWorker === "normal") {
-          expect(initialServiceWorker.controlled).toBe(true);
-          expect(initialServiceWorker.controllerState).toBe("activated");
-          expect(initialServiceWorker.registrations).toHaveLength(1);
-        } else {
-          expect(initialServiceWorker.controlled).toBe(false);
-          expect(initialServiceWorker.controllerState).toBeNull();
-          expect(initialServiceWorker.registrations).toHaveLength(0);
-        }
+        expect(initialServiceWorker).toMatchObject({
+          controlled: serviceWorker === "normal",
+          controllerState: serviceWorker === "normal" ? "activated" : null,
+          registrations: serviceWorker === "normal" ? [expect.anything()] : [],
+        });
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");
         const retainedImage = page.getByAltText(RETAINED_IMAGE_ALT);
         const retainedTimeout = page.getByText(RETAINED_TIMEOUT_TEXT, { exact: true });
-        await retainedImage.waitFor({ state: "visible", timeout: 10_000 });
-        await retainedTimeout.waitFor({ state: "visible", timeout: 10_000 });
-        const imageBeforeReconnect = await retainedImage.evaluate(
-          (element) => element instanceof HTMLImageElement && element.complete,
-        );
-        const timeoutBeforeReconnect = await retainedTimeout.isVisible();
+        const retainedDelivery = async () => {
+          await retainedImage.waitFor({ state: "visible", timeout: 10_000 });
+          await retainedTimeout.waitFor({ state: "visible", timeout: 10_000 });
+          return {
+            image: await retainedImage.evaluate(
+              (element) => element instanceof HTMLImageElement && element.complete,
+            ),
+            timeout: await retainedTimeout.isVisible(),
+          };
+        };
+        const beforeReconnect = await retainedDelivery();
         const connectCountBeforeReconnect = (await gateway.getRequests("connect")).length;
         await gateway.deferNext("connect");
         await gateway.closeLatest(1006, "phone proof timeout-delivery reconnect");
         await gateway.waitForRequest("connect", { after: connectCountBeforeReconnect });
         await gateway.resolveDeferred("connect");
-        await retainedImage.waitFor({ state: "visible", timeout: 10_000 });
-        await retainedTimeout.waitFor({ state: "visible", timeout: 10_000 });
-        const imageAfterReconnect = await retainedImage.evaluate(
-          (element) => element instanceof HTMLImageElement && element.complete,
-        );
-        const timeoutAfterReconnect = await retainedTimeout.isVisible();
+        const afterReconnect = await retainedDelivery();
         const retentionRequests = await observeGatewayRequests(page);
         const retentionConnects = requestsFor(retentionRequests, "connect");
         const retentionTranscripts = requestsFor(retentionRequests, "chat.history", "chat.startup");
         const retentionModelWakes = requestsFor(retentionRequests, "chat.send");
         const retentionAssignmentMutations = requestsFor(retentionRequests, "sessions.assignOwner");
-        expect(imageBeforeReconnect).toBe(true);
-        expect(imageAfterReconnect).toBe(true);
-        expect(timeoutBeforeReconnect).toBe(true);
-        expect(timeoutAfterReconnect).toBe(true);
+        expect([beforeReconnect, afterReconnect]).toEqual([
+          { image: true, timeout: true },
+          { image: true, timeout: true },
+        ]);
         expect(retentionConnects).toHaveLength(2);
         expect(new Set(retentionConnects.map((request) => request.requestId)).size).toBe(2);
         expect(retentionTranscripts.length).toBeGreaterThanOrEqual(1);
@@ -322,15 +319,13 @@ suite.define(() => {
             artifactId: retainedImageArtifactId,
             artifactDownloadRequestCount: artifactDownloadRequests.length,
             blockedUnticketedRequestCount,
-            loadedAfterReconnect: imageAfterReconnect,
-            loadedBeforeReconnect: imageBeforeReconnect,
+            loadedAfterReconnect: afterReconnect.image,
+            loadedBeforeReconnect: beforeReconnect.image,
             mediaRequestUrls: [...retainedImageRequestUrls],
-            naturalWidth: await retainedImage.evaluate((element) =>
-              element instanceof HTMLImageElement ? element.naturalWidth : 0,
-            ),
-            renderedSrc: await retainedImage.evaluate((element) =>
-              element instanceof HTMLImageElement ? element.currentSrc : "",
-            ),
+            ...(await retainedImage.evaluate((element) => ({
+              naturalWidth: element instanceof HTMLImageElement ? element.naturalWidth : 0,
+              renderedSrc: element instanceof HTMLImageElement ? element.currentSrc : "",
+            }))),
             requestCount: retainedImageRequestUrls.length,
             sourcePathname: retainedImagePath,
           },
@@ -342,9 +337,9 @@ suite.define(() => {
             transcriptRequestCount: retentionTranscripts.length,
           },
           timeoutDelivery: {
-            retainedAfterReconnect: timeoutAfterReconnect,
+            retainedAfterReconnect: afterReconnect.timeout,
             text: RETAINED_TIMEOUT_TEXT,
-            visibleBeforeReconnect: timeoutBeforeReconnect,
+            visibleBeforeReconnect: beforeReconnect.timeout,
           },
         };
         await resetPhoneRecoveryRequestObserver(page);
@@ -365,7 +360,6 @@ suite.define(() => {
 
         await waitForConnect();
         await gateway.rejectDeferred("connect", mismatch);
-        const recovery = page.getByRole("button", { name: /Server updated/u });
         await recovery.waitFor({ timeout: 10_000 });
         expect(await recovery.count()).toBe(1);
         expect(await page.locator("openclaw-login-gate").count()).toBe(0);
@@ -480,7 +474,7 @@ suite.define(() => {
           true,
           true,
         ]);
-        expect(await page.getByRole("button", { name: /Server updated/u }).count()).toBe(0);
+        expect(await recovery.count()).toBe(0);
         await expect
           .poll(() => page.locator("openclaw-router-outlet").getAttribute("inert"))
           .toBeNull();
@@ -491,25 +485,22 @@ suite.define(() => {
           ),
         ).toBe("4");
         await expect.poll(() => documentResponses.length).toBe(4);
-        expect(
-          documentResponses.map(({ cacheControl, fromWorker, status }) => ({
-            cacheControl,
-            fromWorker,
-            status,
-          })),
-        ).toEqual(
-          Array.from({ length: 4 }, () => ({
+        expect(documentResponses).toHaveLength(4);
+        for (const response of documentResponses) {
+          expect(response).toMatchObject({
             cacheControl: "no-cache",
             fromWorker: serviceWorker === "normal",
             status: 200,
-          })),
-        );
+          });
+        }
         const installedArtifact = await observeCurrentArtifact();
         expect(installedArtifact.buildId).not.toBeNull();
-        expect(installedArtifact.bodyDisplay).toBe("block");
-        expect(installedArtifact.icon.pathname).toBe("/favicon.svg");
-        expect(installedArtifact.font.pathname).toBe("/fonts/space-grotesk.css");
-        expect(installedArtifact.theme.pathname).toBe("/themes/absolutely.css");
+        expect(installedArtifact).toMatchObject({
+          bodyDisplay: "block",
+          icon: { pathname: "/favicon.svg" },
+          font: { pathname: "/fonts/space-grotesk.css" },
+          theme: { pathname: "/themes/absolutely.css" },
+        });
         for (const asset of [
           installedArtifact.icon,
           installedArtifact.font,
@@ -519,7 +510,7 @@ suite.define(() => {
           expect(asset.version).toBe(installedArtifact.buildId);
         }
         observation.recovered = {
-          actionCount: await page.getByRole("button", { name: /Server updated/u }).count(),
+          actionCount: await recovery.count(),
           routePath: new URL(page.url()).pathname,
         };
         const actions = page.getByRole("button", { name: "Actions for Main" });
@@ -573,42 +564,34 @@ suite.define(() => {
             observation.serviceWorkerState.final = finalServiceWorker;
           }
           observation.gatewayRequests = await observeGatewayRequests(page).catch(() => []);
-          const connectRequestCount = requestsFor(observation.gatewayRequests, "connect").length;
-          const modelWakeCount = requestsFor(observation.gatewayRequests, "chat.send").length;
-          const safeCount = (selector: string) =>
-            page
-              .locator(selector)
-              .count()
-              .catch(() => 0);
-          const inert = (selector: string) =>
-            page
-              .locator(selector)
-              .evaluate((element) => element.hasAttribute("inert"))
-              .catch(() => null);
+          const finalState = await page
+            .evaluate(() => {
+              const count = (selector: string) => document.querySelectorAll(selector).length;
+              const inert = (selector: string) =>
+                document.querySelector(selector)?.hasAttribute("inert") ?? null;
+              const value = sessionStorage.getItem("openclaw.control-ui-e2e.build-rejection-loads");
+              const loads = value === null ? Number.NaN : Number.parseInt(value, 10);
+              return {
+                appShellCount: count("openclaw-app-shell"),
+                loginGateCount: count("openclaw-login-gate"),
+                mainInert: inert("#control-ui-main"),
+                reloadCount: Number.isSafeInteger(loads) ? Math.max(0, loads - 1) : null,
+                routerOutletInert: inert("openclaw-router-outlet"),
+              };
+            })
+            .catch(() => ({
+              appShellCount: 0,
+              loginGateCount: 0,
+              mainInert: null,
+              reloadCount: null,
+              routerOutletInert: null,
+            }));
           observation.final = {
-            appShellCount: await safeCount("openclaw-app-shell"),
-            connectRequestCount,
-            loginGateCount: await safeCount("openclaw-login-gate"),
-            mainInert: await inert("#control-ui-main"),
-            modelWakeCount,
-            recoveryActionCount: await page
-              .getByRole("button", { name: /Server updated/u })
-              .count()
-              .catch(() => 0),
-            reloadCount: await page
-              .evaluate(() => {
-                const value = sessionStorage.getItem(
-                  "openclaw.control-ui-e2e.build-rejection-loads",
-                );
-                if (value === null) {
-                  return null;
-                }
-                const count = Number.parseInt(value, 10);
-                return Number.isSafeInteger(count) ? Math.max(0, count - 1) : null;
-              })
-              .catch(() => null),
+            ...finalState,
+            recoveryActionCount: await recovery.count().catch(() => 0),
+            connectRequestCount: requestsFor(observation.gatewayRequests, "connect").length,
+            modelWakeCount: requestsFor(observation.gatewayRequests, "chat.send").length,
             routePath: new URL(page.url()).pathname,
-            routerOutletInert: await inert("openclaw-router-outlet"),
             terminalInvocationCount: (await gateway.getRequests("terminal.open")).length,
           };
         }

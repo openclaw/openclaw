@@ -1,10 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -26,19 +23,6 @@ async function withPage(
   }
 }
 const trigger = (page: Page, name: string) => page.locator(`#new-session-${name}-trigger`);
-async function capture(
-  page: Page,
-  name: string,
-  surface: Locator,
-  content: Locator[],
-  viewport?: { width: number; height: number },
-) {
-  const frame = await takeControlUiScreenshotFrame(page, surface, content, {
-    animations: "disabled",
-    ...(viewport ? { viewport } : {}),
-  });
-  await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
-}
 async function darkTheme(page: Page) {
   await evaluateControlUiContext(page, (application) => application.theme.setMode("dark"));
 }
@@ -71,15 +55,12 @@ const models: ModelCatalogEntry[] = [
 const responses = {
   "environments.list": {
     environments: [],
-    profiles: [
-      { id: "aws", providerId: "aws", trust: "disposable", executionModes: ["worker-turn"] },
-      {
-        id: "daytona",
-        providerId: "daytona",
-        trust: "disposable",
-        executionModes: ["worker-turn"],
-      },
-    ],
+    profiles: ["aws", "daytona"].map((providerId) => ({
+      id: providerId,
+      providerId,
+      trust: "disposable",
+      executionModes: ["worker-turn"],
+    })),
   },
   "worktrees.branches": {
     branches: [{ kind: "local", name: "main" }],
@@ -114,23 +95,16 @@ suite.define(() => {
       const surface = page.locator(".oc-popover.new-session-page__where-popover");
       const option = surface.locator('[data-value="runtime:agentsapi"]');
       await option.waitFor();
-      await capture(
-        page,
-        "after",
-        surface,
-        [surface.getByRole("searchbox", { name: "Search environments" }), option],
-        desktop,
-      );
       await surface.getByRole("searchbox").fill("Agents API");
       expect(await option.isVisible()).toBe(true);
       await option.focus();
       await page.keyboard.press("Enter");
       const where = trigger(page, "where");
       await pollAttribute(where, "data-hosted-runtime").toBe("agentsapi");
+      await where.waitFor();
       expect(await where.textContent()).toContain("OpenAI (Agents API)");
       expect(await trigger(page, "project").count()).toBe(0);
       expect(await trigger(page, "checkout").count()).toBe(0);
-      await capture(page, "hosted-selected", page.locator(".new-session-page__triggers"), [where]);
       await openEnvironmentPicker(page);
       expect(await option.getAttribute("aria-pressed")).toBe("true");
       await surface.getByRole("searchbox").fill("");
@@ -177,7 +151,6 @@ suite.define(() => {
       const picker = page.locator(".oc-popover.new-session-page__where-popover");
       await picker.getByRole("searchbox").fill("Agents API");
       await picker.getByRole("status").waitFor();
-      await capture(page, "mobile-loading", picker, [picker.getByRole("status")]);
       const unavailable = models.map((model) => ({
         ...model,
         runtimeChoices: model.runtimeChoices!.map((choice) =>
@@ -187,10 +160,10 @@ suite.define(() => {
       await gateway.resolveDeferred("models.list", { models: unavailable });
       const option = picker.locator('[data-value="runtime:agentsapi"]');
       await pollAttribute(option, "aria-disabled").toBe("true");
+      await option.waitFor();
       await option.focus();
       await page.keyboard.press("Enter");
       expect(await trigger(page, "where").getAttribute("data-hosted-runtime")).toBeNull();
-      await capture(page, "mobile-unavailable", picker, [option]);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     });
   });
@@ -214,15 +187,10 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl + "new");
       const where = trigger(page, "where");
       await pollAttribute(where, "data-hosted-runtime").toBe("agentsapi");
+      await where.waitFor();
       await darkTheme(page);
       expect(await trigger(page, "project").count()).toBe(0);
       expect(await where.getAttribute("aria-label")).toContain(label);
-      await capture(
-        page,
-        "mobile-restored-long-label",
-        page.locator(".new-session-page__triggers"),
-        [where],
-      );
       await openEnvironmentPicker(page);
       expect(
         await page.locator('[data-value="runtime:agentsapi"]').getAttribute("aria-pressed"),

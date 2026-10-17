@@ -3,14 +3,18 @@ import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import type { MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  captureUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+async function connect(gateway: MockGatewayControls) {
+  await gateway.waitForRequest("connect");
+  await gateway.resolveDeferred("connect");
+}
 
 suite.define(() => {
   it.each([false, true])(
@@ -35,27 +39,28 @@ suite.define(() => {
           methodResponses: { "agents.list": roster("/workspace-a") },
         });
         await page.goto(`${suite.server.baseUrl}chat?session=main#token=synthetic-test-token`);
-        await gateway.waitForRequest("connect");
-        await gateway.resolveDeferred("connect");
+        await connect(gateway);
         await gateway.waitForRequest("agents.list");
         await gateway.resolveDeferred("agents.list");
+        await waitForControlUiGatewayReady(page);
+        await page.locator(".agent-chat__composer-combobox textarea").waitFor({ state: "visible" });
         await expect
           .poll(() =>
             page.evaluate(() =>
-              Object.keys(localStorage).some(
-                (key) =>
+              Object.entries(localStorage).some(
+                ([key, value]) =>
                   key.startsWith("openclaw.control.bootRecord.v1:") &&
-                  localStorage.getItem(key)?.includes("/workspace-a"),
+                  value.includes("/workspace-a"),
               ),
             ),
           )
           .toBe(true);
-
         await page.goto(`${suite.server.baseUrl}new?agent=main`, { waitUntil: "commit" });
         const message = page.locator(".new-session-page__message");
         await message.fill("Keep the warm draft");
-        await gateway.waitForRequest("connect");
-        await gateway.resolveDeferred("connect");
+        expect(await message.inputValue()).toBe("Keep the warm draft");
+        expect(await gateway.getRequests("config.get")).toHaveLength(0);
+        await connect(gateway);
         await gateway.waitForRequest("agents.list");
         const workspaceOption = page.locator(
           '.new-session-page__project-popover [data-value="workspace"]',
@@ -64,9 +69,6 @@ suite.define(() => {
         expect(await workspaceOption.count()).toBe(0);
         await page.keyboard.press("Escape");
         const start = page.getByRole("button", { name: "Start session", exact: true });
-        if (!explicit) {
-          await captureUiProof(suite, page, "pending-live-agent-defaults.png");
-        }
         expect(await start.getAttribute("aria-disabled")).toBe("true");
         await start.click({ force: true });
         await message.press("Enter");
@@ -74,6 +76,8 @@ suite.define(() => {
 
         await gateway.resolveDeferred("agents.list", roster("/workspace-a"));
         await expect.poll(() => start.getAttribute("aria-disabled")).not.toBe("true");
+        await gateway.waitForRequest("config.get");
+        expect(await message.inputValue()).toBe("Keep the warm draft");
         if (explicit) {
           await page.locator("#new-session-project-trigger").click();
           await workspaceOption.click();
@@ -106,43 +110,6 @@ suite.define(() => {
       });
     },
   );
-
-  it("keeps a reloaded new-session page responsive before the Gateway reconnects", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        heldMethods: ["connect"],
-        authMethod: "token",
-        authMode: "token",
-        presenceUsers: [{ id: "config-startup-profile", self: true }],
-      });
-      await page.goto(`${suite.server.baseUrl}chat?session=main#token=synthetic-test-token`);
-      await gateway.waitForRequest("connect");
-      await gateway.resolveDeferred("connect");
-      await waitForControlUiGatewayReady(page);
-      await page.locator(".agent-chat__composer-combobox textarea").waitFor({ state: "visible" });
-      await expect
-        .poll(() =>
-          page.evaluate(() =>
-            Object.keys(localStorage).some((key) =>
-              key.startsWith("openclaw.control.bootRecord.v1:"),
-            ),
-          ),
-        )
-        .toBe(true);
-      await page.goto(`${suite.server.baseUrl}new?agent=main`, { waitUntil: "commit" });
-
-      const message = page.locator(".new-session-page__message");
-      await message.fill("Keep this draft while connecting");
-      expect(await message.inputValue()).toBe("Keep this draft while connecting");
-      expect(await gateway.getRequests("config.get")).toHaveLength(0);
-
-      await gateway.waitForRequest("connect");
-      await gateway.resolveDeferred("connect");
-      await waitForControlUiGatewayReady(page);
-      await gateway.waitForRequest("config.get");
-      expect(await message.inputValue()).toBe("Keep this draft while connecting");
-    });
-  });
 
   it("settles a failed config load and reflects the owner's reconnect result", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
