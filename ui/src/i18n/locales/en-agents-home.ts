@@ -13,7 +13,6 @@ const enAgentsHome = {
     deleteAgentConfirm: "Delete {agent}?",
     deleteAgentDetails:
       "Its workspace, agent state, and session transcripts move to Trash. Its channel accounts remain configured.",
-    collapseOthers: "Collapse others",
     agentOptions: "Options for {agent}",
     expandAgent: "Expand {agent}",
     collapseAgent: "Collapse {agent}",

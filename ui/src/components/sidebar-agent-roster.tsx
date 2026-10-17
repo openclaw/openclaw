@@ -1,5 +1,5 @@
 import { createEffect, createMemo, createSignal, For, onSettled, Show, untrack } from "solid-js";
-import { isSessionRouteId } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForAgentPanel } from "../app-route-paths.ts";
 import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
@@ -241,18 +241,13 @@ export function SidebarAgentRoster(props: RosterProps) {
             roster.context().agentSelection.setScope(card().id);
             roster.host().onNavigate?.("sessions");
             break;
+          case "settings":
+            roster.context().navigate("agents", {
+              pathname: pathForAgentPanel(card().id, null, roster.context().basePath),
+            });
+            break;
           case "delete":
             void deleteAgent(card());
-            break;
-          case "collapse-others":
-            setCollapsedAgents(
-              new Set(
-                roster
-                  .cards()
-                  .filter((other) => other.id !== card().id)
-                  .map((other) => other.id),
-              ),
-            );
             break;
         }
       }}
@@ -277,10 +272,10 @@ export function SidebarAgentRoster(props: RosterProps) {
           icon: <Icon name="listTree" />,
         },
         {
-          id: "collapse-others",
-          label: t("agentsHome.collapseOthers"),
+          id: "settings",
+          label: t("nav.settings"),
           class: "sidebar-customize-menu__item",
-          icon: <Icon name="foldVertical" />,
+          icon: <Icon name="settings" />,
         },
         {
           id: "delete",

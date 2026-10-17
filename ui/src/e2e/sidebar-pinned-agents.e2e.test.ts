@@ -114,15 +114,22 @@ suite.define(() => {
           await menu.press("ArrowDown");
           const newSession = sidebar.getByRole("menuitem", { name: "Create new session" });
           const viewSessions = sidebar.getByRole("menuitem", { name: "View sessions" });
+          const settings = sidebar.getByRole("menuitem", { name: "Settings", exact: true });
           const deleteAgent = sidebar.getByRole("menuitem", { name: "Delete", exact: true });
           expect(await newSession.locator("svg").count()).toBe(1);
           expect(await viewSessions.locator("svg").count()).toBe(1);
+          expect(await settings.locator("svg").count()).toBe(1);
           expect(await deleteAgent.locator("svg").count()).toBe(1);
-          for (const item of [newSession, viewSessions, deleteAgent]) {
+          for (const item of [newSession, viewSessions, settings, deleteAgent]) {
             expect(await item.locator("svg").evaluate((icon) => getComputedStyle(icon).width)).toBe(
               "16px",
             );
           }
+          expect(await sidebar.getByRole("menuitem", { name: "Collapse others" }).count()).toBe(0);
+          const menuLabels = await sidebar.getByRole("menuitem").allTextContents();
+          expect(menuLabels.findIndex((label) => label.trim() === "Settings") + 1).toBe(
+            menuLabels.findIndex((label) => label.trim() === "Delete"),
+          );
           expect(await deleteAgent.getAttribute("data-variant")).toBe("danger");
           await captureSidebarUiProof(suite, page, `menu-${width}.png`);
           await sidebar.getByRole("menuitem", { name: "Pin", exact: true }).click();
@@ -133,6 +140,17 @@ suite.define(() => {
           expect(await sidebar.locator('[data-agent-group="main"]').count()).toBe(0);
           expect(await sidebar.locator('[data-agent-group="research"]').isVisible()).toBe(true);
           expect(await pinned.locator(".sidebar-agent-roster__preview").count()).toBe(0);
+          const pinnedMenu = pinned.getByRole("button", { name: "Options for Harbor" });
+          await pinnedMenu.hover();
+          expect(
+            await pinnedMenu.evaluate((element) => getComputedStyle(element).backgroundColor),
+          ).toBe("rgba(0, 0, 0, 0)");
+          if (width !== 390) {
+            expect(await pinnedMenu.evaluate((element) => getComputedStyle(element).color)).toBe(
+              await link.evaluate((element) => getComputedStyle(element).color),
+            );
+          }
+          await captureSidebarUiProof(suite, page, `pinned-action-${width}-hover.png`);
           const card = pinned.locator(".tooltip-surface[popover]:popover-open");
           const content = pinned.locator(".sidebar-pinned-agent__card");
           for (const state of ["hover", "focus"] as const) {
@@ -163,10 +181,19 @@ suite.define(() => {
             await expect.poll(() => card.count()).toBe(0);
             expect(await sidebar.isVisible()).toBe(true);
           }
-          await pinned.getByRole("button", { name: "Options for Harbor" }).press("ArrowDown");
+          await pinnedMenu.press("ArrowDown");
+          expect(
+            await sidebar.getByRole("menuitem", { name: "Settings", exact: true }).count(),
+          ).toBe(1);
           await sidebar.getByRole("menuitem", { name: "Unpin", exact: true }).click();
           await row.waitFor({ state: "visible" });
           expect(await sidebar.locator("[data-pinned-agent]").count()).toBe(0);
+          await header.getByRole("button", { name: "Options for Harbor" }).press("ArrowDown");
+          await sidebar.getByRole("menuitem", { name: "Settings", exact: true }).click();
+          await waitForControlUiRoute(page, {
+            routeId: "agents",
+            pathname: "/settings/agents/main",
+          });
         },
       );
     },

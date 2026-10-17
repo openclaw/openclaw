@@ -69,6 +69,12 @@
   opacity: 1;
 }
 
+.sidebar-pinned-agent
+  .sidebar-agent-roster__action:is(:hover, :focus-visible, [aria-expanded="true"]) {
+  color: var(--text);
+  background: transparent;
+}
+
 .sidebar-pinned-agent__tooltip {
   --openclaw-tooltip-max-width: min(280px, calc(100vw - 24px));
   --openclaw-tooltip-padding: 12px;
