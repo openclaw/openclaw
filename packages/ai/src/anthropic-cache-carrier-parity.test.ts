@@ -1,4 +1,11 @@
-import type { Context, Message, Model, RuntimeContextMessage } from "@openclaw/llm-core";
+import type {
+  AssistantMessage,
+  Context,
+  Message,
+  Model,
+  RuntimeContextMessage,
+  UserMessage,
+} from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { createFailureMessage } from "../../agent-core/src/turn-interruption.js";
 import {
@@ -10,11 +17,7 @@ import {
 import { STREAM_ERROR_FALLBACK_TEXT } from "./replay-turn-classification.js";
 import { createZeroUsage } from "./usage.test-support.js";
 
-function user(
-  content: string,
-  timestamp: number,
-  turnScoped?: boolean,
-): Extract<Message, { role: "user" }> {
+function user(content: string, timestamp: number, turnScoped?: boolean): UserMessage {
   return {
     role: "user",
     content,
@@ -25,7 +28,7 @@ function user(
 
 function assistant(
   model: Model,
-  content: Extract<Message, { role: "assistant" }>["content"],
+  content: AssistantMessage["content"],
   timestamp = 1,
   stopReason: "stop" | "toolUse" = "stop",
 ): Message {
@@ -46,6 +49,7 @@ function textBlock(text: string, cache_control?: { type: string; ttl?: string })
 }
 
 const runtimeText = "OpenClaw runtime context:\nRuntime context";
+const opusModel = { ...anthropicModel, id: "claude-opus-5" };
 
 function captureMessages(
   implementation: "provider" | "transport",
@@ -71,20 +75,14 @@ function system(text: string, turnScoped = false) {
 
 function appendToolRound(messages: Context["messages"], model: Model, round: number) {
   const ids = [`call_${round}_a`, `call_${round}_b`];
+  const calls = ids.map((id) => ({
+    type: "toolCall" as const,
+    id,
+    name: "lookup",
+    arguments: { query: id },
+  }));
   messages.push(
-    assistant(
-      model,
-      ids.map((id) => ({
-        type: "toolCall",
-        id,
-        name: "lookup",
-        arguments: { query: id },
-      })),
-      round * 2,
-      "toolUse",
-    ),
-  );
-  messages.push(
+    assistant(model, calls, round * 2, "toolUse"),
     ...ids.map((id) => ({
       role: "toolResult" as const,
       toolCallId: id,
@@ -126,12 +124,10 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       user("Continue", 4),
     ];
 
-    const { payload } = await captureAnthropicRequest("provider", {
-      model: anthropicModel,
-      context: { ...context, messages },
+    const { payload } = await captureMessages("provider", anthropicModel, messages, {
+      cacheRetention: undefined,
     });
     const serialized = JSON.stringify(payload.messages);
-
     expect(serialized).toContain(JSON.stringify(legacyText).slice(1, -1));
     expect(serialized).not.toContain("OpenClaw runtime context:");
     expect(serialized).toContain("signature");
@@ -147,13 +143,9 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       timestamp: 2,
       runtimeContext: { retained: false },
     };
-    const { payload } = await captureAnthropicRequest("transport", {
-      model: { ...anthropicModel, input: ["text", "image"] },
+    const messages = [user("Original question", 1), carrier, user("Steering correction", 3)];
+    const { payload } = await captureMessages("transport", { input: ["text", "image"] }, messages, {
       cacheRetention: "short",
-      context: {
-        ...context,
-        messages: [user("Original question", 1), carrier, user("Steering correction", 3)],
-      },
     });
     const wire = payload.messages as Array<{ content: unknown }>;
 
@@ -225,14 +217,9 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       { ...user("Runtime facts", 3, true), content: [textBlock("Runtime facts")] },
     ];
     for (const implementation of ["provider", "transport"] as const) {
-      const { payload, headers } = await captureMessages(
-        implementation,
-        { id: "claude-opus-5" },
-        messages,
-        {
-          headers: { "anthropic-beta": "custom-beta" },
-        },
-      );
+      const { payload, headers } = await captureMessages(implementation, opusModel, messages, {
+        headers: { "anthropic-beta": "custom-beta" },
+      });
       expect(payload.messages).toEqual([
         { role: "user", content: "Question" },
         system("Prompt update"),
@@ -245,9 +232,8 @@ describe("Anthropic runtime-context cache lifecycle", () => {
   });
 
   it("keeps tool-result scaffolding ahead of a mid-run operator update", async () => {
-    const model = { ...anthropicModel, id: "claude-opus-5" };
     const messages: Context["messages"] = [user("Question", 1)];
-    appendToolRound(messages, model, 1);
+    appendToolRound(messages, opusModel, 1);
     const toolTurn = messages[1];
     if (toolTurn?.role === "assistant") {
       toolTurn.content.unshift({
@@ -258,7 +244,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
     }
     messages.push(user("Permission changed", 4, false));
     for (const implementation of ["provider", "transport"] as const) {
-      const { payload } = await captureMessages(implementation, model, messages, {
+      const { payload } = await captureMessages(implementation, opusModel, messages, {
         reasoning: "off",
       });
       expect(payload.messages).toMatchObject([
@@ -284,17 +270,16 @@ describe("Anthropic runtime-context cache lifecycle", () => {
   });
 
   it("preserves historical operator positions before the next user with an aborted assistant", async () => {
-    const model = { ...anthropicModel, id: "claude-opus-5" };
     const messages: Context["messages"] = [
       user("First question", 1),
       user("First turn facts", 2, true),
     ];
     const nextMessages: Context["messages"] = [...messages];
-    nextMessages.push(createFailureMessage(model, new Error("Interrupted"), true));
+    nextMessages.push(createFailureMessage(opusModel, new Error("Interrupted"), true));
     nextMessages.push(user("Second question", 4), user("Second turn facts", 5, true));
     for (const implementation of ["provider", "transport"] as const) {
-      const initial = await captureMessages(implementation, model, messages);
-      const replay = await captureMessages(implementation, model, nextMessages);
+      const initial = await captureMessages(implementation, opusModel, messages);
+      const replay = await captureMessages(implementation, opusModel, nextMessages);
       if (!Array.isArray(initial.payload.messages)) {
         throw new Error("Expected initial messages");
       }
@@ -312,15 +297,14 @@ describe("Anthropic runtime-context cache lifecycle", () => {
   });
 
   it("preserves ordinary user context on an ineligible OAuth route", async () => {
+    const messages = [
+      user("Question", 1),
+      user("Runtime facts", 2, true),
+      user("Next question", 3),
+    ];
     for (const implementation of ["provider", "transport"] as const) {
-      const { payload, headers } = await captureAnthropicRequest(implementation, {
-        model: { id: "claude-opus-5" },
+      const { payload, headers } = await captureMessages(implementation, opusModel, messages, {
         apiKey: "test-sk-ant-oat-fixture",
-        cacheRetention: "none",
-        context: {
-          ...context,
-          messages: [user("Question", 1), user("Runtime facts", 2, true), user("Next question", 3)],
-        },
       });
       expect(payload.messages).toEqual([
         { role: "user", content: "Question" },
@@ -363,10 +347,9 @@ describe("Anthropic runtime-context cache lifecycle", () => {
           if (round > 0) {
             appendToolRound(messages, model, round);
           }
-          const { payload } = await captureAnthropicRequest(implementation, {
-            model,
+          const replay = retained ? messages : [...messages, carrier];
+          const { payload } = await captureMessages(implementation, model, replay, {
             cacheRetention,
-            context: { ...context, messages: retained ? messages : [...messages, carrier] },
           });
           const wire = payload.messages as Array<{ role: string; content: unknown }>;
           const stable = retained ? wire : wire.slice(0, -1);
@@ -415,10 +398,8 @@ describe("Anthropic runtime-context cache lifecycle", () => {
           ...carrier,
           timestamp: 10,
         });
-        const { payload } = await captureAnthropicRequest(implementation, {
-          model,
+        const { payload } = await captureMessages(implementation, model, messages, {
           cacheRetention,
-          context: { ...context, messages },
         });
         const wire = payload.messages as Array<{ content: unknown }>;
         expect(wire.at(retained ? -1 : -2)?.content).toEqual([

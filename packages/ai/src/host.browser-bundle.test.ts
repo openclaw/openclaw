@@ -75,13 +75,6 @@ it("keeps the default transport host usable in browser bundles", async () => {
     }
     return events;
   }
-  function gate() {
-    let release!: () => void;
-    const promise = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    return { promise, release };
-  }
   expect(
     browserHost.runWithAiTransportHost(browserHost.getDefaultAiTransportHost(), () => "ok"),
   ).toBe("ok");
@@ -102,7 +95,7 @@ it("keeps the default transport host usable in browser bundles", async () => {
   await expect(stream.result()).resolves.toBe(final);
   browserHost.configureAiTransportHost({});
 
-  const resultGate = gate();
+  const resultGate = Promise.withResolvers<void>();
   const pendingSource = {
     ...source,
     async result() {
@@ -116,7 +109,7 @@ it("keeps the default transport host usable in browser bundles", async () => {
     value: undefined,
   });
   expectPending();
-  resultGate.release();
+  resultGate.resolve();
   await expect(pendingStream.result()).resolves.toBe(final);
   browserHost.configureAiTransportHost({});
 
@@ -140,22 +133,16 @@ it("keeps the default transport host usable in browser bundles", async () => {
     resolveSecretSentinel: () => "custom-old",
   });
   const customIteratorHosts: string[] = [];
-  let resolveCustomResult!: (message: typeof final) => void;
-  const customResult = new Promise<typeof final>((resolve) => {
-    resolveCustomResult = resolve;
-  });
+  const customResult = Promise.withResolvers<typeof final>();
   const customSource = {
-    push() {},
-    end() {},
-    async result() {
-      return customResult;
-    },
+    ...source,
+    result: async () => customResult.promise,
     async *[Symbol.asyncIterator]() {
       customIteratorHosts.push(
         browserHost.getAiTransportHost().resolveSecretSentinel("custom-iterator"),
       );
       yield { type: "done", reason: "stop", message: final };
-      resolveCustomResult(final);
+      customResult.resolve(final);
     },
   };
   const customStream = start(customSource, "browser-custom-test");
@@ -168,11 +155,10 @@ it("keeps the default transport host usable in browser bundles", async () => {
   expect(await collect(customStream)).toEqual([done]);
   expect(customIteratorHosts).toEqual(["custom-old"]);
 
-  const liveDrainGate = gate();
-  const liveResultGate = gate();
+  const liveDrainGate = Promise.withResolvers<void>();
+  const liveResultGate = Promise.withResolvers<void>();
   const liveSource = {
-    push() {},
-    end() {},
+    ...source,
     async result() {
       await liveResultGate.promise;
       return final;
@@ -185,7 +171,7 @@ it("keeps the default transport host usable in browser bundles", async () => {
   };
   const liveStream = start(liveSource, "browser-live-custom-test");
   const liveResult = liveStream.result();
-  liveResultGate.release();
+  liveResultGate.resolve();
   const liveIterator = liveStream[Symbol.asyncIterator]();
   await expect(liveIterator.next()).resolves.toEqual({
     done: false,
@@ -200,7 +186,7 @@ it("keeps the default transport host usable in browser bundles", async () => {
   await cancelledLiveIterator.return?.();
   await expect(cancelledLiveRead).resolves.toEqual({ done: true, value: undefined });
   expectPending();
-  liveDrainGate.release();
+  liveDrainGate.resolve();
   await expect(liveIterator.next()).resolves.toEqual({
     done: false,
     value: done,
@@ -209,7 +195,7 @@ it("keeps the default transport host usable in browser bundles", async () => {
   await expect(liveResult).resolves.toBe(final);
   browserHost.configureAiTransportHost({});
 
-  const sharedIteratorGate = gate();
+  const sharedIteratorGate = Promise.withResolvers<void>();
   const sharedIterator = (async function* () {
     yield { type: "start" as const, partial: final };
     await sharedIteratorGate.promise;
@@ -217,11 +203,7 @@ it("keeps the default transport host usable in browser bundles", async () => {
   })();
   let sharedIteratorCalls = 0;
   const sharedSource = {
-    push() {},
-    end() {},
-    async result() {
-      return final;
-    },
+    ...source,
     [Symbol.asyncIterator]() {
       sharedIteratorCalls += 1;
       return sharedIterator;
@@ -237,7 +219,7 @@ it("keeps the default transport host usable in browser bundles", async () => {
   });
   await expect(sharedResult).resolves.toBe(final);
   expectPending();
-  sharedIteratorGate.release();
+  sharedIteratorGate.resolve();
   await expect(liveSharedIterator.next()).resolves.toEqual({
     done: false,
     value: done,
@@ -247,11 +229,10 @@ it("keeps the default transport host usable in browser bundles", async () => {
   browserHost.configureAiTransportHost({});
   expect(await collect(sharedStream)).toEqual([started, done]);
 
-  const failedResultGate = gate();
+  const failedResultGate = Promise.withResolvers<void>();
   const iteratorError = new Error("custom iterator failed");
   const failedSource = {
-    push() {},
-    end() {},
+    ...source,
     async result() {
       await failedResultGate.promise;
       return final;
@@ -267,7 +248,7 @@ it("keeps the default transport host usable in browser bundles", async () => {
   });
   const failedResult = failedStream.result();
   expectPending();
-  failedResultGate.release();
+  failedResultGate.resolve();
   await expect(failedResult).resolves.toBe(final);
   browserHost.configureAiTransportHost({});
 });

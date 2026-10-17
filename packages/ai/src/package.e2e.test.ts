@@ -1,7 +1,7 @@
 import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, it } from "vitest";
 import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -9,7 +9,6 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 type CommandResult = { stdout: string; stderr: string };
 type PackageManifest = {
   name: string;
-  version: string;
   exports: Record<string, unknown>;
 };
 
@@ -87,7 +86,7 @@ const compatibility = {
 function runCommand(
   command: string,
   args: string[],
-  options: { cwd: string; timeoutMs?: number } & Pick<
+  options: { cwd: string } & Pick<
     SpawnOptionsWithoutStdio,
     "env" | "shell" | "windowsVerbatimArguments"
   >,
@@ -114,7 +113,7 @@ function runCommand(
         child.kill("SIGKILL");
       }
       reject(new Error(`command timed out: ${[command, ...args].join(" ")}`));
-    }, options.timeoutMs ?? COMMAND_TIMEOUT_MS);
+    }, COMMAND_TIMEOUT_MS);
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");
     child.stdout?.on("data", (chunk) => stdout.push(String(chunk)));
@@ -156,72 +155,64 @@ function runNpmCommand(args: string[], cwd: string): Promise<CommandResult> {
   });
 }
 
-function packageSpecifier(packageName: string, exportKey: string): string {
-  return exportKey === "." ? packageName : `${packageName}/${exportKey.slice(2)}`;
-}
-
 function compatibilityTypeSource(): string {
   return Object.entries(compatibility)
     .flatMap(([specifier, inventory], index) => {
-      const lines = [
-        `export { ${inventory.values.map((name) => `${name} as value_${index}_${name}`).join(", ")} } from ${JSON.stringify(specifier)};`,
-      ];
-      if (inventory.types.length > 0) {
-        lines.push(
-          `export type { ${inventory.types.map((name) => `${name} as type_${index}_${name}`).join(", ")} } from ${JSON.stringify(specifier)};`,
-        );
+      const line = (kind: "value" | "type", exports: readonly string[]) =>
+        `export ${kind === "type" ? "type " : ""}{ ${exports.map((name) => `${name} as ${kind}_${index}_${name}`).join(", ")} } from ${JSON.stringify(specifier)};`;
+      const lines = [line("value", inventory.values)];
+      if (inventory.types.length) {
+        lines.push(line("type", inventory.types));
       }
       return lines;
     })
     .join("\n");
 }
 
-describe("@openclaw/ai packed package", () => {
-  it("installs externally and preserves every published compatibility export", async () => {
-    const repoRoot = process.cwd();
-    const packageRoot = path.join(repoRoot, "packages", "ai");
-    const manifest = JSON.parse(
-      await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
-    ) as PackageManifest;
-    const rootManifest = JSON.parse(
-      await fs.readFile(path.join(repoRoot, "package.json"), "utf8"),
-    ) as { devDependencies?: Record<string, string> };
-    const nodeTypesVersion = rootManifest.devDependencies?.["@types/node"];
-    if (!nodeTypesVersion) {
-      throw new Error("root package is missing the @types/node version used by package checks");
-    }
-    const tempDir = tempDirs.make("openclaw-ai-consumer-");
+it("@openclaw/ai packed package installs externally and preserves every published compatibility export", async () => {
+  const repoRoot = process.cwd();
+  const packageRoot = path.join(repoRoot, "packages", "ai");
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+  ) as PackageManifest;
+  const rootManifest = JSON.parse(
+    await fs.readFile(path.join(repoRoot, "package.json"), "utf8"),
+  ) as { devDependencies?: Record<string, string> };
+  const nodeTypesVersion = rootManifest.devDependencies?.["@types/node"];
+  if (!nodeTypesVersion) {
+    throw new Error("root package is missing the @types/node version used by package checks");
+  }
+  const tempDir = tempDirs.make("openclaw-ai-consumer-");
+  const writeJson = (name: string, value: unknown) =>
+    fs.writeFile(path.join(tempDir, name), JSON.stringify(value));
 
-    // The E2E global setup owns the exact-head build. Rebuilding this shared
-    // package here can delete modules beneath concurrently running Gateways.
-    const pack = await runNpmCommand(
-      ["pack", "--ignore-scripts", "--json", "--pack-destination", tempDir],
-      packageRoot,
-    );
-    const packResult = JSON.parse(pack.stdout) as Array<{ filename: string }>;
-    const tarball = path.join(tempDir, packResult[0]?.filename ?? "");
-    await fs.stat(tarball);
+  // The E2E global setup owns the exact-head build. Rebuilding this shared
+  // package here can delete modules beneath concurrently running Gateways.
+  const pack = await runNpmCommand(
+    ["pack", "--ignore-scripts", "--json", "--pack-destination", tempDir],
+    packageRoot,
+  );
+  const packResult = JSON.parse(pack.stdout) as Array<{ filename: string }>;
+  const tarball = path.join(tempDir, packResult[0]?.filename ?? "");
+  await fs.stat(tarball);
 
-    await fs.writeFile(
-      path.join(tempDir, "package.json"),
-      JSON.stringify({ private: true, type: "module" }),
-    );
-    await runNpmCommand(
-      [
-        "install",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-        tarball,
-        `@types/node@${nodeTypesVersion}`,
-      ],
-      tempDir,
-    );
+  await writeJson("package.json", { private: true, type: "module" });
+  await runNpmCommand(
+    [
+      "install",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      tarball,
+      `@types/node@${nodeTypesVersion}`,
+    ],
+    tempDir,
+  );
 
-    const specifiers = Object.keys(manifest.exports).map((key) =>
-      packageSpecifier(manifest.name, key),
-    );
-    const importScript = `
+  const specifiers = Object.keys(manifest.exports).map((key) =>
+    key === "." ? manifest.name : `${manifest.name}/${key.slice(2)}`,
+  );
+  const importScript = `
       const specifiers = ${JSON.stringify(specifiers)};
       await Promise.all(specifiers.map((specifier) => import(specifier)));
       const compatibility = ${JSON.stringify(compatibility)};
@@ -233,32 +224,26 @@ describe("@openclaw/ai packed package", () => {
         }
       }
     `;
-    await runCommand(process.execPath, createNodeEvalArgs(importScript, { evalFlag: "-e" }), {
-      cwd: tempDir,
-    });
+  await runCommand(process.execPath, createNodeEvalArgs(importScript, { evalFlag: "-e" }), {
+    cwd: tempDir,
+  });
 
-    await fs.writeFile(path.join(tempDir, "compatibility.ts"), compatibilityTypeSource());
-    await fs.writeFile(
-      path.join(tempDir, "tsconfig.json"),
-      JSON.stringify({
-        compilerOptions: {
-          module: "NodeNext",
-          moduleResolution: "NodeNext",
-          noEmit: true,
-          skipLibCheck: false,
-          strict: true,
-          target: "ES2023",
-          types: ["node"],
-        },
-        files: ["compatibility.ts"],
-      }),
-    );
-    await runCommand(
-      process.execPath,
-      ["scripts/run-tsgo.mjs", "-p", path.join(tempDir, "tsconfig.json")],
-      { cwd: repoRoot },
-    );
-
-    expect(specifiers).toHaveLength(Object.keys(manifest.exports).length);
-  }, 300_000);
-});
+  await fs.writeFile(path.join(tempDir, "compatibility.ts"), compatibilityTypeSource());
+  await writeJson("tsconfig.json", {
+    compilerOptions: {
+      module: "NodeNext",
+      moduleResolution: "NodeNext",
+      noEmit: true,
+      skipLibCheck: false,
+      strict: true,
+      target: "ES2023",
+      types: ["node"],
+    },
+    files: ["compatibility.ts"],
+  });
+  await runCommand(
+    process.execPath,
+    ["scripts/run-tsgo.mjs", "-p", path.join(tempDir, "tsconfig.json")],
+    { cwd: repoRoot },
+  );
+}, 300_000);

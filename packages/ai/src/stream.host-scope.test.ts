@@ -75,41 +75,33 @@ describe("runtime-owned transport host", () => {
     const observe = (operation: string) => observations.push(resolveSecret(operation));
     const final = message("immutable producer");
     const done = { type: "done" as const, reason: "stop" as const, message: final };
+    const withReceiver = <T>(operation: string, run: () => T) =>
+      function (this: unknown) {
+        expect(this).toBe(source);
+        observe(operation);
+        return run();
+      };
     const source: AssistantMessageEventStreamContract = Object.freeze({
-      push() {
-        expect(this).toBe(source);
-        observe("push");
-      },
-      end() {
-        expect(this).toBe(source);
-        observe("end");
-      },
-      async result() {
-        expect(this).toBe(source);
-        observe("result");
-        return final;
-      },
-      [Symbol.asyncIterator]() {
-        expect(this).toBe(source);
-        observe("iterator");
-        return {
-          async next() {
-            observe("next");
-            return {
-              done: false as const,
-              value: { type: "done" as const, reason: "stop" as const, message: final },
-            };
-          },
-          async return() {
-            observe("return");
-            return { done: true as const, value: undefined };
-          },
-          async throw(error: unknown) {
-            observe("throw");
-            throw error;
-          },
-        };
-      },
+      push: withReceiver("push", () => {}),
+      end: withReceiver("end", () => {}),
+      result: withReceiver("result", async () => final),
+      [Symbol.asyncIterator]: withReceiver("iterator", () => ({
+        async next() {
+          observe("next");
+          return {
+            done: false as const,
+            value: { type: "done" as const, reason: "stop" as const, message: final },
+          };
+        },
+        async return() {
+          observe("return");
+          return { done: true as const, value: undefined };
+        },
+        async throw(error: unknown) {
+          observe("throw");
+          throw error;
+        },
+      })),
     });
     const registry = registryForStream(() => source);
     configureAiTransportHost(host("gateway:"));

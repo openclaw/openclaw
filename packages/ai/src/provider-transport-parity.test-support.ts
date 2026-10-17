@@ -119,10 +119,7 @@ export async function captureAnthropicRequest(
     if (!isRecord(payload)) {
       throw new Error("Expected an Anthropic request object");
     }
-    requests.push({
-      payload,
-      headers: new Headers(init?.headers),
-    });
+    requests.push({ payload, headers: new Headers(init?.headers) });
     return createAnthropicResponse(options.events ?? anthropicEvents);
   };
   configureAiTransportHost({
@@ -162,7 +159,7 @@ export async function captureAnthropicRequest(
       }
     },
   } as const;
-  const [{ streamSimpleAnthropic }, { createAnthropicMessagesTransportStreamFn }] =
+  const [{ streamSimpleAnthropic }, { createAnthropicMessagesTransportStreamFn: createTransport }] =
     await Promise.all([
       import("./providers/anthropic.js"),
       import("./transports/anthropic-transport-stream.js"),
@@ -171,12 +168,10 @@ export async function captureAnthropicRequest(
   const stream =
     implementation === "provider"
       ? streamSimpleAnthropic(model, requestContext, streamOptions)
-      : await Promise.resolve(
-          createAnthropicMessagesTransportStreamFn()(
-            { ...model, api: options.transportApi ?? model.api },
-            requestContext,
-            streamOptions,
-          ),
+      : await createTransport()(
+          { ...model, api: options.transportApi ?? model.api },
+          requestContext,
+          streamOptions,
         );
   const result = await stream.result();
   expect(result.stopReason).toBe("stop");
