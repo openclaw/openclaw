@@ -467,7 +467,9 @@ describe("registerPluginCliCommandsFromValidatedConfig", () => {
     expect(mocks.memoryRegister).toHaveBeenCalledTimes(1);
   });
 
-  it("skips full plugin runtime loading when no metadata owns the requested primary", async () => {
+  it("skips full plugin runtime when legacy metadata does not own the requested primary", async () => {
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue(createLegacyExternalCliMetadataSnapshot());
+    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue({ cliRegistrars: [] });
     const program = createProgram();
     program.exitOverride();
 
