@@ -34,16 +34,16 @@ import type { PortUsage } from "./ports-types.js";
 import { PortInUseError } from "./ports.js";
 import { parseSshTarget, startSshPortForward } from "./ssh-tunnel.js";
 
-function syntheticChild() {
+function syntheticChild(event = "exit", code = 0, killResult = true) {
   const child = Object.assign(new EventEmitter(), {
     killed: false,
     pid: 4242,
-    stderr: Object.assign(new EventEmitter(), { setEncoding: (_encoding: string) => {} }),
-    kill: (signal?: string) => {
+    stderr: new PassThrough(),
+    kill: vi.fn((signal?: string) => {
       child.killed = true;
-      queueMicrotask(() => child.emit("exit", 0, signal ?? null));
-      return true;
-    },
+      queueMicrotask(() => child.emit(event, code, signal ?? null));
+      return killResult;
+    }),
   });
   return child;
 }
@@ -97,6 +97,7 @@ describe("parseSshTarget", () => {
 describe("startSshPortForward", () => {
   const openServers: net.Server[] = [];
   const portClaims: TestPortClaim[] = [];
+  const cleanups: (() => void | Promise<void>)[] = [];
 
   async function getClaimedPort(): Promise<number> {
     const claim = await acquireTestPortBlock({ offsets: [0] });
@@ -104,7 +105,7 @@ describe("startSshPortForward", () => {
     return claim.port;
   }
 
-  async function listenOnPort(port = 0): Promise<net.Server> {
+  async function listenOnPort(port = 0): Promise<number> {
     const server = net.createServer();
     openServers.push(server);
     await new Promise<void>((resolve, reject) => {
@@ -114,7 +115,11 @@ describe("startSshPortForward", () => {
         resolve();
       });
     });
-    return server;
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("failed to reserve preferred port");
+    }
+    return address.port;
   }
 
   function startTunnel(
@@ -131,7 +136,14 @@ describe("startSshPortForward", () => {
   }
 
   afterEach(async () => {
+    for (const cleanup of cleanups.splice(0).toReversed()) {
+      await cleanup();
+    }
+    if (vi.isFakeTimers()) {
+      vi.clearAllTimers();
+    }
     vi.useRealTimers();
+    vi.restoreAllMocks();
     while (openServers.length > 0) {
       const server = openServers.pop();
       await new Promise<void>((resolve) => {
@@ -146,7 +158,6 @@ describe("startSshPortForward", () => {
     mocks.spawn.mockReset();
   });
 
-  // A synthetic child can open a real loopback listener or stall until cancellation.
   function spawnFakeSsh({ listen = true } = {}) {
     mocks.inspectPortUsage.mockImplementation(async (port) => busyPort(port));
     mocks.spawn.mockImplementation((_cmd: string, args: string[]) => {
@@ -161,6 +172,12 @@ describe("startSshPortForward", () => {
 
       return syntheticChild();
     });
+  }
+
+  async function readyTunnel(signal?: AbortSignal) {
+    spawnFakeSsh();
+    const tunnel = await startTunnel(await getClaimedPort(), { signal });
+    return { tunnel, child: spawnedChild() };
   }
 
   it.each(["client", "port"] as const)("stops at a failed %s preflight", async (phase) => {
@@ -182,12 +199,12 @@ describe("startSshPortForward", () => {
   });
 
   it.each([
-    { target: "gateway-alias", port: undefined, hostKeyPolicy: "strict" as const },
-    { target: "gateway-alias:22", port: "22", hostKeyPolicy: "strict" as const },
-    { target: "gateway-alias", port: undefined, hostKeyPolicy: "openssh" as const },
-  ])(
-    "preserves OpenSSH routing for $target ($hostKeyPolicy)",
-    async ({ target, port, hostKeyPolicy }) => {
+    ["gateway-alias", undefined, "strict"],
+    ["gateway-alias:22", "22", "strict"],
+    ["gateway-alias", undefined, "openssh"],
+  ] as const)(
+    "preserves OpenSSH routing for %s (port %s, %s)",
+    async (target, port, hostKeyPolicy) => {
       const stop = new Error("captured SSH process boundary");
       mocks.spawn.mockImplementationOnce(() => {
         throw stop;
@@ -215,12 +232,7 @@ describe("startSshPortForward", () => {
     "falls back to an ephemeral port when the preferred port fails with %s",
     async (code) => {
       // Reserve the preferred port so the OS cannot reissue it during fallback.
-      const occupied = await listenOnPort();
-      const addr = occupied.address();
-      if (!addr || typeof addr === "string") {
-        throw new Error("failed to reserve preferred port");
-      }
-      const preferredPort = addr.port;
+      const preferredPort = await listenOnPort();
 
       mocks.ensurePortAvailable.mockRejectedValueOnce(
         code === "PortInUseError"
@@ -295,43 +307,37 @@ describe("startSshPortForward", () => {
   it.each(["term", "kill"] as const)(
     "keeps every stop caller pending until the child exits after %s",
     async (exitAfter) => {
-      spawnFakeSsh();
-      const tunnel = await startTunnel(await getClaimedPort());
-      const child = spawnedChild();
+      const { tunnel, child } = await readyTunnel();
       const signals: string[] = [];
-      child.kill = (signal = "SIGTERM") => {
+      child.kill.mockImplementation((signal = "SIGTERM") => {
         child.killed = true;
         signals.push(signal);
         return true;
-      };
+      });
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const settled: number[] = [];
       const waits = [
         tunnel.stop().then(() => settled.push(1)),
         tunnel.stop().then(() => settled.push(2)),
       ];
-      try {
-        await vi.advanceTimersByTimeAsync(exitAfter === "kill" ? 1500 : 0);
-        expect(signals).toEqual(exitAfter === "kill" ? ["SIGTERM", "SIGKILL"] : ["SIGTERM"]);
-        expect(settled).toEqual([]);
-        child.emit("exit", null, exitAfter === "kill" ? "SIGKILL" : "SIGTERM");
-        await Promise.all(waits);
-        expect(settled).toHaveLength(2);
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
+      cleanups.push(async () => {
         child.emit("exit", null, "SIGTERM");
         child.emit("close", null, "SIGTERM");
         await Promise.all(waits);
-        vi.useRealTimers();
-      }
+      });
+      await vi.advanceTimersByTimeAsync(exitAfter === "kill" ? 1500 : 0);
+      expect(signals).toEqual(exitAfter === "kill" ? ["SIGTERM", "SIGKILL"] : ["SIGTERM"]);
+      expect(settled).toEqual([]);
+      child.emit("exit", null, exitAfter === "kill" ? "SIGKILL" : "SIGTERM");
+      await Promise.all(waits);
+      expect(settled).toHaveLength(2);
+      expect(vi.getTimerCount()).toBe(0);
     },
   );
 
   it("stops an established tunnel when its owner aborts", async () => {
-    spawnFakeSsh();
     const controller = new AbortController();
-    const tunnel = await startTunnel(await getClaimedPort(), { signal: controller.signal });
-    const child = spawnedChild();
+    const { tunnel, child } = await readyTunnel(controller.signal);
 
     controller.abort();
 
@@ -341,7 +347,7 @@ describe("startSshPortForward", () => {
 
   it("keeps startup abort pending until the SSH child exits", async () => {
     const child = syntheticChild();
-    child.kill = vi.fn(() => true);
+    child.kill.mockImplementation(() => true);
     mocks.spawn.mockReturnValue(child);
     const controller = new AbortController();
     const forwarding = startTunnel(await getClaimedPort(), { signal: controller.signal });
@@ -376,13 +382,7 @@ describe("startSshPortForward", () => {
         new Error("ENOENT: no such file or directory, spawn /usr/bin/ssh"),
         { code: "ENOENT" },
       );
-      const child = Object.assign(new EventEmitter(), {
-        stderr: Object.assign(new EventEmitter(), { setEncoding: () => {} }),
-        kill: vi.fn(() => {
-          queueMicrotask(() => child.emit("close", -2, null));
-          return false;
-        }),
-      });
+      const child = syntheticChild("close", -2, false);
       mocks.spawn.mockReturnValue(child);
       const controller = new AbortController();
       const abortReason = new Error("startup owner stopped");
@@ -397,7 +397,7 @@ describe("startSshPortForward", () => {
         return socket;
       });
       const schedule = globalThis.setTimeout;
-      const timerSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
+      vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
         const timer = schedule(...args);
         retryScheduled.resolve();
         return timer;
@@ -414,30 +414,26 @@ describe("startSshPortForward", () => {
             : { name: "AbortError", cause: abortReason },
       );
       const socket = await socketCreated.promise;
-      try {
-        if (pending === "retry") {
-          await retryScheduled.promise;
-          expect(vi.getTimerCount()).toBe(1);
-        }
-        if (terminal === "abort") {
-          controller.abort(abortReason);
-        } else if (terminal === "error") {
-          child.emit("error", spawnError);
-        } else {
-          child.emit("exit", 1, null);
-        }
-        await rejection;
-        expect(socket.closed).toBe(true);
-        expect(vi.getTimerCount()).toBe(0);
-        expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-        await vi.advanceTimersByTimeAsync(500);
-        expect(connectSpy).toHaveBeenCalledTimes(1);
-      } finally {
+      cleanups.push(() => {
         socket.destroy();
-        timerSpy.mockRestore();
-        connectSpy.mockRestore();
-        vi.clearAllTimers();
+      });
+      if (pending === "retry") {
+        await retryScheduled.promise;
+        expect(vi.getTimerCount()).toBe(1);
       }
+      if (terminal === "abort") {
+        controller.abort(abortReason);
+      } else if (terminal === "error") {
+        child.emit("error", spawnError);
+      } else {
+        child.emit("exit", 1, null);
+      }
+      await rejection;
+      expect(socket.closed).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(connectSpy).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -447,37 +443,31 @@ describe("startSshPortForward", () => {
     const controller = new AbortController();
     const now = Date.now;
     let offset = 0;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + offset);
+    vi.spyOn(Date, "now").mockImplementation(() => now() + offset);
     const connect = net.connect;
-    const probe = vi.spyOn(net, "connect").mockImplementation((...args) => {
+    vi.spyOn(net, "connect").mockImplementation((...args) => {
       // Move wall time only after the owner's initial budget timestamp is captured.
       offset = 10_000;
       return connect(...args);
     });
     const safety = setTimeout(() => controller.abort(), 1000);
-    const started = performance.now();
-    try {
-      await expect(
-        startTunnel(localPort, { timeoutMs: 250, signal: controller.signal }),
-      ).rejects.toThrow("ssh tunnel did not start listening");
-      expect(performance.now() - started).toBeGreaterThanOrEqual(200);
-    } finally {
+    cleanups.push(() => {
       clearTimeout(safety);
       controller.abort();
-      clock.mockRestore();
-      probe.mockRestore();
-    }
+    });
+    const started = performance.now();
+    await expect(
+      startTunnel(localPort, { timeoutMs: 250, signal: controller.signal }),
+    ).rejects.toThrow("ssh tunnel did not start listening");
+    expect(performance.now() - started).toBeGreaterThanOrEqual(200);
   });
 
   it("preserves diagnostic lines split across stderr chunks at startup failure", async () => {
-    const child = Object.assign(new EventEmitter(), {
-      stderr: new PassThrough(),
-      kill: vi.fn(() => {
-        queueMicrotask(() => child.emit("close", 255, null));
-        return true;
-      }),
+    const child = syntheticChild("close", 255);
+    vi.spyOn(net, "connect").mockImplementation(() => new net.Socket());
+    cleanups.push(() => {
+      child.stderr.destroy();
     });
-    const connect = vi.spyOn(net, "connect").mockImplementation(() => new net.Socket());
     mocks.spawn.mockImplementationOnce(() => {
       queueMicrotask(() => {
         child.stderr.write("Warning: file /tmp/qa clé ");
@@ -488,27 +478,17 @@ describe("startSshPortForward", () => {
       });
       return child;
     });
-    try {
-      await expect(
-        startTunnel(43210, { target: "synthetic.example", timeoutMs: 250 }),
-      ).rejects.toThrow(
-        "ssh exited (255)\nWarning: file /tmp/qa clé name not found.\nFinal diagnostic without newline",
-      );
-    } finally {
-      connect.mockRestore();
-      child.stderr.destroy();
-    }
+    await expect(
+      startTunnel(43210, { target: "synthetic.example", timeoutMs: 250 }),
+    ).rejects.toThrow(
+      "ssh exited (255)\nWarning: file /tmp/qa clé name not found.\nFinal diagnostic without newline",
+    );
   });
 
   it.each(["active", "teardown"] as const)(
     "does not crash when stderr errors while the tunnel is %s",
     async (phase) => {
-      // Real sockets need real timers to advance the monotonic readiness budget.
-      spawnFakeSsh();
-      const localPort = await getClaimedPort();
-
-      const tunnel = await startTunnel(localPort);
-      const child = spawnedChild();
+      const { tunnel, child } = await readyTunnel();
       const stopping = phase === "teardown" ? tunnel.stop() : undefined;
       expect(child.killed).toBe(phase === "teardown");
       expect(() => child.stderr.emit("error", new Error("stderr EPIPE"))).not.toThrow();

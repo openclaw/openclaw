@@ -21,7 +21,7 @@ import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
+import type { SqliteWorkerCommand, SqliteWorkerRequest } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import {
   openSharedStateSqliteWorkerStore,
@@ -40,7 +40,21 @@ async function preparedStore(captured: OpenClawStateWorkerContext) {
   if (!store) {
     throw new Error("Expected the prepared shared-state worker");
   }
-  return store;
+  const run = (
+    command: SqliteWorkerCommand<OpenClawStateWorkerOperations>,
+    admit: Parameters<typeof createSqliteWorkerOperationAdmission>[0],
+  ) =>
+    runSqliteWorkerStoreOperation(
+      store,
+      (scope) => scope.execute(command),
+      captured,
+      captured.admission.assertCurrent,
+      () => ({
+        nativeLocations: [captured.admission.databasePath],
+        admission: createSqliteWorkerOperationAdmission(admit),
+      }),
+    );
+  return { store, run };
 }
 
 function relayWrite(index: number, relayId = "queued-writer-relay") {
@@ -56,6 +70,17 @@ function readRelay(captured: OpenClawStateWorkerContext, relayId = "queued-write
     input: { relayId },
   });
 }
+
+const deviceToken = (deviceId: string, token = "synthetic-owner-token") => ({
+  deviceId,
+  token,
+  role: "operator",
+});
+const rejection = (pending: Promise<unknown>) =>
+  pending.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
 
 function checkedAdmission(captured: OpenClawStateWorkerContext) {
   return {
@@ -73,7 +98,7 @@ export function registerSharedStateWorkerAdmissionTests(
 ): void {
   it("requires the exact live maintenance owner through the worker commit grant", async () => {
     const captured = createContext();
-    const store = await preparedStore(captured);
+    const { store, run } = await preparedStore(captured);
     const options = { path: captured.admission.databasePath, env: captured.environment };
     const database = openOpenClawStateDatabase(options);
     const owner = acquireGatewayStateOwner({ databasePath: database.path });
@@ -94,36 +119,18 @@ export function registerSharedStateWorkerAdmissionTests(
     const stages: string[] = [];
     let lateOwner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
     const write = (deviceId: string, beforeCommit?: () => void) =>
-      runSqliteWorkerStoreOperation(
-        store,
-        (scope) =>
-          scope.execute({
-            type: "deviceAuth.store",
-            input: { deviceId, role: "operator", token: "synthetic-owner-token" },
-          }),
-        captured,
-        () => captured.admission.assertCurrent(),
-        () => ({
-          nativeLocations: [database.path],
-          admission: createSqliteWorkerOperationAdmission((request, grant) => {
-            stages.push(`${deviceId}:${request.stage}`);
-            if (request.stage === "commit") {
-              beforeCommit?.();
-            }
-            grant();
-          }),
-        }),
-      );
+      run({ type: "deviceAuth.store", input: deviceToken(deviceId) }, (request, grant) => {
+        stages.push(`${deviceId}:${request.stage}`);
+        if (request.stage === "commit") {
+          beforeCommit?.();
+        }
+        grant();
+      });
     try {
       expect(() => openOpenClawStateDatabase(options)).toThrow("offline maintenance");
       expect(() =>
         runOpenClawStateWriteTransaction(
-          ({ db }) =>
-            storeDeviceAuthTokenInDatabase(db, {
-              deviceId: "sync",
-              role: "operator",
-              token: "must-not-commit",
-            }),
+          ({ db }) => storeDeviceAuthTokenInDatabase(db, deviceToken("sync", "must-not-commit")),
           options,
         ),
       ).toThrow("offline maintenance");
@@ -146,9 +153,9 @@ export function registerSharedStateWorkerAdmissionTests(
       expect(stages).toEqual(
         ["accepted", "revoked", "late"].flatMap((id) => [`${id}:transaction`, `${id}:commit`]),
       );
-      for (const deviceId of ["sync", "unrelated", "wrong", "unbound", "revoked", "late"]) {
-        expect(stored(deviceId)).toBeNull();
-      }
+      expect(["sync", "unrelated", "wrong", "unbound", "revoked", "late"].map(stored)).toEqual(
+        Array(6).fill(null),
+      );
       expect(stored("accepted")?.token).toBe("synthetic-owner-token");
     } finally {
       lateOwner?.release();
@@ -161,40 +168,27 @@ export function registerSharedStateWorkerAdmissionTests(
 
   it("services direct broker commit admission while a native writer waits for its SQLite transaction", async () => {
     const captured = createContext();
-    const store = await preparedStore(captured);
+    const { store, run } = await preparedStore(captured);
     const stages: string[] = [];
     let nativeFailure: unknown;
-    const workerInput = {
-      deviceId: "synthetic-broker-worker",
-      role: "operator",
-      token: "synthetic-worker-token",
-    };
+    const workerInput = deviceToken("synthetic-broker-worker", "synthetic-worker-token");
     const nativeInput = { ...workerInput, deviceId: "synthetic-broker-native" };
     try {
-      await runSqliteWorkerStoreOperation(
-        store,
-        (scope) => scope.execute({ type: "deviceAuth.store", input: workerInput }),
-        captured,
-        () => captured.admission.assertCurrent(),
-        () => ({
-          nativeLocations: [captured.admission.databasePath],
-          admission: createSqliteWorkerOperationAdmission((request, grant) => {
-            stages.push(request.stage);
-            expect(grant()).toBe(true);
-            if (request.stage === "transaction") {
-              // The worker holds BEGIN IMMEDIATE and next needs its commit grant.
-              try {
-                runOpenClawStateWriteTransaction(
-                  ({ db }) => storeDeviceAuthTokenInDatabase(db, nativeInput),
-                  { path: captured.admission.databasePath, env: captured.environment },
-                );
-              } catch (error) {
-                nativeFailure = error;
-              }
-            }
-          }),
-        }),
-      );
+      await run({ type: "deviceAuth.store", input: workerInput }, (request, grant) => {
+        stages.push(request.stage);
+        expect(grant()).toBe(true);
+        if (request.stage === "transaction") {
+          // The worker holds BEGIN IMMEDIATE and next needs its commit grant.
+          try {
+            runOpenClawStateWriteTransaction(
+              ({ db }) => storeDeviceAuthTokenInDatabase(db, nativeInput),
+              { path: captured.admission.databasePath, env: captured.environment },
+            );
+          } catch (error) {
+            nativeFailure = error;
+          }
+        }
+      });
       expect(nativeFailure).toBeUndefined();
       expect(stages).toEqual(["transaction", "commit"]);
       for (const input of [workerInput, nativeInput]) {
@@ -229,10 +223,7 @@ export function registerSharedStateWorkerAdmissionTests(
             const head = scope.execute(relayWrite(0));
             const headOutcome = Promise.allSettled([head]);
             const pending = scope.execute(relayWrite(1), { signal: canceled.signal });
-            const outcome = pending.then(
-              () => ({ error: undefined }),
-              (error: unknown) => ({ error }),
-            );
+            const outcome = rejection(pending);
             try {
               if (stop === "abort") {
                 canceled.abort(stopped);
@@ -242,13 +233,12 @@ export function registerSharedStateWorkerAdmissionTests(
               } else {
                 await worker.terminate();
               }
-              const { error } = await outcome;
+              const error = await outcome;
               if (stop === "exit") {
                 expect(error).toMatchObject({ code: "unavailable" });
               } else {
                 expect(error).toBe(stopped);
               }
-              // Only the head reached the worker; the queued mutation never acquired authority.
               expect(
                 posts.mock.calls.filter(([request]) => request.type === "execute"),
               ).toHaveLength(1);
@@ -318,26 +308,21 @@ export function registerSharedStateWorkerAdmissionTests(
     const canceled = new AbortController();
     const stopped = new Error("synthetic queued write canceled");
     const dispatched: number[] = [];
-    // oxlint-disable-next-line typescript/unbound-method -- call supplies the intercepted worker receiver.
+    // Read before postMessage transfers and detaches the serialized input.
+    // oxlint-disable-next-line typescript/unbound-method -- call supplies the worker receiver.
     const nativePost = Worker.prototype.postMessage;
     const posts = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
       this: Worker,
       request: SqliteWorkerRequest,
       transferList,
     ) {
-      let pid: number | undefined;
-      if (request.type === "execute") {
-        const command = deserialize(request.input) as {
-          type: string;
-          input: { record: NativeHookRelayBridgeRecord };
-        };
-        if (command.type === "nativeHookRelay.write") {
-          pid = command.input.record.pid;
-        }
-      }
+      const command =
+        request.type === "execute"
+          ? (deserialize(request.input) as SqliteWorkerCommand<OpenClawStateWorkerOperations>)
+          : undefined;
       nativePost.call(this, request, transferList);
-      if (pid !== undefined) {
-        dispatched.push(pid);
+      if (command?.type === "nativeHookRelay.write") {
+        dispatched.push(command.input.record.pid);
       }
     });
     let factories = 0;
@@ -359,10 +344,7 @@ export function registerSharedStateWorkerAdmissionTests(
           };
           const head = write(0);
           const queued = write(1, canceled.signal);
-          const canceledOutcome = queued.then(
-            () => undefined,
-            (error: unknown) => error,
-          );
+          const canceledOutcome = rejection(queued);
           const followers = Array.from({ length: 126 }, (_, index) => write(index + 2));
           const settledFollowers = Promise.allSettled([head, ...followers]);
           try {
