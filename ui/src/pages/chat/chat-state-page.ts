@@ -696,6 +696,10 @@ export function createPageState(
       "selectedChatSessionArchived",
       "selectedChatSessionIncognito",
       "pendingAbort",
+      "chatNewMessagesBelow",
+      "chatReadingHistory",
+      "chatFollowLocked",
+      "chatUserNearBottom",
     ],
   );
 }

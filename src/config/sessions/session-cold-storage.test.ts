@@ -42,6 +42,7 @@ import {
   readTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
@@ -818,6 +819,13 @@ describe("cold transcript storage workers", () => {
     const before = transcriptRows(fixture, currentId);
     await expectCounts(maintain(fixture), 2);
     expect(readSessionColdTranscript(fixture.database(), currentId)).toBeDefined();
+    expect(() =>
+      runOpenClawAgentWriteTransaction((database) => {
+        appendTranscriptEventsInTransaction(database, scope, [
+          { type: "custom", id: "cold-rejected", customType: "rejected", data: {} },
+        ]);
+      }, fixture.options),
+    ).toThrow(expect.objectContaining({ code: "TRANSCRIPT_COLD" }));
     await appendTranscriptEvent(scope, {
       type: "custom",
       id: "after-cold-restore",
@@ -827,6 +835,7 @@ describe("cold transcript storage workers", () => {
     const after = transcriptRows(fixture, currentId);
     expect(after.slice(0, before.length)).toEqual(before);
     expect(after).toHaveLength(before.length + 1);
+    expect(after.map((row) => row.seq)).toEqual(after.map((_, index) => index));
     expect(readSessionColdTranscript(fixture.database(), currentId)).toBeUndefined();
     await replaceSessionEntry(scope, { sessionId: currentId, updatedAt: 1 });
     setTranscriptActivity(fixture.options, currentId);

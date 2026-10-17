@@ -68,8 +68,7 @@ function resolveReferenceId(raw: Record<string, unknown> | undefined): string | 
 
 function normalizeProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw =
-    asOptionalRecord(providers?.["fish-audio"]) ?? asOptionalRecord(rawConfig["fish-audio"]);
+  const raw = asOptionalRecord(providers?.["fish-audio"]);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -88,7 +87,7 @@ function normalizeProviderConfig(rawConfig: Record<string, unknown>) {
 
 function readProviderConfig(config: SpeechProviderConfig) {
   return normalizeProviderConfig({
-    "fish-audio": { ...config, apiKey: trimToUndefined(config.apiKey) },
+    providers: { "fish-audio": { ...config, apiKey: trimToUndefined(config.apiKey) } },
   });
 }
 

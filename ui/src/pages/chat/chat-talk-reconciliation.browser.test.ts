@@ -24,11 +24,9 @@ it("reconciles persisted voice while preserving the live tail", async () => {
   container = createComposerContainer();
   container.append(fixture);
   document.body.append(container);
-  const transcript = createChatTranscript(
-    () => undefined,
-    () => "talk-reconciliation",
-    { canFollowEnd: () => true },
-  );
+  const transcript = createChatTranscript(() => "talk-reconciliation", {
+    canFollowEnd: () => true,
+  });
   const props = createChatProps({
     transcript,
     paneId: "talk-reconciliation",

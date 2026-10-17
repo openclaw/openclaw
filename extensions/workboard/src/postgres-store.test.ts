@@ -129,7 +129,7 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     ).toBeUndefined();
   });
 
-  it("publishes the anchor receipt after a PostgreSQL commit but not after rollback or failure", async () => {
+  it("invalidates anchor revisions for attempted writes while retaining only committed rows", async () => {
     const dbPath = databasePath();
     const { fixture, schema } = await openDatabase(dbPath);
     const before = readSqliteDatabaseWriteTokenForPath(dbPath);
@@ -148,18 +148,20 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
     await expect(
       fixture.statements([insertBoard("rolled-back")], true, "roll back this write"),
     ).rejects.toThrow("roll back this write");
-    expect(readSqliteDatabaseWriteTokenForPath(dbPath)).toBe(committed);
+    const rolledBack = readSqliteDatabaseWriteTokenForPath(dbPath);
+    expect(rolledBack).not.toBe(committed);
     await expect(
       fixture.statements([insertBoard("failed"), insertBoard("committed")], true),
     ).rejects.toThrow("UNIQUE constraint failed");
-    expect(readSqliteDatabaseWriteTokenForPath(dbPath)).toBe(committed);
+    const failed = readSqliteDatabaseWriteTokenForPath(dbPath);
+    expect(failed).not.toBe(rolledBack);
     await expect(
       fixture.statements(
         [insertBoard("caught"), { ...insertBoard("committed"), catchError: true }],
         true,
       ),
     ).rejects.toThrow("rolled back instead of committing");
-    expect(readSqliteDatabaseWriteTokenForPath(dbPath)).toBe(committed);
+    expect(readSqliteDatabaseWriteTokenForPath(dbPath)).not.toBe(failed);
     expect(
       (
         await observer.query(
@@ -201,11 +203,8 @@ describe.skipIf(!postgresUrl)("experimental PostgreSQL workboard admission and r
       sent: false,
       failure: message,
     });
-    if (unknown) {
-      expect(readSqliteDatabaseWriteTokenForPath(dbPath)).not.toBe(token);
-    } else {
-      expect(readSqliteDatabaseWriteTokenForPath(dbPath)).toBe(token);
-    }
+    // Like SQLite, attempted writes keep their cache witness even after a known rollback.
+    expect(readSqliteDatabaseWriteTokenForPath(dbPath)).not.toBe(token);
     expect(
       (await observer.query(`SELECT id FROM ${quoteIdentifier(schema)}.workboard_boards`)).rows,
     ).toEqual([]);

@@ -147,6 +147,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const goals = state && projectOwner(chatGoalOperations(state), (owner) => owner);
     const resources = projectOwner(runtime.activeSessionResources, (owner) => owner);
     const discussion = projectOwner(runtime.sessionDiscussion, (owner) => owner.snapshot);
+    const transcript = projectOwner(runtime.transcript, (owner) => owner);
     const companion = projectOwner(runtime.sessionCompanionThreads, (owner) => owner);
     const swarm = createMemo(() => {
       const hydrator = runtime.swarm.hydrator;
@@ -228,6 +229,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         goals?.read();
         resources.read();
         discussion.read();
+        transcript.read();
         companion.read();
         swarm()?.read();
         board().forEach((source) => source.read());

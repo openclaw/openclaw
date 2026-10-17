@@ -420,6 +420,14 @@ shutdown, and restart catch-up, and
 [`manager-session-sync-ops.ts`](https://github.com/openclaw/openclaw/blob/main/extensions/memory-core/src/memory/manager-session-sync-ops.ts)
 for scheduling ownership.
 
+Memory publication workers advance the index revision once per committed batch,
+inside the same transaction as source and chunk changes. Forget, purge, reset,
+and shadow publication follow that contract too. Committed receipts publish the
+new revision before retrieval caches can reuse their facts; failed transactions
+publish neither rows nor a revision. Schema 31 retires the per-row revision
+triggers on both engines without changing search projection triggers or retained
+content. See [memory index batch revisions](/reference/database-schemas/storage-changes#memory-index-batch-revisions).
+
 Usage rollup refreshes share one queue per database and scope. Session usage reads
 promote only their requested sessions and wait for those refreshes to commit,
 including appends published while a refresh is running. Aggregate cache reads
