@@ -908,5 +908,90 @@ describe("msteams graph helpers", () => {
       });
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     });
+
+    describe("strict pagination", () => {
+      it("accepts equivalent channel-ID encoding without changing request scope", async () => {
+        let count = 0;
+        mockFetch(async () =>
+          Response.json(
+            ++count === 1
+              ? pagedResponse(
+                  [{ id: "1", name: "a" }],
+                  "https://graph.microsoft.com/v1.0/teams/t1/channels/19:channel@thread.tacv2/members?$skiptoken=p2",
+                )
+              : pagedResponse([{ id: "2", name: "b" }]),
+          ),
+        );
+        const result = await fetchAllGraphPages<Item>({
+          token: graphToken,
+          path: "/teams/t1/channels/19%3Achannel%40thread.tacv2/members",
+          strict: true,
+        });
+        expect(result.items.map((item) => item.id)).toEqual(["1", "2"]);
+        expect(fetchCallUrl(1)).toBe(
+          "https://graph.microsoft.com/v1.0/teams/t1/channels/19%3Achannel%40thread.tacv2/members?$skiptoken=p2",
+        );
+      });
+
+      it("does not change behavior for callers that omit it", async () => {
+        mockFetch(async () => Response.json(pagedResponse([{ id: "1", name: "a" }])));
+
+        const result = await fetchAllGraphPages<Item>({ token: graphToken, path: "/items" });
+
+        expect(result.truncated).toBe(false);
+        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      });
+
+      it("continues across pages that match the expected resource path", async () => {
+        let callCount = 0;
+        mockFetch(async () => {
+          callCount++;
+          return callCount === 1
+            ? Response.json(
+                pagedResponse(
+                  [{ id: "1", name: "a" }],
+                  "https://graph.microsoft.com/v1.0/teams/t1/channels/c1/members?$skiptoken=p2",
+                ),
+              )
+            : Response.json(pagedResponse([{ id: "2", name: "b" }]));
+        });
+
+        const result = await fetchAllGraphPages<Item>({
+          token: graphToken,
+          path: "/teams/t1/channels/c1/members",
+          strict: true,
+        });
+
+        expect(result).toEqual({
+          items: [
+            { id: "1", name: "a" },
+            { id: "2", name: "b" },
+          ],
+          truncated: false,
+        });
+        expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+      });
+
+      it.each([
+        "https://graph.microsoft.com/v1.0/teams/OTHER/channels/OTHER/members?$skiptoken=p2",
+        "https://example.com/v1.0/teams/t1/channels/c1/members?$skiptoken=p2",
+        "https://graph.microsoft.com/beta/teams/t1/channels/c1/members?$skiptoken=p2",
+        "https://user@graph.microsoft.com/v1.0/teams/t1/channels/c1/members?$skiptoken=p2",
+        "https://graph.microsoft.com/v1.0/teams/t1/channels/c1/members#fragment",
+        "https://graph.microsoft.com/v1.0/teams/t1/channels/c1%2Fmembers",
+      ])("refuses an out-of-scope continuation %s", async (nextLink) => {
+        mockJsonFetchResponse(pagedResponse([{ id: "1", name: "a" }], nextLink));
+
+        await expect(
+          fetchAllGraphPages<Item>({
+            token: graphToken,
+            path: "/teams/t1/channels/c1/members",
+            strict: true,
+          }),
+        ).rejects.toThrow("refusing to follow it");
+        // Only the first, legitimate page was ever fetched.
+        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      });
+    });
   });
 });

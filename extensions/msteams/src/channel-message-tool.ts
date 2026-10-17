@@ -38,17 +38,31 @@ export function describeMSTeamsMessageTool({
       : [],
     capabilities: enabled ? ["presentation"] : [],
     schema: enabled
-      ? {
-          actions: ["unpin"],
-          properties: {
-            pinnedMessageId: Type.Optional(
-              Type.String({
-                description:
-                  "Pinned message resource ID for unpin (from pin or list-pins, not the chat message ID).",
-              }),
-            ),
+      ? [
+          {
+            actions: ["channel-info"],
+            visibility: "all-configured",
+            properties: {
+              includeMembers: Type.Optional(
+                Type.Boolean({
+                  description:
+                    "Also fetch this channel's own human member list (never the parent team's). Supported for private channels only; does not verify bot/app installation.",
+                }),
+              ),
+            },
           },
-        }
+          {
+            actions: ["unpin"],
+            properties: {
+              pinnedMessageId: Type.Optional(
+                Type.String({
+                  description:
+                    "Pinned message resource ID for unpin (from pin or list-pins, not the chat message ID).",
+                }),
+              ),
+            },
+          },
+        ]
       : null,
   };
 }
