@@ -79,17 +79,13 @@ it.each(["file", "parent directory", "path", "missing file", "missing parent"] a
   },
 );
 
-it.each(["prepare", "create"] as const)(
+it.each([prepareManagedHandoffLeaseDatabase, createManagedHandoffLeaseDatabase])(
   "rejects a different path at %s admission",
-  async (owner) => {
+  async (admit) => {
     const binding = fixture();
     const current = path.join(root, "other.sqlite");
     const expected = `path (recorded ${binding.databasePath}; current ${current})`;
-    if (owner === "prepare") {
-      await expect(prepareManagedHandoffLeaseDatabase(current, binding)).rejects.toThrow(expected);
-    } else {
-      expect(() => createManagedHandoffLeaseDatabase(current, binding)).toThrow(expected);
-    }
+    await expect(async () => admit(current, binding)).rejects.toThrow(expected);
     expect(fs.existsSync(current)).toBe(false);
   },
 );
@@ -97,16 +93,14 @@ it.each(["prepare", "create"] as const)(
 it.skipIf(isWindows).each([false, true])(
   "preserves original admission through a prepared parent (aliased ancestor=%s)",
   async (aliased) => {
-    const installRoot = path.join(root, "install");
-    fs.mkdirSync(installRoot);
     fs.mkdirSync(directory, { mode: 0o700 });
     const alias = aliasedPath();
     const store = await prepareManagedHandoffLeaseStore({
       databasePath: aliased ? alias : databasePath,
       serviceManagerEnv: process.env,
-      originalUpdateKey: installRoot,
+      originalUpdateKey: root,
     });
-    const acquired = store.acquire(installRoot, "original-owner", { kind: "update" });
+    const acquired = store.acquire(root, "original-owner", { kind: "update" });
     if (acquired.kind !== "acquired" || !acquired.originalDatabaseIdentity) {
       throw new Error("Original owner was not admitted");
     }
@@ -118,8 +112,8 @@ it.skipIf(isWindows).each([false, true])(
     });
     expect(pinned.cancelUpdate(structuredClone(acquired.lease))).toBeNull();
     expect(pinned.cancelUpdate(acquired.lease)?.release()).toBe(true);
-    expect(pinned.read(installRoot)).toEqual({ kind: "absent" });
-    const next = pinned.acquire(installRoot, "next-owner", { kind: "update" });
+    expect(pinned.read(root)).toEqual({ kind: "absent" });
+    const next = pinned.acquire(root, "next-owner", { kind: "update" });
     expect(next.kind).toBe("acquired");
     if (next.kind === "acquired") {
       expect(pinned.release(next.lease)).toBe(true);
@@ -168,8 +162,7 @@ it.skipIf(isWindows)("refuses a replaced prepared parent before creating storage
   fs.renameSync(directory, retained);
   fs.mkdirSync(directory, { mode: 0o700 });
   expect(() => prepared(true, () => undefined)).toThrow();
-  expect(fs.readdirSync(directory)).toEqual([]);
-  expect(fs.readdirSync(retained)).toEqual([]);
+  expect([fs.readdirSync(directory), fs.readdirSync(retained)]).toEqual([[], []]);
 });
 
 it.skipIf(isWindows)("quarantines an unsafe leaf without adopting its symlink target", async () => {

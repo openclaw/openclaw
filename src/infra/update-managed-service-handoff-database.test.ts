@@ -14,13 +14,11 @@ import {
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
-import { executeSqliteQuerySync } from "./kysely-sync.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { classifySqliteMutation } from "./sqlite-schema-mutation.js";
 import * as tempRoot from "./tmp-openclaw-dir.js";
 import {
   createManagedHandoffLeaseDatabase,
-  leaseQueries,
   type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
@@ -39,9 +37,7 @@ beforeEach(() => {
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(directory);
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 function snapshot() {
   const entries: (Pick<fs.Stats, "dev" | "ino" | "mode"> & {
@@ -212,23 +208,14 @@ const damage: [name: string, apply: () => void][] = [
   [
     "missing authority table",
     () => {
-      const db = new DatabaseSync(databasePath);
-      try {
-        db.exec("DROP TABLE managed_update_handoffs");
-      } finally {
-        db.close();
-      }
+      using db = new DatabaseSync(databasePath);
+      db.exec("DROP TABLE managed_update_handoffs");
     },
   ],
   ["symlink database", () => fs.symlinkSync(retain(databasePath), databasePath)],
   ["symlink parent", () => fs.symlinkSync(retain(directory), directory, "dir")],
   ["multiply linked database", () => fs.linkSync(databasePath, path.join(root, "linked.sqlite"))],
-  [
-    "different user",
-    () => {
-      vi.spyOn(process, "getuid").mockReturnValue(process.getuid!() + 1);
-    },
-  ],
+  ["different user", () => vi.spyOn(process, "getuid").mockReturnValue(process.getuid!() + 1)],
   ["unsafe database permissions", () => fs.chmodSync(databasePath, 0o640)],
   ["unsafe parent permissions", () => fs.chmodSync(directory, 0o750)],
 ];
@@ -237,51 +224,33 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
   it("reopens an initialized writable handoff owner without repeating DDL", () => {
     const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
     withDatabase(true, (db) =>
-      executeSqliteQuerySync(
-        db,
-        leaseQueries(db).insertInto("managed_update_handoffs").values({
-          install_root: root,
-          owner: "warm-owner",
-          payload_json: "{}",
-          updated_at: 1,
-        }),
-      ),
+      db
+        .prepare(
+          "INSERT INTO managed_update_handoffs (install_root,owner,payload_json,updated_at) VALUES (?,?,?,?)",
+        )
+        .run(root, "warm-owner", "{}", 1),
     );
     const sql = observeHostDataSql();
-    try {
-      withDatabase(true, (db) =>
-        withDatabase.transact(
-          db,
-          () =>
-            executeSqliteQuerySync(
-              db,
-              leaseQueries(db)
-                .updateTable("managed_update_handoffs")
-                .set({ updated_at: 2 })
-                .where("install_root", "=", root),
-            ),
-          {},
-        ),
-      );
-      expect(
-        withDatabase(
-          false,
-          (db) =>
-            executeSqliteQuerySync(
-              db,
-              leaseQueries(db)
-                .selectFrom("managed_update_handoffs")
-                .select(["owner", "updated_at"])
-                .where("install_root", "=", root),
-            ).rows,
-        ),
-      ).toEqual([{ owner: "warm-owner", updated_at: 2 }]);
-      expect(
-        sql.queries.filter((query) => classifySqliteMutation(query, "batch").mainSchemaChange),
-      ).toEqual([]);
-    } finally {
-      sql.restore();
-    }
+    withDatabase(true, (db) =>
+      withDatabase.transact(
+        db,
+        () =>
+          db
+            .prepare("UPDATE managed_update_handoffs SET updated_at=2 WHERE install_root=?")
+            .run(root),
+        {},
+      ),
+    );
+    expect(
+      withDatabase(false, (db) =>
+        db
+          .prepare("SELECT owner, updated_at FROM managed_update_handoffs WHERE install_root=?")
+          .all(root),
+      ),
+    ).toEqual([{ owner: "warm-owner", updated_at: 2 }]);
+    expect(
+      sql.queries.filter((query) => classifySqliteMutation(query, "batch").mainSchemaChange),
+    ).toEqual([]);
   });
 
   // Node CI shards do not provision Bun. BUN_BIN opts into runtime qualification;
@@ -387,10 +356,7 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       });
       expect(store.read(root)).toMatchObject({
         kind: "current",
-        lease: {
-          owner: acquired.owner,
-          updatedAt: acquired.updatedAt + 4,
-        },
+        lease: { owner: acquired.owner, updatedAt: acquired.updatedAt + 4 },
       });
     },
   );
@@ -410,29 +376,19 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
           // A second connection alone is safe. A raw open/read/close during
           // these owner reads must not discard the first connection's POSIX lock.
           const prefix = `${root}/.openclaw-update-child-`;
-          const children = withDatabase(
-            false,
-            (reader) =>
-              executeSqliteQuerySync(
-                reader,
-                leaseQueries(reader)
-                  .selectFrom("managed_update_handoffs")
-                  .select("owner")
-                  .where("install_root", ">=", prefix)
-                  .where("install_root", "<", prefix + "\uffff"),
-              ).rows,
+          const children = withDatabase(false, (reader) =>
+            reader
+              .prepare(
+                "SELECT owner FROM managed_update_handoffs WHERE install_root>=? AND install_root<?",
+              )
+              .all(prefix, prefix + "\uffff"),
           );
           expect(children).toEqual([]);
           expect(store.current(admitted)).toBe(true);
           expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
-          executeSqliteQuerySync(
-            db,
-            leaseQueries(db)
-              .updateTable("managed_update_handoffs")
-              .set({ updated_at: admitted.updatedAt + 1 })
-              .where("install_root", "=", root)
-              .where("owner", "=", admitted.owner),
-          );
+          db.prepare(
+            "UPDATE managed_update_handoffs SET updated_at=? WHERE install_root=? AND owner=?",
+          ).run(admitted.updatedAt + 1, root, admitted.owner);
           expect(db.isTransaction).toBe(true);
           expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
         },

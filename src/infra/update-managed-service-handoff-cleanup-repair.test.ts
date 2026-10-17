@@ -1,9 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { readManagedHandoffRepairFacts } from "./update-managed-service-handoff-cleanup.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
 import { retainedCheckpointBinding } from "./update-retained-checkpoint.test-support.js";
@@ -20,17 +19,13 @@ import { assertUpdateRecoveryAdmission } from "./update-run-recovery-admission.j
 vi.mock("./update-run-reader.js", () => ({ listUpdateRunsAsync: vi.fn() }));
 vi.mock("./update-run-recovery-admission.js", () => ({ assertUpdateRecoveryAdmission: vi.fn() }));
 
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const dirs = useStateDatabaseTempDirs();
 let root: string;
 let env: NodeJS.ProcessEnv;
 let lease: ManagedHandoffLease;
 const history = vi.mocked(listUpdateRunsAsync);
 const readFacts = (runId?: string) => readManagedHandoffRepairFacts(lease, env, runId);
+const localDriver = (identity = lease.executor) => ({ ...identity, host: os.hostname() });
 
 beforeEach(async () => {
   root = await fs.realpath(dirs.make("handoff-repair-facts-"));
@@ -40,14 +35,7 @@ beforeEach(async () => {
     version: 2 as const,
     executor: { pid: 1001, startIdentity: "executor-start" },
     helper: { pid: 1002, startIdentity: "helper-start" },
-    action: {
-      kind: "triage" as const,
-      phase: "uncertain" as const,
-      lifetime: {
-        kind: "foreground" as const,
-        boot: { platform: "linux" as const, identity: "01234567-89ab-cdef-0123-456789abcdef" },
-      },
-    },
+    action: { kind: "update" as const },
   };
   lease = {
     ...payload,
@@ -59,7 +47,6 @@ beforeEach(async () => {
   history.mockReset().mockResolvedValue([]);
   vi.mocked(assertUpdateRecoveryAdmission).mockReset().mockResolvedValue(undefined);
 });
-afterEach(() => vi.restoreAllMocks());
 
 async function helper(name: string, fields: Record<string, unknown> = {}) {
   const directory = path.join(root, `openclaw-update-run-handoff-${name}`);
@@ -80,7 +67,7 @@ async function helper(name: string, fields: Record<string, unknown> = {}) {
 
 function run(
   runId: string,
-  origin: UpdateRunRecord["origin"] = { driver: { ...lease.executor, host: os.hostname() } },
+  origin: UpdateRunRecord["origin"] = { driver: localDriver() },
 ): UpdateRunRecord {
   return {
     runId,
@@ -103,56 +90,52 @@ function run(
   };
 }
 
+async function expectFacts(
+  runId: string,
+  artifactPaths: string[],
+  ...drivers: ReturnType<typeof localDriver>[]
+) {
+  expect(await readFacts()).toEqual({
+    runIds: [runId],
+    artifactPaths,
+    drivers: [lease.helper, lease.executor, ...drivers],
+    timeoutMs: null,
+  });
+}
+
 describe("managed handoff repair facts", () => {
   it.each(["S-1-5-21-100", undefined])(
     "reads the launching SID from retained history after helper cleanup (%s)",
     async (sid) => {
       history.mockResolvedValue([
-        run("retained-run", {
-          windowsUserSid: sid,
-          driver: { ...lease.executor, host: os.hostname() },
-        }),
+        run("retained-run", { windowsUserSid: sid, driver: localDriver() }),
       ]);
       expect((await readFacts()).windowsUserSid).toBe(sid);
     },
   );
 
   it("keeps only exact helper owner/key artifacts and their retained capture paths", async () => {
-    await helper("wrong-owner", { updateLeaseOwner: "other", runId: "other-run" });
-    await helper("wrong-key", { updateLeaseKey: path.join(root, "other"), runId: "other-run" });
+    await helper("wrong-owner", { updateLeaseOwner: "other" });
+    await helper("wrong-key", { updateLeaseKey: path.join(root, "other") });
     const context = path.join(root, "failure.json");
-    const directory = await helper("matching", {
-      runId: "retained-run",
-      triageContextPath: context,
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-    });
+    const directory = await helper("matching", { triageContextPath: context });
     const capture = path.join(`${env.OPENCLAW_STATE_DIR}.update-captures`, "retained-run");
     await fs.mkdir(capture, { recursive: true });
     history.mockResolvedValue([run("retained-run", {})]);
 
-    expect(await readFacts()).toEqual({
-      runIds: ["retained-run"],
-      artifactPaths: [directory, context, capture],
-      drivers: [lease.helper, lease.executor],
-      timeoutMs: null,
-    });
+    await expectFacts("retained-run", [directory, context, capture]);
   });
 
   it("correlates ledger drivers only by matching PID, start identity, and hostname", async () => {
-    const driver = { ...lease.executor, host: os.hostname() };
+    const driver = localDriver();
     history.mockResolvedValue([
       run("wrong-host", { driver: { ...driver, host: "other-host" } }),
       run("wrong-pid", { driver: { ...driver, pid: 1003 } }),
       run("wrong-start", { driver: { ...driver, startIdentity: "other-start" } }),
-      run("matched-run", { previousDrivers: [{ ...lease.helper, host: os.hostname() }] }),
+      run("matched-run", { previousDrivers: [localDriver(lease.helper)] }),
     ]);
 
-    expect(await readFacts()).toEqual({
-      runIds: ["matched-run"],
-      artifactPaths: [lease.key],
-      drivers: [lease.helper, lease.executor, { ...lease.helper, host: os.hostname() }],
-      timeoutMs: null,
-    });
+    await expectFacts("matched-run", [lease.key], localDriver(lease.helper));
   });
 
   it.each([
@@ -182,7 +165,7 @@ describe("managed handoff repair facts", () => {
     async (bound) => {
       history.mockResolvedValue([
         run("captured-run", {
-          ...(bound ? {} : { driver: { ...lease.executor, host: os.hostname() } }),
+          ...(bound ? {} : { driver: localDriver() }),
           updateRecoveryCapture: {
             manifestSha256: "a".repeat(64),
             configWrites: [],
@@ -381,12 +364,7 @@ describe("managed handoff repair facts", () => {
       } else {
         await fs.writeFile(file, kind === "invalid-json" ? "{" : '{"updateLeaseOwner":123}');
       }
-      expect(await readFacts()).toEqual({
-        runIds: ["retained-run"],
-        artifactPaths: [directory, lease.key],
-        drivers: [lease.helper, lease.executor, { ...lease.executor, host: os.hostname() }],
-        timeoutMs: null,
-      });
+      await expectFacts("retained-run", [directory, lease.key], localDriver());
     },
   );
 });

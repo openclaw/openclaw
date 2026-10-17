@@ -4,7 +4,6 @@ import { symlinkSync, unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,19 +38,13 @@ function createReadyChild(_command: string, args: string[], readyDelayMs = 0) {
     stdout: new PassThrough(),
     unref: vi.fn(),
   });
-  process.nextTick(() => {
-    const ready = () =>
-      signalMockManagedUpdateHandoffReady({
-        child,
-        paramsPath: readManagedHandoffArtifacts(args).paramsPath,
-        cleanups: mockedHandoffLeaseCleanups,
-      });
-    if (readyDelayMs > 0) {
-      setTimeout(ready, readyDelayMs);
-    } else {
-      ready();
-    }
-  });
+  const ready = () =>
+    signalMockManagedUpdateHandoffReady({
+      child,
+      paramsPath: readManagedHandoffArtifacts(args).paramsPath,
+      cleanups: mockedHandoffLeaseCleanups,
+    });
+  process.nextTick(() => (readyDelayMs > 0 ? setTimeout(ready, readyDelayMs) : ready()));
   return child;
 }
 
@@ -130,31 +123,40 @@ async function startHandoff(params: Partial<ManagedServiceUpdateHandoffParams> =
   });
 }
 
+async function readSpawn<T = Record<string, unknown>>() {
+  const [spawnCommand, spawnArgs, options] = expectDefined(
+    spawnMock.mock.calls[0],
+    "handoff spawn",
+  ) as [string, string[], { env?: NodeJS.ProcessEnv }];
+  const { dir, paramsPath } = readManagedHandoffArtifacts(spawnArgs);
+  tempDirs.add(dir);
+  return {
+    spawnCommand,
+    spawnArgs,
+    spawnEnv: options?.env,
+    paramsPath,
+    helperParams: JSON.parse(await fs.readFile(paramsPath, "utf8")) as T,
+  };
+}
+
 async function startHandoffAndReadCommand({
   runtime = "node",
   ...params
 }: Partial<ManagedServiceUpdateHandoffParams> & { runtime?: "node" | "bun" }) {
   const result = await startHandoff({
+    channel: "beta",
     execPath: `/usr/local/bin/${runtime}`,
     ...params,
   });
   expect(forceKillChildProcessTreeMock).not.toHaveBeenCalled();
-  const spawnCall = spawnMock.mock.calls[0] as unknown as
-    | [string, string[], { env?: NodeJS.ProcessEnv }]
-    | undefined;
-  if (!spawnCall) {
-    throw new Error("expected managed-service handoff params path");
-  }
-  tempDirs.add(path.dirname(result.logPath));
-  const { paramsPath } = readManagedHandoffArtifacts(spawnCall[1]);
-  const helperParams = JSON.parse(await fs.readFile(paramsPath, "utf-8")) as {
+  const { paramsPath, spawnEnv, helperParams } = await readSpawn<{
     commandArgv?: string[];
     recoveryCommandArgv: string[];
     triageCommandArgv: string[];
     triageContextCommand: string;
     parentExitTimeoutMs: number;
     parentExitDeadlineAt: number;
-  };
+  }>();
   const metaPath = path.join(path.dirname(paramsPath), "sentinel-meta.json");
   const metaFile = JSON.parse(await fs.readFile(metaPath, "utf-8")) as {
     meta?: { root?: string; runId?: string };
@@ -166,7 +168,7 @@ async function startHandoffAndReadCommand({
   return {
     ...helperParams,
     command: result.command,
-    spawnEnv: spawnCall[2]?.env,
+    spawnEnv,
   };
 }
 
@@ -189,7 +191,6 @@ describe("managed service update handoff command", () => {
 
     const prepared = await startHandoffAndReadCommand({
       argv1: path.join(current, "openclaw.mjs"),
-      channel: "beta",
     });
     expect(prepared.triageCommandArgv.slice(-3)).toEqual(["triage", "--json", "--non-interactive"]);
     expect(prepared.triageContextCommand).toContain("openclaw triage --run --update-result");
@@ -256,11 +257,8 @@ describe("managed service update handoff command", () => {
       }
       const result = await started;
       expect(result).toMatchObject({ status: "started" });
-      const [command, args] = spawnMock.mock.calls[0] as [string, string[]];
-      tempDirs.add(path.dirname(result.logPath));
-      const { paramsPath } = readManagedHandoffArtifacts(args);
-      const prepared = JSON.parse(await fs.readFile(paramsPath, "utf8"));
-      expect(command).toBe(process.execPath);
+      const { spawnCommand, helperParams: prepared } = await readSpawn();
+      expect(spawnCommand).toBe(process.execPath);
       expect(prepared.commandArgv).toContain("--no-restart");
       expect(prepared.serviceRecovery).toBeUndefined();
       expect(prepared.operatorRestartWarning).toBe(
@@ -360,7 +358,7 @@ describe("managed service update handoff command", () => {
       const root = tempDirs.make("openclaw-triage-command-");
       const executable = path.join(root, runtime);
       await fs.writeFile(path.join(root, "systemd-run"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-      const started = await startHandoff({
+      await startHandoff({
         root,
         parentPid: undefined,
         argv1: undefined,
@@ -384,11 +382,8 @@ describe("managed service update handoff command", () => {
           },
         },
       });
-      const [, args] = spawnMock.mock.calls[0] as [string, string[]];
-      tempDirs.add(path.dirname(started.logPath));
-      const { paramsPath } = readManagedHandoffArtifacts(args);
+      const { spawnArgs: args, helperParams: staged } = await readSpawn();
       expect(args).toContain("--property=PartOf=openclaw-gateway.service");
-      const staged = JSON.parse(await fs.readFile(paramsPath, "utf8"));
       expect(args.slice(args.indexOf(executable) + 1, -2)).toEqual(runtimeArgs);
       expect(staged.runtimeArgs).toEqual(runtimeArgs);
       expect(staged.commandArgv).toEqual([
@@ -408,7 +403,6 @@ describe("managed service update handoff command", () => {
     async ({ drain, expected }) => {
       const startedAt = Date.now();
       const result = await startHandoffAndReadCommand({
-        channel: "beta",
         restartDelayMs: 60_000,
         restartDrainTimeoutMs: drain,
       });
@@ -422,23 +416,18 @@ describe("managed service update handoff command", () => {
   it("confirms native group cleanup after a scope is collected, without stopping a replaced scope", async () => {
     const { createManagedHandoffLeaseStore, resolveManagedUpdateLeaseDatabasePath } =
       await import("./update-managed-service-handoff-lease.js");
+    const { prepareManagedHandoffLeaseDatabase } =
+      await import("./update-managed-service-handoff-database.js");
     const store = createManagedHandoffLeaseStore();
-    const action = {
-      kind: "triage" as const,
-      phase: "closing" as const,
-      lifetime: {
-        kind: "native" as const,
-        scope: "synthetic.scope",
-        unit: "synthetic.service",
-        placement: { kind: "attached" as const, invocation: "a".repeat(32) },
-      },
+    const lifetime = {
+      kind: "native" as const,
+      scope: "synthetic.scope",
+      unit: "synthetic.service",
+      placement: { kind: "attached" as const, invocation: "a".repeat(32) },
     };
-    const identities = {
-      version: 2 as const,
-      executor: { pid: 123, startIdentity: "17" },
-      helper: { pid: 123, startIdentity: "17" },
-      action,
-    };
+    const action = { kind: "triage" as const, phase: "closing" as const, lifetime };
+    const identity = { pid: 123, startIdentity: "17" };
+    const identities = { version: 2 as const, executor: identity, helper: identity, action };
     const payload = JSON.stringify(identities);
     const lease: ManagedHandoffLease = {
       ...identities,
@@ -448,30 +437,20 @@ describe("managed service update handoff command", () => {
       payload,
     };
     const databasePath = resolveManagedUpdateLeaseDatabasePath();
-    await fs.mkdir(path.dirname(databasePath), { recursive: true, mode: 0o700 });
-    const db = new DatabaseSync(databasePath);
-    db.exec(
-      "CREATE TABLE IF NOT EXISTS managed_update_handoffs (install_root TEXT NOT NULL PRIMARY KEY, owner TEXT NOT NULL, payload_json TEXT NOT NULL, updated_at INTEGER NOT NULL) STRICT;",
+    const withDatabase = await prepareManagedHandoffLeaseDatabase(databasePath);
+    withDatabase(true, (db) =>
+      db
+        .prepare(
+          "INSERT INTO managed_update_handoffs (install_root, owner, payload_json, updated_at) VALUES (?, ?, ?, ?)",
+        )
+        .run(lease.key, lease.owner, payload, 1),
     );
-    db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
-      lease.key,
-      lease.owner,
-      payload,
-      1,
-    );
-    db.close();
-    if (process.platform !== "win32") {
-      await fs.chmod(databasePath, 0o600);
-    }
     mockedHandoffLeaseCleanups.add(() => {
-      const cleanup = new DatabaseSync(databasePath);
-      try {
-        cleanup
+      withDatabase(true, (db) =>
+        db
           .prepare("DELETE FROM managed_update_handoffs WHERE install_root = ? AND owner = ?")
-          .run(lease.key, lease.owner);
-      } finally {
-        cleanup.close();
-      }
+          .run(lease.key, lease.owner),
+      );
     });
     const scopeResult = (invocation: string, active = "active", loaded = "loaded") => ({
       status: loaded === "loaded" ? 0 : 1,
@@ -500,7 +479,7 @@ describe("managed service update handoff command", () => {
     ["fullIntegrityCheck", "--full-integrity-check", true],
     ["fullIntegrityCheck", "--full-integrity-check", false],
   ] as const)("preserves %s (%s=%s) across handoff", async (option, flag, enabled) => {
-    const result = await startHandoffAndReadCommand({ channel: "beta", [option]: enabled });
+    const result = await startHandoffAndReadCommand({ [option]: enabled });
     expect(result.commandArgv?.includes(flag)).toBe(enabled);
     expect(result.command.includes(flag)).toBe(enabled);
   });
@@ -508,7 +487,7 @@ describe("managed service update handoff command", () => {
   it.each(["auto", "installed"] as const)(
     "preserves %s admission through the detached CLI command",
     async (admission) => {
-      const result = await startHandoffAndReadCommand({ channel: "beta", admission });
+      const result = await startHandoffAndReadCommand({ admission });
       const flagIndex = result.commandArgv?.indexOf("--admission") ?? -1;
       expect(flagIndex).toBeGreaterThan(0);
       expect(result.commandArgv?.[flagIndex + 1]).toBe(admission);
@@ -521,7 +500,6 @@ describe("managed service update handoff command", () => {
     async (runtime) => {
       const result = await startHandoffAndReadCommand({
         runtime,
-        channel: "beta",
         tag: "2.0.0-beta.1",
         acceptCapabilities: true,
       });
@@ -544,7 +522,6 @@ describe("managed service update handoff command", () => {
     const runId = "970895bf-61e5-48e6-b0f6-468ce6f8e33a";
     const result = await startHandoffAndReadCommand({
       runId,
-      channel: "beta",
       env: {
         KEEP: "value",
         OPENCLAW_UPDATE_DEV_TARGET_REF: "stale-ref",
