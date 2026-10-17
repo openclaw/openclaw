@@ -419,6 +419,86 @@ internal val defaultChatThinkingLevelSelection =
     isGatewayProvided = false,
   )
 
+/** Canonical effort ranks aligned with Gateway THINKING_LEVEL_RANKS. */
+private val chatThinkingLevelRanks =
+  mapOf(
+    "off" to 0,
+    "minimal" to 10,
+    "low" to 20,
+    "medium" to 30,
+    "adaptive" to 30,
+    "high" to 40,
+    "xhigh" to 60,
+    "max" to 70,
+    "ultra" to 80,
+  )
+
+internal fun chatThinkingLevelRank(level: String): Int = chatThinkingLevelRanks[level.trim().lowercase(Locale.US)] ?: -1
+
+/**
+ * Clamps [level] onto Gateway-advertised [options].
+ *
+ * Aligns with Gateway resolveGatewaySessionThinkingLevel /
+ * resolveSupportedThinkingLevelFromProfile:
+ * - Membership wins.
+ * - Explicit "ultra" is always preserved (including when omitted from lightweight
+ *   picker metadata).
+ * - Other canonical Gateway-effective levels omitted from picker metadata are preserved.
+ *   Picker shape is not completeness: an Off/Ultra list can be an Off-only profile with
+ *   runtime Ultra appended, and identity-only catalogs must not replace a stored level.
+ * - Clamp only non-canonical levels. Auto-fallback never opts into Ultra.
+ * - Among non-Ultra options: prefer highest non-off with rank <= requested; else lowest
+ *   non-off; else Off.
+ */
+internal fun clampThinkingLevelToOptions(
+  level: String,
+  options: List<ChatThinkingLevelOption>,
+): String {
+  val normalized = level.trim().lowercase(Locale.US).ifEmpty { "off" }
+  if (options.isEmpty()) return normalized
+  val ids =
+    options
+      .map { it.id.trim().lowercase(Locale.US) }
+      .filter { it.isNotEmpty() }
+      .distinct()
+  if (ids.isEmpty()) return normalized
+  if (normalized in ids) return normalized
+  // Existing session contract: Ultra can be effective while omitted from advertised options.
+  if (normalized == "ultra") return "ultra"
+
+  val requestedRank = chatThinkingLevelRank(normalized)
+  // Gateway resolveGatewaySessionThinkingLevel keeps a stored canonical level when the
+  // catalog entry is missing or identity-only, regardless of picker shape.
+  if (requestedRank >= 0) return normalized
+
+  // Mirror Gateway: a fallback must never opt into proactive Ultra orchestration.
+  val ranked =
+    ids.mapNotNull { id ->
+      if (id == "ultra") return@mapNotNull null
+      val rank = chatThinkingLevelRank(id)
+      if (rank < 0) null else id to rank
+    }
+  if (ranked.isEmpty()) {
+    return ids.firstOrNull { it == "off" } ?: "off"
+  }
+  if (requestedRank < 0) {
+    return ids.firstOrNull { it == "off" } ?: ranked.minBy { it.second }.first
+  }
+
+  val floor =
+    ranked
+      .filter { (id, rank) -> id != "off" && rank <= requestedRank }
+      .maxByOrNull { it.second }
+      ?.first
+  if (floor != null) return floor
+
+  val lowestNonOff =
+    ranked.filter { (id, _) -> id != "off" }.minByOrNull { it.second }?.first
+  if (lowestNonOff != null) return lowestNonOff
+
+  return ids.firstOrNull { it == "off" } ?: "off"
+}
+
 internal data class ChatActiveRunPresentation(
   val count: Int = 0,
   val runId: String? = null,
