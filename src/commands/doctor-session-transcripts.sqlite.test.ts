@@ -1,4 +1,3 @@
-// Doctor session transcript tests cover transcript inspection and repair guidance.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -19,9 +18,7 @@ const settleRetainedDoctorSessionSources = vi.hoisted(() => vi.fn());
 const withDoctorSqliteMaintenanceLock = vi.hoisted(() => vi.fn());
 const runPostSessionPluginDoctorStateRepairs = vi.hoisted(() => vi.fn());
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note,
-}));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 vi.mock("./doctor-session-sqlite.js", () => ({
   hasRetainedDoctorSessionSources,
@@ -33,9 +30,7 @@ vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
   runPostSessionPluginDoctorStateRepairs,
 }));
 
-vi.mock("./doctor-session-incognito-key-repair.js", () => ({
-  repairReservedIncognitoSessionKeys,
-}));
+vi.mock("./doctor-session-incognito-key-repair.js", () => ({ repairReservedIncognitoSessionKeys }));
 
 vi.mock("./doctor-session-delivery-state.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./doctor-session-delivery-state.js")>();
@@ -50,9 +45,7 @@ vi.mock("./doctor-session-exec-policy.js", () => ({
   repairLegacySessionExecPolicy: vi.fn(),
 }));
 
-vi.mock("./doctor-session-canonical-keys.js", () => ({
-  repairCanonicalSessionKeys,
-}));
+vi.mock("./doctor-session-canonical-keys.js", () => ({ repairCanonicalSessionKeys }));
 
 vi.mock("./doctor-session-worktree-workspace.js", () => ({
   repairLegacySessionWorktreeWorkspaces,
@@ -103,7 +96,9 @@ function expectCalledBefore(first: OrderedMock, second: OrderedMock) {
   );
 }
 
-const preparedPostSessionPluginMigration: PreparedPostSessionPluginMigration = {
+const legacyMainReport = { armed: false, complete: false, changes: [], warnings: [] };
+
+const postSessionMigration: PreparedPostSessionPluginMigration = {
   step: {
     id: "plugin-doctor-post-session-state",
     phase: "final",
@@ -117,47 +112,27 @@ const preparedPostSessionPluginMigration: PreparedPostSessionPluginMigration = {
 
 describe("doctor session transcript repair", () => {
   let root: string;
+  let env: NodeJS.ProcessEnv;
+  let receipts: unknown[];
+  const onStepReceipt = (receipt: unknown) => {
+    receipts.push(receipt);
+  };
   const maintenanceAuthority = { assertCurrent() {} };
-  const doctor = (overrides: Partial<Parameters<typeof noteSessionTranscriptHealth>[0]> = {}) =>
-    noteSessionTranscriptHealth({
-      cfg: {},
-      env: { ...process.env, OPENCLAW_STATE_DIR: root },
-      shouldRepair: true,
-      ...overrides,
-    });
+  type DoctorOptions = NonNullable<Parameters<typeof noteSessionTranscriptHealth>[0]>;
+  const doctor = (overrides: Partial<DoctorOptions> = {}) =>
+    noteSessionTranscriptHealth({ cfg: {}, env, shouldRepair: true, ...overrides });
   const expectNote = (text: string) =>
     expect(note).toHaveBeenCalledWith(expect.stringContaining(text), "Session SQLite");
 
   beforeEach(async () => {
     note.mockClear();
-    repairReservedIncognitoSessionKeys.mockReset().mockReturnValue({ found: 0, repaired: 0 });
-    repairCanonicalSessionDeliveryStates
-      .mockReset()
-      .mockReturnValue({ found: 0, repaired: 0, scannedStores: 0 });
-    repairCanonicalSessionResolvedSkills
-      .mockReset()
-      .mockReturnValue({ found: 0, repaired: 0, scannedStores: 0 });
-    repairCanonicalSessionKeys.mockReset().mockResolvedValue({
-      archivedTranscriptDirectories: [],
-      foundGroups: 0,
-      repairBatches: 0,
-      removedRows: 0,
-      repairedGroups: 0,
-      scannedStores: 0,
-    });
-    repairLegacySessionWorktreeWorkspaces
-      .mockReset()
-      .mockResolvedValue({ found: 0, repaired: 0, scannedStores: 0 });
-    migrateLegacyMainSessionKeys.mockReset().mockResolvedValue({
-      armed: false,
-      changes: [],
-      complete: false,
-      ledgerComplete: false,
-      legacyAgentId: "main",
-      mainKey: "main",
-      outcomes: [{ kind: "not-armed" }],
-      warnings: [],
-    });
+    receipts = [];
+    repairReservedIncognitoSessionKeys.mockReset().mockReturnValue({ found: 0 });
+    repairCanonicalSessionDeliveryStates.mockReset().mockReturnValue({ found: 0 });
+    repairCanonicalSessionResolvedSkills.mockReset().mockReturnValue({ found: 0 });
+    repairCanonicalSessionKeys.mockReset().mockResolvedValue({ foundGroups: 0 });
+    repairLegacySessionWorktreeWorkspaces.mockReset().mockResolvedValue({ found: 0 });
+    migrateLegacyMainSessionKeys.mockReset().mockResolvedValue(legacyMainReport);
     runDoctorSessionSqlite.mockReset();
     hasRetainedDoctorSessionSources.mockReset().mockReturnValue(false);
     settleRetainedDoctorSessionSources.mockReset();
@@ -173,6 +148,7 @@ describe("doctor session transcript repair", () => {
     root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-transcripts-")),
     );
+    env = { ...process.env, OPENCLAW_STATE_DIR: root };
   });
 
   afterEach(async () => {
@@ -189,7 +165,6 @@ describe("doctor session transcript repair", () => {
         sqliteEntries: 1,
       }),
     );
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
     const cfg = {};
 
     await doctor({ cfg, env });
@@ -198,11 +173,7 @@ describe("doctor session transcript repair", () => {
       { allAgents: true, cfg, env, mode: "import" },
       maintenanceAuthority,
     );
-    expect(migrateLegacyMainSessionKeys).toHaveBeenCalledWith({
-      cfg,
-      env,
-      mode: "doctor-fix",
-    });
+    expect(migrateLegacyMainSessionKeys).toHaveBeenCalledWith({ cfg, env, mode: "doctor-fix" });
     expect(repairCanonicalSessionKeys.mock.invocationCallOrder[0]).toBeLessThan(
       repairLegacySessionWorktreeWorkspaces.mock.invocationCallOrder[0]!,
     );
@@ -238,18 +209,11 @@ describe("doctor session transcript repair", () => {
   it("defers workspace writes while legacy-main source cleanup is incomplete", async () => {
     runDoctorSessionSqlite.mockResolvedValueOnce(sessionSqliteReport());
     migrateLegacyMainSessionKeys.mockResolvedValueOnce({
+      ...legacyMainReport,
       armed: true,
-      changes: [],
-      complete: false,
-      ledgerComplete: false,
-      legacyAgentId: "main",
-      mainKey: "main",
-      ownerAgentId: "ops",
-      outcomes: [{ kind: "divergent-canonical", canonicalKey: "agent:ops:main" }],
       warnings: ["source changed; retry openclaw doctor --fix"],
     });
     const cfg = { agents: { entries: { ops: {} } } };
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
     await noteSessionTranscriptHealth({ cfg, env, shouldRepair: true });
     expect(repairCanonicalSessionKeys).toHaveBeenCalledWith({ apply: true, cfg, env });
     expect(repairLegacySessionWorktreeWorkspaces).toHaveBeenCalledWith({
@@ -265,7 +229,6 @@ describe("doctor session transcript repair", () => {
     repairCanonicalSessionResolvedSkills.mockReturnValueOnce({
       found: 2,
       repaired: 2,
-      scannedStores: 1,
     });
 
     await doctor();
@@ -297,7 +260,6 @@ describe("doctor session transcript repair", () => {
       targets: [{ storePath, issues }],
       totals: sessionSqliteReport({ issues: issues.length, legacyEntries: 1 }).totals,
     });
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
     const cfg = {};
 
     const runtime = {
@@ -371,7 +333,6 @@ describe("doctor session transcript repair", () => {
     const report = sessionSqliteReport();
     runDoctorSessionSqlite.mockResolvedValueOnce(report);
     hasRetainedDoctorSessionSources.mockReturnValueOnce(true);
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
 
     await noteSessionTranscriptHealth({ cfg: {}, env, shouldRepair: true });
 
@@ -399,16 +360,15 @@ describe("doctor session transcript repair", () => {
         return { changes: ["repaired frozen plugin action"], warnings: [] };
       })
       .mockResolvedValueOnce({ changes: [], warnings: [] });
-    const receipts: unknown[] = [];
     const recordReceipt = (receipt: unknown) => {
       expect(mutations).toBe(1);
       receipts.push(receipt);
     };
     const params = {
       cfg: {},
-      env: { ...process.env, OPENCLAW_STATE_DIR: root },
+      env,
       shouldRepair: true,
-      postSessionPluginMigration: preparedPostSessionPluginMigration,
+      postSessionPluginMigration: postSessionMigration,
       onStepReceipt: recordReceipt,
     };
 
@@ -419,7 +379,7 @@ describe("doctor session transcript repair", () => {
       config: {},
       env: params.env,
       maintenanceAuthority: { assertCurrent: expect.any(Function) },
-      plannedActions: preparedPostSessionPluginMigration.plannedActions,
+      plannedActions: postSessionMigration.plannedActions,
     });
     expect(first).toMatchObject({
       id: "plugin-doctor-post-session-state",
@@ -434,80 +394,57 @@ describe("doctor session transcript repair", () => {
     expect(receipts).toEqual([first, replay]);
   });
 
-  it("records a refused post-session receipt when the writer fails", async () => {
-    runDoctorSessionSqlite.mockResolvedValue(sessionSqliteReport());
-    runPostSessionPluginDoctorStateRepairs.mockRejectedValueOnce(new Error("writer failed"));
-    const receipts: unknown[] = [];
-
-    const receipt = await doctor({
-      postSessionPluginMigration: preparedPostSessionPluginMigration,
-      onStepReceipt: (entry) => receipts.push(entry),
-    });
-
-    expect(receipt).toMatchObject({
+  const refusedReceipt = (code: string) =>
+    expect.objectContaining({
       id: "plugin-doctor-post-session-state",
       outcome: "refused",
       changes: [],
-      refusal: { code: "step-threw" },
+      refusal: expect.objectContaining({ code }),
     });
-    expect(receipts).toEqual([receipt]);
-    expect(receipts).not.toContainEqual(expect.objectContaining({ outcome: "completed" }));
-  });
-
-  it("closes the planned post-session step when repair is not authorized", async () => {
+  const notRequiredStep: PreparedPostSessionPluginMigration["step"] = {
+    ...postSessionMigration.step,
+    source: [],
+    target: [],
+    requiredness: "not-required",
+    reversibility: "not-applicable",
+  };
+  it.each([
+    "writer failure",
+    "unauthorized repair",
+    "not-required step",
+    "refused bound plan",
+  ] as const)("closes the post-session step: %s", async (scenario) => {
+    const writerFailure = scenario === "writer failure";
+    const notRequired = scenario === "not-required step";
+    const boundRefusal = scenario === "refused bound plan";
     runDoctorSessionSqlite.mockResolvedValue(sessionSqliteReport());
-    const receipts: unknown[] = [];
-
+    if (writerFailure) {
+      runPostSessionPluginDoctorStateRepairs.mockRejectedValueOnce(new Error("writer failed"));
+    }
     const receipt = await doctor({
-      shouldRepair: false,
-      postSessionPluginMigration: preparedPostSessionPluginMigration,
-      onStepReceipt: (entry) => receipts.push(entry),
+      cfg: boundRefusal
+        ? { plugins: { entries: { external: { enabled: true } } } }
+        : notRequired
+          ? { plugins: { enabled: false } }
+          : {},
+      shouldRepair: writerFailure || boundRefusal,
+      ...(boundRefusal
+        ? { postSessionPluginMigrationPlanBound: true }
+        : {
+            postSessionPluginMigration: notRequired
+              ? { step: notRequiredStep, plannedActions: [] }
+              : postSessionMigration,
+          }),
+      onStepReceipt,
     });
-
-    expect(runPostSessionPluginDoctorStateRepairs).not.toHaveBeenCalled();
-    expect(receipt).toMatchObject({
-      id: "plugin-doctor-post-session-state",
-      outcome: "refused",
-      changes: [],
-      refusal: { code: "repair-not-authorized" },
-    });
-    expect(receipts).toEqual([receipt]);
-    expect(receipts).not.toContainEqual(expect.objectContaining({ outcome: "completed" }));
-  });
-
-  it("skips a not-required post-session step before checking repair authorization", async () => {
-    runDoctorSessionSqlite.mockResolvedValue(sessionSqliteReport());
-    const step: PreparedPostSessionPluginMigration["step"] = {
-      ...preparedPostSessionPluginMigration.step,
-      source: [],
-      target: [],
-      requiredness: "not-required",
-      reversibility: "not-applicable",
-    };
-    const receipts: unknown[] = [];
-    const receipt = await doctor({
-      cfg: { plugins: { enabled: false } },
-      shouldRepair: false,
-      postSessionPluginMigration: { step, plannedActions: [] },
-      onStepReceipt: (entry) => receipts.push(entry),
-    });
-    expect(receipt).toEqual({ ...step, outcome: "skipped", changes: [], warnings: [] });
-    expect(receipts).toEqual([receipt]);
-    expect(runPostSessionPluginDoctorStateRepairs.mock.calls.length).toBe(0);
-  });
-
-  it("does not fall back to dynamic plugin repair after the bound plan refused", async () => {
-    runDoctorSessionSqlite.mockResolvedValue(sessionSqliteReport());
-    const receipts: unknown[] = [];
-
-    await doctor({
-      cfg: { plugins: { entries: { external: { enabled: true } } } },
-      postSessionPluginMigrationPlanBound: true,
-      onStepReceipt: (receipt) => receipts.push(receipt),
-    });
-
-    expect(runPostSessionPluginDoctorStateRepairs).not.toHaveBeenCalled();
-    expect(receipts).toEqual([]);
+    const expected = boundRefusal
+      ? undefined
+      : notRequired
+        ? { ...notRequiredStep, outcome: "skipped", changes: [], warnings: [] }
+        : refusedReceipt(writerFailure ? "step-threw" : "repair-not-authorized");
+    expect(receipt).toEqual(expected);
+    expect(receipts).toEqual(boundRefusal ? [] : [receipt]);
+    expect(runPostSessionPluginDoctorStateRepairs).toHaveBeenCalledTimes(writerFailure ? 1 : 0);
   });
 
   it("reports the native cause when session SQLite import cannot acquire its lock", async () => {
@@ -516,7 +453,6 @@ describe("doctor session transcript repair", () => {
       Object.assign(new Error("function not implemented"), { code: "ENOSYS" }),
     );
 
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
     withDoctorSqliteMaintenanceLock.mockRejectedValueOnce(
       new DoctorSqliteMaintenanceLockUnavailableError("session SQLite import", cause),
     );
@@ -533,25 +469,14 @@ describe("doctor session transcript repair", () => {
 
   it("keeps non-lock session SQLite import failures fatal", async () => {
     runDoctorSessionSqlite.mockRejectedValueOnce(new Error("SQLite import failed"));
-    const receipts: unknown[] = [];
 
     await expect(
       doctor({
-        postSessionPluginMigration: preparedPostSessionPluginMigration,
-        onStepReceipt: (receipt) => receipts.push(receipt),
+        postSessionPluginMigration: postSessionMigration,
+        onStepReceipt,
       }),
     ).rejects.toThrow("SQLite import failed");
     expect(runPostSessionPluginDoctorStateRepairs).not.toHaveBeenCalled();
-    expect(receipts).toEqual([
-      expect.objectContaining({
-        id: "plugin-doctor-post-session-state",
-        outcome: "refused",
-        changes: [],
-        refusal: expect.objectContaining({ code: "blocked-by-session-repair-failure" }),
-      }),
-    ]);
-    expect(receipts).not.toContainEqual(
-      expect.objectContaining({ outcome: expect.stringMatching(/completed|skipped|warning/) }),
-    );
+    expect(receipts).toEqual([refusedReceipt("blocked-by-session-repair-failure")]);
   });
 });

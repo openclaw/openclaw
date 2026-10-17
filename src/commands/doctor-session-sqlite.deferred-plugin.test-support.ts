@@ -4,6 +4,7 @@ import { expect } from "vitest";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   readDeferredPluginMigrations,
@@ -134,20 +135,11 @@ export async function seedDeferredPluginSessionSource(
         : state.statePath("sessions");
   fs.mkdirSync(sessionsDir, { recursive: true });
   const storePath = path.join(sessionsDir, "sessions.json");
-  const records = Object.fromEntries(
-    ["kept", "deleted", ...(missingTranscript ? ["missing"] : [])].map((name) => {
-      const sessionId = `legacy-${name}`;
-      const transcript = path.join(sessionsDir, `${sessionId}.jsonl`);
-      if (name === "missing") {
-        return [
-          `agent:main:${name}`,
-          {
-            sessionId,
-            ...(missingTranscript === "declared" ? { sessionFile: path.basename(transcript) } : {}),
-            updatedAt: 20,
-          },
-        ];
-      }
+  const records: Record<string, SessionEntry> = {};
+  for (const name of ["kept", "deleted", ...(missingTranscript ? ["missing"] : [])]) {
+    const sessionId = `legacy-${name}`;
+    const transcript = path.join(sessionsDir, `${sessionId}.jsonl`);
+    if (name !== "missing") {
       fs.writeFileSync(
         transcript,
         [
@@ -172,12 +164,15 @@ export async function seedDeferredPluginSessionSource(
           pluginAppPolicyContext: { fingerprint: "policy-1", apps: {}, pluginAppIds: {} },
         }),
       );
-      return [
-        `agent:main:${name}`,
-        { sessionId, sessionFile: path.basename(transcript), updatedAt: 20 },
-      ];
-    }),
-  );
+    }
+    records[`agent:main:${name}`] = {
+      sessionId,
+      updatedAt: 20,
+      ...(name !== "missing" || missingTranscript === "declared"
+        ? { sessionFile: path.basename(transcript) }
+        : {}),
+    };
+  }
   fs.writeFileSync(storePath, JSON.stringify(records));
   const cfg: OpenClawConfig = {
     agents: { entries: { main: {} } },

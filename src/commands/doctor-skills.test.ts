@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyInstallChecks } from "../cli/requirements-test-fixtures.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
-import { createDoctorPrompter, type DoctorPrompter } from "./doctor-prompter.js";
+import { createDoctorPrompter } from "./doctor-prompter.js";
 import { maybeRepairSkillReadiness } from "./doctor-skills.js";
 
 const mocks = vi.hoisted(() => ({
@@ -61,29 +61,10 @@ function createReport(skills: SkillStatusEntry[], agentId = "main"): SkillStatus
   };
 }
 
-function createPrompter(): DoctorPrompter {
-  return {
-    confirm: vi.fn(async () => false),
-    confirmAutoFix: vi.fn(async () => false),
-    confirmAggressiveAutoFix: vi.fn(async () => false),
-    confirmRuntimeRepair: vi.fn(async () => false),
-    select: vi.fn(async (_params, fallback) => fallback),
-    shouldRepair: false,
-    shouldForce: false,
-    repairMode: {
-      shouldRepair: false,
-      shouldForce: false,
-      nonInteractive: false,
-      canPrompt: true,
-      updateInProgress: false,
-    },
-  };
-}
-
-function createRepairPrompter() {
+function createPrompter(repair = false) {
   return createDoctorPrompter({
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    options: { repair: true, nonInteractive: true },
+    options: { repair, nonInteractive: true },
   });
 }
 
@@ -115,7 +96,7 @@ describe("doctor skills", () => {
       skills: { entries: { "optional-tool": { enabled: true, env: { EXISTING: "1" } } } },
     };
 
-    const next = await maybeRepairSkillReadiness({ cfg, prompter: createRepairPrompter() });
+    const next = await maybeRepairSkillReadiness({ cfg, prompter: createPrompter(true) });
 
     expect(next.skills?.entries?.["optional-tool"]).toEqual({
       enabled: expectedEnabled,
@@ -147,7 +128,6 @@ describe("doctor skills", () => {
   });
 
   it("surfaces a GH_CONFIG_DIR hint through the doctor path", async () => {
-    const githubSkill = createSkill({ name: "github" });
     mocks.detectGhConfigDirMismatch.mockReturnValue({
       kind: "mismatch",
       effectiveConfigDir: "/agent/home/.config/gh",
@@ -156,7 +136,7 @@ describe("doctor skills", () => {
       alternateHomeHint: "/root",
       suggestedEnvValue: "/root/.config/gh",
     });
-    const calls = await runSkillDoctor([githubSkill]);
+    const calls = await runSkillDoctor([createSkill({ name: "github" })]);
     const output = String(calls.find((call) => call[1] === "GitHub CLI")?.[0] ?? "");
 
     expect(output).toContain("/root/.config/gh");
@@ -182,7 +162,7 @@ describe("doctor skills", () => {
       skills: { entries: { shared: { enabled: true } } },
     };
 
-    const next = await maybeRepairSkillReadiness({ cfg, prompter: createRepairPrompter() });
+    const next = await maybeRepairSkillReadiness({ cfg, prompter: createPrompter(true) });
 
     expect(next).toEqual(cfg);
     expect(next.skills?.entries?.shared?.enabled).toBe(true);
