@@ -13,12 +13,13 @@ function tools(names: string[]): AnyAgentTool[] {
   return names.map((name) => ({ name })) as AnyAgentTool[];
 }
 
-function defaultLeanConfig(): OpenClawConfig {
+const lean = (localModelLean: boolean) => ({ experimental: { localModelLean } });
+const ownedEntries = { ops: lean(false), gemma: lean(true) };
+function defaultLeanConfig(
+  entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: {} },
+): OpenClawConfig {
   return {
-    agents: {
-      entries: { main: {} },
-      defaults: { experimental: { localModelLean: true } },
-    },
+    agents: { entries, defaults: lean(true) },
   };
 }
 
@@ -54,18 +55,7 @@ describe("local model lean tool filtering", () => {
         },
         names,
       ),
-    ).toEqual([
-      "read",
-      "browser",
-      "cron",
-      "message",
-      "image_generate",
-      "music_generate",
-      "pdf",
-      "tts",
-      "video_generate",
-      "exec",
-    ]);
+    ).toEqual(names);
   });
 
   it("adds reply-required message tools to lean preservation", () => {
@@ -99,12 +89,7 @@ describe("local model lean tool filtering", () => {
   });
 
   it("lets an agent opt out of an inherited global lean setting", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        ...defaultLeanConfig().agents,
-        entries: { main: { experimental: { localModelLean: false } } },
-      },
-    };
+    const cfg = defaultLeanConfig({ main: lean(false) });
 
     expect(isLocalModelLeanEnabled({ config: cfg, agentId: "main" })).toBe(false);
     expect(filteredNames(cfg, { agentId: "main" })).toEqual([
@@ -117,11 +102,7 @@ describe("local model lean tool filtering", () => {
   });
 
   it("keeps global lean mode for an agent id without an agent entry", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { experimental: { localModelLean: true } },
-      },
-    };
+    const cfg: OpenClawConfig = { agents: { defaults: lean(true) } };
 
     expect(isLocalModelLeanEnabled({ config: cfg, agentId: "ad-hoc" })).toBe(true);
     expect(filteredNames(cfg, { agentId: "ad-hoc" })).toEqual(["read", "exec"]);
@@ -132,10 +113,7 @@ describe("local model lean tool filtering", () => {
       {
         agents: {
           ownership: "explicit",
-          entries: {
-            ops: { experimental: { localModelLean: false } },
-            gemma: { experimental: { localModelLean: true } },
-          },
+          entries: ownedEntries,
         },
       } satisfies OpenClawConfig,
       "gemma",
@@ -149,14 +127,7 @@ describe("local model lean tool filtering", () => {
   });
 
   it("uses the agent from an agent session key", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: {
-          main: { experimental: { localModelLean: false } },
-          gemma: { experimental: { localModelLean: true } },
-        },
-      },
-    };
+    const cfg: OpenClawConfig = { agents: { entries: { main: lean(false), gemma: lean(true) } } };
 
     expect(isLocalModelLeanEnabled({ config: cfg, sessionKey: "agent:gemma:main" })).toBe(true);
     expect(filteredNames(cfg, { sessionKey: "agent:gemma:main" })).toEqual(["read", "exec"]);
@@ -168,10 +139,7 @@ describe("local model lean tool filtering", () => {
       agents: {
         ownership: "explicit",
         defaults: { sessionStore: { agentId: "gemma" } },
-        entries: {
-          ops: { experimental: { localModelLean: false } },
-          gemma: { experimental: { localModelLean: true } },
-        },
+        entries: ownedEntries,
       },
     };
 
