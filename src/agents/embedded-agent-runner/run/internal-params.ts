@@ -4,7 +4,9 @@ import type { SessionTranscriptTargetBinding } from "../../../config/sessions/tr
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { Model } from "../../../llm/types.js";
 import type { PreparedTtsPreferences } from "../../../tts/tts-preferences.js";
+import type { RunCliAgentParams } from "../../cli-runner/types.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
+import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
 import type { ModelFallbackRouteResolution } from "../../model-fallback.types.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
 import type { ReplyDeliveryFactsObserver } from "../../reply-completion.js";
@@ -46,6 +48,10 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** Pure run-bound guidance, resolved by the host against the final callable tool surface. */
+  resolveRuntimeContextForTools?: (params: {
+    messageToolAvailable: boolean;
+  }) => RuntimeContextFragment[];
   /** The logical run already invoked model routing before preparing its candidate chain. */
   resolvedModelSelection?: ResolvedRunEntryModelSelection;
   preparedTtsPreferences?: PreparedTtsPreferences;
@@ -94,7 +100,13 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
 };
 
 export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
-  Pick<RunEmbeddedAgentInternalParams, "onContextAccountingEvent" | "onCompactionRequestBudget"> & {
+  Pick<
+    RunEmbeddedAgentInternalParams,
+    | "onContextAccountingEvent"
+    | "onCompactionRequestBudget"
+    | "resolveRuntimeContextForTools"
+    | "systemAgentTool"
+  > & {
     /** The dispatch owner already selected this target, including any compaction successor. */
     preparedSessionTarget?: {
       readonly target: Readonly<BoundAgentRunSessionTarget & SessionTranscriptTargetBinding>;
@@ -110,3 +122,7 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
 export type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {
   sessionFile: string;
 };
+
+/** CLI preparation consumes the resolver before handing a request to a backend. */
+export type RunCliAgentInternalParams = RunCliAgentParams &
+  Pick<RunEmbeddedAgentInternalParams, "resolveRuntimeContextForTools">;

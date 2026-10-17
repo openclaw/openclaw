@@ -4,7 +4,8 @@ import { runAgentHarnessAttempt } from "../../harness/selection.js";
 import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { copyCoreTtsAttemptResultProvenance } from "../../tools/tts-tool-result-provenance.js";
 import { prepareAgentWorkspaceAttachments } from "../../workspace-access.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
+import type { EmbeddedRunAttemptResult } from "./types.js";
 
 /** Replaces backend-retained provenance with the exact prepared request fact. */
 export function resolveRuntimeModelAttempt(
@@ -21,7 +22,7 @@ export function resolveRuntimeModelAttempt(
 }
 
 export async function runEmbeddedAttemptWithBackend(
-  params: EmbeddedRunAttemptParams,
+  params: EmbeddedRunAttemptInternalParams,
   nativeSessionRuntime?: Parameters<typeof runAgentHarnessAttempt>[1],
   // Native image projection clears media; attachment transfer still needs the originals.
   attachmentMedia = params.media,

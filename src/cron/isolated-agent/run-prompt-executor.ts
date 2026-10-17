@@ -52,7 +52,7 @@ import { isCommandStyleCronMessage } from "./command-style-prompt.js";
 import { resolveIsolatedCronPromptCacheKey } from "./prompt-cache-key.js";
 import { assertCronRuntimeAuthorityCandidate } from "./run-admission.js";
 import { createCronCandidateExecutionResolver } from "./run-candidate-runtime.js";
-import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
+import { resolveCronRuntimeContextForTools } from "./run-delivery-trace.js";
 import {
   getCliSessionBinding,
   resolveBootstrapWarningSignaturesSeen,
@@ -135,15 +135,12 @@ export function createCronPromptExecutor(
       senderPolicyMode: "never",
     });
   }
-  const finalizePromptForResolvedTools = ({
-    prompt,
+  const resolveRuntimeContextForTools = ({
     messageToolAvailable,
   }: {
-    prompt: string;
     messageToolAvailable: boolean;
   }) =>
-    finalizeCronPromptForResolvedTools({
-      prompt,
+    resolveCronRuntimeContextForTools({
       messageToolAvailable,
       deliveryRequested: params.deliveryRequested,
       resolvedDelivery: params.resolvedDelivery,
@@ -427,7 +424,7 @@ export function createCronPromptExecutor(
             messageActionTurnCapability: cronAdmission.messageActionTurnCapability,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
-            finalizePromptForResolvedTools,
+            resolveRuntimeContextForTools,
             model: modelOverride,
             thinkLevel: candidateThinkLevel,
             thinkingExplicit: candidateConfiguredThinkLevel !== undefined,

@@ -5,6 +5,7 @@ import {
   type DiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { labelRuntimeContextText } from "../../../llm/types.js";
 import type { PluginHookLlmInputEvent } from "../../../plugins/hook-types.js";
 import type { HookRunner } from "../../../plugins/hooks.js";
 import {
@@ -13,6 +14,7 @@ import {
 } from "../../../trajectory/runtime.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
+import { projectRuntimeContextFragments } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
@@ -21,7 +23,9 @@ import { log } from "../logger.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import { summarizeSessionContext } from "./attempt-context-summary.js";
 import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import type { ResolvedToolPromptFinalizer } from "./params.js";
+import { appendCurrentInboundContext } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type NamedTool = { name: string };
@@ -109,15 +113,81 @@ export function applyResolvedToolPromptFinalizer(params: {
   activeToolNames: readonly string[];
   finalize?: ResolvedToolPromptFinalizer;
 }): string {
-  if (!params.finalize) {
-    return params.prompt;
+  return (
+    params.finalize?.({
+      prompt: params.prompt,
+      messageToolAvailable: params.activeToolNames.some(
+        (toolName) => normalizeToolPolicyName(toolName) === "message",
+      ),
+    }) ?? params.prompt
+  );
+}
+
+/** Plugin-owned tools are not host-attested; keep their message guidance conservative. */
+export function preparePluginHarnessPrompt(params: {
+  ownsTransport: boolean;
+  prompt: string;
+  transcriptPrompt?: string;
+  finalize?: ResolvedToolPromptFinalizer;
+  resolveRuntimeContextForTools?: RunEmbeddedAgentInternalParams["resolveRuntimeContextForTools"];
+  currentInboundContext?: EmbeddedRunAttemptParams["currentInboundContext"];
+}):
+  | Pick<EmbeddedRunAttemptParams, "prompt" | "transcriptPrompt" | "currentInboundContext">
+  | undefined {
+  if (!params.ownsTransport || (!params.finalize && !params.resolveRuntimeContextForTools)) {
+    return undefined;
   }
-  return params.finalize({
-    prompt: params.prompt,
-    messageToolAvailable: params.activeToolNames.some(
-      (toolName) => normalizeToolPolicyName(toolName) === "message",
-    ),
+  const prompt = applyResolvedToolPromptFinalizer({ ...params, activeToolNames: [] });
+  const fragments = params.resolveRuntimeContextForTools?.({ messageToolAvailable: false });
+  return {
+    prompt,
+    // Only supply the original task when the caller has not pinned its own transcript.
+    transcriptPrompt: params.transcriptPrompt === undefined ? params.prompt : undefined,
+    // Native plugins consume currentInboundContext, not the raw fragment field.
+    // Project only this resolver's additions; existing caller fragments keep their owner.
+    currentInboundContext: fragments?.length
+      ? appendCurrentInboundContext(
+          params.currentInboundContext,
+          fragments,
+          labelRuntimeContextText(projectRuntimeContextFragments(fragments)),
+        )
+      : params.currentInboundContext,
+  };
+}
+
+type PromptDispatchParams = Pick<
+  RunEmbeddedAgentInternalParams,
+  | "prompt"
+  | "transcriptPrompt"
+  | "finalizePromptForResolvedTools"
+  | "resolveRuntimeContextForTools"
+  | "currentInboundContext"
+>;
+
+/** Bind prompt projection and callback ownership together before harness dispatch. */
+export function prepareEmbeddedAttemptPromptDispatch(input: {
+  params: Omit<PromptDispatchParams, "prompt">;
+  preparedPrompt: Pick<PromptDispatchParams, "prompt" | "transcriptPrompt">;
+  ownsTransport: boolean;
+}): PromptDispatchParams {
+  const { params, preparedPrompt, ownsTransport } = input;
+  const pluginPrompt = preparePluginHarnessPrompt({
+    ownsTransport,
+    prompt: preparedPrompt.prompt,
+    transcriptPrompt: params.transcriptPrompt,
+    finalize: params.finalizePromptForResolvedTools,
+    resolveRuntimeContextForTools: params.resolveRuntimeContextForTools,
+    currentInboundContext: params.currentInboundContext,
   });
+  return {
+    prompt: pluginPrompt?.prompt ?? preparedPrompt.prompt,
+    transcriptPrompt: pluginPrompt?.transcriptPrompt ?? preparedPrompt.transcriptPrompt,
+    finalizePromptForResolvedTools: pluginPrompt
+      ? undefined
+      : params.finalizePromptForResolvedTools,
+    resolveRuntimeContextForTools: pluginPrompt ? undefined : params.resolveRuntimeContextForTools,
+    currentInboundContext: pluginPrompt?.currentInboundContext ?? params.currentInboundContext,
+  };
 }
 
 function sameToolNames(left: readonly string[], right: readonly string[]): boolean {

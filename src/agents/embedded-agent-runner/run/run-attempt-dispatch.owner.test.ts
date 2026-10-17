@@ -172,9 +172,13 @@ type DispatchCase = {
   retryPreparation?: "omit" | "mutate" | "change-cwd";
   cancelTrajectory?: boolean;
   preparedAuth?: "explicit-header" | "no-auth";
+  finalizer?: "string" | "context" | "both";
 };
 
 const dispatchCases: DispatchCase[] = [
+  { agentId: "main", finalizer: "string" },
+  { agentId: "main", finalizer: "context" },
+  { agentId: "main", finalizer: "both" },
   ...(["explicit-header", "no-auth"] as const).map((preparedAuth) => ({
     agentId: "main",
     preparedAuth,
@@ -268,6 +272,7 @@ it.each(dispatchCases)(
     retryPreparation,
     cancelTrajectory,
     preparedAuth,
+    finalizer,
   }) => {
     const gitCoauthorPrompt =
       "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
@@ -394,6 +399,18 @@ it.each(dispatchCases)(
           { sessionId: `${agentId}-global`, updatedAt: 1 },
         );
       }
+      const finalizePromptForResolvedTools = vi.fn(
+        ({ prompt, messageToolAvailable }: { prompt: string; messageToolAvailable: boolean }) => {
+          expect(messageToolAvailable).toBe(false);
+          return `${prompt}:finalized`;
+        },
+      );
+      const resolveRuntimeContextForTools = vi.fn(
+        ({ messageToolAvailable }: { messageToolAvailable: boolean }) => {
+          expect(messageToolAvailable).toBe(false);
+          return [{ kind: "runtime-instruction" as const, text: "Delivery context." }];
+        },
+      );
       const admission = prepareAgentRunAdmission({
         cfg: config,
         facts: {
@@ -511,6 +528,19 @@ it.each(dispatchCases)(
           : {}),
         sessionFile: "global",
         prompt: remoteSkills ? "Use the skill at /host/skills/demo/SKILL.md." : "hello",
+        ...(finalizer
+          ? {
+              currentInboundContext: {
+                text: "Existing inbound context.",
+                resumableText: "Existing resumed context.",
+              },
+              runtimeContextFragments: [
+                { kind: "runtime-instruction" as const, text: "Existing context." },
+              ],
+              ...(finalizer !== "context" ? { finalizePromptForResolvedTools } : {}),
+              ...(finalizer !== "string" ? { resolveRuntimeContextForTools } : {}),
+            }
+          : {}),
         ...(skillsSnapshot ? { skillsSnapshot } : {}),
         ...(remoteSkills
           ? {
@@ -936,6 +966,39 @@ it.each(dispatchCases)(
         restorePlacement();
         admission.close();
         restoreSandbox();
+        for (const [entry] of runAttempt.mock.calls) {
+          expect(entry).not.toHaveProperty("resolveRuntimeContextForTools");
+        }
+        if (finalizer) {
+          expect(runAttempt).toHaveBeenCalledOnce();
+          const [received] = runAttempt.mock.calls[0]!;
+          if (finalizer !== "context") {
+            expect(finalizePromptForResolvedTools).toHaveBeenCalledBefore(runAttempt);
+          }
+          if (finalizer !== "string") {
+            expect(resolveRuntimeContextForTools).toHaveBeenCalledBefore(runAttempt);
+          }
+          expect(received.prompt).toBe(finalizer === "context" ? "hello" : "hello:finalized");
+          expect(finalizePromptForResolvedTools).toHaveBeenCalledTimes(
+            finalizer === "context" ? 0 : 1,
+          );
+          expect(resolveRuntimeContextForTools).toHaveBeenCalledTimes(
+            finalizer === "string" ? 0 : 1,
+          );
+          expect(received.transcriptPrompt).toBe("hello");
+          expect(received.finalizePromptForResolvedTools).toBeUndefined();
+          expect(received.runtimeContextFragments).toEqual([
+            { kind: "runtime-instruction", text: "Existing context." },
+          ]);
+          if (finalizer !== "string") {
+            expect(received.currentInboundContext?.text).toContain("Delivery context.");
+            expect(received.currentInboundContext?.text.match(/Delivery context/g)).toHaveLength(1);
+            expect(received.currentInboundContext?.resumableText).toContain("Delivery context.");
+          } else {
+            expect(received.currentInboundContext?.text).toBe("Existing inbound context.");
+          }
+          expect(received.currentInboundContext?.text).toContain("Existing inbound context.");
+        }
       }
     });
   },

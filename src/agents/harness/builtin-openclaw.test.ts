@@ -65,14 +65,17 @@ describe("createOpenClawAgentHarness", () => {
   });
 
   it("preserves logical Ultra for the embedded attempt", async () => {
-    const params = { thinkLevel: "ultra" } as never;
+    const resolveRuntimeContextForTools = vi.fn(() => []);
+    const params = { thinkLevel: "ultra", resolveRuntimeContextForTools } as never;
 
     await createOpenClawAgentHarness().runAttempt(params);
 
     expect(runEmbeddedAttempt).toHaveBeenCalledWith({
       thinkLevel: "ultra",
+      resolveRuntimeContextForTools,
       supportsTurnScopedToolRestrictions: true,
     });
+    expect(resolveRuntimeContextForTools).not.toHaveBeenCalled();
   });
 
   it("carries only explicit live harness support", async () => {

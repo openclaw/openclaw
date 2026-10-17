@@ -35,6 +35,7 @@ import { createTestAdmittedRunContext } from "./admitted-run-context.test-suppor
 import { closeAuthProfileReadPool } from "./auth-profiles/sqlite.js";
 import { resolveCliExecutionTarget } from "./cli-runner/execution-target.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
+import type { RunCliAgentInternalParams } from "./embedded-agent-runner/run/internal-params.js";
 
 type CliProvider = "claude-cli" | "codex-cli" | "google-gemini-cli";
 type McpLoopbackClientGrant = ReturnType<
@@ -361,7 +362,7 @@ export async function expectPathMissing(targetPath: string) {
   throw new Error(`expected ${targetPath} to be missing`);
 }
 
-type PrepareCliRun = (params: RunCliAgentParams) => Promise<PreparedCliRunContext>;
+type PrepareCliRun = (params: RunCliAgentInternalParams) => Promise<PreparedCliRunContext>;
 
 export function createCliRunnerPrepareFixture(
   prepareCliRun: PrepareCliRun,
@@ -412,7 +413,7 @@ export function createCliRunnerPrepareFixture(
       return getSession();
     },
     createSession,
-    async prepare(overrides: Partial<RunCliAgentParams> = {}) {
+    async prepare(overrides: Partial<RunCliAgentInternalParams> = {}) {
       const { dir, sessionFile, sessionTarget } = getSession();
       const defaults: Omit<RunCliAgentParams, "admittedRunContext"> = {
         sessionId: "session-test",

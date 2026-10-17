@@ -109,18 +109,30 @@ const claudeTurn = {
   isNewSession: true,
 };
 
-it("preserves private Runtime facts when optional turn context fails", async () => {
-  vi.spyOn(mediaTaskStatus, "buildMediaTaskRuntimeContext").mockRejectedValueOnce(
-    new Error("snapshot unavailable"),
-  );
-  const turn = await prepareCliTurnPromptContext({
-    ...claudeTurn,
-    deliveryGuidance: "Reply in this conversation.",
-  });
-  expect(turn.systemPrompt).toBe("Stable instructions.");
-  expect(turn.prompt).toBe("Hello");
-  expect(turn.promptContext?.appendContext).toBe(`${runtimeFacts}\n\nReply in this conversation.`);
-});
+it.each([false, true])(
+  "preserves producer delivery context when optional turn context fails (private=%s)",
+  async (privateContext) => {
+    vi.spyOn(mediaTaskStatus, "buildMediaTaskRuntimeContext").mockRejectedValueOnce(
+      new Error("snapshot unavailable"),
+    );
+    const turn = await prepareCliTurnPromptContext({
+      ...claudeTurn,
+      privateContext,
+      runtimeFactsInTurn: true,
+      deliveryGuidance: "Reply in this conversation.",
+      runtimeContextFragments: [
+        { kind: "runtime-instruction", text: "Cron result is delivered automatically." },
+      ],
+    });
+    expect(turn.systemPrompt).toBe("Stable instructions.");
+    if (privateContext) {
+      expect(turn.prompt).toBe("Hello");
+    }
+    const context = turn.promptContext?.appendContext ?? turn.prompt;
+    expect(context).toContain(`${runtimeFacts}\n\nReply in this conversation.`);
+    expect(context).toContain("Cron result is delivered automatically.");
+  },
+);
 
 it("lets a whole-system hook replacement remove ordinary Claude Runtime facts", async () => {
   const turn = await prepareCliTurnPromptContext({
