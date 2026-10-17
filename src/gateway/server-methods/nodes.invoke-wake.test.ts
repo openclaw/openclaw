@@ -5,6 +5,7 @@ import { WebSocket } from "ws";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as nodeInvokePluginPolicy from "../node-invoke-plugin-policy.js";
 import { NodeRegistry, type NodeInvokeResult } from "../node-registry.js";
 import {
@@ -34,23 +35,6 @@ import {
 } from "./nodes.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-type MockNodeCommandPolicyParams = {
-  command: string;
-  declaredCommands?: string[];
-  allowlist: Set<string>;
-};
-
-type MockNodeConfig = {
-  gateway?: {
-    nodes?: {
-      commands?: {
-        allow?: string[];
-        deny?: string[];
-      };
-    };
-  };
-};
-
 type ForwardedParams = {
   ok: boolean;
   params: unknown;
@@ -61,10 +45,12 @@ const mocks = vi.hoisted(() => ({
   captureNodePairingGeneration: vi.fn(),
   getRuntimeConfig: vi.fn(() => ({})),
   isNodePairingGenerationCurrent: vi.fn(),
-  resolveNodeCommandAllowlist: vi.fn<(cfg: MockNodeConfig) => Set<string>>(() => new Set()),
-  isNodeCommandAllowed: vi.fn<
-    (params: MockNodeCommandPolicyParams) => { ok: true } | { ok: false; reason: string }
-  >(() => ({ ok: true })),
+  resolveNodeCommandAllowlist: vi.fn<
+    typeof import("../node-command-policy.js").resolveNodeCommandAllowlist
+  >(() => new Set()),
+  isNodeCommandAllowed: vi.fn<typeof import("../node-command-policy.js").isNodeCommandAllowed>(
+    () => ({ ok: true }),
+  ),
   isForegroundRestrictedPluginNodeCommand: vi.fn((command: string) =>
     command.startsWith("canvas."),
   ),
@@ -1000,30 +986,30 @@ describe("node.invoke APNs wake path", () => {
 
   it("does not share wake or nudge throttles with a replacement pairing generation", async () => {
     const nodeId = "ios-node-replacement-throttles";
-    const generationOne = { nodeId, key: "generation-1" };
-    const generationTwo = { nodeId, key: "generation-2" };
+    const generations = ["generation-1", "generation-2"].map((key) => ({ nodeId, key }));
     directWake(nodeId);
     mocks.sendApnsAlert.mockResolvedValue(DIRECT_APNS_RESULT);
 
-    await expect(
-      maybeWakeNodeWithApns(nodeId, { generation: generationOne }),
-    ).resolves.toMatchObject({ path: "sent", throttled: false });
-    await expect(
-      maybeWakeNodeWithApns(nodeId, { generation: generationTwo }),
-    ).resolves.toMatchObject({ path: "sent", throttled: false });
-    await expect(
-      maybeSendNodeWakeNudge(nodeId, { generation: generationOne }),
-    ).resolves.toMatchObject({ reason: "sent", throttled: false });
-    await expect(
-      maybeSendNodeWakeNudge(nodeId, { generation: generationTwo }),
-    ).resolves.toMatchObject({ reason: "sent", throttled: false });
+    for (const generation of generations) {
+      await expect(maybeWakeNodeWithApns(nodeId, { generation })).resolves.toMatchObject({
+        path: "sent",
+        throttled: false,
+      });
+    }
+    for (const generation of generations) {
+      await expect(maybeSendNodeWakeNudge(nodeId, { generation })).resolves.toMatchObject({
+        reason: "sent",
+        throttled: false,
+      });
+    }
 
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(2);
     expect(mocks.sendApnsAlert).toHaveBeenCalledTimes(2);
-    expect(getNodeWakeStateSnapshot(nodeId, generationOne.key)?.lastWakeAtMs).toBeGreaterThan(0);
-    expect(getNodeWakeStateSnapshot(nodeId, generationTwo.key)?.lastWakeAtMs).toBeGreaterThan(0);
-    expect(getNodeWakeStateSnapshot(nodeId, generationOne.key)?.lastNudgeAtMs).toBeGreaterThan(0);
-    expect(getNodeWakeStateSnapshot(nodeId, generationTwo.key)?.lastNudgeAtMs).toBeGreaterThan(0);
+    for (const { key } of generations) {
+      const snapshot = getNodeWakeStateSnapshot(nodeId, key);
+      expect(snapshot?.lastWakeAtMs).toBeGreaterThan(0);
+      expect(snapshot?.lastNudgeAtMs).toBeGreaterThan(0);
+    }
     invalidateNodeWakeState(nodeId);
   });
 
@@ -1181,7 +1167,7 @@ describe("node.invoke APNs wake path", () => {
       vi.useFakeTimers();
       const nodeId = "policy-reload";
       directWake(nodeId);
-      const policy = (allow: boolean): MockNodeConfig => ({
+      const policy = (allow: boolean): OpenClawConfig => ({
         gateway: { nodes: { commands: { [allow ? "allow" : "deny"]: ["computer.act"] } } },
       });
       const admissionConfig = policy(initiallyAllowed);
@@ -1217,7 +1203,7 @@ describe("node.invoke APNs wake path", () => {
   );
 
   it("does not dispatch system.which when policy changes during final pairing validation", async () => {
-    let runtimeConfig: MockNodeConfig = {
+    let runtimeConfig: OpenClawConfig = {
       gateway: { nodes: { commands: { allow: ["system.which"] } } },
     };
     mocks.getRuntimeConfig.mockImplementation(() => runtimeConfig);
