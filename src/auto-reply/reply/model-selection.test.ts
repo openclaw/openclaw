@@ -1,4 +1,3 @@
-// Tests model selection resolution from directives, config, and session state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { getContextWindowCaches } from "../../agents/context-cache.js";
@@ -43,8 +42,6 @@ const catalogRuntimeMocks = vi.hoisted(() => {
   );
   return {
     loadModelCatalog,
-    // Delegate to the entries mock so per-test `loadModelCatalog.mockResolvedValueOnce`
-    // still drives selection; tests that need a degraded snapshot override this directly.
     loadModelCatalogSnapshot: vi.fn(async (params?: unknown) => {
       const entries = await loadModelCatalog(params);
       return { entries, routeVariants: entries, authoritative: true };
@@ -77,10 +74,10 @@ vi.mock("./session-entry-persistence.js", () => ({
 }));
 
 const authProfileStoreMock = vi.hoisted(() => {
-  let store = { version: 1, profiles: {} } as {
+  let store: {
     version: 1;
     profiles: Record<string, { type: "api_key"; provider: string; key: string }>;
-  };
+  } = { version: 1, profiles: {} };
   const ensureAuthProfileStoreAsync = vi.fn(() => store);
   const prepareAuthProfileProvider = vi.fn(async (): Promise<{ provider: string | undefined }> => ({
     provider: undefined,
@@ -108,8 +105,7 @@ vi.mock("../../agents/auth-profiles.runtime.js", async (importOriginal) => ({
   prepareAuthProfileProvider: authProfileStoreMock.prepareAuthProfileProvider,
 }));
 
-// Alias-aware stub: mirrors the real isStoredCredentialCompatibleWithAuthProvider
-// but inlines the claude-cli->anthropic alias so tests don't need live plugin metadata.
+// Resolve the deprecated CLI alias without loading live plugin metadata.
 vi.mock("../../agents/auth-profiles/order.js", () => ({
   isStoredCredentialCompatibleWithAuthProvider: ({
     provider,
@@ -121,18 +117,13 @@ vi.mock("../../agents/auth-profiles/order.js", () => ({
     const normalize = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, "");
     const resolveAuthKey = (v: string) => {
       const n = normalize(v);
-      // claude-cli is a deprecated choice id that resolves to the anthropic auth key
-      if (n === "claudecli") {
-        return "anthropic";
-      }
-      return n;
+      return n === "claudecli" ? "anthropic" : n;
     };
     const providerKey = resolveAuthKey(provider);
     const credentialKey = resolveAuthKey(credential.provider);
     if (credentialKey === providerKey) {
       return true;
     }
-    // OpenAI Codex compat: openai api_key credential works for openai-codex provider
     if (providerKey === "openaiapicodex" || providerKey === "openaicodex") {
       return credentialKey === "openai" && credential.type === "api_key";
     }
@@ -167,37 +158,34 @@ function selectSession(
 }
 
 describe("catalog and thinking selection", () => {
-  it.each([{ previous: null, observed: "max", supported: true }])(
-    "uses observed levels for reply thinking ($supported)",
-    async ({ previous, observed, supported }) => {
-      const stale = {
+  it("uses observed levels for reply thinking", async () => {
+    const stale = {
+      provider: "fixture",
+      id: "reasoner",
+      name: "Reasoner",
+      api: "openai-completions" as const,
+      baseUrl: "https://fixture.invalid/v1",
+      reasoning: true,
+      thinkingLevelMap: { max: null },
+    };
+    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([
+      { ...stale, thinkingLevelMap: { max: "max" } },
+    ]);
+    const state = await createInitialState(
+      { agents: { defaults: { model: "fixture/reasoner" } } },
+      "fixture",
+      "reasoner",
+      { preparedModelCatalog: { entries: [stale], routeVariants: [] } },
+    );
+    expect(
+      isThinkingLevelSupported({
         provider: "fixture",
-        id: "reasoner",
-        name: "Reasoner",
-        api: "openai-completions" as const,
-        baseUrl: "https://fixture.invalid/v1",
-        reasoning: true,
-        thinkingLevelMap: { max: previous },
-      };
-      vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([
-        { ...stale, thinkingLevelMap: { max: observed } },
-      ]);
-      const state = await createInitialState(
-        { agents: { defaults: { model: "fixture/reasoner" } } },
-        "fixture",
-        "reasoner",
-        { preparedModelCatalog: { entries: [stale], routeVariants: [] } },
-      );
-      expect(
-        isThinkingLevelSupported({
-          provider: "fixture",
-          model: "reasoner",
-          level: "max",
-          catalog: await state.resolveThinkingCatalog(),
-        }),
-      ).toBe(supported);
-    },
-  );
+        model: "reasoner",
+        level: "max",
+        catalog: await state.resolveThinkingCatalog(),
+      }),
+    ).toBe(true);
+  });
 
   it("retains prepared automatic-primary reasoning outside manual policy", async () => {
     const automatic = {
@@ -274,15 +262,11 @@ describe("catalog and thinking selection", () => {
     );
   });
 
-  it.each([
-    { hasModelDirective: true, capturedPolicy: true, expected: "ultra", unrestricted: false },
-  ])("keeps prepared thinking ownership (captured=$capturedPolicy)", async (fixture) => {
+  it("keeps prepared thinking ownership", async () => {
     const provider = "fixture-provider";
     const model = "fixture-model";
     const cfg: OpenClawConfig = {
-      agents: fixture.unrestricted
-        ? undefined
-        : { defaults: { models: { [`${provider}/${model}`]: { alias: "Fixture" } } } },
+      agents: { defaults: { models: { [`${provider}/${model}`]: { alias: "Fixture" } } } },
       models: {
         providers: {
           [provider]: {
@@ -309,14 +293,10 @@ describe("catalog and thinking selection", () => {
               id: provider,
               label: provider,
               auth: [],
-              ...(fixture.capturedPolicy
-                ? {
-                    resolveThinkingProfile: () => ({
-                      levels: [{ id: "off" }, { id: "max" }, { id: "ultra" }],
-                      defaultLevel: "ultra",
-                    }),
-                  }
-                : {}),
+              resolveThinkingProfile: () => ({
+                levels: [{ id: "off" }, { id: "max" }, { id: "ultra" }],
+                defaultLevel: "ultra",
+              }),
             },
           },
         ],
@@ -327,12 +307,12 @@ describe("catalog and thinking selection", () => {
       .mockReturnValue({ levels: [{ id: "off" }], defaultLevel: "off" });
     try {
       const state = await createInitialState(cfg, provider, model, {
-        hasModelDirective: fixture.hasModelDirective,
+        hasModelDirective: true,
         preparedModelCatalog,
       });
       await expect(
         state.resolveDefaultThinkingLevel({ provider, model, agentRuntime: "codex" }),
-      ).resolves.toBe(fixture.expected);
+      ).resolves.toBe("ultra");
       expect(ambient).not.toHaveBeenCalled();
     } finally {
       ambient.mockRestore();
