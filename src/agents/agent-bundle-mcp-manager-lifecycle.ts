@@ -60,7 +60,6 @@ type SessionMcpRuntimeManagerStore = {
 
 export type SessionMcpRuntimeManagerOpts = {
   scheduler: GatewayScheduler;
-  createRuntime?: CreateSessionMcpRuntime;
 };
 
 function parseRuntimeCacheSessionId(runtimeKey: string): string {
@@ -122,7 +121,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
      */
     runtimeWorkChains: new Map(),
     pendingDisposals: new Map(),
-    createRuntime: options.createRuntime ?? createSessionMcpRuntime,
+    createRuntime: createSessionMcpRuntime,
     runtimeSlots: new WeakMap(),
     liveRuntimeSlots: new Set(),
     scheduler: options.scheduler,

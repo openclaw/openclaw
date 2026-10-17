@@ -1033,6 +1033,14 @@ describe("session MCP runtime", () => {
         work.beginClose(reason);
       }
       let runtime: SessionMcpRuntime | undefined;
+      const runtimeModule = await import("./agent-bundle-mcp-runtime.js");
+      const nativeCreateRuntime = createSessionMcpRuntime;
+      const runtimeFactory = vi
+        .spyOn(runtimeModule, "createSessionMcpRuntime")
+        .mockImplementationOnce((params) => {
+          runtime = nativeCreateRuntime(params);
+          return runtime;
+        });
       let materialized: Awaited<ReturnType<typeof createBundleMcpToolRuntime>> | undefined;
       const pending = work.track(async () => {
         materialized = await createBundleMcpToolRuntime({
@@ -1043,10 +1051,6 @@ describe("session MCP runtime", () => {
               requestTimeoutMs: 30_000,
             }),
           }),
-          createRuntime: (params) => {
-            runtime = createSessionMcpRuntime(params);
-            return runtime;
-          },
         });
         return materialized;
       });
@@ -1081,10 +1085,14 @@ describe("session MCP runtime", () => {
         expect(runtime?.activeLeases).toBe(0);
         expect(() => process.kill(pid, 0)).toThrow();
       } finally {
-        await runtime?.dispose();
-        await pending.catch(() => {});
-        await materialized?.dispose();
-        await work.drain();
+        try {
+          await runtime?.dispose();
+          await pending.catch(() => {});
+          await materialized?.dispose();
+          await work.drain();
+        } finally {
+          runtimeFactory.mockRestore();
+        }
       }
     },
   );

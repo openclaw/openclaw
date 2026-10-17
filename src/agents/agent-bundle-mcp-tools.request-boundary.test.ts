@@ -1,7 +1,7 @@
 /** Tests configured MCP tools survive policy/splitting to the outbound request boundary. */
 import { GetPromptResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createBundleMcpToolRuntime,
@@ -12,6 +12,8 @@ import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "./embedded-agent-runner/effective-tool-policy.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 // Regression #76063: configured MCP tools must survive materialization, policy, and SDK splitting.
 function makeConfiguredRuntime(
@@ -58,10 +60,13 @@ function makeConfiguredRuntime(
 async function buildConfiguredMcpToolNamesAtRequestBoundary(params: {
   cfg: OpenClawConfig;
 }): Promise<string[]> {
+  const runtimeModule = await import("./agent-bundle-mcp-runtime.js");
+  vi.spyOn(runtimeModule, "createSessionMcpRuntime").mockImplementationOnce(() =>
+    makeConfiguredRuntime(),
+  );
   const runtime = await createBundleMcpToolRuntime({
     workspaceDir: "/workspace",
     cfg: params.cfg,
-    createRuntime: () => makeConfiguredRuntime(),
   });
   const filtered = applyFinalEffectiveToolPolicy({
     bundledTools: runtime.tools,

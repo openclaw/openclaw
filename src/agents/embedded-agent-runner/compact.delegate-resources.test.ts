@@ -312,6 +312,7 @@ function openTool(current: Fixture, name: string): Connection {
 // this fixture tests runtime custody, not either wire protocol.
 vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agent-bundle-mcp-tools.js")>();
+  const runtimeModule = await import("../agent-bundle-mcp-runtime.js");
   return {
     ...actual,
     createBundleMcpToolRuntime: async (
@@ -320,9 +321,9 @@ vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => {
       const current = fixture();
       const connection = openTool(current, "mcp");
       if (current.mode.startsWith("mcp-")) {
-        return actual.createBundleMcpToolRuntime({
-          ...params,
-          createRuntime: (input) => ({
+        const createRuntime = vi
+          .spyOn(runtimeModule, "createSessionMcpRuntime")
+          .mockImplementationOnce((input) => ({
             sessionId: input.sessionId,
             workspaceDir: input.workspaceDir,
             configFingerprint: "delegate-mcp",
@@ -345,8 +346,12 @@ vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => {
                 closeConnection(connection);
               }
             },
-          }),
-        });
+          }));
+        try {
+          return await actual.createBundleMcpToolRuntime(params);
+        } finally {
+          createRuntime.mockRestore();
+        }
       }
       const track = captureAsyncWorkTracker();
       if (current.mode === "preparation-failure") {
