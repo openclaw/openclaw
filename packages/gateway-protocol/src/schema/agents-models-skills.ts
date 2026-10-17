@@ -28,6 +28,12 @@ export type {
 } from "./agents-avatar-generate.js";
 export { SkillsDetailResultSchema } from "./skill-detail.js";
 export { AgentKindSchema, AgentOwnershipSchema };
+export {
+  AgentsCreateParamsSchema,
+  AgentsCreateResultSchema,
+  type AgentsCreateParams,
+  type AgentsCreateResult,
+} from "./agents-create.js";
 export { AgentsListParamsSchema, type AgentsListParams } from "./agents-list-session-placement.js";
 
 export { SkillsSearchParamsSchema, SkillsSearchResultSchema } from "./skills-search.js";
@@ -102,26 +108,6 @@ export const AgentsListResultSchema = closedObject({
   mainKey: NonEmptyString,
   scope: Type.Union([Type.Literal("per-sender"), Type.Literal("global")]),
   agents: Type.Array(AgentSummarySchema),
-});
-
-/** Creates a configured agent; the server supplies an omitted workspace. */
-export const AgentsCreateParamsSchema = closedObject({
-  name: NonEmptyString,
-  expectedOwnerId: Type.Optional(NonEmptyString),
-  workspace: Type.Optional(NonEmptyString),
-  model: Type.Optional(NonEmptyString),
-  emoji: Type.Optional(Type.String()),
-  avatar: Type.Optional(Type.String()),
-});
-
-/** Result returned after creating an agent. */
-export const AgentsCreateResultSchema = closedObject({
-  ok: Type.Literal(true),
-  agentId: NonEmptyString,
-  name: NonEmptyString,
-  workspace: NonEmptyString,
-  agentDir: Type.Optional(NonEmptyString),
-  model: Type.Optional(NonEmptyString),
 });
 
 /** Updates mutable agent identity, workspace, and model fields; null clears the model override. */
@@ -779,8 +765,6 @@ export const ToolsInvokeResultSchema = closedObject({
 export type AgentKind = Static<typeof AgentKindSchema>;
 export type AgentSummary = Static<typeof AgentSummarySchema>;
 export type GatewayAgentRuntime = Static<typeof GatewayAgentRuntimeSchema>;
-export type AgentsCreateParams = Static<typeof AgentsCreateParamsSchema>;
-export type AgentsCreateResult = Static<typeof AgentsCreateResultSchema>;
 export type AgentsUpdateParams = Static<typeof AgentsUpdateParamsSchema>;
 export type AgentsUpdateResult = Static<typeof AgentsUpdateResultSchema>;
 export type AgentsDeleteParams = Static<typeof AgentsDeleteParamsSchema>;

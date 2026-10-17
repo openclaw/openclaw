@@ -470,6 +470,7 @@ export function loadUiPreferences(
       sidebarAgentsMode: parsed.sidebarAgentsMode === "roster" ? "roster" : "chip",
       sidebarPreTeamScope: normalizeSidebarPreTeamScope(parsed.sidebarPreTeamScope),
       sidebarCollapsedAgentIds: normalizeUniqueTrimmedStringList(parsed.sidebarCollapsedAgentIds),
+      sidebarRecentlyCreatedAgentId: normalizeOptionalString(parsed.sidebarRecentlyCreatedAgentId),
       sidebarEntries: profileId
         ? (personalNavigation?.railShortcuts ?? defaults.sidebarEntries)
         : (normalizeSidebarEntries(parsedRecord.railShortcuts) ?? defaults.sidebarEntries),
@@ -641,6 +642,7 @@ export function saveSettings(
     showAdvancedSettings: next.showAdvancedSettings === true ? true : undefined,
     // Empty pin list is the default; only real pins persist.
     pinnedAgentIds: next.pinnedAgentIds?.length ? next.pinnedAgentIds : undefined,
+    sidebarRecentlyCreatedAgentId: normalizeOptionalString(next.sidebarRecentlyCreatedAgentId),
     textScale: next.textScale !== undefined ? normalizeTextScale(next.textScale) : undefined,
     customTheme: next.customTheme || undefined,
     sessionsByGateway,

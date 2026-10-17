@@ -35,7 +35,41 @@ class ScreenshotDiagnostics
     end
   end
 
+  # The runner can lose a runtime after startup inventory. Preserve the exact
+  # failed selection before observing current simulator and developer state.
+  def simulator_selection_failure(name, selection)
+    runtime_images = command("xcrun", "simctl", "runtime", "list", "--json")
+    @events << {
+      "phase" => "simulator-selection", "deviceName" => name, "outcome" => "failed",
+      "startedAt" => Time.now.utc.iso8601,
+      "selection" => selection,
+      "developerDir" => ENV["DEVELOPER_DIR"],
+      "xcodePath" => command("/usr/bin/xcode-select", "-p").strip,
+      "simctlPath" => command("xcrun", "--find", "simctl").strip,
+      "devices" => command("xcrun", "simctl", "list", "devices", "--json"),
+      "runtimes" => command("xcrun", "simctl", "list", "runtimes", "--json"),
+      "runtimeImages" => runtime_images,
+      "runtimeMatches" => command("xcrun", "simctl", "runtime", "match", "list", "-v", "--json"),
+      "watchRuntimeProfiles" => watch_runtime_profiles(runtime_images)
+    }
+    persist
+  end
+
   private
+
+  def watch_runtime_profiles(runtime_images)
+    JSON.parse(runtime_images).values.each_with_object([]) do |runtime, profiles|
+      path = runtime["runtimeBundlePath"]
+      next unless runtime["platformIdentifier"] == "com.apple.platform.watchsimulator" && path
+      profiles << {
+        "runtimeIdentifier" => runtime["runtimeIdentifier"], "bundlePath" => path,
+        "bundleDirectoryExists" => File.directory?(path),
+        "infoReadable" => File.readable?(File.join(path, "Contents", "Info.plist"))
+      }
+    end
+  rescue JSON::ParserError
+    []
+  end
 
   def persist
     @persist.call

@@ -58,8 +58,13 @@ function resolvePluginAutoEnableCandidateReason(candidate: PluginAutoEnableCandi
   throw new Error("Unsupported plugin auto-enable candidate");
 }
 
-function isPluginExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
-  const builtInChannelId = normalizeChatChannelId(pluginId);
+function isPluginExplicitlyDisabled(
+  cfg: OpenClawConfig,
+  pluginId: string,
+  manifestRegistry: PluginManifestRegistry,
+): boolean {
+  const plugin = manifestRegistry.plugins.find((record) => record.id === pluginId);
+  const builtInChannelId = plugin?.channels.length === 0 ? null : normalizeChatChannelId(pluginId);
   if (builtInChannelId) {
     const channels = cfg.channels;
     if (asOptionalRecord(channels?.[builtInChannelId])?.enabled === false) {
@@ -125,6 +130,10 @@ function resolveAutoEnableChannelId(params: {
   const plugin = params.manifestRegistry.plugins.find(
     (record) => record.id === params.entry.pluginId,
   );
+  // An admitted manifest already establishes that a provider/tool owns no channels.
+  if (plugin?.channels.length === 0) {
+    return null;
+  }
   const channelId =
     params.entry.kind === "channel-configured"
       ? (normalizeChatChannelId(params.entry.channelId) ?? params.entry.channelId)
@@ -191,13 +200,10 @@ export function hasMaterialPluginEntryConfig(entry: unknown): boolean {
 }
 
 function isKnownPluginId(pluginId: string, manifestRegistry: PluginManifestRegistry): boolean {
-  if (normalizeChatChannelId(pluginId)) {
+  if (manifestRegistry.plugins.some((plugin) => plugin.id === pluginId)) {
     return true;
   }
-  return (
-    manifestRegistry.plugins.some((plugin) => plugin.id === pluginId) ||
-    isOfficialExternalPluginId(pluginId)
-  );
+  return isOfficialExternalPluginId(pluginId) || normalizeChatChannelId(pluginId) !== null;
 }
 
 function materializeConfiguredPluginEntryAllowlist(params: {
@@ -220,7 +226,7 @@ function materializeConfiguredPluginEntryAllowlist(params: {
       isNativeSessionCatalogOptOutOnly(pluginId, entry) ||
       !hasMaterialPluginEntryConfig(entry) ||
       isPluginDenied(next, pluginId) ||
-      isPluginExplicitlyDisabled(next, pluginId) ||
+      isPluginExplicitlyDisabled(next, pluginId, params.manifestRegistry) ||
       allow.includes(pluginId) ||
       !isKnownPluginId(pluginId, params.manifestRegistry)
     ) {
@@ -293,7 +299,10 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
       entry,
       manifestRegistry: params.manifestRegistry,
     });
-    if (isPluginDenied(next, entry.pluginId) || isPluginExplicitlyDisabled(next, entry.pluginId)) {
+    if (
+      isPluginDenied(next, entry.pluginId) ||
+      isPluginExplicitlyDisabled(next, entry.pluginId, params.manifestRegistry)
+    ) {
       continue;
     }
     if (
@@ -304,7 +313,8 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
         env: params.env,
         registry: params.manifestRegistry,
         isPluginDenied,
-        isPluginExplicitlyDisabled,
+        isPluginExplicitlyDisabled: (config, pluginId) =>
+          isPluginExplicitlyDisabled(config, pluginId, params.manifestRegistry),
         preferOverCache,
       })
     ) {

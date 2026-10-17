@@ -211,15 +211,17 @@ it.each([
             revokeSqliteDatabaseAdmissionsForPath(databasePath);
             let witnessed = 0;
             const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+              admit(request, grant);
               if (
                 request.stage === "prepare" &&
                 isRecord(request.facts) &&
                 request.facts.kind === "agent-registration-committed"
               ) {
+                // Acknowledge the real COMMIT before retiring readiness; refused
+                // receipt settlement belongs to the database owner's failure contract.
                 witnessed += 1;
                 rotateAgentEventLifecycleGeneration();
               }
-              admit(request, grant);
             });
             restore = () => admission.mockRestore();
             assertBoundary = () => {

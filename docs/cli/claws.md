@@ -26,7 +26,8 @@ Authoring and inspecting local Claw packages do not require the Labs toggle.
 
 The CLI accepts a local package directory, `CLAW.md`, or grouped JSON manifest.
 Publishing and searching Claws through ClawHub use the separate registry
-surface. The Control UI can browse official Claws from **Agents**.
+surface. The Control UI can browse official Claws from **Pages → Claws** at `/claws`
+when **Claws** is enabled in **Settings → Labs**.
 
 ## Author locally
 

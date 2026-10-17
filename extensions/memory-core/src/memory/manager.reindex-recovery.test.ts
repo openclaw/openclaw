@@ -678,7 +678,7 @@ describe("memory manager reindex recovery", () => {
     },
   );
 
-  it("bounds the shadow cache before any entries reach the primary", async () => {
+  it("bounds the canonical cache before every transaction commits", async () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
     const interceptedPaths: Array<string | undefined> = [];
@@ -709,8 +709,8 @@ describe("memory manager reindex recovery", () => {
     for (let i = 0; i < 4; i += 1) {
       await fs.writeFile(path.join(memoryDir, `${i}.md`), `unique cache content ${i}`);
     }
-    // Reject transient overflow too: checking only the final row count misses
-    // primary-file high-water growth followed by post-publication deletion.
+    // Allow UPSERT-before-prune within a transaction, but reject overflow at
+    // every commit so a later transaction cannot hide a published excess.
     await memoryManager.sync({ reason: "cli", force: true });
 
     expect(interceptedPaths.length).toBeGreaterThan(0);

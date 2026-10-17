@@ -691,7 +691,7 @@ describe("assistant panel", () => {
     provider.setContext({ ...context });
     await restored.updateComplete;
     expect(restored.assistantPanelOpen).toBe(true);
-    restored.pageRouteId = "agents-home";
+    restored.pageRouteId = "sessions";
     await restored.updateComplete;
     expect(restored.assistantPanelOpen).toBe(true);
   });

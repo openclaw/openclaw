@@ -4,10 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
-import {
-  SESSION_COMPOSER_FOCUS_PARAM,
-  SESSION_FACE_PREFERENCE_PARAM,
-} from "../../lib/sessions/route-navigation.ts";
+import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -141,15 +138,9 @@ describe("AppSidebar agent chip", () => {
       expect(sidebar.querySelector(".sidebar-agent-menu")?.textContent).not.toContain(
         "Private agent",
       );
-      const capabilities = sidebar.querySelector('[data-value="command:capabilities"]');
-      if (discovery === "loading") {
-        expect(capabilities).toBeNull();
-      } else {
-        expect(capabilities?.textContent).toMatch(/shared/i);
-      }
-      expect(
-        sidebar.querySelector('[data-value="command:agent-settings"]')?.hasAttribute("disabled"),
-      ).toBe(discovery === "loading");
+      expect(sidebar.querySelectorAll(".sidebar-agent-menu__settings")).toHaveLength(
+        discovery === "loading" ? 0 : 1,
+      );
     },
   );
 
@@ -187,7 +178,7 @@ describe("AppSidebar agent chip", () => {
       const labels = [
         ...sidebar.querySelectorAll(".sidebar-agent-menu .agent-select__option-label"),
       ].map((element) => element.textContent?.trim());
-      expect(labels).toEqual(["Show all", "Workspace Molty", "rust-claw"]);
+      expect(labels).toEqual(["Create new agent", "Show all", "Workspace Molty", "rust-claw"]);
     });
     await vi.waitFor(() => {
       const rustRow = [
@@ -271,37 +262,19 @@ describe("AppSidebar agent chip", () => {
     const menu = sidebar.querySelector(".sidebar-agent-menu");
     expect(menu).not.toBeNull();
     expect(menu?.querySelector(".sidebar-pair-mobile")).toBeNull();
-    expect(menu?.querySelectorAll('[role="separator"]')).toHaveLength(2);
-    expect(
-      menu
-        ?.querySelector('[role="separator"]')
-        ?.previousElementSibling?.classList.contains("sidebar-agent-menu__agent-list"),
-    ).toBe(true);
+    expect(menu?.querySelectorAll('[role="separator"]')).toHaveLength(0);
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).toBeNull();
     expect(
       [...(menu?.querySelectorAll('[role^="menuitem"]') ?? [])].map((element) =>
         element.getAttribute("data-value"),
       ),
-    ).toEqual([
-      "scope:all",
-      "agent:main",
-      "agent:research",
-      "command:new-agent",
-      "command:agents-directory",
-      "command:capabilities",
-      "command:agent-settings",
-    ]);
+    ).toEqual(["command:new-agent", "scope:all", "agent:main", "agent:research"]);
 
     const commands = [...(menu?.querySelectorAll('[data-value^="command:"]') ?? [])];
-    expect(commands.map((item) => item.textContent?.trim())).toEqual([
-      "New agent",
-      "See all agents",
-      "What can Molty do?",
-      "Molty settings",
-    ]);
+    expect(commands.map((item) => item.textContent?.trim())).toEqual(["Create new agent"]);
     for (const command of commands) {
-      expect(command.querySelector(".oc-menu-item__icon svg")).not.toBeNull();
+      expect(command.querySelector(".sidebar-agent-menu__create-icon svg")).not.toBeNull();
     }
 
     expect(menu?.querySelector("[aria-checked], .session-menu__check")).toBeNull();
@@ -336,45 +309,6 @@ describe("AppSidebar agent chip", () => {
     });
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
   });
-
-  it.each(["chip", "roster"] as const)(
-    "requests composer focus from the active agent's capabilities in %s mode",
-    async (mode) => {
-      const gateway = createGateway({} as GatewayBrowserClient);
-      const { sidebar, context } = await mountSidebar(
-        gateway,
-        createSessions("main", ["agent:main:main"]),
-        "panel",
-        TWO_AGENTS,
-      );
-      const onNavigate = vi.fn();
-      sidebar.connected = true;
-      sidebar.onNavigate = onNavigate;
-      sidebar.activeRouteId = "skills";
-      context.agentSelection.set("research");
-      context.agentSelection.setScope(null);
-      sidebar.sidebarAgentsMode = mode;
-      await sidebar.updateComplete;
-
-      sidebar
-        .querySelector<HTMLButtonElement>(
-          ".sidebar-agent-card__main, .sidebar-workspace-header__main",
-        )
-        ?.click();
-      await sidebar.updateComplete;
-      const item = sidebar.querySelector<HTMLElement>('[data-value="command:capabilities"]');
-      expect(item?.textContent).toContain("What can research do?");
-      item?.click();
-      await sidebar.updateComplete;
-
-      await vi.waitFor(() => expect(onNavigate).toHaveBeenCalledOnce());
-      const options = onNavigate.mock.calls[0]?.[1] as { pathname: string; search: string };
-      expect(options.pathname).toBe("/chat/research");
-      const search = new URLSearchParams(options.search);
-      expect(search.get("draft")).toBe("What can you do?");
-      expect(search.get(SESSION_COMPOSER_FOCUS_PARAM)).toBe("1");
-    },
-  );
 
   it("drops the menu below the agent card instead of covering it", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
@@ -484,7 +418,7 @@ describe("AppSidebar agent chip", () => {
       await sidebar.updateComplete;
       sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
       await sidebar.updateComplete;
-      expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
+      expect(sidebar.querySelector(".sidebar-agent-menu [role=searchbox]")).toBeNull();
       expect(sidebar.querySelector(".sidebar-agent-menu__agent-list")).not.toBeNull();
       expect(
         [

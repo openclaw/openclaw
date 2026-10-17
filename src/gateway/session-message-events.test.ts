@@ -343,7 +343,12 @@ describe("session.message websocket events", () => {
     const watchedWs = await harness.openWs();
     const instanceId = "presence-watched-sessions";
     try {
-      await connectOk(observerWs, { scopes: ["operator.read"] });
+      const observerHello = await connectOk(observerWs, { scopes: ["operator.read"] });
+      const observerConnectionId = requireRecord(
+        requireRecord(observerHello, "observer hello").server,
+        "observer server",
+      ).connId;
+      expect(observerConnectionId).toEqual(expect.any(String));
       const watchedHello = await connectOk(watchedWs, {
         scopes: ["operator.read"],
         client: {
@@ -399,6 +404,7 @@ describe("session.message websocket events", () => {
       const declaredEvent = await declaredPresence;
       const declaredEntry = findWatchedEntry(declaredEvent);
       expect(declaredEntry?.watchedSessions).toEqual(declaredKeys);
+      expect(declaredEntry?.deviceId).toEqual(expect.any(String));
       const ownerProfile = (await listProfiles()).find((profile) => profile.emails.length === 0);
       expect(ownerProfile).toBeDefined();
       expect(declaredEntry?.user).toEqual({
@@ -480,19 +486,30 @@ describe("session.message websocket events", () => {
         return Array.isArray(entry?.watchedSessions) && entry.watchedSessions[0] === replacementKey;
       });
       await rpcReq(watchedWs, "sessions.viewers.set", { sessionKeys: [replacementKey] });
-      await redeclaredPresence;
+      const redeclaredEvent = await redeclaredPresence;
 
+      // The live same-device observer keeps its row; the disconnected tab is removed.
       const disconnectPresence = onceMessage(observerWs, (message) => {
-        // A live sibling with the same signed device keeps the closed tab out of the roster.
-        const record = requireRecord(message, "presence event");
-        return record.event === "presence" && findWatchedEntry(record) === undefined;
+        return (
+          message.type === "event" &&
+          message.event === "presence" &&
+          findWatchedEntry(message) === undefined
+        );
       });
       watchedWs.close();
       const disconnectedEvent = await disconnectPresence;
-      expect(findWatchedEntry(disconnectedEvent)).toBeUndefined();
-      const hiddenPresenceVersion = hiddenEvent.stateVersion?.presence;
+      expect(requireRecord(disconnectedEvent.payload, "presence payload").presence).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            connectionId: observerConnectionId,
+            deviceId: declaredEntry?.deviceId,
+            reason: "connect",
+          }),
+        ]),
+      );
+      const redeclaredPresenceVersion = redeclaredEvent.stateVersion?.presence;
       expect(disconnectedEvent.stateVersion?.presence).toBeGreaterThan(
-        typeof hiddenPresenceVersion === "number" ? hiddenPresenceVersion : 0,
+        typeof redeclaredPresenceVersion === "number" ? redeclaredPresenceVersion : 0,
       );
     } finally {
       observerWs.close();

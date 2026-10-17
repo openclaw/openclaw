@@ -4,6 +4,7 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
+  agentChip: TranslationMap;
   pluginsPage: TranslationMap & Record<"installed" | "official" | "install", string>;
   mcpApp: TranslationMap;
   linkReader: TranslationMap;

@@ -2,7 +2,7 @@ import path from "node:path";
 import type { StatementSync } from "node:sqlite";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -351,7 +351,8 @@ describe("postWorkshopChangeNotice", () => {
       lifecycleRevision: currentGeneration.lifecycleRevision,
       updatedAt: 1,
     };
-    await replaceSessionEntry(currentGeneration, entry);
+    // Fixture commits must not schedule unrelated maintenance inside the SQL observation window.
+    replaceSessionEntrySync(currentGeneration, entry);
     const { withSessionEntriesFromStoresInWorker } = await vi.importActual<
       typeof import("../../config/sessions/session-entry-read-runtime.js")
     >("../../config/sessions/session-entry-read-runtime.js");
@@ -392,7 +393,7 @@ describe("postWorkshopChangeNotice", () => {
       await publish();
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
       expect(reads).toEqual([]);
-      await replaceSessionEntry(currentGeneration, {
+      replaceSessionEntrySync(currentGeneration, {
         ...entry,
         lifecycleRevision: "committed-reset",
         updatedAt: 2,

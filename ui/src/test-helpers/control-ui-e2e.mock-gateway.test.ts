@@ -10,6 +10,7 @@ import {
   PluginsCatalogBrowseResultSchema,
   PluginsCatalogCategoriesResultSchema,
 } from "../../../packages/gateway-protocol/src/schema/plugins.ts";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockGateway,
@@ -23,6 +24,23 @@ type ResponseFrame = {
   type?: string;
   payload?: Record<string, unknown>;
 };
+
+it.for([false, true])(
+  "advertises catalog snapshots only for a fixture that supplies them: %s",
+  async (suppliesSnapshot, { gatewayPage }) => {
+    const capabilities = suppliesSnapshot ? [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT] : [];
+    gatewayPage.execute(
+      createControlUiMockGatewayInitScript(
+        suppliesSnapshot ? { connectCapabilities: capabilities } : {},
+      ),
+    );
+    const { frames } = gatewayPage.connect();
+    await flushMockTimers();
+    expect(frames.find((frame) => frame.event === "connect.challenge")).toMatchObject({
+      payload: { capabilities },
+    });
+  },
+);
 
 it("serves protocol-valid empty channel status and pairing defaults", async ({ gatewayPage }) => {
   gatewayPage.execute(createControlUiMockGatewayInitScript());

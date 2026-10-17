@@ -157,6 +157,14 @@ export function createChatPageState(
     return pane && !retainedSessions.unboundPaneIds.has(pane.id) ? pane : undefined;
   }
 
+  function routeLayout(): ChatSplitLayout {
+    // Admission reveals the new chat before the post-render route binding saves
+    // its split position; never reveal the previous active transcript in between.
+    return state.splitLayout && props.data?.creation?.admitted && props.data !== processedRouteData
+      ? setPaneSession(state.splitLayout, state.splitLayout.activePaneId, paneData().sessionKey)
+      : (state.splitLayout ?? classicLayout());
+  }
+
   function updated(presentationChanged: boolean, renderedSnapshot: ChatPageSnapshot | null) {
     prefetch();
     // Cancelling retained previews republishes pane state; suspend only on a hiding edge.
@@ -170,7 +178,7 @@ export function createChatPageState(
       viewerPresence.clear();
       return;
     }
-    const layout = state.splitLayout ?? classicLayout();
+    const layout = routeLayout();
     resumeStagedPanes(host, layout, state.narrow);
     viewerPresence.sync(context().gateway, layout, state.narrow, retainedSessions.unboundPaneIds);
     closeFocus.restore(state.splitLayout, mcpAppUnmountGate.retiring);
@@ -625,28 +633,18 @@ export function createChatPageState(
 
   // MCP teardown discovers retained native pane hosts across their component boundary.
   function render() {
-    if (pendingCreate()) {
-      return mcpAppUnmountGate.render(
-        "pending-create",
-        () => {
-          if (!conversationPresented()) {
-            return null;
-          }
-          const layout = classicLayout();
-          return createSnapshot(
-            layout,
-            false,
-            new Map([[layout.activePaneId, [props.data.sessionKey]]]),
-          );
-        },
-        () => [...host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")],
-      );
-    }
-    const layout = state.splitLayout ?? classicLayout();
-    const retained = retention.read().retain(panesOf(layout));
+    // Pending creation hides retained chats without remounting their startup owners on admission.
+    const layout = pendingCreate() ? classicLayout() : routeLayout();
+    const retained = pendingCreate()
+      ? retention.read().retainProvisional(panesOf(layout))
+      : retention.read().retain(panesOf(layout));
     const nextPaneKeys = chatPagePaneOwnerKeys(context(), layout, retained);
     const renderValue = () =>
-      createSnapshot(layout, Boolean(state.splitLayout && !singleBoundPane()), retained);
+      createSnapshot(
+        layout,
+        !pendingCreate() && Boolean(state.splitLayout && !singleBoundPane()),
+        retained,
+      );
     return mcpAppUnmountGate.render(JSON.stringify([...nextPaneKeys]), renderValue, () =>
       [...host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].filter(
         (pane) => !nextPaneKeys.has(pane.dataset.mcpAppOwnerKey ?? ""),

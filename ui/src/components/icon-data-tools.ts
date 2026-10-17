@@ -30,6 +30,13 @@ export function hasKeyboardIcon(symbol: string): symbol is KeyboardIconSymbol {
 }
 
 export const toolIconData = {
+  agentsConnected: strokeIconData([
+    ["path", { d: "M12 8v4M5 16v-4h14v4" }],
+    ["rect", { x: "8", y: "2", width: "8", height: "6", rx: "1.5" }],
+    ["rect", { x: "1", y: "16", width: "8", height: "6", rx: "1.5" }],
+    ["rect", { x: "15", y: "16", width: "8", height: "6", rx: "1.5" }],
+    ["path", { d: "M10.5 5h.01M13.5 5h.01M3.5 19h.01M6.5 19h.01M17.5 19h.01M20.5 19h.01" }],
+  ]),
   bookOpenText: strokeIconData([
     ["path", { d: "M12 5v16M16 13h2M16 9h2" }],
     [
@@ -219,6 +226,10 @@ export const toolIconData = {
   ]),
   bookmark: strokeIconData([
     ["path", { d: "m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" }],
+  ]),
+  circlePlus: strokeIconData([
+    ["circle", { cx: "12", cy: "12", r: "9" }],
+    ["path", { d: "M8 12h8M12 8v8" }],
   ]),
   plus: strokeIconData([["path", { d: "M5 12h14M12 5v14" }]]),
   gitBranch: strokeIconData([

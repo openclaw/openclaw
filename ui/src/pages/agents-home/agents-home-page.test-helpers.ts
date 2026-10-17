@@ -23,7 +23,7 @@ import {
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
-import { AgentsHomePage } from "./agents-home-page.tsx";
+import { ClawsPage } from "../claws/page.tsx";
 
 const roster: AgentsListResult = {
   defaultId: "harbor",
@@ -53,6 +53,7 @@ export const workflowOperator = {
 
 type PageOptions = {
   clawsEnabled?: boolean;
+  pathname?: string;
   workspaceFileNames?: string[];
   applyResult?: {
     agentId: string;
@@ -336,9 +337,16 @@ export function createPage(options: PageOptions = {}) {
   };
   const baselineEventListeners = eventListeners.size;
   const solidProvider = createSolidApplicationContextProvider(context);
-  const view = mountSolid(() => createComponent(AgentsHomePage, {}), {
-    wrapper: solidProvider.wrapper,
-  });
+  const view = mountSolid(
+    () =>
+      createComponent(ClawsPage, {
+        routeData: {
+          basePath: "",
+          location: { pathname: options.pathname ?? "/claws", search: "", hash: "" },
+        },
+      }),
+    { wrapper: solidProvider.wrapper },
+  );
   const page = view.container;
   disposers.push(() => {
     view.unmount();

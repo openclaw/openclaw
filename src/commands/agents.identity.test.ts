@@ -96,6 +96,36 @@ describe("agents set-identity command", () => {
     setAgents({ entries: { main: {} } });
   });
 
+  it.each([
+    {
+      label: "renames the synchronized roster label after the identity conversation",
+      name: "New Bot",
+      update: { name: "Pip" },
+      expectedName: "Pip",
+      expectedIdentity: { name: "Pip" },
+    },
+    {
+      label: "preserves a separate operator roster label when identity changes",
+      name: "Research assistant",
+      update: { name: "Pip" },
+      expectedName: "Research assistant",
+      expectedIdentity: { name: "Pip" },
+    },
+    {
+      label: "preserves the roster label for an emoji-only identity update",
+      name: "New Bot",
+      update: { emoji: "🐦" },
+      expectedName: "New Bot",
+      expectedIdentity: { name: "New Bot", emoji: "🐦" },
+    },
+  ])("$label", async ({ name, update, expectedName, expectedIdentity }) => {
+    setAgents({ entries: { main: { name, identity: { name: "New Bot" } } } });
+
+    await agentsSetIdentityCommand({ agent: "main", ...update }, runtime);
+
+    expect(writtenAgent()).toMatchObject({ name: expectedName, identity: expectedIdentity });
+  });
+
   it("resolves --from-identity against the selected agent workspace", async () => {
     const { root, workspace } = await createIdentityWorkspace();
     await writeIdentityFile(workspace, ["- Name: Workspace Agent"]);

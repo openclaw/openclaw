@@ -94,6 +94,35 @@ describe("agent run session target", () => {
     await expectKeyedTarget({ agentId: "main", sessionId }, sessionKey);
   });
 
+  it("keeps detached identity independent of a stored row with the same session id", async () => {
+    const sessionId = "detached-session";
+    const config: OpenClawConfig = { session: { store: storePath } };
+    await seed(sessionId, "agent:main:stored");
+    const detached = {
+      agentId: "main",
+      config,
+      sessionId,
+      sessionPersistence: "detached" as const,
+    };
+
+    await expect(
+      resolveAgentRunSessionTarget({ ...detached, sessionKey: " Fresh-Key " }),
+    ).resolves.toMatchObject({ sessionId, sessionKey: "agent:main:fresh-key" });
+    await expect(resolveAgentRunSessionTarget(detached, "create")).resolves.toMatchObject({
+      sessionId,
+      sessionKey: "agent:main:detached-session",
+    });
+    await expect(resolveAgentRunSessionTarget(detached)).rejects.toMatchObject({
+      code: "session-key-missing",
+    });
+    await expect(
+      resolveAgentRunSessionTarget({ ...detached, sessionKey: "agent:other:detached" }),
+    ).rejects.toThrow('belongs to "other"');
+    await expect(
+      resolveAgentRunSessionTarget({ agentId: "main", config, sessionId }),
+    ).resolves.toMatchObject({ sessionId, sessionKey: "agent:main:stored" });
+  });
+
   it("resolves an existing bare row through its persisted fixed-store owner", async () => {
     const sessionId = "fixed-owner-session";
     await seed(sessionId, "global", "ops");

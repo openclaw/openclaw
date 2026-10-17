@@ -1,9 +1,21 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { SESSION_COMPOSER_FOCUS_PARAM } from "../../lib/sessions/route-navigation.ts";
+import {
+  SESSION_COMPOSER_FOCUS_PARAM,
+  SESSION_DASHBOARD_EXPANDED_PARAM,
+} from "../../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 
 type RouteDraftHint = { draft?: string; focusComposer?: boolean };
 type RouteDraftData = { sessionKey: string; draft?: string };
+
+export function sessionRouteHints(location: RouteLocation) {
+  return {
+    ...draftRouteDataFromLocation(location),
+    ...(new URLSearchParams(location.search).get(SESSION_DASHBOARD_EXPANDED_PARAM) === "expanded"
+      ? { dashboardExpanded: true as const }
+      : {}),
+  };
+}
 
 export function locationWithoutDraft(
   location: RouteLocation,

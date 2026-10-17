@@ -23,12 +23,21 @@ import {
 import type { ExactSessionEntry, SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
   readSessionEntryByIdInDatabase,
+  readSessionKeyBySessionIdInDatabase,
   readExactSessionEntryRow,
   readSessionEntryRow,
   readQualifiedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
-import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import type { SessionEntryReadScope } from "./session-accessor.types.js";
+import {
+  resolveSqliteScope,
+  resolveSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
+import type {
+  SessionEntryReadScope,
+  SessionTranscriptReadScope,
+} from "./session-accessor.types.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
   readWithCanonicalSessionReaderContinuation,
@@ -332,6 +341,25 @@ export function loadExactSessionEntryCandidates(
   }
   const result = withOpenClawAgentDatabaseReadOnly(read, options);
   return result.found ? result.value : [];
+}
+
+/** Resolves the persisted session key for a SQLite transcript session id. */
+export function resolveSessionKeyBySessionId(
+  scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionId" | "storePath">,
+): string | undefined {
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    return memory.actor.storage!.readCurrent(
+      { type: "session.entry.readById", input: { sessionId: scope.sessionId } },
+      memory.authority,
+    )?.sessionKey;
+  }
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readSessionKeyBySessionIdInDatabase(database, resolved.sessionId),
+    toDatabaseOptions(resolved),
+  );
+  return result.found ? result.value : undefined;
 }
 
 /** Loads a visible current ID, falling back to legacy trimmed IDs only on an exact miss. */

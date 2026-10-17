@@ -1,16 +1,18 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
-import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
+import { createApplicationAgent } from "../app/create-agent.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { patchSettings } from "../app/settings.ts";
-import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { registerAgentCreationEnglish } from "../i18n/locales/en-agent-creation.ts";
 import { openEditor } from "../lib/editor-links.ts";
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import type { IdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
-import { projectOverlays } from "../lib/reactive/application.ts";
+import { projectGateway, projectOverlays } from "../lib/reactive/application.ts";
+import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { projectTheme } from "../lib/reactive/theme.ts";
 import { categoryClearReturnsToGroups } from "../lib/sessions/grouping.ts";
 import {
   canArchiveSessionRow,
@@ -41,6 +43,10 @@ import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
 import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
+
+registerAgentCreationEnglish();
+
+export { focusSidebarAgentMenu } from "./app-sidebar-agent-menu.tsx";
 
 export {
   renderSidebarCatalogViewMenuForMenus,
@@ -104,32 +110,35 @@ export function renderSidebarAgentMenuForMenus(
   avatars: () => IdentityAvatars,
 ): JSX.Element {
   const trigger = menus.triggers.get("agent");
-  const chipAgent = createMemo(() => host.activeChipAgent());
-  const activeName = createMemo(() => {
-    const current = chipAgent();
-    return current.agent ? normalizeAgentLabel(current.agent, current.identity) : "";
+  const agentState = createMemo(() => {
+    const source = host.sessionDataContext?.agents;
+    return source && projectAgents(source);
   });
+  const gateway = createMemo(() => {
+    const source = host.sessionDataContext?.gateway;
+    return source && projectGateway(source);
+  });
+  const preferences = createMemo(() => {
+    const source = host.sessionDataContext?.theme;
+    return source && projectTheme(source).preferences;
+  });
+  const chipAgent = createMemo(() => host.activeChipAgent());
   return (
     <SidebarAgentMenu
       {...{
         position,
         basePath: host.basePath,
         activeId: chipAgent().agent ? chipAgent().activeId : "",
-        activeName: activeName(),
         agents: chipAgent().agents,
         identities: chipAgent().identities,
         pinnedAgentIds: host.pinnedAgentIds,
-        onTogglePinnedAgent: async (agentId) => {
-          if (host.sessionDataContext) {
-            togglePinnedAgent(host.sessionDataContext.navigation, agentId);
-            await menus.commit();
-          }
-        },
-        rosterMode: host.sidebarAgentsMode === "roster",
+        rosterMode: host.sidebarAgentsMode === "roster" && !chipAgent().pending,
         onShowAllAgents: () => {
           host.navigationView = "sessions";
           host.sessionDataContext?.navigation.update({ navCollapsed: false });
           patchSettings({ sidebarAgentsMode: "roster" });
+          host.sessionDataContext?.agentSelection.setScope(null);
+          host.onNavigate?.("sessions");
           void menus.commit().then((committed) => {
             if (!committed) {
               return;
@@ -141,7 +150,13 @@ export function renderSidebarAgentMenuForMenus(
               ?.focus();
           });
         },
-        connected: host.connected,
+        creationDisabledReason: canCallGatewayMethod(
+          gateway()?.read().snapshot,
+          "agents.create",
+          "operator.admin",
+        )
+          ? null
+          : t("agentChip.creationUnavailable"),
         resolveAvatarUrl: (url) => avatars().resolve(url),
         avatarErrorHandler: (url) => avatars().imageErrorHandler(url),
         openMode: menus.agentMenuMode,
@@ -155,7 +170,17 @@ export function renderSidebarAgentMenuForMenus(
           }
           host.switchChipAgent(agentId);
         },
-        onAskCapabilities: (agentId) => host.askAgentCapabilities(agentId),
+        pendingAgent: agentState()?.read().pendingAgent,
+        recentlyCreatedAgentId:
+          agentState()?.read().recentlyCreatedAgentId ??
+          preferences()?.read().sidebarRecentlyCreatedAgentId,
+        onCreateAgent: async () => {
+          const context = host.sessionDataContext;
+          if (context) {
+            menus.closeAgentMenu();
+            await createApplicationAgent(context);
+          }
+        },
         anchor: trigger ?? undefined,
         onClose: (restoreFocus) => {
           if (menus.agentMenuPosition !== position) {

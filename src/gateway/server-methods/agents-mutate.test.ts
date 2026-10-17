@@ -3,7 +3,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { WORKSPACE_BOOTSTRAP_FILENAMES } from "../../agents/workspace.js";
-import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
+import {
+  getRuntimeConfigWriteApplication,
+  type RuntimeConfigWriteApplicationStatus,
+} from "../../config/runtime-write-application.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { FsSafeError, root, type ReadResult } from "../../infra/fs-safe.js";
 import { resumeAgentDeletions } from "../server-agent-deletion-recovery.js";
@@ -69,6 +72,7 @@ const mocks = vi.hoisted(() => ({
     removedBindings: 0,
   })),
   writeConfigFile: vi.fn(async (_nextConfig?: unknown, _writeOptions?: unknown) => {}),
+  configApplicationStatus: vi.fn<() => RuntimeConfigWriteApplicationStatus>(() => "applied"),
   omitConfigMutationResult: false,
   ensureAgentWorkspace: vi.fn(
     async (params?: { dir?: string }): Promise<{ dir: string; identityPathCreated: boolean }> => ({
@@ -97,6 +101,8 @@ const mocks = vi.hoisted(() => ({
   captureDeletedAgentDatabaseFences: vi.fn<() => [string, string][]>(() => []),
   reviveAgentDatabases: vi.fn(async (_agentIds: readonly string[]) => {}),
   logGatewayWarn: vi.fn(),
+  prepareAgentOnboarding: vi.fn(),
+  completeAgentOnboarding: vi.fn(),
   runAgentDatabaseCleanup: vi.fn(
     async (_target: unknown, run: () => Promise<unknown>) => await run(),
   ),
@@ -183,8 +189,9 @@ vi.mock("../../config/config.js", async (importOriginal) => {
       });
       await mocks.writeConfigFile(draft, params.writeOptions);
       mocks.loadConfigReturn = draft;
-      if (params.writeOptions) {
-        getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
+      const applicationStatus = mocks.configApplicationStatus();
+      if (params.writeOptions && applicationStatus !== "unclaimed") {
+        getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle(applicationStatus);
       }
       return { nextConfig: draft, result: mocks.omitConfigMutationResult ? undefined : result };
     },
@@ -202,8 +209,9 @@ vi.mock("../../config/config.js", async (importOriginal) => {
       });
       await mocks.writeConfigFile(transformed.nextConfig);
       mocks.loadConfigReturn = transformed.nextConfig;
-      if (params.writeOptions) {
-        getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
+      const applicationStatus = mocks.configApplicationStatus();
+      if (params.writeOptions && applicationStatus !== "unclaimed") {
+        getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle(applicationStatus);
       }
       return {
         path: "/tmp/openclaw/config.json",
@@ -460,6 +468,12 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return { ...patched, default: patched };
 });
 
+// mock-isolation: exercise creation ordering without model calls or a second transcript writer.
+vi.mock(import("./agents-onboarding.js"), () => ({
+  prepareAgentOnboarding: mocks.prepareAgentOnboarding,
+  completeAgentOnboarding: mocks.completeAgentOnboarding,
+}));
+
 const { agentsHandlers } = await import("./agents.js");
 
 afterEach(() => {
@@ -469,6 +483,7 @@ afterEach(() => {
 beforeEach(() => {
   vi.mocked(root).mockReset();
   mocks.writeConfigFile.mockReset().mockResolvedValue(undefined);
+  mocks.configApplicationStatus.mockReset().mockReturnValue("applied");
   mocks.omitConfigMutationResult = false;
   mocks.sharedAuthStoreOwnership = { location: "legacy-main" };
   mocks.migrateLegacyMainSessionKeys.mockReset().mockResolvedValue({
@@ -555,7 +570,7 @@ function createContext() {
     chatQueuedTurns: new Map(),
     dedupe: new Map(),
     cron: { removeAgentJobsTransactional: mocks.cronRemoveAgentJobsTransactional },
-    logGateway: { warn: mocks.logGatewayWarn },
+    logGateway: { warn: mocks.logGatewayWarn, isEnabled: () => false },
   };
 }
 
@@ -693,6 +708,82 @@ describe("agents.create", () => {
   });
 
   const create = (params: Record<string, unknown>) => call("agents.create", params);
+  it.each(["failed", "restart-pending", "unclaimed"] as const)(
+    "retains the committed agent when onboarding config application is %s",
+    async (status) => {
+      mocks.loadConfigReturn.session = { mainKey: "home" };
+      mocks.configApplicationStatus.mockReturnValue(status);
+      mocks.prepareAgentOnboarding.mockResolvedValueOnce({
+        expectedConfigHash: "test-hash",
+        assertCurrent: vi.fn(),
+      });
+
+      const respond = await create({
+        agentId: "bot-stable",
+        name: "New agent",
+        onboarding: true,
+      });
+
+      expectRespondOk(respond, {
+        ok: true,
+        agentId: "bot-stable",
+        name: "New agent",
+        workspace: "/resolved/workspace/bot-stable",
+        agentDir: "/agents/test-agent",
+        onboarding: {
+          status: "error",
+          sessionKey: "agent:bot-stable:home",
+          error: expect.stringContaining(`not confirmed (${status})`),
+        },
+      });
+      expect(respond).toHaveBeenCalledOnce();
+      expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
+      expect(mocks.loadConfigReturn).toMatchObject({
+        agents: { entries: { "bot-stable": { name: "New agent" } } },
+      });
+      expect(mocks.completeAgentOnboarding).not.toHaveBeenCalled();
+    },
+  );
+  it("retains the existing unconfirmed-application error for creation without onboarding", async () => {
+    mocks.configApplicationStatus.mockReturnValue("failed");
+    expectRespondErrorContaining(await create({ name: "Test Agent" }), "not confirmed (failed)");
+    expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
+    expect(mocks.completeAgentOnboarding).not.toHaveBeenCalled();
+  });
+  it.each(["completed", "error"] as const)(
+    "returns the created agent even when onboarding is $status",
+    async (status) => {
+      const onboarding =
+        status === "completed"
+          ? { status, sessionKey: "agent:test-agent:home" }
+          : { status, sessionKey: "agent:test-agent:home", error: "inference unavailable" };
+      mocks.prepareAgentOnboarding.mockImplementation(async () => {
+        expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+        return { expectedConfigHash: "test-hash", assertCurrent: vi.fn() };
+      });
+      mocks.completeAgentOnboarding.mockImplementation(async (_options, agentId) => {
+        expect(agentId).toBe("test-agent");
+        expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
+        return onboarding;
+      });
+      expectRespondOk(await create({ name: "Test Agent", onboarding: true }), {
+        ok: true,
+        agentId: "test-agent",
+        onboarding,
+      });
+      expect(mocks.completeAgentOnboarding).toHaveBeenCalledOnce();
+    },
+  );
+  it("does not create an agent or workspace when inference verification fails", async () => {
+    mocks.prepareAgentOnboarding.mockRejectedValueOnce(new Error("Inference unavailable"));
+    expectRespondErrorContaining(
+      await create({ agentId: "bot-unavailable", name: "New agent", onboarding: true }),
+      "Inference unavailable",
+    );
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.completeAgentOnboarding).not.toHaveBeenCalled();
+  });
   it.each([
     { name: "Test Agent", workspace: "/home/user/agents/test", fancy: false },
     { name: "Test Agent", workspace: undefined, fancy: false },
@@ -714,6 +805,7 @@ describe("agents.create", () => {
     expect(mocks.ensureAgentWorkspace).toHaveBeenCalled();
     expect(mocks.writeConfigFile).toHaveBeenCalled();
     expect(mocks.reviveAgentDatabases).not.toHaveBeenCalled();
+    expect(mocks.completeAgentOnboarding).not.toHaveBeenCalled();
     if (!workspace) {
       expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(expect.any(Object), "test-agent");
       expectRespondOk(respond, { workspace: "/resolved/workspace/test-agent" });
@@ -734,6 +826,25 @@ describe("agents.create", () => {
       });
     }
   });
+  it("persists a display name independently of the stable internal agent id", async () => {
+    const agentId = "bot-00000000-0000-4000-8000-000000000001";
+    const respond = await create({ agentId, name: "New Bot", emoji: "🤖" });
+
+    expectRespondOk(respond, { ok: true, agentId, name: "New Bot" });
+    expect(mocks.loadConfigReturn).toMatchObject({
+      agents: {
+        entries: {
+          [agentId]: { name: "New Bot", identity: { name: "New Bot", emoji: "🤖" } },
+        },
+      },
+    });
+    expect(getAgentList(mocks.loadConfigReturn).map((agent) => agent.id)).toEqual([
+      "main",
+      agentId,
+    ]);
+    expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
+  });
+
   it("reports committed creation when deleted database reader revival fails", async () => {
     mocks.captureDeletedAgentDatabaseFences.mockReturnValue([
       ["/agents/test-agent/openclaw-agent.sqlite", "test-agent"],

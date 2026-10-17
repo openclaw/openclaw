@@ -1,4 +1,5 @@
 import { writeFileSync } from "node:fs";
+import { countMemoryEmbeddingCache } from "./manager-embedding-cache.js";
 import type { MemoryPublicationConnection } from "./manager-publication-task.js";
 import { bindSqliteWorkerBackend as bindBackend } from "./manager-publication.worker.js";
 
@@ -49,37 +50,15 @@ export function bindSqliteWorkerBackend(
     };
   }
   if (input.kind === "cache-capacity") {
-    const backend = bindBackend(input.publication, context);
-    const db = context.database;
-    db.exec(`
-      CREATE TEMP TRIGGER reject_cache_overflow BEFORE INSERT ON memory_embedding_cache
-      WHEN (SELECT COUNT(*) FROM memory_embedding_cache) >= ${input.maximum}
-      BEGIN SELECT RAISE(ABORT, 'primary cache overflow'); END;
-    `);
-    return {
-      ...backend,
-      close() {
-        const failures: unknown[] = [];
-        try {
-          backend.close();
-        } catch (error) {
-          failures.push(error);
-        }
-        try {
-          if (db.isOpen) {
-            db.exec("DROP TRIGGER temp.reject_cache_overflow");
-          }
-        } catch (error) {
-          failures.push(error);
-        }
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "Publication and capacity fixture cleanup failed");
+    return bindBackend(input.publication, {
+      ...context,
+      admit(stage) {
+        context.admit(stage);
+        if (stage === "commit" && countMemoryEmbeddingCache(context.database) > input.maximum) {
+          throw new Error("primary cache overflow");
         }
       },
-    };
+    });
   }
   const backend = bindBackend(input, context);
   const db = context.database;

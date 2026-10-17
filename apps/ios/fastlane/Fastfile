@@ -209,24 +209,53 @@ def available_simulator_devices
     UI.user_error!("Failed to list simulator devices: #{detail}")
   end
 
-  JSON.parse(stdout).fetch("devices").flat_map do |runtime, devices|
+  inventory = JSON.parse(stdout).fetch("devices")
+  yield({ "stdout" => stdout, "stderr" => stderr, "exitStatus" => status.exitstatus }, inventory.keys) if block_given?
+  inventory.flat_map do |runtime, devices|
     devices.map { |device| device.merge("runtime" => runtime) }
   end
 rescue JSON::ParserError => e
   UI.user_error!("Invalid JSON from simctl device list: #{e.message}")
 end
 
-def resolve_simulator_device(name)
-  devices = available_simulator_devices
-  exact = devices.find { |device| device["name"] == name }
-  return exact if exact
+def resolve_simulator_device(name, diagnostics: nil)
+  deadline = nil
+  loop do
+    selection, runtime_identifiers = nil, []
+    devices = available_simulator_devices do |result, runtimes|
+      selection, runtime_identifiers = result, runtimes
+    end
+    exact = devices.find { |device| device["name"] == name }
+    return exact if exact
 
-  watch_devices = devices.select { |device| device["name"].to_s.include?("Apple Watch") }
-  fallback = watch_devices.find { |device| device["name"].to_s.include?("Ultra") } || watch_devices.first
-  UI.user_error!("No available Apple Watch simulators found.") unless fallback
+    watch_devices = devices.select { |device| device["name"].to_s.include?("Apple Watch") }
+    fallback = watch_devices.find { |device| device["name"].to_s.include?("Ultra") } || watch_devices.first
+    if fallback
+      UI.important("Apple Watch simulator '#{name}' was not found; using '#{fallback.fetch("name")}'.")
+      return fallback
+    end
 
-  UI.important("Apple Watch simulator '#{name}' was not found; using '#{fallback.fetch("name")}'.")
-  fallback
+    # CoreSimulator can replace a mounted runtime with a cryptex copy after its
+    # initial inventory. Wait only for an existing device runtime's active copy.
+    stdout, _stderr, status = Open3.capture3("xcrun", "simctl", "runtime", "list", "--json")
+    copying = status.success? && JSON.parse(stdout).values.any? do |runtime|
+      runtime["platformIdentifier"] == "com.apple.platform.watchsimulator" &&
+        runtime["state"] == "Copying" && runtime_identifiers.include?(runtime["runtimeIdentifier"])
+    end
+    if copying
+      now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      unless deadline
+        UI.important("Waiting for the Watch simulator runtime copy to finish before capture.")
+        deadline = now + 120
+      end
+      if now < deadline
+        sleep([2, deadline - now].min)
+        next
+      end
+    end
+    diagnostics&.simulator_selection_failure(name, selection)
+    UI.user_error!("No available Apple Watch simulators found.")
+  end
 end
 
 def screenshot_phase(diagnostics, phase, device: nil, udid: nil, log_path: nil, &operation)
@@ -519,7 +548,7 @@ def build_watch_screenshot_app
 end
 
 def capture_watch_screenshot(diagnostics: nil)
-  device = resolve_simulator_device(watch_snapshot_device)
+  device = resolve_simulator_device(watch_snapshot_device, diagnostics: diagnostics)
   device_name = device.fetch("name")
   output_dir = File.join(ios_root, "fastlane", "screenshots", "en-US")
   output_path = File.join(output_dir, "#{device_name}-01-now-face.png")
@@ -2359,6 +2388,8 @@ platform :ios do
         Gem::Version.new(device.fetch("runtime").delete_prefix("com.apple.CoreSimulator.SimRuntime.iOS-").tr("-", "."))
       end || UI.user_error!("Screenshot simulator '#{name}' is unavailable.")
     end
+    # Check every requested family before spending a build and eight captures on iOS.
+    resolve_simulator_device(watch_snapshot_device, diagnostics: diagnostics) unless ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"
     require_idle_screenshot_simulators!
     screenshot_phase(diagnostics, "build") do
       run_screenshot_xcodebuild!(

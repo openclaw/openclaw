@@ -202,7 +202,7 @@ describe("CustodianSessionStore", () => {
         await pending;
         setGatewayToken("replacement-operator");
       } else {
-        setPathname("/agents");
+        setPathname("/sessions");
         await pending;
       }
       expect(currentPluginHelpReference(context)).toBeUndefined();

@@ -15,11 +15,7 @@ import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { buildMemoryPromptSection } from "./src/memory-tool-contract.js";
-import {
-  getMemoryManagerLifecycle,
-  hasMemoryIndexingBeenLive,
-  markMemoryIndexingLive,
-} from "./src/memory/lifecycle.js";
+import { getMemoryManagerLifecycle, markMemoryIndexingLive } from "./src/memory/lifecycle.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 
 const closeAllMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -513,13 +509,13 @@ describe("memory-core plugin runtime registration", () => {
       throw new Error("Expected the memory index service");
     }
     const context = { config, stateDir: "unused", logger: api.logger };
-    expect(hasMemoryIndexingBeenLive()).toBe(false);
     await service.start(context);
     expect(backgroundTasks).toEqual([]);
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
 
     // A watched manager opened by a search or turn makes later restarts restore it.
-    markMemoryIndexingLive();
+    markMemoryIndexingLive("main");
+    markMemoryIndexingLive("research");
     await service.stop?.(context);
     await service.start(context);
     await Promise.all(backgroundTasks);
@@ -529,10 +525,79 @@ describe("memory-core plugin runtime registration", () => {
     ]);
   });
 
+  it("restores only demanded indexes after adding an agent and forgets deleted demand", async () => {
+    markMemoryIndexingLive("used");
+    const config: OpenClawConfig = {
+      plugins: { slots: { memory: "memory-core" } },
+      agents: { entries: { used: {}, untouched: {} } },
+    };
+    let service: OpenClawPluginService | undefined;
+    const backgroundTasks: unknown[] = [];
+    const api = createTestPluginApi({
+      id: "memory-core",
+      config,
+      runtime: hostRuntime,
+      registerService(registered) {
+        if (registered.id === "memory-core-index" && registered.apiVersion !== 2) {
+          service = registered;
+        }
+      },
+    });
+    api.lifecycle.runInBackgroundContext = (run) => {
+      const task = run();
+      backgroundTasks.push(task);
+      return task;
+    };
+    plugin.register(api);
+    if (!service) {
+      throw new Error("Expected the memory index service");
+    }
+    const context = { config, stateDir: "unused", logger: api.logger };
+    await service.stop?.(context);
+    const nextConfig: OpenClawConfig = {
+      ...config,
+      agents: { entries: { used: {}, untouched: {}, newbot: {} } },
+    };
+    await service.start({ ...context, config: nextConfig });
+    await Promise.all(backgroundTasks);
+    expect(closeAllMemorySearchManagersMock).toHaveBeenCalledOnce();
+    expect(getMemorySearchManagerMock.mock.calls).toEqual([[{ cfg: nextConfig, agentId: "used" }]]);
+
+    // A memory/provider change still reacquires the watched manager with current config.
+    getMemorySearchManagerMock.mockClear();
+    const providerConfig: OpenClawConfig = {
+      ...nextConfig,
+      memory: { search: { provider: "none" } },
+    };
+    await service.stop?.({ ...context, config: nextConfig });
+    await service.start({ ...context, config: providerConfig });
+    await Promise.all(backgroundTasks);
+    expect(getMemorySearchManagerMock.mock.calls).toEqual([
+      [{ cfg: providerConfig, agentId: "used" }],
+    ]);
+
+    getMemorySearchManagerMock.mockClear();
+    const removedConfig: OpenClawConfig = {
+      ...providerConfig,
+      agents: { entries: { untouched: {}, newbot: {} } },
+    };
+    await service.stop?.({ ...context, config: providerConfig });
+    await service.start({ ...context, config: removedConfig });
+    await Promise.all(backgroundTasks);
+    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+
+    // Reusing a removed agent ID does not inherit the old agent's memory demand.
+    await service.stop?.({ ...context, config: removedConfig });
+    await service.start({ ...context, config: nextConfig });
+    await Promise.all(backgroundTasks);
+    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+  });
+
   it.each(["memory-core", "honcho", "none"])(
     "starts configured indexes only for the selected memory slot: %s",
     async (owner) => {
-      markMemoryIndexingLive();
+      markMemoryIndexingLive("main");
+      markMemoryIndexingLive("research");
       const config: OpenClawConfig = {
         plugins: { slots: { memory: owner } },
         agents: { entries: { main: {}, research: {} } },
@@ -578,7 +643,8 @@ describe("memory-core plugin runtime registration", () => {
   ])(
     "drains managers after tracked activation rejects ($cleanupOwner, cleanup failure: $cleanupFails)",
     async ({ cleanupOwner, cleanupFails }) => {
-      markMemoryIndexingLive();
+      markMemoryIndexingLive("main");
+      markMemoryIndexingLive("research");
       const activationFailure = new Error("plugin retired after activation");
       const cleanupFailure = new Error("memory manager cleanup failed");
       const config: OpenClawConfig = {

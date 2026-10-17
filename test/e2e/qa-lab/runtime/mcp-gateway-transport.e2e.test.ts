@@ -7,6 +7,7 @@ import {
   connectMcpClientWithPairingReconnect,
   connectMcpWithTimeout,
   createMcpClientTempState,
+  maybeApprovePendingBridgePairing,
   type McpClientTempState,
 } from "./mcp-client-temp-state.fixture.ts";
 
@@ -37,42 +38,78 @@ describe("MCP gateway transport fixture", () => {
     }
   });
 
-  it("reuses one MCP temp state across the pairing reconnect path", async () => {
-    const tempState = createMcpClientTempState({ gatewayToken: "pairing-token" });
-    const firstHandle = {
-      cleanup: vi.fn(),
-      client: { close: vi.fn(async () => undefined) },
-      transport: { close: vi.fn(async () => undefined) },
-    };
-    const secondHandle = {
-      cleanup: vi.fn(),
-      client: { close: vi.fn(async () => undefined) },
-      transport: { close: vi.fn(async () => undefined) },
-    };
-    const connectCalls: McpClientTempState[] = [];
-    const connect = vi.fn(async (state: McpClientTempState) => {
-      connectCalls.push(state);
-      return connectCalls.length === 1 ? firstHandle : secondHandle;
-    });
+  it.each([false, true])(
+    "reuses one MCP temp state after pairing (auto-approved: %s)",
+    async (autoApproved) => {
+      const tempState = createMcpClientTempState({ gatewayToken: "pairing-token" });
+      const firstHandle = {
+        cleanup: vi.fn(),
+        client: { close: vi.fn(async () => undefined) },
+        transport: { close: vi.fn(async () => undefined) },
+      };
+      const secondHandle = {
+        cleanup: vi.fn(),
+        client: { close: vi.fn(async () => undefined) },
+        transport: { close: vi.fn(async () => undefined) },
+      };
+      const request = vi
+        .fn<Parameters<typeof maybeApprovePendingBridgePairing>[0]["request"]>()
+        .mockResolvedValueOnce({
+          pending: [{ requestId: "pair-request", deviceId: "bridge-device", role: "operator" }],
+        });
+      if (autoApproved) {
+        request
+          .mockRejectedValueOnce(new Error("unknown requestId"))
+          .mockResolvedValueOnce({ paired: [{ deviceId: "bridge-device", roles: ["operator"] }] });
+      } else {
+        request.mockResolvedValueOnce({});
+      }
+      const connectCalls: McpClientTempState[] = [];
+      const connect = vi.fn(async (state: McpClientTempState) => {
+        connectCalls.push(state);
+        return connectCalls.length === 1 ? firstHandle : secondHandle;
+      });
 
-    try {
-      await expect(
-        connectMcpClientWithPairingReconnect({
-          connect,
-          maybeApprovePairing: async () => true,
-          tempState,
-        }),
-      ).resolves.toBe(secondHandle);
+      try {
+        await expect(
+          connectMcpClientWithPairingReconnect({
+            connect,
+            maybeApprovePairing: () => maybeApprovePendingBridgePairing({ request }),
+            tempState,
+          }),
+        ).resolves.toBe(secondHandle);
 
-      expect(connect).toHaveBeenCalledTimes(2);
-      expect(connectCalls).toEqual([tempState, tempState]);
-      expect(firstHandle.client.close).toHaveBeenCalledOnce();
-      expect(firstHandle.transport.close).toHaveBeenCalledOnce();
-      expect(firstHandle.cleanup).toHaveBeenCalledOnce();
-      expect(secondHandle.cleanup).not.toHaveBeenCalled();
-    } finally {
-      tempState.cleanup();
-    }
+        expect(connect).toHaveBeenCalledTimes(2);
+        expect(connectCalls).toEqual([tempState, tempState]);
+        expect(firstHandle.client.close).toHaveBeenCalledOnce();
+        expect(firstHandle.transport.close).toHaveBeenCalledOnce();
+        expect(firstHandle.cleanup).toHaveBeenCalledOnce();
+        expect(secondHandle.cleanup).not.toHaveBeenCalled();
+      } finally {
+        tempState.cleanup();
+      }
+    },
+  );
+
+  it.each([
+    { label: "missing device", paired: [] },
+    {
+      label: "other approval failure",
+      message: "approval forbidden",
+      paired: [{ deviceId: "bridge-device", roles: ["operator"] }],
+    },
+    { label: "different device", paired: [{ deviceId: "other-device", roles: ["operator"] }] },
+    { label: "wrong role", paired: [{ deviceId: "bridge-device", roles: ["node"] }] },
+  ])("preserves stale-approval failure for $label", async ({ paired, message }) => {
+    const failure = new Error(message ?? "unknown requestId");
+    const request = vi
+      .fn<Parameters<typeof maybeApprovePendingBridgePairing>[0]["request"]>()
+      .mockResolvedValueOnce({
+        pending: [{ requestId: "pair-request", deviceId: "bridge-device", role: "operator" }],
+      })
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce({ paired });
+    await expect(maybeApprovePendingBridgePairing({ request })).rejects.toBe(failure);
   });
 
   it("cleans up the first MCP client when pairing approval fails", async () => {

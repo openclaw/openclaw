@@ -18,6 +18,7 @@ import {
 } from "../lib/session-pull-requests.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
+import { PendingSessionCreate } from "../pages/chat/pending-session-create-lazy.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { createSidebarCatalogMenu } from "./app-sidebar-catalog-menu.tsx";
 import {
@@ -121,7 +122,11 @@ export function createSidebarMenus(deps: {
   let disposed = false;
   let catalogMenuView: CatalogMenuView | undefined;
   const menuRendererImport = createIdleImport(
-    () => import("./sidebar-menus-render.tsx"),
+    // A visible Create action can enter its pending chat synchronously.
+    () =>
+      Promise.all([import("./sidebar-menus-render.tsx"), PendingSessionCreate.preload()]).then(
+        ([renderer]) => renderer,
+      ),
     (renderer) => {
       if (!disposed) {
         setField("menuRenderer", renderer);
@@ -518,12 +523,7 @@ export function createSidebarMenus(deps: {
           ) {
             return;
           }
-          element
-            .querySelector<HTMLElement>(".sidebar-agent-menu")
-            ?.querySelector<HTMLElement>(
-              '.sidebar-agent-menu__agent-switch--active, [role^="menuitem"]:not([disabled])',
-            )
-            ?.focus();
+          state.menuRenderer?.focusSidebarAgentMenu(element);
         });
         return;
       }

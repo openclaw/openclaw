@@ -28,6 +28,7 @@ import {
 import { createConfigSource, configSourceSnapshotsMatch } from "../config/source.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduledJob } from "../infra/gateway-scheduler.js";
+import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { hashStableJson } from "../plugins/installed-plugin-index-hash.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -568,7 +569,11 @@ export function startGatewayConfigReloader(
           if (options.runtimeApplied !== false && (changedPaths.length > 0 || pluginLifecycle)) {
             try {
               const { refreshSkillsDiscovery } = await import("../skills/runtime/refresh.js");
-              await refreshSkillsDiscovery({ config: currentConfig, reason: "config-change" });
+              await refreshSkillsDiscovery({
+                config: currentConfig,
+                reason: "config-change",
+                pluginMetadataSnapshot: getProcessGatewayPluginMetadataSnapshot(),
+              });
             } catch (error) {
               opts.log.warn(
                 `config applied, but skills discovery refresh failed: ${String(error)}`,

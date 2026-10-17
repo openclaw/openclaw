@@ -1,6 +1,8 @@
 import { createStore, For, onCleanup, Show } from "solid-js";
+import { CatalogPageHeader } from "../../components/solid/catalog-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
+import { SettingsPage } from "../../components/solid/settings-ui.tsx";
+import { registerClawsEnglish } from "../../i18n/locales/en-claws.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -9,7 +11,7 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { searchOfficialClaws, type ClawCatalogEntry } from "./claws-catalog-client.ts";
 import "../../styles/agents-home.css";
 
-registerEnglishCatalog(registerAgentsHomeEnglish);
+registerEnglishCatalog(registerClawsEnglish);
 
 export function ClawsExplore(props: { onSelect?: (entry: ClawCatalogEntry) => void }) {
   const context = useApplication();
@@ -94,98 +96,103 @@ export function ClawsExplore(props: { onSelect?: (entry: ClawCatalogEntry) => vo
   const unavailable = () => gateway.connected && !canSearch();
   return (
     <openclaw-claws-explore>
-      <section
-        class="agents-home__explore"
-        data-claws-explore
-        aria-label={t("clawsCatalog.explore")}
-      >
-        <div class="agents-home__explore-toolbar">
-          <div class="agents-home__explore-heading">
-            <h2>{t("tabs.claws")}</h2>
-            <p>{t("clawsCatalog.exploreDescription")}</p>
-          </div>
-          <label class="agents-home__claw-search">
-            <span aria-hidden="true">
-              <Icon name="search" />
-            </span>
-            <input
-              type="search"
-              class="settings-input"
-              data-claws-search
-              aria-label={t("clawsCatalog.search")}
-              placeholder={t("clawsCatalog.searchPlaceholder")}
-              value={view.query}
-              disabled={!gateway.connected || unavailable()}
-              onInput={(event) => search(event.currentTarget.value)}
-            />
-          </label>
-        </div>
-        <Show when={unavailable()}>
-          <div class="callout warn" role="status">
-            {t("clawsCatalog.unavailable")}
-          </div>
-        </Show>
-        <Show when={view.error}>
-          <div class="callout danger" role="alert">
-            {view.error}
-            <button type="button" class="btn btn--sm" onClick={() => void loadCatalog()}>
-              {t("clawsCatalog.retry")}
-            </button>
-          </div>
-        </Show>
-        <Show when={view.loading}>
-          <div class="agents-home__claw-grid" role="status" aria-label={t("clawsCatalog.loading")}>
-            <For each={[0, 1, 2, 3]}>
-              {() => <div class="agents-home__claw-skeleton" aria-hidden="true" />}
-            </For>
-          </div>
-        </Show>
-        <Show
-          when={
-            gateway.connected &&
-            !unavailable() &&
-            !view.loading &&
-            !view.error &&
-            view.entries.length === 0
+      <section class="agents-home__explore" data-claws-explore aria-label={t("tabs.claws")}>
+        <CatalogPageHeader
+          class="claws-catalog-header"
+          title={t("tabs.claws")}
+          subtitle={t("clawsCatalog.exploreDescription")}
+          actions={
+            <label class="agents-home__claw-search">
+              <span aria-hidden="true">
+                <Icon name="search" />
+              </span>
+              <input
+                type="search"
+                class="settings-input"
+                data-claws-search
+                aria-label={t("clawsCatalog.search")}
+                placeholder={t("clawsCatalog.searchPlaceholder")}
+                value={view.query}
+                disabled={!gateway.connected || unavailable()}
+                onInput={(event) => search(event.currentTarget.value)}
+              />
+            </label>
           }
-        >
-          <p class="agents-home__claw-empty">{t("clawsCatalog.empty")}</p>
-        </Show>
-        <div class="agents-home__claw-grid">
-          <For each={view.entries} keyed={(entry) => entry.packageName}>
-            {(entry) => (
-              <article class="agents-home__claw-card oc-card" data-claws-entry>
-                <button
-                  type="button"
-                  class="agents-home__claw-card-link"
-                  aria-label={`${t("clawsCatalog.review")} ${entry().displayName}`}
-                  disabled={!entry().latestVersion}
-                  onClick={() => props.onSelect?.(entry())}
-                />
-                <div class="agents-home__claw-head">
-                  <span class="agents-home__claw-art" aria-hidden="true">
-                    <Icon name="box" />
-                  </span>
-                  <div class="agents-home__claw-identity">
-                    <h3>{entry().displayName}</h3>
-                    <span>{t("clawsCatalog.publisher")}</span>
-                  </div>
-                  <button
-                    type="button"
-                    class="btn btn--sm agents-home__claw-add oc-action oc-action-secondary"
-                    disabled={!entry().latestVersion}
-                    onClick={() => props.onSelect?.(entry())}
-                  >
-                    {t("clawsCatalog.add")}
-                  </button>
-                </div>
-                <Show when={entry().summary}>
-                  <p class="agents-home__claw-summary">{entry().summary}</p>
-                </Show>
-              </article>
-            )}
-          </For>
-        </div>
+        />
+        <SettingsPage wide carapace>
+          <div class="agents-home">
+            <Show when={unavailable()}>
+              <div class="callout warn" role="status">
+                {t("clawsCatalog.unavailable")}
+              </div>
+            </Show>
+            <Show when={view.error}>
+              <div class="callout danger" role="alert">
+                {view.error}
+                <button type="button" class="btn btn--sm" onClick={() => void loadCatalog()}>
+                  {t("clawsCatalog.retry")}
+                </button>
+              </div>
+            </Show>
+            <Show when={view.loading}>
+              <div
+                class="agents-home__claw-grid"
+                role="status"
+                aria-label={t("clawsCatalog.loading")}
+              >
+                <For each={[0, 1, 2, 3]}>
+                  {() => <div class="agents-home__claw-skeleton" aria-hidden="true" />}
+                </For>
+              </div>
+            </Show>
+            <Show
+              when={
+                gateway.connected &&
+                !unavailable() &&
+                !view.loading &&
+                !view.error &&
+                view.entries.length === 0
+              }
+            >
+              <p class="agents-home__claw-empty">{t("clawsCatalog.empty")}</p>
+            </Show>
+            <div class="agents-home__claw-grid">
+              <For each={view.entries} keyed={(entry) => entry.packageName}>
+                {(entry) => (
+                  <article class="agents-home__claw-card oc-card" data-claws-entry>
+                    <button
+                      type="button"
+                      class="agents-home__claw-card-link"
+                      aria-label={`${t("clawsCatalog.review")} ${entry().displayName}`}
+                      disabled={!entry().latestVersion}
+                      onClick={() => props.onSelect?.(entry())}
+                    />
+                    <div class="agents-home__claw-head">
+                      <span class="agents-home__claw-art" aria-hidden="true">
+                        <Icon name="agentsConnected" />
+                      </span>
+                      <div class="agents-home__claw-identity">
+                        <h3>{entry().displayName}</h3>
+                        <span>{t("clawsCatalog.publisher")}</span>
+                      </div>
+                      <button
+                        type="button"
+                        class="btn btn--sm agents-home__claw-add oc-action oc-action-secondary"
+                        disabled={!entry().latestVersion}
+                        onClick={() => props.onSelect?.(entry())}
+                      >
+                        {t("clawsCatalog.add")}
+                      </button>
+                    </div>
+                    <Show when={entry().summary}>
+                      <p class="agents-home__claw-summary">{entry().summary}</p>
+                    </Show>
+                  </article>
+                )}
+              </For>
+            </div>
+          </div>
+        </SettingsPage>
       </section>
     </openclaw-claws-explore>
   );

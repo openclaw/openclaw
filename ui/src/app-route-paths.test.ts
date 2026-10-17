@@ -547,7 +547,7 @@ describe("Plugin Settings route paths", () => {
 describe("Claw detail route paths", () => {
   it("uses a public package slug and restores its official package identity", () => {
     const pathname = pathForClawCatalogEntry("@openclaw/workflow-operator", "/ui");
-    expect(pathname).toBe("/ui/agents/claws/workflow-operator");
+    expect(pathname).toBe("/ui/claws/workflow-operator");
     expect(clawCatalogPackageNameFromPath(pathname, "/ui")).toBe("@openclaw/workflow-operator");
     expect(routeIdFromPath(pathname, "/ui")).toBe("claws");
     expect(dynamicRouteFromPath(pathname, "/ui")).toEqual([
@@ -561,7 +561,7 @@ describe("Claw detail route paths", () => {
     expect(() => pathForClawCatalogEntry("@community/travel-planner")).toThrow(
       "Only official Claws",
     );
-    expect(clawCatalogPackageNameFromPath("/agents/claws/@openclaw/workflow-operator")).toBeNull();
+    expect(clawCatalogPackageNameFromPath("/claws/@openclaw/workflow-operator")).toBeNull();
   });
 });
 

@@ -25,7 +25,7 @@ import {
 const suite = createSessionManagementE2eSuite();
 const baselineMode = process.env.OPENCLAW_SIDEBAR_BASELINE === "1";
 const selectedKey = "agent:main:dashboard:00000000-0000-4000-8000-000000000006";
-const railPins = ["route:agents-home", `session:${selectedKey}`, "plugin:reports/overview"];
+const railPins = ["route:sessions", `session:${selectedKey}`, "plugin:reports/overview"];
 const pluginPath = "/__openclaw__/plugins/control-ui/reports/one/index.js";
 const avatarUrl =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGN4nhWCFTEQkPj64w8ag5AEPqPgiDgdmAgA9YRzYZfFh50AAAAASUVORK5CYII=";

@@ -13,7 +13,7 @@ const suite = createControlUiE2eSuite({ name: "Session list row events" });
 // These are separate foreground routes. The sidebar and its agent roster share
 // each route's connection; manually mounting all pages would invent a UI state.
 suite.define(() => {
-  it.each(["chat", "sessions", "dashboards", "agents"])(
+  it.each(["chat", "sessions", "dashboards"])(
     "updates held rows on %s without any mounted caller refetching a list",
     async (route) => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
@@ -79,9 +79,7 @@ suite.define(() => {
             ? ".chat-thread"
             : route === "sessions"
               ? ".sessions-table"
-              : route === "dashboards"
-                ? "[data-dashboard-session]"
-                : ".agents-home__preview",
+              : "[data-dashboard-session]",
         );
         await foreground.first().waitFor();
         if (route === "dashboards") {
@@ -117,7 +115,7 @@ suite.define(() => {
         if (route !== "chat") {
           await expect
             .poll(() => foreground.first().textContent())
-            .toContain(route === "agents" ? "Main roster preview" : "Updated by certified event");
+            .toContain("Updated by certified event");
         }
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",

@@ -29,6 +29,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { runWithSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { prepareInitialAssistantTranscript } from "../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import {
   captureSessionActorStorageOwner,
   withSessionActorStorage,
@@ -680,6 +681,17 @@ async function createGatewaySessionInScope(
         if (!params.initialEntry && existingEntry?.initializationPending === true) {
           return initializingSessionFailure();
         }
+        if (
+          params.initialAssistantMessage &&
+          (existingEntry !== undefined ||
+            params.fork === true ||
+            params.atomicInitialization === true ||
+            params.initialEntry?.initializationPending === true)
+        ) {
+          return invalidSessionRequest(
+            "initial assistant transcript requires a new session without fork or deferred initialization",
+          );
+        }
         if (params.initialEntry && existingEntry !== undefined) {
           return invalidSessionRequest("trusted initial session state requires a new session");
         }
@@ -980,7 +992,19 @@ async function createGatewaySessionInScope(
           entry.publicShare = prepareSessionPublicShareGrant(entry, target.canonicalKey);
         }
         if (params.fork !== true) {
-          return { ...patched, entry };
+          return {
+            ...patched,
+            entry,
+            ...(params.initialAssistantMessage
+              ? {
+                  transcriptEvents: prepareInitialAssistantTranscript({
+                    ...params.initialAssistantMessage,
+                    sessionId: entry.sessionId,
+                    cwd: runtimeCwd,
+                  }),
+                }
+              : {}),
+          };
         }
         if (!canonicalParentSessionKey || !currentParentSessionEntry || !parentSessionTarget) {
           return unavailableSessionRequest("failed to resolve parent session for fork");

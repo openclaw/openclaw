@@ -45,7 +45,7 @@ describe("AppSidebar transient menus", () => {
     await sidebar.updateComplete;
     const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
     const settingsItem = firstMenu?.querySelector<HTMLElement>(
-      '[data-value="command:agent-settings"]',
+      '[data-value="agent:main"] .sidebar-agent-menu__settings',
     );
     expect(firstMenu).not.toBeNull();
     expect(firstMenu?.closest("openclaw-menu-surface")).toBeNull();

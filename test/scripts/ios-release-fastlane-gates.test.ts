@@ -903,6 +903,82 @@ puts JSON.generate(rows)
     expect(screenshots).toContain('ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"');
   });
 
+  it("waits for an active Watch runtime copy before selecting a screenshot device", () => {
+    const source = String.raw`
+require "json"
+module UI
+  def self.user_error!(message); raise message; end
+  def self.important(*); end
+end
+def default_platform(*); end
+def desc(*); end
+def platform(*); yield; end
+def lane(*); end
+alias private_lane lane
+load ARGV.fetch(0)
+module Process
+  def self.clock_gettime(*); $elapsed; end
+end
+def sleep(seconds); $elapsed += seconds; end
+module Open3
+  def self.capture3(*arguments)
+    case arguments
+    when ["xcrun", "simctl", "list", "devices", "available", "--json"]
+      # The runner's copy removes the old runtime profile while retaining its devices.
+      ready = $scenario == "ready" || ($scenario == "copying" && $elapsed > 0)
+      devices = ready ? [{ "name" => "Apple Watch Ultra 4 (49mm)", "isAvailable" => true }] : []
+      data = { "devices" => { "com.apple.CoreSimulator.SimRuntime.watchOS-27-0" => devices } }
+    when ["xcrun", "simctl", "runtime", "list", "--json"]
+      data = if %w[copying stalled unrelated].include?($scenario)
+        { "replacement" => { "platformIdentifier" => "com.apple.platform.watchsimulator", "state" => "Copying", "runtimeIdentifier" => $scenario == "unrelated" ? "com.apple.CoreSimulator.SimRuntime.watchOS-26-0" : "com.apple.CoreSimulator.SimRuntime.watchOS-27-0" } }
+      else
+        {}
+      end
+    else
+      raise "unexpected simulator mutation: #{arguments.inspect}"
+    end
+    [JSON.generate(data), "", Struct.new(:success?, :exitstatus).new(true, 0)]
+  end
+end
+rows = %w[ready copying missing unrelated stalled].map do |scenario|
+  $scenario, $elapsed = scenario, 0
+  selected, error = nil, nil
+  begin
+    selected = resolve_simulator_device(watch_snapshot_device).fetch("name")
+  rescue => failure
+    error = failure.message
+  end
+  { scenario: scenario, selected: selected, error: error, elapsed: $elapsed }
+end
+puts JSON.generate(rows)
+`;
+    const result = spawnSync("ruby", ["-e", source, fastfilePath], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    const rows = JSON.parse(result.stdout) as {
+      scenario: string;
+      selected: string | null;
+      error: string | null;
+      elapsed: number;
+    }[];
+    const row = (scenario: string) => rows.find((entry) => entry.scenario === scenario)!;
+    for (const scenario of ["ready", "copying"]) {
+      expect(row(scenario)).toMatchObject({ selected: "Apple Watch Ultra 4 (49mm)", error: null });
+    }
+    expect(row("ready").elapsed).toBe(0);
+    expect(row("copying").elapsed).toBeGreaterThan(0);
+    for (const scenario of ["missing", "unrelated"]) {
+      expect(row(scenario)).toMatchObject({
+        selected: null,
+        error: "No available Apple Watch simulators found.",
+        elapsed: 0,
+      });
+    }
+    expect(row("stalled").selected).toBeNull();
+    expect(row("stalled").error).toContain("No available Apple Watch simulators found.");
+    expect(row("stalled").elapsed).toBeGreaterThan(0);
+    expect(row("stalled").elapsed).toBeLessThanOrEqual(120);
+  });
+
   it("owns one simulator at a time and cleans up failed captures while reusing the screenshot build", () => {
     const source = `
 require "json"
@@ -940,7 +1016,7 @@ def available_simulator_devices
     { "name" => "iPad Pro 13-inch", "udid" => "older-ipad", "deviceTypeIdentifier" => "ipad-type", "runtime" => "com.apple.CoreSimulator.SimRuntime.iOS-26-0", "state" => "Shutdown" },
     { "name" => "iPad Pro 13-inch", "udid" => "ipad-template", "deviceTypeIdentifier" => "ipad-type", "runtime" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0", "state" => "Shutdown" },
     { "name" => "Apple Watch Ultra 3 (49mm)", "udid" => "watch-template", "deviceTypeIdentifier" => "watch-type", "runtime" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "state" => "Shutdown" }
-  ] + @owned.values + (@scenario == "busy" ? [{ "name" => "Unrelated", "udid" => "unrelated", "state" => "Booted" }] : [])
+  ].reject { |device| %w[no-watch iphone].include?(@scenario) && device.fetch("name").include?("Apple Watch") } + @owned.values + (@scenario == "busy" ? [{ "name" => "Unrelated", "udid" => "unrelated", "state" => "Booted" }] : [])
 end
 def write_watch_screenshot_mode_defaults(*); end
 def set_watch_status_bar_override(*)
@@ -961,6 +1037,7 @@ module Open3
     raise Errno::ENOENT
   end
   def self.capture3(command, *args)
+    return ["{}", "", Struct.new(:success?).new(true)] if [command, *args] == ["xcrun", "simctl", "runtime", "list", "--json"]
     raise "unexpected external command: #{command}" unless command == "/usr/libexec/PlistBuddy"
     [File.read(args.last), "", Struct.new(:success?).new(true)]
   end
@@ -1019,7 +1096,7 @@ def sh(command, *arguments, **_options)
   end
 end
 
-results = %w[combined diagnostics iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure].map do |scenario|
+results = %w[combined diagnostics no-watch iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     @owned, @created = {}, 0
@@ -1089,6 +1166,14 @@ puts JSON.generate(results)
     }[];
     const row = (scenario: string) => rows.find((entry) => entry.scenario === scenario)!;
     const versionArgs = ["--version", "2026.9.1", "--revision", "2", "--build-number", "123"];
+    expect(row("no-watch")).toMatchObject({
+      builds: [],
+      error: "No available Apple Watch simulators found.",
+      pngs: 0,
+      xcresults: 0,
+      owned: [],
+      lifecycle: [],
+    });
     expect(row("combined")).toMatchObject({
       builds: ["snapshot"],
       error: null,

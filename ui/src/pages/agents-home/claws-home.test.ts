@@ -3,6 +3,7 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { page as clawsRoute } from "../claws/route.ts";
 import {
   cleanupAgentsHomePageTest,
   createPage,
@@ -35,7 +36,7 @@ function createDetail(
   return { ...fixture, detail: view.container, setPackageName };
 }
 
-describe("Claws on Agents Home", () => {
+describe("Claws discovery", () => {
   it.each([
     {
       names: ["AGENTS.md", "SOUL.md", "USER.md", "notes/context.md"],
@@ -89,14 +90,49 @@ describe("Claws on Agents Home", () => {
     }
   });
 
-  it("shows official Claws and opens their dedicated route", async () => {
-    const { page, navigate, request, ensureConfigLoaded } = createPage({ clawsEnabled: true });
+  it.each(["/claws", "/claws/workflow-operator"])(
+    "rejects direct visits to %s while Labs is disabled",
+    async (pathname) => {
+      const { context, page, request, ensureConfigLoaded } = createPage({ pathname });
+      const location = { pathname, search: "", hash: "" };
+      const result = await clawsRoute.loader!(context, {
+        location,
+        signal: new AbortController().signal,
+        shouldRun: () => true,
+        revalidating: false,
+        cause: "navigation",
+        deps: clawsRoute.loaderDeps!(context, location),
+      });
+      expect(result).toEqual({ type: "notFound", data: undefined });
+      expect(ensureConfigLoaded).toHaveBeenCalledOnce();
+      expect(page.textContent).toContain("Claws is disabled");
+      expect(page.querySelector("[data-claws-explore]")).toBeNull();
+      expect(page.querySelector("[data-claws-confirm]")).toBeNull();
+      expect(request.mock.calls.some(([method]) => method.startsWith("claws."))).toBe(false);
+    },
+  );
+
+  it("removes discovery when the Labs toggle is disabled during a visit", async () => {
+    const { page, setClawsEnabled } = createPage({ clawsEnabled: true });
     await vi.waitFor(() => expect(page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));
-    expect(ensureConfigLoaded).toHaveBeenCalledOnce();
+    setClawsEnabled(false);
+    await vi.waitFor(() => expect(page.querySelector("[data-claws-explore]")).toBeNull());
+    expect(page.textContent).toContain("Claws is disabled");
+  });
+
+  it("shows official Claws and opens their dedicated route", async () => {
+    const { page, navigate, request } = createPage({ clawsEnabled: true });
+    await vi.waitFor(() => expect(page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));
+    expect(page.querySelector(".catalog-page-header h1.page-title")?.textContent).toBe("Claws");
+    expect(page.querySelector(".catalog-page-header [data-claws-search]")).not.toBeNull();
+    expect(page.querySelector(".settings-page .catalog-page-header")).toBeNull();
+    expect(page.querySelector(".agents-home__card")).toBeNull();
+    expect(page.textContent).not.toContain("Manage agents");
+    expect(request.mock.calls.some(([method]) => method === "sessions.list")).toBe(false);
 
     page.querySelector<HTMLButtonElement>(".agents-home__claw-card-link")?.click();
     expect(navigate).toHaveBeenCalledWith("claws", {
-      pathname: "/agents/claws/workflow-operator",
+      pathname: "/claws/workflow-operator",
     });
     expect(request).toHaveBeenCalledWith("claws.catalog.search", {});
   });

@@ -78,7 +78,7 @@ export async function openSidebarCustomizationPage(
   await page.goto(`${suite.server.baseUrl}chat`);
   await page.locator("openclaw-app-sidebar").waitFor();
   const pages = await openSidebarPages(page);
-  for (const label of ["Agents", "Dashboards", "Systems"]) {
+  for (const label of ["Sessions", "Dashboards", "Systems"]) {
     await pages
       .locator(".sidebar-pages__entry")
       .filter({ has: page.getByRole("link", { name: label, exact: true }) })

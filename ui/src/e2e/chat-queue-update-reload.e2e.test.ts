@@ -139,8 +139,8 @@ suite.define(() => {
         });
         if (otherPage) {
           const pages = await openSidebarPages(page);
-          await pages.getByRole("link", { name: "Agents", exact: true }).click();
-          await page.waitForURL((url) => url.pathname.endsWith("/agents"));
+          await pages.getByRole("link", { name: "Sessions", exact: true }).click();
+          await page.waitForURL((url) => url.pathname.endsWith("/sessions"));
         }
         await page.getByRole("button", { name: "Review edit", exact: true }).click();
         await page.waitForURL((url) => url.pathname === originalPathname);

@@ -6,6 +6,7 @@ import type {
   AgentsFilesGetResult,
   AgentsFilesListResult,
   AgentsListResult,
+  GatewayAgentRow,
   ToolsCatalogResult,
 } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
@@ -14,6 +15,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
+import { createAgentCreationRecovery, type AgentCreationResult } from "./creation-recovery.ts";
 import type { AgentsPanel } from "./panels.ts";
 import {
   buildToolsEffectiveRequestKey,
@@ -64,6 +66,8 @@ type AgentCapabilityState = {
   agentsLoading: boolean;
   agentsError: string | null;
   agentsList: AgentsListResult | null;
+  pendingAgent?: GatewayAgentRow;
+  recentlyCreatedAgentId?: string;
 };
 
 export type AgentCapability = ReturnType<typeof createAgentCapability>;
@@ -187,6 +191,7 @@ export function createAgentCapability(gateway: AgentGateway) {
   const listeners = new Set<(state: AgentCapabilityState) => void>();
   let disposed = false;
   let agentsRequest: Promise<AgentsListResult | null> | null = null;
+  const creations = createAgentCreationRecovery();
 
   const retireAgentsRequest = () => {
     agentsRequest = null;
@@ -222,6 +227,7 @@ export function createAgentCapability(gateway: AgentGateway) {
     if (state.agentsList && !force) {
       return state.agentsList;
     }
+    const createdWhenRequested = state.recentlyCreatedAgentId;
     state.agentsLoading = true;
     state.agentsError = null;
     publish();
@@ -230,6 +236,16 @@ export function createAgentCapability(gateway: AgentGateway) {
       .request<AgentsListResult>("agents.list", { includeSessionPlacement: true })
       .then((result) => {
         const current = state.client === client && agentsRequest === request;
+        if (
+          current &&
+          state.recentlyCreatedAgentId &&
+          state.recentlyCreatedAgentId !== createdWhenRequested &&
+          !result.agents.some((agent) => agent.id === state.recentlyCreatedAgentId)
+        ) {
+          // This read predates a confirmed creation. Its original caller still
+          // needs the current roster to reconcile identity and workspace caches.
+          return loadList(true);
+        }
         if (current) {
           state.agentsList = result;
           state.agentsError = null;
@@ -314,6 +330,8 @@ export function createAgentCapability(gateway: AgentGateway) {
     state.client = snapshot.client;
     state.connected = connected;
     if (connectionChanged && (clientChanged || !connected)) {
+      state.pendingAgent = undefined;
+      state.recentlyCreatedAgentId = undefined;
       retireAgentsRequest();
       fileRequests.clear();
       for (const status of files.values()) {
@@ -334,6 +352,37 @@ export function createAgentCapability(gateway: AgentGateway) {
     },
     ensureList: () => loadList(false),
     refreshList: () => loadList(true),
+    async create(
+      name: string,
+      onStarted?: (agentId: string) => void,
+    ): Promise<AgentCreationResult | null> {
+      const client = state.client;
+      if (!client || !state.connected || disposed || state.pendingAgent) {
+        return null;
+      }
+      const attempt = creations.prepare(client, name);
+      const { agentId } = attempt;
+      const pendingAgent = { id: agentId, name: attempt.name };
+      const isCurrent = () =>
+        !disposed &&
+        state.client === client &&
+        state.connected &&
+        state.pendingAgent === pendingAgent;
+      state.pendingAgent = pendingAgent;
+      publish();
+      try {
+        // The UI can open a display-only chat immediately. Persistence still waits
+        // for the new agent's own inference route to pass verification.
+        onStarted?.(agentId);
+        const { createAgentInRoster } = await import("./creation-recovery.runtime.ts");
+        return await createAgentInRoster(state, () => loadList(false), attempt, isCurrent);
+      } finally {
+        if (state.pendingAgent === pendingAgent) {
+          state.pendingAgent = undefined;
+          publish();
+        }
+      }
+    },
     files(agentId: string | null | undefined) {
       const normalized = normalizeOptionalString(agentId);
       return normalized
@@ -385,6 +434,7 @@ export function createAgentCapability(gateway: AgentGateway) {
       listeners.clear();
       fileRequests.clear();
       files.clear();
+      creations.dispose();
       retireAgentsRequest();
     },
   };

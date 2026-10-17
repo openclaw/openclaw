@@ -9,6 +9,7 @@ import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
+import { isClawsAvailable } from "../pages/claws/availability.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { DevicePairSetupLoader } from "./app-shell-device-pair-setup.tsx";
@@ -218,7 +219,9 @@ export function readShellView(host: ShellViewHost) {
     activeRouteId: activeRoute,
     router: runtime.router,
     activePluginTabId: activePluginRef ? pluginTabKey(activePluginRef) : "",
-    enabledRouteIds: APP_ROUTE_IDS,
+    enabledRouteIds: isClawsAvailable(runtimeConfig)
+      ? APP_ROUTE_IDS
+      : APP_ROUTE_IDS.filter((route) => route !== "claws"),
     sessionKey: host.activeSessionKey,
     connected: gatewayConnected,
     connectionStatus,

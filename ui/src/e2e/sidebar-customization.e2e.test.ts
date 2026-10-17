@@ -118,7 +118,7 @@ suite.define(() => {
                 key,
                 JSON.stringify({
                   sidebarAgentsMode: "roster",
-                  railShortcuts: ["route:agents-home", leadEntry, "route:cron"],
+                  railShortcuts: ["route:sessions", leadEntry, "route:cron"],
                 }),
               ),
             { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), leadEntry: entry },
@@ -823,7 +823,7 @@ suite.define(() => {
         const pages = await openSidebarPages(page);
         await pages
           .locator(".sidebar-pages__entry")
-          .filter({ has: page.getByRole("link", { name: "Agents", exact: true }) })
+          .filter({ has: page.getByRole("link", { name: "Sessions", exact: true }) })
           .getByRole("button", { name: "Pin", exact: true })
           .click();
         await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
@@ -840,8 +840,8 @@ suite.define(() => {
 
         const activity = home.locator(".session-glyph");
         const shortcut = sidebar
-          .locator('.sidebar-rail__pin[data-sidebar-entry="route:agents-home"]')
-          .getByRole("link", { name: "Agents", exact: true });
+          .locator('.sidebar-rail__pin[data-sidebar-entry="route:sessions"]')
+          .getByRole("link", { name: "Sessions", exact: true });
         await expect
           .poll(() => home.locator(".session-glyph--running .session-glyph__ring").count())
           .toBe(1);

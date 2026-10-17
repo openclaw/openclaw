@@ -244,11 +244,14 @@ suite.define(() => {
         expect(await cells.first().textContent()).toContain("Choose a conversation");
         const sidebar = page.locator("openclaw-app-sidebar");
         await sidebar.locator(".sidebar-agent-card__main").click();
-        await sidebar.locator('.sidebar-agent-menu [data-value="command:capabilities"]').click();
-        await expect.poll(() => cells.first().locator("openclaw-chat-pane").count()).toBe(1);
+        await sidebar.locator('.sidebar-agent-menu [data-value="agent:main"]').click();
+        const visiblePane = cells
+          .first()
+          .locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+        await expect.poll(() => visiblePane.count()).toBe(1);
         await expect
-          .poll(() => cells.first().locator(".agent-chat__composer-combobox textarea").inputValue())
-          .toBe("What can you do?");
+          .poll(() => visiblePane.locator(".agent-chat__composer-combobox textarea").inputValue())
+          .toBe(sessionScope === "global" ? "Scoped Home draft" : "");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(errors).toEqual([]);
       });

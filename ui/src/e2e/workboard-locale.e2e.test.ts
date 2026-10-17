@@ -55,7 +55,7 @@ suite.define(() => {
               localStorage.setItem(
                 key,
                 JSON.stringify({
-                  railShortcuts: ["route:agents-home", "plugin:workboard/board-sessions"],
+                  railShortcuts: ["route:sessions", "plugin:workboard/board-sessions"],
                 }),
               );
             },

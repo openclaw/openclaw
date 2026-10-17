@@ -89,47 +89,47 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element 
   );
   return (
     <Show
-      when={host.sidebarAgentsMode !== "roster" && (cardAgent() || cached())}
+      when={
+        (chipAgent().pending || host.sidebarAgentsMode !== "roster") && (cardAgent() || cached())
+      }
       fallback={renderSidebarWorkspaceHeader(host)}
     >
-      <openclaw-tooltip prop:content={cardName()}>
-        <SidebarAgentCard
-          compact={true}
-          agentName={cardName()}
-          agentId={cardAgentId()}
-          avatarUrl={
-            cached()
-              ? cached()!.avatar
-              : cardAgent()
-                ? resolveAgentAvatarUrl(cardAgent()!, cardIdentity())
-                : null
+      <SidebarAgentCard
+        compact={true}
+        agentName={cardName()}
+        agentId={cardAgentId()}
+        avatarUrl={
+          cached()
+            ? cached()!.avatar
+            : cardAgent()
+              ? resolveAgentAvatarUrl(cardAgent()!, cardIdentity())
+              : null
+        }
+        avatarAuthReady={avatarAuthReady()}
+        avatarText={
+          cached()
+            ? (cached()!.textAvatar ?? null)
+            : cardAgent()
+              ? resolveAgentTextAvatar(cardAgent()!, cardIdentity())
+              : null
+        }
+        environment={host.sessionDataContext?.config?.current?.environment ?? null}
+        menuOpen={host.sidebarMenus.agentMenuPosition !== null}
+        menuUnread={menuUnread()}
+        switcherAvailable={cardAgents().length > 1}
+        onToggleMenu={(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
+        onMenuPointerMove={(trigger: HTMLElement, event: PointerEvent) =>
+          host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)
+        }
+        onMenuPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
+        onContextMenu={(trigger, event) => {
+          event.preventDefault();
+          if (host.sidebarMenus.agentMenuPosition !== null) {
+            return;
           }
-          avatarAuthReady={avatarAuthReady()}
-          avatarText={
-            cached()
-              ? (cached()!.textAvatar ?? null)
-              : cardAgent()
-                ? resolveAgentTextAvatar(cardAgent()!, cardIdentity())
-                : null
-          }
-          environment={host.sessionDataContext?.config?.current?.environment ?? null}
-          menuOpen={host.sidebarMenus.agentMenuPosition !== null}
-          menuUnread={menuUnread()}
-          switcherAvailable={cardAgents().length > 1}
-          onToggleMenu={(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
-          onMenuPointerMove={(trigger: HTMLElement, event: PointerEvent) =>
-            host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)
-          }
-          onMenuPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
-          onContextMenu={(trigger, event) => {
-            event.preventDefault();
-            if (host.sidebarMenus.agentMenuPosition !== null) {
-              return;
-            }
-            host.sidebarMenus.toggleAgentMenu(trigger);
-          }}
-        />
-      </openclaw-tooltip>
+          host.sidebarMenus.toggleAgentMenu(trigger);
+        }}
+      />
     </Show>
   );
 }
@@ -179,66 +179,64 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
   const name = () => brand().name;
   const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
   return (
-    <openclaw-tooltip prop:content={name()}>
-      <div class="sidebar-workspace-header sidebar-workspace-header--rail">
-        <button
-          type="button"
-          class="sidebar-workspace-header__main"
-          aria-haspopup="menu"
-          aria-expanded={menuOpen() ? "true" : "false"}
-          aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
-          onPointerMove={(event) => {
-            host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
-          }}
-          onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
-          onPointerDown={(event: PointerEvent) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
+    <div class="sidebar-workspace-header sidebar-workspace-header--rail">
+      <button
+        type="button"
+        class="sidebar-workspace-header__main"
+        aria-haspopup="menu"
+        aria-expanded={menuOpen() ? "true" : "false"}
+        aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
+        onPointerMove={(event) => {
+          host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
+        }}
+        onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
+        onPointerDown={(event: PointerEvent) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          host.sidebarMenus.toggleAgentMenu(event.currentTarget);
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          if (!menuOpen()) {
             host.sidebarMenus.toggleAgentMenu(event.currentTarget);
-          }}
-          onContextMenu={(event) => {
-            event.preventDefault();
-            if (!menuOpen()) {
-              host.sidebarMenus.toggleAgentMenu(event.currentTarget);
-            }
-          }}
-        >
-          {branding().brandIcon !== "claw" ? (
-            <span
-              class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
-              aria-hidden="true"
-            >
-              {branding().brandIcon === "mark" ? (
-                <Icon name="mark" />
-              ) : (
-                <openclaw-theme-brand-icon prop:branding={branding()} aria-hidden="true" />
-              )}
-            </span>
-          ) : (
-            <span class="sidebar-workspace-header__mark" aria-hidden="true">
-              <Icon name="lobster" />
-            </span>
-          )}
-          <span class="sidebar-agent-card__text">
-            <span class="sidebar-agent-card__name">
-              <HoverMarquee
-                content={name()}
-                class="sidebar-agent-card__name-text"
-                options={{ loop: true, delay: 300, speed: 35 }}
-              />
-              <span class="sidebar-agent-card__chevron" aria-hidden="true">
-                <Icon name="chevronsUpDown" />
-              </span>
-            </span>
-            {host.sessionDataContext?.config.current.environment ? (
-              <span class="control-ui-environment-pill">
-                {host.sessionDataContext.config.current.environment.label}
-              </span>
-            ) : undefined}
+          }
+        }}
+      >
+        {branding().brandIcon !== "claw" ? (
+          <span
+            class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
+            aria-hidden="true"
+          >
+            {branding().brandIcon === "mark" ? (
+              <Icon name="mark" />
+            ) : (
+              <openclaw-theme-brand-icon prop:branding={branding()} aria-hidden="true" />
+            )}
           </span>
-        </button>
-      </div>
-    </openclaw-tooltip>
+        ) : (
+          <span class="sidebar-workspace-header__mark" aria-hidden="true">
+            <Icon name="lobster" />
+          </span>
+        )}
+        <span class="sidebar-agent-card__text">
+          <span class="sidebar-agent-card__name">
+            <HoverMarquee
+              content={name()}
+              class="sidebar-agent-card__name-text"
+              options={{ loop: true, delay: 300, speed: 35 }}
+            />
+            <span class="sidebar-agent-card__chevron" aria-hidden="true">
+              <Icon name="chevronsUpDown" />
+            </span>
+          </span>
+          {host.sessionDataContext?.config.current.environment ? (
+            <span class="control-ui-environment-pill">
+              {host.sessionDataContext.config.current.environment.label}
+            </span>
+          ) : undefined}
+        </span>
+      </button>
+    </div>
   );
 }
 

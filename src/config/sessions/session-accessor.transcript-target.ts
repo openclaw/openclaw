@@ -7,9 +7,11 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveConcreteSessionStorePath } from "./paths.js";
-import { resolveSessionEntrySelection } from "./session-accessor.entry.js";
 import { readSessionKeyBySessionIdInDatabase } from "./session-accessor.sqlite-entry-read.js";
-import { resolveSessionKeyBySessionId } from "./session-accessor.sqlite-entry.js";
+import {
+  resolveSessionEntry as resolveSessionEntrySelection,
+  resolveSessionKeyBySessionId,
+} from "./session-accessor.sqlite-exact-read.js";
 import {
   resolveSqliteTranscriptScope,
   resolveSqliteTranscriptReadScope,

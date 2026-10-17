@@ -303,7 +303,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     }
     this.batch = this.resolveBatchConfig();
     if (!transient) {
-      markMemoryIndexingLive();
+      markMemoryIndexingLive(this.agentId);
       this.runInBackgroundContext(() => {
         this.ensureWatcher();
         this.ensureSessionListener();

@@ -14,6 +14,7 @@ import type { ChannelsPairingListResult } from "../api/types.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-e2e-contract.ts";
 
 export const defaultControlUiFeatureMethods = [
+  "agents.create",
   "chat.abort",
   "chat.history",
   "chat.send",

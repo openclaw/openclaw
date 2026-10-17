@@ -74,6 +74,7 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   readonly themeMode: ThemeMode;
   activeChipAgent(): {
     activeId: string;
+    pending?: boolean;
     agent: GatewayAgentRow | undefined;
     agents: readonly GatewayAgentRow[];
     identity: AgentIdentityResult | null;
@@ -81,7 +82,6 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   };
   agentUnreadCount(agentId: string): number;
   ensureAgentIdentities(agentIds: readonly string[]): void;
-  askAgentCapabilities(agentId: string): void;
   findSidebarMenuSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   getSessionNavigationState(): { selectedAgentId: string };
   selectedVisibleSessions(): SidebarRecentSession[];

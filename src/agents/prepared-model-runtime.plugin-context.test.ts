@@ -1,16 +1,28 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
+import {
+  bindPluginMetadataSnapshotCache,
+  createPluginCache,
+  retirePluginCache,
+  withPluginCache,
+} from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import * as artifactIdentity from "../plugins/plugin-runtime-artifact-identity.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   getPluginRuntimeLoadContext,
   setPluginRuntimeLoadContext,
 } from "../plugins/runtime/load-context.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
+
+const temp = useAutoCleanupTempDirTracker(afterEach);
 
 describe("prepared model runtime plugin metadata ownership", () => {
   afterEach(() => {
@@ -79,6 +91,55 @@ describe("prepared model runtime plugin metadata ownership", () => {
     expect(selectedContext?.loaderCacheIdentity).toBeUndefined();
     expect(selectedContext?.registrationConfigKey).not.toBe("inbound-registration");
     expect(selectedContext?.expectedSourceDigests).toBeUndefined();
+  });
+
+  it("owns setup code with admitted metadata while rerunning current activation inputs", async () => {
+    const rootDir = temp.make("prepared-setup-owner-");
+    const source = path.join(rootDir, "setup-api.cjs");
+    fs.writeFileSync(
+      source,
+      `module.exports = { register(api) {
+        api.registerAutoEnableProbe(({ config, env }) =>
+          config.plugins.entries["setup-owner"].config.mode + ":" + env.OPENCLAW_SETUP_OWNER_TEST);
+      } };`,
+    );
+    const manifestRegistry = makeRegistry([{ id: "setup-owner", channels: [], origin: "bundled" }]);
+    Object.assign(manifestRegistry.plugins[0]!, {
+      rootDir,
+      source,
+      setupSource: source,
+      setup: { requiresRuntime: true },
+    });
+    const caches = Array.from({ length: 6 }, () => createPluginCache());
+    using fingerprints = vi.spyOn(artifactIdentity, "fingerprintPluginRuntimeArtifact");
+    try {
+      for (const generation of [0, 1]) {
+        const metadata = createPluginMetadataSnapshot({ manifestRegistry, workspaceDir: rootDir });
+        bindPluginMetadataSnapshotCache(metadata, caches[generation * 3]!);
+        for (const revision of [0, 1]) {
+          const mode = `generation-${generation}-revision-${revision}`;
+          const env = { OPENCLAW_SETUP_OWNER_TEST: `env-${revision}` };
+          const config = { plugins: { entries: { "setup-owner": { config: { mode } } } } };
+          const registry = createEmptyPluginRegistry();
+          withPluginCache(caches[generation * 3 + revision + 1]!, () =>
+            prepareOwnedPluginLoadContext(
+              { config, workspaceDir: rootDir },
+              env,
+              registry,
+              metadata,
+              true,
+            ),
+          );
+          expect(getPluginRuntimeLoadContext(registry)?.autoEnabledReasons).toEqual({
+            "setup-owner": [`${mode}:env-${revision}`],
+          });
+          expect(fingerprints).toHaveBeenCalledTimes(generation + 1);
+        }
+        await retirePluginCache(caches[generation * 3]!);
+      }
+    } finally {
+      await Promise.all(caches.map((cache) => retirePluginCache(cache)));
+    }
   });
 
   it("keeps direct no-current preparation on the requested workspace", () => {

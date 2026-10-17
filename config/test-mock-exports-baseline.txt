@@ -2341,7 +2341,6 @@
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../wait-for-idle-before-flush.js","3321face10b260e50b0929ba51d3ce2eff513837e88f8ab587b55a20818babff",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","./compaction-retry-aggregate-timeout.js","b5c2e15b3646cefca4c575a4154a5a62cf9a2052762b926216c854062e54489b",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","./compaction-timeout.js","dcf09c6a1351fc0e3b4ce481ffbfb7bf0584560a81326e2fd99537b3384ff2ba",1]
-["src/agents/embedded-agent-runner/run/attempt-startup.test.ts","../../../skills/runtime/embedded-run-entries.js","bc3f5c70aa6ccda8ce6839968fc264e2e3c6f63aa048a98fe0297c2e504b6f5c",1]
 ["src/agents/embedded-agent-runner/run/attempt-startup.test.ts","../../../skills/runtime/env-overrides.js","d742444d830144d3ca3afd878fc1a77292090f97b600055fd16dc33ce4e14973",1]
 ["src/agents/embedded-agent-runner/run/attempt-startup.test.ts","../../installed-skill-runtime.js","811dfdc517b43c5b90e65e7c98312cd6c579393c4fa06e09698b48bf90cbe636",1]
 ["src/agents/embedded-agent-runner/run/attempt-startup.test.ts","../sandbox-skills.js","0b09057fddc80c55fa2114d2fbad6581d7b17a38cd61e975570026e041b46e51",1]

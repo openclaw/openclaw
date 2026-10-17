@@ -5851,6 +5851,13 @@ jobs:
 
       - *select_xcode_step
 
+      - name: Inspect screenshot simulator prerequisites
+        run: |
+          xcrun simctl list runtimes --json
+          xcrun simctl runtime list --json
+          xcrun simctl list devices --json
+          xcrun simctl list devicetypes --json
+
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:

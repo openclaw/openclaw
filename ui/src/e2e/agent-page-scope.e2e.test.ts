@@ -341,7 +341,8 @@ suite.define(() => {
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       await sidebar
         .locator(".sidebar-agent-menu")
-        .locator('[data-value="command:agent-settings"]')
+        .locator('[data-value="agent:writer"]')
+        .getByRole("button", { name: "Writer settings", exact: true })
         .click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/writer");
       expect(new URL(page.url()).searchParams.get("agent")).toBeNull();

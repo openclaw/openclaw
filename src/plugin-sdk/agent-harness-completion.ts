@@ -1,5 +1,4 @@
 import {
-  isAgentHarnessCompletionCustodyCurrent,
   runWithAgentHarnessCompletionCustody,
   type AgentHarnessCompletionCustody,
 } from "../agents/agent-harness-completion-custody.js";
@@ -112,11 +111,15 @@ async function deliverAgentHarnessCompletionBound(
     const requesterSessionId = requester.entry?.sessionId;
     const requesterLifecycleRevision = requester.entry?.lifecycleRevision;
     const isRequesterCurrent = (rejectRetiredCustody = false) => {
-      if (completionCustody && !isAgentHarnessCompletionCustodyCurrent(completionCustody, scope)) {
-        if (rejectRetiredCustody) {
-          throw new Error("Harness completion custody retired");
+      if (completionCustody) {
+        try {
+          runWithAgentHarnessCompletionCustody(completionCustody, scope, () => undefined);
+        } catch (cause) {
+          if (rejectRetiredCustody) {
+            throw new Error("Harness completion custody retired", { cause });
+          }
+          return false;
         }
-        return false;
       }
       let current: ReturnType<typeof readRequesterCurrent>;
       try {

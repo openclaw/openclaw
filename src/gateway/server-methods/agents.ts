@@ -6,6 +6,7 @@ import {
   validateAgentsDeleteParams,
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { validateAgentIdInput } from "../../agents/agent-create.js";
 import { AgentSharedStoreOwnerError } from "../../agents/agent-delete-databases.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
@@ -25,11 +26,14 @@ import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../../config/runtime-write-application.js";
+import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { reviveAgentDatabasesAfterConfigCommit } from "../server-reload-agent-databases.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { agentAvatarGenerateHandler } from "./agents-avatar.js";
 import {
@@ -49,6 +53,11 @@ import {
 } from "./agents-files.js";
 import { agentListHandler } from "./agents-list.js";
 import {
+  prepareAgentOnboarding,
+  completeAgentOnboarding,
+  type PreparedAgentOnboarding,
+} from "./agents-onboarding.js";
+import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
 } from "./local-state-owner.js";
@@ -66,19 +75,17 @@ function createAgentConfigApplication(respond: RespondFn) {
   return {
     attach: <T extends object>(options: T) =>
       attachRuntimeConfigWriteApplication(options, application),
-    confirm: async () => {
+    confirm: async (onUnconfirmed?: (message: string) => void) => {
       const outcome = application.claimed ? await application.result : "unclaimed";
       if (outcome === "applied") {
         return true;
       }
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); run config.get, then apply the saved config or restart the Gateway.`,
-        ),
-      );
+      const message = `Agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); run config.get, then apply the saved config or restart the Gateway.`;
+      if (onUnconfirmed) {
+        onUnconfirmed(message);
+      } else {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+      }
       return false;
     },
   };
@@ -89,6 +96,15 @@ export const agentsHandlers: GatewayRequestHandlers = {
   "agents.list": agentListHandler,
   "agents.create": async (options) => {
     const { params, respond, client, context } = options;
+    using diagnostics = startSlowRequestDiagnostics<
+      | "preflight"
+      | "inference"
+      | "persistAgent"
+      | "reviveDatabases"
+      | "applyConfig"
+      | "createChat"
+      | "response"
+    >(context.logGateway, "slow agent create", "agents.create", "preflight");
     if (!assertValidParams(params, validateAgentsCreateParams, "agents.create", respond)) {
       return;
     }
@@ -102,16 +118,39 @@ export const agentsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, localStateOwnerChangedError(error));
       return;
     }
+    let preparation: PreparedAgentOnboarding | undefined;
+    if (params.onboarding) {
+      const identity = validateAgentIdInput(params.agentId ?? params.name, {
+        displayName: params.name,
+      });
+      if (!identity.ok) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, identity.message));
+        return;
+      }
+      try {
+        diagnostics?.mark("inference");
+        preparation = await prepareAgentOnboarding(options, identity.agentId, params);
+      } catch (error) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+        return;
+      }
+    }
     const application = createAgentConfigApplication(respond);
     try {
+      diagnostics?.mark("persistAgent");
       const result = await createAgentConfigEntry(
         {
           name: params.name,
+          ...(params.agentId ? { entry: { id: params.agentId, name: params.name } } : {}),
           workspace: params.workspace,
           model: params.model,
           emoji: params.emoji,
           avatar: params.avatar,
-          beforePersistentApply: assertOwnerCurrent,
+          beforePersistentApply: () => {
+            assertOwnerCurrent?.();
+            preparation?.assertCurrent();
+          },
+          ...(preparation ? { expectedConfigHash: preparation.expectedConfigHash } : {}),
           assertIdentityInputAllowed: captureGatewayClientUploadCommitGuard({
             method: "agents.create",
             requestParams: params,
@@ -125,12 +164,38 @@ export const agentsHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.message));
         return;
       }
+      diagnostics?.mark("reviveDatabases");
       await reviveAgentDatabasesAfterConfigCommit([result.agentId], (message) =>
         context.logGateway.warn(message),
       );
-      if (!(await application.confirm())) {
+      diagnostics?.mark("applyConfig");
+      let applicationError: string | undefined;
+      const applied = await application.confirm(
+        preparation
+          ? (message) => {
+              applicationError = message;
+            }
+          : undefined,
+      );
+      if (!applied && !preparation) {
         return;
       }
+      if (applied) {
+        diagnostics?.mark("createChat");
+      }
+      const onboarding = preparation
+        ? applicationError
+          ? {
+              status: "error" as const,
+              sessionKey: resolveAgentMainSessionKey({
+                cfg: context.getRuntimeConfig(),
+                agentId: result.agentId,
+              }),
+              error: applicationError,
+            }
+          : await completeAgentOnboarding(options, result.agentId)
+        : undefined;
+      diagnostics?.mark("response");
       respond(
         true,
         {
@@ -140,6 +205,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
           workspace: result.workspace,
           agentDir: result.agentDir,
           ...(result.model ? { model: result.model } : {}),
+          ...(onboarding ? { onboarding } : {}),
         },
         undefined,
       );

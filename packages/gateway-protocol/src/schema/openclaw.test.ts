@@ -156,6 +156,15 @@ describe("OpenClaw setup detection protocol", () => {
     expect(validateSystemAgentSetupDetectParams({ agentId: "research" })).toBe(true);
     expect(validateSystemAgentSetupVerifyParams({ agentId: "research" })).toBe(true);
     expect(
+      validateSystemAgentSetupVerifyParams({ agentId: "new-bot", modelTarget: "primary" }),
+    ).toBe(true);
+    expect(
+      validateSystemAgentSetupVerifyParams({ agentId: "new-bot", modelTarget: "utility" }),
+    ).toBe(true);
+    expect(
+      validateSystemAgentSetupVerifyParams({ agentId: "new-bot", modelTarget: "fallback" }),
+    ).toBe(false);
+    expect(
       validateSystemAgentSetupActivateParams({
         agentId: "research",
         kind: "existing-model",

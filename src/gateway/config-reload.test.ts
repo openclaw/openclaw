@@ -37,6 +37,7 @@ import {
   publishRuntimeConfigWrite,
 } from "../config/runtime-write-application.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   clearCurrentPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshotState,
@@ -45,6 +46,7 @@ import {
 import { hashStableJson } from "../plugins/installed-plugin-index-hash.js";
 import { PluginRuntimeApplicationError, getPluginRuntimeGeneration } from "../plugins/lifecycle.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { capturePluginGenerationArtifact } from "../plugins/plugin-generation-artifact.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
@@ -3383,6 +3385,7 @@ describe("startGatewayConfigReloader skills discovery refresh", () => {
 
   afterEach(async () => {
     await closeTestConfigReloaders();
+    clearCurrentPluginMetadataSnapshot();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -3397,14 +3400,21 @@ describe("startGatewayConfigReloader skills discovery refresh", () => {
       makeSnapshot({ config: nextConfig, hash: "skills-config-change" }),
     );
     const order: string[] = [];
+    const previousMetadata = createPluginMetadataSnapshotFixture();
+    const publishedMetadata = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "published-skills", skills: ["skills"] }],
+    });
+    setGatewayPluginMetadataSnapshot(previousMetadata);
     let acceptedConfig: OpenClawConfig | undefined;
     refreshSkillsDiscoveryMock.mockImplementation(async ({ config: candidateConfig }) => {
       expect(candidateConfig).toEqual(acceptedConfig);
       order.push("skills");
     });
     const { watcher, reloader } = createReloaderHarness(readSnapshot, {
+      runTransaction: (run) => withPluginCache(createPluginCache(), run),
       onConfigAccepted: async (candidateConfig) => {
         acceptedConfig = candidateConfig;
+        setGatewayPluginMetadataSnapshot(publishedMetadata, { config: candidateConfig });
         order.push("config");
       },
     });
@@ -3417,6 +3427,7 @@ describe("startGatewayConfigReloader skills discovery refresh", () => {
     expect(refreshSkillsDiscoveryMock).toHaveBeenCalledExactlyOnceWith({
       config: nextConfig,
       reason: "config-change",
+      pluginMetadataSnapshot: publishedMetadata,
     });
     await reloader.stop();
   });

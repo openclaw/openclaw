@@ -1,4 +1,6 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
+import { parseAgentSessionKey } from "./session-key.ts";
 
 export function sessionWorkspaceFileKey(
   sessionKey: string,
@@ -59,5 +61,10 @@ export function resolveSessionWorkspace(params: {
     : root
       ? pathBasename(root)
       : null;
+  const agentId = parseAgentSessionKey(row.key)?.agentId ?? row.agentId;
+  // Default agent folders are storage identities, not user-chosen project names.
+  if (root === params.agentWorkspace?.trim() && label === `workspace-${agentId}`) {
+    return { root, label: t("sessionHovercard.workspaceLabel") };
+  }
   return { root, label };
 }

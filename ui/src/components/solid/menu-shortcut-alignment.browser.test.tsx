@@ -102,6 +102,8 @@ it("keeps Layout hints aligned before and after panel styles load, and hidden on
     // The opening transition scales DOM bounds; measure its final geometry.
     expect(getComputedStyle(menu).scale).toBe("1");
   });
+  // Computed scale can round to 1 before WebKit finishes the entry transition.
+  await Promise.all(menu.getAnimations().map((animation) => animation.finished));
   const hints = [...menu.querySelectorAll<HTMLElement>(".shortcut-kbd")];
   expect(hints).toHaveLength(4);
   const bounds = () => hints.map((hint) => hint.getBoundingClientRect());

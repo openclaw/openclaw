@@ -68,11 +68,7 @@ export function modelSelectionPoliciesMatch(
   ]);
   for (const agentId of agentIds) {
     const policy = (cfg: OpenClawConfig) => {
-      const model = resolveDefaultModelForAgent({
-        cfg,
-        agentId,
-        manifestPlugins: publishedMetadata,
-      });
+      const model = resolveDefaultModelForAgent({ cfg, agentId, manifestPlugins });
       return createModelVisibilityPolicy({
         cfg,
         agentId,

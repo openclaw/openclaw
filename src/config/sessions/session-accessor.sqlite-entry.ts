@@ -2,7 +2,6 @@ import { normalizeInternalTurnContext } from "../../auto-reply/internal-turn-sou
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { runOpenClawAgentWriteWithYieldingAdmission } from "../../state/openclaw-agent-db-transaction.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
@@ -21,7 +20,6 @@ import type {
   SessionAccessScope,
   SessionEntrySummary,
   SessionEntryTargetPatchScope,
-  SessionTranscriptReadScope,
 } from "./session-accessor.sqlite-contract.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import { listSqliteSessionEntriesFromDatabase } from "./session-accessor.sqlite-entry-list.read.js";
@@ -29,7 +27,6 @@ import {
   applySessionEntryPatchInDatabase,
   replaceSessionEntryInDatabase,
 } from "./session-accessor.sqlite-entry-mutation.js";
-import { readSessionKeyBySessionIdInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import {
   readSessionEntryRow,
   readLifecycleTargetSnapshot,
@@ -42,7 +39,6 @@ import { createFallbackSessionEntry } from "./session-accessor.sqlite-normalize.
 import {
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
-  resolveSqliteTranscriptReadScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedSqliteScope,
@@ -109,25 +105,6 @@ export function loadSessionEntryReadOnly(scope: SessionEntryReadScope): SessionE
 }
 
 export { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-exact-read.js";
-
-/** Resolves the persisted session key for a SQLite transcript session id. */
-export function resolveSessionKeyBySessionId(
-  scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionId" | "storePath">,
-): string | undefined {
-  const memory = getSessionActorStorageBinding(scope);
-  if (memory) {
-    return memory.actor.storage!.readCurrent(
-      { type: "session.entry.readById", input: { sessionId: scope.sessionId } },
-      memory.authority,
-    )?.sessionKey;
-  }
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => readSessionKeyBySessionIdInDatabase(database, resolved.sessionId),
-    toDatabaseOptions(resolved),
-  );
-  return result.found ? result.value : undefined;
-}
 
 /** Lists session entries from the additive SQLite session store. */
 export function listSessionEntryRows(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
