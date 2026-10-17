@@ -274,10 +274,11 @@ struct CLIInstallerTests {
     @Test(arguments: [false, true])
     func `stale managed update preserves a runtime advanced by the CLI`(advancesDuringDispatch: Bool) async throws {
         let root = FileManager().temporaryDirectory.appendingPathComponent(
-            "openclaw-update-ahead-\(UUID().uuidString)")
+            "openclaw-update-ahead-\(UUID().uuidString)").resolvingSymlinksInPath()
         defer { try? FileManager().removeItem(at: root) }
         try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
-        let executable = root.appendingPathComponent("openclaw")
+        let executable = URL(fileURLWithPath: CLIInstaller.managedExecutableLocation(homeDirectory: root))
+        try FileManager().createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
         let dispatched = root.appendingPathComponent("update-dispatched")
         try """
         #!/bin/sh
@@ -294,11 +295,18 @@ struct CLIInstallerTests {
         exit 1
         """.write(to: executable, atomically: false, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let node = executable.deletingLastPathComponent().appendingPathComponent("node")
+        try makeExecutableForTests(at: node)
+        try "#!/bin/sh\nprintf 'v24.16.0\\n'\n".write(to: node, atomically: false, encoding: .utf8)
         let config = root.appendingPathComponent("openclaw.json")
         try "{}".write(to: config, atomically: false, encoding: .utf8)
         try await TestIsolation.withIsolatedState(
             env: ["OPENCLAW_STATE_DIR": root.path, "OPENCLAW_CONFIG_PATH": config.path],
-            defaults: [cliInstallPolicyKey: "exact"])
+            defaults: [
+                cliInstallPolicyKey: "exact",
+                cliValidatedExecutableKey: root.appendingPathComponent("external/openclaw").path,
+                cliValidatedVersionKey: "2026.9.8",
+            ])
         {
             let absent = root.appendingPathComponent("absent-service")
             let authority = GatewayLaunchAgentManager.ServiceAuthority(
@@ -308,6 +316,7 @@ struct CLIInstallerTests {
             var dispatchedReceipt = false
             let outcome = await CLIInstaller.updateManaged(
                 targetVersion: "2026.9.8",
+                homeDirectory: root,
                 installedCLI: .init(
                     prefix: [executable.path], sqliteLibrary: nil, serviceAuthority: authority),
                 onDispatch: { dispatchedReceipt = true },
@@ -316,6 +325,9 @@ struct CLIInstallerTests {
             #expect(outcome == .success(fromVersion: "2026.10.2", toVersion: "2026.10.2"))
             #expect(dispatchedReceipt == advancesDuringDispatch)
             #expect(FileManager().fileExists(atPath: dispatched.path) == advancesDuringDispatch)
+            #expect(AppDefaults.standard.string(forKey: cliValidatedExecutableKey) ==
+                executable.path)
+            #expect(AppDefaults.standard.string(forKey: cliValidatedVersionKey) == "2026.10.2")
         }
         #expect(CLIInstaller.satisfiesUpdateTarget(installedVersion: "2026.10.2", targetVersion: "2026.9.8"))
         #expect(!CLIInstaller.satisfiesUpdateTarget(installedVersion: "2026.9.8", targetVersion: "2026.10.2"))
