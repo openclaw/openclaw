@@ -99,6 +99,7 @@ class SessionPrefetcher {
       return;
     }
     this.connected = true;
+    // Prefetch scheduling owns document visibility from connect() through disconnect().
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     this.schedule();
   }
@@ -438,6 +439,7 @@ export function createSessionPrefetch(
       return;
     }
     const source = context;
+    // Native pane hosts expose retained-session state across their renderer boundaries.
     const panes = [...paneRoot.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].filter(
       (pane) => pane.closest("openclaw-app-shell") === paneRoot.closest("openclaw-app-shell"),
     );
@@ -491,6 +493,7 @@ export function createSessionPrefetch(
     if (root !== paneRoot) {
       paneListeners?.abort();
       paneRoot = root;
+      // Native lifecycle and navigation events share cleanup when the shell root changes.
       paneListeners = new AbortController();
       const options = { signal: paneListeners.signal };
       paneRoot.addEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, syncSnapshot, options);
