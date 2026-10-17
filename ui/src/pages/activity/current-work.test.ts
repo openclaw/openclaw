@@ -5,9 +5,17 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { useSessionActivityControllerFixture } from "./session-activity-controller.test-support.ts";
 
 const { active, listing, setup } = useSessionActivityControllerFixture();
-beforeEach(() => vi.useFakeTimers());
+let fixture: ReturnType<typeof setup>;
+beforeEach(() => {
+  vi.useFakeTimers();
+  fixture = setup();
+});
 
-function snapshot(session: GatewaySessionRow, ancestorSessions: unknown[] = [], reason?: string) {
+function snapshot(
+  session: GatewaySessionRow,
+  ancestorSessions: GatewaySessionRow[] = [],
+  reason?: string,
+) {
   return { agentId: active.agentId, session, ancestorSessions, reason };
 }
 
@@ -23,15 +31,16 @@ function ancestorRef(key: string, sessionId: string | undefined, revision: strin
   return { key, sessionId, revision, snapshotAt: 300 };
 }
 
-function pendingRefresh({ request, controller, client }: ReturnType<typeof setup>) {
+function pendingRefresh(query: Parameters<typeof fixture.controller.load>[1] = "current") {
+  const { request, controller, client } = fixture;
   const pending = createDeferred<SessionsListResult>();
   request.mockReturnValueOnce(pending.promise);
-  void controller.load(client, "current", "refresh");
+  void controller.load(client, query, "refresh");
   return pending;
 }
 
 it("publishes usable snapshots while new work keeps starting during refresh", async () => {
-  const { client, request, controller } = setup();
+  const { client, request, controller } = fixture;
   request.mockResolvedValueOnce(listing([]));
   await controller.load(client, "current");
   const responses = Array.from({ length: 4 }, () => createDeferred<SessionsListResult>());
@@ -74,7 +83,7 @@ it("publishes usable snapshots while new work keeps starting during refresh", as
 });
 
 it("keeps an incomplete empty snapshot loading and permits retry after catch-up fails", async () => {
-  const { client, request, controller } = setup();
+  const { client, request, controller } = fixture;
   const pending = createDeferred<SessionsListResult>();
   request.mockReturnValueOnce(pending.promise).mockRejectedValueOnce(new Error("Unavailable"));
   void controller.load(client, "current");
@@ -87,18 +96,16 @@ it("keeps an incomplete empty snapshot loading and permits retry after catch-up 
   await vi.advanceTimersByTimeAsync(5_000);
   expect(controller.error).toBe("Unavailable");
   expect(controller.loading).toBe(false);
-  void controller.load(client, "current", "retry");
-  await vi.advanceTimersByTimeAsync(0);
+  await controller.load(client, "current", "retry");
   expect(controller.error).toBeUndefined();
   expect(controller.result?.sessions).toEqual([active]);
   expect(controller.incomplete).toBe(false);
 });
 
 it("retires current work on disconnect and only accepts the replacement query", async () => {
-  const fixture = setup();
   const { client, request, controller } = fixture;
   await controller.load(client, "current");
-  const stale = pendingRefresh(fixture);
+  const stale = pendingRefresh();
   void controller.load(null, null);
   expect(controller.result).toBeUndefined();
   expect(controller.incomplete).toBe(false);
@@ -115,7 +122,6 @@ it.each([
 ])(
   "reconciles overlapping completions during a snapshot (both finish: $bothFinish, truncated: $hasMore, newer: $newer)",
   async ({ bothFinish, hasMore, newer }) => {
-    const fixture = setup();
     const { client, request, controller, publications } = fixture;
     const overlap = sample(active, 200, {
       activeRunIds: ["release-run", "overlap-run"],
@@ -127,7 +133,7 @@ it.each([
     };
     request.mockResolvedValueOnce(initial);
     await controller.load(client, "current");
-    const stale = pendingRefresh(fixture);
+    const stale = pendingRefresh();
     if (bothFinish) {
       controller.invalidate({ ...overlap, updatedAt: 150, snapshotAt: undefined });
     }
@@ -169,7 +175,6 @@ it.each([
 );
 
 it("uses canonical replacement liveness before a delayed old completion", async () => {
-  const fixture = setup();
   const { client, request, controller } = fixture;
   const replacement = {
     ...active,
@@ -179,7 +184,7 @@ it("uses canonical replacement liveness before a delayed old completion", async 
   };
   const latest = sample(replacement, 230);
   await controller.load(client, "current");
-  const stale = pendingRefresh(fixture);
+  const stale = pendingRefresh();
   request.mockResolvedValue(listing([latest]));
   controller.invalidate({ ...replacement, runId: "next-run", activeRunIds: null });
   expect(controller.result?.sessions).toEqual([replacement]);
@@ -205,7 +210,7 @@ it("uses canonical replacement liveness before a delayed old completion", async 
 });
 
 it("keeps a replacement run after an older terminal event", async () => {
-  const { client, controller } = setup();
+  const { client, controller } = fixture;
   await controller.load(client, "current");
   controller.invalidate({
     key: active.key,
@@ -219,17 +224,15 @@ it("keeps a replacement run after an older terminal event", async () => {
 });
 
 it("refreshes a conflicting delete generation without confusing global owners during a read", async () => {
-  const fixture = setup();
   const { client, request, controller } = fixture;
   const globalRow = { ...active, key: "global", kind: "global" as const };
   const main = { ...globalRow, agentId: "main", sessionId: "main-global" };
   const work = { ...globalRow, agentId: "work", sessionId: "work-global" };
   const literal = { ...active, key: "agent:work:global", sessionId: "literal-global" };
-  const authoritative = [literal];
   const initial = listing([main, work, literal]);
-  request.mockResolvedValueOnce(initial).mockResolvedValue({ ...listing(authoritative), ts: 300 });
+  request.mockResolvedValueOnce(initial).mockResolvedValue({ ...listing([literal]), ts: 300 });
   await controller.load(client, "current");
-  const stale = pendingRefresh(fixture);
+  const stale = pendingRefresh();
   controller.invalidate(settled(main, 200));
   controller.invalidate({
     sessionKey: work.key,
@@ -243,7 +246,7 @@ it("refreshes a conflicting delete generation without confusing global owners du
   expect(controller.result?.sessions).toEqual([literal, work]);
   expect(controller.incomplete).toBe(true);
   await vi.advanceTimersByTimeAsync(5_000);
-  expect(controller.result?.sessions).toEqual(authoritative);
+  expect(controller.result?.sessions).toEqual([literal]);
   expect(controller.incomplete).toBe(false);
   expect(request).toHaveBeenCalledTimes(3);
 });
@@ -251,26 +254,16 @@ it("refreshes a conflicting delete generation without confusing global owners du
 it.each(["current", { personId: null, time: "all", query: "" }] as const)(
   "retains certified rows through a busy overlapping %j read without overflowing",
   async (query) => {
-    const { client, request, controller } = setup();
+    const { client, request, controller } = fixture;
     await controller.load(client, query);
-    const pending = createDeferred<SessionsListResult>();
-    request.mockReturnValueOnce(pending.promise);
-    void controller.load(client, query, "refresh");
+    const pending = pendingRefresh(query);
     for (let revision = 1; revision <= 1_500; revision += 1) {
-      controller.invalidate({
-        agentId: active.agentId,
-        reason: "patch",
-        session: sample(active, 100 + revision, { label: `Revision ${revision}` }),
-        ancestorSessions: [],
-      });
+      const row = sample(active, 100 + revision, { label: `Revision ${revision}` });
+      controller.invalidate(snapshot(row, [], "patch"));
     }
     if (query === "current") {
-      controller.invalidate({
-        agentId: active.agentId,
-        reason: "patch",
-        session: sample(active, 1_600, { snapshotAt: 1_599, label: "Delayed sample" }),
-        ancestorSessions: [],
-      });
+      const delayed = sample(active, 1_600, { snapshotAt: 1_599, label: "Delayed sample" });
+      controller.invalidate(snapshot(delayed, [], "patch"));
     }
     pending.resolve(listing([active]));
     await vi.advanceTimersByTimeAsync(59_999);
@@ -285,7 +278,7 @@ it.each(["current", { personId: null, time: "all", query: "" }] as const)(
 );
 
 it("excludes certified dock snapshots from current work even with space", async () => {
-  const { client, request, controller } = setup();
+  const { client, request, controller } = fixture;
   request.mockResolvedValue({ ...listing([active]), hasMore: false, limitApplied: 100 });
   await controller.load(client, "current");
   const added = sample(active, 200, {
@@ -293,17 +286,13 @@ it("excludes certified dock snapshots from current work even with space", async 
     sessionId: "new-session",
     isDock: true,
   });
-  controller.invalidate({
-    ...snapshot(added),
-    reason: "agent.run.started",
-  });
+  controller.invalidate(snapshot(added, [], "agent.run.started"));
   expect(controller.result?.sessions).toEqual([active]);
   await vi.advanceTimersByTimeAsync(5_000);
   expect(request).toHaveBeenCalledTimes(1);
 });
 
 it("refreshes held parent facts after uncertified child completion during a read", async () => {
-  const fixture = setup();
   const { client, request, controller } = fixture;
   const group = { groupId: "work", createdAt: 1, queued: 0, running: 1, done: 0, failed: 0 };
   const parent = {
@@ -326,7 +315,7 @@ it("refreshes held parent facts after uncertified child completion during a read
     .mockResolvedValueOnce(initial)
     .mockResolvedValue({ ...listing([settledParent]), ts: 300 });
   await controller.load(client, "current");
-  const stale = pendingRefresh(fixture);
+  const stale = pendingRefresh();
   controller.invalidate(snapshot({ ...settled(child, 200), snapshotAt: 200 }));
   expect(controller.result?.sessions).toEqual([parent]);
   expect(controller.incomplete).toBe(true);
@@ -341,7 +330,6 @@ it("refreshes held parent facts after uncertified child completion during a read
 });
 
 it("applies certified ancestor rows and references without refetching current work during a read", async () => {
-  const fixture = setup();
   const { client, request, controller } = fixture;
   const parent = {
     ...active,
@@ -362,9 +350,12 @@ it("applies certified ancestor rows and references without refetching current wo
   };
   const child = { ...active, parentSessionKey: parent.key, snapshotAt: 100 };
   const heldParent = () => controller.result?.sessions.find((row) => row.key === parent.key);
+  const changeAncestors = (at: number, rows: GatewaySessionRow[]) => {
+    controller.invalidate(snapshot(sample(child, at), rows, "subagent-status"));
+  };
   request.mockResolvedValue(listing([child, parent, grandparent]));
   await controller.load(client, "current");
-  const stale = pendingRefresh(fixture);
+  const stale = pendingRefresh();
   const updatedParent = {
     ...parent,
     label: "Parent after settlement",
@@ -373,24 +364,18 @@ it("applies certified ancestor rows and references without refetching current wo
     status: "queued" as const,
     hasActiveSubagentRun: false,
   };
-  controller.invalidate(
-    snapshot(
-      sample(child, 200),
-      [
-        { ...updatedParent, ancestorRevision: "parent-revision" },
-        { ...grandparent, snapshotAt: 200, ancestorRevision: "grandparent-revision" },
-        {
-          ...updatedParent,
-          key: "agent:work:inactive-ancestor",
-          sessionId: "inactive-ancestor",
-          ancestorRevision: "inactive-ancestor-revision",
-          hasActiveRun: false,
-          status: "done",
-        },
-      ],
-      "subagent-status",
-    ),
-  );
+  changeAncestors(200, [
+    { ...updatedParent, ancestorRevision: "parent-revision" },
+    { ...grandparent, snapshotAt: 200, ancestorRevision: "grandparent-revision" },
+    {
+      ...updatedParent,
+      key: "agent:work:inactive-ancestor",
+      sessionId: "inactive-ancestor",
+      ancestorRevision: "inactive-ancestor-revision",
+      hasActiveRun: false,
+      status: "done",
+    },
+  ]);
   expect(heldParent()).toEqual(updatedParent);
   const reference = ancestorRef(parent.key, parent.sessionId, "parent-revision");
   controller.invalidate({
@@ -405,21 +390,15 @@ it("applies certified ancestor rows and references without refetching current wo
       ),
     ],
   });
-  controller.invalidate(
-    snapshot(
-      sample(child, 250),
-      [
-        {
-          ...updatedParent,
-          label: "Delayed parent snapshot",
-          updatedAt: 175,
-          snapshotAt: 250,
-          ancestorRevision: "delayed-parent-revision",
-        },
-      ],
-      "subagent-status",
-    ),
-  );
+  changeAncestors(250, [
+    {
+      ...updatedParent,
+      label: "Delayed parent snapshot",
+      updatedAt: 175,
+      snapshotAt: 250,
+      ancestorRevision: "delayed-parent-revision",
+    },
+  ]);
   const referencedParent = { ...updatedParent, snapshotAt: 300 };
   expect(heldParent()).toEqual(referencedParent);
   stale.resolve(listing([child, parent, grandparent]));

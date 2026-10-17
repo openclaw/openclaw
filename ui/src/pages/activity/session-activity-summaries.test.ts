@@ -39,25 +39,43 @@ const updating = (...sessions: GatewaySessionRow[]) => ({
     activitySummary: { ...activitySummary, state: "updating", canEnsure: true },
   })),
 });
+type BackfillResponse = SessionsListResult | ReturnType<typeof updating>;
 let client: GatewayBrowserClient;
 let state: ReturnType<typeof createSessionActivity>;
 let request: ReturnType<typeof mockRequest>;
+let held: ReturnType<typeof createDeferred<BackfillResponse>>;
 const mockRequest = () => vi.spyOn(client, "request");
 const waitForSummary = (index: number, value: string) =>
   vi.waitFor(() => expect(state.result?.sessions[index]?.activitySummary?.state).toBe(value));
+const startBackfill = async (sessions: GatewaySessionRow[], ...responses: BackfillResponse[]) => {
+  request.mockResolvedValueOnce(listing(sessions)).mockReturnValueOnce(held.promise);
+  for (const response of responses) {
+    request.mockResolvedValueOnce(response);
+  }
+  void state.load(client, filters, "query", true);
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+};
+const expectEnsure = (session: GatewaySessionRow) =>
+  expect(request).toHaveBeenLastCalledWith(
+    ACTIVITY_SUMMARY_ENSURE_METHOD,
+    { sessions: [{ key: session.key, agentId: session.agentId }] },
+    expect.anything(),
+  );
 beforeEach(() => {
   client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
   state = createSessionActivity(() => {});
   request = mockRequest();
+  held = createDeferred<BackfillResponse>();
 });
-afterEach(() => {
+afterEach(async () => {
+  held.resolve({ sessions: [] });
   state.dispose();
+  await held.promise;
   vi.unstubAllGlobals();
 });
 
 it("rechecks latest row permissions before queued batches and does not consume skipped attempts", async () => {
   const sessions = Array.from({ length: 22 }, (_, index) => row(`agent:main:notes-${index}`));
-  const { promise: pending, resolve: finish } = createDeferred<unknown>();
   let currentRows = sessions;
   const batches: string[][] = [];
   request.mockImplementation(async (method, params) => {
@@ -67,7 +85,7 @@ it("rechecks latest row permissions before queued batches and does not consume s
     const batch = (params as { sessions: Array<{ key: string }> }).sessions;
     batches.push(batch.map(({ key }) => key));
     if (batches.length === 1) {
-      return pending;
+      return held.promise;
     }
     return updating(...batch.map(({ key }) => row(key)));
   });
@@ -86,7 +104,7 @@ it("rechecks latest row permissions before queued batches and does not consume s
   await vi.waitFor(() => expect(state.result?.sessions[20]).toEqual(currentRows[20]));
   state.retrySummary(staleRow);
   state.retrySummary(state.result!.sessions[20]!);
-  finish({ sessions: [] });
+  held.resolve({ sessions: [] });
   await vi.waitFor(() => expect(batches).toHaveLength(2));
   expect(batches[1]).toEqual([sessions[21]!.key]);
   currentRows = state.result!.sessions.map((session) =>
@@ -115,22 +133,16 @@ it("keeps cached recaps readable without requesting generation on a read-only co
 });
 
 it("does not let a delayed backfill response overwrite a newer session-list recap", async () => {
-  const { promise: pending, resolve: finish } = createDeferred<unknown>();
   const oldRow = row();
   const newRow = row(oldRow.key, {
     updatedAt: 2,
     activitySummary: { state: "current", text: "The repair is now merged.", updatedAt: 2 },
   });
-  request
-    .mockResolvedValueOnce(listing([oldRow]))
-    .mockReturnValueOnce(pending)
-    .mockResolvedValueOnce(listing([newRow]));
-  void state.load(client, filters, "query", true);
-  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+  await startBackfill([oldRow], listing([newRow]));
   void state.load(client, filters, "refresh");
   await vi.waitFor(() => expect(state.result?.sessions[0]).toEqual(newRow));
-  finish(updating(oldRow));
-  await pending;
+  held.resolve(updating(oldRow));
+  await held.promise;
   await Promise.resolve();
   expect(state.result?.sessions[0]).toEqual(newRow);
 });
@@ -138,29 +150,13 @@ it("does not let a delayed backfill response overwrite a newer session-list reca
 it("backfills newly visible sessions after the current batch settles", async () => {
   const first = row();
   const added = row("agent:main:newly-visible");
-  const { promise: pending, resolve: finish } = createDeferred<unknown>();
-  request
-    .mockResolvedValueOnce(listing([first]))
-    .mockReturnValueOnce(pending)
-    .mockResolvedValueOnce(listing([first, added]))
-    .mockResolvedValueOnce(updating(added));
-  try {
-    void state.load(client, filters, "query", true);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    void state.load(client, filters, "refresh");
-    await vi.waitFor(() => expect(state.result?.sessions).toEqual([first, added]));
-    finish(updating(first));
-    await waitForSummary(1, "updating");
-    expect(request).toHaveBeenLastCalledWith(
-      ACTIVITY_SUMMARY_ENSURE_METHOD,
-      { sessions: [{ key: added.key, agentId: added.agentId }] },
-      expect.anything(),
-    );
-    expect(request).toHaveBeenCalledTimes(4);
-  } finally {
-    finish({ sessions: [] });
-    await pending;
-  }
+  await startBackfill([first], listing([first, added]), updating(added));
+  void state.load(client, filters, "refresh");
+  await vi.waitFor(() => expect(state.result?.sessions).toEqual([first, added]));
+  held.resolve(updating(first));
+  await waitForSummary(1, "updating");
+  expectEnsure(added);
+  expect(request).toHaveBeenCalledTimes(4);
 });
 
 it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
@@ -176,38 +172,30 @@ it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
     const source = row();
     const response = (method: string) =>
       method === "sessions.list" ? listing([source]) : updating(source);
-    const { promise: pending, resolve: finish } = createDeferred<unknown>();
-    let held = false;
+    let intercepted = false;
     request.mockImplementation(async (method) => {
-      if (method === heldMethod && !held) {
-        held = true;
-        return pending;
+      if (method === heldMethod && !intercepted) {
+        intercepted = true;
+        return held.promise;
       }
       return response(method);
     });
     state.dispose();
     state = createSessionActivity(() => {});
-    try {
-      void state.load(client, filters, "query", true);
-      await vi.waitFor(() => expect(held).toBe(true));
-      if (visibilityState !== "hidden") {
-        visibilityState = "hidden";
-        documentEvents.dispatchEvent(new Event("visibilitychange"));
-      }
-      finish(response(heldMethod));
-      await vi.waitFor(() => expect(state.loading).toBe(false));
-      const requestsWhileHidden = heldMethod === "sessions.list" ? 1 : 2;
-      expect(request).toHaveBeenCalledTimes(requestsWhileHidden);
-      expect(state.result?.sessions[0]?.activitySummary?.state).toBe("stale");
-
-      visibilityState = "visible";
+    void state.load(client, filters, "query", true);
+    await vi.waitFor(() => expect(intercepted).toBe(true));
+    if (visibilityState !== "hidden") {
+      visibilityState = "hidden";
       documentEvents.dispatchEvent(new Event("visibilitychange"));
-      await waitForSummary(0, "updating");
-    } finally {
-      finish(response(heldMethod));
-      state.dispose();
-      await pending;
     }
+    held.resolve(response(heldMethod));
+    await vi.waitFor(() => expect(state.loading).toBe(false));
+    const requestsWhileHidden = heldMethod === "sessions.list" ? 1 : 2;
+    expect(request).toHaveBeenCalledTimes(requestsWhileHidden);
+    expect(state.result?.sessions[0]?.activitySummary?.state).toBe("stale");
+    visibilityState = "visible";
+    documentEvents.dispatchEvent(new Event("visibilitychange"));
+    await waitForSummary(0, "updating");
   },
 );
 
@@ -230,13 +218,10 @@ it("retains a failed recap and retries it without turning the session list into 
 
 it("stops queued backfill batches when write access is revoked", async () => {
   const sessions = Array.from({ length: 25 }, (_, index) => row(`agent:main:notes-${index}`));
-  const { promise: pending, resolve: finish } = createDeferred<unknown>();
-  request.mockResolvedValueOnce(listing(sessions)).mockReturnValueOnce(pending);
-  void state.load(client, filters, "query", true);
-  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+  await startBackfill(sessions);
   void state.load(client, filters, "query", false);
-  finish(updating(...sessions.slice(0, 20)));
-  await pending;
+  held.resolve(updating(...sessions.slice(0, 20)));
+  await held.promise;
   await Promise.resolve();
   expect(request).toHaveBeenCalledTimes(2);
   expect(state.result?.sessions).toEqual(sessions);
@@ -247,19 +232,9 @@ it("keeps an explicit retry queued while another visible batch is pending", asyn
     activitySummary: recap("Previous recap", "unavailable"),
   });
   const pendingRow = row();
-  const { promise: pending, resolve: finish } = createDeferred<unknown>();
-  request
-    .mockResolvedValueOnce(listing([retryRow, pendingRow]))
-    .mockReturnValueOnce(pending)
-    .mockResolvedValueOnce(updating(retryRow));
-  void state.load(client, filters, "query", true);
-  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+  await startBackfill([retryRow, pendingRow], updating(retryRow));
   state.retrySummary(state.result!.sessions[0]!);
-  finish(updating(pendingRow));
+  held.resolve(updating(pendingRow));
   await waitForSummary(0, "updating");
-  expect(request).toHaveBeenLastCalledWith(
-    ACTIVITY_SUMMARY_ENSURE_METHOD,
-    { sessions: [{ key: retryRow.key, agentId: "main" }] },
-    expect.anything(),
-  );
+  expectEnsure(retryRow);
 });

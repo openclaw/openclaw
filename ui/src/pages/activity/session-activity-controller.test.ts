@@ -17,16 +17,23 @@ const dayAt = (month: number, day: number, hour = 0, minute = 0, year = 2026) =>
   new Date(year, month, day, hour, minute);
 const mockRequest = () => vi.spyOn(client, "request").mockResolvedValue(result);
 let request: ReturnType<typeof mockRequest>;
+let held: ReturnType<typeof createDeferred<typeof result>>;
 const pulse = (index: number) =>
   request.mock.calls[index]![1] as { activityPulseBoundaries: number[]; activeMinutes?: number };
+const advance = async (ms: number, calls: number) => {
+  await vi.advanceTimersByTimeAsync(ms);
+  expect(request).toHaveBeenCalledTimes(calls);
+};
 beforeEach(() => {
   vi.useFakeTimers();
   vi.spyOn(Math, "random").mockReturnValue(0);
   client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
   controller = createSessionActivity(() => {});
   request = mockRequest();
+  held = createDeferred<typeof result>();
 });
 afterEach(() => {
+  held.resolve(result);
   controller.dispose();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -51,13 +58,9 @@ it("requests calendar-aligned pulse windows, including clock-change dates", asyn
     const params = pulse(index);
     const boundaries = params.activityPulseBoundaries;
     const oldest = new Date(now.getTime() - 24 * 3_600_000);
+    oldest.setMinutes(0, 0, 0);
     expect(boundaries).toHaveLength(count);
-    expect(boundaries[0]).toBe(
-      (
-        first ??
-        new Date(oldest.getFullYear(), oldest.getMonth(), oldest.getDate(), oldest.getHours())
-      ).getTime(),
-    );
+    expect(boundaries[0]).toBe((first ?? oldest).getTime());
     expect(boundaries.at(-1)).toBe(last.getTime());
     expect(boundaries.every((value, i) => i === 0 || value > boundaries[i - 1]!)).toBe(true);
     expect(params.activeMinutes).toBe(activeMinutes);
@@ -96,10 +99,8 @@ it.each([
     await controller.load(client, filters);
     expect(request).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(60_999);
-    expect(request).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(5_001);
-    expect(request).toHaveBeenCalledTimes(2);
+    await advance(60_999, 1);
+    await advance(5_001, 2);
     const { activityPulseBoundaries: refreshed } = pulse(1);
     if (time === "all") {
       expect(refreshed).toEqual(initial);
@@ -111,15 +112,13 @@ it.each([
     await controller.load(client, "current");
     expect(request).toHaveBeenCalledTimes(3);
     expect(request.mock.calls[2]?.[1]).not.toHaveProperty("activityPulseBoundaries");
-    await vi.advanceTimersByTimeAsync(24 * 3_600_000);
-    expect(request).toHaveBeenCalledTimes(3);
+    await advance(24 * 3_600_000, 3);
 
     await controller.load(client, filters);
     expect(request).toHaveBeenCalledTimes(4);
     controller.dispose();
     expect(vi.getTimerCount()).toBe(0);
-    await vi.advanceTimersByTimeAsync(24 * 3_600_000);
-    expect(request).toHaveBeenCalledTimes(4);
+    await advance(24 * 3_600_000, 4);
   },
 );
 
@@ -130,40 +129,34 @@ it.each([
   { action: "filter", phase: "cooldown" },
 ])("bypasses automatic Activity $phase for an explicit $action", async ({ action, phase }) => {
   const replacement = { ...result, ts: 2 };
-  const stale = createDeferred<typeof result>();
   request
     .mockResolvedValueOnce(result)
-    .mockReturnValueOnce(stale.promise)
+    .mockReturnValueOnce(held.promise)
     .mockResolvedValue(replacement);
-  try {
-    const filters = { personId: null, time: "all" as const, query: "" };
-    void controller.load(client, filters);
+  const filters = { personId: null, time: "all" as const, query: "" };
+  void controller.load(client, filters);
+  await vi.advanceTimersByTimeAsync(0);
+  controller.invalidate();
+  await vi.advanceTimersByTimeAsync(5_000);
+  controller.invalidate();
+  if (phase === "cooldown") {
+    await vi.advanceTimersByTimeAsync(1_000);
+    held.resolve(result);
     await vi.advanceTimersByTimeAsync(0);
-    controller.invalidate();
-    await vi.advanceTimersByTimeAsync(5_000);
-    controller.invalidate();
-    if (phase === "cooldown") {
-      await vi.advanceTimersByTimeAsync(1_000);
-      stale.resolve(result);
-      await vi.advanceTimersByTimeAsync(0);
-    }
-    void controller.load(
-      client,
-      action === "filter" ? { ...filters, query: "replacement" } : filters,
-      action === "retry" ? "retry" : "query",
-    );
-    expect(request).toHaveBeenCalledTimes(3);
-    if (phase === "pending") {
-      expect(request.mock.calls[1]![2]?.signal?.aborted).toBe(true);
-    }
-    await vi.advanceTimersByTimeAsync(0);
-    stale.resolve(result);
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(controller.result).toEqual(replacement);
-    expect(request).toHaveBeenCalledTimes(3);
-  } finally {
-    stale.resolve(result);
   }
+  void controller.load(
+    client,
+    action === "filter" ? { ...filters, query: "replacement" } : filters,
+    action === "retry" ? "retry" : "query",
+  );
+  expect(request).toHaveBeenCalledTimes(3);
+  if (phase === "pending") {
+    expect(request.mock.calls[1]![2]?.signal?.aborted).toBe(true);
+  }
+  await vi.advanceTimersByTimeAsync(0);
+  held.resolve(result);
+  await advance(15_000, 3);
+  expect(controller.result).toEqual(replacement);
 });
 
 it("keeps the same-query snapshot during invalidation and clears it on person changes", async () => {
@@ -186,42 +179,31 @@ it("keeps the same-query snapshot during invalidation and clears it on person ch
   );
   void controller.load(client, { ...filters, personId: "other" });
   expect(controller.result).toBeUndefined();
-  controller.dispose();
 });
 
 it("holds a trailing Activity refresh through page hiding and retires it on disconnect", async () => {
-  const documentEvents = new EventTarget();
+  const documentEvents = Object.assign(new EventTarget(), { visibilityState: "visible" });
   const pageEvents = new EventTarget();
-  let visibilityState = "visible";
-  Object.defineProperty(documentEvents, "visibilityState", { get: () => visibilityState });
   vi.stubGlobal("document", documentEvents);
   vi.stubGlobal("addEventListener", pageEvents.addEventListener.bind(pageEvents));
   vi.stubGlobal("removeEventListener", pageEvents.removeEventListener.bind(pageEvents));
   controller = createSessionActivity(() => {});
-  const { promise: pending, resolve: complete } = createDeferred<typeof result>();
-  try {
-    const filters = { personId: null, time: "7d" as const, query: "" };
-    void controller.load(client, filters);
-    await vi.advanceTimersByTimeAsync(0);
-    request.mockReturnValueOnce(pending);
-    void controller.load(client, filters, "refresh");
-    controller.invalidate();
-    await vi.advanceTimersByTimeAsync(5_000);
-    visibilityState = "hidden";
-    documentEvents.dispatchEvent(new Event("visibilitychange"));
-    complete(result);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(request).toHaveBeenCalledTimes(2);
-    visibilityState = "visible";
-    documentEvents.dispatchEvent(new Event("visibilitychange"));
-    pageEvents.dispatchEvent(new Event("pageshow"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledTimes(3);
-    controller.invalidate();
-    controller.dispose();
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(request).toHaveBeenCalledTimes(3);
-  } finally {
-    complete(result);
-  }
+  const filters = { personId: null, time: "7d" as const, query: "" };
+  void controller.load(client, filters);
+  await vi.advanceTimersByTimeAsync(0);
+  request.mockReturnValueOnce(held.promise);
+  void controller.load(client, filters, "refresh");
+  controller.invalidate();
+  await vi.advanceTimersByTimeAsync(5_000);
+  documentEvents.visibilityState = "hidden";
+  documentEvents.dispatchEvent(new Event("visibilitychange"));
+  held.resolve(result);
+  await advance(5_000, 2);
+  documentEvents.visibilityState = "visible";
+  documentEvents.dispatchEvent(new Event("visibilitychange"));
+  pageEvents.dispatchEvent(new Event("pageshow"));
+  await advance(0, 3);
+  controller.invalidate();
+  controller.dispose();
+  await advance(5_000, 3);
 });

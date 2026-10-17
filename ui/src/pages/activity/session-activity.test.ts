@@ -110,57 +110,47 @@ describe("session activity projection", () => {
 
   it("refreshes decorative names while retaining exact references, longer prefixes, filters and anchors", () => {
     const personId = "12345678-abcd-4123-8123-123456789abc";
+    const compactId = personId.replaceAll("-", "");
+    const canonical = (
+      location: Parameters<typeof canonicalSessionActivityLocation>[0],
+      label = "Ada",
+      id = personId,
+    ) => canonicalSessionActivityLocation(location, id, label, "/ui");
     const legacy = {
       pathname: "/ui/activity",
       search: `?person=${personId}&time=30d&q=release`,
       hash: "#sessions",
     };
-    expect(canonicalSessionActivityLocation(legacy, personId, "Ada Lovelace", "/ui")).toEqual({
+    expect(canonical(legacy, "Ada Lovelace")).toEqual({
       pathname: "/ui/activity/ada-lovelace-12345678abcd41238123123456789abc",
       search: "?time=30d&q=release",
       hash: "#sessions",
     });
-    for (const reference of [
-      "12345678",
-      "12345678abcd4123",
-      personId,
-      personId.replaceAll("-", ""),
-    ]) {
+    for (const reference of ["12345678", "12345678abcd4123", personId, compactId]) {
       const location = { ...legacy, pathname: `/ui/activity/${reference}`, search: "?q=none" };
-      expect(canonicalSessionActivityLocation(location, personId, "Ada", "/ui")?.pathname).toBe(
+      expect(canonical(location)?.pathname).toBe(
         `/ui/activity/ada-${reference.replaceAll("-", "")}`,
       );
     }
     const empty = { pathname: "/ui/activity/ada-12345678abcd", search: "?q=none", hash: "" };
     expect(canonicalSessionActivityLocation(empty, "12345678abcd", undefined, "/ui")).toBeNull();
-    expect(
-      canonicalSessionActivityLocation(legacy, "abcdef12-1234-4123-8123-123456789abc", "Ada", "/ui")
-        ?.pathname,
-    ).toBe("/ui/activity/ada-abcdef12123441238123123456789abc");
+    expect(canonical(legacy, "Ada", "abcdef12-1234-4123-8123-123456789abc")?.pathname).toBe(
+      "/ui/activity/ada-abcdef12123441238123123456789abc",
+    );
   });
 
   it("groups the server page without treating its preview or session clock as personal history", () => {
     const now = new Date(2026, 7, 17, 12).getTime();
     const yesterday = now - 26 * 60 * 60_000;
-    const historyRow = (
-      name: string,
-      updatedAt: number,
-      lastActivityAt: number,
-    ): GatewaySessionRow => ({
-      key: `agent:main:${name}`,
-      kind: "direct",
-      updatedAt,
-      lastActivityAt,
-    });
-    const rows: GatewaySessionRow[] = [
-      {
-        ...historyRow("first", now + 60_000, yesterday),
-        lastInteractionAt: now,
-        participants: [{ identity: { type: "agent", id: "bob" } }],
-      },
-      historyRow("second", yesterday, now - 60_000),
-      historyRow("older", now, yesterday),
+    const clocks = [
+      { updatedAt: now + 60_000, lastActivityAt: yesterday, lastInteractionAt: now },
+      { updatedAt: yesterday, lastActivityAt: now - 60_000 },
+      { updatedAt: now, lastActivityAt: yesterday },
     ];
+    const rows: GatewaySessionRow[] = ["first", "second", "older"].map((name, index) =>
+      Object.assign({ key: `agent:main:${name}`, kind: "direct" as const }, clocks[index]),
+    );
+    rows[0]!.participants = [{ identity: { type: "agent", id: "bob" } }];
     Object.freeze(rows);
     const activity = projectSessionActivity(result(rows));
     expect(activity.people.map(({ id, count }) => ({ id, count }))).toEqual([
@@ -174,11 +164,7 @@ describe("session activity projection", () => {
     ]);
     expect(activity).toMatchObject({ matchedCount: 12, timeCount: 15 });
     expect(activity.sessions).toBe(rows);
-    expect(activity.sessions.map(sessionActivityTimestamp)).toEqual([
-      now,
-      now - 60_000,
-      now - 26 * 60 * 60_000,
-    ]);
+    expect(activity.sessions.map(sessionActivityTimestamp)).toEqual([now, now - 60_000, yesterday]);
   });
 
   it.each([
@@ -232,24 +218,20 @@ it.each(["ancestor-omitted", "ancestor-cleared"])(
     });
     const { request, controller } = await loaded([first, second]);
     const { activitySummary, ...snapshot } = second;
-    const event = (lastActivityAt: number, updatedAt: number) => ({
-      ...eventSnapshot(
-        {
-          ...first,
-          updatedAt,
-          activitySummary: { state: "current", text: "The child's new recap." },
-        },
-        [
-          {
-            ...snapshot,
-            lastActivityAt,
-            updatedAt,
-            ...(summary === "ancestor-cleared" ? { activitySummary: null } : {}),
-          },
-        ],
-      ),
-      reason: "patch",
-    });
+    const event = (lastActivityAt: number, updatedAt: number) => {
+      const session = {
+        ...first,
+        updatedAt,
+        activitySummary: { state: "current" as const, text: "The child's new recap." },
+      };
+      const ancestor = {
+        ...snapshot,
+        lastActivityAt,
+        updatedAt,
+        ...(summary === "ancestor-cleared" ? { activitySummary: null } : {}),
+      };
+      return { ...eventSnapshot(session, [ancestor]), reason: "patch" };
+    };
     controller.invalidate(event(300, 300));
     expect(controller.result?.sessions.map((row) => row.key)).toEqual([second.key, first.key]);
     expect(controller.result?.sessions[0]?.activitySummary).toEqual(
@@ -292,16 +274,14 @@ it("applies excluded child events to held History ancestors without refetching",
     ...eventSnapshot(at(child, snapshotAt)),
     ancestorSessionRefs: [ancestorRef(parent, "parent-revision", snapshotAt)],
   });
+  const parentLabel = () =>
+    controller.result?.sessions.find((session) => session.key === parent.key)?.label;
   controller.invalidate(reference(400));
   await vi.advanceTimersByTimeAsync(0);
-  expect(controller.result?.sessions.find((row) => row.key === parent.key)?.label).toBe(
-    "Updated parent",
-  );
+  expect(parentLabel()).toBe("Updated parent");
   controller.invalidate(reference(500));
   await vi.advanceTimersByTimeAsync(5_000);
-  expect(controller.result?.sessions.find((row) => row.key === parent.key)?.label).toBe(
-    "Updated parent",
-  );
+  expect(parentLabel()).toBe("Updated parent");
   expect(request).toHaveBeenCalledTimes(1);
 });
 
