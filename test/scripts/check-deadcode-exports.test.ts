@@ -1,4 +1,3 @@
-// Check Deadcode Exports tests cover parsing and hard-zero enforcement.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -21,27 +20,27 @@ if (!fullRootWorkspace || !fullExtensionWorkspace || !fullUiWorkspace || !script
   throw new Error("deadcode Knip configs must define root, extension, and UI workspaces");
 }
 
+function expectEntries(entries: readonly string[], required: string[]) {
+  expect(entries).toEqual(expect.arrayContaining(required));
+}
+
 describe("check-deadcode-exports", () => {
   it("makes tests in every workspace roots of the full-tree export audit", () => {
     const isEntry = (entries: readonly string[], file: string) =>
       entries.some((entry) => path.matchesGlob(file, entry.replace(/!$/u, "")));
-    expect(knipConfig.workspaces["."].entry).toEqual(
-      expect.arrayContaining([
-        "config/knip.config.ts!",
-        "config/knip.all-exports.config.ts!",
-        "config/knip.scripts-exports.config.ts!",
-      ]),
-    );
+    expectEntries(knipConfig.workspaces["."].entry, [
+      "config/knip.config.ts!",
+      "config/knip.all-exports.config.ts!",
+      "config/knip.scripts-exports.config.ts!",
+    ]);
     expect(knipConfig.workspaces["."].project).toContain("config/**/*.{ts,mts,cts}!");
-    expect(fullRootWorkspace.entry).toEqual(
-      expect.arrayContaining([
-        "test/vitest/vitest*.config.ts!",
-        "scripts/crabbox-wrapper.mjs!",
-        "scripts/crabbox-wrapper.mts!",
-        "scripts/check-openclaw-package-tarball.mjs!",
-        "scripts/check-openclaw-package-tarball.mts!",
-      ]),
-    );
+    expectEntries(fullRootWorkspace.entry, [
+      "test/vitest/vitest*.config.ts!",
+      "scripts/crabbox-wrapper.mjs!",
+      "scripts/crabbox-wrapper.mts!",
+      "scripts/check-openclaw-package-tarball.mjs!",
+      "scripts/check-openclaw-package-tarball.mts!",
+    ]);
     for (const extension of ["js", "mjs", "cjs", "ts", "tsx", "mts", "cts"]) {
       for (const directory of ["src", "scripts", "test"]) {
         expect(isEntry(fullRootWorkspace.entry, `${directory}/example.test.${extension}`)).toBe(
@@ -83,21 +82,14 @@ describe("check-deadcode-exports", () => {
   });
 
   it("keeps the script unused-export scan scoped to real executable roots", () => {
-    expect(scriptRootWorkspace.entry).toEqual(
-      expect.arrayContaining([
-        ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
-        ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
-        "apps/android/scripts/build-release-artifacts.ts!",
-        "security/opengrep/check-rule-metadata.mjs!",
-        "skills/meme-maker/scripts/meme.mjs!",
-        "scripts/check-openclaw-package-tarball.mts!",
-        "scripts/crabbox-wrapper.mjs!",
-        "scripts/crabbox-wrapper.mts!",
-        "scripts/lib/vitest-resource-reporter.mts!",
-        "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-        "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-        "src/plugin-sdk/api-baseline.ts!",
-      ]),
+    expectEntries(
+      scriptRootWorkspace.entry,
+      `.agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!
+.github/actions/setup-node-env/dependency-fingerprint.mjs! apps/android/scripts/build-release-artifacts.ts!
+security/opengrep/check-rule-metadata.mjs! skills/meme-maker/scripts/meme.mjs!
+scripts/check-openclaw-package-tarball.mts! scripts/crabbox-wrapper.mjs! scripts/crabbox-wrapper.mts!
+scripts/lib/vitest-resource-reporter.mts! scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!
+test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.split(/\s+/u),
     );
     expect(scriptRootWorkspace.entry).not.toContain("scripts/**/*.{js,mjs,cjs,ts,mts,cts}!");
     expect(
@@ -167,33 +159,22 @@ describe("check-deadcode-exports", () => {
   });
 
   it("parses all compact export sections and expands symbol lists", () => {
+    const sections = {
+      "Unused exports (2)":
+        "src/b.ts: beta, alpha\n/tmp/outside.ts: noise\nC:\\tmp\\outside.ts: noise\nC:outside.ts: noise\n\\\\server\\share\\outside.ts: noise",
+      "Unused exported types (1)": "extensions/example/src/types.ts: ExampleType",
+      "Unused exported enum members (1)": "packages/example/src/state.ts: Ready",
+      "Exports in used namespace (1)": "src/namespace.ts: runtimeHelper",
+      "Exported types in used namespace (1)": "src/namespace.ts: RuntimeType",
+      "Unused exported namespace members (1)": "src/protocol.ts: Result (v2)",
+      "Unused files (1)": "src/noise.ts: src/noise.ts",
+    };
     expect(
-      parseKnipCompactUnusedExports(`
-Unused exports (2)
-src/b.ts: beta, alpha
-/tmp/outside.ts: noise
-C:\\tmp\\outside.ts: noise
-C:outside.ts: noise
-\\\\server\\share\\outside.ts: noise
-
-Unused exported types (1)
-extensions/example/src/types.ts: ExampleType
-
-Unused exported enum members (1)
-packages/example/src/state.ts: Ready
-
-Exports in used namespace (1)
-src/namespace.ts: runtimeHelper
-
-Exported types in used namespace (1)
-src/namespace.ts: RuntimeType
-
-Unused exported namespace members (1)
-src/protocol.ts: Result (v2)
-
-Unused files (1)
-src/noise.ts: src/noise.ts
-`),
+      parseKnipCompactUnusedExports(
+        `\n${Object.entries(sections)
+          .map(([header, body]) => `${header}\n${body}`)
+          .join("\n\n")}\n`,
+      ),
     ).toEqual([
       "extensions/example/src/types.ts: ExampleType",
       "packages/example/src/state.ts: Ready",
@@ -224,8 +205,7 @@ src/config/types.ts: TelegramConfig
 `;
 
     const result = checkExportScan("production unused-export scan", output);
-    expect(result.ok).toBe(false);
-    expect(result.entries).toEqual([]);
+    expect(result).toMatchObject({ ok: false, entries: [] });
     expect(result.message).toContain(
       "deadcode production unused-export scan could not resolve workspace modules; export findings would be unreliable and are discarded.",
     );

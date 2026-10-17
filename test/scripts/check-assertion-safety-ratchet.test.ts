@@ -4,9 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
-  collectAssertionSafetyReport,
-  collectCurrentAssertionSafetyCounts,
-  countUnsafeAssertions,
+  collectAssertionSafetyReport as assertionReport,
+  collectCurrentAssertionSafetyCounts as currentCounts,
+  countUnsafeAssertions as countAssertions,
   isGovernedAssertionSourcePath,
   main,
 } from "../../scripts/check-assertion-safety-ratchet.mts";
@@ -22,25 +22,11 @@ function parseFixture(source: string, fileName: string) {
 }
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const nestedGitEnvKeys = [
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-  "GIT_COMMON_DIR",
-  "GIT_CONFIG",
-  "GIT_CONFIG_COUNT",
-  "GIT_CONFIG_PARAMETERS",
-  "GIT_DIR",
-  "GIT_GRAFT_FILE",
-  "GIT_IMPLICIT_WORK_TREE",
-  "GIT_INDEX_FILE",
-  "GIT_NAMESPACE",
-  "GIT_NO_REPLACE_OBJECTS",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_PREFIX",
-  "GIT_QUARANTINE_PATH",
-  "GIT_REPLACE_REF_BASE",
-  "GIT_SHALLOW_FILE",
-  "GIT_WORK_TREE",
-] as const;
+const nestedGitEnvKeys = `ALTERNATE_OBJECT_DIRECTORIES COMMON_DIR CONFIG CONFIG_COUNT
+CONFIG_PARAMETERS DIR GRAFT_FILE IMPLICIT_WORK_TREE INDEX_FILE NAMESPACE NO_REPLACE_OBJECTS
+OBJECT_DIRECTORY PREFIX QUARANTINE_PATH REPLACE_REF_BASE SHALLOW_FILE WORK_TREE`
+  .split(/\s+/u)
+  .map((key) => `GIT_${key}`);
 
 function git(cwd: string, args: string[], input?: string) {
   const env: NodeJS.ProcessEnv = {
@@ -70,15 +56,30 @@ function commitFixture(root: string) {
   }
 }
 
-function ratchetFixture(source = "export const first = value as string;\n") {
+function fileFixture(files: Record<string, string>, committed = false) {
   const root = tempDirs.make("openclaw-assertion-safety-");
-  fs.mkdirSync(path.join(root, "config"));
-  fs.mkdirSync(path.join(root, "src"));
+  for (const [file, source] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), source);
+  }
+  if (committed) {
+    commitFixture(root);
+  } else {
+    git(root, ["init"]);
+  }
+  return root;
+}
+
+function ratchetFixture(source = "export const first = value as string;\n") {
+  const root = fileFixture(
+    {
+      "src/example.ts": source,
+      "config/assertion-safety-baseline.txt": "src/example.ts\t1\n",
+    },
+    true,
+  );
   const baselinePath = path.join(root, "config/assertion-safety-baseline.txt");
   const sourcePath = path.join(root, "src/example.ts");
-  fs.writeFileSync(baselinePath, "src/example.ts\t1\n");
-  fs.writeFileSync(sourcePath, source);
-  commitFixture(root);
   vi.spyOn(console, "log").mockImplementation(() => {});
   return { root, baselinePath, sourcePath };
 }
@@ -96,20 +97,15 @@ afterEach(() => {
 
 describe("check-assertion-safety-ratchet", () => {
   it("counts mixed source files and reports the first malformed source in path order", () => {
-    const root = tempDirs.make("openclaw-assertion-safety-files-");
-    fs.mkdirSync(path.join(root, "src"), { recursive: true });
     const extensions = ["ts", "tsx", "mts", "cts"];
     const sources = Array.from({ length: 36 }, (_, index) => ({
       file: `src/source-${String(index).padStart(2, "0")}.${extensions[index % extensions.length]!}`,
       source:
         index === 17 ? "export const value = 17;\n" : "export const value = input as Shape;\n",
     }));
-    for (const { file, source } of sources) {
-      fs.writeFileSync(path.join(root, file), source);
-    }
-    git(root, ["init"]);
+    const root = fileFixture(Object.fromEntries(sources.map(({ file, source }) => [file, source])));
 
-    expect(collectCurrentAssertionSafetyCounts(root)).toEqual(
+    expect(currentCounts(root)).toEqual(
       new Map(sources.filter((_, index) => index !== 17).map(({ file }) => [file, 1])),
     );
 
@@ -118,24 +114,19 @@ describe("check-assertion-safety-ratchet", () => {
       fs.writeFileSync(path.join(root, file), "const broken = ;\n");
     }
     for (const { file, source } of malformed) {
-      expect(() => collectCurrentAssertionSafetyCounts(root)).toThrow(
-        `${file}:1: Expression expected.`,
-      );
+      expect(() => currentCounts(root)).toThrow(`${file}:1: Expression expected.`);
       fs.writeFileSync(path.join(root, file), source);
     }
   });
 
   it("keeps worktree counts and staged read failures with unmerged index entries", () => {
-    const root = tempDirs.make("openclaw-assertion-safety-unmerged-");
-    fs.mkdirSync(path.join(root, "src"), { recursive: true });
     const files = Array.from(
       { length: 36 },
       (_, index) => `src/source-${String(index).padStart(2, "0")}.ts`,
     );
-    for (const file of files) {
-      fs.writeFileSync(path.join(root, file), "export const value = input as Shape;\n");
-    }
-    git(root, ["init"]);
+    const root = fileFixture(
+      Object.fromEntries(files.map((file) => [file, "export const value = input as Shape;\n"])),
+    );
     git(root, ["add", "."]);
     const oid = git(
       root,
@@ -154,10 +145,8 @@ describe("check-assertion-safety-ratchet", () => {
         .join(""),
     );
 
-    expect(collectCurrentAssertionSafetyCounts(root)).toEqual(
-      new Map(files.map((file) => [file, 1])),
-    );
-    expect(() => collectCurrentAssertionSafetyCounts(root, { staged: true })).toThrow(
+    expect(currentCounts(root)).toEqual(new Map(files.map((file) => [file, 1])));
+    expect(() => currentCounts(root, { staged: true })).toThrow(
       `Could not read staged source ${conflictedFiles[0]}`,
     );
   });
@@ -180,12 +169,12 @@ describe("check-assertion-safety-ratchet", () => {
       "const angleUnknown = <unknown>value;",
     ].join("\n");
 
-    expect(countUnsafeAssertions(...parseFixture(source, "src/example.ts"))).toBe(3);
+    expect(countAssertions(...parseFixture(source, "src/example.ts"))).toBe(3);
     for (const file of ["src/agents/agent-model-discovery.ts", "src/example.ts"]) {
-      expect(countUnsafeAssertions(...parseFixture("value as unknown as Shape;", file))).toBe(1);
+      expect(countAssertions(...parseFixture("value as unknown as Shape;", file))).toBe(1);
     }
     expect(
-      countUnsafeAssertions(
+      countAssertions(
         ...parseFixture("declare const value: unknown as Shape;", "src/example.d.ts"),
       ),
     ).toBe(0);
@@ -212,26 +201,14 @@ describe("check-assertion-safety-ratchet", () => {
     expect(errors.join("\n")).toContain("src/example.ts: 2 > 1");
     expect(errors.join("\n")).toContain("// SAFETY:");
 
-    fs.writeFileSync(
-      sourcePath,
-      [
-        "export const first = value as string;",
-        "// SAFETY: the parser guarantees this value is numeric.",
-        "export const second = value as number;",
-        "",
-      ].join("\n"),
-    );
+    const safeSecond =
+      "// SAFETY: the parser guarantees this value is numeric.\nexport const second = value as number;\n";
+    fs.writeFileSync(sourcePath, `export const first = value as string;\n${safeSecond}`);
     expect(main(root, ["--base", "HEAD"])).toBe(0);
 
     fs.writeFileSync(
       sourcePath,
-      [
-        "// SAFETY: the parser guarantees this value is text.",
-        "export const first = value as string;",
-        "// SAFETY: the parser guarantees this value is numeric.",
-        "export const second = value as number;",
-        "",
-      ].join("\n"),
+      `// SAFETY: the parser guarantees this value is text.\nexport const first = value as string;\n${safeSecond}`,
     );
     expect(main(root, ["--base", "HEAD"])).toBe(1);
     expect(main(root, ["--base", "HEAD", "--prune"])).toBe(0);
@@ -251,7 +228,6 @@ describe("check-assertion-safety-ratchet", () => {
   });
 
   it("reports frozen sites, policy exemptions, unused allowances, and ambiguous fingerprints", () => {
-    const root = tempDirs.make("openclaw-assertion-report-");
     const files = {
       "src/a.ts": [
         'const emoji = "🦊"; const first = value as Shape;',
@@ -277,16 +253,12 @@ describe("check-assertion-safety-ratchet", () => {
         "",
       ].join("\n"),
     };
-    for (const [file, source] of Object.entries(files)) {
-      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-      fs.writeFileSync(path.join(root, file), source);
-    }
-    commitFixture(root);
+    const root = fileFixture(files, true);
     const commit = git(root, ["rev-parse", "HEAD"]).trim();
     // A report ref selects source bytes, unlike the ratchet's comparison-only --base.
     fs.writeFileSync(path.join(root, "src/a.ts"), "const broken = ;");
     fs.rmSync(path.join(root, "src/b.ts"));
-    const report = collectAssertionSafetyReport(root, "HEAD");
+    const report = assertionReport(root, "HEAD");
     expect(report).toMatchObject({ complete: true, matching: "not-performed" });
     expect(report.source).toEqual({
       commit,
@@ -304,15 +276,10 @@ describe("check-assertion-safety-ratchet", () => {
         )
         .digest("hex"),
     );
-    expect(report.coverage).toEqual({
-      discovered: 7,
-      parsed: 3,
-      failed: 0,
-      unvisited: 0,
-      excluded: 3,
-      missing: 1,
-    });
-    expect(report.totals).toEqual({ allowances: 25, counted: 3, exempt: 3, unusedAllowance: 22 });
+    expect([report.coverage, report.totals]).toEqual([
+      { discovered: 7, parsed: 3, failed: 0, unvisited: 0, excluded: 3, missing: 1 },
+      { allowances: 25, counted: 3, exempt: 3, unusedAllowance: 22 },
+    ]);
     expect(report.files.map((file) => file.path)).toEqual([
       "scripts/example.ts",
       "src/a.ts",
@@ -355,20 +322,18 @@ describe("check-assertion-safety-ratchet", () => {
   });
 
   it("reports parse failures across batches without treating unknown counts as zero", () => {
-    const root = tempDirs.make("openclaw-assertion-report-errors-");
-    fs.mkdirSync(path.join(root, "config"));
-    fs.mkdirSync(path.join(root, "src"));
-    fs.writeFileSync(
-      path.join(root, "config/assertion-safety-baseline.txt"),
-      "src/00.ts\t1\nsrc/33.ts\t1\n",
+    const root = fileFixture(
+      {
+        ...Object.fromEntries(
+          Array.from({ length: 34 }, (_, index) => [
+            `src/${String(index).padStart(2, "0")}.ts`,
+            index === 0 || index === 33 ? "const broken = ;" : "const value = 1;",
+          ]),
+        ),
+        "config/assertion-safety-baseline.txt": "src/00.ts\t1\nsrc/33.ts\t1\n",
+      },
+      true,
     );
-    for (let index = 0; index < 34; index += 1) {
-      fs.writeFileSync(
-        path.join(root, `src/${String(index).padStart(2, "0")}.ts`),
-        index === 0 || index === 33 ? "const broken = ;" : "const value = 1;",
-      );
-    }
-    commitFixture(root);
     const output = vi.spyOn(console, "log").mockImplementation(() => {});
     expect(main(root, ["--report", "HEAD"])).toBe(1);
     const report = JSON.parse(String(output.mock.calls[0]?.[0]));
@@ -392,17 +357,19 @@ describe("check-assertion-safety-ratchet", () => {
   it("does not claim coverage when source resolution fails", () => {
     const root = tempDirs.make("openclaw-assertion-report-missing-");
     git(root, ["init"]);
-    const report = collectAssertionSafetyReport(root, "missing-ref");
-    expect(report.complete).toBe(false);
-    expect(report.source.commit).toBeNull();
-    expect(report.coverage.discovered).toBeNull();
+    const report = assertionReport(root, "missing-ref");
+    expect(report).toMatchObject({
+      complete: false,
+      source: { commit: null },
+      coverage: { discovered: null },
+      files: [],
+    });
     expect(report.totals).toEqual({
       allowances: null,
       counted: null,
       exempt: null,
       unusedAllowance: null,
     });
-    expect(report.files).toEqual([]);
     expect(report.errors).toHaveLength(1);
   });
 });

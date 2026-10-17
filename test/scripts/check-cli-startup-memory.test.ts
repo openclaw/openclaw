@@ -23,10 +23,10 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 const aliasError = "--json and --summary must refer to different files";
-const successSpawn = () => ({
+const successSpawn = (rssMb = 1) => ({
   signal: null,
   status: 0,
-  stderr: "__OPENCLAW_MAX_RSS_KB__=1024\n",
+  stderr: `__OPENCLAW_MAX_RSS_KB__=${rssMb * 1024}\n`,
   stdout: "",
 });
 
@@ -74,12 +74,7 @@ function runStartupMemoryCheckWithHelpSamples(
       const caseSampleIndex = sampleIndex % testing.sampleCount;
       sampleIndex += 1;
       const rssMb = caseIndex === 0 ? (helpSamplesMb[caseSampleIndex] ?? 1) : 1;
-      return {
-        signal: null,
-        status: 0,
-        stderr: `__OPENCLAW_MAX_RSS_KB__=${rssMb * 1024}\n`,
-        stdout: "",
-      };
+      return successSpawn(rssMb);
     },
   });
 }
@@ -144,21 +139,17 @@ describe("check-cli-startup-memory", () => {
     const helpSamplesMb = [helpLimitMb + 20, helpLimitMb + 0.5, helpLimitMb - 20];
     const result = runStartupMemoryCheckWithHelpSamples(helpSamplesMb, tempRoot);
 
-    expect(result!.results[0]).toMatchObject({
+    const expected = {
       limitMb: helpLimitMb,
       rssToleranceMb: 1,
       effectiveLimitMb: helpLimitMb + 1,
       maxRssMb: helpLimitMb + 0.5,
       rssSamplesMb: helpSamplesMb,
       status: "pass",
-    });
+    };
+    expect(result!.results[0]).toMatchObject(expected);
     const report = JSON.parse(readFileSync(path.join(tempRoot, "startup-memory.json"), "utf8"));
-    expect(report.results[0]).toMatchObject({
-      limitMb: helpLimitMb,
-      rssToleranceMb: 1,
-      effectiveLimitMb: helpLimitMb + 1,
-      rssSamplesMb: helpSamplesMb,
-    });
+    expect(report.results[0]).toMatchObject(expected);
     expect(readFileSync(path.join(tempRoot, "summary.md"), "utf8")).toContain(
       `base limit ${helpLimitMb.toFixed(1)} MB; RSS tolerance 1.0 MB; effective ceiling ${(helpLimitMb + 1).toFixed(1)} MB; samples: ${helpSamplesMb.map((sample) => `${sample.toFixed(1)} MB`).join(", ")}`,
     );
@@ -244,8 +235,7 @@ describe("check-cli-startup-memory", () => {
           }
           const run = captureReportRun(tempRoot, firstPath, secondPath);
 
-          expect.soft(run.failure).toMatchObject({ message: aliasError });
-          expect.soft(run.probes).toBe(0);
+          expect.soft(run).toMatchObject({ failure: { message: aliasError }, probes: 0 });
           expect.soft(readdirSync(run.homeRoot)).toEqual([]);
           if (kind === "dangling-symlink") {
             expect.soft(existsSync(targetPath)).toBe(false);
@@ -256,45 +246,32 @@ describe("check-cli-startup-memory", () => {
         },
       );
 
-      const nameCases = [
-        [
-          "nested mixed folds",
-          ["Directory-\u00c9", "Report-\u03a3"],
-          ["directory-e\u0301", "report-\u03c2"],
-        ],
-      ] as const;
+      it("follows filesystem identity for nested mixed Unicode folds", () => {
+        const tempRoot = tempRoots.make("openclaw-startup-memory-name-");
+        const reportsDir = path.join(tempRoot, "reports");
+        mkdirSync(reportsDir);
+        const jsonSuffix = ["Directory-\u00c9", "Report-\u03a3"];
+        const summarySuffix = ["directory-e\u0301", "report-\u03c2"];
+        const aliases = detectFilesystemAlias(tempRoot, jsonSuffix, summarySuffix);
+        const jsonPath = path.join(reportsDir, ...jsonSuffix);
+        const summaryPath = path.join(reportsDir, ...summarySuffix);
+        const run = captureReportRun(tempRoot, jsonPath, summaryPath);
 
-      it.each(
-        nameCases.flatMap(([label, first, second]) =>
-          [false].map((reversed) => [label, reversed, first, second] as const),
-        ),
-      )(
-        "follows actual filesystem name identity for %s (reversed: %s)",
-        (label, reversed, first, second) => {
-          const tempRoot = tempRoots.make("openclaw-startup-memory-name-");
-          const reportsDir = path.join(tempRoot, "reports");
-          mkdirSync(reportsDir);
-          const [jsonSuffix, summarySuffix] = reversed ? [second, first] : [first, second];
-          const aliases = detectFilesystemAlias(tempRoot, jsonSuffix, summarySuffix);
-          const jsonPath = path.join(reportsDir, ...jsonSuffix);
-          const summaryPath = path.join(reportsDir, ...summarySuffix);
-          const run = captureReportRun(tempRoot, jsonPath, summaryPath);
-
-          expect.soft(readdirSync(run.homeRoot), label).toEqual([]);
-          if (aliases) {
-            expect.soft(run.failure, label).toMatchObject({ message: aliasError });
-            expect.soft(run.probes, label).toBe(0);
-            expect.soft(readdirSync(reportsDir), label).toEqual([]);
-          } else {
-            expect.soft(run.failure, label).toBeUndefined();
-            expect.soft(run.probes, label).toBe(testing.cases.length * testing.sampleCount);
-            expect.soft(JSON.parse(readFileSync(jsonPath, "utf8")), label).toMatchObject({
-              status: "pass",
-            });
-            expect.soft(readFileSync(summaryPath, "utf8"), label).toContain("Status: pass");
-          }
-        },
-      );
+        expect.soft(readdirSync(run.homeRoot)).toEqual([]);
+        if (aliases) {
+          expect.soft(run).toMatchObject({ failure: { message: aliasError }, probes: 0 });
+          expect.soft(readdirSync(reportsDir)).toEqual([]);
+        } else {
+          expect.soft(run).toMatchObject({
+            failure: undefined,
+            probes: testing.cases.length * testing.sampleCount,
+          });
+          expect.soft(JSON.parse(readFileSync(jsonPath, "utf8"))).toMatchObject({
+            status: "pass",
+          });
+          expect.soft(readFileSync(summaryPath, "utf8")).toContain("Status: pass");
+        }
+      });
 
       it("removes reserved leaves and empty parents when admission fails", () => {
         const tempRoot = tempRoots.make("openclaw-startup-memory-cleanup-");
@@ -459,8 +436,7 @@ describe("check-cli-startup-memory", () => {
           { encoding: "utf8" },
         );
 
-        expect(result.status).toBe(0);
-        expect(result.stderr).toBe("");
+        expect(result).toMatchObject({ status: 0, stderr: "" });
         const output = JSON.parse(result.stdout);
         expect(output).toMatchObject({
           failure: "--json or --summary changed during startup benchmarks",
@@ -478,16 +454,15 @@ describe("check-cli-startup-memory", () => {
       it("publishes failure reports before surfacing a benchmark failure", () => {
         const { tempRoot, jsonPath, summaryPath } = reportFixture();
         const run = captureReportRun(tempRoot, jsonPath, summaryPath, () => ({
-          signal: null,
+          ...successSpawn(),
           status: 1,
           stderr: "benchmark failed\n",
-          stdout: "",
         }));
 
-        expect(run.failure).toMatchObject({
-          message: expect.stringContaining("--help exited with 1"),
+        expect(run).toMatchObject({
+          failure: { message: expect.stringContaining("--help exited with 1") },
+          probes: testing.cases.length,
         });
-        expect(run.probes).toBe(testing.cases.length);
         expect(JSON.parse(readFileSync(jsonPath, "utf8"))).toMatchObject({ status: "fail" });
         expect(readFileSync(summaryPath, "utf8")).toContain("Status: fail");
         expect(readFileSync(summaryPath, "utf8")).toContain("--help: --help exited with 1");
@@ -501,8 +476,7 @@ describe("check-cli-startup-memory", () => {
     }
 
     const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
-    const seenTimeouts: Array<number | undefined> = [];
-    const seenKillSignals: Array<string | undefined> = [];
+    const seenOptions: Array<{ timeout?: number; killSignal?: string }> = [];
     const timeoutError = Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT" });
     vi.stubEnv("GITHUB_ACTIONS", "true");
 
@@ -515,8 +489,7 @@ describe("check-cli-startup-memory", () => {
           _args: string[],
           options: { killSignal?: string; timeout?: number },
         ) => {
-          seenTimeouts.push(options.timeout);
-          seenKillSignals.push(options.killSignal);
+          seenOptions.push({ timeout: options.timeout, killSignal: options.killSignal });
           return {
             error: timeoutError,
             signal: "SIGKILL",
@@ -527,8 +500,9 @@ describe("check-cli-startup-memory", () => {
         },
       }),
     ).toThrow("--help timed out after 1234ms");
-    expect(seenTimeouts).toEqual(testing.cases.map(() => 1234));
-    expect(seenKillSignals).toEqual(testing.cases.map(() => "SIGKILL"));
+    expect(seenOptions).toEqual(
+      testing.cases.map(() => ({ timeout: 1234, killSignal: "SIGKILL" })),
+    );
   });
 
   it("rejects zero RSS markers instead of passing empty resource evidence", () => {
@@ -540,12 +514,7 @@ describe("check-cli-startup-memory", () => {
     expect(() =>
       testing.runStartupMemoryCheck(reportArgs(tempRoot), {
         platform: "darwin",
-        spawnSync: () => ({
-          signal: null,
-          status: 0,
-          stderr: "__OPENCLAW_MAX_RSS_KB__=0\n",
-          stdout: "",
-        }),
+        spawnSync: () => successSpawn(0),
       }),
     ).toThrow("--help did not report max RSS");
   });
