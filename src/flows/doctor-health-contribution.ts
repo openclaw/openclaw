@@ -104,7 +104,11 @@ async function runStructuredDoctorHealthContribution(params: {
     allowExecSecretRefs: params.ctx.options.allowExec === true,
     agentDatabaseRefusals: params.ctx.agentDatabaseRefusals,
   };
-  const result = await runDoctorHealthRepairs(context, { checks: params.checks, dryRun });
+  const result = await runDoctorHealthRepairs(context, {
+    checks: params.checks,
+    dryRun,
+    progress: params.ctx.options.json !== true,
+  });
   params.ctx.cfg = result.config;
   renderStructuredHealthFindings(params.ctx, result.findings);
   // Display retains original findings; finalization records only unresolved warnings.
@@ -144,6 +148,11 @@ export function recordDoctorHealthWarnings(
       ),
     ...warnings,
   ];
+  const warningCount =
+    added.length + findings.filter((finding) => finding.severity === "error").length;
+  if (warningCount > 0) {
+    ctx.healthWarningCount = (ctx.healthWarningCount ?? 0) + warningCount;
+  }
   ctx.updateWarnings = normalizeUpdatePostInstallDoctorWarnings(
     options?.prepend ? [...added, ...existing] : [...existing, ...added],
   );

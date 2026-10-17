@@ -147,7 +147,19 @@ it.each([
 ])("defers snapshot discovery under the shipped updater marker %s", async (marker) => {
   await snapshot("1-100", 1024);
   const ctx = createDoctorHealthFlowContext({ env: { [marker]: "1" } });
+  vi.mocked(resolveOpenClawPackageRoot).mockClear();
+  const opendir = vi.spyOn(fs, "opendir");
   await contribution()?.run(ctx);
-  expect(ctx.runtime.log).not.toHaveBeenCalled();
+  expect(resolveOpenClawPackageRoot).not.toHaveBeenCalled();
+  expect(opendir).not.toHaveBeenCalled();
+  expect(ctx.runtime.log).toHaveBeenCalledTimes(2);
+  expect(ctx.runtime.log).toHaveBeenNthCalledWith(
+    1,
+    "Doctor: core/doctor/update-snapshots started",
+  );
+  expect(ctx.runtime.log).toHaveBeenNthCalledWith(
+    2,
+    expect.stringMatching(/^Doctor: core\/doctor\/update-snapshots completed \(\d+ms\)$/),
+  );
   expect(ctx.runtime.error).not.toHaveBeenCalled();
 });

@@ -15,6 +15,7 @@ interface DoctorRepairRunOptions {
   readonly checks?: readonly DoctorHealthCheck[];
   readonly dryRun?: boolean;
   readonly diff?: boolean;
+  readonly progress?: boolean;
 }
 
 interface DoctorRepairRunResult {
@@ -54,69 +55,93 @@ export async function runDoctorHealthRepairs(
     checksValidated: 0,
   };
 
+  const progress = opts.progress === true;
   for (const check of checks) {
-    const checkContext = { ...ctx, cfg: outcome.config };
-    let checkFindings: readonly HealthFinding[];
-    try {
-      checkFindings = await check.detect(checkContext);
-    } catch (err) {
-      outcome.warnings.push(`${check.id} detect failed: ${scrubDoctorErrorMessage(err)}`);
-      continue;
+    const startedAt = progress ? performance.now() : 0;
+    const warningsBefore = outcome.warnings.length;
+    let remainingFindings: readonly HealthFinding[] = [];
+    if (progress) {
+      ctx.runtime.log(`Doctor: ${check.id} started`);
     }
-    outcome.findings.push(...checkFindings);
-    if (checkFindings.length === 0 || check.repair === undefined) {
-      outcome.remainingFindings.push(...checkFindings);
-      continue;
-    }
-
-    let remainingFindings = checkFindings;
-    // Split checks expose detect/repair separately, so repair output must be validated by detect().
     try {
-      const result = await check.repair(
-        { ...checkContext, dryRun: opts.dryRun === true, diff: opts.diff === true },
-        checkFindings,
-      );
-      outcome.warnings.push(...(result.warnings ?? []));
-      outcome.diffs.push(...(result.diffs ?? []));
-      outcome.effects.push(...(result.effects ?? []));
-      outcome.changes.push(...result.changes);
-      const status = result.status ?? "repaired";
-      if (status !== "repaired") {
-        outcome.warnings.push(
-          `${check.id} repair ${status}${result.reason ? `: ${result.reason}` : ""}`,
-        );
-        continue;
-      }
-      if (result.config !== undefined && opts.dryRun !== true) {
-        outcome.config = result.config;
-      }
-      outcome.checksRepaired++;
-      if (opts.dryRun === true) {
-        continue;
-      }
+      const checkContext = { ...ctx, cfg: outcome.config };
+      let checkFindings: readonly HealthFinding[];
       try {
-        // Re-run only failing paths/ocPaths to avoid unrelated expensive checks.
-        const validationFindings = await check.detect(
-          { ...checkContext, cfg: outcome.config },
-          {
-            findings: remainingFindings,
-            paths: uniqueDefined(remainingFindings.map((finding) => finding.path)),
-            ocPaths: uniqueDefined(remainingFindings.map((finding) => finding.ocPath)),
-          },
+        checkFindings = await check.detect(checkContext);
+      } catch (err) {
+        outcome.warnings.push(`${check.id} detect failed: ${scrubDoctorErrorMessage(err)}`);
+        continue;
+      }
+      outcome.findings.push(...checkFindings);
+      remainingFindings = checkFindings;
+      if (checkFindings.length === 0 || check.repair === undefined) {
+        outcome.remainingFindings.push(...checkFindings);
+        continue;
+      }
+
+      // Split checks expose detect/repair separately, so repair output must be validated by detect().
+      try {
+        const result = await check.repair(
+          { ...checkContext, dryRun: opts.dryRun === true, diff: opts.diff === true },
+          checkFindings,
         );
-        remainingFindings = validationFindings;
-        outcome.checksValidated++;
-        if (validationFindings.length > 0) {
-          outcome.warnings.push(`${check.id} repair left ${validationFindings.length} finding(s)`);
+        outcome.warnings.push(...(result.warnings ?? []));
+        outcome.diffs.push(...(result.diffs ?? []));
+        outcome.effects.push(...(result.effects ?? []));
+        outcome.changes.push(...result.changes);
+        const status = result.status ?? "repaired";
+        if (status !== "repaired") {
+          outcome.warnings.push(
+            `${check.id} repair ${status}${result.reason ? `: ${result.reason}` : ""}`,
+          );
+          continue;
+        }
+        if (result.config !== undefined && opts.dryRun !== true) {
+          outcome.config = result.config;
+        }
+        outcome.checksRepaired++;
+        if (opts.dryRun === true) {
+          continue;
+        }
+        try {
+          // Re-run only failing paths/ocPaths to avoid unrelated expensive checks.
+          const validationFindings = await check.detect(
+            { ...checkContext, cfg: outcome.config },
+            {
+              findings: remainingFindings,
+              paths: uniqueDefined(remainingFindings.map((finding) => finding.path)),
+              ocPaths: uniqueDefined(remainingFindings.map((finding) => finding.ocPath)),
+            },
+          );
+          remainingFindings = validationFindings;
+          outcome.checksValidated++;
+          if (validationFindings.length > 0) {
+            outcome.warnings.push(
+              `${check.id} repair left ${validationFindings.length} finding(s)`,
+            );
+          }
+        } catch (err) {
+          outcome.warnings.push(`${check.id} validation failed: ${scrubDoctorErrorMessage(err)}`);
         }
       } catch (err) {
-        outcome.warnings.push(`${check.id} validation failed: ${scrubDoctorErrorMessage(err)}`);
+        outcome.warnings.push(`${check.id} repair failed: ${scrubDoctorErrorMessage(err)}`);
+      } finally {
+        // Only completed validation replaces the original findings for this check.
+        outcome.remainingFindings.push(...remainingFindings);
       }
-    } catch (err) {
-      outcome.warnings.push(`${check.id} repair failed: ${scrubDoctorErrorMessage(err)}`);
     } finally {
-      // Only completed validation replaces the original findings for this check.
-      outcome.remainingFindings.push(...remainingFindings);
+      if (progress) {
+        const status =
+          outcome.warnings.length > warningsBefore ||
+          remainingFindings.some(
+            (finding) => finding.severity === "warning" || finding.severity === "error",
+          )
+            ? "warning"
+            : "completed";
+        ctx.runtime.log(
+          `Doctor: ${check.id} ${status} (${Math.round(performance.now() - startedAt)}ms)`,
+        );
+      }
     }
   }
 

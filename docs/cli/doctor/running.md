@@ -9,6 +9,10 @@ read_when:
 This page covers how to invoke `openclaw doctor`: the supported postures, ready-to-run
 examples, and every option the command accepts.
 
+`openclaw doctor` and `openclaw doctor --fix` identify each check when it starts,
+then report its outcome and elapsed milliseconds when it finishes. JSON output
+omits these human progress lines.
+
 If a plugin fails to load during Doctor, the report includes an error finding
 with the plugin ID, source path, and error. `ENOSPC` failures name the disk-space
 cause. Standalone `doctor --non-interactive` exits `1` for these failures and

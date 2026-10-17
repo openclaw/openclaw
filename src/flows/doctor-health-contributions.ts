@@ -603,6 +603,7 @@ async function runDoctorHealthContributionList(
         ...contributions.filter((entry) => entry.updateWork?.kind === "finalize"),
       ]
     : contributions;
+  const progress = ctx.options.json !== true;
   try {
     for (const contribution of ordered) {
       signal?.throwIfAborted();
@@ -631,6 +632,12 @@ async function runDoctorHealthContributionList(
         )
       ) {
         continue;
+      }
+      const startedAt = progress ? performance.now() : 0;
+      const warningsBefore = ctx.healthWarningCount ?? 0;
+      let failed = false;
+      if (progress) {
+        ctx.runtime.log(`Doctor: ${contribution.label} started`);
       }
       try {
         const run = async () => {
@@ -661,6 +668,7 @@ async function runDoctorHealthContributionList(
           return;
         }
       } catch (error) {
+        failed = true;
         // Cancellation ends the command, including when an optional check reports a warning.
         signal?.throwIfAborted();
         if (
@@ -674,6 +682,17 @@ async function runDoctorHealthContributionList(
         const message = `${contribution.id} run failed: ${scrubDoctorErrorMessage(error)}`;
         note(message, "Doctor warnings");
         recordDoctorHealthWarnings(ctx, [], [message]);
+      } finally {
+        if (progress) {
+          const status = failed
+            ? "failed"
+            : (ctx.healthWarningCount ?? 0) > warningsBefore || ctx.configWriteRefusal
+              ? "warning"
+              : "completed";
+          ctx.runtime.log(
+            `Doctor: ${contribution.label} ${status} (${Math.round(performance.now() - startedAt)}ms)`,
+          );
+        }
       }
     }
   } finally {

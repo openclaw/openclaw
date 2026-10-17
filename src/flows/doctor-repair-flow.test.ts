@@ -1,5 +1,5 @@
 // Doctor repair flow tests cover repair plan output and repair execution.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthRepairs } from "./doctor-repair-flow.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
@@ -71,7 +71,9 @@ describe("runDoctorHealthRepairs", () => {
       }),
     ];
 
-    const result = await runDoctorHealthRepairs(ctx({}), { checks });
+    const context = ctx({});
+    context.runtime.log = vi.fn();
+    const result = await runDoctorHealthRepairs(context, { checks, progress: true });
 
     expect(result.checksRepaired).toBe(1);
     expect(result.checksValidated).toBe(1);
@@ -82,6 +84,9 @@ describe("runDoctorHealthRepairs", () => {
       },
     ]);
     expect(result.warnings).toEqual(["test/not-fixed repair left 1 finding(s)"]);
+    expect(context.runtime.log).toHaveBeenCalledWith(
+      expect.stringMatching(/^Doctor: test\/not-fixed warning \(\d+ms\)$/),
+    );
   });
 
   it.each(["skipped", "throws", "unavailable", "validation-failed"] as const)(
@@ -113,8 +118,11 @@ describe("runDoctorHealthRepairs", () => {
             }),
       });
 
-      const result = await runDoctorHealthRepairs(ctx({}), {
+      const context = ctx({});
+      context.runtime.log = vi.fn();
+      const result = await runDoctorHealthRepairs(context, {
         checks: [successfullyRepairedCheck(), unresolvedCheck],
+        progress: true,
       });
 
       expect(result.config.gateway?.mode).toBe("local");
@@ -128,6 +136,79 @@ describe("runDoctorHealthRepairs", () => {
       expect(result.checksValidated).toBe(1);
       if (outcome === "throws") {
         expect(result.warnings).toEqual([`${unresolvedId} repair failed: repair unavailable`]);
+      }
+      expect(context.runtime.log).toHaveBeenCalledWith(
+        expect.stringMatching(/^Doctor: test\/repaired-first completed \(\d+ms\)$/),
+      );
+      expect(context.runtime.log).toHaveBeenCalledWith(
+        expect.stringMatching(new RegExp(`^Doctor: ${unresolvedId} warning \\(\\d+ms\\)$`)),
+      );
+    },
+  );
+
+  it.each([undefined, "info", "warning", "error"] as const)(
+    "reports detect-only outcomes without carrying an earlier finding into a healthy sibling (%s)",
+    async (severity) => {
+      const context = ctx({});
+      context.runtime.log = vi.fn();
+      const result = await runDoctorHealthRepairs(context, {
+        progress: true,
+        checks: [
+          normalizeHealthCheck({
+            id: "test/detect-only",
+            kind: "core",
+            description: "detect-only progress",
+            async detect() {
+              return severity ? [{ checkId: "test/detect-only", severity, message: severity }] : [];
+            },
+          }),
+          normalizeHealthCheck({
+            id: "test/healthy",
+            kind: "core",
+            description: "healthy sibling",
+            async detect() {
+              return [];
+            },
+          }),
+        ],
+      });
+      const status = severity === "warning" || severity === "error" ? "warning" : "completed";
+      expect(context.runtime.log).toHaveBeenCalledWith(
+        expect.stringMatching(new RegExp(`^Doctor: test/detect-only ${status} \\(\\d+ms\\)$`)),
+      );
+      expect(context.runtime.log).toHaveBeenCalledWith(
+        expect.stringMatching(/^Doctor: test\/healthy completed \(\d+ms\)$/),
+      );
+      expect(result.remainingFindings).toHaveLength(severity ? 1 : 0);
+    },
+  );
+
+  it.each([false, true])(
+    "retains detection failures with progress enabled=%s",
+    async (progress) => {
+      const context = ctx({});
+      context.runtime.log = vi.fn();
+      const result = await runDoctorHealthRepairs(context, {
+        progress,
+        checks: [
+          normalizeHealthCheck({
+            id: "test/detect-failed",
+            kind: "core",
+            description: "failed detection",
+            async detect() {
+              throw new Error("unavailable");
+            },
+          }),
+        ],
+      });
+      expect(result.warnings).toEqual(["test/detect-failed detect failed: unavailable"]);
+      if (progress) {
+        expect(context.runtime.log).toHaveBeenCalledWith("Doctor: test/detect-failed started");
+        expect(context.runtime.log).toHaveBeenCalledWith(
+          expect.stringMatching(/^Doctor: test\/detect-failed warning \(\d+ms\)$/),
+        );
+      } else {
+        expect(context.runtime.log).not.toHaveBeenCalled();
       }
     },
   );
@@ -179,10 +260,13 @@ describe("runDoctorHealthRepairs", () => {
       }),
     ];
 
-    const result = await runDoctorHealthRepairs(ctx({}), {
+    const context = ctx({});
+    context.runtime.log = vi.fn();
+    const result = await runDoctorHealthRepairs(context, {
       checks,
       dryRun: true,
       diff: true,
+      progress: true,
     });
 
     expect(result.config).toEqual({});
@@ -193,5 +277,8 @@ describe("runDoctorHealthRepairs", () => {
     expect(result.checksValidated).toBe(0);
     expect(detectCalls).toBe(1);
     expect(repairContexts[0]).toMatchObject({ dryRun: true, diff: true });
+    expect(context.runtime.log).toHaveBeenCalledWith(
+      expect.stringMatching(/^Doctor: test\/dry-run warning \(\d+ms\)$/),
+    );
   });
 });
