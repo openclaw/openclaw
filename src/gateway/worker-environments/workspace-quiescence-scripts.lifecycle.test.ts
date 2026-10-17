@@ -12,6 +12,33 @@ import { classifySqliteMutation } from "../../infra/sqlite-schema-mutation.js";
 import { workspaceQuiescenceArgv } from "./workspace-quiescence-scripts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const nonce = "a".repeat(32);
+const require = createRequire(import.meta.url);
+const now = { now: () => 0 };
+
+function acquisition() {
+  return workspaceQuiescenceArgv(
+    "/workspace",
+    { action: "acquire", nonce, timeoutMs: 10_000 },
+    "shared-host",
+    "owned",
+  );
+}
+
+function dependencies(overrides: Record<string, unknown>) {
+  const modules: Record<string, unknown> = {
+    "node:crypto": crypto,
+    "node:path": path,
+    "node:os": { homedir: () => "/home/worker" },
+    ...overrides,
+  };
+  return (name: string) => {
+    if (!(name in modules)) {
+      throw new Error("unexpected dependency: " + name);
+    }
+    return modules[name];
+  };
+}
 
 it("renews and releases an initialized Windows lease without repeating DDL", () => {
   const root = nativeFs.realpathSync(tempDirs.make("workspace-quiescence-warm-schema-"));
@@ -19,7 +46,6 @@ it("renews and releases an initialized Windows lease without repeating DDL", () 
   nativeFs.mkdirSync(directory, { recursive: true });
   const databasePath = path.join(directory, "windows-shared-host.sqlite");
   const workspaceKey = crypto.createHash("sha256").update(root).digest("hex");
-  const nonce = "a".repeat(32);
   const database = new DatabaseSync(databasePath);
   try {
     database.exec(
@@ -39,7 +65,6 @@ it("renews and releases an initialized Windows lease without repeating DDL", () 
   } finally {
     database.close();
   }
-  const require = createRequire(import.meta.url);
   const output: string[] = [];
   const sql = observeHostDataSql();
   try {
@@ -55,7 +80,7 @@ it("renews and releases an initialized Windows lease without repeating DDL", () 
           stdout: { write: (value: string) => output.push(value) },
           stderr: { write: (value: string) => output.push(value) },
         },
-        performance: { now: () => 0 },
+        performance: now,
         require: (name: string) => (name === "node:os" ? { homedir: () => root } : require(name)),
       });
     }
@@ -79,60 +104,32 @@ it("renews and releases an initialized Windows lease without repeating DDL", () 
 });
 
 it("closes the generated Windows lease database when admission fails", () => {
-  const nonce = "a".repeat(32);
-  const command = workspaceQuiescenceArgv(
-    "/workspace",
-    { action: "acquire", nonce, timeoutMs: 10_000 },
-    "shared-host",
-    "owned",
-  );
+  const command = acquisition();
   const close = vi.fn();
   expect(() =>
     runInNewContext(command[2]!, {
       process: { argv: [process.execPath, ...command.slice(3)], platform: "win32" },
-      performance: { now: () => 0 },
-      require: (name: string) => {
-        if (name === "node:crypto") {
-          return crypto;
-        }
-        if (name === "node:path") {
-          return path;
-        }
-        if (name === "node:os") {
-          return { homedir: () => "/home/worker" };
-        }
-        if (name === "node:fs") {
-          return { realpathSync: (value: string) => value, mkdirSync() {} };
-        }
-        if (name === "node:child_process") {
-          return {};
-        }
-        if (name === "node:sqlite") {
-          return {
-            DatabaseSync: class {
-              close = close;
-              isTransaction = false;
-              exec() {
-                throw new Error("lease admission failed");
-              }
-            },
-          };
-        }
-        throw new Error("unexpected dependency: " + name);
-      },
+      performance: now,
+      require: dependencies({
+        "node:fs": { realpathSync: (value: string) => value, mkdirSync() {} },
+        "node:child_process": {},
+        "node:sqlite": {
+          DatabaseSync: class {
+            close = close;
+            isTransaction = false;
+            exec() {
+              throw new Error("lease admission failed");
+            }
+          },
+        },
+      }),
     }),
   ).toThrow("lease admission failed");
   expect(close).toHaveBeenCalledOnce();
 });
 
 it("retires the generated sidecar transport and rejects already-queued acquisition", () => {
-  const nonce = "a".repeat(32);
-  const command = workspaceQuiescenceArgv(
-    "/workspace",
-    { action: "acquire", nonce, timeoutMs: 10_000 },
-    "shared-host",
-    "owned",
-  );
+  const command = acquisition();
   const events = new EventEmitter();
   const files = new Map<string, string>();
   const timers = new Set<() => void>();
@@ -180,28 +177,13 @@ it("retires the generated sidecar transport and rejects already-queued acquisiti
   };
   runInNewContext(command[2]!, {
     process: child,
-    performance: { now: () => 0 },
-    require: (name: string) => {
-      if (name === "node:process" || name === "process") {
-        return child;
-      }
-      if (name === "node:crypto") {
-        return crypto;
-      }
-      if (name === "node:path") {
-        return path;
-      }
-      if (name === "node:fs") {
-        return fs;
-      }
-      if (name === "node:os") {
-        return { homedir: () => "/home/worker" };
-      }
-      if (name === "node:child_process") {
-        return { execFileSync: () => "synthetic start" };
-      }
-      throw new Error("unexpected dependency: " + name);
-    },
+    performance: now,
+    require: dependencies({
+      "node:process": child,
+      process: child,
+      "node:fs": fs,
+      "node:child_process": { execFileSync: () => "synthetic start" },
+    }),
     setTimeout: (callback: () => void) => {
       timers.add(callback);
       return callback;

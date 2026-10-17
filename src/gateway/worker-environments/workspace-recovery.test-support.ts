@@ -72,6 +72,23 @@ export function createWorkerWorkspaceRecoveryFixture(options: {
   return { resolveWorkspace: options.resolveWorkspace, withPreparedRecovery };
 }
 
+type WorkspaceFiles = Record<string, string | Uint8Array>;
+
+export async function writeWorkspaceFiles(root: string, files: WorkspaceFiles) {
+  for (const [relative, content] of Object.entries(files)) {
+    const target = path.join(root, relative);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, content);
+  }
+}
+
+export async function expectWorkspaceFiles(root: string, files: WorkspaceFiles) {
+  for (const [relative, content] of Object.entries(files)) {
+    const bytes = typeof content === "string" ? Buffer.from(content, "utf8") : Buffer.from(content);
+    await expect(fs.readFile(path.join(root, relative))).resolves.toEqual(bytes);
+  }
+}
+
 export async function gitInit(root: string): Promise<void> {
   const { runCommandWithTimeout } = await import("../../process/exec.js");
   const result = await runCommandWithTimeout(["git", "-C", root, "init", "--quiet"], {

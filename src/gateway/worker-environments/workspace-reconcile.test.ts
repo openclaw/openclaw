@@ -11,7 +11,13 @@ import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
-import { applyWorkspace, gitInit, manifestFor } from "./workspace-recovery.test-support.js";
+import {
+  applyWorkspace,
+  expectWorkspaceFiles,
+  gitInit,
+  manifestFor,
+  writeWorkspaceFiles,
+} from "./workspace-recovery.test-support.js";
 import {
   localWorkspaceBaseRefreshRef,
   requireWorkerResultStorageRef,
@@ -49,6 +55,24 @@ function encodeWorkspaceManifest(manifest: WorkerWorkspaceManifest) {
   return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
 }
 
+function emptyJournal(commit = async (_manifestRef: string) => {}) {
+  return { load: async () => undefined, begin: async () => {}, commit, abort: async () => {} };
+}
+
+async function resultFixture(
+  name: string,
+  baseFiles: Record<string, string | Uint8Array> = { "result.txt": "base\n" },
+  currentFiles: Record<string, string | Uint8Array> = { "result.txt": "worker\n" },
+) {
+  const local = await temporaryDirectory(`${name}-local`);
+  const payload = await temporaryDirectory(`${name}-payload`);
+  await writeWorkspaceFiles(local, baseFiles);
+  await writeWorkspaceFiles(payload, currentFiles);
+  const base = encodeWorkspaceManifest(await manifestFor(local));
+  const current = encodeWorkspaceManifest(await manifestFor(payload));
+  return { local, payload, base, current, ref: workerWorkspaceResultRef(`claim-${name}`) };
+}
+
 function prepareWorkspaceResult(params: {
   local: string;
   payload: string;
@@ -62,12 +86,7 @@ function prepareWorkspaceResult(params: {
       localPath: params.local,
       remoteWorkspaceDir: "/worker/workspace",
       baseManifestRef: params.base.ref,
-      journal: {
-        load: async () => undefined,
-        begin: async () => {},
-        commit: async () => {},
-        abort: async () => {},
-      },
+      journal: emptyJournal(),
       stagedResult: { ref: params.ref, record: params.record ?? (() => {}) },
     },
     stagingRoot: params.payload,
@@ -151,20 +170,15 @@ describe("worker workspace reconciliation", () => {
     const local = await temporaryDirectory("workspace-staged-ref-local");
     const payload = await temporaryDirectory("workspace-staged-ref-payload");
     const complete = await temporaryDirectory("workspace-staged-ref-complete");
-    await Promise.all([
-      fs.writeFile(path.join(local, "changed.txt"), "base\n"),
-      fs.writeFile(path.join(local, "unchanged.txt"), "keep\n"),
-    ]);
+    await writeWorkspaceFiles(local, { "changed.txt": "base\n", "unchanged.txt": "keep\n" });
     const base = encodeWorkspaceManifest(await manifestFor(local));
-    await Promise.all([
-      fs.writeFile(path.join(payload, "changed.txt"), "worker\n"),
-      fs.writeFile(path.join(complete, "changed.txt"), "worker\n"),
-      fs.writeFile(path.join(complete, "unchanged.txt"), "keep\n"),
-      fs.writeFile(path.join(complete, "added.txt"), "added\n"),
-      fs.writeFile(path.join(payload, "added.txt"), "added\n"),
-      fs.writeFile(path.join(complete, "odd\nname.txt"), "quoted path\n"),
-      fs.writeFile(path.join(payload, "odd\nname.txt"), "quoted path\n"),
-    ]);
+    const changedFiles = {
+      "changed.txt": "worker\n",
+      "added.txt": "added\n",
+      "odd\nname.txt": "quoted path\n",
+    };
+    await writeWorkspaceFiles(payload, changedFiles);
+    await writeWorkspaceFiles(complete, { ...changedFiles, "unchanged.txt": "keep\n" });
     const current = encodeWorkspaceManifest(await manifestFor(complete));
     const ref = workerWorkspaceResultRef("claim-stage-order");
     let recordedRef: string | undefined;
@@ -174,15 +188,10 @@ describe("worker workspace reconciliation", () => {
         localPath: local,
         remoteWorkspaceDir: "/worker/workspace",
         baseManifestRef: base.ref,
-        journal: {
-          load: async () => undefined,
-          begin: async () => {},
-          commit: async (manifestRef) => {
-            expect(recordedRef).toBeUndefined();
-            acceptedManifestRef = manifestRef;
-          },
-          abort: async () => {},
-        },
+        journal: emptyJournal(async (manifestRef) => {
+          expect(recordedRef).toBeUndefined();
+          acceptedManifestRef = manifestRef;
+        }),
         stagedResult: {
           ref,
           record: (stagedResultRef) => {
@@ -196,59 +205,33 @@ describe("worker workspace reconciliation", () => {
       currentManifestRaw: current.raw,
     });
 
-    expect(
-      await runCommandWithTimeout(
-        ["git", "-C", local, "show-ref", "--verify", preparedWorkerWorkspaceResultRef(ref)],
-        { timeoutMs: 10_000 },
-      ),
-    ).toMatchObject({ code: 0 });
-    expect(
-      (
-        await runCommandWithTimeout(["git", "-C", local, "show-ref", "--verify", ref], {
+    const expectRefs = async () => {
+      const probe = (targetRef: string) =>
+        runCommandWithTimeout(["git", "-C", local, "show-ref", "--verify", targetRef], {
           timeoutMs: 10_000,
-        })
-      ).code,
-    ).not.toBe(0);
+        });
+      expect(await probe(preparedWorkerWorkspaceResultRef(ref))).toMatchObject({ code: 0 });
+      expect((await probe(ref)).code).not.toBe(0);
+    };
+    await expectRefs();
     expect(recordedRef).toBeUndefined();
     await expect(fs.readFile(path.join(local, "changed.txt"), "utf8")).resolves.toBe("base\n");
     await prepared.applyPreparedStagedResult();
 
     expect(recordedRef).toBeUndefined();
     expect(acceptedManifestRef).toBe(current.ref);
-    expect(
-      await runCommandWithTimeout(
-        ["git", "-C", local, "show-ref", "--verify", preparedWorkerWorkspaceResultRef(ref)],
-        { timeoutMs: 10_000 },
-      ),
-    ).toMatchObject({ code: 0 });
-    expect(
-      (
-        await runCommandWithTimeout(["git", "-C", local, "show-ref", "--verify", ref], {
-          timeoutMs: 10_000,
-        })
-      ).code,
-    ).not.toBe(0);
+    await expectRefs();
     await prepared.publishStagedResult();
 
     expect(recordedRef).toBe(ref);
     expect(acceptedManifestRef).toBe(current.ref);
-    await expect(fs.readFile(path.join(local, "changed.txt"), "utf8")).resolves.toBe("worker\n");
-    await expect(fs.readFile(path.join(local, "unchanged.txt"), "utf8")).resolves.toBe("keep\n");
-    await expect(fs.readFile(path.join(local, "added.txt"), "utf8")).resolves.toBe("added\n");
-    await expect(fs.readFile(path.join(local, "odd\nname.txt"), "utf8")).resolves.toBe(
-      "quoted path\n",
-    );
+    await expectWorkspaceFiles(local, { ...changedFiles, "unchanged.txt": "keep\n" });
     const replayCommit = vi.fn(async () => {});
     await applyStagedWorkerWorkspaceResult({
       root: local,
       stagedResultRef: ref,
       expectedBaseManifestRef: current.ref,
-      journal: {
-        load: async () => undefined,
-        begin: async () => {},
-        commit: replayCommit,
-        abort: async () => {},
-      },
+      journal: emptyJournal(replayCommit),
     });
     expect(replayCommit).not.toHaveBeenCalled();
     await deleteStagedWorkerWorkspaceResult({ root: local, stagedResultRef: ref });
@@ -284,19 +267,10 @@ describe("worker workspace reconciliation", () => {
   });
 
   it("preserves the published result when its fence-row update fails", async () => {
-    const local = await temporaryDirectory("workspace-staged-record-failure-local");
-    const payload = await temporaryDirectory("workspace-staged-record-failure-payload");
-    await fs.writeFile(path.join(local, "result.txt"), "base\n");
-    await fs.writeFile(path.join(payload, "result.txt"), "worker\n");
-    const base = encodeWorkspaceManifest(await manifestFor(local));
-    const current = encodeWorkspaceManifest(await manifestFor(payload));
-    const ref = workerWorkspaceResultRef("claim-record-failure");
+    const fixture = await resultFixture("record-failure");
+    const { local, ref } = fixture;
     const prepared = await prepareWorkspaceResult({
-      local,
-      payload,
-      ref,
-      base,
-      current,
+      ...fixture,
       record: () => {
         throw new Error("state database unavailable");
       },
@@ -337,12 +311,7 @@ describe("worker workspace reconciliation", () => {
       root: local,
       stagedResultRef: ref,
       expectedBaseManifestRef: current.ref,
-      journal: {
-        load: async () => undefined,
-        begin: async () => {},
-        commit: async () => {},
-        abort: async () => {},
-      },
+      journal: emptyJournal(),
     });
 
     expect(replay.conflictPaths).toEqual(["result.pipe"]);
@@ -350,13 +319,14 @@ describe("worker workspace reconciliation", () => {
   });
 
   it("does not sweep cleanup refs retained by another pending result", async () => {
-    const local = await temporaryDirectory("workspace-retained-cleanup-ref");
-    const payload = await temporaryDirectory("workspace-retained-cleanup-payload");
+    const {
+      local,
+      payload,
+      base,
+      current,
+      ref: stagedResultRef,
+    } = await resultFixture("retained-cleanup", {}, { "result.txt": "worker\n" });
     await gitInit(local);
-    await fs.writeFile(path.join(payload, "result.txt"), "worker\n");
-    const base = encodeWorkspaceManifest(await manifestFor(local));
-    const current = encodeWorkspaceManifest(await manifestFor(payload));
-    const stagedResultRef = workerWorkspaceResultRef("claim-retained-cleanup");
     await stageWorkerWorkspaceResult({
       root: local,
       stagingRoot: payload,
@@ -390,16 +360,16 @@ describe("worker workspace reconciliation", () => {
   });
 
   it("never replays an accepted result when omitted local state kept the base ref unchanged", async () => {
-    const local = await temporaryDirectory("workspace-accepted-unchanged-ref-local");
-    const payload = await temporaryDirectory("workspace-accepted-unchanged-ref-payload");
-    await fs.writeFile(path.join(payload, "result.pipe"), "worker file\n");
-    const base = encodeWorkspaceManifest(await manifestFor(local));
-    const current = encodeWorkspaceManifest(await manifestFor(payload));
+    const fixture = await resultFixture(
+      "accepted-unchanged-ref",
+      {},
+      { "result.pipe": "worker file\n" },
+    );
+    const { local, ref, base } = fixture;
     const fifoPath = path.join(local, "result.pipe");
     const mkfifo = await runCommandWithTimeout(["mkfifo", fifoPath], { timeoutMs: 10_000 });
     expect(mkfifo.code).toBe(0);
-    const ref = workerWorkspaceResultRef("claim-accepted-unchanged-ref");
-    const prepared = await prepareWorkspaceResult({ local, payload, ref, base, current });
+    const prepared = await prepareWorkspaceResult(fixture);
 
     await prepared.applyPreparedStagedResult();
     expect(prepared.getAppliedWorkspaceResult()?.conflictPaths).toEqual(["result.pipe"]);
@@ -412,14 +382,9 @@ describe("worker workspace reconciliation", () => {
       stagedResultRef: ref,
       expectedBaseManifestRef: base.ref,
       alreadyAccepted: true,
-      journal: {
-        load: async () => undefined,
-        begin: async () => {},
-        commit: async (manifestRef) => {
-          committed.push(manifestRef);
-        },
-        abort: async () => {},
-      },
+      journal: emptyJournal(async (manifestRef) => {
+        committed.push(manifestRef);
+      }),
     });
 
     expect(replay.conflictPaths).toEqual(["result.pipe"]);
@@ -428,16 +393,13 @@ describe("worker workspace reconciliation", () => {
   });
 
   it("resnapshots an offline local edit after the staged manifest committed", async () => {
-    const local = await temporaryDirectory("workspace-committed-local-advance");
-    const payload = await temporaryDirectory("workspace-committed-local-advance-payload");
-    await fs.writeFile(path.join(local, "result.txt"), "base\n");
-    await fs.writeFile(path.join(local, "conflict.txt"), "base\n");
-    await fs.writeFile(path.join(payload, "result.txt"), "worker\n");
-    await fs.writeFile(path.join(payload, "conflict.txt"), "worker\n");
-    const base = encodeWorkspaceManifest(await manifestFor(local));
-    const current = encodeWorkspaceManifest(await manifestFor(payload));
-    const ref = workerWorkspaceResultRef("claim-committed-local-advance");
-    const prepared = await prepareWorkspaceResult({ local, payload, ref, base, current });
+    const fixture = await resultFixture(
+      "committed-local-advance",
+      { "result.txt": "base\n", "conflict.txt": "base\n" },
+      { "result.txt": "worker\n", "conflict.txt": "worker\n" },
+    );
+    const { local, ref, current } = fixture;
+    const prepared = await prepareWorkspaceResult(fixture);
     await fs.writeFile(path.join(local, "conflict.txt"), "first local\n");
     await prepared.applyPreparedStagedResult();
     const committed = prepared.getAppliedWorkspaceResult();
@@ -451,12 +413,7 @@ describe("worker workspace reconciliation", () => {
       root: local,
       stagedResultRef: ref,
       expectedBaseManifestRef: committed!.manifestRef,
-      journal: {
-        load: async () => undefined,
-        begin: async () => {},
-        commit: replayCommit,
-        abort: async () => {},
-      },
+      journal: emptyJournal(replayCommit),
     });
 
     expect(replay.conflictPaths).toEqual(["conflict.txt", "result.txt"]);
@@ -480,16 +437,10 @@ describe("worker workspace reconciliation", () => {
   });
 
   it("disables workspace repository hooks while publishing result refs", async () => {
-    const local = await temporaryDirectory("workspace-staged-hooks-local");
-    const payload = await temporaryDirectory("workspace-staged-hooks-payload");
+    const { local, payload, base, current, ref } = await resultFixture("disabled-hooks");
     await gitInit(local);
     const hook = path.join(local, ".git", "hooks", "reference-transaction");
     await fs.writeFile(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-    await fs.writeFile(path.join(local, "result.txt"), "base\n");
-    await fs.writeFile(path.join(payload, "result.txt"), "worker\n");
-    const base = encodeWorkspaceManifest(await manifestFor(local));
-    const current = encodeWorkspaceManifest(await manifestFor(payload));
-    const ref = workerWorkspaceResultRef("claim-disabled-hooks");
 
     await stageWorkerWorkspaceResult({
       root: local,
@@ -511,26 +462,26 @@ describe("worker workspace reconciliation", () => {
     const staged = await temporaryDirectory("workspace-staged");
     const addedName = process.platform === "win32" ? "added.txt" : "added\u0001-é.txt";
     await gitInit(local);
-    await fs.mkdir(path.join(local, "src"));
-    await fs.writeFile(path.join(local, "keep.bin"), Buffer.from([0, 1, 2]));
-    await fs.writeFile(path.join(local, "delete.txt"), "remove");
-    await fs.writeFile(path.join(local, "src", "script.sh"), "before");
+    await writeWorkspaceFiles(local, {
+      "keep.bin": Buffer.from([0, 1, 2]),
+      "delete.txt": "remove",
+      "src/script.sh": "before",
+    });
     const base = await manifestFor(local);
 
-    await fs.mkdir(path.join(staged, "src"));
-    await fs.writeFile(path.join(staged, "keep.bin"), Buffer.from([0, 9, 2]));
-    await fs.writeFile(path.join(staged, addedName), "new");
-    await fs.writeFile(path.join(staged, "src", "script.sh"), "after");
+    const files = {
+      "keep.bin": Buffer.from([0, 9, 2]),
+      [addedName]: "new",
+      "src/script.sh": "after",
+    };
+    await writeWorkspaceFiles(staged, files);
     await fs.chmod(path.join(staged, "src", "script.sh"), 0o755);
     await fs.symlink(addedName, path.join(staged, "link.txt"));
     const current = await manifestFor(staged);
 
     await applyWorkspace({ root: local, stagingRoot: staged, base, current });
 
-    await expect(fs.readFile(path.join(local, "keep.bin"))).resolves.toEqual(
-      Buffer.from([0, 9, 2]),
-    );
-    await expect(fs.readFile(path.join(local, addedName), "utf8")).resolves.toBe("new");
+    await expectWorkspaceFiles(local, files);
     await expect(fs.access(path.join(local, "delete.txt"))).rejects.toThrow();
     await expect(fs.readlink(path.join(local, "link.txt"))).resolves.toBe(addedName);
     expect((await fs.stat(path.join(local, "src", "script.sh"))).mode & 0o111).not.toBe(0);
@@ -578,16 +529,16 @@ describe("worker workspace reconciliation", () => {
       fs.mkdir(path.join(local, "removed-dir")),
       fs.mkdir(path.join(staged, "removed-dir")),
     ]);
-    await Promise.all([
-      fs.writeFile(path.join(local, "removed-dir", "base.txt"), "base"),
-      fs.writeFile(path.join(staged, "removed-dir", "base.txt"), "base"),
-    ]);
+    await writeWorkspaceFiles(local, { "removed-dir/base.txt": "base" });
+    await writeWorkspaceFiles(staged, { "removed-dir/base.txt": "base" });
     const base = await manifestFor(local);
 
+    await writeWorkspaceFiles(staged, {
+      "apply.txt": "worker",
+      "noop.txt": "worker",
+      "conflict.txt": "worker",
+    });
     await Promise.all([
-      fs.writeFile(path.join(staged, "apply.txt"), "worker"),
-      fs.writeFile(path.join(staged, "noop.txt"), "worker"),
-      fs.writeFile(path.join(staged, "conflict.txt"), "worker"),
       fs.rm(path.join(staged, "deleted-apply.txt")),
       fs.rm(path.join(staged, "deleted-noop.txt")),
       fs.rm(path.join(staged, "deleted-conflict.txt")),
@@ -595,29 +546,30 @@ describe("worker workspace reconciliation", () => {
       fs.rm(path.join(staged, "removed-dir"), { recursive: true }),
     ]);
     await fs.symlink("worker-target", path.join(staged, "link"));
-    await Promise.all([
-      fs.writeFile(path.join(staged, "added-identical.txt"), "worker"),
-      fs.writeFile(path.join(staged, "collision.txt"), "worker"),
-      fs.mkdir(path.join(staged, "tree")),
-    ]);
-    await fs.writeFile(path.join(staged, "tree", "file.txt"), "worker");
+    await writeWorkspaceFiles(staged, {
+      "added-identical.txt": "worker",
+      "collision.txt": "worker",
+      "tree/file.txt": "worker",
+    });
     const current = await manifestFor(staged);
 
+    await writeWorkspaceFiles(local, {
+      "noop.txt": "worker",
+      "conflict.txt": "local",
+      "deleted-conflict.txt": "local",
+    });
     await Promise.all([
-      fs.writeFile(path.join(local, "noop.txt"), "worker"),
-      fs.writeFile(path.join(local, "conflict.txt"), "local"),
       fs.rm(path.join(local, "deleted-noop.txt")),
-      fs.writeFile(path.join(local, "deleted-conflict.txt"), "local"),
       fs.rm(path.join(local, "link")),
     ]);
     await fs.symlink("local-target", path.join(local, "link"));
-    await Promise.all([
-      fs.writeFile(path.join(local, "added-identical.txt"), "worker"),
-      fs.writeFile(path.join(local, "collision.txt"), "local"),
-      fs.writeFile(path.join(local, "tree"), "local ancestor"),
-      fs.writeFile(path.join(local, "removed-dir", "local.txt"), "local addition"),
-      fs.writeFile(path.join(local, "worker-unchanged-local.txt"), "local only change"),
-    ]);
+    await writeWorkspaceFiles(local, {
+      "added-identical.txt": "worker",
+      "collision.txt": "local",
+      tree: "local ancestor",
+      "removed-dir/local.txt": "local addition",
+      "worker-unchanged-local.txt": "local only change",
+    });
 
     let acceptedManifestRef: string | undefined;
     const result = await applyWorkspace({
@@ -639,32 +591,20 @@ describe("worker workspace reconciliation", () => {
       "tree",
     ]);
     expect(acceptedManifestRef).toBe(result.manifestRef);
-    await expect(fs.readFile(path.join(local, "apply.txt"), "utf8")).resolves.toBe("worker");
-    await expect(fs.readFile(path.join(local, "noop.txt"), "utf8")).resolves.toBe("worker");
-    await expect(fs.readFile(path.join(local, "added-identical.txt"), "utf8")).resolves.toBe(
-      "worker",
-    );
-    await expect(fs.readFile(path.join(local, "conflict.txt"), "utf8")).resolves.toBe("local");
-    await expect(fs.lstat(path.join(local, "deleted-apply.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
+    await expectWorkspaceFiles(local, {
+      "apply.txt": "worker",
+      "noop.txt": "worker",
+      "added-identical.txt": "worker",
+      "conflict.txt": "local",
+      "deleted-conflict.txt": "local",
+      "removed-dir/local.txt": "local addition",
+      tree: "local ancestor",
+      "worker-unchanged-local.txt": "local only change",
     });
-    await expect(fs.lstat(path.join(local, "deleted-noop.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(fs.readFile(path.join(local, "deleted-conflict.txt"), "utf8")).resolves.toBe(
-      "local",
-    );
+    for (const file of ["deleted-apply.txt", "deleted-noop.txt", "removed-dir/base.txt"]) {
+      await expect(fs.lstat(path.join(local, file))).rejects.toMatchObject({ code: "ENOENT" });
+    }
     await expect(fs.readlink(path.join(local, "link"))).resolves.toBe("local-target");
-    await expect(fs.readFile(path.join(local, "removed-dir", "local.txt"), "utf8")).resolves.toBe(
-      "local addition",
-    );
-    await expect(fs.lstat(path.join(local, "removed-dir", "base.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(fs.readFile(path.join(local, "tree"), "utf8")).resolves.toBe("local ancestor");
-    await expect(fs.readFile(path.join(local, "worker-unchanged-local.txt"), "utf8")).resolves.toBe(
-      "local only change",
-    );
     expect(result.manifest).toEqual(await manifestFor(local));
     await result.verifyLocalStable();
   });
