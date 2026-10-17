@@ -30,6 +30,10 @@ import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import {
+  deferClientVoiceRunCompletion,
+  resetClientVoiceRunHoldsForTest,
+} from "./client-voice-run-hold.js";
+import {
   CLIENT_VOICE_MUTATION_DIGEST_POLICY,
   ClientVoiceMutationDigestOwner,
   createClientVoiceMutationDigestDeliveryOptions,
@@ -167,12 +171,18 @@ function ensureToolEffectSubscription(): void {
       if (event.type !== "run.completed") {
         return;
       }
-      const owner = voiceSessionByRunId.get(event.runId);
+      const runId = event.runId;
+      const owner = voiceSessionByRunId.get(runId);
       // Root-backed runs include queued and yielded work beyond diagnostic completion.
       if (!owner || owner.settlement) {
         return;
       }
-      retireClientVoiceRun(event.runId, owner);
+      // A failed fallback attempt completes before the next model runs tools; keep the
+      // binding until the whole consult ends so spoken confirmation still gates them.
+      const retire = () => retireClientVoiceRun(runId, owner);
+      if (!deferClientVoiceRunCompletion(runId, retire)) {
+        retire();
+      }
     },
     { include: ["run.completed"] },
   );
@@ -716,6 +726,7 @@ const clientVoiceSessionTesting = {
     for (const [runId, owner] of voiceSessionByRunId) {
       retireClientVoiceRun(runId, owner, false);
     }
+    resetClientVoiceRunHoldsForTest();
     voiceSessionOperations.clear();
     mutationDigestDeliveryOwner.clear();
     unsubscribeToolEffects?.();
