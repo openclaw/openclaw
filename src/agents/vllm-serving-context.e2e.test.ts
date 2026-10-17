@@ -117,14 +117,15 @@ it("keeps observed serving limits through authored overrides and catalog refresh
       const facts = prepared.agentFacts[0]!;
       const acquire = async (cfg = config, refresh = false) => {
         const current = { ...facts, input: { ...input, config: cfg } };
+        // Under Vitest on Node, this registry-less read loads the plugin through the native
+        // loader, which compiles a second cold copy of core inside the 5s production deadline.
+        // Discovery's own per-request timeout still bounds the HTTP probe.
         const source = await prepareAgentCatalogSource(
           current,
           prepared.pluginGeneration,
           "live",
           false,
-          {
-            refresh,
-          },
+          { refresh, providerDiscoveryTimeoutMs: 60_000 },
         );
         return prepareFullCatalogFacts(current, prepared.pluginGeneration, "live", source, {
           includeNative: false,

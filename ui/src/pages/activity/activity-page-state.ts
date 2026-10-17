@@ -393,6 +393,7 @@ export function createActivityPageState(context: ApplicationContext) {
   const gateway = context.gateway;
   applyGatewaySnapshot(gateway, gateway.snapshot, true);
   const stopEvents = gateway.subscribeEvents((event) => applyGatewayEvent(gateway, event));
+  // Gateway receipts retire inspector requests and session presentation before replacement reads start.
   const stopGateway = gateway.subscribe((snapshot) =>
     applyGatewaySnapshot(gateway, snapshot, false),
   );

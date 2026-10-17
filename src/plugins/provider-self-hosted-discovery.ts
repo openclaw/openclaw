@@ -1,7 +1,12 @@
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
+import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { resolveProviderTransportSsrFPolicy } from "../agents/provider-network-policy.js";
 import { resolveProviderRequestPolicyConfig } from "../agents/provider-request-config.js";
@@ -16,6 +21,7 @@ import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { recordLiveServingContextLimit } from "./provider-catalog-expiry.js";
+import type { ProviderCatalogContext } from "./types.js";
 
 const log = createSubsystemLogger("plugins/self-hosted-provider-discovery");
 
@@ -412,4 +418,37 @@ export async function discoverOpenAICompatibleLocalModels(
     };
     return [modelConfig];
   });
+}
+
+export async function discoverOpenAICompatibleSelfHostedProvider<
+  T extends Record<string, unknown>,
+>(params: {
+  ctx: ProviderCatalogContext;
+  providerId: string;
+  buildProvider: (params: { apiKey?: string; baseUrl?: string }) => Promise<T>;
+}): Promise<{ provider: T & { apiKey: string } } | null> {
+  const configuredProvider = findNormalizedProviderValue(
+    params.ctx.config.models?.providers,
+    params.providerId,
+  );
+  const configuredBaseUrl = normalizeOptionalString(configuredProvider?.baseUrl);
+  if (configuredProvider) {
+    const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.ctx.config });
+    if (!visibility.providerWildcards.has(normalizeProviderId(params.providerId))) {
+      return null;
+    }
+  }
+  const { apiKey, discoveryApiKey } = params.ctx.resolveProviderApiKey(params.providerId);
+  if (!apiKey) {
+    return null;
+  }
+  return {
+    provider: {
+      ...(await params.buildProvider({
+        apiKey: discoveryApiKey,
+        ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
+      })),
+      apiKey,
+    },
+  };
 }

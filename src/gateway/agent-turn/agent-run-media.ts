@@ -75,7 +75,6 @@ export function dispatchAgentRunWithMedia(
           ingressOpts.privateCompletion ||
           ingressOpts.sessionEffects === "internal" ||
           ingressOpts.deliver === true ||
-          ingressOpts.internalDeliveryMediaUrls !== undefined ||
           !isInternalMessageChannel(ingressOpts.channel ?? ingressOpts.messageChannel)
         ) {
           return;

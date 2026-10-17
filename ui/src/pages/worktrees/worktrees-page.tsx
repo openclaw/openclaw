@@ -14,7 +14,7 @@ import { pathDisplayName } from "../../lib/path-display.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
@@ -44,12 +44,7 @@ export function WorktreesView(props: { model: WorktreesModel }) {
     ensureInitialData: () => void model.load(),
     onSnapshot: () => model.update(model.operatorAccess.canAdmin ? {} : { createOpen: false }),
   });
-  const projection = projectSource(model, {
-    read: (source) => source,
-    subscribe: (source, notify) => source.subscribe(notify),
-    equality: "revision",
-  });
-  const view = projection.read;
+  const view = projectOwner(model, (source) => source).read;
 
   const owner = (record: WorktreesModel["records"][number]) => {
     if (record.ownerKind === "session" && record.ownerId) {

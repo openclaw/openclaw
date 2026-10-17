@@ -7,6 +7,7 @@ import { createMcpAppUnmountGate } from "../../components/mcp-app-unmount.ts";
 import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-toggle-contract.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -20,7 +21,6 @@ import {
   ownedChatPaneRouteData,
   ownedChatPaneSessionKey,
   sameChatPaneRoute,
-  subscribeChatPageRouteDefaults,
 } from "./chat-page-navigation.ts";
 import {
   type ChatPageSnapshot,
@@ -58,6 +58,16 @@ export function createChatPageState(
   application: ApplicationContext,
 ) {
   const context = () => props.context ?? application;
+  const presentationSources = createMemo(() => {
+    const source = context();
+    return [
+      projectOwner(source.gateway, (gateway) => gateway.snapshot.hello, Object.is),
+      projectOwner(source.placementStartup, (startup) => startup),
+      ...(source.nativeConversation
+        ? [projectOwner(source.nativeConversation, (native) => native.presentation)]
+        : []),
+    ];
+  });
   const nativeConversation = nativeEmbedHost()?.surface === "conversation";
   // Resize-end and consecutive UI commands must read preceding mutations before Solid flushes.
   let splitLayout = nativeConversation ? undefined : loadSettings().chatSplitLayout;
@@ -622,19 +632,9 @@ export function createChatPageState(
       ),
     );
   }
-  // Gateway and native presentation event streams retain their ordering and teardown.
+  // Creation receipts remain events; route and presentation snapshots are projected above.
   createEffect(createMemo(context), (source) => {
-    const subscriptions = [
-      source.chatSubmissions?.subscribeCreate(invalidate),
-      source.placementStartup?.subscribe(invalidate),
-      subscribeChatPageRouteDefaults(source.gateway, invalidate),
-      source.nativeConversation?.subscribe(invalidate),
-    ];
-    return () => {
-      for (const unsubscribe of subscriptions) {
-        unsubscribe?.();
-      }
-    };
+    return source.chatSubmissions?.subscribeCreate(invalidate);
   });
   // Boot consumes the current route once; the snapshot memo tracks later prop changes.
   untrack(() => {
@@ -663,6 +663,7 @@ export function createChatPageState(
   });
   const snapshot = createMemo(() => {
     revision();
+    presentationSources().forEach((source) => source.read());
     return render();
   });
   // Direct Solid construction precedes attachment; shell ancestry is available after settlement.

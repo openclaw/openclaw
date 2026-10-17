@@ -7145,7 +7145,6 @@
 ["src/gateway/server-restart-sentinel.state-context.test.ts","../hooks/loader.js","a71e55b9ced70eb4edeb5e495ce4e99e99a4135206fe37e503f2296da6800458",1]
 ["src/gateway/server-restart-sentinel.state-context.test.ts","../plugins/hook-runner-global.js","106e13eaf7930a8d2786749dc764c79370dd9c6593279929bf239d28f67c489f",1]
 ["src/gateway/server-restart-sentinel.state-context.test.ts","./server-startup-model-runtime.js","9c7ca756e13d1ba3a4be3ced69e2be1ebc6686a8c6237d706e56a0724102c564",1]
-["src/gateway/server-restart-sentinel.test.ts","../channels/message/runtime.js","56d39b7066c9418693edd4caf407ce2e48fa290502c87066657bac39010723c5",1]
 ["src/gateway/server-restart-sentinel.test.ts","../channels/plugins/session-thread-info-loaded.js","259c8dbe0796d2cb6eaf08a1f79b6fdba83128f7904df1b44c5e2d9b2d5c1bb6",1]
 ["src/gateway/server-restart-sentinel.test.ts","../channels/turn/lifecycle.js","6fd76767e9dd80c06bbafae308e023317a08fe65d037a2f6c37bdf9fb31dc514",1]
 ["src/gateway/server-restart-sentinel.test.ts","../config/sessions/transcript.js","1c19c570257223c014248ecc5ecfea8f8c4ca17fd425e6c541891af3c240340f",1]
