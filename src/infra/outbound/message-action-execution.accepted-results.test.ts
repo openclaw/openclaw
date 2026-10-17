@@ -57,6 +57,30 @@ function registerPlugin(overrides: Partial<ChannelPlugin> = {}): ChannelPlugin {
   return plugin;
 }
 
+function createCallerAuthority() {
+  let active = true;
+  return {
+    close: () => {
+      active = false;
+    },
+    assertCurrent: () => {
+      if (!active) {
+        throw closed;
+      }
+    },
+  };
+}
+
+function runAuthorizedAction(input: Omit<Parameters<typeof runMessageAction>[0], "cfg">) {
+  return runMessageAction({
+    cfg: {},
+    messageActionAuthorization: authorization,
+    sessionKey,
+    defaultAccountId: "default",
+    ...input,
+  });
+}
+
 describe("accepted results through registered message actions", () => {
   let tempHome: TempHomeEnv;
   beforeAll(async () => {
@@ -71,14 +95,9 @@ describe("accepted results through registered message actions", () => {
   ] as const)(
     "retains an accepted $mode send ($messageId) when its caller closes before annotation",
     async ({ mode, messageId }) => {
-      let active = true;
+      const callerAuthority = createCallerAuthority();
       const submitted: string[] = [];
       const onPlatformSendDispatch = vi.fn(async () => {});
-      const assertCurrent = () => {
-        if (!active) {
-          throw closed;
-        }
-      };
       const plugin = registerPlugin(
         mode === "plugin"
           ? {
@@ -88,7 +107,7 @@ describe("accepted results through registered message actions", () => {
                   ctx.assertDirectAdapterHandoff?.();
                   await ctx.onPlatformSendDispatch?.();
                   submitted.push(messageId);
-                  active = false;
+                  callerAuthority.close();
                   return jsonResult(acceptedPayload);
                 },
               },
@@ -100,7 +119,7 @@ describe("accepted results through registered message actions", () => {
                   ctx.assertDirectAdapterHandoff?.();
                   await ctx.onPlatformSendDispatch?.();
                   submitted.push(messageId);
-                  active = false;
+                  callerAuthority.close();
                   return {
                     channel,
                     messageId,
@@ -114,14 +133,10 @@ describe("accepted results through registered message actions", () => {
             },
       );
 
-      const result = await runMessageAction({
-        cfg: {},
+      const result = await runAuthorizedAction({
         action: "send",
         params: { channel: plugin.id, target: "room-1", message: "accepted reply" },
-        messageActionAuthorization: authorization,
-        sessionKey,
-        defaultAccountId: "default",
-        assertDirectAdapterHandoff: assertCurrent,
+        assertDirectAdapterHandoff: callerAuthority.assertCurrent,
         onPlatformSendDispatch,
         skipQueue: true,
         suppressTranscriptMirror: true,
@@ -157,29 +172,21 @@ describe("accepted results through registered message actions", () => {
             error: "provider result unknown",
             sentBeforeError: true,
           };
-      let active = true;
+      const callerAuthority = createCallerAuthority();
       const handleAction = vi.fn(async () => {
-        active = false;
+        callerAuthority.close();
         return jsonResult(payload);
       });
       registerPlugin({
         actions: { describeMessageTool: () => ({ actions: ["send"] }), handleAction },
       });
 
-      const result = await runMessageAction({
-        cfg: {},
+      const result = await runAuthorizedAction({
         action: "broadcast",
         params: { channel, targets: ["room-1", "room-2"], message: "broadcast reply" },
-        messageActionAuthorization: authorization,
-        sessionKey,
-        defaultAccountId: "default",
         skipQueue: true,
         suppressTranscriptMirror: true,
-        assertDirectAdapterHandoff: () => {
-          if (!active) {
-            throw closed;
-          }
-        },
+        assertDirectAdapterHandoff: callerAuthority.assertCurrent,
       });
 
       expect(handleAction).toHaveBeenCalledOnce();
@@ -215,9 +222,9 @@ describe("accepted results through registered message actions", () => {
           ? { messageId: "part-1" }
           : { result: { messageIds: ["part-1"], visibleReplySent: true } }),
       };
-      let active = true;
+      const callerAuthority = createCallerAuthority();
       const handleAction = vi.fn(async () => {
-        active = false;
+        callerAuthority.close();
         return jsonResult(payload);
       });
       registerPlugin({
@@ -227,8 +234,7 @@ describe("accepted results through registered message actions", () => {
         },
       });
 
-      const result = await runMessageAction({
-        cfg: {},
+      const result = await runAuthorizedAction({
         action,
         params: {
           channel,
@@ -236,15 +242,8 @@ describe("accepted results through registered message actions", () => {
           message: "partial reply",
         },
         conversationReadOrigin: "direct-operator",
-        messageActionAuthorization: authorization,
-        sessionKey,
-        defaultAccountId: "default",
         suppressTranscriptMirror: true,
-        assertDirectAdapterHandoff: () => {
-          if (!active) {
-            throw closed;
-          }
-        },
+        assertDirectAdapterHandoff: callerAuthority.assertCurrent,
       });
 
       expect(handleAction).toHaveBeenCalledOnce();
@@ -265,14 +264,14 @@ describe("accepted results through registered message actions", () => {
     "aborted before lookup",
     "aborted during lookup",
   ] as const)("preserves an accepted thread reply (%s)", async (scenario) => {
-    let active = true;
+    const callerAuthority = createCallerAuthority();
     const caller = new AbortController();
     const matchesCurrentConversationAsync = vi.fn(async () => {
       if (scenario === "lookup failure") {
         throw new Error("source lookup unavailable");
       }
       if (scenario === "during lookup") {
-        active = false;
+        callerAuthority.close();
       }
       if (scenario === "aborted during lookup") {
         caller.abort(closed);
@@ -281,7 +280,7 @@ describe("accepted results through registered message actions", () => {
     });
     const handleAction = vi.fn(async () => {
       if (scenario === "before lookup") {
-        active = false;
+        callerAuthority.close();
       }
       if (scenario === "aborted before lookup") {
         caller.abort(closed);
@@ -298,22 +297,14 @@ describe("accepted results through registered message actions", () => {
       },
     });
 
-    const result = await runMessageAction({
-      cfg: {},
+    const result = await runAuthorizedAction({
       action: "thread-reply",
       params: { channel, target: "room-1", threadId: "thread-1", message: "accepted reply" },
       conversationReadOrigin: "direct-operator",
-      messageActionAuthorization: authorization,
-      sessionKey,
-      defaultAccountId: "default",
       abortSignal: caller.signal,
       assertDirectAdapterHandoff: scenario.startsWith("aborted")
         ? undefined
-        : () => {
-            if (!active) {
-              throw closed;
-            }
-          },
+        : callerAuthority.assertCurrent,
     });
 
     expect(handleAction).toHaveBeenCalledOnce();
@@ -410,6 +401,14 @@ const input = {
   defaultAccountId: "default",
 };
 
+const threadResult = {
+  kind: "action",
+  channel: "testchat",
+  action: "thread-reply",
+  handledBy: "plugin",
+  dryRun: false,
+} as const;
+
 const annotationParams = {
   cfg: {},
   params: threadActionParams,
@@ -452,12 +451,8 @@ describe("annotateSourceDelivery thread replies", () => {
         ]),
       );
       const actionResult = {
-        kind: "action" as const,
-        channel: "testchat" as const,
-        action: "thread-reply" as const,
-        handledBy: "plugin" as const,
+        ...threadResult,
         payload: { ok: true },
-        dryRun: false,
       };
       const pending = annotateSourceDelivery(actionResult, annotationParams, false);
       expect(matchesCurrentConversationAsync).toHaveBeenCalledOnce();
@@ -486,10 +481,7 @@ describe("annotateSourceDelivery thread replies", () => {
     const receipt = { threadId: "thread-1" };
     const result = await annotateSourceDelivery(
       {
-        kind: "action" as const,
-        channel: "testchat" as const,
-        action: "thread-reply" as const,
-        handledBy: "plugin" as const,
+        ...threadResult,
         payload: { receipt },
         toolResult: {
           content: [{ type: "text" as const, text: "delivered" }],
@@ -511,10 +503,7 @@ describe("annotateSourceDelivery thread replies", () => {
   it("leaves a different-thread receipt unmarked", async () => {
     const result = await annotateSourceDelivery(
       {
-        kind: "action" as const,
-        channel: "testchat" as const,
-        action: "thread-reply" as const,
-        handledBy: "plugin" as const,
+        ...threadResult,
         payload: { receipt: { threadId: "other-thread" } },
         dryRun: false,
       },
@@ -527,64 +516,44 @@ describe("annotateSourceDelivery thread replies", () => {
 });
 
 describe("runMessageAction reply-type plugin actions", () => {
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
-  });
-  it("marks replies to the run's inbound message as current-source deliveries", async () => {
+  beforeEach(() => {
     registerReplyPlugin();
+  });
+  afterEach(() => setActivePluginRegistry(createTestRegistry([])));
 
+  it.each([
+    { name: "inbound message", messageId: "1783", route: "current-source" },
+    { name: "numeric inbound id", messageId: 1783, route: "current-source" },
+    {
+      name: "explicit other target",
+      messageId: "1783",
+      to: "direct:someone-else",
+      route: undefined,
+    },
+  ])("annotates replies to $name", async ({ messageId, to, route }) => {
     const result = await runReplyAction({
-      actionParams: { message: "visible reply", messageId: "1783" },
+      actionParams: { message: "visible reply", messageId, ...(to ? { to } : {}) },
       currentMessageId: "1783",
     });
-
     expect(result.kind).toBe("action");
-    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
-    const details = "toolResult" in result ? result.toolResult?.details : undefined;
-    expect(details).toMatchObject({ sourceReplyRoute: "current-source" });
+    if (route) {
+      expect(result.payload).toMatchObject({ sourceReplyRoute: route });
+      const details = "toolResult" in result ? result.toolResult?.details : undefined;
+      expect(details).toMatchObject({ sourceReplyRoute: route });
+    } else {
+      expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
+    }
   });
 
-  it("matches numeric replied-to message ids against string tool-context ids", async () => {
-    registerReplyPlugin();
-
-    const result = await runReplyAction({
-      actionParams: { message: "visible reply", messageId: 1783 },
-      currentMessageId: "1783",
-    });
-
-    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
-  });
-
-  it("leaves explicitly targeted replies unmarked", async () => {
-    registerReplyPlugin();
-
-    const result = await runReplyAction({
-      actionParams: {
-        message: "visible reply",
-        messageId: "1783",
-        to: "direct:someone-else",
-      },
-      currentMessageId: "1783",
-    });
-
-    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
-  });
-
-  it("marks polls sent to the current conversation as current-source deliveries", async () => {
-    registerReplyPlugin();
-
-    const result = await runCurrentConversationPollAction({ to: "direct:user-1" });
-
+  it.each([
+    ["direct:user-1", "current-source"],
+    ["direct:someone-else", undefined],
+  ] as const)("annotates polls to %s", async (to, sourceReplyRoute) => {
+    const result = await runCurrentConversationPollAction({ to });
     expect(result.kind).toBe("poll");
-    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
-  });
-
-  it("leaves polls sent to other conversations unmarked", async () => {
-    registerReplyPlugin();
-
-    const result = await runCurrentConversationPollAction({ to: "direct:someone-else" });
-
-    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBe(
+      sourceReplyRoute,
+    );
   });
 });
 
@@ -610,20 +579,12 @@ const sendPoll = async ({ threadId }: Parameters<PollerSendPoll>[0]) => ({
 const pollerSendPoll = vi.fn<PollerSendPoll>(sendPoll);
 
 const pollerTestPlugin: ChannelPlugin = {
-  id: "poller",
-  meta: {
+  ...createChannelTestPluginBase({
     id: "poller",
     label: "Poller",
-    selectionLabel: "Poller",
-    docsPath: "/channels/poller",
-    blurb: "Poller test plugin.",
-  },
-  capabilities: { chatTypes: ["direct", "group"] },
-  config: {
-    listAccountIds: () => ["default"],
-    resolveAccount: () => ({ botToken: "poller-test" }),
-    isConfigured: () => true,
-  },
+    capabilities: { chatTypes: ["direct", "group"] },
+    config: { resolveAccount: () => ({ botToken: "poller-test" }), isConfigured: () => true },
+  }),
   outbound: {
     deliveryMode: "direct",
     sendPoll: pollerSendPoll,
