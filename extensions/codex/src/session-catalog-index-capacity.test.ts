@@ -89,8 +89,7 @@ describe("resident Codex catalog restore bounds", () => {
       persistence.remove("first");
       const snapshot = await persistence.readSnapshot();
 
-      expect(snapshot.rows).toEqual([]);
-      expect(snapshot.complete).toBe(true);
+      expect(snapshot).toMatchObject({ rows: [], complete: true });
       expect([...values.values()]).toEqual([{ version: 1, kind: "complete" }]);
     } finally {
       await persistence.retire();
@@ -133,9 +132,7 @@ describe("resident Codex catalog restore bounds", () => {
     const rows = Array.from({ length: 20_000 }, (_, index) => storedRow(`invalid-${index}`, index));
     rows[0]!.preview = "x".repeat(501);
     const snapshot = await readSnapshot(rows);
-    expect(snapshot.rows).toEqual([]);
-    expect(snapshot.complete).toBe(false);
-    expect(snapshot.cleanupIncomplete).toBe(false);
+    expect(snapshot).toMatchObject({ rows: [], complete: false, cleanupIncomplete: false });
     expect(snapshot.obsolete.size).toBe(20_001);
   });
 
@@ -148,24 +145,13 @@ describe("resident Codex catalog restore bounds", () => {
 
     const oversized = { ...valid, rolloutPath: `${valid.rolloutPath}x` };
     const rejected = await readSnapshot([oversized]);
-    expect(rejected.complete).toBe(false);
-    expect(rejected.rows).toEqual([]);
+    expect(rejected).toMatchObject({ complete: false, rows: [] });
     expect(rejected.obsolete).toEqual(new Set(["bounded", "complete"]));
   });
 });
 
 const createdAt = Date.parse("2026-09-16T12:00:00.000Z") / 1_000;
 const line = (type: string, payload: unknown) => `${JSON.stringify({ type, payload })}\n`;
-function nativeCatalog(root: string, data: CodexThread[]) {
-  const readNative = vi.fn(async () => projectCodexCatalogPage({ data }));
-  const index = catalog({
-    homeId: root,
-    localSessionsRoot: root,
-    readNative,
-  });
-  return { index, readNative };
-}
-
 function rolloutContents(thread: CodexThread): string {
   return (
     line("session_meta", {
@@ -184,7 +170,7 @@ function rolloutContents(thread: CodexThread): string {
   );
 }
 
-async function fixture() {
+async function fixture(data: (thread: CodexThread) => CodexThread[]) {
   const root = path.join(tempDirs.make("codex-native-authority-"), "sessions");
   const day = path.join(root, "2026", "09", "16");
   await fs.mkdir(day, { recursive: true });
@@ -207,7 +193,11 @@ async function fixture() {
   };
   await fs.writeFile(file, rolloutContents(thread));
   await fs.utimes(file, createdAt + 100, createdAt + 100);
-  return { root, file, thread };
+  const nativeData = data(thread);
+  const readNative = vi.fn(async () => projectCodexCatalogPage({ data: nativeData }));
+  const index = catalog({ homeId: root, localSessionsRoot: root, readNative });
+  await index.initialize();
+  return { file, thread, index, readNative };
 }
 
 async function reconcileAt(
@@ -230,6 +220,13 @@ async function reconcileAt(
   await index.reconcile();
 }
 
+const sessionIds = async (index: CodexCatalogIndex) =>
+  (await index.list({})).sessions.map((row) => row.threadId);
+
+async function rewriteRollout(file: string, thread: CodexThread) {
+  await fs.writeFile(file, rolloutContents(thread));
+}
+
 describe("native catalog metadata authority", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
@@ -237,25 +234,24 @@ describe("native catalog metadata authority", () => {
   it.each([null, createdAt + 100])(
     "moves a file-observed turn ahead of a native timestamp tie (previous recency: %s)",
     async (recencyAt) => {
-      const { root, file, thread } = await fixture();
-      const native = {
-        ...thread,
-        recencyAt,
-        updatedAt: recencyAt === null ? createdAt + 100 : createdAt + 400,
-      };
-      const peer = { ...native, id: "newer-peer", path: undefined, recencyAt: createdAt + 200 };
-      const { index, readNative } = nativeCatalog(root, [peer, native]);
-      await index.initialize();
-      expect((await index.list({})).sessions.map((row) => row.threadId)).toEqual([
-        peer.id,
-        native.id,
-      ]);
+      const { file, thread, index, readNative } = await fixture((base) => {
+        const native = {
+          ...base,
+          recencyAt,
+          updatedAt: recencyAt === null ? createdAt + 100 : createdAt + 400,
+        };
+        return [
+          { ...native, id: "newer-peer", path: undefined, recencyAt: createdAt + 200 },
+          native,
+        ];
+      });
+      expect(await sessionIds(index)).toEqual(["newer-peer", thread.id]);
       await reconcileAt(index, file, createdAt + 500, createdAt + 200);
       const current = await index.list({ limit: 1 });
       expect(current.sessions[0]).toMatchObject({
-        threadId: native.id,
+        threadId: thread.id,
         recencyAt: createdAt + 200,
-        updatedAt: native.updatedAt,
+        updatedAt: recencyAt === null ? createdAt + 100 : createdAt + 400,
       });
       expect(current.nextCursor).toBeDefined();
       await reconcileAt(index, file, createdAt + 600);
@@ -265,19 +261,18 @@ describe("native catalog metadata authority", () => {
   );
 
   it("refreshes the selected file's preview without replacing native workspace metadata", async () => {
-    const { root, file, thread } = await fixture();
-    const native = {
+    const { file, thread, index, readNative } = await fixture((base) => [
+      {
+        ...base,
+        cwd: "/workspace/native",
+        preview: "Previous first request",
+        updatedAt: createdAt + 300,
+      },
+    ]);
+    await rewriteRollout(file, {
       ...thread,
-      cwd: "/workspace/native",
-      preview: "Previous first request",
-      updatedAt: createdAt + 300,
-    };
-    const { index, readNative } = nativeCatalog(root, [native]);
-    await index.initialize();
-    await fs.writeFile(
-      file,
-      rolloutContents({ ...thread, preview: "New first user request in the selected file" }),
-    );
+      preview: "New first user request in the selected file",
+    });
     await reconcileAt(index, file, createdAt + 400);
     expect((await index.list({ searchTerm: "new first" })).sessions[0]).toMatchObject({
       cwd: "/workspace/native",
@@ -288,7 +283,6 @@ describe("native catalog metadata authority", () => {
   });
 
   it("keeps native selections and fallback ordering when an old rollout is touched", async () => {
-    const { root, file, thread } = await fixture();
     const nativeMetadata = {
       cwd: "/workspace/native-selected",
       modelProvider: "native-provider",
@@ -298,30 +292,22 @@ describe("native catalog metadata authority", () => {
       createdAt: createdAt + 10,
       updatedAt: createdAt + 300,
     } satisfies Partial<CodexThread>;
-    const native: CodexThread = {
-      ...thread,
-      ...nativeMetadata,
-      gitInfo: { branch: "native-branch" },
-      recencyAt: null,
-    };
-    const peer: CodexThread = {
-      ...native,
-      id: "newer-peer",
-      path: undefined,
-      updatedAt: createdAt + 400,
-    };
-    const { index, readNative } = nativeCatalog(root, [peer, native]);
+    const { file, index, readNative } = await fixture((thread) => {
+      const native = {
+        ...thread,
+        ...nativeMetadata,
+        gitInfo: { branch: "native-branch" },
+        recencyAt: null,
+      };
+      return [{ ...native, id: "newer-peer", path: undefined, updatedAt: createdAt + 400 }, native];
+    });
     const selected = {
       threadId: "authority",
       ...nativeMetadata,
       gitBranch: "native-branch",
     };
-    await index.initialize();
     await index.reconcile();
-    expect((await index.list({})).sessions.map((row) => row.threadId)).toEqual([
-      "newer-peer",
-      "authority",
-    ]);
+    expect(await sessionIds(index)).toEqual(["newer-peer", "authority"]);
 
     await reconcileAt(index, file, createdAt + 500);
     const touched = await index.list({});
@@ -342,9 +328,7 @@ describe("native catalog metadata authority", () => {
   });
 
   it("updates provisional file metadata until a native upsert selects its authoritative values", async () => {
-    const { root, file, thread } = await fixture();
-    const { index, readNative } = nativeCatalog(root, []);
-    await index.initialize();
+    const { file, thread, index, readNative } = await fixture(() => []);
     await index.reconcile();
     expect((await index.list({})).sessions[0]).toMatchObject({
       cwd: "/workspace/rollout-original",
@@ -352,42 +336,31 @@ describe("native catalog metadata authority", () => {
       sessionId: "rollout-session",
     });
 
-    await fs.writeFile(
-      file,
-      rolloutContents({
-        ...thread,
-        cwd: "/workspace/rollout-moved",
-        source: "vscode",
-        sessionId: "rollout-replaced-session",
-        createdAt: createdAt + 20,
-      }),
-    );
-    await reconcileAt(index, file, createdAt + 200);
-    expect((await index.list({ cwd: "/workspace/rollout-moved" })).sessions[0]).toMatchObject({
+    const moved = {
+      cwd: "/workspace/rollout-moved",
       source: "vscode",
       sessionId: "rollout-replaced-session",
       createdAt: createdAt + 20,
+    } satisfies Partial<CodexThread>;
+    await rewriteRollout(file, { ...thread, ...moved });
+    await reconcileAt(index, file, createdAt + 200);
+    expect((await index.list({ cwd: moved.cwd })).sessions[0]).toMatchObject({
+      ...moved,
       updatedAt: createdAt + 200,
     });
     const provisional = index.get("authority");
 
-    await index.upsertThread({
-      ...thread,
+    const promoted = {
       cwd: "/workspace/native-promoted",
       source: "cli",
       sessionId: "native-promoted-session",
       createdAt: createdAt + 30,
       updatedAt: createdAt + 300,
-    });
+    } satisfies Partial<CodexThread>;
+    await index.upsertThread({ ...thread, ...promoted });
     await fs.appendFile(file, line("event_msg", { type: "agent_message", message: "More output" }));
     await reconcileAt(index, file, createdAt + 400);
-    expect((await index.list({})).sessions[0]).toMatchObject({
-      cwd: "/workspace/native-promoted",
-      source: "cli",
-      sessionId: "native-promoted-session",
-      createdAt: createdAt + 30,
-      updatedAt: createdAt + 300,
-    });
+    expect((await index.list({})).sessions[0]).toMatchObject(promoted);
     expect((await index.list({ cwd: "/workspace/rollout-moved" })).sessions).toEqual([]);
     expect(provisional).toMatchObject({ nativeMetadata: false });
     expect(index.get("authority")).toMatchObject({ nativeMetadata: true });
@@ -396,22 +369,16 @@ describe("native catalog metadata authority", () => {
 });
 
 describe("projectCodexCatalogNativeThread string bounds", () => {
-  it("drops a surrogate pair split by the originator bound", () => {
-    const row = projectCodexCatalogNativeThread(
-      { id: "t1", originator: `${"s".repeat(499)}🙂` },
-      sanitizeTerminalText,
-    );
-    expect(row.originator).toBe("s".repeat(499));
-  });
-
-  it("admits a custom source with a complete surrogate pair at its bound", () => {
-    const custom = `${"s".repeat(498)}🙂`;
-    const row = projectCodexCatalogNativeThread(
-      { id: "t1", source: { custom } },
-      sanitizeTerminalText,
-    );
-    expect(row.source).toEqual({ custom });
-  });
+  it.each([
+    [{ originator: `${"s".repeat(499)}🙂` }, "originator", "s".repeat(499)],
+    [{ source: { custom: `${"s".repeat(498)}🙂` } }, "source", { custom: `${"s".repeat(498)}🙂` }],
+  ] as const)(
+    "preserves whole surrogate pairs at native string bounds: %j",
+    (input, field, expected) => {
+      const row = projectCodexCatalogNativeThread({ id: "t1", ...input }, sanitizeTerminalText);
+      expect(row[field]).toEqual(expected);
+    },
+  );
 
   it("carries bounded native fields into the displayed catalog", async () => {
     const thread = projectCodexCatalogNativeThread(
