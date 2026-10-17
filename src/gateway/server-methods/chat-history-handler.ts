@@ -26,6 +26,7 @@ import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.
 import { isQueuedChatTurnForSession } from "../chat-queued-turns.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.claude.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
+import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { SerializedJsonArray } from "../serialized-json.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.js";
@@ -243,6 +244,11 @@ export async function handleChatHistoryRequest({
     let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
     // Internal adapters may inspect message objects before responding.
     const encodeResponse = acceptsSerializedJson && method === req.method;
+    // Model projection replaces serialized messages, so their compressed bytes go unused.
+    const deflateResponse =
+      encodeResponse &&
+      acceptsDeflatedSegments &&
+      !resolveOperatorRolePolicy(client, context.getCommittedRuntimeConfig?.() ?? cfg)?.modelPolicy;
     try {
       historyPage =
         deltaCursor !== undefined
@@ -253,7 +259,7 @@ export async function handleChatHistoryRequest({
                 readChatHistoryPage(
                   {
                     encodeResponse,
-                    deflateResponse: encodeResponse && acceptsDeflatedSegments,
+                    deflateResponse,
                     includePluginSteering,
                     entry: historyEntry,
                     provider: resolvedSessionModel.provider,
