@@ -12,10 +12,23 @@ private let gatewayTLSTestRootCertificateDER =
     Data(
         base64Encoded: "MIIDLjCCAhagAwIBAgIUZm9nSb93f+rEJJweoxU/auE9A3UwDQYJKoZIhvcNAQELBQAwHTEbMBkGA1UEAwwST3BlbkNsYXcgVGVzdCBSb290MB4XDTI2MDkxNjIzNTI0OFoXDTM2MDkxMzIzNTI0OFowHTEbMBkGA1UEAwwST3BlbkNsYXcgVGVzdCBSb290MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApWsa86zBy3I9AZ5m533iV1JLhFUtRYEHtF3Mq/00UrvZZlmfceY4bJUp38tX+UnT9sx+ilD45+VOl8VjSXmLtMo74TNjBQEn79SYbwaHMkLItYomwO+lgF9tcAjJM4MS3bQ1tK40VqxfuKtTKL1ZsqUZW1zHZ8Tf2dom+jLB8yKYelY35IxpNVBelzbiGUXw5OW8oGDqKjE9eezDpDpd4Bfgt/l8PPWlhXK2PLwNXZtCMUFPFt0ZOeo1o9Bal0cp/R46DyV1OvGkpL9RIyHbXfQJQZvugV2whWVsxHAM7cINV7rmOdf9ObbQPogTPLx08ZFDFv/MVjH5RAqYWz3LuwIDAQABo2YwZDAdBgNVHQ4EFgQUdnh7Zg6UOXq6ezrHR8XvyymGbIMwHwYDVR0jBBgwFoAUdnh7Zg6UOXq6ezrHR8XvyymGbIMwEgYDVR0TAQH/BAgwBgEB/wIBADAOBgNVHQ8BAf8EBAMCAQYwDQYJKoZIhvcNAQELBQADggEBAKPVh4LuWJf4rowdUkEEWu1fa/QBqK2/gLMdOryxkR9es2FU2LdL744KoBND89+fuisFa7gDxDCZBrJhBkDthjOnerl9Se/qpOfuODgfvSMF4Qkv97L52rhR7djV5+8LJYrGXBSbeRIMnsdOOyn1rH5GugLSCakLfmfkTIGmTwK/l7zDw7DcRNcYdLruE8wSccIDnPLKIEpyYeC2uLvLKigAV7gOjmVzObaSwKSzUaYAjFdi+zMxpHT8l8gXEfpqN+g5SgG/yRFWLy12lWNO4YXwt0jgTRqljouj1/SdozeMQCLKfoLrjDk8wlcplfSpKsJPtGVp81hAnEY9akYrw7s=")!
 
-private func gatewayTLSTestTrust(systemTrusted: Bool) throws -> SecTrust {
-    let certificate = try #require(SecCertificateCreateWithData(nil, gatewayTLSTestCertificateDER as CFData))
+private let gatewayTLSAlternateCertificateDER =
+    Data(
+        base64Encoded: "MIIDDDCCAfSgAwIBAgIBAjANBgkqhkiG9w0BAQsFADAmMSQwIgYDVQQDDBtPcGVuQ2xhdyBTeW50aGV0aWMgUmVwcm8gQ0EwHhcNMjYxMDE0MTM1MTIzWhcNMjYxMDE2MTM1MTIzWjAaMRgwFgYDVQQDDA9nYXRld2F5LmV4YW1wbGUwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCu7JRoYxl8wwsI7MsPbkmJVrKm9Fx4zzUsXPxq89m2RGjjtZIXEHIhFu+LqOgp5dwQEDsx7YQYY7ypUcxqEU0/NsuasWbv2X0KL39SoC+4I9BW+XE1flR3cevdXNHXcuuhr2yGw+QlwdjaVbxp4C56jRMK/25DJDSbcW4hLF5lurHBr+LPvlHdjM643LvzDJArd9lAgo61+x1e6JkUidp3hMUlNSpwPpWRRgLXE5XUtcjmlq7ovc+39w//1ar6aCC8V0sg12iMQUs8k319Ke6G5+aG1wvQViUJtdYtb9nMmLXHFrIdkkc2vmeGxEeETWhOaMlreM3uLv2DosBLpdw3AgMBAAGjUTBPMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMBoGA1UdEQQTMBGCD2dhdGV3YXkuZXhhbXBsZTANBgkqhkiG9w0BAQsFAAOCAQEAHV3UbLIy10CVGuKGFT/qbAGSPbhYwiYjNpbf0HmP4Qo5sfG047Ew1EcYC8+DKqXBU3EQH+jF7JjMDErxUR+vNuCCcIKybYQkYYC0jG1qwlM1SYLuqBVgm0FKHXNOVu7p92DjwY9YYNVE4sZ9+fYFNuhGRrYjkJs0R6VvEWY46QF66a47nY5xwSxvYOVGv1kD2yOX627qLBwLDlkyxCOVb1nJjvtq3l5dxfr0aub4YsKTJjhyArhKoftWnsVSK4KdrmsWVjr2i7du9jMW5FRM6F8nhAZkKltYMrkhomYPmqpKVyfsjRQfXKv+W4iMZlu/6IrwwO42gt6qRhssItGHBA==")!
+
+private let gatewayTLSAlternateRootDER =
+    Data(
+        base64Encoded: "MIIC8jCCAdqgAwIBAgIJAI9yGAYuu1zaMA0GCSqGSIb3DQEBCwUAMCYxJDAiBgNVBAMMG09wZW5DbGF3IFN5bnRoZXRpYyBSZXBybyBDQTAeFw0yNjEwMTQxMzUxMjNaFw0yNjEwMTYxMzUxMjNaMCYxJDAiBgNVBAMMG09wZW5DbGF3IFN5bnRoZXRpYyBSZXBybyBDQTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAMAXjGzbtPX9x7UdtqNGmmfRYBRazfj0BejQhPjvDCPq1y1mcj1AqvUwzg2OR3wpOP95b1McyPekzN4gcETEpB7eWdG1GVv/CZTlM9e1eskpxrjaEi0H+G75HIZtQ3D3bKHYtAH1KQsd/n0gT3YfSsY4p3sN1UTYTzzLKz4A5KLd0bKVg9B3P0yfXQcFIt2+uT/BgpTZqztUWaSXGKjnxMgxwdEWNii77r5GwyhfTPvMS/iQ7F1ia3+54f2zYamPr79Sb94BmMYAv9TE3TZf8KFCWK7MArOEiWwXRTQvqSoOL4F2+E1pRcjpVmoTiSYZwzP/PWnA2MXYzAf8J2vOB30CAwEAAaMjMCEwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYwDQYJKoZIhvcNAQELBQADggEBADG95+ZtzkEqZhGlyLpaIYepRbyWOQpLbf1icjLrfbShqFa8k03wZVhQUDfwlPBTQK4seHEp5D0u7N7CAcUZGoxPCEwrC5inKlgxN8uJrEAgMEQBhg9EfPCbtjgF0zqBp+xMgAvEdb7Gfcq0QB5XexcHMMumCzgTzTDrtDjQkPkaT1JR8n+lFvGTgYUoAz8zWH8vo3Bv7Xom97Xow99kR69XG3xYSdTxTZPShIdEDHl+GoU7yiLxmdW1IQoT++QrCf1C+Kn+BBzXeXHgyCeckMJK7HhLj6Nw1IG0VQ4eU9GfBHc+EqWAm2Gkpfiq7bEffZljMsFRkrWOk4KSFa1DzZM=")!
+
+private func gatewayTLSTestTrust(
+    systemTrusted: Bool,
+    certificateDER: Data = gatewayTLSTestCertificateDER,
+    rootDER: Data = gatewayTLSTestRootCertificateDER,
+    verifyDate: Date? = nil) throws -> SecTrust
+{
+    let certificate = try #require(SecCertificateCreateWithData(nil, certificateDER as CFData))
     let rootCertificate = try #require(
-        SecCertificateCreateWithData(nil, gatewayTLSTestRootCertificateDER as CFData))
+        SecCertificateCreateWithData(nil, rootDER as CFData))
     let policy = systemTrusted
         ? SecPolicyCreateBasicX509()
         : SecPolicyCreateSSL(true, "gateway.example" as CFString)
@@ -28,6 +41,9 @@ private func gatewayTLSTestTrust(systemTrusted: Bool) throws -> SecTrust {
     try #require(SecTrustSetAnchorCertificates(trustValue, anchors as CFArray) == errSecSuccess)
     try #require(SecTrustSetAnchorCertificatesOnly(trustValue, true) == errSecSuccess)
     try #require(SecTrustSetNetworkFetchAllowed(trustValue, false) == errSecSuccess)
+    if let verifyDate {
+        try #require(SecTrustSetVerifyDate(trustValue, verifyDate as CFDate) == errSecSuccess)
+    }
     return trustValue
 }
 
@@ -162,6 +178,132 @@ struct GatewayTLSPinningTests {
             host: "gateway.example",
             port: 443,
             params: params) == .reject)
+    }
+
+    @Test func `approved alternating leaves survive new sessions without widening explicit pins`() throws {
+        // The synthetic alternate chain is valid on this fixed date, independent of the host clock.
+        let date = Date(timeIntervalSince1970: 1_792_069_200)
+        let trustA = try gatewayTLSTestTrust(systemTrusted: true, verifyDate: date)
+        let trustB = try gatewayTLSTestTrust(
+            systemTrusted: true,
+            certificateDER: gatewayTLSAlternateCertificateDER,
+            rootDER: gatewayTLSAlternateRootDER,
+            verifyDate: date)
+        try #require(SecTrustEvaluateWithError(trustA, nil))
+        try #require(SecTrustEvaluateWithError(trustB, nil))
+        let fingerprintA = try #require(GatewayTLSServerTrust.certificateFingerprint(trustA))
+        let fingerprintB = try #require(GatewayTLSServerTrust.certificateFingerprint(trustB))
+        let route = "profile:alternating"
+        let account = "fingerprint.v3." + Data(route.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let existingPin: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: GatewayTLSStore.resolvedKeychainService(suffix: ".tests"),
+            kSecAttrAccount as String: account,
+            kSecValueData as String: Data(fingerprintA.utf8),
+            kSecAttrGeneric as String: Data(fingerprintA.utf8),
+        ]
+        // Stable v2026.10.3 writes a scalar v3 item without approval metadata.
+        try #require(GatewayTLSStore.keychainOperations.add(existingPin as CFDictionary) == errSecSuccess)
+        func session(allowsAlternates: Bool = true, routeKey: String = route) -> GatewayTLSPinningSession {
+            GatewayTLSPinningSession(params: GatewayTLSParams(
+                required: true,
+                expectedFingerprint: GatewayTLSStore.loadFingerprint(stableID: routeKey),
+                allowTOFU: false,
+                storeKey: routeKey,
+                allowsApprovedAlternates: allowsAlternates))
+        }
+        let url = try #require(URL(string: "wss://gateway.example"))
+        #expect(session().validateServerTrust(trustA, for: url))
+        #expect(!session().validateServerTrust(trustB, for: url))
+        try #require(GatewayTLSStore.approveFingerprint(fingerprintB, ifCurrent: fingerprintA, stableID: route))
+        // New sessions read durable approvals, rather than relying on the approving session's cache.
+        #expect(session().validateServerTrust(trustB, for: url))
+        #expect(session().validateServerTrust(trustA, for: url))
+        // A retained edge can be the live session's pin while B remains the scalar store pin.
+        // Reviewing a new rotation from that session must not fail the conditional write.
+        let fingerprintC = String(repeating: "c", count: 64)
+        try #require(GatewayTLSStore.approveFingerprint(fingerprintC, ifCurrent: fingerprintA, stableID: route))
+        #expect(session().validateServerTrust(trustA, for: url))
+        #expect(session().validateServerTrust(trustB, for: url))
+        #expect(!session(allowsAlternates: false).validateServerTrust(trustA, for: url))
+        let untrustedA = try gatewayTLSTestTrust(systemTrusted: false, verifyDate: date)
+        #expect(!session().validateServerTrust(untrustedA, for: url))
+        let wrongHost = try #require(URL(string: "wss://other.example"))
+        #expect(!session().validateServerTrust(trustA, for: wrongHost))
+        let otherRoute = "profile:other"
+        try #require(GatewayTLSStore.replaceFingerprint(fingerprintB, stableID: otherRoute))
+        #expect(!session(routeKey: otherRoute).validateServerTrust(trustA, for: url))
+        #expect(!GatewayTLSStore.approveFingerprint(
+            fingerprintA, ifCurrent: String(repeating: "f", count: 64), stableID: route))
+        // Explicit setup/configuration writes retire alternates, including identical-pin writes.
+        try #require(GatewayTLSStore.replaceFingerprint(fingerprintB, stableID: route))
+        #expect(!session().validateServerTrust(trustA, for: url))
+    }
+
+    @Test(arguments: [false, true])
+    func `withdrawn approvals reject a retained session pin on its next handshake`(forget: Bool) throws {
+        let trust = try gatewayTLSTestTrust(systemTrusted: true)
+        let fingerprint = try #require(GatewayTLSServerTrust.certificateFingerprint(trust))
+        let replacement = String(repeating: "b", count: 64)
+        let route = "profile:withdrawn"
+        try #require(GatewayTLSStore.replaceFingerprint(fingerprint, stableID: route))
+        try #require(GatewayTLSStore.approveFingerprint(replacement, ifCurrent: fingerprint, stableID: route))
+        let session = GatewayTLSPinningSession(params: .init(
+            required: true,
+            expectedFingerprint: replacement,
+            allowTOFU: false,
+            storeKey: route,
+            allowsApprovedAlternates: true))
+        let url = try #require(URL(string: "wss://gateway.example"))
+        try #require(session.validateServerTrust(trust, for: url))
+        let untrusted = try gatewayTLSTestTrust(systemTrusted: false)
+        #expect(!session.validateServerTrust(untrusted, for: url))
+        #expect(session.consumeLastTLSFailure()?.kind == .untrustedCertificate)
+        if forget {
+            try #require(GatewayTLSStore.clearFingerprint(stableID: route))
+        } else {
+            try #require(GatewayTLSStore.replaceFingerprint(replacement, stableID: route))
+        }
+        #expect(!session.validateServerTrust(trust, for: url))
+        #expect(session.consumeLastTLSFailure()?.kind == .pinMismatch)
+    }
+
+    @Test func `approved leaves are bounded and retired by forget or older-client writes`() throws {
+        let route = "profile:bounded"
+        let leaves = (0..<6).map { String(repeating: String($0), count: 64) }
+        try #require(GatewayTLSStore.replaceFingerprint(leaves[0], stableID: route))
+        for index in 1..<leaves.count {
+            try #require(GatewayTLSStore.approveFingerprint(
+                leaves[index], ifCurrent: leaves[index - 1], stableID: route))
+        }
+        for index in 0..<leaves.count {
+            #expect((GatewayTLSStore.approvedFingerprints(stableID: route)?.contains(leaves[index]) == true) ==
+                (index >= 2))
+        }
+        // Simulate a v3 client updating the scalar pin without knowing approval metadata.
+        let account = "fingerprint.v3." + Data(route.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: GatewayTLSStore.resolvedKeychainService(suffix: ".tests"),
+            kSecAttrAccount as String: account,
+        ]
+        let olderWrite: [String: Any] = [
+            kSecValueData as String: Data(leaves[0].utf8),
+            kSecAttrGeneric as String: Data(leaves[0].utf8),
+        ]
+        try #require(GatewayTLSStore.keychainOperations.update(
+            query as CFDictionary, olderWrite as CFDictionary) == errSecSuccess)
+        #expect(GatewayTLSStore.loadFingerprint(stableID: route) == leaves[0])
+        #expect(GatewayTLSStore.approvedFingerprints(stableID: route)?.contains(leaves[4]) == false)
+        try #require(GatewayTLSStore.clearFingerprint(stableID: route))
+        try #require(GatewayTLSStore.replaceFingerprint(leaves[5], stableID: route))
+        #expect(GatewayTLSStore.approvedFingerprints(stableID: route)?.contains(leaves[4]) == false)
     }
 
     @Test func `server trust evaluator claims trusted first use`() throws {
