@@ -128,6 +128,7 @@ async function writeRawShortTermStore(
 ): Promise<void> {
   const record = asOptionalRecord(raw);
   const entries = asOptionalRecord(record?.entries);
+  const updatedAt = record?.updatedAt;
   await Promise.all([
     writeMemoryCoreWorkspaceEntries({
       namespace:
@@ -141,9 +142,7 @@ async function writeRawShortTermStore(
       key: metaKey,
       value: {
         updatedAt:
-          typeof record?.updatedAt === "string" && record.updatedAt.trim()
-            ? record.updatedAt
-            : new Date().toISOString(),
+          typeof updatedAt === "string" && updatedAt.trim() ? updatedAt : new Date().toISOString(),
       },
     }),
   ]);
@@ -184,7 +183,6 @@ export const dreamingTestState = {
 
 export function createMemoryCoreTestHarness() {
   let fixtureRoot = "";
-  let caseId = 0;
 
   beforeAll(async () => {
     await configureMemoryCoreDreamingStateForTests();
@@ -207,10 +205,6 @@ export function createMemoryCoreTestHarness() {
   });
 
   return {
-    async createTempWorkspace(prefix: string): Promise<string> {
-      const workspaceDir = path.join(fixtureRoot, `${prefix}${caseId++}`);
-      await fs.mkdir(workspaceDir, { recursive: true });
-      return workspaceDir;
-    },
+    createTempWorkspace: (prefix: string) => fs.mkdtemp(path.join(fixtureRoot, prefix)),
   };
 }

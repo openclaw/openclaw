@@ -19,10 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runInMemoryTestBackgroundContext } from "./memory/background-context.test-support.js";
 import * as cpuRuntime from "./memory/manager-cpu-worker-runtime.js";
 import * as generationLease from "./memory/manager-index-generation-lease.js";
-import {
-  createManagerIndexFixture,
-  type ManagerIndexFixture,
-} from "./memory/manager-index.test-support.js";
+import { createManagerIndexFixture } from "./memory/manager-index.test-support.js";
 import { createMemoryGetTool, createMemorySearchTool, testing } from "./tools.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./memory/index.js");
@@ -45,7 +42,7 @@ function searchTool(
 }
 
 describe("memory_search real manager", () => {
-  const fixture: ManagerIndexFixture = createManagerIndexFixture({
+  const fixture = createManagerIndexFixture({
     getMemorySearchManager,
     closeAllMemorySearchManagers,
   });
@@ -88,13 +85,6 @@ describe("memory_search real manager", () => {
     });
   }
 
-  function withWiki() {
-    registerMemoryCorpusSupplement("wiki-fixture", {
-      search: async () => [wikiHit],
-      get: async () => null,
-    });
-  }
-
   beforeEach(() => testing.resetMemorySearchToolCooldowns());
   afterEach(() => {
     clearMemoryPluginState();
@@ -112,15 +102,15 @@ describe("memory_search real manager", () => {
         main: path.join(fixture.paths.workspace, pinned ? "pinned-main" : "main"),
         other: path.join(fixture.paths.workspace, pinned ? "pinned-other" : "other"),
       };
-      const main = pinned ? { workspace: workspaces.main } : {};
-      const other = pinned ? { workspace: workspaces.other } : {};
       cfg.agents = {
         ownership: "explicit",
         defaults: {
           workspace: fixture.paths.workspace,
           ...(systemAgent ? { systemAgent: { agentId: "other" } } : {}),
         },
-        entries: { main, other },
+        entries: Object.fromEntries(
+          Object.entries(workspaces).map(([id, workspace]) => [id, pinned ? { workspace } : {}]),
+        ),
       };
       cfg.memory = { ...cfg.memory, citations: "off" };
       await fs.writeFile(path.join(fixture.paths.workspace, "USER.md"), "Parent decoy\n");
@@ -141,10 +131,12 @@ describe("memory_search real manager", () => {
         await manager.close();
 
         const options = { config: cfg, agentId, oneShotCliRun: true };
-        const search = searchTool(cfg, options);
         const get = createMemoryGetTool(options)!;
-        const found = await search.execute("workspace-search", { query: marker, corpus: "memory" });
-        const { results } = found.details as {
+        const { details } = await searchTool(cfg, options).execute("workspace-search", {
+          query: marker,
+          corpus: "memory",
+        });
+        const { results } = details as {
           results: Array<{ path: string; startLine: number; endLine: number; snippet: string }>;
         };
         expect(results).toEqual([
@@ -175,22 +167,13 @@ describe("memory_search real manager", () => {
     };
     await (await indexedManager(cfg, "cli")).close();
 
-    const tool = searchTool(cfg, {
+    const result = await searchTool(cfg, {
       agentSessionKey: "agent:main:main",
       oneShotCliRun: true,
-    });
-    const result = await tool.execute("citation-indentation", {
+    }).execute("citation-indentation", {
       query: "CitationIndentSpaces",
       corpus: "memory",
     });
-    const expected = {
-      results: [
-        {
-          path: "memory/citation-indent.md",
-          snippet: `${text}\n\nSource: memory/citation-indent.md#L1-L2`,
-        },
-      ],
-    };
     expect(result.details).toMatchObject({
       results: [{ citation: "memory/citation-indent.md#L1-L2" }],
     });
@@ -200,7 +183,14 @@ describe("memory_search real manager", () => {
     }
     expect
       .soft(JSON.parse(content.text), "model-visible JSON preserves snippet layout")
-      .toMatchObject(expected);
+      .toMatchObject({
+        results: [
+          {
+            path: "memory/citation-indent.md",
+            snippet: `${text}\n\nSource: memory/citation-indent.md#L1-L2`,
+          },
+        ],
+      });
     expect(await fs.readFile(filePath, "utf8")).toBe(text);
     expect(provider).toMatchObject({ embedBatchCalls: 0, embedQueryCalls: 0 });
   });
@@ -211,9 +201,8 @@ describe("memory_search real manager", () => {
     await session("excerpt-proof", "The excerpt marker is cobalt orchid.");
     await indexedManager(cfg);
     const options = { config: cfg, agentId: "main", agentSessionKey: sessionKey };
-    const search = searchTool(cfg, options);
     const get = createMemoryGetTool(options)!;
-    const found = await search.execute("session-search", {
+    const found = await searchTool(cfg, options).execute("session-search", {
       query: "cobalt orchid",
       corpus: "sessions",
     });
@@ -248,14 +237,13 @@ describe("memory_search real manager", () => {
   });
 
   it("preserves reindex guidance alongside wiki results after an embedding model change", async () => {
-    const manager = await indexedManager(
-      createConfig({ model: "old-embed", vectorEnabled: false }),
-      undefined,
-      "cli",
-    );
-    await manager.close();
+    const oldConfig = createConfig({ model: "old-embed", vectorEnabled: false });
+    await (await indexedManager(oldConfig, undefined, "cli")).close();
     const embeddingCalls = provider.embedBatchCalls;
-    withWiki();
+    registerMemoryCorpusSupplement("wiki-fixture", {
+      search: async () => [wikiHit],
+      get: async () => null,
+    });
     const tool = searchTool(createConfig({ model: "new-embed", vectorEnabled: false }));
     const action =
       "Tell the user to run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.";
@@ -294,23 +282,17 @@ describe("memory_search real manager", () => {
     Reflect.set(manager, "sessionsDirty", true);
 
     const getSpy = vi.spyOn(MemoryIndexManager, "get");
-    try {
-      const tool = searchTool(cfg, {
-        agentSessionKey: "agent:main:telegram:direct:active-refresh-proof",
-      });
-      const result = await tool.execute("routine-refresh", zebraQuery);
-
-      expect(result.details).toMatchObject({
-        results: [expect.objectContaining({ snippet: expect.stringContaining("Zebra") })],
-      });
-      expect(result.details).not.toHaveProperty("stale");
-      expect(result.details).not.toHaveProperty("warning");
-      expect(result.details).not.toHaveProperty("action");
-      expect(getSpy.mock.calls.some(([params]) => params.purpose === "maintenance")).toBe(false);
-      expect(Reflect.get(manager, "sessionsDirty")).toBe(true);
-    } finally {
-      getSpy.mockRestore();
+    const result = await searchTool(cfg, {
+      agentSessionKey: "agent:main:telegram:direct:active-refresh-proof",
+    }).execute("routine-refresh", zebraQuery);
+    expect(result.details).toMatchObject({
+      results: [expect.objectContaining({ snippet: expect.stringContaining("Zebra") })],
+    });
+    for (const field of ["stale", "warning", "action"]) {
+      expect(result.details).not.toHaveProperty(field);
     }
+    expect(getSpy.mock.calls.some(([params]) => params.purpose === "maintenance")).toBe(false);
+    expect(Reflect.get(manager, "sessionsDirty")).toBe(true);
   });
 
   it("reads published memory changes without database diagnostic queries", async () => {
@@ -366,16 +348,14 @@ describe("memory_search real manager", () => {
 
     await indexedManager(cfg);
 
-    const tool = searchTool(cfg, {
+    const result = await searchTool(cfg, {
       agentSessionKey: `${anchorSessionKey}:active-memory:abcdef123456`,
       conversationRecall: {
         anchorSessionKey,
         scope: "same-agent-private",
         corpus: "sessions",
       },
-    });
-
-    const result = await tool.execute("real-manager-visible-backfill", {
+    }).execute("real-manager-visible-backfill", {
       query: "alpha",
       corpus: "sessions",
       maxResults: 2,
@@ -414,13 +394,9 @@ describe("memory_search real manager", () => {
       provider.beforeEmbedQuery = async (options) => {
         const control = managed ? options?.[MEMORY_SEARCH_DEADLINE_CONTROL] : undefined;
         control?.report("pause");
-        try {
-          embeddingStarted = true;
-          entered.resolve();
-          await release.promise;
-        } finally {
-          control?.report("resume");
-        }
+        embeddingStarted = true;
+        entered.resolve();
+        await release.promise.finally(() => control?.report("resume"));
       };
       const tool = searchTool(cfg);
       vi.useFakeTimers();
