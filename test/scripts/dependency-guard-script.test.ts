@@ -47,6 +47,9 @@ function contentFile(text: string) {
 function manifestContent(version: string, test = "old") {
   return contentFile(JSON.stringify({ devDependencies: { example: version }, scripts: { test } }));
 }
+function afterTwoReads<T>(initial: T, latest: T) {
+  return { responses: [initial, initial, latest] };
+}
 function changedDependencyFields(version: string, test: string) {
   return {
     optionalDependencies: { a: version },
@@ -199,9 +202,9 @@ function expectGuard(
   result: ReturnType<typeof runDependencyGuard>,
   states: string[],
   status = 0,
-  name = "",
+  context: unknown = "",
 ) {
-  expect(result.status, `${name}: ${result.stderr}`).toBe(status);
+  expect(result.status, `${JSON.stringify(context)}: ${result.stderr}`).toBe(status);
   expect(result.statuses.map((call) => call.body?.state)).toEqual(states);
 }
 function expectGuardState(result: ReturnType<typeof runDependencyGuard>, state: string) {
@@ -228,47 +231,30 @@ describe("dependency guard script", () => {
   });
 
   it("requires current maintainer authority for dependency approval", () => {
-    const cases: Array<[string, typeof approval | undefined, string, boolean, boolean?]> = [
-      ["maintainer author", undefined, "maintain", true, true],
-      ["admin author", undefined, "admin", true, true],
-      ["current maintainer command", approval, "maintain", true],
-      ["current admin command", approval, "admin", true],
-      ["write-only commenter", approval, "write", false],
-      [
-        "command before the current request",
-        {
-          ...approval,
-          created_at: "2025-12-31T00:00:00Z",
-          updated_at: "2025-12-31T00:00:00Z",
-        },
-        "maintain",
-        false,
-      ],
-      ["edited comment", { ...approval, updated_at: "2026-01-01T00:00:02Z" }, "maintain", false],
-      ["bot command", { ...approval, user: { ...approval.user, type: "Bot" } }, "maintain", false],
-      [
-        "security-only command",
-        { ...approval, body: "/allow-security-sensitive-change" },
-        "maintain",
-        false,
-      ],
-      [
-        "both commands on separate lines",
-        {
-          ...approval,
-          body: "/allow-security-sensitive-change\n/allow-dependencies-change",
-        },
-        "maintain",
-        true,
-      ],
+    const early = "2025-12-31T00:00:00Z";
+    const securityCommand = "/allow-security-sensitive-change";
+    const cases: Array<[string, boolean, Partial<typeof approval> | null]> = [
+      ["maintain", true, null],
+      ["admin", true, null],
+      ["maintain", true, {}],
+      ["admin", true, {}],
+      ["write", false, {}],
+      ["maintain", false, { created_at: early, updated_at: early }],
+      ["maintain", false, { updated_at: "2026-01-01T00:00:02Z" }],
+      ["maintain", false, { user: { ...approval.user, type: "Bot" } }],
+      ["maintain", false, { body: securityCommand }],
+      ["maintain", true, { body: `${securityCommand}\n${approval.body}` }],
     ];
-    for (const [name, comment, role, allowed, author] of cases) {
+    for (const [role, allowed, overrides] of cases) {
+      const author = overrides === null;
       const result = runDependencyGuard({
         [`GET /repos/openclaw/openclaw/collaborators/${author ? "contributor" : "maintainer"}/permission`]:
           { role_name: role },
-        [`GET ${issuePath}/comments`]: author ? [] : [approvalNotice, comment],
+        [`GET ${issuePath}/comments`]: author
+          ? []
+          : [approvalNotice, { ...approval, ...overrides }],
       });
-      expectGuard(result, ["failure", allowed ? "success" : "failure"], 0, name);
+      expectGuard(result, ["failure", allowed ? "success" : "failure"], 0, overrides);
       if (author) {
         expect(result.stdout).toContain("informational");
         expect(result.stdout).toContain("- `pnpm-workspace.yaml`\n");
@@ -283,9 +269,7 @@ describe("dependency guard script", () => {
 
   it("rechecks a command comment before publishing dependency success", () => {
     const result = runDependencyGuard({
-      [`GET ${issuePath}/comments`]: {
-        responses: [[approvalNotice, approval], [approvalNotice, approval], [approvalNotice]],
-      },
+      [`GET ${issuePath}/comments`]: afterTwoReads([approvalNotice, approval], [approvalNotice]),
     });
     expectGuardState(result, "failure");
     expect(result.stdout).toContain("Maintainer dependency review required");
@@ -293,34 +277,29 @@ describe("dependency guard script", () => {
 
   it("requires review for renamed protected files and preserves lockfile artifacts", () => {
     const manifest = contentFile(JSON.stringify({ dependencies: { example: "1" } }));
-    const cases: Array<[string, string, Record<string, unknown>?, string?, boolean?]> = [
-      ["archived.patch", "patches/package.patch", {}, "patches/package.patch"],
+    const cases: Array<[string, string, string?, boolean?]> = [
+      ["archived.patch", "patches/package.patch", "patches/package.patch"],
       [
         "extensions/new/package.json",
         "extensions/old/package.json",
-        {
-          [`GET ${contentsPath}/extensions/old/package.json`]: manifest,
-          [`GET ${contentsPath}/extensions/new/package.json`]: manifest,
-          [`GET ${graphPath}`]: [
-            { change_type: "removed", name: "example", manifest: "extensions/old/package.json" },
-          ],
-        },
         "- `extensions/old/package.json`\n- `extensions/new/package.json`\n",
       ],
-      [
-        "fixtures/old-lockfile.txt",
-        "pnpm-lock.yaml",
-        {
-          [`GET ${graphPath}`]: [
-            { change_type: "removed", name: "example", manifest: "pnpm-lock.yaml" },
-          ],
-        },
-        undefined,
-        true,
-      ],
+      ["fixtures/old-lockfile.txt", "pnpm-lock.yaml", undefined, true],
     ];
-    for (const [filename, previous_filename, routes, notice, detect] of cases) {
-      const fixture = { [`GET ${pullPath}/files`]: [{ filename, previous_filename }], ...routes };
+    for (const [filename, previous_filename, notice, detect] of cases) {
+      const fixture: Record<string, unknown> = {
+        [`GET ${pullPath}/files`]: [{ filename, previous_filename }],
+      };
+      if (previous_filename.endsWith("package.json") || detect) {
+        fixture[`GET ${graphPath}`] = [
+          { change_type: "removed", name: "example", manifest: previous_filename },
+        ];
+      }
+      if (previous_filename.endsWith("package.json")) {
+        for (const file of [filename, previous_filename]) {
+          fixture[`GET ${contentsPath}/${file}`] = manifest;
+        }
+      }
       if (detect) {
         const detection = runDependencyGuard(fixture, "detect");
         expect(detection.status, detection.stderr).toBe(0);
@@ -393,23 +372,17 @@ describe("dependency guard script", () => {
       const headChanged = outcome === "head-changed";
       const result = runDependencyGuard(
         {
-          [`GET ${pullPath}`]: {
-            responses: [
-              pullRequest,
-              pullRequest,
-              headChanged
-                ? { ...pullRequest, head: { ...pullRequest.head, sha: staleSha } }
-                : pullRequest,
-            ],
-          },
+          [`GET ${pullPath}`]: afterTwoReads(
+            pullRequest,
+            headChanged
+              ? { ...pullRequest, head: { ...pullRequest.head, sha: staleSha } }
+              : pullRequest,
+          ),
           [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml" }],
-          [`GET ${issuePath}/comments`]: {
-            responses: [
-              [approvalNotice],
-              [approvalNotice],
-              lateApproval ? [approvalNotice, approval] : [approvalNotice],
-            ],
-          },
+          [`GET ${issuePath}/comments`]: afterTwoReads(
+            [approvalNotice],
+            lateApproval ? [approvalNotice, approval] : [approvalNotice],
+          ),
           [`GET ${graphPath}`]: [],
           [`GET ${contentsPath}/pnpm-lock.yaml`]: contentFile("base lockfile"),
           "POST /graphql": writeError
@@ -1023,14 +996,11 @@ describe("dependency guard script", () => {
       vi.useFakeTimers();
       try {
         let signal: AbortSignal | undefined;
-        let markFetchStarted!: () => void;
-        const fetchStarted = new Promise<void>((resolve) => {
-          markFetchStarted = resolve;
-        });
+        const fetchStarted = Promise.withResolvers<void>();
         const backoff = phase.endsWith("-backoff");
         const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
           signal = init?.signal ?? undefined;
-          markFetchStarted();
+          fetchStarted.resolve();
           if (phase === "fetch") {
             return await new Promise<Response>(() => {});
           }
@@ -1054,7 +1024,7 @@ describe("dependency guard script", () => {
         const rejection = expect(request).rejects.toThrow(
           `GitHub API GET ${requestPath} exceeded timeout 5ms`,
         );
-        await fetchStarted;
+        await fetchStarted.promise;
         await vi.advanceTimersByTimeAsync(5);
         await rejection;
         expect(signal?.aborted).toBe(true);

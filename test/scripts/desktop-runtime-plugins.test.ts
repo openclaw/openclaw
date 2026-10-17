@@ -11,6 +11,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+const runtimeScript = path.resolve("scripts/lib/desktop-runtime-plugins.mjs");
 beforeEach(() => {
   vi.stubEnv("RELEASE_TAG", undefined);
   vi.stubEnv("RELEASE_SHA", undefined);
@@ -21,15 +22,9 @@ const writeJson = (root: string, file: string, value: unknown) => {
   mkdirSync(path.dirname(target), { recursive: true });
   writeFileSync(target, JSON.stringify(value));
 };
-const git = (root: string, ...args: string[]) =>
-  execFileSync(
-    "git",
-    ["-C", root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", ...args],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  ).trim();
+const run = (command: string, args: string[]) =>
+  execFileSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+const git = (root: string, ...args: string[]) => run("git", ["-C", root, ...args]);
 const readJson = (root: string, file: string) =>
   JSON.parse(readFileSync(path.join(root, file), "utf8"));
 function writePlugin(root: string, id: string) {
@@ -41,6 +36,8 @@ function writePlugin(root: string, id: string) {
 function fixture(dependencies?: Record<string, string>) {
   const root = temps.make("desktop-runtime-plugins-");
   git(root, "init", "--quiet");
+  git(root, "config", "user.name", "Fixture");
+  git(root, "config", "user.email", "fixture@example.invalid");
   git(root, "commit", "--allow-empty", "-qm", "fixture");
   const commit = git(root, "rev-parse", "HEAD");
   writeJson(root, "package.json", {
@@ -73,22 +70,35 @@ function shallowRelease(tag = "v2026.10.2") {
   return { root, origin, commit };
 }
 
-it.each([true, false])(
-  "keeps tagless shallow release plans empty (verified SHA: %s)",
-  (withSha) => {
-    const { root, commit } = shallowRelease();
-    vi.stubEnv("RELEASE_TAG", "v2026.10.2");
+it.each([
+  ["v2026.10.2", true, false],
+  ["v2026.10.2", false, false],
+  ["v2026.10.2", false, true],
+  ["v2026.10.2-1", true, false],
+  ["v2026.10.2-1", true, true],
+] as const)(
+  "checks shallow %s identity (verified SHA: %s; wrong fetched commit: %s)",
+  (tag, withSha, wrongCommit) => {
+    const { root, origin, commit } = shallowRelease(tag);
+    const correction = tag === "v2026.10.2-1";
+    const fetchedTag = correction ? "v2026.10.2" : tag;
+    const fetchedCommit = wrongCommit ? `${commit}^` : commit;
+    if (correction || wrongCommit) {
+      git(origin, "tag", "-f", fetchedTag, fetchedCommit);
+    }
+    vi.stubEnv("RELEASE_TAG", tag);
     if (withSha) {
       vi.stubEnv("RELEASE_SHA", commit);
     }
-    const plan = JSON.parse(
-      execFileSync(
-        process.execPath,
-        [path.resolve("scripts/lib/desktop-runtime-plugins.mjs"), "plan", root],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-      ),
-    );
-    expect(plan).toEqual({ commit, releaseTag: "v2026.10.2", pluginIds: [] });
+    const plan = () =>
+      correction || wrongCommit
+        ? planDesktopRuntimePlugins(root)
+        : JSON.parse(run(process.execPath, [runtimeScript, "plan", root]));
+    if (wrongCommit) {
+      expect(plan).toThrow("does not match source commit");
+    } else {
+      expect(plan()).toEqual({ commit, releaseTag: tag, pluginIds: [] });
+    }
   },
 );
 
@@ -100,93 +110,54 @@ it.each([
   [undefined, "0".repeat(40), [], "RELEASE_TAG"],
   [undefined, undefined, ["release/2026.10.2", "v2026.9.2"], null],
   [undefined, undefined, ["v2026.10.2-1"], "requires same-source base tag v2026.10.2"],
-] as const)(
-  "validates explicit and local release identity (%s, %s, %j)",
-  (tag, sha, tags, error) => {
-    const { root, commit } = fixture();
-    for (const localTag of tags) {
-      git(root, "tag", localTag);
-    }
-    vi.stubEnv("RELEASE_TAG", tag);
-    vi.stubEnv("RELEASE_SHA", sha);
-    const resolve = () => desktopRuntimeReleaseTag(root, "2026.10.2", commit);
-    if (error) {
-      expect(resolve).toThrow(error);
-    } else {
-      expect(resolve()).toBeNull();
-    }
-  },
-);
-
-it("rejects a fetched release tag on another commit", () => {
-  const { root, origin, commit } = shallowRelease();
-  git(origin, "tag", "-f", "v2026.10.2", `${commit}^`);
-  vi.stubEnv("RELEASE_TAG", "v2026.10.2");
-  expect(() => planDesktopRuntimePlugins(root)).toThrow("does not match source commit");
+] as const)("validates release identity (%s, %s, %j)", (tag, sha, tags, error) => {
+  const { root, commit } = fixture();
+  for (const localTag of tags) {
+    git(root, "tag", localTag);
+  }
+  vi.stubEnv("RELEASE_TAG", tag);
+  vi.stubEnv("RELEASE_SHA", sha);
+  const resolve = () => desktopRuntimeReleaseTag(root, "2026.10.2", commit);
+  if (error) {
+    expect(resolve).toThrow(error);
+  } else {
+    expect(resolve()).toBeNull();
+  }
 });
 
-it.each([true, false])(
-  "verifies a correction's fetched base tag (same source: %s)",
-  (sameSource) => {
-    const { root, origin, commit } = shallowRelease("v2026.10.2-1");
-    git(origin, "tag", "v2026.10.2", sameSource ? commit : `${commit}^`);
-    vi.stubEnv("RELEASE_TAG", "v2026.10.2-1");
-    vi.stubEnv("RELEASE_SHA", commit);
-    if (sameSource) {
-      expect(planDesktopRuntimePlugins(root)).toEqual({
-        commit,
-        releaseTag: "v2026.10.2-1",
-        pluginIds: [],
-      });
-    } else {
-      expect(() => planDesktopRuntimePlugins(root)).toThrow("does not match source commit");
-    }
-  },
-);
-
-it.runIf(process.platform === "darwin")(
-  "normalizes only staged Codex voice build rpaths",
-  async () => {
-    const { auditMacRuntimePortability } =
-      await import("../../scripts/lib/mac-runtime-portability.mjs");
-    const root = temps.make("desktop-runtime-codex-native-");
-    const commit = "a".repeat(40);
-    writeJson(root, "dist/build-info.json", { commit });
-    writePlugin(root, "codex");
-    for (const name of ["codex", "codex-darwin-arm64"]) {
-      writeJson(root, `node_modules/@openai/${name}/package.json`, { name: `@openai/${name}` });
-    }
-    const voice = path.join(
-      root,
-      "node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-resources/voice",
-    );
-    mkdirSync(path.join(voice, "lib"), { recursive: true });
-    mkdirSync(path.join(voice, "bin"));
-    const host = path.join(voice, "bin/codex-voice-host");
-    execFileSync(
-      "/usr/bin/clang",
-      [
-        "-x",
-        "c",
-        "-",
-        "-o",
-        host,
-        "-Wl,-rpath,@loader_path/../../_solib_darwin_arm64/voice/native_link_macos_aarch64",
-        "-Wl,-rpath,@loader_path/../lib",
-      ],
-      { input: "int main(void) { return 0; }\n" },
-    );
-    const original = readFileSync(host);
-    stampDesktopRuntimePlugins(root, { commit, pluginIds: [] });
-    expect(readFileSync(host)).toEqual(original);
-    expect(() => auditMacRuntimePortability(root, host)).toThrow("Nonportable LC_RPATH");
-    stampDesktopRuntimePlugins(root, { commit, pluginIds: ["codex"] });
-    expect(auditMacRuntimePortability(root, host)).toBe(1);
-  },
-);
+it.runIf(process.platform === "darwin")("normalizes only staged voice rpaths", async () => {
+  const { auditMacRuntimePortability } =
+    await import("../../scripts/lib/mac-runtime-portability.mjs");
+  const root = temps.make("desktop-runtime-codex-native-");
+  const commit = "a".repeat(40);
+  writeJson(root, "dist/build-info.json", { commit });
+  writePlugin(root, "codex");
+  for (const name of ["codex", "codex-darwin-arm64"]) {
+    writeJson(root, `node_modules/@openai/${name}/package.json`, {});
+  }
+  const voice = path.join(
+    root,
+    "node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-resources/voice",
+  );
+  mkdirSync(path.join(voice, "lib"), { recursive: true });
+  mkdirSync(path.join(voice, "bin"));
+  const host = path.join(voice, "bin/codex-voice-host");
+  const rpaths = [
+    "@loader_path/../../_solib_darwin_arm64/voice/native_link_macos_aarch64",
+    "@loader_path/../lib",
+  ];
+  const args = ["-x", "c", "-", "-o", host, ...rpaths.map((rpath) => `-Wl,-rpath,${rpath}`)];
+  execFileSync("/usr/bin/clang", args, { input: "int main(void) { return 0; }\n" });
+  const original = readFileSync(host);
+  stampDesktopRuntimePlugins(root, { commit, pluginIds: [] });
+  expect(readFileSync(host)).toEqual(original);
+  expect(() => auditMacRuntimePortability(root, host)).toThrow("Nonportable LC_RPATH");
+  stampDesktopRuntimePlugins(root, { commit, pluginIds: ["codex"] });
+  expect(auditMacRuntimePortability(root, host)).toBe(1);
+});
 
 it.each(["2026.10.2-beta.1", "2026.10.2-alpha.1", "2026.10.33"])(
-  "recognizes the canonical exact release version %s",
+  "recognizes exact release version %s",
   (version) => {
     const { root, commit } = fixture();
     git(root, "tag", `v${version}`);
@@ -194,7 +165,7 @@ it.each(["2026.10.2-beta.1", "2026.10.2-alpha.1", "2026.10.33"])(
   },
 );
 
-it("stages all official source plugins and stamps the installed build only", () => {
+it("stamps official plugins only in the installed build", () => {
   const { root, commit } = fixture();
   const plan = planDesktopRuntimePlugins(root);
   expect(plan.pluginIds).toEqual(["codex", "extra"]);
@@ -223,27 +194,24 @@ it("lets a desktop stage only Codex without requiring other plugins' builds", ()
   expect(planDesktopRuntimePlugins(root, { pluginIds: ["codex"] }).pluginIds).toEqual([]);
 });
 
-it.each([false, true])(
-  "counts only additional plugin payload above 300 MiB (core ships it: %s)",
-  (inCore) => {
-    const { root } = fixture(inCore ? { large: "1.0.0" } : undefined);
-    writeJson(root, "extensions/extra/package.json", {
-      name: "@openclaw/extra",
-      dependencies: { large: "1.0.0" },
-    });
-    writeJson(root, "node_modules/large/package.json", {});
-    const payload = path.join(root, "node_modules/large/payload");
-    writeFileSync(payload, "");
-    truncateSync(payload, 301 * 1024 * 1024);
-    const plan = planDesktopRuntimePlugins(root);
-    expect(plan.pluginIds).toEqual(inCore ? ["codex", "extra"] : ["codex"]);
-    if (!inCore) {
-      expect(plan.releaseTag).toBeNull();
-    }
-  },
-);
+it.each([false, true])("excludes core dependencies from the 300 MiB budget (%s)", (inCore) => {
+  const { root } = fixture(inCore ? { large: "1.0.0" } : undefined);
+  writeJson(root, "extensions/extra/package.json", {
+    name: "@openclaw/extra",
+    dependencies: { large: "1.0.0" },
+  });
+  writeJson(root, "node_modules/large/package.json", {});
+  const payload = path.join(root, "node_modules/large/payload");
+  writeFileSync(payload, "");
+  truncateSync(payload, 301 * 1024 * 1024);
+  const plan = planDesktopRuntimePlugins(root);
+  expect(plan.pluginIds).toEqual(inCore ? ["codex", "extra"] : ["codex"]);
+  if (!inCore) {
+    expect(plan.releaseTag).toBeNull();
+  }
+});
 
-it("keeps exact release artifacts unchanged without requiring source dependencies", () => {
+it("preserves exact release artifacts without source dependencies", () => {
   const { root } = fixture();
   git(root, "tag", "v2026.10.2");
   const before = readFileSync(path.join(root, "dist/build-info.json"));

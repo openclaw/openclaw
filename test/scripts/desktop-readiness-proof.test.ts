@@ -1,17 +1,12 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { desktopReadinessLines } from "../../scripts/lib/desktop-readiness-proof.mts";
 import {
-  readDesktopProofTestReport,
+  desktopProofTestReport,
   withDesktopProofCleanup,
 } from "../../scripts/lib/desktop-resize-proof.mts";
 import { testing, type GatewayReadinessDiagnostic } from "../helpers/openclaw-test-instance.ts";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const processState = () =>
   Object.assign(new EventEmitter(), {
     pid: 12345,
@@ -39,9 +34,7 @@ const waitForReady = (
     (entry) => diagnostics.push(entry),
   );
 
-async function evidence(failure?: unknown) {
-  const root = tempDirs.make("desktop-readiness-proof-");
-  const report = path.join(root, "vitest.json");
+function evidence(failure?: unknown) {
   const status = failure ? "failed" : "passed";
   const assertionResults = [
     {
@@ -50,22 +43,18 @@ async function evidence(failure?: unknown) {
       meta: { desktopProofPhase: "gateway-start", desktopGatewayReadiness: diagnostics },
     },
   ];
-  await writeFile(
-    report,
-    JSON.stringify({
-      numTotalTests: 1,
-      numFailedTests: failure ? 1 : 0,
-      numFailedTestSuites: failure ? 1 : 0,
-      testResults: [
-        {
-          name: "/fixture/ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
-          status,
-          assertionResults,
-        },
-      ],
-    }),
-  );
-  const artifact = await readDesktopProofTestReport(report);
+  const artifact = desktopProofTestReport({
+    numTotalTests: 1,
+    numFailedTests: failure ? 1 : 0,
+    numFailedTestSuites: failure ? 1 : 0,
+    testResults: [
+      {
+        name: "/fixture/ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
+        status,
+        assertionResults,
+      },
+    ],
+  });
   const entries = artifact.files[0]!.assertions[0]!.gatewayReadiness!;
   expect(entries, "public artifact must retain readiness evidence").toHaveLength(1);
   return { artifact, entries, entry: entries[0]! };
@@ -83,12 +72,10 @@ it("retains timeout probes, timing, and redacted Gateway logs when cleanup also 
         ["[gateway] waiting for startup-sidecars\nmodel: fixture-private-model\n"],
         [`Authorization: Bearer ${credential}\nError opening /private/fixture/state.sqlite\n`],
       ),
-    async () => {
-      throw cleanup;
-    },
+    () => Promise.reject(cleanup),
     () => {},
   ).catch((error: unknown) => error);
-  const { artifact, entries, entry } = await evidence(failure);
+  const { artifact, entries, entry } = evidence(failure);
   expect(entry).toMatchObject({
     probe: "GET /readyz",
     outcome: "timeout",
@@ -135,7 +122,7 @@ it.each([false, true])(
     } finally {
       clock.mockRestore();
     }
-    const { entry } = await evidence(failure);
+    const { entry } = evidence(failure);
     if (expired) {
       expect(fetchImpl).not.toHaveBeenCalled();
       expect(failure).toBeInstanceOf(Error);
@@ -167,19 +154,13 @@ it("records every completed probe and one success timing line", async () => {
     .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }))
     .mockResolvedValueOnce(new Response('{"ok":true,"status":"started"}', { status: 200 }));
   await waitForReady(fetchImpl, 60_000);
-  const { artifact, entries, entry } = await evidence();
+  const { artifact, entries, entry } = evidence();
   expect(entry).toMatchObject({ outcome: "ready", attempts: 3, omittedProbes: 0, logs: null });
   expect(entry.deadlineMs - entry.startedAtMs).toBe(60_000);
-  expect(entry.probes.map((probe) => probe.outcome)).toEqual([
-    "fetch-failed",
-    "not-ready",
-    "ready",
-  ]);
-  expect(entry.probes[1]).toMatchObject({
-    status: 503,
-    ready: false,
-    failing: ["startup-sidecars"],
-  });
+  const outcomes = entry.probes.map((probe) => probe.outcome);
+  expect(outcomes).toEqual(["fetch-failed", "not-ready", "ready"]);
+  const notReady = entry.probes[1];
+  expect(notReady).toMatchObject({ status: 503, ready: false, failing: ["startup-sidecars"] });
   expect(
     entry.probes.every((probe) => probe.deadlineMs >= probe.startedAtMs && probe.elapsedMs >= 0),
   ).toBe(true);

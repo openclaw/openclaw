@@ -68,6 +68,7 @@ const assets = {
 };
 const writeJson = (file: string, value: unknown) => writeFile(file, JSON.stringify(value));
 const fixtureFile = (prefix: string, name: string) => path.join(dirs.make(prefix), name);
+const repeat = <T>(value: T, length: number) => Array.from({ length }, () => value);
 const events = <T>(values: T[], omitted = 0) => ({ events: values, omitted });
 const expectRedacted = (value: unknown, forbidden: RegExp) =>
   expect(JSON.stringify(value)).not.toMatch(forbidden);
@@ -97,6 +98,13 @@ const phaseResult = (status: string, lastObservedPhase: string | null = null) =>
   lastObservedPhase,
   owners: null,
 });
+async function exportFixture() {
+  const root = dirs.make("desktop-export-");
+  const input = path.join(root, "input");
+  const output = path.join(root, "public");
+  await mkdir(input);
+  return { root, input, output };
+}
 function sourceReader(run: (args: string[]) => Buffer, checkout = head) {
   const receipt = { phase: "preflight", sourceStatus: null as DesktopProofSourceStatus | null };
   return {
@@ -318,7 +326,7 @@ it("projects bounded gateway owner facts and never publishes raw identity or std
   const file = fixtureFile("desktop-gateway-log-", "gateway.log");
   const record = (message: string, metadata: unknown) =>
     JSON.stringify({ "0": '{"subsystem":"gateway/desktop"}', "1": metadata, "2": message });
-  const lines = Array.from({ length: 10 }, () =>
+  const lines = repeat(
     record("desktop observer closed", {
       trigger: "stream-close",
       cleanupCode: 1000,
@@ -327,6 +335,7 @@ it("projects bounded gateway owner facts and never publishes raw identity or std
       streamId: "private-stream",
       ownerEpoch: 3,
     }),
+    10,
   );
   lines.push(
     record("desktop SSH tunnel exited", {
@@ -406,7 +415,7 @@ it("projects SSH, tap and RFB diagnostics with closed fields and explicit omitte
   });
   expectRedacted(projectViewer(diagnostic), /private|token|address|url/u);
   for (const override of [
-    { endpointCloses: events(Array.from({ length: 9 }, () => endpoint)) },
+    { endpointCloses: events(repeat(endpoint, 9)) },
     { endpointCloses: events([{ ...endpoint, side: "private-host" }]) },
     { rfbLifecycle: events([rfb], -1) },
     { rfbLifecycle: events([{ ...rfb, socketIndex: -1 }]) },
@@ -420,14 +429,8 @@ it("projects SSH, tap and RFB diagnostics with closed fields and explicit omitte
   ]) {
     expect(() => projectViewer({ ...diagnostic, ...override })).toThrow();
   }
-  expect(
-    projectViewer({
-      ...viewerFailure,
-      endpointCloses: null,
-      rfbLifecycle: null,
-      gatewayCloses: null,
-    }),
-  ).toMatchObject({ endpointCloses: null, rfbLifecycle: null, gatewayCloses: null });
+  const absent = { endpointCloses: null, rfbLifecycle: null, gatewayCloses: null };
+  expect(projectViewer({ ...viewerFailure, ...absent })).toMatchObject(absent);
 });
 
 it("retains the last eight node closes from a 1 MiB JSON file logger output", async () => {
@@ -650,8 +653,8 @@ it.each([
   { pageClosed: 0 },
   { latestReadyState: 4 },
   { nodeStreamCloses: [{ trigger: "private-token", closeCode: 1000 }] },
-  { nodeStreamCloses: Array.from({ length: 9 }, () => viewerFailure.nodeStreamCloses[0]) },
-  { socketCloses: Array.from({ length: 9 }, () => viewerFailure.socketCloses[0]) },
+  { nodeStreamCloses: repeat(viewerFailure.nodeStreamCloses[0], 9) },
+  { socketCloses: repeat(viewerFailure.socketCloses[0], 9) },
   {
     socketCloses: [
       { ...viewerFailure.socketCloses[0], category: "control-taken:private-operator" },
@@ -672,8 +675,8 @@ it("rejects unknown report files and excessive counts, and ignores unknown metad
 });
 
 it("projects only known phases from bounded regular checkpoints", async () => {
-  const root = dirs.make("desktop-private-phase-");
-  const file = path.join(root, "desktop-phase.json");
+  const file = fixtureFile("desktop-private-phase-", "desktop-phase.json");
+  const root = path.dirname(file);
   expect(await readDesktopProofPhase(file)).toEqual(phaseResult("unavailable"));
   await writeJson(file, { lastObservedPhase: "file-loaded", secret: "private" });
   expect(await readDesktopProofPhase(file)).toEqual(phaseResult("available", "file-loaded"));
@@ -688,8 +691,7 @@ it("projects only known phases from bounded regular checkpoints", async () => {
 });
 
 it("projects explicit resource ownership without inferring detached-process cleanup", async () => {
-  const root = dirs.make("desktop-process-ownership-");
-  const file = path.join(root, "desktop-phase.json");
+  const file = fixtureFile("desktop-process-ownership-", "desktop-phase.json");
   for (const gateway of ["not-started", "owned", "closed"] as const) {
     await writeJson(file, {
       lastObservedPhase: "gateway-start",
@@ -766,9 +768,7 @@ it("retains child ownership when both private logging and export fail", async ()
 it.each(["entries", "bytes"] as const)(
   "shares the %s budget across node and SSH",
   async (limit) => {
-    const root = dirs.make("desktop-shared-budget-");
-    const input = path.join(root, "input");
-    await mkdir(input);
+    const { root, input } = await exportFixture();
     const data = JSON.stringify(assets);
     await writeFile(path.join(input, "served-assets.json"), data);
     const budget = {
@@ -873,25 +873,11 @@ it("uses real NUL status without leaking either private additions or a rename de
   expectRedacted(receipt, /private/u);
 });
 
-it("distinguishes literal head proof from GitHub merge-tree proof", () => {
-  expect(
-    desktopProofSource({ head, tree, parents: [base] }, { checkout: head, head, base }).kind,
-  ).toBe("pr-head");
-  expect(
-    desktopProofSource(
-      { head: merge, tree, parents: [base, head] },
-      { checkout: merge, head, base },
-    ),
-  ).toMatchObject({
-    kind: "pr-merge",
-    prHead: head,
-    prEventBase: base,
-    testedBase: base,
-    head: merge,
-  });
-  expect(desktopProofSource({ head, tree, parents: [base] }, { checkout: head }).kind).toBe(
-    "checkout",
-  );
+it.each([
+  [{ checkout: head, head, base }, "pr-head"],
+  [{ checkout: head }, "checkout"],
+] as const)("distinguishes literal head proof: %j", (expected, kind) => {
+  expect(desktopProofSource({ head, tree, parents: [base] }, expected).kind).toBe(kind);
 });
 
 it("reads actual merge parents at a depth-one Git boundary without conflating the event base", async () => {
@@ -900,19 +886,12 @@ it("reads actual merge parents at a depth-one Git boundary without conflating th
   const git = (args: string[], input?: string) => runGit(args, input).toString().trim();
   git(["init", "--quiet"]);
   const objectTree = git(["mktree"], "");
-  const eventBase = git(["commit-tree", objectTree, "-m", "event base"]);
-  const testedBase = git(["commit-tree", objectTree, "-p", eventBase, "-m", "tested base"]);
-  const prHead = git(["commit-tree", objectTree, "-p", eventBase, "-m", "PR head"]);
-  const checkout = git([
-    "commit-tree",
-    objectTree,
-    "-p",
-    testedBase,
-    "-p",
-    prHead,
-    "-m",
-    "test merge",
-  ]);
+  const commit = (message: string, ...parents: string[]) =>
+    git(["commit-tree", objectTree, ...parents.flatMap((parent) => ["-p", parent]), "-m", message]);
+  const eventBase = commit("event base");
+  const testedBase = commit("tested base", eventBase);
+  const prHead = commit("PR head", eventBase);
+  const checkout = commit("test merge", testedBase, prHead);
   git(["update-ref", "HEAD", checkout]);
   await writeFile(path.join(root, ".git", "shallow"), `${checkout}\n`);
   expect(git(["rev-parse", "--is-shallow-repository"])).toBe("true");
@@ -957,9 +936,7 @@ it("rejects asset paths and non-digests", () => {
 });
 
 it("exports a complete bounded allowlist without raw diagnostics or metadata", async () => {
-  const root = dirs.make("desktop-public-proof-");
-  const input = path.join(root, "input");
-  const output = path.join(root, "public");
+  const { input, output } = await exportFixture();
   const nested = path.join(input, "desktop-suite");
   await mkdir(nested, { recursive: true });
   const png = Buffer.from(
@@ -994,12 +971,8 @@ it("exports a complete bounded allowlist without raw diagnostics or metadata", a
 });
 
 it("rejects symlinks instead of publishing their targets", async () => {
-  const root = dirs.make("desktop-symlink-proof-");
-  const input = path.join(root, "input");
-  await mkdir(input);
+  const { root, input, output } = await exportFixture();
   await writeFile(path.join(root, "secret"), "private-token");
   await symlink(path.join(root, "secret"), path.join(input, "resize-proof.json"));
-  await expect(exportDesktopResizeProof(input, path.join(root, "public"), "node")).rejects.toThrow(
-    "regular-file",
-  );
+  await expect(exportDesktopResizeProof(input, output, "node")).rejects.toThrow("regular-file");
 });
