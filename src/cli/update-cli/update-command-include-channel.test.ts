@@ -144,6 +144,7 @@ it.each(["expired", "revoked", "parent-replaced"] as const)(
       const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
       let reached = false;
       const now = Date.now();
+      vi.spyOn(performance, "now").mockImplementation(() => Date.now());
       const operation = withUpdateCommandExecutor(run.runId, async (executor) => {
         const fence = await executor.enter(root, { activationTimeoutMs: 60_000 });
         const open = fs.open;

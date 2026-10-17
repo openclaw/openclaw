@@ -47,6 +47,7 @@ it.each([false, true])(
     let assertCurrent: (() => void) | undefined;
     const budget = 10 * 60_000;
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const running = withUpdateCommandTerminalResult(
       async (registerRun) => {
         registerRun(run);
@@ -112,6 +113,7 @@ it.each([false, true])(
   async (expired) => {
     const root = fs.realpathSync(dirs.make("update-activation-clock-"));
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const work = withUpdateCommandExecutor("clock-probe", async (executor) => {
       await executor.enter(root, { activationTimeoutMs: 60_000 });
       // Move the clock without dispatching timers, as a blocking native probe can.
@@ -144,6 +146,7 @@ it.each([undefined, 48 * 60 * 60_000])(
     });
     const legacyBudget = Math.max(30 * 60_000, (callerTimeoutMs ?? 0) * 6);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     await expect(
       withUpdateCommandExecutor("measured-activation", async (executor) => {
         const fence = await executor.enter(root, { activationTimeoutMs: budget });
@@ -160,6 +163,7 @@ it("preserves retained ownership when preflight starts a measured activation dea
   const root = fs.realpathSync(dirs.make("update-preflight-activation-"));
   const serviceRoot = fs.realpathSync(dirs.make("update-preflight-retained-"));
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  vi.spyOn(performance, "now").mockImplementation(() => Date.now());
   await expect(
     withUpdateCommandExecutor("retained-preflight", async (executor) => {
       const preflight = await executor.enter(root, { preflight: true, serviceRoot });
