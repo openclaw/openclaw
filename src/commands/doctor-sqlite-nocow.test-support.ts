@@ -13,11 +13,11 @@ export function createDoctorNoCowToolFixture(root: string, nativeSpawnSync?: typ
   const fixture = {
     tools: "ok" as "ok" | "unavailable" | "busy" | "exchange-failed" | "exchange-timeout",
     attributes: false,
+    noCowInodes: new Set<number>(),
     exchanges: 0,
     acls: new Map<string, string>(),
     unavailableAclTool: undefined as "getfacl" | "setfacl" | undefined,
     rejectAclVerification: false,
-    verifyPrivateAclBoundary: false,
     beforeExchange: undefined as (() => void) | undefined,
     fuserResult: undefined as SpawnSyncReturns<string> | undefined,
   };
@@ -75,55 +75,47 @@ export function createDoctorNoCowToolFixture(root: string, nativeSpawnSync?: typ
   vi.mocked(isSqlitePathOnBtrfs).mockReturnValue(true);
   vi.mocked(setSqliteDirectoryNoCow).mockImplementation((dir) => {
     expect(fs.statSync(dir).isDirectory()).toBe(true);
-    expect(fs.readdirSync(dir)).toEqual([]);
+    fixture.noCowInodes.add(fs.statSync(dir).ino);
   });
   vi.mocked(spawnSync).mockImplementation((command, args, options) => {
     const argv = args ?? [];
     let stdout = "";
     let status = 0;
     if (command === "lsattr") {
-      stdout = `${fixture.attributes || String(argv.at(-1)).includes(".nocow-backup-") ? "-------C------" : "--------------"} ${argv.at(-1)}`;
+      const pathname = String(argv.at(-1));
+      const ino = fs.statSync(pathname).ino;
+      if (pathname.includes(".nocow-backup-")) {
+        fixture.noCowInodes.add(ino);
+      }
+      stdout = `${fixture.attributes || fixture.noCowInodes.has(ino) ? "-------C------" : "--------------"} ${pathname}`;
       if (fixture.tools === "unavailable") {
         status = 127;
       }
     } else if (command === "getfacl" || command === "setfacl") {
       expect(options?.env?.POSIXLY_CORRECT).toBeUndefined();
-      const pathname = String(argv.at(-1));
-      const existing = observedAcl(pathname);
       if (fixture.unavailableAclTool === command) {
         status = 127;
       } else if (command === "getfacl") {
         expect(argv.slice(0, 2)).toEqual(["-cEpn", "--"]);
-        stdout = existing;
-      } else if (argv[0] === "-k") {
-        fixture.acls.set(
-          pathname,
-          existing
-            .split("\n")
-            .filter((line) => !line.startsWith("default:"))
-            .join("\n"),
-        );
+        stdout = argv
+          .slice(2)
+          .map((pathname) => observedAcl(pathname))
+          .join("\n\n");
       } else {
-        expect(argv.slice(0, 3)).toEqual(["-n", "--set-file=-", "--"]);
+        expect(argv).toEqual(["--restore=-"]);
         if (typeof options?.input !== "string") {
           throw new Error("Expected textual ACL input");
         }
-        const input = options.input.trim();
-        if (fixture.verifyPrivateAclBoundary && fs.statSync(pathname).isDirectory()) {
-          expect(fs.statSync(pathname).mode & 0o077).toBe(0);
-          expect(input).toContain("user:12345:---");
+        for (const block of options.input.trim().split("\n\n")) {
+          const [header, ...lines] = block.split("\n");
+          const pathname = header!
+            .slice("# file: ".length)
+            .replaceAll("\\012", "\n")
+            .replaceAll("\\134", "\\");
+          const acl = fixture.rejectAclVerification ? baseAcl : lines.join("\n");
+          fixture.acls.set(pathname, acl);
+          fs.chmodSync(pathname, (fs.statSync(pathname).mode & 0o7000) | modeFromAcl(acl));
         }
-        const defaults = existing.split("\n").filter((line) => line.startsWith("default:"));
-        fixture.acls.set(
-          pathname,
-          fixture.rejectAclVerification
-            ? baseAcl
-            : input.includes("default:")
-              ? input
-              : [input, ...defaults].join("\n"),
-        );
-        const applied = fixture.acls.get(pathname)!;
-        fs.chmodSync(pathname, (fs.statSync(pathname).mode & 0o7000) | modeFromAcl(applied));
       }
     } else if (command === "fuser" && argv[0]?.includes(".nocow-probe-") && !nativeSpawnSync) {
       status = 0;

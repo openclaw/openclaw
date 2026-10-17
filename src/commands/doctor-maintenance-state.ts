@@ -300,6 +300,7 @@ export async function createDoctorMaintenanceState(options: {
             paths,
             stateDir,
             env: selectedEnv,
+            log: (message) => params.runtime.log(sanitizeDoctorNote(message)),
             assertCurrent: () => assertOwnerCurrent(databasePath),
           });
         });

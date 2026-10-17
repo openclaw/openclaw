@@ -1,9 +1,5 @@
 import fs from "node:fs";
 import {
-  readMigrationArtifactIdentity,
-  type MigrationArtifact,
-} from "../infra/session-sqlite-migration-artifact.js";
-import {
   canonicalMigrationFilePath,
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
@@ -23,13 +19,9 @@ export function reconcileNoCowRecoveryIdentities(params: {
     ]),
   );
   const warnings: string[] = [];
-  const refresh = (
-    pathname: string,
-    identity: { dev: string; ino: string },
-    artifact?: MigrationArtifact,
-  ): boolean => {
+  const refresh = (pathname: string, identity: { dev: string; ino: string }): boolean => {
     const before = previous.get(canonicalMigrationFilePath(pathname));
-    if (!before || (artifact && artifact.disposal.state !== "retained")) {
+    if (!before) {
       return false;
     }
     try {
@@ -41,22 +33,9 @@ export function reconcileNoCowRecoveryIdentities(params: {
       if (!next.isFile() || next.nlink !== 1n) {
         throw new Error("rewritten file is not an unaliased regular file");
       }
-      if (artifact) {
-        const copied = readMigrationArtifactIdentity(pathname);
-        if (
-          String(before.mtimeNs) !== artifact.identity.mtimeNs ||
-          Number(before.size) !== artifact.identity.size ||
-          copied.size !== artifact.identity.size ||
-          copied.sha256 !== artifact.identity.sha256
-        ) {
-          throw new Error("rewritten copy does not match the recorded original");
-        }
-        artifact.identity = copied;
-      } else {
-        // The destination may have migrated in place; bind its generation, not its old bytes.
-        identity.dev = String(next.dev);
-        identity.ino = String(next.ino);
-      }
+      // The destination may have migrated in place; bind its generation, not its old bytes.
+      identity.dev = String(next.dev);
+      identity.ino = String(next.ino);
       return true;
     } catch (error) {
       warnings.push(`NOCOW recovery identity left unchanged for ${pathname}: ${String(error)}`);
@@ -70,11 +49,6 @@ export function reconcileNoCowRecoveryIdentities(params: {
     }
     let changed = false;
     for (const target of manifest.targets) {
-      for (const move of [...target.completedMoves, ...target.plannedMoves]) {
-        if (move.artifact) {
-          changed = refresh(move.archivePath, move.artifact.identity, move.artifact) || changed;
-        }
-      }
       if (target.databaseIdentity) {
         changed = refresh(target.sqlitePath, target.databaseIdentity) || changed;
       }
