@@ -3,7 +3,7 @@ import { ensureMeetingAudioBackend, resolveMeetingAudioRuntimeForFormat } from "
 
 const PIPEWIRE_SINK_NAME = "openclaw_meeting_audio";
 const PIPEWIRE_MONITOR_NAME = `${PIPEWIRE_SINK_NAME}.monitor`;
-const PIPEWIRE_SOURCE_NAME = PIPEWIRE_SINK_NAME;
+const PIPEWIRE_SOURCE_NAME = `${PIPEWIRE_SINK_NAME}_in`;
 
 describe("meeting audio backend", () => {
   it("selects the native backend for macOS and Linux", () => {
@@ -63,6 +63,20 @@ describe("meeting audio backend", () => {
       "--channels=1",
       "--latency-msec=86",
     ]);
+  });
+
+  it("uses distinct pulse device names for capture and playback", () => {
+    // PulseAudio's name registry is shared by sinks and sources, so a source named like
+    // the sink is created as `<name>.2` and the readiness check can never pass.
+    const runtime = resolveMeetingAudioRuntimeForFormat({
+      backend: "pipewire-pulse",
+      bufferBytes: 4_096,
+      format: "pcm16-24khz",
+      platform: "linux",
+    });
+    const deviceOf = (command: string[]) =>
+      command.find((argument) => argument.startsWith("--device=") ?? "");
+    expect(deviceOf(runtime.inputCommand)).not.toBe(deviceOf(runtime.outputCommand));
   });
 
   it("preserves explicit command overrides while resolving the host backend", () => {
