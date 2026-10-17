@@ -47,7 +47,6 @@ export async function loadChatHistory(
   if (!state.client || !state.connected) {
     setChatHistoryLoad(state, { phase: "pending-connection", sessionKey, requestAgentId, startup });
     state.chatLoading = true;
-    state.requestUpdate?.();
     return undefined;
   }
   const method = startup ? "chat.startup" : "chat.history";
@@ -163,7 +162,6 @@ export async function loadChatHistory(
         setChatHistoryLoad(state, { phase: "idle" });
         state.chatLoading = false;
       }
-      state.requestUpdate?.();
     }
     return result;
   });

@@ -470,7 +470,6 @@ export async function settleDeliverySettings(
       current = setState("waiting-model");
       if (!current) {
         setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-        host.requestUpdate?.();
       }
     }
     const ready = await pendingSettings;
@@ -490,7 +489,6 @@ export async function settleDeliverySettings(
         routeVisible(current.agentId) && restoreRejectedChatDelivery(host, current, options);
       if (!restored && !setState("failed", INTERRUPTED_SETTINGS_WAIT_ERROR)) {
         setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-        host.requestUpdate?.();
       }
       return "failed";
     }
@@ -503,7 +501,6 @@ export async function settleDeliverySettings(
   }
   if (!current) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-    host.requestUpdate?.();
     return "failed";
   }
   return deliver(current);

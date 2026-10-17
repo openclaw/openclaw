@@ -121,7 +121,7 @@ export function shouldRebuildSessionTranscriptIndexSynchronously(
   return true;
 }
 
-function selectSessionTranscriptProjectionState(
+export function selectSessionTranscriptProjectionState(
   db: EngineConnection,
   sessionId: string | Expression<string>,
 ) {
@@ -301,13 +301,14 @@ function deleteActiveEventRows(db: EngineConnection, sessionId: string): void {
 export function createTranscriptIndexAppenderInTransaction(
   db: EngineConnection,
   sessionId: string,
+  prepared?: { state: ReturnType<typeof readSessionTranscriptProjectionState> },
 ): {
   append: (params: TranscriptIndexAppend) => boolean;
   flushRows: () => void;
   flush: () => void;
 } {
   const actor = readSessionActorTransactionState({ db }, { sessionId });
-  const initial = readSessionTranscriptProjectionState(db, sessionId);
+  const initial = prepared ? prepared.state : readSessionTranscriptProjectionState(db, sessionId);
   let watermark: SessionTranscriptProjectionState | undefined = initial;
   let hasUnclassifiedEvents = initial?.hasUnclassifiedEvents;
   let insertActiveEvent: ReturnType<typeof createActiveEventInserter> | undefined;

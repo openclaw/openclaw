@@ -43,6 +43,7 @@ import {
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
+import { projectChatFields } from "./chat-field-projection.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_RUN_ACTIVITY_CHANGED_EVENT,
@@ -369,16 +370,12 @@ export abstract class ChatPaneStateOwner {
     return this.chatState.projectRunActivity(this.state);
   }
   readonly composerCapabilities = new ChatComposerCapabilityHost();
-  protected readonly transcript = createChatTranscript(
-    () => this.invalidate(),
-    () => this.paneId,
-    {
-      geometryEventTarget: this.element,
-      onViewportResize: () => this.chatState.handleTranscriptResize(),
-      canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
-      onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
-    },
-  );
+  readonly transcript = createChatTranscript(() => this.paneId, {
+    geometryEventTarget: this.element,
+    onViewportResize: () => this.chatState.handleTranscriptResize(),
+    canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
+    onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
+  });
   protected get progressCards() {
     return sessionProgressCardsForGateway(this.context.gateway);
   }
@@ -435,13 +432,13 @@ export abstract class ChatPaneStateOwner {
   protected projectChildRoster(
     target: ReturnType<typeof resolveUiConversationIdentity> | undefined,
   ) {
-    const sessions = target ? this.swarmHydrator?.rows : undefined;
+    const sessions = target ? this.swarm.hydrator?.rows : undefined;
     return {
-      swarm: target && this.swarmEnabled ? { ...target, sessions: sessions ?? [] } : undefined,
+      swarm: target && this.swarm.enabled ? { ...target, sessions: sessions ?? [] } : undefined,
       subagentSessions: sessions,
-      subagentSessionsHydrated: Boolean(target && this.swarmHydrator?.hydrated),
-      subagentSessionsPending: Boolean(target && this.swarmHydrator?.pendingChildRead),
-      subagentSessionsRead: Boolean(target && this.swarmHydrator?.childrenRead),
+      subagentSessionsHydrated: Boolean(target && this.swarm.hydrator?.hydrated),
+      subagentSessionsPending: Boolean(target && this.swarm.hydrator?.pendingChildRead),
+      subagentSessionsRead: Boolean(target && this.swarm.hydrator?.childrenRead),
       // Carry the admitted owner forward; route aliases do not identify child ancestry.
       subagentParentKey: target
         ? scopedSessionArtifactKey(target.sessionKey, target.agentId)
@@ -526,8 +523,10 @@ export abstract class ChatPaneStateOwner {
     expanded: boolean;
     pendingRoute?: boolean;
   };
-  protected swarmHydrator: SwarmRosterHydrator | null = null;
-  protected swarmEnabled = true;
+  readonly swarm: { hydrator: SwarmRosterHydrator | null; enabled: boolean } = {
+    hydrator: null,
+    enabled: true,
+  };
   readonly sessionDiscussion = createChatPaneDiscussionState();
   protected readonly pendingPanelToggleRequests = new Map<
     SessionPanelToggleSlot,
@@ -589,12 +588,21 @@ export abstract class ChatPaneStateOwner {
   protected githubPublication: GitHubPublicationBinding | null = null;
   protected dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
   protected readonly dismissedWorkspaceConflictRefs = new Map<string, string>();
-  protected catalogMessages: unknown[] = [];
-  protected catalogLoading = false;
-  protected loadingOlder = false;
-  protected catalogCursor: string | undefined;
-  protected catalogSession: SessionCatalogSession | null = null;
-  protected catalogHost: SessionCatalogHost | null = null;
+  readonly history = projectChatFields<{
+    catalogMessages: unknown[];
+    catalogLoading: boolean;
+    loadingOlder: boolean;
+    catalogCursor: string | undefined;
+    catalogSession: SessionCatalogSession | null;
+    catalogHost: SessionCatalogHost | null;
+  }>({
+    catalogMessages: [],
+    catalogLoading: false,
+    loadingOlder: false,
+    catalogCursor: undefined,
+    catalogSession: null,
+    catalogHost: null,
+  });
   protected catalogLoadGeneration = 0;
   protected catalogRequestedSessionKey: string | null = null;
   protected olderLoadGeneration = 0;

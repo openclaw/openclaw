@@ -369,6 +369,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       swarmExecutionLane: params.opts.swarmExecutionLane,
       extraSystemPrompt: params.opts.extraSystemPrompt,
       inputProvenance: params.opts.inputProvenance,
+      privateCompletion: params.opts.privateCompletion,
       skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
       sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
       taskSuggestionDeliveryMode: params.opts.taskSuggestionDeliveryMode,

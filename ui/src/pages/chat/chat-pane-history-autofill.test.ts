@@ -48,7 +48,7 @@ function setup(notifyOnObserve = false) {
       pane.syncHistoryObserver();
       notify?.();
       // Join the production load rather than waiting on timers.
-      if (pane.loadingOlder) {
+      if (pane.history.loadingOlder) {
         await pane.loadOlderMessages();
       }
     },
@@ -60,29 +60,29 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("fills a settled short window without input, stopping beyond the prefetch edge", async () => {
+it("fills a settled short window once without filling the reader's prefetch margin", async () => {
   const { intersect, pane, state, request, setHeight } = setup();
   await intersect();
   expect(state.chatMessages.map(nativeHistorySeq)).toEqual([-2, 3, 4]);
   setHeight(900);
   await intersect();
-  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([-3, -2, 3, 4]);
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([-2, 3, 4]);
   setHeight(1800);
   await intersect();
-  expect(request.mock.calls.map(([, params]) => params.offset)).toEqual([2, 3]);
+  expect(request.mock.calls.map(([, params]) => params.offset)).toEqual([2]);
   expect(pane.stagedOlder.page).toBeNull();
   expect(pane.stagedOlder.load).toBeNull();
 });
 
-it("caps automatic requests at three pages and renews the allowance for another open", async () => {
+it("caps automatic requests at one page even while short, renewing on another open", async () => {
   const { intersect, pane, request } = setup();
   for (let index = 0; index < 5; index += 1) {
     await intersect();
   }
-  expect(request.mock.calls.map(([, params]) => params.offset)).toEqual([2, 3, 4]);
+  expect(request.mock.calls.map(([, params]) => params.offset)).toEqual([2]);
   pane.resetOlderMessagesViewport();
   await intersect();
-  expect(request.mock.calls.map(([, params]) => params.offset)).toEqual([2, 3, 4, 5]);
+  expect(request.mock.calls.map(([, params]) => params.offset)).toEqual([2, 3]);
 });
 
 it("does not bootstrap a first page that already overflows", async () => {

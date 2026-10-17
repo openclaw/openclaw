@@ -32,6 +32,7 @@ import {
   prepareSessionRowPublicationView,
   type PublicationView,
 } from "./session-row-publication.js";
+import { registerSessionRowEncoding, serializeSessionRow } from "./session-row-serialization.js";
 import {
   authorizeIncognitoSessionTarget,
   authorizeSessionAgentRun,
@@ -67,7 +68,6 @@ function toProjectedSessionSharingTarget(record: records.MaterializedRow): Sessi
   };
 }
 
-const encodings = new WeakMap<GatewaySessionRow, string>();
 /** Immutable row identities own field preparation; fact indexes stay response-local. */
 function createSessionRowFactSharing<T extends GatewaySessionRow>() {
   const prepared = new WeakMap<T, [string, Partial<T>][]>();
@@ -185,16 +185,6 @@ export function shareSidebarSessionRows(
     return result;
   }
   return shared;
-}
-
-/** Only the immutable presentation is encoded; recipient-specific list wrappers stay private. */
-export function serializeSessionRow(row: GatewaySessionRow): string {
-  let encoded = encodings.get(row);
-  if (encoded === undefined) {
-    encoded = JSON.stringify(row);
-    encodings.set(row, encoded);
-  }
-  return encoded;
 }
 
 /** Sharing decisions remain recipient-local; only their identical presented results are reused. */
@@ -546,7 +536,7 @@ export function prepareProjectedSessionPresentation(
       // Publish the wire snapshot and its bytes together; mutable source aliases stay private.
       const encoded = JSON.stringify(row);
       const snapshot = freezeJsonSnapshot(row);
-      encodings.set(snapshot, encoded);
+      registerSessionRowEncoding(snapshot, encoded);
       views?.set(signature, snapshot);
       return projectModels(snapshot, views, signature);
     }

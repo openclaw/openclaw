@@ -516,7 +516,6 @@ describe("conversation position rail", () => {
       new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       });
-    props.onRequestUpdate = rerender;
     try {
       rerender();
       transcript.start();
@@ -655,7 +654,6 @@ describe("conversation position rail", () => {
       view.render(props);
       transcript.update();
     };
-    props.onRequestUpdate = rerender;
     const markers = () => [
       ...container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker"),
     ];
@@ -781,7 +779,6 @@ describe("conversation position rail", () => {
         view.render(props);
         transcript.update();
       };
-      props.onRequestUpdate = rerender;
       try {
         rerender();
         transcript.start();
@@ -864,12 +861,12 @@ describe("conversation position rail", () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
     const view = mountThread(container, transcript);
-    props.onRequestUpdate = () => {
+    const renderCurrent = () => {
       view.render(props);
       transcript.update();
     };
     try {
-      props.onRequestUpdate();
+      renderCurrent();
       transcript.start();
       const markers = container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker");
       expect(markers).toHaveLength(1);
@@ -916,7 +913,6 @@ describe("conversation position rail", () => {
       view.render(props);
       transcript.update();
     };
-    props.onRequestUpdate = rerender;
     const marker = () =>
       container.querySelector<HTMLButtonElement>('[data-position-marker-id="run:stream-run"]')!;
     try {

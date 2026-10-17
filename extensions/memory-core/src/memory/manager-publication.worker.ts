@@ -35,6 +35,7 @@ import {
   withSqliteDatabaseWriteScope,
   type SqliteWorkerBackend,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { publishMemoryDatabaseTables } from "./manager-db-kernel.js";
 import {
@@ -454,7 +455,13 @@ function createPublicationBackend(
       }
       if (command.type === "source.refresh") {
         return withFacts(
-          writeSingleStatement(() => refreshMemorySessionSourceState(db, command.input)),
+          write(() => {
+            const changed = refreshMemorySessionSourceState(db, command.input);
+            if (changed) {
+              advanceMemoryIndexRevision(db);
+            }
+            return changed;
+          }),
         );
       }
       if (command.type === "stage.start" || command.type === "cache.stage.start") {
@@ -592,9 +599,15 @@ function createPublicationBackend(
       }
       if (command.type === "source.delete") {
         return withFacts(
-          write(() =>
-            new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(command.input),
-          ),
+          write(() => {
+            const changed = new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(
+              command.input,
+            );
+            if (changed) {
+              advanceMemoryIndexRevision(db);
+            }
+            return changed;
+          }),
         );
       }
       if (command.type === "source.replace.group") {
@@ -615,6 +628,7 @@ function createPublicationBackend(
             }
           }
           kernel.replaceGroup(sources());
+          advanceMemoryIndexRevision(db);
           return true;
         });
         return outcome.ok
@@ -644,6 +658,7 @@ function createPublicationBackend(
           );
         }
         new MemorySourceIndexKernel(db, command.input.state).replaceRows(header, rows);
+        advanceMemoryIndexRevision(db);
         facts = readMemoryDatabaseFacts(db, command.input.state.hasVectorTable);
         return true;
       });

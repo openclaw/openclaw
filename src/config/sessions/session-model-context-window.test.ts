@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@openclaw/agent-core";
 import { expect, it } from "vitest";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { projectSessionModelContext } from "./session-model-context-read.js";
 import {
   selectBoundedModelRequests,
   type ModelContextRequest,
@@ -24,6 +25,39 @@ function sizing(bytes: number[]) {
   return (requests: readonly ModelContextRequest[]) =>
     new Map(requests.map(({ entry }) => [entry, bytes[entry.seq]!]));
 }
+
+it("retains the last inference model when command history and provider output leave the bounded window", () => {
+  const entries = [
+    request(0, makeAgentAssistantMessage({ content: [{ type: "text", text: "answer" }] })).entry,
+    request(
+      1,
+      makeAgentAssistantMessage({
+        provider: "openclaw",
+        model: "command",
+        content: [{ type: "text", text: "Command completed" }],
+      }),
+    ).entry,
+    request(2, { role: "user", content: "next turn", timestamp: 2 }).entry,
+  ];
+  const context = projectSessionModelContext(
+    {
+      header: { type: "session", id: "bounded-model", version: 4 },
+      entries,
+      version: { generation: null, rawSeq: 2, updatedAt: 2 },
+      readModelEntries: (requests) => new Map(requests.map(({ entry }) => [entry, entry])),
+      readModelEntrySizes: (requests) => new Map(requests.map(({ entry }) => [entry, 100])),
+    },
+    { maxBytes: 1000, maxEvents: 1 },
+  );
+  expect(context.events).toEqual([
+    { type: "session", id: "bounded-model", version: 4 },
+    expect.objectContaining({ type: "model_change", provider: "openai", modelId: "test-model" }),
+    expect.objectContaining({
+      type: "message",
+      message: { role: "user", content: "next turn", timestamp: 2 },
+    }),
+  ]);
+});
 
 it("preserves a newest tool turn using headroom when its final reply arrives", () => {
   const requests = [

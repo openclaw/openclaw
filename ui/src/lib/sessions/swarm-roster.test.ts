@@ -170,7 +170,6 @@ describe("SwarmRosterHydrator", () => {
       parentKey: "agent:main:parent",
       sourceEpoch: 1,
       currentRows: () => [],
-      onRows: () => undefined,
     };
     try {
       hydrator.update(params);
@@ -228,7 +227,6 @@ describe("SwarmRosterHydrator", () => {
           parentKey: initial.key,
           sourceEpoch: 1,
           currentRows: () => [],
-          onRows: () => undefined,
         });
         await vi.advanceTimersByTimeAsync(250);
         expect(readParent).toHaveBeenCalledTimes(1);
@@ -268,7 +266,6 @@ describe("SwarmRosterHydrator", () => {
         parentKey: initial.key,
         sourceEpoch: 1,
         currentRows: () => [],
-        onRows: () => undefined,
       });
       await vi.advanceTimersByTimeAsync(250);
       sessions.invalidateParent();
@@ -301,7 +298,6 @@ describe("SwarmRosterHydrator", () => {
         parentKey: initial.key,
         sourceEpoch: 1,
         currentRows: () => [],
-        onRows: () => undefined,
       });
       await vi.advanceTimersByTimeAsync(250);
       expect(hydrator.rows).toEqual([initial]);
@@ -329,6 +325,10 @@ describe("SwarmRosterHydrator", () => {
       const sessions = sessionSource(list);
       const hydrator = new SwarmRosterHydrator();
       const hydration: boolean[] = [];
+      const stop = hydrator.subscribe(() =>
+        hydration.push(hydrator.hydrated && !hydrator.pendingChildRead),
+      );
+      onTestFinished(stop);
       try {
         hydrator.update({
           sessions,
@@ -339,7 +339,6 @@ describe("SwarmRosterHydrator", () => {
           parentKey: parentRow().key,
           sourceEpoch: 1,
           currentRows: () => [],
-          onRows: () => hydration.push(hydrator.hydrated && !hydrator.pendingChildRead),
         });
         await vi.advanceTimersByTimeAsync(250);
         expect(hydrator.hydrated).toBe(true);
@@ -413,7 +412,6 @@ describe("SwarmRosterHydrator", () => {
         parentKey: parentRow().key,
         sourceEpoch: 1,
         currentRows: () => [],
-        onRows: () => undefined,
       });
       await vi.advanceTimersByTimeAsync(250);
       expect(hydrator.hydrated).toBe(true);
@@ -468,7 +466,6 @@ describe("SwarmRosterHydrator", () => {
         parentKey: parentRow().key,
         sourceEpoch: 1,
         currentRows: () => [],
-        onRows: () => undefined,
       });
       await vi.advanceTimersByTimeAsync(250);
       expect(hydrator.hydrated).toBe(true);
@@ -509,7 +506,6 @@ describe("SwarmRosterHydrator", () => {
       parentKey: "agent:main:parent",
       sourceEpoch: 1,
       currentRows: () => currentRows,
-      onRows: () => undefined,
     };
     hydrator.update(params);
     await vi.runAllTimersAsync();
@@ -549,7 +545,6 @@ describe("SwarmRosterHydrator", () => {
         readParent,
         sourceEpoch: 1,
         currentRows: () => [],
-        onRows: () => undefined,
       });
       await vi.advanceTimersByTimeAsync(250);
       expect(readParent).toHaveBeenCalledTimes(1);
@@ -592,7 +587,6 @@ describe("SwarmRosterHydrator", () => {
       parentKey: "global",
       sourceEpoch: 1,
       currentRows: () => [main],
-      onRows: () => {},
     };
     hydrator.update({ ...params, agentId: "main", readParent: () => oldRead });
     await vi.advanceTimersByTimeAsync(250);
@@ -634,7 +628,6 @@ describe("SwarmRosterHydrator", () => {
       sourceEpoch: 1,
       readParent: async () => parent,
       currentRows: () => [],
-      onRows: () => {},
     });
     await vi.advanceTimersByTimeAsync(250);
     expect(hydrator.rows).toEqual([parent]);
@@ -665,13 +658,14 @@ describe("SwarmRosterHydrator", () => {
       );
       const onRows = vi.fn();
       const hydrator = new SwarmRosterHydrator();
+      const stop = hydrator.subscribe(() => onRows(hydrator.rows));
+      onTestFinished(stop);
       let currentRows = [parent];
       const params = {
         sessions,
         parentKey: parent.key,
         sourceEpoch: 1,
         currentRows: () => currentRows,
-        onRows,
       };
       try {
         hydrator.update({ ...params, readParent: async () => parent });

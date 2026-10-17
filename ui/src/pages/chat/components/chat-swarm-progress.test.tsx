@@ -4,9 +4,11 @@ import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunReadRecord } from "../../../../../src/agents/subagents/registry/subagent-registry-read.types.js";
 import { buildSessionSwarmSummary } from "../../../../../src/gateway/session-swarm-summary.js";
+import { GatewayChatEvents } from "../../../api/gateway-chat-events.ts";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { pt_BR } from "../../../i18n/locales/pt-BR.ts";
+import { reconcileSessionChangedRow } from "../../../lib/sessions/reconcile.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -192,6 +194,9 @@ describe("chat Swarm progress", () => {
     const { gateway, emitEvent } = createGatewayHarness(client);
     const sessions = createTestSessionCapability(gateway);
     const { container, update } = mountProgress({ sessionKey: parentSessionKey, sessions: [] });
+    const stop = hydrator.subscribe(() =>
+      update({ sessionKey: parentSessionKey, sessions: withSummary(hydrator.rows) }),
+    );
     const params = {
       sessions,
       parentKey: parentSessionKey,
@@ -202,8 +207,6 @@ describe("chat Swarm progress", () => {
       }),
       sourceEpoch: 1,
       currentRows: () => [child],
-      onRows: (rows: GatewaySessionRow[]) =>
-        update({ sessionKey: parentSessionKey, sessions: withSummary(rows) }),
     };
     try {
       hydrator.update(params);
@@ -236,6 +239,7 @@ describe("chat Swarm progress", () => {
       ).toEqual(["Review CI", "Check types"]);
       expect(container.textContent).not.toContain(parentRunId);
     } finally {
+      stop();
       hydrator.dispose();
       sessions.dispose();
     }
@@ -348,6 +352,75 @@ describe("chat Swarm progress", () => {
       { label: "Sampled", duration: "6s" },
       { label: "Done", duration: "7s" },
     ]);
+  });
+
+  it("renders the same live and settled timers after row-delta ingress", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+    const initial = session({
+      key: childSessionKey,
+      sessionId: "child-session",
+      label: "Sampled child",
+      status: "running",
+      hasActiveRun: true,
+      runtimeMs: 4_000,
+      runtimeSampledAt: 98_000,
+      snapshotAt: 100_000,
+    });
+    let reconstructed = initial;
+    const reconnect = vi.fn();
+    const ingress = new GatewayChatEvents(reconnect);
+    const receive = (wire: unknown) => {
+      ingress.dispatch(
+        {
+          type: "event",
+          event: "sessions.changed",
+          payload: { key: childSessionKey, session: wire, ancestorSessions: [] },
+        },
+        (frame) => {
+          const applied = reconcileSessionChangedRow(reconstructed, frame.payload);
+          if (!applied.row) {
+            throw new Error("Expected the child's runtime snapshot to be admitted");
+          }
+          reconstructed = applied.row;
+        },
+      );
+    };
+    receive({ key: childSessionKey, version: 1, full: initial });
+    const capable = mountProgress({
+      sessionKey: parentSessionKey,
+      sessions: withSummary([reconstructed]),
+    });
+    const legacy = mountProgress({
+      sessionKey: parentSessionKey,
+      sessions: withSummary([initial]),
+    });
+    const duration = (container: HTMLElement) =>
+      container.querySelector(".chat-swarm__task-duration")?.textContent;
+    expect(duration(capable.container)).toBe("6s");
+    expect(duration(capable.container)).toBe(duration(legacy.container));
+
+    const changes: Partial<GatewaySessionRow>[] = [
+      { runtimeMs: 9_000, runtimeSampledAt: 102_000, snapshotAt: 103_000 },
+      {
+        runtimeMs: 9_000,
+        runtimeSampledAt: 104_000,
+        snapshotAt: 104_000,
+        status: "done",
+        hasActiveRun: false,
+      },
+    ];
+    const legacyRow = { ...initial };
+    for (const [index, set] of changes.entries()) {
+      vi.setSystemTime(103_000 + index * 1_000);
+      receive({ key: childSessionKey, base: index + 1, version: index + 2, set, remove: [] });
+      Object.assign(legacyRow, set);
+      capable.update({ sessionKey: parentSessionKey, sessions: withSummary([reconstructed]) });
+      legacy.update({ sessionKey: parentSessionKey, sessions: withSummary([legacyRow]) });
+      expect(duration(capable.container)).toBe(index === 0 ? "10s" : "9s");
+      expect(duration(capable.container)).toBe(duration(legacy.container));
+    }
+    expect(reconnect).not.toHaveBeenCalled();
   });
   it.each(["unknown"])("keeps raw %s owners separate from ordinary qualified keys", (raw) => {
     const makeParent = (key: string, agentId: string, done: number): GatewaySessionRow => ({

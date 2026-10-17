@@ -350,8 +350,8 @@ describe("managed removal custody", () => {
   });
 
   it("expires a pending HEAD pin after snapshot-loss removal without orphaning it", async () => {
-    let now = Date.now();
-    service = new ManagedWorktreeService({ env, now: () => now });
+    const started = Date.now();
+    service = new ManagedWorktreeService({ env });
     const created = await materialize("snapshot-loss-finalization");
     const nested = path.join(created.path, "nested");
     await fs.mkdir(nested);
@@ -371,11 +371,14 @@ describe("managed removal custody", () => {
       service.remove({ id: created.id, reason: "archive", allowSnapshotLoss: true }),
     ).rejects.toThrow("injected pending-ref deletion failure");
     fault.mockRestore();
-    expect(registry(created.id)).toMatchObject({ removedAt: now });
+    expect(registry(created.id)?.removedAt).toBeGreaterThanOrEqual(started);
+    expect(registry(created.id)?.removedAt).toBeLessThanOrEqual(Date.now());
     expect(registry(created.id)?.snapshotRef).toBeUndefined();
     expect(await git(repo, "rev-parse", pendingRef)).toBe(head);
 
-    now += 31 * 24 * 60 * 60 * 1000;
+    await updateRegistryWorktree(env, created.id, {
+      removedAt: Date.now() - 31 * 24 * 60 * 60 * 1000 - 1,
+    });
     const lock = path.join(repo, ".git", `${pendingRef}.lock`);
     await fs.writeFile(lock, "", { flag: "wx" });
     try {

@@ -1,4 +1,4 @@
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   withFreshOpenClawAgentDatabaseReadOnly,
@@ -16,7 +16,7 @@ export function readSessionBranchSnapshot(
   database: OpenClawAgentReadOnlyDatabase,
   request: Pick<SessionBranchSummaryReadRequest, "sessionKey" | "previous">,
 ): SessionBranchSummaryReadResult {
-  return runSqliteDeferredTransactionSync<SessionBranchSummaryReadResult>(
+  return runSqliteReadSnapshotSync<SessionBranchSummaryReadResult>(
     database.db,
     () => {
       const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;

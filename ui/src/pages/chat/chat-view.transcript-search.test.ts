@@ -40,7 +40,6 @@ function createPane(paneId = "primary") {
     runActive: true,
     onClearReply,
     onAbort,
-    onRequestUpdate: vi.fn(),
   });
   renderChatPropsInto(container, props);
   const composer = expectDefined(

@@ -10,13 +10,9 @@ import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
 class EndFollowFixture extends TranscriptTestHost {
   followEnabled = true;
-  override readonly transcript = createChatTranscript(
-    () => this.requestRender(),
-    () => "end-follow-browser",
-    {
-      canFollowEnd: () => this.followEnabled,
-    },
-  );
+  override readonly transcript = createChatTranscript(() => "end-follow-browser", {
+    canFollowEnd: () => this.followEnabled,
+  });
   viewportHeight = 400;
   viewportPadding = 60;
   earlierRowHeight = 400;

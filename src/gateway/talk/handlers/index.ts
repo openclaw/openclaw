@@ -155,15 +155,6 @@ function withTalkBaseTtsSpeakerSelectionCompat(
       }),
     );
   }
-  for (const [key, value] of Object.entries(baseTts)) {
-    if (key === "providers") {
-      continue;
-    }
-    const record = asOptionalRecord(value);
-    if (record) {
-      next[key] = withSpeakerSelectionCompat(record);
-    }
-  }
   return next;
 }
 

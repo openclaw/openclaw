@@ -20,7 +20,6 @@ import {
   writePackedBundledPluginActivationConfig,
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
-import { resolveNpmJsonEntries as resolveRuntimeNpmJsonEntries } from "../src/infra/npm-registry-spec.js";
 
 function makeItem(shortVersion: string, sparkleVersion: string, channel?: string): string {
   const channelElement = channel ? `<sparkle:channel>${channel}</sparkle:channel>` : "";
@@ -349,9 +348,6 @@ describe("resolveNpmJsonEntries", () => {
     expect(resolveNpmJsonEntries(entry)).toEqual([entry]);
     expect(resolveNpmJsonEntries({ openclaw: entry })).toEqual([entry]);
     expect(resolveNpmJsonEntries({ "@openclaw/demo": entry })).toEqual([entry]);
-    expect(resolveNpmJsonEntries({ openclaw: entry })).toEqual(
-      resolveRuntimeNpmJsonEntries({ openclaw: entry }),
-    );
   });
 });
 

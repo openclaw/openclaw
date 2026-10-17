@@ -4,7 +4,7 @@ import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceOwner } from "./chat-media-source.ts";
 import {
   observeChatMediaResourceSubscriber,
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type AttachmentItem,
 } from "./chat-message-media.ts";
 
@@ -19,7 +19,7 @@ type VideoSource =
 export function videoLightboxItem(
   attachment: AttachmentItem["attachment"],
   resolveSource: (update: () => void) => VideoSource,
-  onRequestUpdate?: () => void,
+  mediaOwner?: object,
 ): ImageLightboxItem {
   return {
     kind: "video",
@@ -73,8 +73,8 @@ export function videoLightboxItem(
         report();
         void pending?.then(report);
       };
-      if (onRequestUpdate) {
-        observeChatMediaResourceSubscriber(onRequestUpdate, refresh);
+      if (mediaOwner) {
+        observeChatMediaResourceSubscriber(mediaOwner, refresh);
       }
       const metadata = () => controller.handleLoadedMetadata(media, () => active);
       const reportAfter = (update: () => void) => () => {
@@ -100,7 +100,7 @@ export function videoLightboxItem(
         media.removeEventListener("error", error);
         controller.cancel();
         controller.reset(media);
-        releaseChatMediaResourceSubscriber(refresh);
+        releaseChatMediaResourceOwner(refresh);
       };
     },
   };
