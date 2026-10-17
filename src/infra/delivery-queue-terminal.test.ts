@@ -248,9 +248,8 @@ describe("delivery queue pending terminal transition", () => {
       const ids = ["terminal-bounded-old", "terminal-bounded-new"] as const;
       const otherQueue = "other-producer-queue";
       for (const ownerQueue of [queueName, otherQueue]) {
-        ids.forEach((id, index) => {
-          insertRetained(db, id, Date.now() + index, policies[index], ownerQueue);
-        });
+        insertRetained(db, ids[0], Date.now(), policies[0], ownerQueue);
+        insertRetained(db, ids[1], Date.now() + 1, policies[1], ownerQueue);
       }
       const ordinaryId = "ordinary-completed";
       seedDeliveryQueueEntry({

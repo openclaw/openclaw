@@ -52,7 +52,11 @@ function expectPluginIds(
   plugins: ReadonlyArray<{ id?: string; pluginId?: string }>,
   ...ids: string[]
 ) {
-  expect(plugins.map((plugin) => plugin.id ?? plugin.pluginId).toSorted()).toEqual(ids.toSorted());
+  expect(
+    plugins
+      .map((plugin) => plugin.id ?? plugin.pluginId)
+      .toSorted((left, right) => String(left).localeCompare(String(right))),
+  ).toEqual(ids.toSorted((left, right) => left.localeCompare(right)));
 }
 
 function createWorkspaceFixture() {

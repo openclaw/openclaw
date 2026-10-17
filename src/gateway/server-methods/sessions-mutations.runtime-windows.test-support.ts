@@ -109,7 +109,9 @@ export function registerSessionRuntimeWindowTests(harness: {
       lightweightListRow: true,
     });
     expect(row).toMatchObject({ ...window, contextTokens: 64_000 });
-    expect(await patch({ contextWindow: "64k" })).toMatchObject([true, { resolved: window }]);
+    const contextOnly = await patch({ contextWindow: "64k" });
+    expect(contextOnly[0]).toBe(true);
+    expect(contextOnly[1]).toMatchObject({ resolved: window });
     const invalid = await patch({ contextWindow: "32k" });
     expect(invalid[0]).toBe(false);
     expect(invalid[2]?.message).toContain("use 64k");

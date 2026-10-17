@@ -1,5 +1,5 @@
 import { webhookCallback, type Bot } from "grammy";
-import type { Message } from "grammy/types";
+import type { Message, Update } from "grammy/types";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as configMutation from "openclaw/plugin-sdk/config-mutation";
@@ -51,7 +51,7 @@ const configuredBot = (
   account?: string,
 ) => createBot(false, true, { ...config, channels: { telegram } }, topics, account);
 const messageBase = { date: 1736380800, chat, from };
-const handleMessage = (bot: Bot, update_id: number, message: Message) =>
+const handleMessage = (bot: Bot, update_id: number, message: Message & Update.NonChannel) =>
   bot.handleUpdate({ update_id, message });
 const callback = (id: string, data: string, chat_instance: string, message_id: number) => ({
   id,

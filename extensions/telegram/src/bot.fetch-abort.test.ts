@@ -34,8 +34,10 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
 // Local socket proof must not inherit the host's global proxy dispatcher.
 const dispatcher = new Agent({ allowH2: false });
 // Keep fetch and Dispatcher on the same Undici ABI across Node releases.
-const fetch: typeof globalThis.fetch = (input, init) =>
-  (undiciFetch as unknown as typeof globalThis.fetch)(input, { ...init, dispatcher });
+const fetch: typeof globalThis.fetch = (input, init) => {
+  const requestInit = { ...init, dispatcher };
+  return (undiciFetch as unknown as typeof globalThis.fetch)(input, requestInit);
+};
 const clientFor = (options: Partial<Parameters<typeof createTelegramClientFetch>[0]> = {}) =>
   createTelegramClientFetch({ fetchImpl: asTelegramClientFetch(fetch), ...options });
 const responses = new Set<ServerResponse>();

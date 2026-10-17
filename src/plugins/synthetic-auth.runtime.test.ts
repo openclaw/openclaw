@@ -19,6 +19,7 @@ vi.mock("./runtime-state.js", () => ({
   getPluginRegistryState,
 }));
 
+// mock-isolation: supply registry snapshots without loading installed plugins.
 vi.mock("./plugin-registry.js", () => ({
   loadPluginRegistrySnapshotWithMetadata: loadSnapshot,
 }));

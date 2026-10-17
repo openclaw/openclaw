@@ -12,7 +12,7 @@ const { proc, read } = vi.hoisted(() => ({
     directories: new Map<string, string[]>(),
     links: new Map<string, string>(),
   },
-  read(map: Map<string, string>, file: string) {
+  read: (map: Map<string, string>, file: string) => {
     const value = map.get(file);
     if (value === undefined) {
       throw new Error("unreadable proc entry");

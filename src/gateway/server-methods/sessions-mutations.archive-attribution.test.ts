@@ -25,7 +25,7 @@ import { createSessionMutationTestClient } from "./sessions-mutations.owner.test
 import * as archivePreparation from "./sessions-patch-archive.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-afterEach(closeOpenClawAgentDatabasesForTest);
+afterEach(() => closeOpenClawAgentDatabasesForTest());
 const scopeFor = (sessionKey: string) => ({ agentId: "main", sessionKey });
 const readSession = (key: string) => loadSessionEntry(scopeFor(key));
 const seedSession = (key: string, entry: Partial<SessionEntry> = {}) =>

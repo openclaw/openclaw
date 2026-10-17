@@ -177,10 +177,18 @@ test("deletes only structurally complete legacy envelope rows", async () => {
   await expect(migration.detectLegacyState(params)).resolves.toBeNull();
   await withTable(async (table) => {
     await expect(table.countRows()).resolves.toBe(benignRows.length);
-    // Exact row count plus every distinct survivor also excludes all contaminated IDs.
-    await expect(table.query().select(["id", "text"]).toArray()).resolves.toEqual(
-      expect.arrayContaining(benignRows),
-    );
+    for (const row of benignRows) {
+      const storedRows = await table
+        .query()
+        .where(`id = '${row.id}'`)
+        .select(["id", "text"])
+        .toArray();
+      expect(storedRows).toHaveLength(1);
+      expect(storedRows[0]).toMatchObject(row);
+    }
+    for (const row of contaminatedRows) {
+      await expect(table.countRows(`id = '${row.id}'`)).resolves.toBe(0);
+    }
   });
 });
 

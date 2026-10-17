@@ -31,6 +31,7 @@ import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({ monitorIrcProvider: vi.fn() }));
 
+// mock-isolation: setup tests must not start the real IRC transport.
 vi.mock("./channel-runtime.js", () => ({ monitorIrcProvider: hoisted.monitorIrcProvider }));
 
 afterAll(() => {
