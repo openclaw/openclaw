@@ -45,9 +45,6 @@ import {
 import * as contextEngineRegistry from "./registry.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
 
-const CONTEXT_ENGINE_QUARANTINE_OWNER_ID = "core:context-engine-quarantine-health";
-const CONTEXT_ENGINE_QUARANTINE_NAMESPACE = "runtime-quarantines";
-
 // Sibling records need a verifiable /proc starttime, so sibling-visibility
 // coverage only runs where that identity source exists.
 const hasProcessStartTimes = process.platform === "linux";
@@ -81,25 +78,52 @@ function seedPersistedContextEngineQuarantineForTest(
   record: ContextEngineQuarantineTestRecord,
 ): void {
   createCorePluginStateSyncKeyedStore<ContextEngineQuarantineTestRecord>({
-    ownerId: CONTEXT_ENGINE_QUARANTINE_OWNER_ID,
-    namespace: CONTEXT_ENGINE_QUARANTINE_NAMESPACE,
+    ownerId: "core:context-engine-quarantine-health",
+    namespace: "runtime-quarantines",
     maxEntries: 64,
   }).register(JSON.stringify([record.engineId, record.processId]), record);
 }
 
+function makeQuarantine(
+  overrides: Partial<Parameters<typeof recordPersistedContextEngineQuarantine>[0]> = {},
+) {
+  return {
+    engineId: "lossless-claw",
+    owner: "plugin:lossless-claw",
+    operation: "bootstrap",
+    reason: "current process failure",
+    failedAt: new Date(123),
+    ...overrides,
+  };
+}
+
 function seedSiblingQuarantineForTest(params: {
-  engineId: string;
-  owner?: string;
-  operation: string;
-  reason: string;
-  failedAtMs: number;
   processId: number;
   processStartTime: number | null;
+  reason: string;
+  failedAtMs: number;
 }): void {
   seedPersistedContextEngineQuarantineForTest({
+    engineId: "lossless-claw",
+    owner: "plugin:lossless-claw",
+    operation: "bootstrap",
     ...params,
     processToken: "sibling-process-token",
   });
+}
+
+function gateHealthCleanup() {
+  const reached = createDeferredCore();
+  const release = createDeferredCore();
+  const clear = pluginStateWorker.clearRuntimeHealthInWorker;
+  const observer = vi
+    .spyOn(pluginStateWorker, "clearRuntimeHealthInWorker")
+    .mockImplementation(async (params) => {
+      reached.resolve();
+      await release.promise;
+      await clear(params);
+    });
+  return { reached, release, observer };
 }
 
 afterEach(() => {
@@ -155,24 +179,14 @@ describe("context engine quarantine health", () => {
         }
         const publication = captureActivePluginRegistrySnapshot();
         const engineId = `health-registration-${superseded}`;
-        const quarantine = {
+        const record = makeQuarantine({
           engineId,
           owner: "plugin:health-registration",
           operation: "resolve",
           reason: "not registered",
-          failedAt: new Date(123),
-        };
-        await recordPersistedContextEngineQuarantine(quarantine);
-        const reached = createDeferredCore();
-        const release = createDeferredCore();
-        const clear = pluginStateWorker.clearRuntimeHealthInWorker;
-        const observer = vi
-          .spyOn(pluginStateWorker, "clearRuntimeHealthInWorker")
-          .mockImplementation(async (params) => {
-            reached.resolve();
-            await release.promise;
-            await clear(params);
-          });
+        });
+        await recordPersistedContextEngineQuarantine(record);
+        const { reached, release, observer } = gateHealthCleanup();
         const registration = contextEngineRegistry.registerContextEngineForOwner(
           engineId,
           () => new MockContextEngine(),
@@ -195,9 +209,7 @@ describe("context engine quarantine health", () => {
           release.resolve();
           expect(await observed).toEqual({ result: { ok: true } });
           expect(registry.contextEngines.get(engineId)?.owner).toBe("test:health-registration");
-          expect(await listPersistedContextEngineQuarantines()).toEqual(
-            superseded ? [quarantine] : [],
-          );
+          expect(await listPersistedContextEngineQuarantines()).toEqual(superseded ? [record] : []);
         } finally {
           release.resolve();
           await observed;
@@ -214,15 +226,9 @@ describe("context engine quarantine health", () => {
     async (scope) => {
       await withStateDirEnv("openclaw-context-engine-quarantine-", async () => {
         await withLiveSiblingProcess(async (siblingProcessId) => {
-          const quarantine = {
-            engineId: "lossless-claw",
-            owner: "plugin:lossless-claw",
-            operation: "bootstrap",
-            reason: "current process failure",
-            failedAt: new Date(123),
-          };
-          await recordPersistedContextEngineQuarantine(quarantine);
-          expect(await contextEngineRegistry.listContextEngineQuarantines()).toEqual([quarantine]);
+          const record = makeQuarantine();
+          await recordPersistedContextEngineQuarantine(record);
+          expect(await contextEngineRegistry.listContextEngineQuarantines()).toEqual([record]);
           if (scope === "process") {
             seedPersistedContextEngineQuarantineForTest({
               engineId: "local-b",
@@ -232,9 +238,6 @@ describe("context engine quarantine health", () => {
             });
           }
           seedSiblingQuarantineForTest({
-            engineId: "lossless-claw",
-            owner: "plugin:lossless-claw",
-            operation: "bootstrap",
             reason: "sibling process failure",
             failedAtMs: 789,
             processId: siblingProcessId,
@@ -246,13 +249,10 @@ describe("context engine quarantine health", () => {
             await resetContextEngineRuntimeQuarantineForTests();
           }
           expect(await contextEngineRegistry.listContextEngineQuarantines()).toEqual([
-            {
-              engineId: "lossless-claw",
-              owner: "plugin:lossless-claw",
-              operation: "bootstrap",
+            makeQuarantine({
               reason: "sibling process failure",
               failedAt: new Date(789),
-            },
+            }),
           ]);
         });
       });
@@ -284,9 +284,6 @@ describe("context engine quarantine health", () => {
       await withLiveSiblingProcess(async (processId) => {
         await resetContextEngineRuntimeQuarantineForTests();
         seedSiblingQuarantineForTest({
-          engineId: "lossless-claw",
-          owner: "plugin:lossless-claw",
-          operation: "bootstrap",
           reason: "stale process failure",
           failedAtMs: 123,
           processId,
@@ -337,16 +334,7 @@ describe("context engine quarantine health", () => {
       };
       await recordContextEngineQuarantine(quarantine);
       const original = getContextEngineQuarantine(engineId);
-      const reached = createDeferredCore();
-      const release = createDeferredCore();
-      const clear = pluginStateWorker.clearRuntimeHealthInWorker;
-      const observer = vi
-        .spyOn(pluginStateWorker, "clearRuntimeHealthInWorker")
-        .mockImplementation(async (params) => {
-          reached.resolve();
-          await release.promise;
-          await clear(params);
-        });
+      const { reached, release, observer } = gateHealthCleanup();
       const failure = new Error("publication rejected");
       const commit = vi.spyOn(pluginRuntime, "commitStagedPluginRegistry");
       if (publicationThrows) {

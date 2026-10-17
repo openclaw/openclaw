@@ -62,21 +62,19 @@ vi.mock("../agents/embedded-agent-runner/compact.runtime.js", () => ({
   compactEmbeddedAgentSessionOnDemand: compactEmbeddedAgentSessionOnDemandMock,
 }));
 
-function installCompactRuntimeSpy(sessionTarget?: ContextEngineSessionTarget) {
-  return compactEmbeddedAgentSessionOnDemandMock.mockResolvedValue({
-    ok: true,
-    compacted: false,
-    reason: "mock compaction",
-    result: {
-      summary: "",
-      firstKeptEntryId: "",
-      tokensBefore: 0,
-      tokensAfter: 0,
-      details: undefined,
-      ...(sessionTarget ? { sessionTarget } : {}),
-    },
-  });
-}
+const compactionResult = (sessionTarget: ContextEngineSessionTarget) => ({
+  ok: true,
+  compacted: false,
+  reason: "mock compaction",
+  result: {
+    summary: "",
+    firstKeptEntryId: "",
+    tokensBefore: 0,
+    tokensAfter: 0,
+    details: undefined,
+    sessionTarget,
+  },
+});
 
 function requireCompactRuntimeParams(callIndex: number): Record<string, unknown> {
   const params = compactEmbeddedAgentSessionOnDemandMock.mock.calls[callIndex]?.[0] as
@@ -90,6 +88,15 @@ function requireCompactRuntimeParams(callIndex: number): Record<string, unknown>
 
 function configWithSlot(engineId: string): OpenClawConfig {
   return { plugins: { slots: { contextEngine: engineId } } };
+}
+
+const session = { sessionId: "session", sessionKey: "agent:main:session" };
+const callerTarget = { agentId: "main", ...session };
+
+function expectQuarantine(engineId: string, operation: string, reason?: string) {
+  return expect(listContextEngineQuarantines()).resolves.toEqual([
+    expect.objectContaining({ engineId, operation, ...(reason === undefined ? {} : { reason }) }),
+  ]);
 }
 
 function makeMockMessage(text = "hello"): AgentMessage {
@@ -188,13 +195,10 @@ describe("Engine contract tests", () => {
   });
 
   it("delegateCompactionToRuntime reuses the legacy runtime bridge", async () => {
-    const sessionTarget = {
-      agentId: "main",
-      sessionId: "s2",
-      sessionKey: "agent:main:s2",
-      storePath: "/tmp/openclaw-agent.sqlite",
-    };
-    const compactRuntimeSpy = installCompactRuntimeSpy(sessionTarget);
+    const target = { ...callerTarget, storePath: "/tmp/openclaw-agent.sqlite" };
+    const compactRuntimeSpy = compactEmbeddedAgentSessionOnDemandMock.mockResolvedValue(
+      compactionResult(target),
+    );
     const runtimeContext = {
       workspaceDir: "/tmp/workspace",
       currentTokenCount: 12345,
@@ -206,9 +210,8 @@ describe("Engine contract tests", () => {
     const result = await delegateCompactionToRuntime({
       abortSignal,
       agentId: "main",
-      sessionId: "s2",
-      sessionKey: "agent:main:s2",
-      sessionTarget,
+      ...session,
+      sessionTarget: target,
       tokenBudget: 4096,
       runtimeContext,
     });
@@ -218,28 +221,15 @@ describe("Engine contract tests", () => {
     expect(compactRuntimeParams).toMatchObject({
       abortSignal,
       agentId: "main",
-      sessionId: "s2",
-      sessionKey: "agent:main:s2",
-      sessionTarget,
+      ...session,
+      sessionTarget: target,
       tokenBudget: 4096,
       currentTokenCount: 12345,
       workspaceDir: "/tmp/workspace",
     });
     expect(compactRuntimeParams).not.toHaveProperty("sessionFile");
     expect(compactRuntimeParams.contextEngineRuntimeContext).toBe(runtimeContext);
-    expect(result).toEqual({
-      ok: true,
-      compacted: false,
-      reason: "mock compaction",
-      result: {
-        summary: "",
-        firstKeptEntryId: "",
-        tokensBefore: 0,
-        tokensAfter: 0,
-        details: undefined,
-        sessionTarget,
-      },
-    });
+    expect(result).toEqual(compactionResult(target));
   });
 
   it("rejects a structured successor key from another agent", async () => {
@@ -277,13 +267,8 @@ describe("Engine contract tests", () => {
         await expect(
           engine.compact({
             agentId: "main",
-            sessionId: "session",
-            sessionKey: "agent:main:session",
-            sessionTarget: {
-              agentId: "main",
-              sessionId: "session",
-              sessionKey: "agent:main:session",
-            },
+            ...session,
+            sessionTarget: callerTarget,
             ...input,
           }),
         ).rejects.toThrow(/conflicts with/);
@@ -765,9 +750,7 @@ describe("Invalid engine fallback", () => {
     );
     expect(assemble).toHaveBeenCalledTimes(2);
     expect(defaultFactory).toHaveBeenCalledTimes(1);
-    expect(await listContextEngineQuarantines()).toEqual([
-      expect.objectContaining({ engineId, operation: "assemble" }),
-    ]);
+    await expectQuarantine(engineId, "assemble");
   });
 
   it("routes legacy resolver fence failures through normal quarantine", async () => {
@@ -798,13 +781,7 @@ describe("Invalid engine fallback", () => {
     expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("legacy");
     expect(factory).toHaveBeenCalledOnce();
     expect(resolveContextEngineOwnerPluginId(engine)).toBeUndefined();
-    expect(await listContextEngineQuarantines()).toEqual([
-      expect.objectContaining({
-        engineId,
-        operation: "assemble",
-        reason: "admitted user row is unavailable",
-      }),
-    ]);
+    await expectQuarantine(engineId, "assemble", "admitted user row is unavailable");
     expect(assemble).toHaveBeenCalledTimes(1);
     expect(ingest).not.toHaveBeenCalled();
   });
@@ -831,9 +808,7 @@ describe("Invalid engine fallback", () => {
   it("clears a missing-engine quarantine when the plugin registers later", async () => {
     const engineId = uniqueEngineId("late-register");
     expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("legacy");
-    expect(await listContextEngineQuarantines()).toEqual([
-      expect.objectContaining({ engineId, operation: "resolve", reason: "not registered" }),
-    ]);
+    await expectQuarantine(engineId, "resolve", "not registered");
     await registerTestContextEngine(engineId, () => createEngine(engineId));
     expect(await listContextEngineQuarantines()).toEqual([]);
     expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe(engineId);
@@ -919,9 +894,7 @@ describe("Invalid engine fallback", () => {
         await expect(maintenance).resolves.toMatchObject({ changed: false });
         expect(controller.signal.aborted).toBe(false);
         expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("legacy");
-        expect(await listContextEngineQuarantines()).toEqual([
-          expect.objectContaining({ engineId, operation: "maintain", reason: abortError.message }),
-        ]);
+        await expectQuarantine(engineId, "maintain", abortError.message);
       } else {
         await expect(maintenance).rejects.toBe(abortAt === "before" ? reason : abortError);
         expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe(engineId);
@@ -953,13 +926,7 @@ describe("Invalid engine fallback", () => {
 
     const nextEngine = await resolveContextEngine(configWithSlot(engineId));
     expect(nextEngine.info.id).toBe("legacy");
-    expect(await listContextEngineQuarantines()).toEqual([
-      expect.objectContaining({
-        engineId,
-        operation: "prepareSubagentSpawn",
-        reason: "child context projection failed",
-      }),
-    ]);
+    await expectQuarantine(engineId, "prepareSubagentSpawn", "child context projection failed");
   });
 
   it("throws when the default engine itself is not registered", async () => {

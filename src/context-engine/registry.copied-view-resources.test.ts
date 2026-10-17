@@ -331,27 +331,26 @@ const unusedFactory: ContextEngineFactory = async () => {
   throw new Error("context engine factory should not run");
 };
 
-function registryWithPluginEngine(params: {
-  pluginId: string;
-  engineId: string;
-  lifecycle: "runtime" | "readOnlyDiscovery";
-  source?: string;
-  status?: "loaded" | "disabled" | "error";
-  owner?: string;
-  factory?: ContextEngineFactory;
-}) {
+function registryWithPluginEngine(
+  params: {
+    lifecycle?: "runtime" | "readOnlyDiscovery";
+    source?: string;
+    status?: "loaded" | "disabled" | "error";
+    factory?: ContextEngineFactory;
+  } = {},
+) {
   const registry = createEmptyPluginRegistry();
   registry.plugins.push(
     createPluginRecord({
-      id: params.pluginId,
-      source: params.source ?? `/tmp/${params.pluginId}`,
+      id: "ce-probe",
+      source: params.source ?? "/tmp/ce-probe",
       status: params.status ?? "loaded",
     }),
   );
-  registry.contextEngines.set(params.engineId, {
+  registry.contextEngines.set("ce-probe", {
     factory: params.factory ?? unusedFactory,
-    owner: params.owner ?? `plugin:${params.pluginId}`,
-    lifecycle: params.lifecycle,
+    owner: "plugin:ce-probe",
+    lifecycle: params.lifecycle ?? "runtime",
   });
   return registry;
 }
@@ -365,17 +364,10 @@ describe("adoptRuntimeContextEngineRegistrations", () => {
       throw new Error("runtime factory should not run");
     };
     const scoped = registryWithPluginEngine({
-      pluginId: "ce-probe",
-      engineId: "ce-probe",
       lifecycle: "readOnlyDiscovery",
       factory: discoveryFactory,
     });
-    const root = registryWithPluginEngine({
-      pluginId: "ce-probe",
-      engineId: "ce-probe",
-      lifecycle: "runtime",
-      factory: runtimeFactory,
-    });
+    const root = registryWithPluginEngine({ factory: runtimeFactory });
 
     const adopted = adoptRuntimeContextEngineRegistrations(scoped, root);
 
@@ -385,12 +377,7 @@ describe("adoptRuntimeContextEngineRegistrations", () => {
   });
 
   it("does not copy engines from a different plugin source", () => {
-    const root = registryWithPluginEngine({
-      pluginId: "ce-probe",
-      engineId: "ce-probe",
-      lifecycle: "runtime",
-      source: "/tmp/root-ce-probe",
-    });
+    const root = registryWithPluginEngine({ source: "/tmp/root-ce-probe" });
     const scoped = createEmptyPluginRegistry();
     scoped.plugins.push(createPluginRecord({ id: "ce-probe", source: "/tmp/shadow-ce-probe" }));
 
@@ -404,18 +391,8 @@ describe("adoptRuntimeContextEngineRegistrations", () => {
     const rootFactory: ContextEngineFactory = async () => {
       throw new Error("root factory should not run");
     };
-    const scoped = registryWithPluginEngine({
-      pluginId: "ce-probe",
-      engineId: "ce-probe",
-      lifecycle: "runtime",
-      factory: scopedFactory,
-    });
-    const root = registryWithPluginEngine({
-      pluginId: "ce-probe",
-      engineId: "ce-probe",
-      lifecycle: "runtime",
-      factory: rootFactory,
-    });
+    const scoped = registryWithPluginEngine({ factory: scopedFactory });
+    const root = registryWithPluginEngine({ factory: rootFactory });
 
     const adopted = adoptRuntimeContextEngineRegistrations(scoped, root);
 
@@ -424,18 +401,10 @@ describe("adoptRuntimeContextEngineRegistrations", () => {
   });
 
   it("does not copy core-owned engines or disabled plugin engines", () => {
-    const root = createEmptyPluginRegistry();
+    const root = registryWithPluginEngine();
     root.contextEngines.set("legacy", {
       factory: unusedFactory,
       owner: "core",
-      lifecycle: "runtime",
-    });
-    root.plugins.push(
-      createPluginRecord({ id: "ce-probe", source: "/tmp/ce-probe", status: "loaded" }),
-    );
-    root.contextEngines.set("ce-probe", {
-      factory: unusedFactory,
-      owner: "plugin:ce-probe",
       lifecycle: "runtime",
     });
     const scoped = createEmptyPluginRegistry();
