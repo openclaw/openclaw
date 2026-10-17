@@ -107,8 +107,7 @@ describe("normalizeSlackChannelType", () => {
 
 describe("resolveSlackSystemEventRoute", () => {
   it("uses the sole configured agent for fallback system-event sessions", async () => {
-    const ctx = createSlackMonitorContext({
-      ...baseParams(),
+    const ctx = createContext({
       cfg: {
         agents: { entries: { ops: {} } },
       },
@@ -120,8 +119,7 @@ describe("resolveSlackSystemEventRoute", () => {
   });
 
   it("routes DM system events through direct-peer bindings when sender is known", async () => {
-    const ctx = createSlackMonitorContext({
-      ...baseParams(),
+    const ctx = createContext({
       accountId: "work",
       cfg: {
         bindings: [

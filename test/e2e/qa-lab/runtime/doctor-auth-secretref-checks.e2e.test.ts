@@ -166,7 +166,7 @@ describe.skipIf(process.platform === "win32")("doctor auth and SecretRef product
       await doctor("--repair", "--yes", "--generate-gateway-token");
       const token = await readToken(instance.configPath);
       expect(typeof token).toBe("string");
-      expect(String(token).length).toBeGreaterThan(20);
+      expect(token).toEqual(expect.stringMatching(/^.{21,}$/u));
     },
   );
 });

@@ -97,12 +97,14 @@ const navigation = vi.hoisted(() => ({
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
+// mock-isolation: Exercise route admission against controlled browser effects, not a live Chrome session.
 vi.mock("../chrome-mcp.js", () => ({
   ...mcp,
   closeChromeMcpTab: vi.fn(async () => {}),
   resizeChromeMcpPage: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Hold navigation-policy completion explicitly to test revocation before browser effects.
 vi.mock("../navigation-guard.js", () => navigation);
 
 vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());

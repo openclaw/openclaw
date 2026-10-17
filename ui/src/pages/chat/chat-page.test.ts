@@ -77,8 +77,6 @@ function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
 
 const panesIn = (page: ChatPage) => [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
 const paneAt = (page: ChatPage, index = 0) => itemAt(panesIn(page), index, "pane");
-const requiredElement = <T extends Element = HTMLElement>(parent: ParentNode, selector: string) =>
-  expectDefined(parent.querySelector<T>(selector), selector);
 const location = (pathname: string, search = "") => ({ pathname, search, hash: "" });
 
 function command(detail: UiCommandDetail) {
@@ -147,7 +145,10 @@ function stubDropBounds(page: ChatPage) {
     panesIn(page).find((candidate) => candidate.paneId === "p1"),
     "drop pane",
   );
-  const container = requiredElement<HTMLElement>(page, ".chat-split-view__drop-container");
+  const container = expectDefined(
+    page.querySelector<HTMLElement>(".chat-split-view__drop-container"),
+    ".chat-split-view__drop-container",
+  );
   mockBounds(pane, 100, 50, 200, 100);
   mockBounds(container, 100, 50, 400, 100);
   return pane;
@@ -179,7 +180,10 @@ describe("chat page split layout host", () => {
         { container },
       );
       try {
-        const page = requiredElement<ChatPage>(container, "openclaw-chat-page");
+        const page = expectDefined(
+          container.querySelector<ChatPage>("openclaw-chat-page"),
+          "openclaw-chat-page",
+        );
         await settleChatPage(page);
         const pane = paneAt(page, 0);
 
@@ -500,7 +504,10 @@ describe("chat page split layout host", () => {
     await settleChatPage(page);
     command({ command: { kind: "split", direction: "down", sessionKey: "main" } });
     await settleChatPage(page);
-    const horizontal = requiredElement<RenderedDivider>(page, "resizable-divider");
+    const horizontal = expectDefined(
+      page.querySelector<RenderedDivider>("resizable-divider"),
+      "resizable-divider",
+    );
     expect(horizontal.orientation).toBe("horizontal");
     horizontal.focus();
     expect(document.activeElement).toBe(horizontal);
@@ -644,12 +651,18 @@ describe("chat page split layout host", () => {
     patchSettings({ chatSplitLayout: layout });
     document.body.append(page);
     await settleChatPage(page);
-    const bound = requiredElement<RenderedPane>(
-      page,
+    const bound = expectDefined(
+      page.querySelector<RenderedPane>("openclaw-chat-pane.chat-pane-cache__pane--visible"),
       "openclaw-chat-pane.chat-pane-cache__pane--visible",
     );
-    const unbound = requiredElement<HTMLElement>(page, "[data-unbound-pane-id]");
-    const container = requiredElement<HTMLElement>(page, ".chat-split-view__drop-container");
+    const unbound = expectDefined(
+      page.querySelector<HTMLElement>("[data-unbound-pane-id]"),
+      "[data-unbound-pane-id]",
+    );
+    const container = expectDefined(
+      page.querySelector<HTMLElement>(".chat-split-view__drop-container"),
+      ".chat-split-view__drop-container",
+    );
     mockBounds(bound, 200, 0, 200, 200);
     mockBounds(unbound, 0, 0, 200, 200);
     mockBounds(container, 0, 0, 400, 200);
@@ -710,8 +723,8 @@ describe("chat page split layout host", () => {
       dispatchSessionDrag(header, "dragover", 200);
       frame?.(0);
       await settleChatPage(page);
-      const indicator = requiredElement<HTMLElement>(
-        page,
+      const indicator = expectDefined(
+        page.querySelector<HTMLElement>(".chat-split-view__drop-indicator--center"),
         ".chat-split-view__drop-indicator--center",
       );
       expect(indicator.style.left).toBe("0px");

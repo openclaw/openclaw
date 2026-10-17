@@ -51,8 +51,6 @@ type RenderedPane = HTMLElement & {
 };
 
 const panesIn = (page: ChatPage) => [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
-const requiredElement = <T extends Element = HTMLElement>(parent: ParentNode, selector: string) =>
-  expectDefined(parent.querySelector<T>(selector), selector);
 function command(detail: UiCommandDetail) {
   window.dispatchEvent(new CustomEvent(UI_COMMAND_EVENT, { cancelable: true, detail }));
 }
@@ -99,10 +97,16 @@ describe("chat page close navigation", () => {
     setRoute({ data: { kind: "session", sessionKey: firstKey, face: "chat" }, presented: true });
     await Promise.resolve();
     flush();
-    const page = requiredElement<ChatPage>(view.container, "openclaw-chat-page");
+    const page = expectDefined(
+      view.container.querySelector<ChatPage>("openclaw-chat-page"),
+      "openclaw-chat-page",
+    );
     await settleChatPage(page);
     expect(panesIn(page).map((pane) => pane.sessionKey)).toEqual([firstKey]);
-    const firstPane = requiredElement<RenderedPane>(page, "openclaw-chat-pane");
+    const firstPane = expectDefined(
+      page.querySelector<RenderedPane>("openclaw-chat-pane"),
+      "openclaw-chat-pane",
+    );
 
     for (const presented of [false, true]) {
       setRoute({
@@ -135,7 +139,10 @@ describe("chat page close navigation", () => {
     page.data = { sessionKey: "agent:main:main", agentId: "main" };
     document.body.append(page);
     await settleChatPage(page);
-    const pane = requiredElement<RenderedPane>(page, "openclaw-chat-pane");
+    const pane = expectDefined(
+      page.querySelector<RenderedPane>("openclaw-chat-pane"),
+      "openclaw-chat-pane",
+    );
     pane.onOpenSplitView?.();
     await settleChatPage(page);
     const added = expectDefined(
@@ -334,7 +341,10 @@ describe("chat page close navigation", () => {
     const sessionKey = "agent:research:chosen";
     command({ command: { kind: "navigate", sessionKey }, agentId: "research" });
     await settleChatPage(page);
-    const admitted = requiredElement<RenderedPane>(page, "openclaw-chat-pane");
+    const admitted = expectDefined(
+      page.querySelector<RenderedPane>("openclaw-chat-pane"),
+      "openclaw-chat-pane",
+    );
     expect(admitted.paneId).toBe("saved-pane");
     await showSession(page, sessionKey);
     expect(page.querySelector("openclaw-chat-pane")).toBe(admitted);

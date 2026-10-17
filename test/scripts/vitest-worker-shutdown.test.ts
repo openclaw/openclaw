@@ -62,12 +62,6 @@ afterAll(async () => {
 });
 
 type OwnerReceipt = { owner: number; borrower: number; generation: string };
-function readReceipt<T>(file: string): T {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-function existingOwner(file: string): OwnerReceipt | undefined {
-  return fs.existsSync(file) ? readReceipt<OwnerReceipt>(file) : undefined;
-}
 
 const shutdownCases = [
   { route: "direct", phase: "disposal" },
@@ -123,6 +117,7 @@ it
         "compiler.mjs",
         `
 import fs from 'node:fs';
+import path from 'node:path';
 import {writeWorkerFixtureManifest} from ${JSON.stringify(new URL("./fixtures/vitest-worker-compiler.mjs", import.meta.url).href)};
 ${fixtureReceiptClientSource(receipts.endpoint)}
 const directory=process.argv[2];
@@ -183,7 +178,8 @@ import path from 'node:path';
 import {syncFixtureBuiltinExports} from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 ${fixtureReceiptClientSource(receipts.endpoint)}
 const root=${JSON.stringify(root)}, input=${JSON.stringify(input)};
-// Control-file readiness must work without native directory notifications.
+// CI workspaces need not provide native directory notifications. Control-file
+// readiness must remain observable without that optional filesystem facility.
 const nativeWatch=fs.watch;
 fs.watch=(directory,...args)=>{
   if(directory===root) throw new Error('Native fixture notifications unavailable');
@@ -222,7 +218,8 @@ cp.spawn=(bin,args,options)=>{
   publish(process.env.OPENCLAW_VITEST_SHARD_NAME==='ci-held'?'held-owner.json':'owner.json',{owner,borrower:child.pid,generation});
   return child;
 };
-// Probe held I/O; a signal listener could rescue a broken wrapper.
+// Node can cache process.emit before a preload replaces it. Probe held I/O
+// directly; adding a signal listener could rescue a broken wrapper instead.
 const waitForRelease=()=>new Promise(resolve=>{
   let idle=false, responsive=false;
   const check=()=>{
@@ -255,7 +252,8 @@ fs.readFile=(filename,...args)=>{
   }
   return readFile(filename,...args);
 };
-// Hold both deletion paths; only the async path can still process signals.
+// The same delayed deletion blocks synchronous callers but lets async callers
+// process signals. Neither path may finish until the external fixture releases it.
 const rm=fsp.rm, rmSync=fs.rmSync;
 fsp.rm=async(filename,...args)=>{
   if(phase==='deletion' && filename===generation) {
@@ -287,7 +285,8 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
                 "scripts/test-projects-serial.mts",
                 "test/scripts/vitest-worker-shutdown.test.ts",
               ];
-      // Keep wrappers and IPC real; control only child executables and held I/O.
+      // Keep the wrappers, IPC and process owners real; only expensive child
+      // executables and one verification read or deletion are controlled by the fixture.
       const command = workerArtifacts.fixtureLifetime.track(
         runNodeScript(
           args,
@@ -341,7 +340,8 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
           Promise.race([
             receipts.waitFor(filename, "ready"),
             command.then(() => {
-              // Separate transports can deliver completion before its receipt.
+              // Publication precedes the receipt and command completion, but their
+              // separate transports can deliver command completion first.
               if (!fs.existsSync(filename) || fs.statSync(filename).size === 0) {
                 throw new Error(`Missing shutdown receipt: ${filename}`);
               }
@@ -352,24 +352,30 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
       let owner: OwnerReceipt | undefined;
       let heldOwner: OwnerReceipt | undefined;
       try {
-        // Child readiness can beat PID receipts; join every publication before reading.
+        // Child readiness can beat the parent's PID receipts. Join every required
+        // publication before reading them.
         const ready = phase === "compilation" ? compiling : admitted;
         await Promise.all(
           [ready, ownerFile, compilerFile, ...(route === "ci-shared" ? [heldOwnerFile] : [])].map(
             (filename) => waitForReceipt(filename),
           ),
         );
-        owner = readReceipt<OwnerReceipt>(ownerFile);
-        heldOwner = route === "ci-shared" ? readReceipt<OwnerReceipt>(heldOwnerFile) : undefined;
-        const { pid: compilerPid } = readReceipt<{ pid: number }>(compilerFile);
+        owner = JSON.parse(fs.readFileSync(ownerFile, "utf8")) as OwnerReceipt;
+        heldOwner =
+          route === "ci-shared"
+            ? (JSON.parse(fs.readFileSync(heldOwnerFile, "utf8")) as OwnerReceipt)
+            : undefined;
+        const compilerPid = (JSON.parse(fs.readFileSync(compilerFile, "utf8")) as { pid: number })
+          .pid;
         if (route.startsWith("ci")) {
           const budget = route === "ci-shared" ? "1" : "2";
-          expect(readReceipt(compilerBudget)).toEqual([budget, budget]);
+          expect(JSON.parse(fs.readFileSync(compilerBudget, "utf8"))).toEqual([budget, budget]);
         }
         if (phase === "compilation") {
           expect(isProcessAlive(compilerPid)).toBe(true);
           expect(fs.existsSync(path.join(owner.generation, "manifest.json"))).toBe(false);
-          // Borrower death must allow disposal to cancel the unfinished compiler.
+          // Only the borrower dies. Its completion must let the invocation cancel
+          // the compiler, rather than waiting for that compiler before disposal.
           process.kill(owner.borrower, shutdownSignal);
           if (heldOwner) {
             await waitForReceipt(path.join(root, `owner-${owner.owner}.closed`));
@@ -385,12 +391,13 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
             expect(fs.existsSync(released)).toBe(false);
           }
         } else {
-          expect(readReceipt(admitted)).toEqual({ owner: owner.owner });
+          expect(JSON.parse(fs.readFileSync(admitted, "utf8"))).toEqual({ owner: owner.owner });
           if (phase === "admission") {
-            // Distinguish borrower failure from the retained owner's later interruption.
+            // An ordinary borrower failure cannot supply the owner's signal status.
+            // Observe a loop turn after close before interrupting the retained owner.
             fs.writeFileSync(borrowerExit, "exit");
             await waitForReceipt(borrowerClosed);
-            expect(readReceipt(borrowerClosed)).toMatchObject({
+            expect(JSON.parse(fs.readFileSync(borrowerClosed, "utf8"))).toMatchObject({
               code: 1,
               signal: null,
             });
@@ -407,14 +414,15 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
           }
           fs.writeFileSync(loopRequest, "probe");
           await waitForReceipt(responsive);
-          expect(readReceipt(responsive)).toEqual({ owner: owner.owner });
+          expect(JSON.parse(fs.readFileSync(responsive, "utf8"))).toEqual({ owner: owner.owner });
           expect(isProcessAlive(owner.owner)).toBe(true);
           expect(fs.existsSync(owner.generation)).toBe(true);
           expect(fs.existsSync(released)).toBe(false);
           release();
         }
         const result = await command;
-        expect(result, result.stderr).toMatchObject({ error: undefined, status: expectedExitCode });
+        expect(result.error, result.stderr).toBeUndefined();
+        expect(result.status, result.stderr).toBe(expectedExitCode);
         expect(result.stdout.includes("fixture borrower completed")).toBe(
           phase === "disposal" || phase === "deletion" || route === "ci-shared",
         );
@@ -440,12 +448,16 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
         if (result.error) {
           console.error(result.error, result.stderr);
         }
-        owner ??= existingOwner(ownerFile);
+        owner ??= fs.existsSync(ownerFile)
+          ? (JSON.parse(fs.readFileSync(ownerFile, "utf8")) as OwnerReceipt)
+          : undefined;
         if (owner) {
           const compilerPid = fs.existsSync(compilerFile)
-            ? readReceipt<{ pid: number }>(compilerFile).pid
+            ? (JSON.parse(fs.readFileSync(compilerFile, "utf8")) as { pid: number }).pid
             : undefined;
-          heldOwner ??= existingOwner(heldOwnerFile);
+          heldOwner ??= fs.existsSync(heldOwnerFile)
+            ? (JSON.parse(fs.readFileSync(heldOwnerFile, "utf8")) as OwnerReceipt)
+            : undefined;
           for (const pid of [
             owner.owner,
             owner.borrower,
@@ -456,7 +468,8 @@ syncFixtureBuiltinExports(["node:child_process", "node:fs", "node:fs/promises"])
             if (pid === undefined) {
               continue;
             }
-            // Command completion must have joined every nested borrower and compiler.
+            // The command joins its process tree; nested wrappers join their
+            // borrowers and compiler before their own close can settle it.
             expect(isProcessAlive(pid)).toBe(false);
             expect(
               managedChild.inspectManagedProcessGroup(
@@ -509,7 +522,7 @@ it("rejects a live borrower when its owner closes during verification", ({
         filename !== manifestFile &&
         fs.existsSync(manifestFile)
       ) {
-        const manifest = readReceipt<VitestWorkerManifest>(manifestFile);
+        const manifest: VitestWorkerManifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
         if (Object.hasOwn(manifest.inputs, filename)) {
           held = true;
           started.resolve();
@@ -562,7 +575,8 @@ it("rejects a live borrower when its owner closes during verification", ({
       );
       await nextTurn();
       expect(disposed).toBe(false);
-      expect(child).toMatchObject({ exitCode: null, signalCode: null });
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
       expect(fs.existsSync(directory)).toBe(true);
       release.resolve();
       expect(await completion, stderr).toEqual({ code: 1, signal: null });

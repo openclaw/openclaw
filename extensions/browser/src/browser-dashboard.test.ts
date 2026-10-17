@@ -27,6 +27,7 @@ const browser = vi.hoisted(() => ({
   ownership: vi.fn(),
   closeOwned: vi.fn(),
 }));
+// mock-isolation: Drive dashboard lifetime through synthetic tabs without opening a browser.
 vi.mock("./browser/client.js", () => ({ browserOpenTab: browser.open, browserTabs: browser.tabs }));
 vi.mock("./browser/cdp.helpers.js", () => ({
   resolveCdpTabOwnership: browser.ownership,

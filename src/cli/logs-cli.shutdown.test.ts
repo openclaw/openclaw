@@ -129,9 +129,15 @@ function startLogs(args: string[] = [], dispose = vi.fn(async () => {})) {
   resources.adopt({ release: dispose });
   const program = new Command();
   registerLogsCli(program);
-  const command = resources
-    .run(() => program.parseAsync(["logs", "--follow", "--json", ...args], { from: "user" }))
-    .finally(() => resources.release());
+  const command = (async () => {
+    try {
+      return await resources.run(() =>
+        program.parseAsync(["logs", "--follow", "--json", ...args], { from: "user" }),
+      );
+    } finally {
+      await resources.release();
+    }
+  })();
   // Same command-completion gate and resource owner used by executable CLI cleanup.
   const finished = command.then(
     () => {},

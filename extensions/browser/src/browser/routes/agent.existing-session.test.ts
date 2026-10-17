@@ -50,6 +50,7 @@ const navigation = vi.hoisted(() => ({
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
+// mock-isolation: Supply deterministic browser documents and effects without a live Chrome session.
 vi.mock("../chrome-mcp.js", () => ({
   ...mcp,
   closeChromeMcpTab: vi.fn(async () => {}),
@@ -60,8 +61,10 @@ vi.mock("../chrome-mcp.js", () => ({
   resizeChromeMcpPage: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Route screenshot capture through the same controlled transport fixture.
 vi.mock("../chrome-mcp-actions.js", () => ({
-  takeChromeMcpScreenshotOnTarget: mcp.takeChromeMcpScreenshot,
+  takeChromeMcpScreenshotOnTarget: async (params: unknown) =>
+    await mcp.takeChromeMcpScreenshot(params),
 }));
 
 vi.mock("../chrome-mcp-routing.js", async (importOriginal) => ({
@@ -102,8 +105,10 @@ vi.mock("../chrome-mcp-routing.js", async (importOriginal) => ({
   ),
 }));
 
+// mock-isolation: Existing-session routes must not connect through the managed CDP transport.
 vi.mock("../cdp.js", () => ({ captureScreenshot: vi.fn(), snapshotAria: vi.fn() }));
 
+// mock-isolation: Observe route policy calls without resolving or connecting to fixture URLs.
 vi.mock("../navigation-guard.js", () => navigation);
 
 vi.mock("../pw-ai-module.js", () => ({

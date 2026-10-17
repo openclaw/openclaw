@@ -56,6 +56,7 @@ vi.mock("../pw-ai-module.js", () => ({
   getLoadedPwAiModule: () => null,
 }));
 
+// mock-isolation: Keep managed snapshot capture in the synthetic CDP fixture, not a live browser.
 vi.mock("../cdp.js", () => ({
   captureScreenshot: vi.fn(),
   ...cdp,

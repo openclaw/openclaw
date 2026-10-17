@@ -83,7 +83,7 @@ it.each<{ source: string; reason?: string }>([
     } else {
       expect(source).not.toBe("canonical");
     }
-    const stdout = responses[command];
+    const stdout = responses[command]!;
     return { status: stdout ? 0 : 1, stdout, stderr: "", pid: 0, output: [], signal: null };
   });
   const notice = vi.spyOn(console, "error").mockImplementation(() => {});

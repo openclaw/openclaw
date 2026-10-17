@@ -91,7 +91,8 @@ export -f timeout docker rpm dnf useradd
 ${stepRun("fedora-installer", "install.sh on Fedora")}`,
       { PATH: root, INSTALL_USER: "non-root" },
     );
-    expect(result, result.stderr).toMatchObject({ error: undefined, status: dnfCode });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(dnfCode);
     expect(result.stdout.trim().split(/\r?\n/u)).toEqual(output);
   });
 

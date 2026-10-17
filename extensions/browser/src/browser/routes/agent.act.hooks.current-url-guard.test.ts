@@ -22,10 +22,12 @@ const pwMocks = vi.hoisted(() => ({
   setInputFilesViaPlaywright: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Observe rejected hook effects without connecting to a live Chrome session.
 vi.mock("../chrome-mcp.js", () => mcp);
 
 vi.mock("../paths.js", () => pathMocks);
 
+// mock-isolation: Keep hook effects in the controlled Playwright fixture without loading a browser.
 vi.mock("../pw-ai-module.js", () => ({ getPwAiModule: vi.fn(async () => pwMocks) }));
 
 const { registerBrowserAgentActHookRoutes } = await import("./agent.act.hooks.js");

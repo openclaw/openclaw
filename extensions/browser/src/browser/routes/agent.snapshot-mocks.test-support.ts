@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 
+// mock-isolation: Test snapshot publication with synthetic image bytes, without invoking image codecs.
 vi.mock("../screenshot.js", () => ({
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES: 128,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE: 64,

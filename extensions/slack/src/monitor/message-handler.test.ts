@@ -335,7 +335,7 @@ describe("createSlackMessageHandler", () => {
     expect(prepared.turnAdoptionLifecycle?.abortSignal).toBe(turnAdoptionLifecycle.abortSignal);
     await prepared.turnAdoptionLifecycle?.onAdopted();
     expect(turnAdoptionLifecycle.onAdopted).toHaveBeenCalledTimes(1);
-    prepared.turnAdoptionLifecycle?.onDeferred();
+    prepared.turnAdoptionLifecycle?.onDeferred?.();
     expect(turnAdoptionLifecycle.onDeferred).toHaveBeenCalledTimes(1);
   });
 

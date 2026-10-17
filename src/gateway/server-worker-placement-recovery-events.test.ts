@@ -45,6 +45,7 @@ vi.mock("./server-worker-placement-session-evidence.js", () => ({
 }));
 
 import { getRuntimeConfig } from "../config/config.js";
+import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import {
@@ -86,7 +87,7 @@ function createRecoveryRuntime(options: {
   startup?: PlacementTransition;
   sweep?: PlacementTransition;
   evidence?: "current" | "absent";
-  broadcast?: () => void;
+  broadcast?: GatewayBroadcastToConnIdsFn;
   hasContext?: boolean;
   hasSubscribers?: boolean;
   environmentRows?: Map<string, WorkerEnvironmentPlacementFacts>;

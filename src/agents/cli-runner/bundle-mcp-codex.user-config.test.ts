@@ -1,6 +1,7 @@
 /** Tests projecting OpenClaw user MCP servers into Codex app-server config. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServerConfig } from "../../config/types.mcp.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "./bundle-mcp-codex.js";
 
 const project = (

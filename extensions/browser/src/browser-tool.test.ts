@@ -44,11 +44,12 @@ beforeEach(resetBrowserToolMocks);
 afterEach(resetBrowserToolMocks);
 
 type ImageParams = Parameters<typeof runtime.imageResultFromFile>[0];
-const sessionKey = "agent:main:main";
-const session = { agentSessionKey: sessionKey };
-const managedNodeRoute = { status: "resolved", profile: "openclaw", driver: "openclaw" } as const;
 const hostUnavailableMessage = "Browser control host is not reachable on 127.0.0.1:18791.";
-const existingSessionProfile = { driver: "existing-session", attachOnly: true, color: "#00AA00" };
+const existingSessionProfile = {
+  driver: "existing-session",
+  attachOnly: true,
+  color: "#00AA00",
+};
 
 function execute(
   input: Record<string, unknown>,
@@ -56,29 +57,6 @@ function execute(
   signal?: AbortSignal,
 ) {
   return createBrowserTool(options).execute("call-1", input, signal);
-}
-
-function hostTab(targetId: string) {
-  return { sessionKey, targetId, route: { kind: "browser-control" }, profile: "openclaw" };
-}
-
-function expectUnused(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
-
-function expectTextIncludes(text: string, ...fragments: string[]) {
-  for (const fragment of fragments) {
-    expect(text).toContain(fragment);
-  }
-}
-
-function abortDuring(controller: AbortController, error: Error) {
-  return async () => {
-    controller.abort(error);
-    throw error;
-  };
 }
 
 function durableOwnership(nativeTargetId: string) {
@@ -151,7 +129,8 @@ it.each(["open", "close", "snapshot"] as const)(
       },
       { scopes: ["operator.admin"], signal },
     );
-    expectUnused(client.browserOpenTab, client.browserCloseTab);
+    expect(client.browserOpenTab).not.toHaveBeenCalled();
+    expect(client.browserCloseTab).not.toHaveBeenCalled();
   },
 );
 
@@ -159,12 +138,17 @@ function mockCallArg<T>(
   { mock: { calls } }: { mock: { calls: unknown[][] } },
   callIndex: number,
   argIndex: number,
+  _type?: (value: unknown) => value is T,
 ): T {
   return expectDefined(calls.at(callIndex), `Missing mock call ${callIndex}`)[argIndex] as T;
 }
 
-function lastMockCallArg<T>(mock: { mock: { calls: unknown[][] } }, argIndex: number): T {
-  return mockCallArg<T>(mock, -1, argIndex);
+function lastMockCallArg<T>(
+  mock: { mock: { calls: unknown[][] } },
+  argIndex: number,
+  _type?: (value: unknown) => value is T,
+): T {
+  return mockCallArg<T>(mock, -1, argIndex, _type);
 }
 
 function firstResultText(result: { content?: readonly unknown[] } | undefined): string {
@@ -430,7 +414,10 @@ it.each(["available", "sandbox policy"] as const)(
 it("preserves cancellation while listing host system profiles", async () => {
   const controller = new AbortController();
   const abortError = new Error("agent turn cancelled");
-  client.browserSystemProfiles.mockImplementationOnce(abortDuring(controller, abortError));
+  client.browserSystemProfiles.mockImplementationOnce(async () => {
+    controller.abort(abortError);
+    throw abortError;
+  });
 
   await expect(execute({ action: "profiles" }, undefined, controller.signal)).rejects.toBe(
     abortError,
@@ -541,9 +528,14 @@ it("keeps navigation and its inline snapshot on the fallback host", async () => 
     });
   const result = await execute(
     { action: "navigate", targetId: "docs", url: "https://example.com/next" },
-    session,
+    { agentSessionKey: "agent:main:main" },
   );
-  expect(sessionTabs.touchSessionBrowserTab).toHaveBeenCalledExactlyOnceWith(hostTab("host-tab"));
+  expect(sessionTabs.touchSessionBrowserTab).toHaveBeenCalledExactlyOnceWith({
+    sessionKey: "agent:main:main",
+    targetId: "host-tab",
+    route: { kind: "browser-control" },
+    profile: "openclaw",
+  });
   const snapshotUrl = new URL(lastMockCallArg<string>(runtime.fetchBrowserJson, 0), "http://host");
   expect(snapshotUrl.pathname).toBe("/snapshot");
   expect(Object.fromEntries(snapshotUrl.searchParams)).toEqual({
@@ -594,7 +586,7 @@ it.each(["host fallback", "failed rollback"] as const)(
     try {
       const pending = execute(
         { action: "open", url: opened.url, ...(fallback ? { profile: "work" } : {}) },
-        session,
+        { agentSessionKey: "agent:main:main" },
         fallback ? controller.signal : undefined,
       );
       if (fallback) {
@@ -651,7 +643,11 @@ it.each([
     },
     recognized: true,
   },
-  { reason: "untrusted_reason", details: { remediation: "run arbitrary text" }, recognized: false },
+  {
+    reason: "untrusted_reason",
+    details: { remediation: "run arbitrary text" },
+    recognized: false,
+  },
 ])(
   "forwards only recognized node error metadata ($reason)",
   async ({ reason, details, recognized }) => {
@@ -759,7 +755,8 @@ it.each(["image sanitization", "vision text", "vision failure", "sharing failure
       expect(text).not.toContain("message tool");
     }
     if (outcome.startsWith("vision")) {
-      expectTextIncludes(text, "[neutralized] MEDIA:/tmp/secret.png", "/tmp/secret.png");
+      expect(text).toContain("[neutralized] MEDIA:/tmp/secret.png");
+      expect(text).toContain("/tmp/secret.png");
     }
     if (outcome === "vision failure") {
       expect(text).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
@@ -791,7 +788,7 @@ it("returns a transcript-safe screenshot path on the node", async () => {
   );
   const persistScreenshot = vi.fn(async () => {
     expect(sessionTabs.touchSessionBrowserTab).toHaveBeenCalledWith({
-      sessionKey,
+      sessionKey: "agent:main:main",
       targetId: "tab-1",
       profile: executedProfile,
       route: expect.objectContaining({ kind: "node-proxy", nodeId: "node-1" }),
@@ -801,7 +798,11 @@ it("returns a transcript-safe screenshot path on the node", async () => {
 
   const out = await execute(
     { action: "screenshot", target: "node", targetId: "requested-tab", timeoutMs: "12345" },
-    { ...session, screenshotResultMode: "path", persistScreenshot },
+    {
+      agentSessionKey: "agent:main:main",
+      screenshotResultMode: "path",
+      persistScreenshot,
+    },
   );
 
   expect(nodeInvokeCall(-1)).toMatchObject({
@@ -899,7 +900,8 @@ it("cancels automatic user-browser discovery with the agent signal", async () =>
   await expect(
     execute({ action: "status", profile: "user" }, undefined, controller.signal),
   ).rejects.toBe(abortError);
-  expectUnused(client.browserStatus, gateway.callGatewayTool);
+  expect(client.browserStatus).not.toHaveBeenCalled();
+  expect(gateway.callGatewayTool).not.toHaveBeenCalled();
 });
 
 it.each(["disconnected pin", "available host"] as const)(
@@ -928,6 +930,7 @@ it.each(["disconnected pin", "available host"] as const)(
       expect(client.browserStatus).not.toHaveBeenCalled();
     } else {
       const result = await pending;
+      expect(lastMockCallArg<{ profile?: string }>(client.browserStatus, 1).profile).toBe(profile);
       expect(result.details).toMatchObject({ ok: true, running: true });
       expect(client.browserStatus).toHaveBeenCalledWith(undefined, { profile });
       expect(nodes.listNodes).not.toHaveBeenCalled();
@@ -960,7 +963,8 @@ describe("browser tool standalone routing", () => {
 
     expect(client.browserStatus).toHaveBeenCalledTimes(2);
     expect(client.browserStatus).toHaveBeenCalledWith(undefined, { profile: "openclaw" });
-    expectUnused(nodes.listNodes, gateway.callGatewayTool);
+    expect(nodes.listNodes).not.toHaveBeenCalled();
+    expect(gateway.callGatewayTool).not.toHaveBeenCalled();
   });
 
   it.each<{
@@ -969,7 +973,10 @@ describe("browser tool standalone routing", () => {
     gatewayUrl?: string;
   }>([
     { name: "explicit automatic routing", gateway: { nodes: { browser: { mode: "auto" } } } },
-    { name: "a configured remote URL", gateway: { remote: { url: "wss://gateway.example.com" } } },
+    {
+      name: "a configured remote URL",
+      gateway: { remote: { url: "wss://gateway.example.com" } },
+    },
     { name: "an environment-selected Gateway", gatewayUrl: "wss://gateway.example.com" },
   ])(
     "preserves discovery errors for $name without an in-process Gateway",
@@ -981,7 +988,8 @@ describe("browser tool standalone routing", () => {
 
       await expect(execute({ action: "status" })).rejects.toBe(error);
       expect(nodes.listNodes).toHaveBeenCalledTimes(1);
-      expectUnused(client.browserStatus, gateway.callGatewayTool);
+      expect(client.browserStatus).not.toHaveBeenCalled();
+      expect(gateway.callGatewayTool).not.toHaveBeenCalled();
     },
   );
 
@@ -1014,11 +1022,11 @@ it("keeps legacy sandbox ownership without a resolved profile volatile", async (
   });
   const result = await execute(
     { action: "open", target: "sandbox", url: "https://example.com" },
-    { ...session, sandboxBridgeUrl: "http://127.0.0.1:9999" },
+    { agentSessionKey: "agent:main:main", sandboxBridgeUrl: "http://127.0.0.1:9999" },
   );
   expect(sessionTabs.trackSessionBrowserTab).toHaveBeenCalledWith(
     expect.objectContaining({
-      sessionKey,
+      sessionKey: "agent:main:main",
       targetId: "legacy-tab",
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
       profile: undefined,
@@ -1055,7 +1063,7 @@ it.each([
     );
     await execute(
       { action: "open", target: "node", url: "https://example.com" },
-      session,
+      { agentSessionKey: "agent:main:main" },
       controller.signal,
     );
     const tracked = mockCallArg<{ route: BrowserSessionTabRoute }>(
@@ -1100,9 +1108,17 @@ it("touches the canonical dialog target after automatic host fallback", async ()
   gateway.callGatewayTool.mockRejectedValueOnce(new Error(hostUnavailableMessage));
   runtime.fetchBrowserJson.mockResolvedValueOnce({ ok: true, targetId: "RAW-DIALOG" });
 
-  await execute({ action: "dialog", accept: true, targetId: "docs" }, session);
+  await execute(
+    { action: "dialog", accept: true, targetId: "docs" },
+    { agentSessionKey: "agent:main:main" },
+  );
 
-  expect(sessionTabs.touchSessionBrowserTab).toHaveBeenCalledWith(hostTab("RAW-DIALOG"));
+  expect(sessionTabs.touchSessionBrowserTab).toHaveBeenCalledWith({
+    sessionKey: "agent:main:main",
+    targetId: "RAW-DIALOG",
+    route: { kind: "browser-control" },
+    profile: "openclaw",
+  });
 });
 
 it.each(["host cancellation", "node failure"] as const)(
@@ -1126,7 +1142,10 @@ it.each(["host cancellation", "node failure"] as const)(
         );
     } else {
       actions.browserNavigate.mockResolvedValueOnce(navigated);
-      client.browserSnapshot.mockImplementationOnce(abortDuring(controller, abortError));
+      client.browserSnapshot.mockImplementationOnce(async () => {
+        controller.abort(abortError);
+        throw abortError;
+      });
     }
     const pending = execute(
       { action: "navigate", url: navigated.url },
@@ -1158,23 +1177,23 @@ it.each(["host cancellation", "node failure"] as const)(
   },
 );
 
-it("rejects credentialed open URLs before dispatch", async () => {
+it.each(["open"])("rejects credentialed %s URLs before dispatch", async (action) => {
   mockSingleBrowserProxyNode();
   const tool = createBrowserTool();
   for (const target of ["host", "node"] as const) {
     for (const url of ["https://user:secret@example.com/path", "https://user:secret@"]) {
-      const error = await tool
-        .execute("call-1", { action: "open", target, url, targetId: "tab-1" })
-        .then(
-          () => new Error("credentialed URL was accepted"),
-          (cause: unknown) => cause,
-        );
+      const error = await tool.execute("call-1", { action, target, url, targetId: "tab-1" }).then(
+        () => new Error("credentialed URL was accepted"),
+        (cause: unknown) => cause,
+      );
       expect(error).toBeInstanceOf(Error);
       expect(String(error)).not.toContain("secret");
     }
   }
 
-  expectUnused(actions.browserNavigate, client.browserOpenTab, gateway.callGatewayTool);
+  expect(actions.browserNavigate).not.toHaveBeenCalled();
+  expect(client.browserOpenTab).not.toHaveBeenCalled();
+  expect(gateway.callGatewayTool).not.toHaveBeenCalled();
 });
 
 it.each(["docs", undefined])(
@@ -1183,16 +1202,18 @@ it.each(["docs", undefined])(
     const result = { ok: true, targetId: "canonical", url: "https://example.com" };
     if (targetId) {
       mockSingleBrowserProxyNode();
-      gateway.callGatewayTool.mockResolvedValueOnce(nodeReply(result, managedNodeRoute));
+      gateway.callGatewayTool.mockResolvedValueOnce(
+        nodeReply(result, { status: "resolved", profile: "openclaw", driver: "openclaw" }),
+      );
     } else {
       actions.browserAct.mockResolvedValueOnce(result);
     }
     const closed = await execute(
       { action: "close", targetId, target: targetId ? "node" : "host" },
-      session,
+      { agentSessionKey: "agent:main:main" },
     );
     expect(sessionTabs.untrackSessionBrowserTab).toHaveBeenCalledWith({
-      sessionKey,
+      sessionKey: "agent:main:main",
       targetId: "canonical",
       route: targetId
         ? expect.objectContaining({ kind: "node-proxy", nodeId: "node-1" })
@@ -1219,9 +1240,16 @@ it.each(["docs", undefined])(
 it("never creates tracking records from tab listing or focus", async () => {
   client.browserTabs.mockResolvedValueOnce({
     running: true,
-    tabs: [{ targetId: "USER-TAB", tabId: "t1", title: "User tab", url: "https://example.com" }],
+    tabs: [
+      {
+        targetId: "USER-TAB",
+        tabId: "t1",
+        title: "User tab",
+        url: "https://example.com",
+      },
+    ],
   });
-  const tool = createBrowserTool(session);
+  const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
 
   await tool.execute("call-1", { action: "tabs", target: "host" });
   client.browserFocusTab.mockResolvedValueOnce({ ok: true, targetId: "USER-TAB" });
@@ -1239,22 +1267,28 @@ it("never creates tracking records from tab listing or focus", async () => {
   });
 });
 
-it("retires session ownership after act:batch close", async () => {
-  actions.browserAct.mockResolvedValueOnce({
-    ok: true,
-    targetId: "closed-tab",
-    results: [{ ok: true }],
-    aborted: { reason: "closed", afterAction: 1, url: "https://example.com", skipped: 0 },
-  });
-  await execute(
-    {
-      action: "act",
-      request: { kind: "batch", targetId: "closed-tab", actions: [{ kind: "close" }] },
+it.each([
+  {
+    name: "batch close",
+    request: { kind: "batch", targetId: "closed-tab", actions: [{ kind: "close" }] },
+    result: {
+      ok: true,
+      targetId: "closed-tab",
+      results: [{ ok: true }],
+      aborted: { reason: "closed", afterAction: 1, url: "https://example.com", skipped: 0 },
     },
-    session,
-  );
+  },
+])("retires session ownership after act:$name", async ({ request, result }) => {
+  actions.browserAct.mockResolvedValueOnce(result);
 
-  expect(sessionTabs.untrackSessionBrowserTab).toHaveBeenCalledWith(hostTab("closed-tab"));
+  await execute({ action: "act", request }, { agentSessionKey: "agent:main:main" });
+
+  expect(sessionTabs.untrackSessionBrowserTab).toHaveBeenCalledWith({
+    sessionKey: "agent:main:main",
+    targetId: "closed-tab",
+    route: { kind: "browser-control" },
+    profile: "openclaw",
+  });
   expect(sessionTabs.touchSessionBrowserTab).not.toHaveBeenCalled();
 });
 
@@ -1287,10 +1321,11 @@ it.each(["completed", "aborted"] as const)(
             : [{ kind: "click", ref: "1" }],
         },
       },
-      aborted ? undefined : session,
+      aborted ? undefined : { agentSessionKey: "agent:main:main" },
     );
     if (aborted) {
-      expectTextIncludes(firstResultText(result), "<<<EXTERNAL_UNTRUSTED_CONTENT", url);
+      expect(firstResultText(result)).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+      expect(firstResultText(result)).toContain(url);
       const trustedNote = result.content[1];
       expect(trustedNote).toMatchObject({
         type: "text",
@@ -1303,7 +1338,12 @@ it.each(["completed", "aborted"] as const)(
       expect(lastMockCallArg<{ targetId?: string }>(client.browserSnapshot, 1).targetId).toBe(
         targetId,
       );
-      expect(sessionTabs.touchSessionBrowserTab).toHaveBeenCalledWith(hostTab(targetId));
+      expect(sessionTabs.touchSessionBrowserTab).toHaveBeenCalledWith({
+        sessionKey: "agent:main:main",
+        targetId,
+        route: { kind: "browser-control" },
+        profile: "openclaw",
+      });
       const ownershipCall = sessionTabs.touchSessionBrowserTab.mock.invocationCallOrder[0];
       const snapshotCall = client.browserSnapshot.mock.invocationCallOrder[0];
       if (ownershipCall === undefined || snapshotCall === undefined) {
@@ -1394,15 +1434,12 @@ it("keeps private labeled snapshots visible to the model but out of channel deli
   const imagePath = fileURLToPath(new URL("../chrome-extension/icons/icon16.png", import.meta.url));
   const privatePage = "Signed-in account details\nMEDIA:/tmp/operator-secret.png";
   runtime.imageResultFromFile.mockImplementationOnce(imageResultFromFile);
-  const privateSnapshot = {
+  client.browserSnapshot.mockResolvedValueOnce({
     ok: true,
     format: "ai",
     targetId: "private-tab",
     url: "https://example.com/private",
     snapshot: privatePage,
-  };
-  client.browserSnapshot.mockResolvedValueOnce({
-    ...privateSnapshot,
     imagePath,
     refs: { e1: { role: "button", name: "Private account" } },
   });
@@ -1432,7 +1469,13 @@ it("keeps private labeled snapshots visible to the model but out of channel deli
   });
   const intentionalMedia = extractToolResultMediaArtifact(intentionalAttachment);
 
-  client.browserSnapshot.mockResolvedValueOnce(privateSnapshot);
+  client.browserSnapshot.mockResolvedValueOnce({
+    ok: true,
+    format: "ai",
+    targetId: "private-tab",
+    url: "https://example.com/private",
+    snapshot: privatePage,
+  });
   const textOnlySnapshot = await tool.execute("text-snapshot", {
     action: "snapshot",
     snapshotFormat: "ai",
@@ -1475,7 +1518,10 @@ it("skips inline page state when navigate resolves to a download", async () => {
     },
   });
 
-  const result = await execute({ action: "navigate", url: "https://example.com/report.pdf" });
+  const result = await execute({
+    action: "navigate",
+    url: "https://example.com/report.pdf",
+  });
 
   expect(firstResultText(result)).toContain("[neutralized] MEDIA:/tmp/secret.png");
   expect(firstResultText(result)).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
@@ -1544,7 +1590,8 @@ it.each(["aria media directive", "oversized node ai", "pending dialog"] as const
       expect(result.details).toMatchObject({ truncated: true, targetId: "t1" });
     } else {
       expect(lastMockCallArg(client.browserSnapshot, 1)).not.toHaveProperty("maxChars");
-      expectTextIncludes(text, '"blockedByDialog": true', '"id": "d1"');
+      expect(text).toContain('"blockedByDialog": true');
+      expect(text).toContain('"id": "d1"');
       expect(result.details).toMatchObject({
         ok: true,
         externalContent: { untrusted: true, source: "browser", kind: "snapshot" },
@@ -1568,8 +1615,16 @@ it("hard-caps model-visible browser JSON with console guidance", async () => {
   });
   actions.browserConsoleMessages.mockResolvedValueOnce({ ok: true, targetId: "t1", messages });
 
-  const result = await execute({ action: "console", targetId: "docs" }, session);
-  expect(sessionTabs.touchSessionBrowserTab).toHaveBeenCalledWith(hostTab("t1"));
+  const result = await execute(
+    { action: "console", targetId: "docs" },
+    { agentSessionKey: "agent:main:main" },
+  );
+  expect(sessionTabs.touchSessionBrowserTab).toHaveBeenCalledWith({
+    sessionKey: "agent:main:main",
+    targetId: "t1",
+    route: { kind: "browser-control" },
+    profile: "openclaw",
+  });
   const text = firstResultText(result);
 
   expect(text.length).toBeLessThanOrEqual(16_000);
@@ -1745,7 +1800,12 @@ describe("browser observation actions and tab previews", () => {
           : { ok: true, targetId: "canonical", url: "https://example.com", errors };
       mockSingleBrowserProxyNode();
       gateway.callGatewayTool.mockResolvedValueOnce(
-        nodeReply(payload, action === "errors" ? managedNodeRoute : undefined),
+        nodeReply(
+          payload,
+          action === "errors"
+            ? { status: "resolved", profile: "openclaw", driver: "openclaw" }
+            : undefined,
+        ),
       );
       const input =
         action === "requests"
@@ -1769,12 +1829,14 @@ describe("browser observation actions and tab previews", () => {
       });
       if (action === "requests") {
         expect(text.length).toBeLessThanOrEqual(16_000);
-        expectTextIncludes(text, '"returned": 1', '"id": "latest"');
+        expect(text).toContain('"returned": 1');
+        expect(text).toContain('"id": "latest"');
         expect(text).not.toContain('"id": "large"');
       } else {
         expect(text).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
         expect(text).not.toContain('"message": "page-error-9"');
-        expectTextIncludes(text, '"message": "page-error-10"', '"message": "page-error-59"');
+        expect(text).toContain('"message": "page-error-10"');
+        expect(text).toContain('"message": "page-error-59"');
         expect(result.details).toMatchObject({
           externalContent: { untrusted: true, kind: "errors", wrapped: true },
           browserTab: {
@@ -1856,7 +1918,10 @@ describe("browser observation actions and tab previews", () => {
     mockSingleBrowserProxyNode();
     for (let index = 0; index < 4; index++) {
       gateway.callGatewayTool.mockResolvedValueOnce(
-        nodeReply({ ok: true, targetId: "canonical" }, managedNodeRoute),
+        nodeReply(
+          { ok: true, targetId: "canonical" },
+          { status: "resolved", profile: "openclaw", driver: "openclaw" },
+        ),
       );
     }
     const result = await execute({
@@ -1966,10 +2031,22 @@ describe("browser observation actions and tab previews", () => {
         ...(format === "aria"
           ? { nodes: snapshotNodes }
           : {
-              snapshot: '- button "Sign in" [ref=e1]',
+              snapshot:
+                outcome === "matching"
+                  ? '- button "Sign in" [ref=e1]\n- button "Sign out" [ref=e2]'
+                  : '- button "Sign in" [ref=e1]',
               ...(outcome === "empty"
-                ? { stats: { lines: 1, chars: 25, refs: 1, interactive: 1 } }
-                : { refs: { e1: { role: "button" } } }),
+                ? {
+                    stats: { lines: 1, chars: 25, refs: 1, interactive: 1 },
+                  }
+                : outcome === "capped"
+                  ? {
+                      refs: { e1: { role: "button" } },
+                    }
+                  : {
+                      refs: Object.fromEntries(snapshotNodes.map((node) => [node.ref, node])),
+                      stats: { lines: 2, chars: 100, refs: 2, interactive: 2 },
+                    }),
             }),
       });
       const result = await execute({
@@ -1983,7 +2060,8 @@ describe("browser observation actions and tab previews", () => {
           .filter((item) => item.type === "text")
           .map((item) => item.text)
           .join("\n");
-        expectTextIncludes(text, "1 matching line", "[ref=e1]");
+        expect(text).toContain("1 matching line");
+        expect(text).toContain("[ref=e1]");
         expect(text).not.toContain("[ref=e2]");
         expect(result.details).toMatchObject({
           matchCount: 1,
@@ -1992,7 +2070,8 @@ describe("browser observation actions and tab previews", () => {
           browserTab: { targetId: "t1" },
         });
       } else if (outcome === "empty") {
-        expectTextIncludes(firstResultText(result), "No matching lines", "Refine");
+        expect(firstResultText(result)).toContain("No matching lines");
+        expect(firstResultText(result)).toContain("Refine");
         expect(result.details).toMatchObject({
           matchCount: 0,
           refs: 0,
@@ -2089,7 +2168,12 @@ it.each<{
   route: "host" | "node" | "sandbox" | "blocked";
   guidance: string;
 }>([
-  { name: "manual pin", policy: pin, route: "node", guidance: "Default: configured browser node." },
+  {
+    name: "manual pin",
+    policy: pin,
+    route: "node",
+    guidance: "Default: configured browser node.",
+  },
   {
     name: "manual without pin",
     policy: { mode: "manual" },
@@ -2149,7 +2233,8 @@ it.each<{
   }
   expect(tool.description).toContain(scenario.guidance);
   if (scenario.route === "host") {
-    expectTextIncludes(tool.description, "action=profiles", "Do not assume a profile name");
+    expect(tool.description).toContain("action=profiles");
+    expect(tool.description).toContain("Do not assume a profile name");
     expect(tool.description).not.toContain('profile="user"');
     expect(tool.description).toContain("omit timeoutMs on act:type");
     expect(tool.description).toContain("act:evaluate supports timeoutMs");

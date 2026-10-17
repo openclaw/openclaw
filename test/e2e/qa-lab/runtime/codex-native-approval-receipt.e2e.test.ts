@@ -75,19 +75,19 @@ function readJsonLines(filePath: string): AppServerLogEntry[] {
   }
 }
 
-function queryApproval<T>(owner: OpenClawTestInstance, sql: string, ...args: string[]) {
+function queryApproval(owner: OpenClawTestInstance, sql: string, ...args: string[]) {
   const database = new DatabaseSync(path.join(owner.stateDir, "state", "openclaw.sqlite"), {
     readOnly: true,
   });
   try {
-    return database.prepare(sql).get(...args) as T;
+    return database.prepare(sql).get(...args);
   } finally {
     database.close();
   }
 }
 
 function readApprovalIdentity(testInstance: OpenClawTestInstance, approvalId: string) {
-  return queryApproval<ApprovalIdentityRow | undefined>(
+  return queryApproval(
     testInstance,
     `SELECT approval.source_agent_id, approval.source_session_key, approval.source_run_id,
             approval.source_tool_call_id, approval.source_tool_name,
@@ -97,7 +97,7 @@ function readApprovalIdentity(testInstance: OpenClawTestInstance, approvalId: st
          ON binding.approval_id = approval.approval_id
       WHERE approval.approval_id = ?`,
     approvalId,
-  );
+  ) as ApprovalIdentityRow | undefined;
 }
 
 function assertNoGenericDuplicate(testInstance: OpenClawTestInstance, approvalId: string) {
@@ -107,7 +107,7 @@ function assertNoGenericDuplicate(testInstance: OpenClawTestInstance, approvalId
     "execution_decision_facts",
   );
   if (table) {
-    const row = queryApproval<{ count: number }>(
+    const row = queryApproval(
       testInstance,
       `SELECT COUNT(*) AS count FROM execution_decision_facts
         WHERE owner = 'operator_approvals' OR source_ref = (
@@ -115,7 +115,7 @@ function assertNoGenericDuplicate(testInstance: OpenClawTestInstance, approvalId
         )`,
       approvalId,
     );
-    expect(row.count).toBe(0);
+    expect(row?.count).toBe(0);
   }
 }
 

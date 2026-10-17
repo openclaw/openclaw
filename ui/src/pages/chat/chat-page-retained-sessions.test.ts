@@ -64,9 +64,8 @@ type RenderedPane = HTMLElement & {
 };
 
 const paneTag = "openclaw-chat-pane";
-const requiredElement = <T extends Element = HTMLElement>(parent: ParentNode, selector: string) =>
-  expectDefined(parent.querySelector<T>(selector), selector);
-const paneIn = (page: ChatPage) => requiredElement<RenderedPane>(page, paneTag);
+const paneIn = (page: ChatPage) =>
+  expectDefined(page.querySelector<RenderedPane>(paneTag), paneTag);
 function command(detail: UiCommandDetail) {
   const event = new CustomEvent(UI_COMMAND_EVENT, { detail, cancelable: true });
   window.dispatchEvent(event);
@@ -794,7 +793,10 @@ describe("chat page retained sessions", () => {
       });
       document.body.append(page);
       await settleChatPage(page);
-      requiredElement(page, "[data-unbound-pane-id]").focus();
+      expectDefined(
+        page.querySelector<HTMLElement>("[data-unbound-pane-id]"),
+        "[data-unbound-pane-id]",
+      ).focus();
       await settleChatPage(page);
       if (reason === "canonical replacement") {
         expect(route("New title")).not.toBe(route("Old title"));
@@ -874,7 +876,10 @@ describe("chat page retained sessions", () => {
         pending = router.navigate("dashboard", context);
         await entered.promise;
         expect(page.data).toBe(initial);
-        requiredElement(page, "[data-unbound-pane-id]").focus();
+        expectDefined(
+          page.querySelector<HTMLElement>("[data-unbound-pane-id]"),
+          "[data-unbound-pane-id]",
+        ).focus();
         await settleChatPage(page);
         if (chooseAgain) {
           const owner = Object.assign(document.createElement("nav"), {

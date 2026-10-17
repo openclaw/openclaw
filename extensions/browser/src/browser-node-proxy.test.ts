@@ -48,6 +48,7 @@ vi.mock("./browser/proxy-files.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./browser/proxy-files.js")>()),
   persistBrowserProxyResultFiles: runtime.persistBrowserProxyResultFiles,
 }));
+// mock-isolation: Supply upload admission outcomes without reading or transferring local files.
 vi.mock("./browser-proxy-upload.js", () => uploads);
 
 import { createBrowserNodeProxyRequest } from "./browser-node-proxy.js";
