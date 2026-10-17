@@ -34,6 +34,20 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+async function writeResourceSkill(
+  root: string,
+  name: string,
+  host: "Gateway project" | "Node agent",
+) {
+  const dir = path.join(root, "skills", name);
+  await writeSkill({
+    dir,
+    name,
+    description: `${host === "Gateway project" ? "Canonical project" : "Remote agent"} skill`,
+    body: `${host} instructions`,
+  });
+  await fs.writeFile(path.join(dir, "resource.txt"), `${host} resource`);
+}
 afterEach(async () => {
   await closeSkillsWatchers(true);
   await closeOpenClawStateDatabaseAsync();
@@ -64,16 +78,7 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
     if (kind === "repository") {
       await fs.mkdir(source);
       await requireGit(source, ["init", "-b", "main"]);
-      await writeSkill({
-        dir: path.join(source, "skills", "project-only"),
-        name: "project-only",
-        description: "Canonical project skill",
-        body: "Gateway project instructions",
-      });
-      await fs.writeFile(
-        path.join(source, "skills", "project-only", "resource.txt"),
-        "Gateway project resource",
-      );
+      await writeResourceSkill(source, "project-only", "Gateway project");
       await requireGit(source, ["add", "."]);
       await requireGit(source, [
         "-c",
@@ -94,16 +99,7 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
             baseRef: "HEAD",
             runSetupScript: false,
           });
-    await writeSkill({
-      dir: path.join(remote, "skills", "agent-only"),
-      name: "agent-only",
-      description: "Remote agent skill",
-      body: "Node agent instructions",
-    });
-    await fs.writeFile(
-      path.join(remote, "skills", "agent-only", "resource.txt"),
-      "Node agent resource",
-    );
+    await writeResourceSkill(remote, "agent-only", "Node agent");
     const policy = {
       allowReadPaths: [remote, remote + "/**"],
       allowWritePaths: [],
@@ -160,42 +156,36 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
         canonicalWorkspaceDir: worktree.repoRoot,
       },
     };
-    try {
-      const control = await ensureSkillSnapshot({
+    const snapshot = (sessionEntry?: SessionEntry, isFirstTurnInSession = true) =>
+      ensureSkillSnapshot({
         agentId: "main",
         workspaceDir: local,
         cfg: config,
-        isFirstTurnInSession: true,
+        isFirstTurnInSession,
+        ...(sessionEntry
+          ? { sessionEntry, executionWorkspaceDir: sessionEntry.worktree!.canonicalWorkspaceDir }
+          : {}),
       });
+    try {
+      const control = await snapshot();
       expect(control.skillsSnapshot?.skills.some((skill) => skill.name === "agent-only")).toBe(
         true,
       );
       for (const isFirstTurnInSession of [true, false]) {
-        const result = await ensureSkillSnapshot({
-          agentId: "main",
-          sessionEntry: entry,
-          workspaceDir: local,
-          executionWorkspaceDir: entry.worktree!.canonicalWorkspaceDir,
-          cfg: config,
-          isFirstTurnInSession,
-        });
+        const result = await snapshot(entry, isFirstTurnInSession);
         const serializedSnapshot = JSON.stringify(result.skillsSnapshot);
         entry.skillsSnapshot = JSON.parse(serializedSnapshot);
-        const agentSkill = result.skillsSnapshot?.resolvedSkills?.find(
-          (skill) => skill.name === "agent-only",
-        );
-        expect(agentSkill).toMatchObject({
-          filePath: path.join(remote, "skills", "agent-only", "SKILL.md"),
-        });
-        expect(resolveSkillFileHost(agentSkill!)).toBe("workspace");
-        if (kind === "repository") {
-          const projectSkill = result.skillsSnapshot?.resolvedSkills?.find(
-            (skill) => skill.name === "project-only",
+        for (const [name, skillRoot, host] of [
+          ["agent-only", remote, "workspace"],
+          ...(kind === "repository" ? [["project-only", source, "gateway"]] : []),
+        ]) {
+          const skill = result.skillsSnapshot?.resolvedSkills?.find(
+            (candidate) => candidate.name === name,
           );
-          expect(projectSkill).toMatchObject({
-            filePath: path.join(source, "skills", "project-only", "SKILL.md"),
+          expect(skill).toMatchObject({
+            filePath: path.join(skillRoot!, "skills", name!, "SKILL.md"),
           });
-          expect(resolveSkillFileHost(projectSkill!)).toBe("gateway");
+          expect(resolveSkillFileHost(skill!)).toBe(host);
         }
         const delivery = await prepareSkillResourceDelivery(
           result.skillsSnapshot,
@@ -208,13 +198,10 @@ it.skipIf(process.platform === "win32").each(["empty", "repository"] as const)(
           for (const skill of materialized.snapshot.resolvedSkills!.filter((s) =>
             ["agent-only", "project-only"].includes(s.name),
           )) {
-            expect(await fs.readFile(skill.filePath, "utf8")).toContain(
-              skill.name === "agent-only"
-                ? "Node agent instructions"
-                : "Gateway project instructions",
-            );
+            const host = skill.name === "agent-only" ? "Node agent" : "Gateway project";
+            expect(await fs.readFile(skill.filePath, "utf8")).toContain(`${host} instructions`);
             expect(await fs.readFile(path.join(skill.baseDir, "resource.txt"), "utf8")).toBe(
-              skill.name === "agent-only" ? "Node agent resource" : "Gateway project resource",
+              `${host} resource`,
             );
           }
         } finally {

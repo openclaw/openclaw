@@ -401,7 +401,6 @@ it.skipIf(process.platform === "win32")(
               { timeoutMs: PROOF_TIMEOUT_MS + 5000 },
             )
             .then((result) => {
-              record("agent.wait-terminal", { runId, ...result });
               if (result.status !== "ok") {
                 record("required-native-dispatch-error", {
                   runId,
@@ -464,7 +463,6 @@ it.skipIf(process.platform === "win32")(
             let aClaim: string | undefined;
             let aRun: string | undefined;
             let bRun: string | undefined;
-            let sawPending = false;
             let finishReleased = false;
             let sawClear = false;
             let quiesced = false;
@@ -474,14 +472,6 @@ it.skipIf(process.platform === "win32")(
                 return;
               }
               const placement = event.session?.placement;
-              record("sessions.changed-snapshot", {
-                creation,
-                timing,
-                phase: event.phase,
-                reason: event.reason,
-                state: placement?.state,
-                reconciling: placement?.workspaceResultReconciling,
-              });
               if (event.phase === "error" || event.reason === "chat.dispatch-error") {
                 // A queued follow-up's execution run ID is known only at native HTTP entry.
                 // Fail on its published error instead of waiting for the test timeout.
@@ -493,21 +483,16 @@ it.skipIf(process.platform === "win32")(
                 });
                 throw new Error(`${creation} ${timing} run failed before settlement`);
               }
-              if (placement?.workspaceResultReconciling) {
-                if (!sawPending) {
-                  record("finishing-ACK-pending-publication", {
-                    creation,
-                    timing,
-                    state: readSettlement(gateway, key),
-                  });
-                }
-                sawPending = true;
-              } else if (finishReleased && !sawClear && placement?.state === "active") {
+              if (
+                !placement?.workspaceResultReconciling &&
+                finishReleased &&
+                !sawClear &&
+                placement?.state === "active"
+              ) {
                 const settled = readSettlement(gateway, key);
                 expect(settled.pending?.claim_id).not.toBe(aClaim);
                 expect(settled.placement?.turn_claim_id).not.toBe(aClaim);
                 sawClear = true;
-                record("sessions.changed-clear", { creation, timing });
                 changedClear.resolve();
               }
             };
@@ -549,7 +534,6 @@ it.skipIf(process.platform === "win32")(
                   state: "completed",
                   runId: aRun,
                 });
-                record("A-finishing-ACK-and-physical-receipt", { creation, timing, state });
                 atQuiesce.resolve();
                 await continueQuiesce.promise;
               } else if (!resumed && input.argv[2] === REMOTE_WORKSPACE_RESUME_JS) {
@@ -561,13 +545,11 @@ it.skipIf(process.platform === "win32")(
                   staged_result_ref: null,
                   workspace_accepted_at_ms: expect.any(Number),
                 });
-                record("A-unchanged-and-accepted", { creation, timing, state });
                 atResume.resolve();
                 await continueResume.promise;
               }
             };
             onNativeRequest = (marker) => {
-              record("native-HTTP-entry", { marker });
               if (marker !== markers.B) {
                 return;
               }
@@ -580,7 +562,6 @@ it.skipIf(process.platform === "win32")(
               }
               bRun = state.placement?.turn_claim_run_id ?? undefined;
               expect(bRun).toBeTruthy();
-              record("B-after-A-atomic-clear", { admittedRunId: markers.B, ...state });
               bEntered.resolve();
             };
             await send(key, markers.A);
@@ -590,24 +571,12 @@ it.skipIf(process.platform === "win32")(
               "A never reached physical terminal receipt / quiescence",
             );
             expect(await aWait).toMatchObject({ status: "ok" });
-            record("A-agent.wait-before-workspace-settlement", { creation, timing });
             const current = await describe(key);
-            record("A-sessions.describe-pending", {
-              creation,
-              timing,
-              sessionId: current.sessionId,
-              placement: current.placement,
-            });
             expect(current.placement).toMatchObject({
               state: "active",
               workspaceResultReconciling: true,
             });
             const committed = await history(key);
-            record("A-chat.history-committed", {
-              creation,
-              timing,
-              messages: committed.messages.length,
-            });
             expect(
               committed.messages.some((message) => wireMessageText(message) === markers.A),
             ).toBe(true);
@@ -639,21 +608,11 @@ it.skipIf(process.platform === "win32")(
                 value: { state: "queued", session_id: placed.session_id, run_id: markers.B },
               });
               const pendingHistory = (await history(key)).pendingInputs;
-              record("B-public-pending-input", {
-                creation,
-                timing,
-                items: pendingHistory.items.map(({ runId, state, queued }) => ({
-                  runId,
-                  state,
-                  queued,
-                })),
-              });
               expect(pendingHistory.items).toContainEqual(
                 // queued is an optional in-memory chatQueuedTurns hint. The
                 // canonical queued receipt, then actual native HTTP entry, own this proof.
                 expect.objectContaining({ runId: markers.B, state: "queued" }),
               );
-              record("B-durable-pending-input", pendingInput);
             }
             continueQuiesce.resolve();
             await checkpoint(atResume.promise, "A never accepted its unchanged workspace result");
@@ -720,7 +679,6 @@ it.skipIf(process.platform === "win32")(
             }
             retained = final.placement;
             await node.waitForWorkersIdle();
-            record("pair-settled", { creation, timing, state: final });
           }
         }
         const skillRequests = node.frames

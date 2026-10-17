@@ -19,6 +19,7 @@ import {
 } from "../../../../src/agents/auth-profiles/sqlite.js";
 import { coerceAuthProfileState } from "../../../../src/agents/auth-profiles/state.js";
 import { createAuthProfileStoreRuntime } from "../../../../src/agents/auth-profiles/store.js";
+import type { ModelProviderConfig } from "../../../../src/config/types.models.js";
 import { GatewayClientRequestError } from "../../../../src/gateway/client.js";
 import { connectGatewayClient } from "../../../../src/gateway/test-helpers.e2e.js";
 import { openNodeSqliteDatabase } from "../../../../src/infra/node-sqlite.js";
@@ -85,6 +86,19 @@ type HeldProviderResponse = {
   releasedAt?: number;
   releaseReason?: "explicit" | "deadline" | "aborted";
 };
+type ResponseHold = { arrived: Deferred<HeldProviderResponse>; released: Deferred };
+
+function fixtureModel(id: string, name = id, maxTokens = 4096) {
+  return {
+    id,
+    name,
+    maxTokens,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+  };
+}
 
 export function syntheticAccessToken(expires = Date.UTC(2036, 0, 1), accountId = ACCOUNT_ID) {
   return [
@@ -124,8 +138,8 @@ export async function startQuotaProvider(
 ) {
   let phase: Phase = "healthy";
   let nextSuccessObserver: { observe: () => void; model: string; path: string } | undefined;
-  let nextUsageHold: { arrived: Deferred<HeldProviderResponse>; released: Deferred } | undefined;
-  let nextCatalogHold: { arrived: Deferred<HeldProviderResponse>; released: Deferred } | undefined;
+  let nextUsageHold: ResponseHold | undefined;
+  let nextCatalogHold: ResponseHold | undefined;
   const heldUsageResponses: HeldProviderResponse[] = [];
   const heldCatalogResponses: HeldProviderResponse[] = [];
   const resetAt = Math.floor(Date.now() / 1000) + 5 * 86_400;
@@ -342,6 +356,42 @@ export async function startQuotaProvider(
         response.writeHead(status, { "content-type": "application/json", ...headers });
         response.end(JSON.stringify(value));
       };
+      const heldJson = async (
+        value: unknown,
+        hold: ResponseHold,
+        captures: HeldProviderResponse[],
+        deadlineMs?: number,
+      ) => {
+        const captured: HeldProviderResponse = {
+          phase,
+          path: requestPath,
+          status: 200,
+          body: JSON.stringify(value),
+          capturedAt: Date.now(),
+        };
+        captures.push(captured);
+        hold.arrived.resolve(captured);
+        const interrupted = createDeferredCore<"deadline" | "aborted">();
+        const timer =
+          deadlineMs === undefined
+            ? undefined
+            : setTimeout(() => interrupted.resolve("deadline"), deadlineMs);
+        const onClose = () => interrupted.resolve("aborted");
+        response.once("close", onClose);
+        try {
+          captured.releaseReason = await Promise.race([
+            hold.released.promise.then(() => "explicit" as const),
+            interrupted.promise,
+          ]);
+          captured.releasedAt = Date.now();
+          if (captured.releaseReason !== "aborted") {
+            json(captured.status, value, {}, captured.phase);
+          }
+        } finally {
+          clearTimeout(timer);
+          response.off("close", onClose);
+        }
+      };
       if (requestPath === "/backend-api/wham/accounts/check") {
         json(200, {
           accounts: [ACCOUNT_ID, "quota-alternate-account"].map((id) => ({
@@ -366,32 +416,7 @@ export async function startQuotaProvider(
           const hold = requestPath === "/core-wham/usage" ? nextUsageHold : undefined;
           if (hold) {
             nextUsageHold = undefined;
-            const captured: HeldProviderResponse = {
-              phase,
-              path: requestPath,
-              status: 200,
-              body: JSON.stringify(value),
-              capturedAt: Date.now(),
-            };
-            heldUsageResponses.push(captured);
-            hold.arrived.resolve(captured);
-            const interrupted = createDeferredCore<"deadline" | "aborted">();
-            const timer = setTimeout(() => interrupted.resolve("deadline"), 2800);
-            const onClose = () => interrupted.resolve("aborted");
-            response.once("close", onClose);
-            try {
-              captured.releaseReason = await Promise.race([
-                hold.released.promise.then(() => "explicit" as const),
-                interrupted.promise,
-              ]);
-              captured.releasedAt = Date.now();
-              if (captured.releaseReason !== "aborted") {
-                json(captured.status, value, {}, captured.phase);
-              }
-            } finally {
-              clearTimeout(timer);
-              response.off("close", onClose);
-            }
+            await heldJson(value, hold, heldUsageResponses, 2800);
           } else {
             json(200, value);
           }
@@ -424,31 +449,7 @@ export async function startQuotaProvider(
         const hold = nextCatalogHold;
         if (hold) {
           nextCatalogHold = undefined;
-          const captured: HeldProviderResponse = {
-            phase,
-            path: requestPath,
-            status: 200,
-            body: JSON.stringify(value),
-            capturedAt: Date.now(),
-          };
-          heldCatalogResponses.push(captured);
-          hold.arrived.resolve(captured);
-          const aborted = createDeferredCore<"aborted">();
-          const onClose = () => aborted.resolve("aborted");
-          response.once("close", onClose);
-          try {
-            captured.releaseReason = await Promise.race([
-              hold.released.promise.then(() => "explicit" as const),
-              aborted.promise,
-            ]);
-            captured.releasedAt = Date.now();
-            if (captured.releaseReason === "aborted") {
-              return;
-            }
-          } finally {
-            response.off("close", onClose);
-          }
-          json(captured.status, value, {}, captured.phase);
+          await heldJson(value, hold, heldCatalogResponses);
         } else {
           json(200, value);
         }
@@ -669,6 +670,24 @@ export async function createQuotaResetFixture(
     path.dirname(requireCodex.resolve("@openai/codex/package.json")),
     "bin/codex.js",
   );
+  const providers: Record<string, ModelProviderConfig> = {};
+  if (scopedCooldown) {
+    providers.openai = {
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      api: "openai-chatgpt-responses",
+      auth: "oauth",
+      models: ["gpt-5.5", UTILITY_MODEL_ID].map((id) => fixtureModel(id)),
+    };
+  }
+  if (includeBackup) {
+    providers["quota-backup"] = {
+      baseUrl: `${provider.baseUrl}/quota-backup`,
+      api: "openai-responses",
+      apiKey: BACKUP_API_KEY,
+      request: { allowPrivateNetwork: true },
+      models: [fixtureModel("echo", "Quota backup echo", 256)],
+    };
+  }
   const gateway = await createOpenClawTestInstance({
     name: `quota-reset-${source}`,
     gatewayCommandPrefix: limitGatewayFileSize
@@ -695,53 +714,7 @@ export async function createQuotaResetFixture(
         : {}),
       gateway: { controlUi: { enabled: controlUi } },
       ...(enableIsolatedTool ? { tools: { alsoAllow: ["llm-task"] } } : {}),
-      ...(scopedCooldown || includeBackup
-        ? {
-            models: {
-              providers: {
-                ...(scopedCooldown
-                  ? {
-                      openai: {
-                        baseUrl: "https://chatgpt.com/backend-api/codex",
-                        api: "openai-chatgpt-responses" as const,
-                        auth: "oauth" as const,
-                        models: ["gpt-5.5", UTILITY_MODEL_ID].map((id) => ({
-                          id,
-                          name: id,
-                          reasoning: false,
-                          input: ["text" as const],
-                          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                          contextWindow: 128_000,
-                          maxTokens: 4096,
-                        })),
-                      },
-                    }
-                  : {}),
-                ...(includeBackup
-                  ? {
-                      "quota-backup": {
-                        baseUrl: `${provider.baseUrl}/quota-backup`,
-                        api: "openai-responses" as const,
-                        apiKey: BACKUP_API_KEY,
-                        request: { allowPrivateNetwork: true },
-                        models: [
-                          {
-                            id: "echo",
-                            name: "Quota backup echo",
-                            reasoning: false,
-                            input: ["text" as const],
-                            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                            contextWindow: 128_000,
-                            maxTokens: 256,
-                          },
-                        ],
-                      },
-                    }
-                  : {}),
-              },
-            },
-          }
-        : {}),
+      ...(scopedCooldown || includeBackup ? { models: { providers } } : {}),
       plugins: {
         enabled: true,
         allow: ["codex", "openai", ...(enableIsolatedTool ? ["llm-task"] : [])],
