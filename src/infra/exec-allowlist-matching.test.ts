@@ -1,6 +1,21 @@
 // Covers exec allowlist pattern matching.
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { matchAllowlist, type ExecAllowlistEntry } from "./exec-approvals.js";
+
+const nativeParityFixture = JSON.parse(
+  fs.readFileSync(
+    path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../test/fixtures/exec-arg-pattern-native-parity.json",
+    ),
+    "utf8",
+  ),
+) as {
+  cases: Array<{ id: string; pattern: string; accept: boolean; argument: string }>;
+};
 
 describe("exec allowlist matching", () => {
   const baseResolution = {
@@ -102,6 +117,234 @@ describe("exec allowlist matching", () => {
       ];
 
       expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBeNull();
+    });
+
+    it.each(nativeParityFixture.cases)(
+      "shares native matcher parity for $id",
+      ({ pattern, accept, argument }) => {
+        const entry = { pattern: "/usr/bin/python3", argPattern: pattern };
+        const match = matchAllowlist([entry], resolution, ["python3", argument]);
+        if (accept) {
+          expect(match).toBe(entry);
+        } else {
+          expect(match).toBeNull();
+        }
+      },
+    );
+
+    it("rejects nested-repetition patterns before they can authorize a matching command", () => {
+      const argPattern = "(a+)+$";
+      const unsafe = { pattern: "/usr/bin/python3", argPattern };
+
+      expect(new RegExp(argPattern).test("aaaa")).toBe(true);
+      expect(matchAllowlist([unsafe], resolution, ["python3", "aaaa"])).toBeNull();
+    });
+
+    it("rejects adjacent overlapping unbounded argPatterns before they can authorize", () => {
+      const argPattern = "^a*a*a*a*a*a*a*a*a*a*b$";
+      const unsafe = { pattern: "/usr/bin/python3", argPattern };
+
+      expect(matchAllowlist([unsafe], resolution, ["python3", `${"a".repeat(40)}!`])).toBeNull();
+    });
+
+    it("rejects overlapping unbounded argPatterns separated by a zero-minimum atom", () => {
+      const optionalSep = { pattern: "/usr/bin/python3", argPattern: "^a*x?a*x?a*x?a*b$" };
+      const starSep = { pattern: "/usr/bin/python3", argPattern: "^a*x*a*b$" };
+      const requiredSep = { pattern: "/usr/bin/python3", argPattern: "^a*xa*b$" };
+
+      expect(
+        matchAllowlist([optionalSep], resolution, ["python3", `${"a".repeat(40)}b`]),
+      ).toBeNull();
+      expect(matchAllowlist([starSep], resolution, ["python3", `${"a".repeat(40)}b`])).toBeNull();
+      expect(matchAllowlist([requiredSep], resolution, ["python3", "axab"])).toBe(requiredSep);
+    });
+
+    it("rejects adjacent alternation groups whose complete branch unions overlap", () => {
+      const overlapping = { pattern: "/usr/bin/python3", argPattern: "^(a|b)*(b|c)*z$" };
+      const disjoint = { pattern: "/usr/bin/python3", argPattern: "^(a|x)*(b|y)*z$" };
+
+      expect(matchAllowlist([overlapping], resolution, ["python3", "bbbbz"])).toBeNull();
+      expect(
+        matchAllowlist(
+          [{ pattern: "/usr/bin/python3", argPattern: "^((a|b))*((b|c))*z$" }],
+          resolution,
+          ["python3", "bbbbz"],
+        ),
+      ).toBeNull();
+      expect(matchAllowlist([disjoint], resolution, ["python3", "axbyz"])).toBe(disjoint);
+    });
+
+    it("rejects repeated overlapping alternatives while preserving disjoint siblings", () => {
+      const duplicate = { pattern: "/usr/bin/python3", argPattern: "^(a|a)+$" };
+      const overlapping = { pattern: "/usr/bin/python3", argPattern: "^(aa|a.)+$" };
+      const safe = { pattern: "/usr/bin/python3", argPattern: "^(?:aa|bb)+$" };
+      const fixedWidthDisjoint = { pattern: "/usr/bin/python3", argPattern: "^(ab|ac)+$" };
+      const mixedDisjoint = { pattern: "/usr/bin/python3", argPattern: "^(ab|[c]d)+$" };
+      const mixedOverlap = { pattern: "/usr/bin/python3", argPattern: "^(ab|[a]b)+$" };
+      const octalOverlap = {
+        pattern: "/usr/bin/python3",
+        argPattern: String.raw`^(\141\x61|aaaa)+$`,
+      };
+      const groupedDisjoint = { pattern: "/usr/bin/python3", argPattern: "^((ab)|(cd))+$" };
+      const hexDollarOverlap = {
+        pattern: "/usr/bin/python3",
+        argPattern: String.raw`^(\x24a|[$]a)+$`,
+      };
+      const escapedDotDisjoint = {
+        pattern: "/usr/bin/python3",
+        argPattern: String.raw`^(\.a|[b]a)+$`,
+      };
+      const highOctalOverlap = {
+        pattern: "/usr/bin/python3",
+        argPattern: String.raw`^(\400| 0)+$`,
+      };
+      const twoDigitBackrefOverlap = {
+        pattern: "/usr/bin/python3",
+        argPattern: `^${"()".repeat(39)}(a)(\\40b|abab)+$`,
+      };
+      const threeDigitBackrefOverlap = {
+        pattern: "/usr/bin/python3",
+        argPattern: `^${"()".repeat(140)}(a)(\\141b|abab)+$`,
+      };
+      const escapedDollarDisjoint = {
+        pattern: "/usr/bin/python3",
+        argPattern: String.raw`^(a\$|b[!])+$`,
+      };
+      const nestedDisjoint = {
+        pattern: "/usr/bin/python3",
+        argPattern: "^((ab|cd)e|(fg|hi)j)+$",
+      };
+      const nestedOverlap = {
+        pattern: "/usr/bin/python3",
+        argPattern: "^((ab|cd)e|(abe))+$",
+      };
+      const unequalDisjoint = { pattern: "/usr/bin/python3", argPattern: "^(a|[b]c)+$" };
+      const unequalOverlap = { pattern: "/usr/bin/python3", argPattern: "^(a|[a]c)+$" };
+      const propertyIdentityOverlap = {
+        pattern: "/usr/bin/python3",
+        argPattern: String.raw`^(\p{L}a|p\{L\}ap\{L\}a)+$`,
+      };
+      const longDisjoint = {
+        pattern: "/usr/bin/python3",
+        argPattern: `^([a]${"b".repeat(32)}|[c]${"d".repeat(32)})+$`,
+      };
+      const eAcuteOverlap = {
+        pattern: "/usr/bin/python3",
+        argPattern: String.raw`^(\u00E9a|[é]a)+$`,
+      };
+      const truncatedOverlap = {
+        pattern: "/usr/bin/python3",
+        argPattern: `^([a]${"a".repeat(32)}|[a]${"a".repeat(32)}[a]${"a".repeat(32)})+$`,
+      };
+      const seventeenWay = {
+        pattern: "/usr/bin/python3",
+        argPattern: "^((a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q)x|zx)+$",
+      };
+      const overflowPrefix = {
+        pattern: "/usr/bin/python3",
+        argPattern: "^((a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q)x|axax)+$",
+      };
+      const twoCharOverflowPrefix = {
+        pattern: "/usr/bin/python3",
+        argPattern: "^((ax|bx|cx|dx|ex|fx|gx|hx|ix|jx|kx|lx|mx|nx|ox|px|qx)|axax)+$",
+      };
+      const truncatedDisjointPrefix = `[a]${"a".repeat(31)}`;
+      const truncatedDisjoint = {
+        pattern: "/usr/bin/python3",
+        argPattern: `^(${truncatedDisjointPrefix}b|${truncatedDisjointPrefix}c)+$`,
+      };
+      const longerTruncatedDisjointPrefix = `[a]${"a".repeat(32)}`;
+      const longerTruncatedDisjoint = {
+        pattern: "/usr/bin/python3",
+        argPattern: `^(${longerTruncatedDisjointPrefix}b|${longerTruncatedDisjointPrefix}c)+$`,
+      };
+      const macronOverlap = {
+        pattern: "/usr/bin/python3",
+        argPattern: "^([Ā]a|ĀaĀa)+$",
+      };
+
+      expect(matchAllowlist([duplicate], resolution, ["python3", "aaaa"])).toBeNull();
+      expect(matchAllowlist([overlapping], resolution, ["python3", "aaaa"])).toBeNull();
+      expect(matchAllowlist([safe], resolution, ["python3", "aabb"])).toBe(safe);
+      expect(matchAllowlist([fixedWidthDisjoint], resolution, ["python3", "abac"])).toBe(
+        fixedWidthDisjoint,
+      );
+      expect(matchAllowlist([mixedDisjoint], resolution, ["python3", "abcd"])).toBe(mixedDisjoint);
+      expect(matchAllowlist([mixedOverlap], resolution, ["python3", "abab"])).toBeNull();
+      expect(matchAllowlist([octalOverlap], resolution, ["python3", "aaaa"])).toBeNull();
+      expect(matchAllowlist([groupedDisjoint], resolution, ["python3", "abcd"])).toBe(
+        groupedDisjoint,
+      );
+      expect(matchAllowlist([hexDollarOverlap], resolution, ["python3", "$a$a"])).toBeNull();
+      expect(matchAllowlist([escapedDotDisjoint], resolution, ["python3", ".aba"])).toBe(
+        escapedDotDisjoint,
+      );
+      expect(matchAllowlist([highOctalOverlap], resolution, ["python3", " 0 0"])).toBeNull();
+      expect(
+        matchAllowlist([twoDigitBackrefOverlap], resolution, ["python3", "aababab"]),
+      ).toBeNull();
+      expect(
+        matchAllowlist([threeDigitBackrefOverlap], resolution, ["python3", "aababab"]),
+      ).toBeNull();
+      expect(matchAllowlist([escapedDollarDisjoint], resolution, ["python3", "a$b!"])).toBe(
+        escapedDollarDisjoint,
+      );
+      expect(matchAllowlist([nestedDisjoint], resolution, ["python3", "abehij"])).toBe(
+        nestedDisjoint,
+      );
+      expect(matchAllowlist([nestedOverlap], resolution, ["python3", "abeabe"])).toBeNull();
+      expect(matchAllowlist([unequalDisjoint], resolution, ["python3", "abc"])).toBe(
+        unequalDisjoint,
+      );
+      expect(matchAllowlist([unequalOverlap], resolution, ["python3", "aac"])).toBeNull();
+      expect(
+        matchAllowlist([propertyIdentityOverlap], resolution, ["python3", "p{L}ap{L}a"]),
+      ).toBeNull();
+      expect(
+        matchAllowlist([longDisjoint], resolution, [
+          "python3",
+          `a${"b".repeat(32)}c${"d".repeat(32)}`,
+        ]),
+      ).toBe(longDisjoint);
+      expect(matchAllowlist([eAcuteOverlap], resolution, ["python3", "éaéa"])).toBeNull();
+      expect(
+        matchAllowlist([truncatedOverlap], resolution, ["python3", `a${"a".repeat(32)}`]),
+      ).toBeNull();
+      expect(matchAllowlist([seventeenWay], resolution, ["python3", "axzx"])).toBe(seventeenWay);
+      expect(matchAllowlist([overflowPrefix], resolution, ["python3", "axax"])).toBeNull();
+      expect(matchAllowlist([twoCharOverflowPrefix], resolution, ["python3", "axax"])).toBeNull();
+      expect(
+        matchAllowlist([truncatedDisjoint], resolution, [
+          "python3",
+          `${"a".repeat(32)}b${"a".repeat(32)}c`,
+        ]),
+      ).toBe(truncatedDisjoint);
+      expect(
+        matchAllowlist([longerTruncatedDisjoint], resolution, [
+          "python3",
+          `${"a".repeat(33)}b${"a".repeat(33)}c`,
+        ]),
+      ).toBeNull();
+      expect(matchAllowlist([macronOverlap], resolution, ["python3", "ĀaĀa"])).toBeNull();
+    });
+
+    it("falls back to an explicit path-only sibling when an argPattern is rejected", () => {
+      const unsafe = { pattern: "/usr/bin/python3", argPattern: "(a+)+$" };
+      const pathOnly = { pattern: "/usr/bin/python3" };
+
+      expect(matchAllowlist([unsafe, pathOnly], resolution, ["python3", "aaaa"])).toBe(pathOnly);
+    });
+
+    it("preserves blank and whitespace-sensitive legacy argPattern semantics", () => {
+      const blank = { pattern: "/usr/bin/python3", argPattern: "" };
+      const whitespace = { pattern: "/usr/bin/python3", argPattern: "^ a $" };
+      const escapedSpace = { pattern: "/usr/bin/python3", argPattern: String.raw`\ ` };
+
+      expect(matchAllowlist([blank], resolution, ["python3", "anything"])).toBe(blank);
+      expect(matchAllowlist([whitespace], resolution, ["python3", " a "])).toBe(whitespace);
+      expect(matchAllowlist([whitespace], resolution, ["python3", "a"])).toBeNull();
+      expect(matchAllowlist([escapedSpace], resolution, ["python3", " "])).toBe(escapedSpace);
+      expect(matchAllowlist([escapedSpace], resolution, ["python3", "x"])).toBeNull();
     });
 
     it("rejects split-arg bypasses against single-arg auto-generated argPattern", () => {

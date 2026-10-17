@@ -354,6 +354,81 @@ const claudeCliCheck: CoreHealthCheck = {
   },
 };
 
+const execApprovalArgPatternCheck: CoreHealthCheck = {
+  id: "core/doctor/exec-approval-arg-patterns",
+  description: "Persisted exec approval argPatterns satisfy the runtime safety contract.",
+  async detect() {
+    const { collectRejectedExecArgPatterns } = await import("../commands/doctor-security.js");
+    return collectRejectedExecArgPatterns().map((finding) => {
+      const pattern =
+        finding.pattern.length > 120 ? `${finding.pattern.slice(0, 117)}...` : finding.pattern;
+      if (finding.preserve) {
+        return {
+          checkId: "core/doctor/exec-approval-arg-patterns",
+          severity: "warning" as const,
+          message: `${finding.scope} exec approval ${JSON.stringify(pattern)} has a conservatively refused argPattern (${finding.reason}).`,
+          target: finding.scope,
+          requirement: "Persisted exec approval argPatterns must pass the runtime safety guard.",
+          fixHint:
+            "Doctor --fix keeps this stored rule. Runtime still refuses it until the operator replaces the pattern.",
+        };
+      }
+      return {
+        checkId: "core/doctor/exec-approval-arg-patterns",
+        severity: "warning" as const,
+        message: `${finding.scope} exec approval ${JSON.stringify(pattern)} has a rejected argPattern (${finding.reason}).`,
+        target: finding.scope,
+        requirement: "Persisted exec approval argPatterns must pass the runtime safety guard.",
+        fixHint: "Remove the rejected entry, then re-approve the command if it is still needed.",
+      };
+    });
+  },
+  async repair(ctx) {
+    const { collectRejectedExecArgPatterns, repairRejectedExecArgPatterns } =
+      await import("../commands/doctor-security.js");
+    const { resolveExecApprovalsDisplayPath } = await import("../infra/exec-approvals.js");
+    const pending = collectRejectedExecArgPatterns();
+    const removableCount = pending.filter((finding) => !finding.preserve).length;
+    const preservedCount = pending.filter((finding) => finding.preserve).length;
+    const keepNoun = preservedCount === 1 ? "rule" : "rules";
+    const keepNote =
+      preservedCount > 0 ? ` Kept ${preservedCount} conservatively refused ${keepNoun}.` : "";
+    const target = resolveExecApprovalsDisplayPath();
+    const effect = {
+      kind: "state" as const,
+      action: `remove ${removableCount} rejected exec approval entr${removableCount === 1 ? "y" : "ies"}`,
+      target,
+      dryRunSafe: false,
+    };
+    if (ctx.dryRun === true) {
+      const dryKeepNote =
+        preservedCount > 0
+          ? ` Would keep ${preservedCount} conservatively refused ${keepNoun}.`
+          : "";
+      return {
+        status: "repaired" as const,
+        changes: [
+          `Would remove ${removableCount} rejected exec approval entr${removableCount === 1 ? "y" : "ies"} from ${target}.${dryKeepNote}`,
+        ],
+        effects: [effect],
+      };
+    }
+    const removed = repairRejectedExecArgPatterns();
+    return {
+      status: "repaired" as const,
+      changes: [
+        `Removed ${removed.length} rejected exec approval entr${removed.length === 1 ? "y" : "ies"} from ${target}.${keepNote} Re-approve any still-needed command through the normal allow-always flow.`,
+      ],
+      effects: [
+        {
+          ...effect,
+          action: `remove ${removed.length} rejected exec approval entr${removed.length === 1 ? "y" : "ies"}`,
+        },
+      ],
+    };
+  },
+};
+
 const openAIOAuthTlsCheck: CoreHealthCheck = {
   id: "core/doctor/oauth-tls",
   description: "OpenAI OAuth TLS prerequisites are satisfied before browser auth.",
@@ -749,6 +824,7 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
         return findings.map(securityAuditFindingToHealthFinding);
       },
     },
+    execApprovalArgPatternCheck,
     browserCheck,
     openAIOAuthTlsCheck,
     hooksModelCheck,

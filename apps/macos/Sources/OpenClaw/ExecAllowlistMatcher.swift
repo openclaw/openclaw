@@ -1,5 +1,4 @@
 import Foundation
-import JavaScriptCore
 
 enum ExecAllowlistMatcher {
     private static let cwdBoundArgPatternPrefix = "sha256:cwd-argv:v1:"
@@ -116,17 +115,9 @@ enum ExecAllowlistMatcher {
             arguments.joined(separator: " ")
         }
 
-        // The shared policy contract is JavaScript RegExp. Foundation uses ICU,
-        // whose broader character classes and extra syntax can grant more than
-        // the Gateway would, so compile and match with the system JS engine.
-        guard let context = JSContext(),
-              let constructor = context.objectForKeyedSubscript("RegExp"),
-              let regex = constructor.construct(withArguments: [argPattern]),
-              context.exception == nil,
-              let result = regex.invokeMethod("test", withArguments: [joined]),
-              context.exception == nil
-        else { return false }
-        return result.toBool()
+        // Same compileExecArgPattern policy as the Node gateway: reject unsafe
+        // or invalid patterns before JavaScriptCore constructs the user regex.
+        return ExecArgPatternSafety.matches(argPattern, subject: joined)
     }
 
     private static func matches(pattern: String, target: String) -> Bool {

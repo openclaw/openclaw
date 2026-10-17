@@ -1,0 +1,214 @@
+{
+  "cases": [
+    {
+      "id": "nested-plus",
+      "pattern": "(a+)+$",
+      "accept": false,
+      "argument": "aaaa"
+    },
+    {
+      "id": "adjacent-star",
+      "pattern": "^a*a*a*a*a*a*a*a*a*a*b$",
+      "accept": false,
+      "argument": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"
+    },
+    {
+      "id": "unicode-property-adjacent",
+      "pattern": "^\\p{L}*\\p{L}*\\p{L}*z$",
+      "accept": false,
+      "argument": "AAAz"
+    },
+    {
+      "id": "unicode-property-identity-nested",
+      "pattern": "\\p{(a+)+}",
+      "accept": false,
+      "argument": "paaaa"
+    },
+    {
+      "id": "unicode-hex-adjacent",
+      "pattern": "\\u0041*\\u0041*",
+      "accept": false,
+      "argument": "AAAA"
+    },
+    {
+      "id": "unicode-property-alias-adjacent",
+      "pattern": "\\p{Script=Arabic}*\\p{sc=Arab}*",
+      "accept": false,
+      "argument": "\u0627\u0627\u0627"
+    },
+    {
+      "id": "overlapping-unions",
+      "pattern": "^(a|b)*(b|c)*z$",
+      "accept": false,
+      "argument": "bbbbz"
+    },
+    {
+      "id": "wrapped-unions",
+      "pattern": "^((a|b))*((b|c))*z$",
+      "accept": false,
+      "argument": "bbbbz"
+    },
+    {
+      "id": "zero-minimum-omit",
+      "pattern": "^a*x?a*x?a*x?a*b$",
+      "accept": false,
+      "argument": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"
+    },
+    {
+      "id": "invalid-regex",
+      "pattern": "[",
+      "accept": false,
+      "argument": "x"
+    },
+    {
+      "id": "safe-json-flag",
+      "pattern": "^--json$",
+      "accept": true,
+      "argument": "--json"
+    },
+    {
+      "id": "safe-json-flag-miss",
+      "pattern": "^--json$",
+      "accept": false,
+      "argument": "--files"
+    },
+    {
+      "id": "disjoint-stars",
+      "pattern": "^a*b*$",
+      "accept": true,
+      "argument": "aaabbb"
+    },
+    {
+      "id": "required-separator",
+      "pattern": "^a*xa*b$",
+      "accept": true,
+      "argument": "axab"
+    },
+    {
+      "id": "disjoint-unions",
+      "pattern": "^(a|x)*(b|y)*z$",
+      "accept": true,
+      "argument": "axbyz"
+    },
+    {
+      "id": "grouped-sequence-disjoint",
+      "pattern": "^(ab)*(cb)*$",
+      "accept": true,
+      "argument": "abcb"
+    },
+    {
+      "id": "grouped-sequence-repeated-tail",
+      "pattern": "^(ab)*(ab)*$",
+      "accept": false,
+      "argument": "abab"
+    },
+    {
+      "id": "hex-dollar-class-overlap",
+      "pattern": "^(\\x24a|[$]a)+$",
+      "accept": false,
+      "argument": "$a$a"
+    },
+    {
+      "id": "escaped-dot-class-disjoint",
+      "pattern": "^(\\.a|[b]a)+$",
+      "accept": true,
+      "argument": ".aba"
+    },
+    {
+      "id": "high-octal-space-overlap",
+      "pattern": "^(\\400| 0)+$",
+      "accept": false,
+      "argument": " 0 0"
+    },
+    {
+      "id": "two-digit-backref-overlap",
+      "pattern": "^()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()(a)(\\40b|abab)+$",
+      "accept": false,
+      "argument": "aababab"
+    },
+    {
+      "id": "three-digit-backref-overlap",
+      "pattern": "^()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()()(a)(\\141b|abab)+$",
+      "accept": false,
+      "argument": "aababab"
+    },
+    {
+      "id": "escaped-dollar-class-disjoint",
+      "pattern": "^(a\\$|b[!])+$",
+      "accept": true,
+      "argument": "a$b!"
+    },
+    {
+      "id": "nested-alt-disjoint",
+      "pattern": "^((ab|cd)e|(fg|hi)j)+$",
+      "accept": true,
+      "argument": "abehij"
+    },
+    {
+      "id": "nested-alt-overlap",
+      "pattern": "^((ab|cd)e|(abe))+$",
+      "accept": false,
+      "argument": "abeabe"
+    },
+    {
+      "id": "unequal-length-disjoint",
+      "pattern": "^(a|[b]c)+$",
+      "accept": true,
+      "argument": "abc"
+    },
+    {
+      "id": "unequal-length-overlap",
+      "pattern": "^(a|[a]c)+$",
+      "accept": false,
+      "argument": "aac"
+    },
+    {
+      "id": "property-identity-overlap",
+      "pattern": "^(\\p{L}a|p\\{L\\}ap\\{L\\}a)+$",
+      "accept": false,
+      "argument": "p{L}ap{L}a"
+    },
+    {
+      "id": "long-disjoint-atom-cap",
+      "pattern": "^([a]bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|[c]dddddddddddddddddddddddddddddddd)+$",
+      "accept": true,
+      "argument": "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbcdddddddddddddddddddddddddddddddd"
+    },
+    {
+      "id": "seventeen-way-disjoint",
+      "pattern": "^((a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q)x|zx)+$",
+      "accept": true,
+      "argument": "axzx"
+    },
+    {
+      "id": "expansion-overflow-prefix",
+      "pattern": "^((a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q)x|axax)+$",
+      "accept": false,
+      "argument": "axax"
+    },
+    {
+      "id": "two-char-expansion-overflow-prefix",
+      "pattern": "^((ax|bx|cx|dx|ex|fx|gx|hx|ix|jx|kx|lx|mx|nx|ox|px|qx)|axax)+$",
+      "accept": false,
+      "argument": "axax"
+    },
+    {
+      "id": "truncated-equal-prefix-disjoint",
+      "pattern": "^([a]aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab|[a]aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac)+$",
+      "accept": true,
+      "argument": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac"
+    },
+    {
+      "id": "truncated-equal-prefix-disjoint-32",
+      "pattern": "^([a]aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab|[a]aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac)+$",
+      "accept": false,
+      "argument": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac"
+    },
+    {
+      "id": "macron-class-literal-overlap",
+      "pattern": "^([Ā]a|ĀaĀa)+$",
+      "accept": false,
+      "argument": "ĀaĀa"
+    }
+  ]
+}

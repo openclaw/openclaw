@@ -23,6 +23,8 @@ excluded:
   # Generated (generate-host-env-security-policy-swift.mts)
   - ../apps/macos/Sources/OpenClaw/HostEnvSecurityPolicy.generated.swift
   - ../apps/macos/Sources/OpenClaw/BrowserInspectScript.generated.swift
+  # Generated (generate-macos-exec-arg-pattern-safety.mts)
+  - ../apps/macos/Sources/OpenClaw/ExecArgPatternSafetyJS.generated.swift
 
 analyzer_rules:
   - unused_declaration

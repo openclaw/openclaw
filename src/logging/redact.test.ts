@@ -90,6 +90,127 @@ describe("bounded replacement output", () => {
   });
 });
 
+describe("custom adjacent-class redaction", () => {
+  it("still masks corp-[A-Z]+[A-Z]+ deployment values", () => {
+    const output = redactSensitiveText("id=corp-ABCDEFG", {
+      patterns: ["corp-[A-Z]+[A-Z]+"],
+    });
+    expect(output).not.toContain("ABCDEFG");
+  });
+
+  it("still masks corp-(ab|[c]d)+ mixed alternatives", () => {
+    const output = redactSensitiveText("id=corp-abcd", {
+      patterns: ["corp-(ab|[c]d)+"],
+    });
+    expect(output).not.toContain("corp-abcd");
+    expect(output).not.toContain("abcd");
+  });
+
+  it("still masks corp-((ab|cd)e|(fg|hi)j)+ nested alternatives", () => {
+    const output = redactSensitiveText("id=corp-abehij", {
+      patterns: ["corp-((ab|cd)e|(fg|hi)j)+"],
+    });
+    expect(output).not.toContain("corp-abehij");
+    expect(output).not.toContain("abehij");
+  });
+
+  it("still masks corp-((ab)|(cd))+ capturing-group alternatives", () => {
+    const output = redactSensitiveText("id=corp-abcd", {
+      patterns: ["corp-((ab)|(cd))+"],
+    });
+    expect(output).not.toContain("corp-abcd");
+    expect(output).not.toContain("abcd");
+  });
+
+  it("still masks corp-(\\.a|[b]a)+ escaped-dot mixed alternatives", () => {
+    const output = redactSensitiveText("id=corp-.aba", {
+      patterns: [String.raw`corp-(\.a|[b]a)+`],
+    });
+    expect(output).not.toContain("corp-.aba");
+    expect(output).not.toContain(".aba");
+  });
+
+  it("still masks corp-(a\\$|b[!])+ escaped-dollar mixed alternatives", () => {
+    const output = redactSensitiveText("id=corp-a$b!", {
+      patterns: [String.raw`corp-(a\$|b[!])+`],
+    });
+    expect(output).not.toContain("corp-a$b!");
+    expect(output).not.toContain("a$b!");
+  });
+
+  it("still masks long disjoint alternatives past the analysis atom cap", () => {
+    const pattern = `corp-([a]${"b".repeat(32)}|[c]${"d".repeat(32)})+`;
+    const value = `corp-a${"b".repeat(32)}c${"d".repeat(32)}`;
+    const output = redactSensitiveText(`id=${value}`, { patterns: [pattern] });
+    expect(output).not.toContain(value);
+  });
+
+  it("still masks disjoint single-character classes after expansion limit", () => {
+    const output = redactSensitiveText("id=corp-aazz", {
+      patterns: [
+        "corp-(([a]a|[b]b|[c]c|[d]d|[e]e|[f]f|[g]g|[h]h|[i]i|[j]j|[k]k|[l]l|[m]m|[n]n|[o]o|[p]p|[q]q)|[z]z)+",
+      ],
+    });
+    expect(output).not.toContain("corp-aazz");
+    expect(output).not.toContain("aazz");
+  });
+
+  it("drops overlapping truncated tails instead of matching them", () => {
+    const unit = `[a]${"ba".repeat(17)}`;
+    const value = `corp-${("a" + "ba".repeat(17)).repeat(2)}`;
+    const output = redactSensitiveText(`id=${value}`, {
+      patterns: [`corp-(${unit}|${unit}${unit})+`],
+    });
+    expect(output).toContain(value);
+  });
+
+  it("still masks 17-way disjoint alternatives after expansion limit", () => {
+    const output = redactSensitiveText("id=corp-axzx", {
+      patterns: ["corp-((a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q)x|zx)+"],
+    });
+    expect(output).not.toContain("corp-axzx");
+    expect(output).not.toContain("axzx");
+  });
+
+  it("still masks truncated equal prefixes whose suffixes are disjoint", () => {
+    const prefix = `[a]${"a".repeat(31)}`;
+    const value = `corp-${"a".repeat(32)}b${"a".repeat(32)}c`;
+    const output = redactSensitiveText(`id=${value}`, {
+      patterns: [`corp-(${prefix}b|${prefix}c)+`],
+    });
+    expect(output).not.toContain(value);
+    const longerPrefix = `[a]${"a".repeat(32)}`;
+    const longerValue = `corp-${"a".repeat(33)}b${"a".repeat(33)}c`;
+    const longerOutput = redactSensitiveText(`id=${longerValue}`, {
+      patterns: [`corp-(${longerPrefix}b|${longerPrefix}c)+`],
+    });
+    expect(longerOutput).not.toContain(longerValue);
+  });
+
+  it("drops overlapping expansion-overflow and unprobed Unicode prefixes", () => {
+    const overflowValue = "corp-axax!";
+    const overflowOutput = redactSensitiveText(`id=${overflowValue}`, {
+      patterns: ["corp-((a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q)x|axax)+"],
+    });
+    expect(overflowOutput).toContain(overflowValue);
+    const twoCharOverflowValue = "corp-axaxax";
+    const twoCharOverflowOutput = redactSensitiveText(`id=${twoCharOverflowValue}`, {
+      patterns: ["corp-((ax|bx|cx|dx|ex|fx|gx|hx|ix|jx|kx|lx|mx|nx|ox|px|qx)|axax)+"],
+    });
+    expect(twoCharOverflowOutput).toContain(twoCharOverflowValue);
+    const macronValue = "corp-ĀaĀa";
+    const macronOutput = redactSensitiveText(`id=${macronValue}`, {
+      patterns: ["corp-([Ā]a|ĀaĀa)+"],
+    });
+    expect(macronOutput).toContain(macronValue);
+    const greekValue = "corp-αaαa";
+    const greekOutput = redactSensitiveText(`id=${greekValue}`, {
+      patterns: [String.raw`/corp-(\p{L}a|\p{Script=Greek}a\p{Script=Greek}a)+/u`],
+    });
+    expect(greekOutput).toContain(greekValue);
+  });
+});
+
 describe("registered exact secret values", () => {
   it("shares registrations and matcher invalidation across module instances", async () => {
     const first = await import("./secret-redaction-registry.js");

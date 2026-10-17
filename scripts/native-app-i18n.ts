@@ -213,7 +213,9 @@ const APPLE_LOCALIZABLE_DESCRIPTION_KEYS = new Set(["NSScreenCaptureDescription"
 const GENERATED_PATH_RE = /(?:^|[\\/])(?:build|\.gradle|\.build|DerivedData)(?:$|[\\/])/u;
 const EXCLUDED_PATH_RE = /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
-const GENERATED_FILE_RE = /(?:^|[\\/])NativeStringResources\.kt$/u;
+// Generated Swift embeds JS or policy data, not UI copy. Scanning it enrolls
+// parser fragments such as " || marker === ".
+const GENERATED_FILE_RE = /(?:(?:^|[\\/])NativeStringResources\.kt|\.generated\.swift)$/u;
 // These files emit mobile.ui protocol evidence, not UI copy. Keep their text verbatim so
 // developer-screen diagnostics match the agent-facing action results and snapshot refs.
 const ANDROID_NATIVE_I18N_EXCLUDED_FILES = new Set([

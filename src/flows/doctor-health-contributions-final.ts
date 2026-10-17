@@ -155,7 +155,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     ),
     createDoctorHealthContribution("doctor:security", "Security", {
       updateWork: { kind: "inspection", scope: "agent" },
-      healthCheckIds: ["core/doctor/security"],
+      healthCheckIds: ["core/doctor/security", "core/doctor/exec-approval-arg-patterns"],
       run: runSecurityHealth,
     }),
     createDoctorHealthContribution("doctor:web-fetch-proxy", "Web fetch proxy", {

@@ -284,6 +284,10 @@ async function fixture({
     "../../logging/redact-pem",
     "../../security/config-regex",
     "../../security/safe-regex",
+    // Loaded by safe-regex while redaction compiles a pattern. Stubs throw on call.
+    "../../security/safe-regex-adjacent",
+    "../../security/safe-regex-sequences",
+    "../../security/safe-regex-tokens",
     "../../infra/map-size",
     "../../../packages/acp-core/src/structured-auth-redaction",
     "../../logging/redact-patterns",

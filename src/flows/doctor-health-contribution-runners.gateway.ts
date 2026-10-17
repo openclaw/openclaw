@@ -3,6 +3,7 @@ import { shouldManageGatewayService } from "../commands/doctor-service-repair-po
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
+import { runCoreContributionHealth } from "./doctor-health-contribution-core.js";
 import { runWriteConfigHealth } from "./doctor-health-contribution-runners.config.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { resolveDoctorMode } from "./doctor-health-contribution-utils.js";
@@ -94,6 +95,7 @@ export async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<v
   const { noteInstallPolicyHealth } = await import("../commands/doctor-install-policy.js");
   const { noteSecurityWarnings } = await import("../commands/doctor-security.js");
   const { securityAuditFindingToHealthFinding } = await import("./health-check-adapter.js");
+  await runCoreContributionHealth(ctx, ["core/doctor/exec-approval-arg-patterns"]);
   const findings = await noteSecurityWarnings(ctx.cfg);
   recordDoctorHealthWarnings(ctx, findings.map(securityAuditFindingToHealthFinding));
   await noteInstallPolicyHealth(ctx.cfg, { deep: ctx.options.deep === true, env: ctx.env });

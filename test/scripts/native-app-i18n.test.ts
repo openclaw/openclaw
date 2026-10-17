@@ -739,6 +739,11 @@ describe("native app i18n inventory", () => {
       ),
     ).toBe(true);
     expect(
+      entries.every((entry) =>
+        entry.sites.every((site) => !site.path.endsWith(".generated.swift")),
+      ),
+    ).toBe(true);
+    expect(
       entries
         .filter((entry) => entry.surface === "apple")
         .every((entry) =>

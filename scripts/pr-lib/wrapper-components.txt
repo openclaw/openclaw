@@ -950,6 +950,7 @@ src/infra/errors.ts
 src/infra/exec-allowlist-pattern.ts
 src/infra/exec-approval-action.types.ts
 src/infra/exec-approvals-core.ts
+src/infra/exec-arg-pattern.ts
 src/infra/exec-command-resolution.ts
 src/infra/exec-safe-bin-policy-profiles.ts
 src/infra/exec-safe-bin-policy-validator.ts
@@ -1740,6 +1741,9 @@ src/secrets/target-registry-query.ts
 src/secrets/target-registry.ts
 src/secrets/unsupported-surface-policy.ts
 src/security/config-regex.ts
+src/security/safe-regex-adjacent.ts
+src/security/safe-regex-sequences.ts
+src/security/safe-regex-tokens.ts
 src/security/safe-regex.ts
 src/security/scan-paths.ts
 src/sessions/model-selection-error.ts

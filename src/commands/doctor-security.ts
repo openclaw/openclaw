@@ -11,17 +11,99 @@ import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import { countObsoleteGeneratedExecApprovals } from "../infra/exec-approvals-generated-migration.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
+import { updateExecApprovalsForMaintenance } from "../infra/exec-approvals-store.js";
 import {
   loadExecApprovalsReadOnly,
   resolveExecApprovalsDisplayPath,
+  type ExecAllowlistEntry,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
+import {
+  compileExecArgPattern,
+  isConservativeExecArgPatternRefusal,
+  type ExecArgPatternRejectReason,
+} from "../infra/exec-arg-pattern.js";
 import { findSecretStoreRedactedValueFindings } from "../secrets/audit-store.js";
 import { classifyConfigSecretTarget } from "../secrets/config-secret-target.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { collectChannelSecurityFindingsCore } from "../security/audit-channel.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 import { collectExecFilesystemPolicyDriftHits } from "../security/exec-filesystem-policy.js";
+
+type RejectedExecArgPattern = {
+  scope: string;
+  pattern: string;
+  argPattern: string;
+  reason: ExecArgPatternRejectReason;
+  preserve: boolean;
+};
+
+function collectRejectedExecArgPatternsFromAllowlist(
+  scope: string,
+  allowlist: readonly ExecAllowlistEntry[] | undefined,
+): RejectedExecArgPattern[] {
+  const findings: RejectedExecArgPattern[] = [];
+  for (const entry of allowlist ?? []) {
+    if (typeof entry.argPattern !== "string") {
+      continue;
+    }
+    const compiled = compileExecArgPattern(entry.argPattern);
+    if (!compiled.regex) {
+      findings.push({
+        scope,
+        pattern: entry.pattern,
+        argPattern: entry.argPattern,
+        reason: compiled.reason,
+        preserve: isConservativeExecArgPatternRefusal(entry.argPattern),
+      });
+    }
+  }
+  return findings;
+}
+
+export function collectRejectedExecArgPatterns(
+  file: ExecApprovalsFile = loadExecApprovalsReadOnly(),
+): RejectedExecArgPattern[] {
+  return Object.entries(file.agents ?? {}).flatMap(([agentId, agent]) =>
+    collectRejectedExecArgPatternsFromAllowlist(`agents.${agentId}`, agent.allowlist),
+  );
+}
+
+export function repairRejectedExecArgPatterns(): RejectedExecArgPattern[] {
+  const removed: RejectedExecArgPattern[] = [];
+  updateExecApprovalsForMaintenance({
+    update: (file) => {
+      let changed = false;
+      const agents = { ...file.agents };
+      for (const [agentId, agent] of Object.entries(file.agents ?? {})) {
+        const scope = `agents.${agentId}`;
+        const nextAllowlist = (agent.allowlist ?? []).filter((entry) => {
+          if (typeof entry.argPattern !== "string") {
+            return true;
+          }
+          const compiled = compileExecArgPattern(entry.argPattern);
+          if (compiled.regex || isConservativeExecArgPatternRefusal(entry.argPattern)) {
+            return true;
+          }
+          changed = true;
+          removed.push({
+            scope,
+            pattern: entry.pattern,
+            argPattern: entry.argPattern,
+            reason: compiled.reason,
+            preserve: false,
+          });
+          return false;
+        });
+        if (nextAllowlist.length !== (agent.allowlist?.length ?? 0)) {
+          agents[agentId] = { ...agent, allowlist: nextAllowlist };
+        }
+      }
+      return changed ? { ...file, agents } : null;
+    },
+  });
+  return removed;
+}
 
 function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   return [
