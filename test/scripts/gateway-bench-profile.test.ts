@@ -231,9 +231,7 @@ it.each([
     const { child } = spawnFixture(["-e", workload, preloadUrl], directory);
     await waitMessage(child, "ready");
     if (preexisting) {
-      const prepared = waitMessage(child, "prepared");
-      child.send({ prepare: true });
-      await prepared;
+      expect(await sendMessage(child, { prepare: true })).toMatchObject({ prepared: true });
     }
     await controlGatewayProfile(child, kind, "start", profilePath, { includeWorkers: true });
     const completed = await sendMessage(child, { run: true });
@@ -278,26 +276,22 @@ it.each([
       }
     }
     expect(profiledThreadIds).toEqual([completed.threadId]);
+    const samples = manifest.samples.flatMap((sample) => sample.workers);
     expect(
-      manifest.samples.some((sample) =>
-        sample.workers.some(
-          (worker) =>
-            worker.threadId === completed.threadId &&
-            worker.error === undefined &&
-            Number.isFinite(worker.cpu?.user) &&
-            Number.isFinite(worker.cpu?.system) &&
-            Number.isFinite(worker.heap?.total_heap_size) &&
-            Number.isFinite(worker.heap?.used_heap_size),
-        ),
+      samples.some(
+        ({ threadId, error, cpu, heap }) =>
+          threadId === completed.threadId &&
+          error === undefined &&
+          [cpu?.user, cpu?.system, heap?.total_heap_size, heap?.used_heap_size].every(
+            Number.isFinite,
+          ),
       ),
     ).toBe(true);
     expect(await readFile(profilePath, "utf8")).not.toBe("");
 
     const retiredPath = path.join(directory, `${kind}-retired`);
     await controlGatewayProfile(child, kind, "start", retiredPath, { includeWorkers: true });
-    const retired = waitMessage(child, "retired");
-    child.send({ retire: true });
-    await retired;
+    expect(await sendMessage(child, { retire: true })).toMatchObject({ retired: true });
     await controlGatewayProfile(child, kind, "stop", retiredPath, { includeWorkers: true });
     const incomplete = await readJson<WorkerProfileManifest>(`${retiredPath}.workers.json`);
     expect(workerIdentities(incomplete)).toEqual(workerIdentities(manifest));
@@ -341,21 +335,21 @@ it("measures discarded allocation churn and GC per completed operation, and clea
     directory,
   );
   await waitMessage(child, "ready");
+  const measure = (name: string, count: number, run: () => Promise<void>) =>
+    measureGatewayAllocations(child, path.join(directory, name), count, run);
   await expect(
-    measureGatewayAllocations(child, path.join(directory, "failed"), 1, async () => {
+    measure("failed", 1, async () => {
       throw new Error("workload failed");
     }),
   ).rejects.toThrow("workload failed");
-  const result = await measureGatewayAllocations(
-    child,
-    path.join(directory, "completed"),
-    4,
-    async () => {
-      expect(await sendMessage(child, { run: true })).toEqual({ completed: 4 });
-    },
-  );
-  expect(result.scope).toBe("main-isolate");
-  expect(result.includesCollectedObjects).toBe(true);
+  const result = await measure("completed", 4, async () => {
+    expect(await sendMessage(child, { run: true })).toEqual({ completed: 4 });
+  });
+  expect(result).toMatchObject({
+    scope: "main-isolate",
+    includesCollectedObjects: true,
+    cpu: { pid: child.pid },
+  });
   expect(result.estimatedAllocatedBytesPerOperation).toBeGreaterThan(1_000_000);
   expect(result.gcMsPerOperation).toBeGreaterThan(0);
   expect(result.gcCount).toBeGreaterThan(0);
@@ -364,5 +358,4 @@ it("measures discarded allocation churn and GC per completed operation, and clea
       site.stack.some((frame) => frame.startsWith("discardedAllocation (")),
     ),
   ).toBe(true);
-  expect(result.cpu.pid).toBe(child.pid);
 });

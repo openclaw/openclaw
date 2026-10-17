@@ -16,15 +16,15 @@ async function writeJson(dir: string, fileName: string, value: unknown) {
   await writeFile(path.join(dir, fileName), `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+const readText = (dir: string, name: string) => readFile(path.join(dir, name), "utf8");
+const writeExecutable = (dir: string, name: string, source: string) =>
+  writeFile(path.join(dir, name), `#!/usr/bin/env node\n${source}`, { mode: 0o755 });
+
 function runCli(args: string[], env = process.env) {
   return spawnSync(
     process.execPath,
     ["--import", "tsx", "scripts/generate-dependency-release-evidence.mts", ...args],
-    {
-      cwd: path.resolve("."),
-      env,
-      encoding: "utf8",
-    },
+    { cwd: path.resolve("."), env, encoding: "utf8" },
   );
 }
 
@@ -42,25 +42,23 @@ function advisory(packageName: string, id: string, tool: string, url: string | n
 }
 
 function makeReports(vulnerability: unknown, populated = false): Record<string, unknown> {
+  const count = (value: number) => (populated ? value : 0);
   return {
     "dependency-vulnerability-gate.json": vulnerability,
     "transitive-manifest-risk-report.json": {
-      findingCount: populated ? 17 : 0,
-      workspaceExcludedFindingCount: populated ? 3 : 0,
+      findingCount: count(17),
+      workspaceExcludedFindingCount: count(3),
       metadataFailures: populated ? [{}] : [],
     },
     "dependency-ownership-surface-report.json": {
-      summary: {
-        lockfilePackageCount: populated ? 101 : 0,
-        buildRiskPackageCount: populated ? 8 : 0,
-      },
+      summary: { lockfilePackageCount: count(101), buildRiskPackageCount: count(8) },
     },
     "dependency-changes-report.json": {
       summary: {
-        dependencyFileChanges: populated ? 4 : 0,
-        addedPackages: populated ? 5 : 0,
-        removedPackages: populated ? 6 : 0,
-        changedPackages: populated ? 7 : 0,
+        dependencyFileChanges: count(4),
+        addedPackages: count(5),
+        removedPackages: count(6),
+        changedPackages: count(7),
       },
     },
     "npm-package-locks.json": {
@@ -94,6 +92,9 @@ it.each([false, true])(
     await mkdir(source);
     await writeJson(source, "package.json", { version: "2026.5.13" });
     const upstream = {
+      source: "github-public-repository-advisories",
+      packageVersions: 101,
+      repositories: 2,
       status: "partial",
       mappedPackageVersions: 100,
       checkedRepositories: 1,
@@ -102,15 +103,7 @@ it.each([false, true])(
         { subject: "example/tool", reason: "GitHub API rate limit exceeded" },
       ],
     };
-    const coverage = {
-      npm: "checked",
-      upstream: {
-        source: "github-public-repository-advisories",
-        packageVersions: 101,
-        repositories: 2,
-        ...upstream,
-      },
-    };
+    const coverage = { npm: "checked", upstream };
     const findings = malware
       ? [
           { id: "GHSA-malware", lockfile: "pnpm-lock.yaml", source: "npm-bulk", malware: true },
@@ -163,9 +156,7 @@ it.each([false, true])(
       },
     });
     expect(commands).toContain("deps:npm-lock:report");
-    const manifest = JSON.parse(
-      await readFile(path.join(outputDir, "dependency-evidence-manifest.json"), "utf8"),
-    );
+    const manifest = JSON.parse(await readText(outputDir, "dependency-evidence-manifest.json"));
     expect(manifest.reports).toContainEqual({
       name: "npm package-lock mirrors",
       command: "pnpm deps:npm-lock:report",
@@ -173,34 +164,26 @@ it.each([false, true])(
       json: "npm-package-locks.json",
       markdown: "npm-package-locks.md",
     });
-    if (malware) {
-      expect(result.counts).toEqual({
-        malwareBlockers: 2,
-        vulnerabilityFindings: 3,
-        advisories: [findings[2]],
-        vulnerabilityCoverage: coverage,
-        upstreamOnlyVulnerabilityFindings: 2,
-        transitiveRiskSignals: 17,
-        workspaceExcludedTransitiveSignals: 3,
-        transitiveMetadataFailures: 1,
-        ownershipLockfilePackages: 101,
-        ownershipBuildRiskPackages: 8,
-        dependencyFileChanges: 4,
-        dependencyAddedPackages: 5,
-        dependencyRemovedPackages: 6,
-        dependencyChangedPackages: 7,
-        npmLockPackages: 3,
-        npmLocklessPackages: 2,
-        npmPartialLockPackages: 2,
-      });
-    } else {
-      expect(result.counts).toMatchObject({
-        npmLockPackages: 2,
-        npmLocklessPackages: 1,
-        npmPartialLockPackages: 1,
-      });
-    }
-    const summary = await readFile(path.join(outputDir, "dependency-evidence-summary.md"), "utf8");
+    expect(result.counts).toEqual({
+      malwareBlockers: malware ? 2 : 0,
+      vulnerabilityFindings: malware ? 3 : 1,
+      advisories: malware ? [findings[2]] : findings,
+      vulnerabilityCoverage: coverage,
+      upstreamOnlyVulnerabilityFindings: malware ? 2 : 1,
+      transitiveRiskSignals: malware ? 17 : 0,
+      workspaceExcludedTransitiveSignals: malware ? 3 : 0,
+      transitiveMetadataFailures: malware ? 1 : 0,
+      ownershipLockfilePackages: malware ? 101 : 0,
+      ownershipBuildRiskPackages: malware ? 8 : 0,
+      dependencyFileChanges: malware ? 4 : 0,
+      dependencyAddedPackages: malware ? 5 : 0,
+      dependencyRemovedPackages: malware ? 6 : 0,
+      dependencyChangedPackages: malware ? 7 : 0,
+      npmLockPackages: malware ? 3 : 2,
+      npmLocklessPackages: malware ? 2 : 1,
+      npmPartialLockPackages: malware ? 2 : 1,
+    });
+    const summary = await readText(outputDir, "dependency-evidence-summary.md");
     const stepSummary = await readFile(stepPath, "utf8");
     expectContains(
       summary,
@@ -299,18 +282,13 @@ it.skipIf(process.platform === "win32")(
     const sourceDir = path.join(dir, "candidate");
     const marker = path.join(dir, "pnpm-cwd");
     const githubOutput = path.join(dir, "github-output");
-    await mkdir(binDir);
-    await mkdir(sourceDir);
+    await Promise.all([mkdir(binDir), mkdir(sourceDir)]);
     await writeJson(sourceDir, "package.json", { version: "2026.5.13" });
-    await writeFile(
-      path.join(binDir, "git"),
-      '#!/usr/bin/env node\nconsole.log("a".repeat(40));\n',
-      { mode: 0o755 },
-    );
-    await writeFile(
-      path.join(binDir, "pnpm"),
+    await writeExecutable(binDir, "git", 'console.log("a".repeat(40));\n');
+    await writeExecutable(
+      binDir,
+      "pnpm",
       [
-        "#!/usr/bin/env node",
         'const { writeFileSync } = require("node:fs");',
         "const args = process.argv.slice(2);",
         "writeFileSync(process.env.RELEASE_TEST_MARKER, process.cwd());",
@@ -320,7 +298,6 @@ it.skipIf(process.platform === "win32")(
         'writeFileSync(args[args.indexOf("--markdown") + 1], "# Known malware evidence\\n");',
         "process.exitCode = 1;",
       ].join("\n"),
-      { mode: 0o755 },
     );
 
     const result = runCli(
@@ -345,12 +322,12 @@ it.skipIf(process.platform === "win32")(
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Command failed: pnpm deps:vuln:gate");
     await expect(readFile(githubOutput, "utf8")).resolves.toBe(`dir=${outputDir}\n`);
-    await expect(
-      readFile(path.join(outputDir, "dependency-vulnerability-gate.json"), "utf8"),
-    ).resolves.toBe(JSON.stringify({ blockers: [{ id: "GHSA-fixture", malware: true }] }));
-    await expect(
-      readFile(path.join(outputDir, "dependency-vulnerability-gate.md"), "utf8"),
-    ).resolves.toBe("# Known malware evidence\n");
+    await expect(readText(outputDir, "dependency-vulnerability-gate.json")).resolves.toBe(
+      JSON.stringify({ blockers: [{ id: "GHSA-fixture", malware: true }] }),
+    );
+    await expect(readText(outputDir, "dependency-vulnerability-gate.md")).resolves.toBe(
+      "# Known malware evidence\n",
+    );
   },
 );
 
@@ -374,8 +351,7 @@ it.each([true, false])(
     const target = path.join(dir, "target");
     const refs = () =>
       git(target, "for-each-ref", "--format=%(refname)", "refs/tags", "refs/remotes");
-    await mkdir(origin);
-    await mkdir(target);
+    await Promise.all([mkdir(origin), mkdir(target)]);
     git(origin, "init", "--quiet", "--initial-branch=main");
     git(origin, "config", "uploadpack.allowFilter", "true");
     git(origin, "commit", "--quiet", "--allow-empty", "-m", "previous release");

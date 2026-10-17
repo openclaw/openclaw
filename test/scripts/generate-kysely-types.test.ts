@@ -7,6 +7,11 @@ import { collectPackageDistImportErrors } from "../../scripts/lib/package-dist-i
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const entrypoints = [
+  "scripts/generate-kysely-types.mts",
+  "scripts/prepare-git-hooks.mjs",
+  "scripts/prepare-native-protocol.mjs",
+];
 const schema = `
 CREATE TABLE records (
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, payload BLOB,
@@ -40,10 +45,8 @@ it("packages a runnable generator closure through the published file policy", ()
   const root = tempDirs.make("kysely-package-");
   for (const file of [
     "package.json",
-    "scripts/prepare-git-hooks.mjs",
-    "scripts/prepare-native-protocol.mjs",
+    ...entrypoints,
     "scripts/runtime-postbuild-shared.mjs",
-    "scripts/generate-kysely-types.mts",
     "scripts/lib/direct-run.mjs",
   ]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
@@ -64,10 +67,7 @@ it("packages a runnable generator closure through the published file policy", ()
   expect(packed.status, packed.stderr).toBe(0);
   const inventoryByName = JSON.parse(packed.stdout) as Record<
     string,
-    {
-      filename: string;
-      files: Array<{ path: string }>;
-    }
+    { filename: string; files: Array<{ path: string }> }
   >;
   expect(Object.keys(inventoryByName)).toEqual(["openclaw"]);
   const inventory = inventoryByName.openclaw;
@@ -92,20 +92,16 @@ it("packages a runnable generator closure through the published file policy", ()
   ).toEqual([]);
   const run = (file: string) =>
     runCommand(process.execPath, [path.join(packageRoot, file)], packageRoot);
-  for (const file of [
-    "scripts/generate-kysely-types.mts",
-    "scripts/prepare-git-hooks.mjs",
-    "scripts/prepare-native-protocol.mjs",
-  ]) {
+  for (const file of entrypoints) {
     const result = run(file);
     expect(result.status, result.stderr).toBe(0);
   }
-  expect(fs.existsSync(path.join(packageRoot, ".artifacts"))).toBe(false);
-  expect(fs.existsSync(path.join(packageRoot, "apps"))).toBe(false);
+  expect(
+    [".artifacts", "apps"].filter((dir) => fs.existsSync(path.join(packageRoot, dir))),
+  ).toEqual([]);
   fs.unlinkSync(path.join(packageRoot, "scripts/lib/direct-run.mjs"));
   const missing = run("scripts/generate-kysely-types.mts");
-  expect(missing.status).toBe(1);
-  expect(missing.stderr).toContain("direct-run.mjs");
+  expect(missing).toMatchObject({ status: 1, stderr: expect.stringContaining("direct-run.mjs") });
 });
 
 it("retires omitted sparse projections and still requires complete generation", async () => {
@@ -163,7 +159,6 @@ export interface DB {
   records: Records;
 }
 `);
-  // SQLite creation order is not declaration order.
   const statements = schema.split(";").filter((statement) => statement.trim());
   fs.writeFileSync(schemas[0]!, `${statements.toReversed().join(";")};`);
   await generate();
