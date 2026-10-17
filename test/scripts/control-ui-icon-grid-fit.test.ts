@@ -14,8 +14,14 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
+let dom: JSDOM | undefined;
+const getDocument = () => (dom ??= new JSDOM()).window.document;
+afterEach(() => {
+  dom?.window.close();
+  dom = undefined;
+});
 
-function collect(source: string, file: string, document: Document): IconFixture[] {
+function collect(source: string, file: string, document = getDocument()): IconFixture[] {
   return collectIconFixtures(parser.parseSourceFile(file, source), file, document);
 }
 const base = "* { box-sizing: border-box; }";
@@ -81,53 +87,47 @@ describe("fixed icon-grid fit", () => {
   });
 
   it("defers unresolved geometry instead of inventing a fit", () => {
-    const dom = new JSDOM();
-    try {
-      const defer = (css: string, fixtures = [fixture]) => {
-        const result = scanIconGridFit(css, fixtures, base);
-        expect(result.findings, css).toEqual([]);
-        expect(result.unresolved, css).toBeGreaterThan(0);
-        return result;
-      };
-      for (const correction of [
-        ".icon {width:2em;font-size:20px}",
-        ".icon {inline-size:40px}",
-        ".icon {border-inline-width:2px}",
-        ".icon {all:unset}",
-        ".toolbar .icon {width:40px!important}.icon {width:24px!important}",
-        "@media all {.icon {padding:0}}",
-        ".icon {&:hover {padding:0}}",
-        ...[
-          "display:none",
-          "position:absolute",
-          "transform:translateX(-2px)",
-          "justify-self:start",
-        ].map((declaration) => ".icon svg {" + declaration + "}"),
-      ]) {
-        defer(original + correction);
-      }
-      defer(original.replace("padding:6px;", "padding:var(--control-padding);"));
-      expect(
-        defer(original + ".toolbar > button {padding:0}.toolbar > button:hover {padding:8px}")
-          .checked,
-      ).toBe(0);
-      defer(original, [
-        {
-          ...fixture,
-          html: fixture.html.replace('class="icon"', 'class="icon" style="padding:0"'),
-        },
-      ]);
-      defer(
-        original + '.icon:not([aria-pressed="true"]) {padding:8px}',
-        collect(
-          'html`<button class="icon" aria-pressed=${pressed}>${icons.refresh}</button>`',
-          "ui/src/state.ts",
-          dom.window.document,
-        ),
-      );
-    } finally {
-      dom.window.close();
+    const defer = (css: string, fixtures = [fixture]) => {
+      const result = scanIconGridFit(css, fixtures, base);
+      expect(result.findings, css).toEqual([]);
+      expect(result.unresolved, css).toBeGreaterThan(0);
+      return result;
+    };
+    for (const correction of [
+      ".icon {width:2em;font-size:20px}",
+      ".icon {inline-size:40px}",
+      ".icon {border-inline-width:2px}",
+      ".icon {all:unset}",
+      ".toolbar .icon {width:40px!important}.icon {width:24px!important}",
+      "@media all {.icon {padding:0}}",
+      ".icon {&:hover {padding:0}}",
+      ...[
+        "display:none",
+        "position:absolute",
+        "transform:translateX(-2px)",
+        "justify-self:start",
+      ].map((declaration) => ".icon svg {" + declaration + "}"),
+    ]) {
+      defer(original + correction);
     }
+    defer(original.replace("padding:6px;", "padding:var(--control-padding);"));
+    expect(
+      defer(original + ".toolbar > button {padding:0}.toolbar > button:hover {padding:8px}")
+        .checked,
+    ).toBe(0);
+    defer(original, [
+      {
+        ...fixture,
+        html: fixture.html.replace('class="icon"', 'class="icon" style="padding:0"'),
+      },
+    ]);
+    defer(
+      original + '.icon:not([aria-pressed="true"]) {padding:8px}',
+      collect(
+        'html`<button class="icon" aria-pressed=${pressed}>${icons.refresh}</button>`',
+        "ui/src/state.ts",
+      ),
+    );
   });
 
   it("defers cross-sheet ancestor, tag, ID, attribute, and SVG overrides", () => {
@@ -150,45 +150,38 @@ describe("fixed icon-grid fit", () => {
   });
 
   it("collects only static icon witnesses and preserves their native AST locations", () => {
-    const dom = new JSDOM();
-    try {
-      const source = [
-        "class Control extends OpenClawLightDomElement {",
-        "  render() {",
-        '    return html`<button class="icon">${(busy ? icons.loader : icons.refresh)}</button>`;',
-        "  }",
-        "}",
-      ].join("\n");
-      const cases: [string, string, number | null, number][] = [
-        ["control", source, 3, 0],
-        ["shadow", source.replace("OpenClawLightDomElement", "LitElement"), null, 0],
-        ["custom-root", source.replace("render()", "createRenderRoot()"), null, 0],
-        ["extra", 'html`<button class="icon"><span></span>${icons.refresh}</button>`', null, 0],
-        [
-          "literal",
-          'html`<header class="toolbar"><button class="icon">${busy ? icons.loader : icons.refresh}</button><button class="icon">Save ${icons.check}</button><button class="icon ${variant}">${icons.x}</button></header>`',
-          1,
-          2,
-        ],
-      ];
-      for (const [name, markup, line, findings] of cases) {
-        const file = `ui/src/${name}.ts`;
-        const fixtures = collect(markup, file, dom.window.document);
-        expect(fixtures, name).toEqual(
-          line === null ? [] : [expect.objectContaining({ file, line })],
-        );
-        if (line !== null) {
-          expect(fixtures, name).toHaveLength(1);
-          const template = dom.window.document.createElement("template");
-          template.innerHTML = fixtures[0]!.html;
-          expect(template.content.querySelectorAll("[data-icon-grid-control]"), name).toHaveLength(
-            1,
-          );
-          expect(scanIconGridFit(original, fixtures, base).findings, name).toHaveLength(findings);
-        }
+    const source = [
+      "class Control extends OpenClawLightDomElement {",
+      "  render() {",
+      '    return html`<button class="icon">${(busy ? icons.loader : icons.refresh)}</button>`;',
+      "  }",
+      "}",
+    ].join("\n");
+    const cases: [string, string, number | null, number][] = [
+      ["control", source, 3, 0],
+      ["shadow", source.replace("OpenClawLightDomElement", "LitElement"), null, 0],
+      ["custom-root", source.replace("render()", "createRenderRoot()"), null, 0],
+      ["extra", 'html`<button class="icon"><span></span>${icons.refresh}</button>`', null, 0],
+      [
+        "literal",
+        'html`<header class="toolbar"><button class="icon">${busy ? icons.loader : icons.refresh}</button><button class="icon">Save ${icons.check}</button><button class="icon ${variant}">${icons.x}</button></header>`',
+        1,
+        2,
+      ],
+    ];
+    for (const [name, markup, line, findings] of cases) {
+      const file = `ui/src/${name}.ts`;
+      const fixtures = collect(markup, file, getDocument());
+      expect(fixtures, name).toEqual(
+        line === null ? [] : [expect.objectContaining({ file, line })],
+      );
+      if (line !== null) {
+        expect(fixtures, name).toHaveLength(1);
+        const template = getDocument().createElement("template");
+        template.innerHTML = fixtures[0]!.html;
+        expect(template.content.querySelectorAll("[data-icon-grid-control]"), name).toHaveLength(1);
+        expect(scanIconGridFit(original, fixtures, base).findings, name).toHaveLength(findings);
       }
-    } finally {
-      dom.window.close();
     }
   });
 
@@ -236,270 +229,190 @@ describe("JSX icon-grid fixtures", () => {
     'import { Show, For, Show as If } from "solid-js"; import * as Solid from "solid-js";';
   const css = original.replaceAll(".toolbar > button", ".toolbar > .icon");
 
-  function collectJsx(markup: string, document: Document) {
-    return collect(`${imports}\nconst View = () => ${markup};`, "ui/src/control.tsx", document);
+  function collectJsx(markup: string) {
+    return collect(`${imports}\nconst View = () => ${markup};`, "ui/src/control.tsx");
+  }
+
+  function expectSibling(body: string, selector: string, count = 2) {
+    const fixtures = collectJsx(`<header class="toolbar">${body}</header>`);
+    const sheet = original.replace(".toolbar > button", `.toolbar > ${selector} + button`);
+    expect(scanIconGridFit(sheet, fixtures, base).findings, body).toHaveLength(count);
   }
 
   it("preserves literal ancestors through JSX branches, Show, and For", () => {
-    const dom = new JSDOM();
-    try {
-      const cases: [string, number][] = [
-        ['<button class="icon">{icons.refresh}</button>', 1],
-        ['<a class="icon"><svg /></a>', 1],
-        ['<div class="icon" role="button">{icons.refresh}</div>', 1],
-        ['<button class={["icon", { compact: true }]}><svg /></button>', 1],
-        ['<Show when={ok}><button class="icon">{icons.refresh}</button></Show>', 1],
-        ['<Show when={false}><button class="icon"><svg /></button></Show>', 0],
-        ['<Show when="" fallback={<span />}><button class="icon"><svg /></button></Show>', 0],
-        [
-          '<Show when="ready" fallback={<a class="icon"><svg /></a>}><button class="icon"><svg /></button></Show>',
-          1,
-        ],
-        [
-          '<Show when fallback={<a class="icon"><svg /></a>}><button class="icon"><svg /></button></Show>',
-          1,
-        ],
-        [
-          '<Show when={true} fallback={<a class="icon"><svg /></a>}><button class="icon"><svg /></button></Show>',
-          1,
-        ],
-        [
-          '<Show when={false} fallback={<a class="icon"><svg /></a>}><button class="icon"><svg /></button></Show>',
-          1,
-        ],
-        ['<Show when={selected}>{item => <button class="icon"><svg /></button>}</Show>', 1],
-        ['<If when={ok}><button class="icon">{icons.refresh}</button></If>', 1],
-        ['<Solid.Show when={ok}><button class="icon">{icons.refresh}</button></Solid.Show>', 1],
-        ['<For each={[1]}>{item => <button class="icon">{icons.refresh}</button>}</For>', 1],
-        ['<For each={[1, 2]}>{item => <button class="icon"><svg /></button>}</For>', 2],
-        [
-          '<For each={[]} fallback={<button class="icon"><svg /></button>}>{item => <span />}</For>',
-          1,
-        ],
-        ['{ok && <button class="icon"><svg /></button>}', 1],
-        ['{false && <button class="icon"><svg /></button>}', 0],
-        ['{false ? <button class="icon"><svg /></button> : null}', 0],
-        ['{false && <span />}{false && <span />}<button class="icon"><svg /></button>', 1],
-        ['{true ? <button class="icon"><svg /></button> : <a class="icon"><svg /></a>}', 1],
-        ['{ok ? <span /> : <span />}<button class="icon"><svg /></button>', 1],
-        ['{ok ? <button class="icon"><svg /></button> : <a class="icon"><svg /></a>}', 2],
-        [
-          '<Show when={ok} fallback={<a class="icon"><svg /></a>}><button class="icon"><svg /></button></Show>',
-          2,
-        ],
-        ['<button class="icon">{ok ? <svg /> : <svg />}</button>', 2],
-        ['<button class="icon">{ok && <svg />}</button>', 1],
-        ['<button class="icon"><svg /></button>{ok && <button class="icon"><svg /></button>}', 3],
-        [
-          '<button class="icon"><svg /></button><button class="icon">{ok ? <svg /> : <svg />}</button>',
-          3,
-        ],
-        [
-          '<For each={[1]}>{item => <Show when={item}>{ok && <button class="icon"><svg /></button>}</Show>}</For>',
-          1,
-        ],
-      ];
-      for (const [body, count] of cases) {
-        const fixtures = collectJsx(
-          `<header class="toolbar">${body}</header>`,
-          dom.window.document,
-        );
-        let controls = 0;
-        for (const entry of fixtures) {
-          const template = dom.window.document.createElement("template");
-          template.innerHTML = entry.html;
-          controls += template.content.querySelectorAll("[data-icon-grid-control]").length;
-          expect(entry.html, body).not.toContain("data-icon-grid-source");
-        }
-        expect(controls, body).toBe(count);
-        expect(scanIconGridFit(css, fixtures, base).findings, body).toHaveLength(count * 2);
+    const cases: [string, number][] = [
+      ['<button class="icon">{icons.refresh}</button>', 1],
+      ['<a class="icon"><svg /></a>', 1],
+      ['<div class="icon" role="button">{icons.refresh}</div>', 1],
+      ['<button class={["icon", { compact: true }]}><svg /></button>', 1],
+      ['<Show when={ok}><button class="icon">{icons.refresh}</button></Show>', 1],
+      ['<Show when={false}><button class="icon"><svg /></button></Show>', 0],
+      ['<Show when="" fallback={<span />}><button class="icon"><svg /></button></Show>', 0],
+      [
+        '<Show when="ready" fallback={<a class="icon"><svg /></a>}><button class="icon"><svg /></button></Show>',
+        1,
+      ],
+      [
+        '<Show when fallback={<a class="icon"><svg /></a>}><button class="icon"><svg /></button></Show>',
+        1,
+      ],
+      [
+        '<Show when={true} fallback={<a class="icon"><svg /></a>}><button class="icon"><svg /></button></Show>',
+        1,
+      ],
+      [
+        '<Show when={false} fallback={<a class="icon"><svg /></a>}><button class="icon"><svg /></button></Show>',
+        1,
+      ],
+      ['<Show when={selected}>{item => <button class="icon"><svg /></button>}</Show>', 1],
+      ['<If when={ok}><button class="icon">{icons.refresh}</button></If>', 1],
+      ['<Solid.Show when={ok}><button class="icon">{icons.refresh}</button></Solid.Show>', 1],
+      ['<For each={[1]}>{item => <button class="icon">{icons.refresh}</button>}</For>', 1],
+      ['<For each={[1, 2]}>{item => <button class="icon"><svg /></button>}</For>', 2],
+      [
+        '<For each={[]} fallback={<button class="icon"><svg /></button>}>{item => <span />}</For>',
+        1,
+      ],
+      ['{ok && <button class="icon"><svg /></button>}', 1],
+      ['{false && <button class="icon"><svg /></button>}', 0],
+      ['{false ? <button class="icon"><svg /></button> : null}', 0],
+      ['{false && <span />}{false && <span />}<button class="icon"><svg /></button>', 1],
+      ['{true ? <button class="icon"><svg /></button> : <a class="icon"><svg /></a>}', 1],
+      ['{ok ? <span /> : <span />}<button class="icon"><svg /></button>', 1],
+      ['{ok ? <button class="icon"><svg /></button> : <a class="icon"><svg /></a>}', 2],
+      [
+        '<Show when={ok} fallback={<a class="icon"><svg /></a>}><button class="icon"><svg /></button></Show>',
+        2,
+      ],
+      ['<button class="icon">{ok ? <svg /> : <svg />}</button>', 2],
+      ['<button class="icon">{ok && <svg />}</button>', 1],
+      ['<button class="icon"><svg /></button>{ok && <button class="icon"><svg /></button>}', 3],
+      [
+        '<button class="icon"><svg /></button><button class="icon">{ok ? <svg /> : <svg />}</button>',
+        3,
+      ],
+      [
+        '<For each={[1]}>{item => <Show when={item}>{ok && <button class="icon"><svg /></button>}</Show>}</For>',
+        1,
+      ],
+    ];
+    for (const [body, count] of cases) {
+      const fixtures = collectJsx(`<header class="toolbar">${body}</header>`);
+      let controls = 0;
+      for (const entry of fixtures) {
+        const template = getDocument().createElement("template");
+        template.innerHTML = entry.html;
+        controls += template.content.querySelectorAll("[data-icon-grid-control]").length;
+        expect(entry.html, body).not.toContain("data-icon-grid-source");
       }
-      const adjacent = collectJsx(
-        '<header class="toolbar">{ok ? <span /> : <span />}<button class="icon"><svg /></button></header>',
-        dom.window.document,
-      );
-      expect(
-        scanIconGridFit(
-          original.replace(".toolbar > button", ".toolbar > span + button"),
-          adjacent,
-          base,
-        ).findings,
-      ).toHaveLength(2);
-      const differentSiblings = collectJsx(
-        '<header class="toolbar">{ok ? <span class="wide" /> : <span class="narrow" />}<button class="icon"><svg /></button></header>',
-        dom.window.document,
-      );
-      expect(
-        scanIconGridFit(
-          original.replace(".toolbar > button", ".toolbar > .narrow + button"),
-          differentSiblings,
-          base,
-        ).findings,
-      ).toHaveLength(2);
-      for (const middle of [
-        "{ok && <span />}",
-        "{ok ? <span /> : null}",
-        "<Show when={ok}><span /></Show>",
-      ]) {
-        const optionalSibling = collectJsx(
-          `<header class="toolbar"><span class="wide" />${middle}<button class="icon"><svg /></button></header>`,
-          dom.window.document,
-        );
-        expect(
-          scanIconGridFit(
-            original.replace(".toolbar > button", ".toolbar > .wide + button"),
-            optionalSibling,
-            base,
-          ).findings,
-          middle,
-        ).toHaveLength(2);
-      }
-      const repeated = collectJsx(
-        '<header class="toolbar"><For each={[1, 2]}>{() => <span />}</For><button class="icon"><svg /></button></header>',
-        dom.window.document,
-      );
-      expect(
-        scanIconGridFit(
-          original.replace(".toolbar > button", ".toolbar > span + span + button"),
-          repeated,
-          base,
-        ).findings,
-      ).toHaveLength(2);
-      const voidSibling = collectJsx(
-        '<header class="toolbar"><br /><button class="icon"><svg /></button></header>',
-        dom.window.document,
-      );
-      expect(
-        scanIconGridFit(
-          original.replace(".toolbar > button", ".toolbar > br + br + button"),
-          voidSibling,
-          base,
-        ).findings,
-      ).toHaveLength(0);
-      expect(
-        scanIconGridFit(
-          original.replace(".toolbar > button", ".toolbar > br + button"),
-          voidSibling,
-          base,
-        ).findings,
-      ).toHaveLength(2);
-    } finally {
-      dom.window.close();
+      expect(controls, body).toBe(count);
+      expect(scanIconGridFit(css, fixtures, base).findings, body).toHaveLength(count * 2);
     }
+    expectSibling('{ok ? <span /> : <span />}<button class="icon"><svg /></button>', "span");
+    expectSibling(
+      '{ok ? <span class="wide" /> : <span class="narrow" />}<button class="icon"><svg /></button>',
+      ".narrow",
+    );
+    for (const middle of [
+      "{ok && <span />}",
+      "{ok ? <span /> : null}",
+      "<Show when={ok}><span /></Show>",
+    ]) {
+      expectSibling(`<span class="wide" />${middle}<button class="icon"><svg /></button>`, ".wide");
+    }
+    expectSibling(
+      '<For each={[1, 2]}>{() => <span />}</For><button class="icon"><svg /></button>',
+      "span + span",
+    );
+    const voidSibling = '<br /><button class="icon"><svg /></button>';
+    expectSibling(voidSibling, "br + br", 0);
+    expectSibling(voidSibling, "br");
   });
 
   it("applies class-array overrides before splitting enabled class names", () => {
-    const dom = new JSDOM();
-    try {
-      const cases: [string, string | null][] = [
-        ['["icon", { icon: false }]', null],
-        ['[{ icon: false }, ["icon"]]', "icon"],
-        ['["icon label", { icon: false }]', "icon label"],
-        ['["icon", { "icon label": false }]', "icon"],
-        ['["icon", { icon: false }, { icon: true }]', "icon"],
-        ["null", null],
-        ["false", null],
-        ["true", null],
-        ["[]", null],
-        ['""', ""],
-      ];
-      for (const [classes, expected] of cases) {
-        const fixtures = collectJsx(
-          `<button class={${classes}}><svg /></button>`,
-          dom.window.document,
-        );
-        expect(fixtures, classes).toHaveLength(1);
-        const template = dom.window.document.createElement("template");
-        template.innerHTML = fixtures[0]!.html;
-        expect(template.content.querySelector("button")?.getAttribute("class"), classes).toBe(
-          expected,
-        );
-      }
-      const literalName = collectJsx(
-        '<button className="icon"><svg /></button>',
-        dom.window.document,
+    const cases: [string, string | null][] = [
+      ['["icon", { icon: false }]', null],
+      ['[{ icon: false }, ["icon"]]', "icon"],
+      ['["icon label", { icon: false }]', "icon label"],
+      ['["icon", { "icon label": false }]', "icon"],
+      ['["icon", { icon: false }, { icon: true }]', "icon"],
+      ["null", null],
+      ["false", null],
+      ["true", null],
+      ["[]", null],
+      ['""', ""],
+    ];
+    for (const [classes, expected] of cases) {
+      const fixtures = collectJsx(`<button class={${classes}}><svg /></button>`);
+      expect(fixtures, classes).toHaveLength(1);
+      const template = getDocument().createElement("template");
+      template.innerHTML = fixtures[0]!.html;
+      expect(template.content.querySelector("button")?.getAttribute("class"), classes).toBe(
+        expected,
       );
-      const template = dom.window.document.createElement("template");
-      template.innerHTML = literalName[0]!.html;
-      expect(template.content.querySelector("button")?.getAttribute("class")).toBeNull();
-      expect(template.content.querySelector("button")?.getAttribute("classname")).toBe("icon");
-      expect(scanIconGridFit(original, literalName, base).findings).toEqual([]);
-    } finally {
-      dom.window.close();
     }
+    const literalName = collectJsx('<button className="icon"><svg /></button>');
+    const template = getDocument().createElement("template");
+    template.innerHTML = literalName[0]!.html;
+    expect(template.content.querySelector("button")?.getAttribute("class")).toBeNull();
+    expect(template.content.querySelector("button")?.getAttribute("classname")).toBe("icon");
+    expect(scanIconGridFit(original, literalName, base).findings).toEqual([]);
   });
 
   it("excludes unresolved JSX ancestry, geometry, and icon-only content", () => {
-    const dom = new JSDOM();
-    try {
-      for (const markup of [
-        '<header class={variant}><button class="icon"><svg /></button></header>',
-        '<header style={style}><button class="icon"><svg /></button></header>',
-        '<header {...props}><button class="icon"><svg /></button></header>',
-        '<Wrapper><button class="icon"><svg /></button></Wrapper>',
-        '<header><span class={variant} /><button class="icon"><svg /></button></header>',
-        '<header><span {...props} /><button class="icon"><svg /></button></header>',
-        '<header><span prop:textContent="label" /><button class="icon"><svg /></button></header>',
-        '<button class="icon" innerHTML={html}><svg /></button>',
-        '<><span {...props} /><button class="icon"><svg /></button></>',
-        '<><span class={variant} /><button class="icon"><svg /></button></>',
-        '<header><For each={items}>{() => <span />}</For><button class="icon"><svg /></button></header>',
-        '<header><Show when={ok}><span /></Show><Show when={ok}><button class="icon"><svg /></button></Show></header>',
-        '<For each={[1, 2]} {...{each: []}}>{() => <button class="icon"><svg /></button>}</For>',
-        '<Show when={true} {...props}><button class="icon"><svg /></button></Show>',
-        '(Show) => <Show when={true}><button class="icon"><svg /></button></Show>',
-        '({ Show }) => <Show when={true}><button class="icon"><svg /></button></Show>',
-        '(Solid) => <Solid.Show when={true}><button class="icon"><svg /></button></Solid.Show>',
-        '<button><Show when={false} fallback="Save" /><svg /></button>',
-        '<button><For each={[]} fallback="Save">{() => <span />}</For><svg /></button>',
-        'false && <button class="icon"><svg /></button>',
-        'false ? <button class="icon"><svg /></button> : null',
-        'true || <button class="icon"><svg /></button>',
-        '1 ?? <button class="icon"><svg /></button>',
-        '<button class={["icon", { active: state }]}><svg /></button>',
-        '<button class="icon"><svg class={variant} /></button>',
-        '<button class="icon"><svg {...props} /></button>',
-        '<button class="icon">Save <svg /></button>',
-        '<button class="icon"><span /><svg /></button>',
-        '<button class="icon">{arbitrary}</button>',
-        '<section><style>{styles}</style><button class="icon"><svg /></button></section>',
-      ]) {
-        expect(collectJsx(markup, dom.window.document), markup).toEqual([]);
-      }
-      const fixtures = collectJsx(
-        '<button class="icon" aria-pressed={pressed}><svg /></button>',
-        dom.window.document,
-      );
-      const result = scanIconGridFit(
-        original + '.icon:not([aria-pressed="true"]) {padding:0}',
-        fixtures,
-        base,
-      );
-      expect(result.findings).toEqual([]);
-      expect(result.unresolved).toBe(2);
-    } finally {
-      dom.window.close();
+    for (const markup of [
+      '<header class={variant}><button class="icon"><svg /></button></header>',
+      '<header style={style}><button class="icon"><svg /></button></header>',
+      '<header {...props}><button class="icon"><svg /></button></header>',
+      '<Wrapper><button class="icon"><svg /></button></Wrapper>',
+      '<header><span class={variant} /><button class="icon"><svg /></button></header>',
+      '<header><span {...props} /><button class="icon"><svg /></button></header>',
+      '<header><span prop:textContent="label" /><button class="icon"><svg /></button></header>',
+      '<button class="icon" innerHTML={html}><svg /></button>',
+      '<><span {...props} /><button class="icon"><svg /></button></>',
+      '<><span class={variant} /><button class="icon"><svg /></button></>',
+      '<header><For each={items}>{() => <span />}</For><button class="icon"><svg /></button></header>',
+      '<header><Show when={ok}><span /></Show><Show when={ok}><button class="icon"><svg /></button></Show></header>',
+      '<For each={[1, 2]} {...{each: []}}>{() => <button class="icon"><svg /></button>}</For>',
+      '<Show when={true} {...props}><button class="icon"><svg /></button></Show>',
+      '(Show) => <Show when={true}><button class="icon"><svg /></button></Show>',
+      '({ Show }) => <Show when={true}><button class="icon"><svg /></button></Show>',
+      '(Solid) => <Solid.Show when={true}><button class="icon"><svg /></button></Solid.Show>',
+      '<button><Show when={false} fallback="Save" /><svg /></button>',
+      '<button><For each={[]} fallback="Save">{() => <span />}</For><svg /></button>',
+      'false && <button class="icon"><svg /></button>',
+      'false ? <button class="icon"><svg /></button> : null',
+      'true || <button class="icon"><svg /></button>',
+      '1 ?? <button class="icon"><svg /></button>',
+      '<button class={["icon", { active: state }]}><svg /></button>',
+      '<button class="icon"><svg class={variant} /></button>',
+      '<button class="icon"><svg {...props} /></button>',
+      '<button class="icon">Save <svg /></button>',
+      '<button class="icon"><span /><svg /></button>',
+      '<button class="icon">{arbitrary}</button>',
+      '<section><style>{styles}</style><button class="icon"><svg /></button></section>',
+    ]) {
+      expect(collectJsx(markup), markup).toEqual([]);
     }
+    const fixtures = collectJsx('<button class="icon" aria-pressed={pressed}><svg /></button>');
+    const result = scanIconGridFit(
+      original + '.icon:not([aria-pressed="true"]) {padding:0}',
+      fixtures,
+      base,
+    );
+    expect(result.findings).toEqual([]);
+    expect(result.unresolved).toBe(2);
   });
 
   it("reports JSX source locations and discovers TSX controls without test fixtures", () => {
-    const dom = new JSDOM();
-    try {
-      const fixtures = collectJsx(
-        '\n<section>\n  <button class="icon"><svg /></button>\n</section>',
-        dom.window.document,
-      );
-      const whitespace = collectJsx(
-        '<section><span>\n  </span><button class="icon"><svg /></button></section>',
-        dom.window.document,
-      );
-      const template = dom.window.document.createElement("template");
-      template.innerHTML = whitespace[0]!.html;
-      expect(template.content.querySelector("span")?.textContent).toBe("");
-      expect(fixtures).toEqual([expect.objectContaining({ file: "ui/src/control.tsx", line: 3 })]);
-    } finally {
-      dom.window.close();
-    }
+    const fixtures = collectJsx('\n<section>\n  <button class="icon"><svg /></button>\n</section>');
+    const whitespace = collectJsx(
+      '<section><span>\n  </span><button class="icon"><svg /></button></section>',
+    );
+    const template = getDocument().createElement("template");
+    template.innerHTML = whitespace[0]!.html;
+    expect(template.content.querySelector("span")?.textContent).toBe("");
+    expect(fixtures).toEqual([expect.objectContaining({ file: "ui/src/control.tsx", line: 3 })]);
     const { root } = createAuditFixture({ "control.css": css }, "");
     const markup =
       'const View = () => <header class="toolbar"><div role="button" class="icon">{icons.refresh}</div></header>;';

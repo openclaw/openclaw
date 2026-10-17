@@ -23,6 +23,10 @@ const entry: LocaleEntry = {
 
 const hashText = (text: string) => `hash:${text}`;
 const cacheKeyFor = (key: string, textHash: string) => `cache:${key}:${textHash}`;
+const strings = (values: Record<string, string>) => new Map(Object.entries(values));
+const memoryMap = (...rows: TranslationMemoryEntry[]) =>
+  new Map(rows.map((row) => [row.cache_key, row]));
+const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 
 function memoryEntry(overrides: Partial<TranslationMemoryEntry> = {}): TranslationMemoryEntry {
   return {
@@ -52,6 +56,34 @@ function localeMeta(overrides: Partial<LocaleMeta> = {}): LocaleMeta {
   };
 }
 
+function createPlan(overrides: Partial<Parameters<typeof createControlUiLocaleSyncPlan>[0]>) {
+  return createControlUiLocaleSyncPlan({
+    sourcePath: "ui/src/i18n/locales/fr.ts",
+    allowTranslate: false,
+    cacheKeyFor,
+    entry,
+    existingFlat: new Map(),
+    force: false,
+    hashText,
+    previousMeta: localeMeta(),
+    sourceFlat: new Map(),
+    sourceHash: "next-source",
+    translationMemory: new Map(),
+    ...overrides,
+  });
+}
+
+function render(plan: ReturnType<typeof createPlan>, generatedAt: string) {
+  return plan.render({ defaultGlossary: [], glossary: [], generatedAt, workflow: 1 });
+}
+
+function materialize(
+  source: ReadonlyMap<string, string>,
+  memory: ReadonlyMap<string, TranslationMemoryEntry>,
+) {
+  return materializePreparedControlUiLocaleCatalog(prepareControlUiCatalogSource(source), memory);
+}
+
 describe("createControlUiLocaleSyncPlan", () => {
   it("preserves authored plugin values under force without inventing memory provenance", () => {
     const verified = memoryEntry({
@@ -60,39 +92,27 @@ describe("createControlUiLocaleSyncPlan", () => {
       translated: "Identique",
       text_hash: hashText("Same"),
     });
-    const plan = createControlUiLocaleSyncPlan({
+    const plan = createPlan({
       allowTranslate: true,
-      cacheKeyFor,
-      entry,
-      existingFlat: new Map(),
-      authoredFlat: new Map([
-        ["example.authored", "Identique"],
-        ["example.verified", "Identique"],
-      ]),
+      authoredFlat: strings({ "example.authored": "Identique", "example.verified": "Identique" }),
       force: true,
       refreshKeys: new Set(["example.authored"]),
-      hashText,
       previousMeta: null,
-      sourceFlat: new Map([
-        ["example.authored", "Same"],
-        ["example.verified", "Same"],
-        ["example.new", "New {count}"],
-      ]),
+      sourceFlat: strings({
+        "example.authored": "Same",
+        "example.verified": "Same",
+        "example.new": "New {count}",
+      }),
       sourceHash: "plugin-source",
       sourcePath: "extensions/example/browser/i18n/locales/en.ts",
-      translationMemory: new Map([[verified.cache_key, verified]]),
+      translationMemory: memoryMap(verified),
     });
     expect(plan.pending.map(({ key }) => key)).toEqual(["example.new"]);
     plan.recordTranslations(plan.pending, new Map([["example.new", "Nouveau {count}"]]), {
       sourceLocale: "en",
       updatedAt: () => "2026-01-02T00:00:00Z",
     });
-    const result = plan.render({
-      defaultGlossary: [],
-      glossary: [],
-      generatedAt: "2026-01-02T00:00:00Z",
-      workflow: 1,
-    });
+    const result = render(plan, "2026-01-02T00:00:00Z");
     expect(result.nextFlat.get("example.authored")).toBe("Identique");
     const records = result.translationMemory
       .trim()
@@ -113,15 +133,15 @@ describe("createControlUiLocaleSyncPlan", () => {
 
   it("refreshes selected keys without replaying cached aliases or dropping normal pending work", () => {
     const catalogHashText = hashControlUiTranslationText;
-    const sourceFlat = new Map([
-      ["refresh", "Shared"],
-      ["alias", "Shared"],
-      ["keep", "Keep"],
-      ["missing", "New"],
-      ["changed", "Changed {new}"],
-      ["otherGroup", "Shared"],
-      ["otherAlias", "Shared"],
-    ]);
+    const sourceFlat = strings({
+      refresh: "Shared",
+      alias: "Shared",
+      keep: "Keep",
+      missing: "New",
+      changed: "Changed {new}",
+      otherGroup: "Shared",
+      otherAlias: "Shared",
+    });
     const cached = memoryEntry({
       cache_key: cacheKeyFor("refresh", catalogHashText("Shared")),
       segment_id: "refresh",
@@ -142,55 +162,38 @@ describe("createControlUiLocaleSyncPlan", () => {
       text_hash: catalogHashText("Shared"),
       translated: "Autre",
     });
-    const plan = createControlUiLocaleSyncPlan({
-      sourcePath: "ui/src/i18n/locales/fr.ts",
+    const plan = createPlan({
       allowTranslate: true,
-      cacheKeyFor,
-      entry,
-      existingFlat: new Map([
-        ["refresh", "Partage"],
-        ["alias", "Partage"],
-        ["keep", "Conserver"],
-        ["otherGroup", "Autre"],
-        ["otherAlias", "Autre"],
-      ]),
-      force: false,
+      existingFlat: strings({
+        refresh: "Partage",
+        alias: "Partage",
+        keep: "Conserver",
+        otherGroup: "Autre",
+        otherAlias: "Autre",
+      }),
       refreshKeys: new Set(["refresh"]),
       hashText: catalogHashText,
-      previousMeta: localeMeta(),
       sourceFlat,
       sourceHash: "source",
-      translationMemory: new Map([
-        [cached.cache_key, cached],
-        [kept.cache_key, kept],
-        [independent.cache_key, independent],
-        [
-          "old",
-          memoryEntry({
-            cache_key: "old",
-            segment_id: "changed",
-            text: "Changed {old}",
-            text_hash: catalogHashText("Changed {old}"),
-          }),
-        ],
-      ]),
+      translationMemory: memoryMap(
+        cached,
+        kept,
+        independent,
+        memoryEntry({
+          cache_key: "old",
+          segment_id: "changed",
+          text: "Changed {old}",
+          text_hash: catalogHashText("Changed {old}"),
+        }),
+      ),
     });
     expect(plan.pending.map((item) => item.key)).toEqual(["refresh", "missing", "changed"]);
     plan.recordTranslations(
       plan.pending,
-      new Map([
-        ["refresh", "Corrigé"],
-        ["missing", "Nouveau"],
-        ["changed", "Modifié {new}"],
-      ]),
+      strings({ refresh: "Corrigé", missing: "Nouveau", changed: "Modifié {new}" }),
       { sourceLocale: "en", updatedAt: () => "2026-09-06T00:00:00.000Z" },
     );
-    const rendered = plan.render({
-      defaultGlossary: [],
-      glossary: [],
-      generatedAt: "2026-09-06T00:00:00.000Z",
-      workflow: 1,
-    });
+    const rendered = render(plan, "2026-09-06T00:00:00.000Z");
     expect(Object.fromEntries(rendered.nextFlat)).toEqual({
       refresh: "Corrigé",
       alias: "Partage",
@@ -217,25 +220,13 @@ describe("createControlUiLocaleSyncPlan", () => {
 
   it("retranslates cached and existing strings on a full refresh", () => {
     const cached = memoryEntry({ segment_id: "cached" });
-    const plan = createControlUiLocaleSyncPlan({
-      sourcePath: "ui/src/i18n/locales/fr.ts",
+    const plan = createPlan({
       allowTranslate: true,
-      cacheKeyFor,
-      entry,
-      existingFlat: new Map([
-        ["cached", "Partage"],
-        ["existing", "Existant"],
-      ]),
+      existingFlat: strings({ cached: "Partage", existing: "Existant" }),
       force: true,
-      hashText,
-      previousMeta: localeMeta(),
-      sourceFlat: new Map([
-        ["cached", "Shared"],
-        ["alias", "Shared"],
-        ["existing", "Existing"],
-      ]),
+      sourceFlat: strings({ cached: "Shared", alias: "Shared", existing: "Existing" }),
       sourceHash: "source",
-      translationMemory: new Map([[cached.cache_key, cached]]),
+      translationMemory: memoryMap(cached),
     });
     expect(plan.pending.map((item) => item.key)).toEqual(["cached", "alias", "existing"]);
   });
@@ -286,24 +277,11 @@ describe("createControlUiLocaleSyncPlan", () => {
       model: "private-model-fixture",
       provider: "private-provider-fixture",
     });
-    const plan = createControlUiLocaleSyncPlan({
-      sourcePath: "ui/src/i18n/locales/fr.ts",
-      allowTranslate: false,
-      cacheKeyFor,
-      entry,
-      existingFlat: new Map([
-        ["group.cached", "Ancien cache"],
-        ["group.existing", "Existant"],
-      ]),
-      force: false,
-      hashText,
+    const plan = createPlan({
+      existingFlat: strings({ "group.cached": "Ancien cache", "group.existing": "Existant" }),
       previousMeta: localeMeta({ fallbackKeys: ["group.cached"] }),
       sourceFlat,
-      sourceHash: "next-source",
-      translationMemory: new Map([
-        [sharedCache.cache_key, sharedCache],
-        [exactCache.cache_key, exactCache],
-      ]),
+      translationMemory: memoryMap(sharedCache, exactCache),
     });
 
     expect(plan.pending.map((item) => item.key)).toEqual(["group.pending"]);
@@ -317,23 +295,17 @@ describe("createControlUiLocaleSyncPlan", () => {
     });
 
     expect(artifacts.meta).toBe(
-      `${JSON.stringify(
-        {
-          fallbackKeys: ["group.cached", "group.pending"],
-          generatedAt: "2026-02-02T00:00:00.000Z",
-          locale: "fr",
-          sourceHash: "next-source",
-          totalKeys: 4,
-          translatedKeys: 2,
-          workflow: 1,
-        },
-        null,
-        2,
-      )}\n`,
+      json({
+        fallbackKeys: ["group.cached", "group.pending"],
+        generatedAt: "2026-02-02T00:00:00.000Z",
+        locale: "fr",
+        sourceHash: "next-source",
+        totalKeys: 4,
+        translatedKeys: 2,
+        workflow: 1,
+      }),
     );
-    expect(artifacts.glossary).toBe(
-      `${JSON.stringify([{ source: "OpenClaw", target: "OpenClaw" }], null, 2)}\n`,
-    );
+    expect(artifacts.glossary).toBe(json([{ source: "OpenClaw", target: "OpenClaw" }]));
     const reusedCache = {
       ...memoryEntry(),
       cache_key: cacheKeyFor("group.reused", hashText("Shared")),
@@ -348,83 +320,60 @@ describe("createControlUiLocaleSyncPlan", () => {
     expect(artifacts.translationMemory + artifacts.meta).not.toContain("private-");
   });
 
-  describe.each([
-    {
-      name: "prepared",
-      materialize: (
-        source: ReadonlyMap<string, string>,
-        memory: ReadonlyMap<string, TranslationMemoryEntry>,
-      ) => materializePreparedControlUiLocaleCatalog(prepareControlUiCatalogSource(source), memory),
-    },
-  ])("$name materialization", ({ materialize }) => {
-    it("keeps aliases independent, source order, and the last valid write", () => {
-      const abcHash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-      const grouped = memoryEntry({
-        segment_id: "group.second",
-        segment_ids: ["group.first", "removed", "changed"],
-        text: "Stored text is not the freshness authority",
-        text_hash: abcHash,
-        translated: "Partagé",
-      });
-      const replacement = memoryEntry({
-        cache_key: "replacement",
-        segment_id: "group.first",
-        text_hash: abcHash,
-        translated: "Dernier",
-      });
-      const stale = memoryEntry({
-        cache_key: "stale",
-        segment_id: "group.first",
-        text_hash: "stale",
-        translated: "Obsolète",
-      });
-      const memory = new Map([
-        [grouped.cache_key, grouped],
-        [replacement.cache_key, replacement],
-        [stale.cache_key, stale],
-      ]);
-      const source = flattenTranslations({
-        group: { first: "abc", second: "abc" },
-        changed: "Changed",
-        unused: "abc",
-      });
-      const catalog = materialize(source, memory);
-      expect(catalog).toEqual({ group: { first: "Dernier", second: "Partagé" } });
-      expect([...flattenTranslations(catalog)]).toEqual([
-        ["group.first", "Dernier"],
-        ["group.second", "Partagé"],
-      ]);
-      expect(materialize(new Map([["group.first", "abc"]]), new Map())).toEqual({});
-      expect(materialize(new Map(), memory)).toEqual({});
-      expect(materialize(new Map([["group.first", "Changed"]]), memory)).toEqual({});
-      expect(
-        materialize(new Map([["group.first", "abc"]]), new Map([[grouped.cache_key, grouped]])),
-      ).toEqual({ group: { first: "Partagé" } });
+  it("keeps aliases independent, source order, and the last valid write", () => {
+    const abcHash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    const grouped = memoryEntry({
+      segment_id: "group.second",
+      segment_ids: ["group.first", "removed", "changed"],
+      text: "Stored text is not the freshness authority",
+      text_hash: abcHash,
+      translated: "Partagé",
     });
+    const replacement = memoryEntry({
+      cache_key: "replacement",
+      segment_id: "group.first",
+      text_hash: abcHash,
+      translated: "Dernier",
+    });
+    const stale = memoryEntry({
+      cache_key: "stale",
+      segment_id: "group.first",
+      text_hash: "stale",
+      translated: "Obsolète",
+    });
+    const memory = new Map([
+      [grouped.cache_key, grouped],
+      [replacement.cache_key, replacement],
+      [stale.cache_key, stale],
+    ]);
+    const source = flattenTranslations({
+      group: { first: "abc", second: "abc" },
+      changed: "Changed",
+      unused: "abc",
+    });
+    const catalog = materialize(source, memory);
+    expect(catalog).toEqual({ group: { first: "Dernier", second: "Partagé" } });
+    expect([...flattenTranslations(catalog)]).toEqual([
+      ["group.first", "Dernier"],
+      ["group.second", "Partagé"],
+    ]);
+    expect(materialize(new Map([["group.first", "abc"]]), new Map())).toEqual({});
+    expect(materialize(new Map(), memory)).toEqual({});
+    expect(materialize(new Map([["group.first", "Changed"]]), memory)).toEqual({});
+    expect(
+      materialize(new Map([["group.first", "abc"]]), new Map([[grouped.cache_key, grouped]])),
+    ).toEqual({ group: { first: "Partagé" } });
   });
-
   it("refreshes recorded fallback copy when forced without a provider", () => {
-    const plan = createControlUiLocaleSyncPlan({
-      sourcePath: "ui/src/i18n/locales/fr.ts",
-      allowTranslate: false,
-      cacheKeyFor,
-      entry,
+    const plan = createPlan({
       existingFlat: new Map([["title", "Old English"]]),
       force: true,
-      hashText,
       previousMeta: localeMeta({ fallbackKeys: ["title"] }),
       sourceFlat: new Map([["title", "New English"]]),
-      sourceHash: "next-source",
-      translationMemory: new Map(),
     });
 
     expect(plan.newFallbackCount).toBe(0);
-    const artifacts = plan.render({
-      defaultGlossary: [],
-      generatedAt: "2026-03-03T00:00:00.000Z",
-      glossary: [],
-      workflow: 1,
-    });
+    const artifacts = render(plan, "2026-03-03T00:00:00.000Z");
     expect(artifacts.nextFlat.get("title")).toBe("New English");
     expect(JSON.parse(artifacts.meta).fallbackKeys).toEqual(["title"]);
   });
@@ -436,26 +385,14 @@ describe("createControlUiLocaleSyncPlan", () => {
       totalKeys: 1,
       translatedKeys: 1,
     });
-    const plan = createControlUiLocaleSyncPlan({
-      sourcePath: "ui/src/i18n/locales/fr.ts",
-      allowTranslate: false,
-      cacheKeyFor,
-      entry,
+    const plan = createPlan({
       existingFlat: new Map([["title", "Titre"]]),
-      force: false,
-      hashText,
       previousMeta,
       sourceFlat,
       sourceHash: "same-source",
-      translationMemory: new Map(),
     });
 
-    const artifacts = plan.render({
-      defaultGlossary: [],
-      generatedAt: "2026-03-03T00:00:00.000Z",
-      glossary: [],
-      workflow: 1,
-    });
+    const artifacts = render(plan, "2026-03-03T00:00:00.000Z");
 
     expect(JSON.parse(artifacts.meta)).toMatchObject({
       generatedAt: previousMeta.generatedAt,

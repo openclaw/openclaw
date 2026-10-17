@@ -96,12 +96,14 @@ describe("cold-load trace accounting", () => {
 });
 
 describe("cold-load CPU accounting", () => {
-  const frame = (functionName: string, url = "app.ts", lineNumber = 0) => ({
+  const frame = (functionName: string, url = "app.ts", lineNumber = 0, columnNumber = 0) => ({
     functionName,
     url,
     lineNumber,
-    columnNumber: 0,
+    columnNumber,
   });
+  const mapProfile = (profile: ColdLoadCpuProfile, assetDirectory: string) =>
+    mapColdLoadCpuProfile(profile, { assetBaseUrl: "http://localhost/assets/", assetDirectory });
 
   it("weights leaf samples by time delta and counts nested Solid flush time once", () => {
     const solidUrl = "node_modules/@solidjs/signals/dist/prod.js";
@@ -154,10 +156,7 @@ describe("cold-load CPU accounting", () => {
         timeDeltas: [2_000],
       };
 
-      const mapped = await mapColdLoadCpuProfile(profile, {
-        assetBaseUrl: "http://localhost/assets/",
-        assetDirectory: directory,
-      });
+      const mapped = await mapProfile(profile, directory);
       expect(mapped).toMatchObject({ mappedFrames: 1, unmappedFrames: 0 });
       expect(mapped.profile.nodes[0]?.callFrame).toMatchObject({
         functionName: "flush",
@@ -188,26 +187,16 @@ describe("cold-load CPU accounting", () => {
     await writeFile(path.join(directory, "app.js.map"), map);
     const generatedColumn = code.indexOf("+1");
     expect(generatedColumn).toBeGreaterThan(0);
-    const mapped = await mapColdLoadCpuProfile(
+    const mapped = await mapProfile(
       {
         nodes: [
           {
             id: 1,
-            callFrame: {
-              functionName: "t",
-              url: "http://localhost/assets/app.js",
-              lineNumber: 0,
-              columnNumber: generatedColumn,
-            },
+            callFrame: frame("t", "http://localhost/assets/app.js", 0, generatedColumn),
           },
           {
             id: 2,
-            callFrame: {
-              functionName: "t",
-              url: "http://localhost/assets/app.js",
-              lineNumber: 0,
-              columnNumber: 1,
-            },
+            callFrame: frame("t", "http://localhost/assets/app.js", 0, 1),
           },
           {
             id: 3,
@@ -215,7 +204,7 @@ describe("cold-load CPU accounting", () => {
           },
         ],
       },
-      { assetBaseUrl: "http://localhost/assets/", assetDirectory: directory },
+      directory,
     );
     expect(mapped.profile.nodes[0]?.callFrame).toMatchObject({
       url: expect.stringMatching(/(?:^|\/)src\/timestamp\.ts$/u),
@@ -251,10 +240,7 @@ describe("cold-load CPU accounting", () => {
         minify: true,
         sourcemap: "external",
       });
-      const mapped = await mapColdLoadCpuProfile(profile, {
-        assetBaseUrl: "http://localhost/assets/",
-        assetDirectory,
-      });
+      const mapped = await mapProfile(profile, assetDirectory);
       expect(mapped.mappedFrames).toBe(1);
       return summarizeCpuProfile(mapped.profile, { includeTables: true }).tables!;
     }
@@ -334,10 +320,7 @@ describe("cold-load CPU accounting", () => {
       samples: [1],
       timeDeltas: [1000],
     };
-    const mapped = await mapColdLoadCpuProfile(profile, {
-      assetBaseUrl: "http://localhost/assets/",
-      assetDirectory: directory,
-    });
+    const mapped = await mapProfile(profile, directory);
     expect(mapped).toMatchObject({ mappedFrames: 0, unmappedFrames: 1 });
     expect(mapped.profile.nodes[0]).toBe(profile.nodes[0]);
   });

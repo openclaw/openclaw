@@ -18,6 +18,23 @@ const preparedScripts = new Map<string, string | Uint8Array>();
 const tsxImport = new URL("../../scripts/tsx.mjs", import.meta.url).href;
 const baselineUpdateCommand =
   'node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"';
+const startupHtml =
+  '<script type="module" src="./assets/index-a.js"></script>\n<link rel="stylesheet" href="./assets/index-c.css">\n';
+const readBaseline = (configDir: string) =>
+  JSON.parse(
+    fs.readFileSync(path.join(configDir, "control-ui-startup-budget-baseline.json"), "utf8"),
+  );
+
+function writeAssetAt(
+  assetsDir: string,
+  file: string,
+  sizes: { rawBytes: number; gzipBytes: number; brotliBytes: number },
+) {
+  const assetPath = path.join(assetsDir, file);
+  fs.writeFileSync(assetPath, Buffer.alloc(sizes.rawBytes));
+  fs.writeFileSync(`${assetPath}.gz`, Buffer.alloc(sizes.gzipBytes));
+  fs.writeFileSync(`${assetPath}.br`, Buffer.alloc(sizes.brotliBytes));
+}
 
 function runControlUiPerformanceCli(
   scriptPath: string,
@@ -45,25 +62,14 @@ function createDistFixture() {
   const assetsDir = path.join(distDir, "assets");
   fs.mkdirSync(assetsDir);
   tempDirs.push(distDir);
-  const writeAsset = (
-    file: string,
-    sizes: { rawBytes: number; gzipBytes: number; brotliBytes: number },
-  ) => {
-    const assetPath = path.join(assetsDir, file);
-    fs.writeFileSync(assetPath, Buffer.alloc(sizes.rawBytes));
-    fs.writeFileSync(`${assetPath}.gz`, Buffer.alloc(sizes.gzipBytes));
-    fs.writeFileSync(`${assetPath}.br`, Buffer.alloc(sizes.brotliBytes));
-  };
+  const writeAsset = (file: string, sizes: Parameters<typeof writeAssetAt>[2]) =>
+    writeAssetAt(assetsDir, file, sizes);
   return { distDir, writeAsset };
 }
 
 function createStartupFixture() {
   const { distDir, writeAsset } = createDistFixture();
-  fs.writeFileSync(
-    path.join(distDir, "index.html"),
-    '<script type="module" src="./assets/index-a.js"></script>\n' +
-      '<link rel="stylesheet" href="./assets/index-c.css">\n',
-  );
+  fs.writeFileSync(path.join(distDir, "index.html"), startupHtml);
   writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
   writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
   return { distDir };
@@ -102,20 +108,13 @@ function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
     path.join(scriptsDir, "tsx.mjs"),
     `await import(${JSON.stringify(tsxImport)});\n`,
   );
-  fs.writeFileSync(
-    path.join(distDir, "index.html"),
-    '<script type="module" src="./assets/index-a.js"></script>\n' +
-      '<link rel="stylesheet" href="./assets/index-c.css">\n',
-  );
+  fs.writeFileSync(path.join(distDir, "index.html"), startupHtml);
   for (const [file, sizes] of [
     ["index-a.js", { rawBytes: 100, gzipBytes: 65, brotliBytes: 50 }],
     ["index-c.css", { rawBytes: 50, gzipBytes: startupCssGzipBytes, brotliBytes: 12 }],
     ["lazy-d.css", { rawBytes: 50, gzipBytes: deferredCssGzipBytes, brotliBytes: 12 }],
   ] as const) {
-    const assetPath = path.join(assetsDir, file);
-    fs.writeFileSync(assetPath, Buffer.alloc(sizes.rawBytes));
-    fs.writeFileSync(`${assetPath}.gz`, Buffer.alloc(sizes.gzipBytes));
-    fs.writeFileSync(`${assetPath}.br`, Buffer.alloc(sizes.brotliBytes));
+    writeAssetAt(assetsDir, file, sizes);
   }
   fs.writeFileSync(
     path.join(configDir, "control-ui-startup-budget-baseline.json"),
@@ -130,6 +129,22 @@ function createCliFixture(startupCssGzipBytes = 15, deferredCssGzipBytes = 15) {
     fs.copyFileSync(path.join(scriptsDir, "check-control-ui-performance.js"), scriptPath);
   }
   return { rootDir, scriptPath, configDir, distDir };
+}
+
+function jsonCli(
+  fixture: ReturnType<typeof createCliFixture>,
+  args: string[] = [],
+  exitCode = 0,
+  env: NodeJS.ProcessEnv = {},
+) {
+  const result = runControlUiPerformanceCli(
+    fixture.scriptPath,
+    ["--json", ...args],
+    fixture.rootDir,
+    env,
+  );
+  expect(result.status, result.stderr).toBe(exitCode);
+  return JSON.parse(result.stdout);
 }
 
 beforeAll(async () => {
@@ -311,11 +326,7 @@ describe("Control UI performance budgets", () => {
 
   it("retains the ordinary chunk cap beside locale pairs", () => {
     const { distDir, writeAsset } = createDistFixture();
-    fs.writeFileSync(
-      path.join(distDir, "index.html"),
-      '<script type="module" src="./assets/index-a.js"></script>\n' +
-        '<link rel="stylesheet" href="./assets/index-c.css">\n',
-    );
+    fs.writeFileSync(path.join(distDir, "index.html"), startupHtml);
     writeAsset("index-a.js", { rawBytes: 100, gzipBytes: 40, brotliBytes: 30 });
     writeAsset("lazy-b.js", { rawBytes: 200, gzipBytes: 215 * 1024 + 1, brotliBytes: 55 });
     writeAsset("index-c.css", { rawBytes: 50, gzipBytes: 15, brotliBytes: 12 });
@@ -335,11 +346,7 @@ describe("Control UI performance budgets", () => {
   });
 
   it("reports a 17-byte startup CSS target excess without failing the check", () => {
-    const { rootDir, scriptPath } = createCliFixture(46_097);
-    const result = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir);
-
-    expect(result.status, result.stderr).toBe(0);
-    const report = JSON.parse(result.stdout);
+    const report = jsonCli(createCliFixture(46_097));
     expect(report.violations).toEqual([]);
     expect(report.warnings).toEqual([expect.stringContaining("CSS")]);
     expect(report.report).toContain("46097 B");
@@ -367,14 +374,7 @@ describe("Control UI performance budgets", () => {
   ])("checks %s against built base assets", (_name, css, baseCss, lazy, baseLazy, metric) => {
     const current = createCliFixture(css, lazy);
     const base = createCliFixture(baseCss, baseLazy);
-    const result = runControlUiPerformanceCli(
-      current.scriptPath,
-      ["--json", "--base-dist", base.distDir],
-      current.rootDir,
-    );
-
-    expect(result.status, result.stderr).toBe(metric ? 1 : 0);
-    const report = JSON.parse(result.stdout);
+    const report = jsonCli(current, ["--base-dist", base.distDir], metric ? 1 : 0);
     expect(report.baseMetrics.startup.css.gzipBytes).toBe(baseCss);
     expect(report.baseMetrics.largest.css.gzipBytes).toBe(Math.max(baseCss, baseLazy));
     expect(report.violations).toEqual(
@@ -409,7 +409,8 @@ describe("Control UI performance budgets", () => {
   );
 
   it.each(["chat", "new"] as const)("enforces the %s boot request limit in Actions", (route) => {
-    const { rootDir, scriptPath, distDir } = createCliFixture();
+    const fixture = createCliFixture();
+    const { distDir } = fixture;
     const limit = CONTROL_UI_PERFORMANCE_BUDGETS[`${route}BootJsRequests`];
     const links = Array.from({ length: limit }, (_, index) => {
       const file = `route-${index}.js`;
@@ -427,26 +428,17 @@ describe("Control UI performance budgets", () => {
       );
     writeRoute(limit);
     const actions = { GITHUB_ACTIONS: "true" };
-    const over = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, actions);
-    expect(JSON.parse(over.stdout).violations).toEqual([
+    expect(jsonCli(fixture, [], 1, actions).violations).toEqual([
       expect.objectContaining({ metric: `${route} boot JS requests`, actual: limit + 1, limit }),
     ]);
-    expect(over.status, over.stderr).toBe(1);
-    const reported = runControlUiPerformanceCli(
-      scriptPath,
-      ["--json", "--report-only"],
-      rootDir,
-      actions,
-    );
-    expect(reported.status, reported.stderr).toBe(0);
+    jsonCli(fixture, ["--report-only"], 0, actions);
     writeRoute(limit - 1);
-    const atLimit = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, actions);
-    expect(atLimit.status, atLimit.stderr).toBe(0);
-    expect(JSON.parse(atLimit.stdout).violations).toEqual([]);
+    expect(jsonCli(fixture, [], 0, actions).violations).toEqual([]);
   });
 
   it.each(["chat", "new"] as const)("enforces the %s boot byte limit in Actions", (route) => {
-    const { rootDir, scriptPath, distDir } = createCliFixture();
+    const fixture = createCliFixture();
+    const { distDir } = fixture;
     const limit = CONTROL_UI_PERFORMANCE_BUDGETS[`${route}BootJsGzipBytes`];
     const initialBytes = collectControlUiPerformanceMetrics(distDir).startup.js.gzipBytes;
     const links: string[] = [];
@@ -466,23 +458,13 @@ describe("Control UI performance budgets", () => {
       `<template data-openclaw-route-preloads="${route}">${links.join("")}</template>`,
     );
     const actions = { GITHUB_ACTIONS: "true" };
-    const atLimit = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, actions);
-    expect(atLimit.status, atLimit.stderr).toBe(0);
-    expect(JSON.parse(atLimit.stdout).violations).toEqual([]);
+    expect(jsonCli(fixture, [], 0, actions).violations).toEqual([]);
 
     fs.appendFileSync(path.join(distDir, "assets/route-0.js.gz"), "x");
-    const over = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, actions);
-    expect(over.status, over.stderr).toBe(1);
-    expect(JSON.parse(over.stdout).violations).toEqual([
+    expect(jsonCli(fixture, [], 1, actions).violations).toEqual([
       expect.objectContaining({ metric: `${route} boot JS gzip`, actual: limit + 1, limit }),
     ]);
-    const reported = runControlUiPerformanceCli(
-      scriptPath,
-      ["--json", "--report-only"],
-      rootDir,
-      actions,
-    );
-    expect(reported.status, reported.stderr).toBe(0);
+    jsonCli(fixture, ["--report-only"], 0, actions);
   });
 
   it("fails closed when the startup baseline is malformed", () => {
@@ -517,44 +499,33 @@ describe("Control UI performance budgets", () => {
 
   it("updates the baseline from generated or explicitly measured metrics", () => {
     const { rootDir, scriptPath, configDir, distDir } = createCliFixture();
-
-    const result = runControlUiPerformanceCli(scriptPath, ["--update-baseline"], rootDir);
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(
-      JSON.parse(
-        fs.readFileSync(path.join(configDir, "control-ui-startup-budget-baseline.json"), "utf8"),
-      ),
-    ).toEqual({
+    const update = (args: string[] = []) => {
+      const result = runControlUiPerformanceCli(
+        scriptPath,
+        ["--update-baseline", ...args],
+        rootDir,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      return readBaseline(configDir);
+    };
+    expect(update()).toEqual({
       startupJsGzipBytes: 65,
       reason: "manual baseline update",
       updatedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/u),
     });
 
-    const customReasonResult = runControlUiPerformanceCli(
-      scriptPath,
-      ["--update-baseline", "--reason", "fixture update"],
-      rootDir,
-    );
-    expect(customReasonResult.status, customReasonResult.stderr).toBe(0);
-    expect(
-      JSON.parse(
-        fs.readFileSync(path.join(configDir, "control-ui-startup-budget-baseline.json"), "utf8"),
-      ),
-    ).toMatchObject({ startupJsGzipBytes: 65, reason: "fixture update" });
+    expect(update(["--reason", "fixture update"])).toMatchObject({
+      startupJsGzipBytes: 65,
+      reason: "fixture update",
+    });
 
     fs.rmSync(distDir, { recursive: true });
-    const explicitBytesResult = runControlUiPerformanceCli(
-      scriptPath,
-      ["--update-baseline", "--startup-js-bytes", "321", "--reason", "explicit measurement"],
-      rootDir,
+    expect(update(["--startup-js-bytes", "321", "--reason", "explicit measurement"])).toMatchObject(
+      {
+        startupJsGzipBytes: 321,
+        reason: "explicit measurement",
+      },
     );
-    expect(explicitBytesResult.status, explicitBytesResult.stderr).toBe(0);
-    expect(
-      JSON.parse(
-        fs.readFileSync(path.join(configDir, "control-ui-startup-budget-baseline.json"), "utf8"),
-      ),
-    ).toMatchObject({ startupJsGzipBytes: 321, reason: "explicit measurement" });
 
     const beyondRatchetResult = runControlUiPerformanceCli(
       scriptPath,
@@ -565,11 +536,10 @@ describe("Control UI performance budgets", () => {
     expect(beyondRatchetResult.stderr).toContain(
       "4418 B differs from current baseline 321 B by 4097 B, exceeding the 4096 B ratchet",
     );
-    expect(
-      JSON.parse(
-        fs.readFileSync(path.join(configDir, "control-ui-startup-budget-baseline.json"), "utf8"),
-      ),
-    ).toMatchObject({ startupJsGzipBytes: 321, reason: "explicit measurement" });
+    expect(readBaseline(configDir)).toMatchObject({
+      startupJsGzipBytes: 321,
+      reason: "explicit measurement",
+    });
   });
 
   it.each([

@@ -28,14 +28,7 @@ function writeExecutable(filePath: string, source: string): void {
   chmodSync(filePath, 0o755);
 }
 
-function createRigRepository(): {
-  root: string;
-  script: string;
-  fakeBin: string;
-  app: string;
-  fixture: string;
-  proof: string;
-} {
+function createRigRepository() {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-computer-use-rig-"));
   fixtureRoots.push(root);
   const scriptsDev = path.join(root, "scripts", "dev");
@@ -66,10 +59,10 @@ console.log(JSON.stringify({
   writeExecutable(appExecutable, captureInvocation);
   writeExecutable(path.join(fakeBin, "defaults"), '#!/bin/sh\n[ "$1" != read ]\n');
   mkdirSync(path.join(root, "home"));
-  writeExecutable(path.join(fakeBin, "codesign"), "#!/bin/sh\nexit 0\n");
   writeExecutable(path.join(fakeBin, "uname"), "#!/bin/sh\necho Linux\n");
-  writeExecutable(path.join(fakeBin, "xdotool"), "#!/bin/sh\nexit 0\n");
-  writeExecutable(path.join(fakeBin, "xdpyinfo"), "#!/bin/sh\nexit 0\n");
+  for (const command of ["codesign", "xdotool", "xdpyinfo"]) {
+    writeExecutable(path.join(fakeBin, command), "#!/bin/sh\nexit 0\n");
+  }
 
   runGit(root, "init", "-q");
   runGit(root, "config", "user.name", "OpenClaw Test");
@@ -228,39 +221,33 @@ describe.each(["macos", "linux"] as const)("computer-use %s live rig auth", (pla
 });
 
 describe("computer-use live rig source integrity", () => {
-  it("refuses macOS preparation after the proof runner changes", async () => {
+  async function rejectDirtySource(kind: "macos" | "linux") {
     const fixture = createRigRepository();
-    writeFileSync(fixture.proof, "// locally modified proof\n");
-    const result = runRig({
-      ...fixture,
-      args: [
-        "prepare",
-        "proof-test",
-        String(await reservePort()),
-        fixture.app,
-        path.join(fixture.root, "scratch-mac"),
-        "cua",
-      ],
-    });
-
+    writeFileSync(
+      kind === "macos" ? fixture.proof : fixture.fixture,
+      kind === "macos" ? "// locally modified proof\n" : "# locally modified fixture\n",
+    );
+    const args = [
+      kind === "macos" ? "prepare" : "prepare-linux",
+      "proof-test",
+      String(await reservePort()),
+    ];
+    if (kind === "macos") {
+      args.push(fixture.app);
+    }
+    args.push(path.join(fixture.root, `scratch-${kind}`));
+    if (kind === "macos") {
+      args.push("cua");
+    }
+    const result = runRig({ ...fixture, args });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("runtime sources are dirty");
+  }
+  it("refuses macOS preparation after the proof runner changes", async () => {
+    await rejectDirtySource("macos");
   });
 
   it("refuses Linux preparation after the X11 fixture changes", async () => {
-    const fixture = createRigRepository();
-    writeFileSync(fixture.fixture, "# locally modified fixture\n");
-    const result = runRig({
-      ...fixture,
-      args: [
-        "prepare-linux",
-        "proof-test",
-        String(await reservePort()),
-        path.join(fixture.root, "scratch-linux"),
-      ],
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("runtime sources are dirty");
+    await rejectDirtySource("linux");
   });
 });

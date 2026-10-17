@@ -1,4 +1,3 @@
-// Control Ui I18N tests cover control ui i18n script behavior.
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -396,56 +395,35 @@ describe("control-ui-i18n generated ownership", () => {
     expect(source.get("meetingCapture.sources")).toBe("Auto-start sources");
   });
 
+  const isolated = (...args: Parameters<typeof assertControlUiGeneratedArtifactsIsolated>) =>
+    expect(() => assertControlUiGeneratedArtifactsIsolated(...args));
   it("keeps generated locale snapshots out of source PRs", () => {
-    expect(() =>
-      assertControlUiGeneratedArtifactsIsolated([
-        "ui/src/i18n/locales/en.ts",
-        "ui/src/i18n/locales/de.ts",
-        "ui/src/i18n/.i18n/de.meta.json",
-      ]),
-    ).toThrow("Control UI generated locale artifacts must be isolated from source changes");
+    isolated([
+      "ui/src/i18n/locales/en.ts",
+      "ui/src/i18n/locales/de.ts",
+      "ui/src/i18n/.i18n/de.meta.json",
+    ]).toThrow("Control UI generated locale artifacts must be isolated from source changes");
 
-    expect(() =>
-      assertControlUiGeneratedArtifactsIsolated([
-        "ui/src/i18n/.i18n/catalog-fallbacks.json",
-        "ui/src/i18n/.i18n/de.meta.json",
-        "ui/src/i18n/.i18n/de.tm.jsonl",
-      ]),
-    ).not.toThrow();
+    isolated([
+      "ui/src/i18n/.i18n/catalog-fallbacks.json",
+      "ui/src/i18n/.i18n/de.meta.json",
+      "ui/src/i18n/.i18n/de.tm.jsonl",
+    ]).not.toThrow();
 
-    expect(() =>
-      assertControlUiGeneratedArtifactsIsolated([
-        "ui/src/i18n/locales/de.ts",
-        "ui/src/i18n/.i18n/glossary.de.json",
-      ]),
-    ).not.toThrow();
+    isolated(["ui/src/i18n/locales/de.ts", "ui/src/i18n/.i18n/glossary.de.json"]).not.toThrow();
 
-    expect(() =>
-      assertControlUiGeneratedArtifactsIsolated([
-        "ui/src/i18n/.i18n/catalog-fallbacks.json",
-        "ui/src/i18n/.i18n/raw-copy-baseline.json",
-      ]),
-    ).toThrow("Control UI generated locale artifacts must be isolated from source changes");
+    isolated([
+      "ui/src/i18n/.i18n/catalog-fallbacks.json",
+      "ui/src/i18n/.i18n/raw-copy-baseline.json",
+    ]).toThrow("Control UI generated locale artifacts must be isolated from source changes");
 
-    expect(() =>
-      assertControlUiGeneratedArtifactsIsolated([
-        "ui/src/i18n/locales/en.ts",
-        "ui/src/i18n/.i18n/raw-copy-baseline.json",
-      ]),
-    ).not.toThrow();
+    isolated([
+      "ui/src/i18n/locales/en.ts",
+      "ui/src/i18n/.i18n/raw-copy-baseline.json",
+    ]).not.toThrow();
 
-    expect(() =>
-      assertControlUiGeneratedArtifactsIsolated(
-        ["package.json", "ui/src/i18n/locales/de.ts"],
-        "release/2026.7.3",
-      ),
-    ).not.toThrow();
-    expect(() =>
-      assertControlUiGeneratedArtifactsIsolated(
-        ["package.json", "ui/src/i18n/locales/de.ts"],
-        "main",
-      ),
-    ).not.toThrow();
+    isolated(["package.json", "ui/src/i18n/locales/de.ts"], "release/2026.7.3").not.toThrow();
+    isolated(["package.json", "ui/src/i18n/locales/de.ts"], "main").not.toThrow();
 
     expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/de.ts"])).toBe(false);
     expect(shouldStrictControlUiI18n(["ui/src/i18n/.i18n/de.tm.jsonl"])).toBe(true);
@@ -463,27 +441,13 @@ describe("control-ui-i18n generated ownership", () => {
       branch,
     );
     const fork = resolveAllowedGeneratedMixBranch({ GITHUB_ACTIONS: "true" }, branch);
-    expect(() =>
-      assertControlUiGeneratedArtifactsIsolated([memory, bundle, manifest], trusted),
-    ).not.toThrow();
-    expect(() =>
-      assertControlUiGeneratedArtifactsIsolated([memory, bundle, manifest], fork),
-    ).toThrow("must be isolated");
-    expect(() => assertControlUiGeneratedArtifactsIsolated([memory, manifest], "feature")).toThrow(
+    isolated([memory, bundle, manifest], trusted).not.toThrow();
+    isolated([memory, bundle, manifest], fork).toThrow("must be isolated");
+    isolated([memory, manifest], "feature").toThrow("must be isolated");
+    isolated([memory, "extensions/example/src/i18n/locales/en.ts"], trusted).toThrow(
       "must be isolated",
     );
-    expect(() =>
-      assertControlUiGeneratedArtifactsIsolated(
-        [memory, "extensions/example/src/i18n/locales/en.ts"],
-        trusted,
-      ),
-    ).toThrow("must be isolated");
-    expect(() =>
-      assertControlUiGeneratedArtifactsIsolated([
-        bundle,
-        "extensions/example/src/i18n/locales/en.ts",
-      ]),
-    ).not.toThrow();
+    isolated([bundle, "extensions/example/src/i18n/locales/en.ts"]).not.toThrow();
     expect(shouldStrictControlUiI18n(["extensions/example/src/i18n/.i18n/fr.tm.jsonl"])).toBe(true);
   });
 
@@ -513,18 +477,14 @@ describe("control-ui-i18n generated ownership", () => {
     ];
     const migration = [...owners, ...adapters, ...generated];
 
-    expect(() => assertControlUiGeneratedArtifactsIsolated(migration)).not.toThrow();
-    expect(() => assertControlUiGeneratedArtifactsIsolated(migration.slice(1))).toThrow(
+    isolated(migration).not.toThrow();
+    isolated(migration.slice(1)).toThrow("Control UI generated locale artifacts must be isolated");
+    isolated(migration.filter((filePath) => filePath !== generated[1])).toThrow(
       "Control UI generated locale artifacts must be isolated",
     );
-    expect(() =>
-      assertControlUiGeneratedArtifactsIsolated(
-        migration.filter((filePath) => filePath !== generated[1]),
-      ),
-    ).toThrow("Control UI generated locale artifacts must be isolated");
-    expect(() =>
-      assertControlUiGeneratedArtifactsIsolated([...migration, "ui/src/i18n/.i18n/other.tm.jsonl"]),
-    ).toThrow("Control UI generated locale artifacts must be isolated");
+    isolated([...migration, "ui/src/i18n/.i18n/other.tm.jsonl"]).toThrow(
+      "Control UI generated locale artifacts must be isolated",
+    );
   });
 
   it("allows generated release output on trusted release and main runs only", () => {
@@ -563,6 +523,9 @@ describe("control-ui-i18n generated ownership", () => {
 });
 
 describe("control-ui-i18n catalog validation", () => {
+  const batch = (key = "configView.viewPendingChange", text = "View pending change ({count})") => [
+    { cacheKey: "cache-key", key, text, textHash: "text-hash" },
+  ];
   it("points strict catalog drift at the generated release repair", () => {
     const message = formatControlUiCatalogFallbackDriftError();
 
@@ -679,14 +642,7 @@ describe("control-ui-i18n catalog validation", () => {
   });
 
   it("rejects placeholder-corrupt batch replies before they leave the retry loop", () => {
-    const items = [
-      {
-        cacheKey: "cache-key",
-        key: "configView.viewPendingChange",
-        text: "View pending change ({count})",
-        textHash: "text-hash",
-      },
-    ];
+    const items = batch();
 
     expect(() =>
       parseTranslationBatchReply(
@@ -705,14 +661,7 @@ describe("control-ui-i18n catalog validation", () => {
   });
 
   it("runs an optional result validator before accepting a batch reply", () => {
-    const items = [
-      {
-        cacheKey: "cache-key",
-        key: "native.apple.progress",
-        text: "Processed %lld of %@",
-        textHash: "text-hash",
-      },
-    ];
+    const items = batch("native.apple.progress", "Processed %lld of %@");
 
     expect(() =>
       parseTranslationBatchReply(
@@ -744,14 +693,7 @@ describe("control-ui-i18n catalog validation", () => {
   });
 
   it("feeds the exact validation failure back into a retry prompt", () => {
-    const items = [
-      {
-        cacheKey: "cache-key",
-        key: "configView.viewPendingChange",
-        text: "View pending change ({count})",
-        textHash: "text-hash",
-      },
-    ];
+    const items = batch();
     const validationError = "ar:configView.viewPendingChange expected {count} got {}";
 
     expect(buildBatchPrompt(items, validationError)).toContain(
