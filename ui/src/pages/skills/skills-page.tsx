@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createStore, onCleanup } from "solid-js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
@@ -11,6 +12,7 @@ import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
@@ -97,8 +99,6 @@ export function SkillsPage(props: SkillsPageProps) {
   let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
   let routeDataInitialized = false;
   let routeDataEnabled = true;
-  let searchAbort: AbortController | null = null;
-  let searchGeneration = 0;
   let accessSignature = "";
   const skills = observeSkillState<SkillsState>({
     ...createSkillsData(),
@@ -113,6 +113,21 @@ export function SkillsPage(props: SkillsPageProps) {
     },
   });
   const data = skills.state;
+  const searchRequest = createPageRequest(
+    () => {
+      data.clawhubSearchLoading = searchRequest.pending;
+    },
+    {
+      task: (client: GatewayBrowserClient, { signal }) =>
+        searchClawHub(client, local.clawhubSearchQuery, signal),
+      onComplete: (results) => {
+        data.clawhubSearchResults = results;
+      },
+      onError: (error) => {
+        data.clawhubSearchError = formatUiError(error);
+      },
+    },
+  );
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: resetLoadedSkillState,
@@ -229,36 +244,20 @@ export function SkillsPage(props: SkillsPageProps) {
   });
   onCleanup(() => {
     clearClawHubSearchTimer();
-    searchAbort?.abort();
-    searchGeneration++;
+    searchRequest.cancel();
     skills.dispose();
     clawhubIcons.reset();
   });
 
   async function runSearch() {
-    searchAbort?.abort();
-    const generation = ++searchGeneration;
+    searchRequest.cancel();
     data.clawhubSearchError = null;
     data.clawhubSearchLoading = gateway.connected && canReadSkills() && surface() === "discovery";
     const client = gateway.client;
     if (!data.clawhubSearchLoading || !client || clawhubSearchTimer) {
       return;
     }
-    const controller = (searchAbort = new AbortController());
-    try {
-      const results = await searchClawHub(client, local.clawhubSearchQuery, controller.signal);
-      if (generation === searchGeneration) {
-        data.clawhubSearchResults = results;
-      }
-    } catch (error) {
-      if (generation === searchGeneration) {
-        data.clawhubSearchError = formatUiError(error);
-      }
-    } finally {
-      if (generation === searchGeneration) {
-        data.clawhubSearchLoading = false;
-      }
-    }
+    await searchRequest.run(client);
   }
 
   function agentSelection() {
@@ -286,8 +285,7 @@ export function SkillsPage(props: SkillsPageProps) {
     data.clawhubVerdictsLoading = false;
     data.skillCardLoadingKey = null;
     data.clawhubSearchLoading = false;
-    searchAbort?.abort();
-    searchGeneration++;
+    searchRequest.cancel();
     clearClawHubSearchTimer();
     clawhubIcons.reconcileKeys(new Set(Object.keys(data.clawhubIconUrls)));
     library.invalidateRequests();
@@ -295,8 +293,7 @@ export function SkillsPage(props: SkillsPageProps) {
 
   function resetLoadedSkillState() {
     library.reset();
-    searchAbort?.abort();
-    searchGeneration++;
+    searchRequest.cancel();
     clearClawHubSearchTimer();
     if (routeDataInitialized) {
       routeDataEnabled = false;
@@ -395,8 +392,7 @@ export function SkillsPage(props: SkillsPageProps) {
     data.clawhubSearchLoading = true;
     data.clawhubInstallMessage = null;
     clearClawHubSearchTimer();
-    searchAbort?.abort();
-    searchGeneration++;
+    searchRequest.cancel();
     clawhubSearchTimer = setTimeout(() => {
       clawhubSearchTimer = null;
       void runSearch();

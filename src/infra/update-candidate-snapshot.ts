@@ -244,6 +244,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
   env: NodeJS.ProcessEnv;
   workerEnv: (directory: string) => NodeJS.ProcessEnv;
   nodeRunner?: string;
+  fullIntegrityCheck?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -373,6 +374,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
               targetStateDir: directory,
               candidateRoot: params.candidateRoot,
               sourceBundledPlugins: params.sourceBundledPlugins,
+              fullIntegrityCheck: params.fullIntegrityCheck,
               env: {
                 HOME: params.env.HOME,
                 OPENCLAW_HOME: params.env.OPENCLAW_HOME,

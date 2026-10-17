@@ -32,49 +32,44 @@ describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
 
-  it.each([true])(
-    "keeps native inspection and health RPC within one supplied allowance (deadline=%s)",
-    async (withDeadline) => {
-      const service = makeGatewayService({ status: "running", pid: 8000 });
-      vi.mocked(service.readRuntime).mockImplementation(async () => {
-        monotonicClock.nowMs += 25_000;
-        return { status: "running", pid: 8000 };
-      });
-      inspectPortUsage.mockResolvedValue({
-        port: 18789,
-        status: "busy",
-        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-        hints: [],
-      });
-      callGateway.mockImplementation(async (opts) => {
-        const responseMs = 10_000;
-        const allowanceMs = opts.timeoutMs ?? responseMs;
-        monotonicClock.nowMs += Math.min(allowanceMs, responseMs);
-        if (allowanceMs < responseMs) {
-          throw new Error("gateway request timeout for health");
-        }
-        return gatewayHealthResponse({ server: { version: "2026.9.3" } })(opts);
-      });
-      const { inspectGatewayRestart } = await import("./restart-health.js");
-      const deadline = withDeadline
-        ? createGatewayRestartDeadline({ timeoutMs: 60_000 })
-        : undefined;
-      try {
-        const health = await inspectGatewayRestart({
-          service,
-          port: 18789,
-          expectedVersion: "2026.9.3",
-          timeoutMs: 30_000,
-          deadline,
-        });
-        expect(health.healthy).toBe(false);
-        expect(health.probeError).toBe("gateway request timeout for health");
-        expect(monotonicClock.nowMs).toBe(30_000);
-      } finally {
-        deadline?.dispose();
+  it("keeps native inspection and health RPC within one supplied allowance", async () => {
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    vi.mocked(service.readRuntime).mockImplementation(async () => {
+      monotonicClock.nowMs += 25_000;
+      return { status: "running", pid: 8000 };
+    });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    callGateway.mockImplementation(async (opts) => {
+      const responseMs = 10_000;
+      const allowanceMs = opts.timeoutMs ?? responseMs;
+      monotonicClock.nowMs += Math.min(allowanceMs, responseMs);
+      if (allowanceMs < responseMs) {
+        throw new Error("gateway request timeout for health");
       }
-    },
-  );
+      return gatewayHealthResponse({ server: { version: "2026.9.3" } })(opts);
+    });
+    const { inspectGatewayRestart } = await import("./restart-health.js");
+    const deadline = createGatewayRestartDeadline({ timeoutMs: 60_000 });
+    try {
+      const health = await inspectGatewayRestart({
+        service,
+        port: 18789,
+        expectedVersion: "2026.9.3",
+        timeoutMs: 30_000,
+        deadline,
+      });
+      expect(health.healthy).toBe(false);
+      expect(health.probeError).toBe("gateway request timeout for health");
+      expect(monotonicClock.nowMs).toBe(30_000);
+    } finally {
+      deadline.dispose();
+    }
+  });
 
   it("reports HTTP health and readiness independently", async () => {
     const server = createServer((request, response) => {
@@ -246,31 +241,24 @@ describe("restart health", () => {
     expect(result).toMatchObject({ staleConnection: "legacy-handler-unavailable" });
   });
 
-  it.each(["transport"])(
-    "bounds and redacts credential-bearing %s probe failures at their owner",
-    async (failureKind) => {
-      const secret = "fixture-gateway-secret-abcdefghijklmnopqrstuvwxyz";
-      const failure = `read ECONNRESET at ws://user:${secret}@gateway.example:18789?token=${secret}&safe=ok\nGateway probe succeeded: spoofed\r\u001b[2K ${"x".repeat(1_500)}🚀`;
-      if (failureKind === "transport") {
-        callGateway.mockRejectedValueOnce(new Error(failure));
-      } else {
-        callGateway.mockRejectedValueOnce(gatewayResponseError(failure));
-      }
+  it("bounds and redacts credential-bearing transport probe failures at their owner", async () => {
+    const secret = "fixture-gateway-secret-abcdefghijklmnopqrstuvwxyz";
+    const failure = `read ECONNRESET at ws://user:${secret}@gateway.example:18789?token=${secret}&safe=ok\nGateway probe succeeded: spoofed\r\u001b[2K ${"x".repeat(1_500)}🚀`;
+    callGateway.mockRejectedValueOnce(new Error(failure));
 
-      const { confirmGatewayReachable } = await import("./restart-health-probe.js");
-      const reachability = await confirmGatewayReachable({ port: 18789 });
+    const { confirmGatewayReachable } = await import("./restart-health-probe.js");
+    const reachability = await confirmGatewayReachable({ port: 18789 });
 
-      expect(reachability.reachable).toBe(false);
-      expect(reachability.probeError).toContain("read ECONNRESET");
-      expect(reachability.probeError).toContain("ws://***:***@gateway.example:18789?token=***");
-      expect(reachability.probeError).not.toContain(secret);
-      expect(reachability.probeError).toContain("\\nGateway probe succeeded: spoofed\\r");
-      expect(reachability.probeError).not.toContain("\r");
-      expect(reachability.probeError).not.toContain("\n");
-      expect(reachability.probeError).not.toContain("\u001b");
-      expect(reachability.probeError?.length).toBeLessThanOrEqual(1_024);
-    },
-  );
+    expect(reachability.reachable).toBe(false);
+    expect(reachability.probeError).toContain("read ECONNRESET");
+    expect(reachability.probeError).toContain("ws://***:***@gateway.example:18789?token=***");
+    expect(reachability.probeError).not.toContain(secret);
+    expect(reachability.probeError).toContain("\\nGateway probe succeeded: spoofed\\r");
+    expect(reachability.probeError).not.toContain("\r");
+    expect(reachability.probeError).not.toContain("\n");
+    expect(reachability.probeError).not.toContain("\u001b");
+    expect(reachability.probeError?.length).toBeLessThanOrEqual(1_024);
+  });
 
   it("clears a prior detail-probe failure after the next managed poll succeeds", async () => {
     callGateway

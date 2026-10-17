@@ -111,7 +111,8 @@ it.each(["runtime open", "doctor repair"] as const)(
       if (entry === "runtime open") {
         expect(integrityChecks).toHaveLength(1);
       } else {
-        expect(integrityChecks.length).toBeGreaterThan(0);
+        expect(integrityChecks).toEqual([]);
+        expect(migration.queries).toContain("PRAGMA quick_check;");
       }
     } finally {
       migration.restore();

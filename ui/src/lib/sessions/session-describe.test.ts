@@ -183,6 +183,61 @@ describe("session descriptor reads", () => {
     },
   );
 
+  it.each(["pending", "completed"] as const)(
+    "reuses a %s parent descriptor across unchanged ancestor references",
+    async (phase) => {
+      const h = harness();
+      const parent = { ...initial, lifecycleRevision: "first-life" };
+      h.setRow(parent);
+      const child = {
+        key: "agent:main:subagent:worker",
+        kind: "direct" as const,
+        sessionId: "child",
+        spawnedBy: key,
+        updatedAt: 2,
+      };
+      const emit = (snapshotAt: number, changed = false) =>
+        h.emitEvent({
+          type: "event",
+          event: snapshotAt % 2 ? "sessions.changed" : "session.message",
+          payload: {
+            agentId: "main",
+            reason: "send",
+            session: { ...child, updatedAt: snapshotAt, snapshotAt },
+            ancestorSessions: changed
+              ? [{ ...parent, snapshotAt, ancestorRevision: "parent-content" }]
+              : [],
+            ...(changed
+              ? {}
+              : {
+                  ancestorSessionRefs: [
+                    { key, sessionId: parent.sessionId, revision: "parent-content", snapshotAt },
+                  ],
+                }),
+          },
+        });
+      emit(2, true);
+      const pending = createDeferred<{ session: GatewaySessionRow }>();
+      h.read.mockReturnValueOnce(pending.promise);
+      const first = h.sessions.describe({ key });
+      if (phase === "completed") {
+        pending.resolve({ session: parent });
+        await first;
+      }
+      const readers = [first];
+      for (let update = 3; update < 19; update++) {
+        emit(update);
+        readers.push(h.sessions.describe({ key }));
+      }
+      pending.resolve({ session: parent });
+      expect(await Promise.all(readers)).toEqual(readers.map(() => ({ session: parent })));
+      expect(h.read).toHaveBeenCalledTimes(1);
+      emit(19, true);
+      await h.sessions.describe({ key });
+      expect(h.read).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("does not retain descriptors read during an event-subscription outage", async () => {
     const h = harness();
     h.list.mockResolvedValue(sessionsResult([], 1));

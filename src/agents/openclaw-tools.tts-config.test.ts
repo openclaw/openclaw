@@ -111,17 +111,23 @@ describe("createOpenClawTools context wiring", () => {
     );
   });
 
-  it("hides transcripts when caller-channel provenance is unavailable", () => {
+  it("refuses transcripts when caller-channel provenance is unavailable", () => {
     const caller = {
       agentChannel: "discord",
       agentAccountId: "delivery",
       gatewayCallerAccountId: "creator",
       requesterSenderId: "requester",
     };
+    // The definition stays offered; without a caller the tool refuses every call.
     createTools({ ...caller, gatewayCallerChannel: null });
-    expect(mocks.transcripts).not.toHaveBeenCalled();
+    expect(mocks.transcripts).toHaveBeenLastCalledWith(
+      expect.objectContaining({ callerUnavailable: true }),
+    );
+    expect(mocks.transcripts.mock.lastCall?.[0]).not.toHaveProperty("caller");
     createTools({ ...caller, gatewayCallerLocal: true });
-    expect(mocks.transcripts).not.toHaveBeenCalled();
+    expect(mocks.transcripts).toHaveBeenLastCalledWith(
+      expect.objectContaining({ callerUnavailable: true }),
+    );
   });
 
   it("keeps transcripts channel-less for explicit local scheduled provenance", () => {

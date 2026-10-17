@@ -358,7 +358,7 @@ describe("doctor session transcript repair", () => {
     );
 
     expect(runDoctorSessionSqlite).toHaveBeenCalledWith(
-      { allAgents: true, cfg, env, mode: "dry-run" },
+      { allAgents: true, cfg, env, mode: "dry-run", integrityCheck: "quick" },
       undefined,
     );
     expect(migrateLegacyMainSessionKeys).toHaveBeenCalledWith({ cfg, env, mode: "detect" });
@@ -366,6 +366,7 @@ describe("doctor session transcript repair", () => {
       apply: false,
       cfg,
       env,
+      integrityCheck: "quick",
       targets: [],
     });
     expect(withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
