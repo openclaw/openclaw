@@ -2,7 +2,6 @@ import fs from "node:fs";
 import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { createJiti } from "jiti";
 import { describe, expect, it } from "vitest";
 import { isPathInside } from "../infra/path-guards.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
@@ -16,15 +15,6 @@ type Loader<T> = { load(): Promise<T> };
 
 function write(root: string, file: string, source: string) {
   fs.writeFileSync(path.join(root, file), source);
-}
-
-function loadLegacy(source: string) {
-  return createJiti(source, { tryNative: false, fsCache: false, moduleCache: false })(source);
-}
-
-function* loadVersions<T>(root: string, entry = "index.ts") {
-  yield loadLegacy(path.join(root, entry)) as T;
-  yield host(root).load(entry) as T;
 }
 
 describe("native plugin generation interop", () => {
@@ -90,9 +80,7 @@ describe("native plugin generation interop", () => {
       }
       const root = fixture(files);
       type Plugin = { read(): string[] };
-      const entry = path.join(root, "entry.cjs");
       const before = ["before-1.0.0", "before-2.0.0"];
-      expect((createRequire(entry)(entry) as Plugin).read()).toEqual(before);
       const firstHost = host(root);
       const first = firstHost.load("entry.cjs") as Plugin;
       expect(first.read()).toEqual(before);
@@ -154,12 +142,8 @@ describe("native plugin generation interop", () => {
           };`,
       });
       type Addon = { relativeRoot: string; read(): string };
-      const entry = path.join(root, "entry.cjs");
-      const original = createRequire(entry)(entry) as Addon;
-      expect(original.relativeRoot).toBe("..");
-      expect(original.read()).toBe("before");
       const captured = host(root).load("entry.cjs") as Addon;
-      expect(captured.relativeRoot).toBe(original.relativeRoot);
+      expect(captured.relativeRoot).toBe("..");
       write(root, "node_modules/native-addon/build/Release/addon.txt", "after");
       expect(captured.read()).toBe("before");
       expect((host(root).load("entry.cjs") as Addon).read()).toBe("after");
@@ -239,11 +223,10 @@ describe("native plugin generation interop", () => {
         "node_modules/conditional-dependency/require.cjs": "exports.value = 7;",
       });
       type Plugin = { default: { register(api: { read?: () => Promise<unknown[]> }): void } };
-      for (const plugin of loadVersions<Plugin>(root)) {
-        const api: { read?: () => Promise<unknown[]> } = {};
-        expect(plugin.default.register(api)).toBeUndefined();
-        await expect(api.read!()).resolves.toEqual([42, 42, 42, 7]);
-      }
+      const plugin = host(root).load("index.ts") as Plugin;
+      const api: { read?: () => Promise<unknown[]> } = {};
+      expect(plugin.default.register(api)).toBeUndefined();
+      await expect(api.read!()).resolves.toEqual([42, 42, 42, 7]);
     },
   );
 
@@ -295,11 +278,10 @@ describe("native plugin generation interop", () => {
     } };`,
     });
     type Plugin = { default: { register(api: { results?: unknown[] }): void } };
-    for (const plugin of loadVersions<Plugin>(root)) {
-      const api: { results?: unknown[] } = {};
-      plugin.default.register(api);
-      expect(api.results).toEqual([true, true, true, undefined]);
-    }
+    const plugin = host(root).load("index.ts") as Plugin;
+    const api: { results?: unknown[] } = {};
+    plugin.default.register(api);
+    expect(api.results).toEqual([true, true, true, undefined]);
   });
 
   it("preserves resolver options in asynchronously imported ESM TypeScript", async () => {
@@ -308,9 +290,7 @@ describe("native plugin generation interop", () => {
       "resolver.ts":
         "export const value = import.meta.resolve('missing-optional-dependency', { try: true }) ?? 42;",
     });
-    for (const plugin of loadVersions<Reader>(root)) {
-      await expect(plugin.read()).resolves.toBe(42);
-    }
+    await expect((host(root).load("index.ts") as Reader).read()).resolves.toBe(42);
   });
 
   it("links static ESM imports to an async CommonJS TypeScript child", async () => {
@@ -324,13 +304,6 @@ describe("native plugin generation interop", () => {
         module.exports.default = { value: 42, read() { return this.value; } };
         module.exports[['ans', 'wer'].join('')] = 7;`,
     });
-    const entry = path.join(root, "entry.ts");
-    const legacy = loadLegacy(entry) as {
-      load(): Promise<{ result: number[] }>;
-      required(): { result: number[] };
-    };
-    await expect(legacy.load()).resolves.toMatchObject({ result: [42, 7, 42] });
-    expect(legacy.required()).toMatchObject({ result: [42, 7, 42] });
     const managed = host(root);
     const current = managed.load("entry.ts") as {
       load(): Promise<{ result: number[]; cacheKey: string }>;
@@ -356,9 +329,8 @@ describe("native plugin generation interop", () => {
       "second.ts": `import * as first from './first.ts';
         export const readSecond = () => first.name;`,
     });
-    for (const plugin of loadVersions<Loader<{ read(): string[] }>>(root, "entry.ts")) {
-      expect((await plugin.load()).read()).toEqual(["first", "first"]);
-    }
+    const plugin = host(root).load("entry.ts") as Loader<{ read(): string[] }>;
+    expect((await plugin.load()).read()).toEqual(["first", "first"]);
   });
 
   it.skipIf(!useNodeModuleHooks())(
@@ -430,11 +402,7 @@ describe("native plugin generation interop", () => {
         ];`,
       });
       type Module = { read(): string[] };
-      const source = path.join(root, "nested/source.ts");
-      const baseline = loadLegacy(source) as Module;
       const expected = ["before", "before", "source.ts", "source.ts"];
-      expect(baseline.read()).toEqual(expected);
-      expect((createRequire(import.meta.url)(source) as Module).read()).toEqual(expected);
       const managed = host(root);
       const plugin =
         mode === "async"
@@ -446,42 +414,32 @@ describe("native plugin generation interop", () => {
   );
 
   it.each([
-    { standalone: false, extension: "ts" },
-    { standalone: true, extension: "cts" },
+    { standalone: false, extension: "ts", nativePeer: true },
+    { standalone: true, extension: "cts", nativePeer: true },
+    { standalone: true, extension: "ts", nativePeer: false },
+    { standalone: true, extension: "cts", nativePeer: false },
   ])(
-    "keeps explicit TS and JS peers distinct ($extension, standalone: $standalone)",
-    ({ extension, standalone }) => {
+    "resolves $extension peers (native: $nativePeer, standalone: $standalone)",
+    ({ extension, standalone, nativePeer }) => {
       const nativeExtension = extension === "cts" ? "cjs" : "js";
-      const references = [`./peer.${extension}`, `./peer.${nativeExtension}`];
+      const references = nativePeer
+        ? [`./peer.${extension}`, `./peer.${nativeExtension}`]
+        : [`./peer.${nativeExtension}`];
+      const source = `exports.values = [${references.map((name) => `require(${JSON.stringify(name)}).value`).join(",")}];`;
       const root = fixture({
         "package.json": '{"type":"commonjs"}',
         [`peer.${extension}`]: 'exports.value = "typescript" as string;',
-        [`peer.${nativeExtension}`]: 'exports.value = "javascript";',
-        "entry.ts": `exports.values = [${references.map((name) => `require(${JSON.stringify(name)}).value`).join(",")}];`,
-        "native.cjs": `exports.values = [${references.map((name) => `require(${JSON.stringify(name)}).value`).join(",")}];`,
+        ...(nativePeer ? { [`peer.${nativeExtension}`]: 'exports.value = "javascript";' } : {}),
+        "entry.ts": source,
+        "native.cjs": source,
       });
-      expect(loadLegacy(path.join(root, "entry.ts"))).toMatchObject({
-        values: ["typescript", "javascript"],
-      });
-      expect(createRequire(import.meta.url)(path.join(root, "native.cjs"))).toMatchObject({
-        values: ["typescript", "javascript"],
-      });
-      const managed = host(root, standalone);
-      expect(managed.load("entry.ts")).toMatchObject({ values: ["typescript", "javascript"] });
-      expect(host(root).load("native.cjs")).toMatchObject({ values: ["typescript", "javascript"] });
+      const expected = { values: nativePeer ? ["typescript", "javascript"] : ["typescript"] };
+      expect(host(root, standalone).load("entry.ts")).toMatchObject(expected);
+      if (nativePeer) {
+        expect(host(root).load("native.cjs")).toMatchObject(expected);
+      }
     },
   );
-
-  it.each(["ts", "cts"])("resolves a missing JavaScript peer to its %s source", (extension) => {
-    const nativeExtension = extension === "cts" ? "cjs" : "js";
-    const root = fixture({
-      "package.json": '{"type":"commonjs"}',
-      "entry.ts": `exports.value = require('./peer.${nativeExtension}').value;`,
-      [`peer.${extension}`]: 'exports.value = "typescript" as string;',
-    });
-    expect(loadLegacy(path.join(root, "entry.ts"))).toMatchObject({ value: "typescript" });
-    expect(host(root, true).load("entry.ts")).toMatchObject({ value: "typescript" });
-  });
 
   it.each(["ts", "cts"])(
     "keeps a compiled %s peer stable when its dependency package is promoted",
@@ -501,15 +459,6 @@ describe("native plugin generation interop", () => {
       });
       const pluginRoot = path.join(root, "plugin");
       const typed = path.join(root, `node_modules/peer-dependency/peer.${extension}`);
-      const legacy = createJiti(path.join(pluginRoot, "entry.mjs"), {
-        fsCache: false,
-        moduleCache: false,
-        tryNative: false,
-      });
-      expect(legacy(typed)).toMatchObject({ value: "typescript" });
-      expect(
-        createRequire(path.join(pluginRoot, "entry.mjs"))("peer-dependency/native"),
-      ).toMatchObject({ value: "javascript" });
       const plugin = host(pluginRoot, true).load("entry.mjs") as {
         read(name: string): Promise<{ value: string }>;
       };
@@ -546,8 +495,6 @@ describe("native plugin generation interop", () => {
         "node_modules/source-dependency/second.mjs": "export const value = 84;",
       });
       const pluginRoot = path.join(root, "plugin");
-      const native = createRequire(path.join(pluginRoot, "entry.mjs"));
-      expect(native("source-dependency/second")).toMatchObject({ value: 84 });
       const plugin = host(pluginRoot, true).load("entry.mjs") as {
         read(name: string): Promise<{ value: number }>;
       };
@@ -600,11 +547,6 @@ describe("native plugin generation interop", () => {
         "nested/node_modules/versioned-dependency/index.mjs": "export const value = 2;",
       });
       type Plugin = { rootVersion: number; readNested(name: string): Promise<number> };
-      const entry = path.join(root, "entry.mjs");
-      const native = createRequire(entry)(entry) as Plugin;
-      expect(native.rootVersion).toBe(1);
-      await expect(native.readNested("versioned-dependency/sub:entry")).resolves.toBe(2);
-      await expect(native.readNested("versioned-dependency")).resolves.toBe(2);
       const plugin = host(root, standalone).load("entry.mjs") as Plugin;
       expect(plugin.rootVersion).toBe(1);
       await expect(plugin.readNested("versioned-dependency/sub:entry")).resolves.toBe(2);

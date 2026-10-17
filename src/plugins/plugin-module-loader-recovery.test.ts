@@ -10,27 +10,16 @@ import { getSharedPluginCodeReloadWarning } from "./plugin-shared-module-loader.
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const instances: PluginInstance[] = [];
-function newInstance(id = "recovery-fixture") {
+function newInstance(
+  id = "recovery-fixture",
+  binding?: Omit<Parameters<typeof bindPluginInstanceModuleLoader>[0], "instance">,
+) {
   const instance = new PluginInstance(id);
   instances.push(instance);
+  if (binding) {
+    bindPluginInstanceModuleLoader({ ...binding, instance });
+  }
   return instance;
-}
-function bind(
-  instance: PluginInstance,
-  root: string,
-  entry: string,
-  captures: string,
-  standalone = false,
-) {
-  withPluginSourceCaptureDirectory(captures, () =>
-    bindPluginInstanceModuleLoader({
-      instance,
-      origin: "global",
-      source: entry,
-      rootDir: root,
-      standalone,
-    }),
-  );
 }
 function capture(instance: PluginInstance, captures: string) {
   return withPluginSourceCaptureDirectory(captures, () => instance.captureModuleLoaderRecovery());
@@ -89,9 +78,16 @@ function fixture(standalone = false, nativePackageMap = false) {
      exports.native = () => fs.readFileSync(path.join(__dirname, 'native.so'), 'utf8');
      exports.late = () => require('./late.cjs').value;`,
   );
-  const instance = newInstance();
-  bind(instance, root, entry, captures, standalone);
-  return { root, entry, captures, instance };
+  const create = () =>
+    withPluginSourceCaptureDirectory(captures, () =>
+      newInstance("recovery-fixture", {
+        origin: "global",
+        source: entry,
+        rootDir: root,
+        standalone,
+      }),
+    );
+  return { root, entry, captures, instance: create(), create };
 }
 
 type FixtureModule = {
@@ -127,7 +123,7 @@ it.each(
         symlink(target, link, type);
       });
     }
-    const { root, entry, captures, instance } = fixture(standalone, nativePackageMap);
+    const { root, entry, captures, instance, create } = fixture(standalone, nativePackageMap);
     const oldModule = instance.loadModule(entry) as FixtureModule;
     expect(oldModule.next()).toBe(1);
     expect(oldModule.next()).toBe(2);
@@ -135,8 +131,7 @@ it.each(
     const nativeIdentity = fs.statSync(oldModule.nativePath);
     const dependencyIdentity = fs.statSync(oldModule.nativeDependencyPath());
     if (denyFileSymlinks) {
-      const warm = newInstance();
-      bind(warm, root, entry, captures, standalone);
+      const warm = create();
       const warmModule = warm.loadModule(entry) as FixtureModule;
       expect(warmModule.native()).toBe("original native bytes");
       expectIdentity(warmModule.nativePath, nativeIdentity);
@@ -249,15 +244,13 @@ it("shares bundled TypeScript code without captures and warns when edited code n
        export const schema = emptyPluginConfigSchema().jsonSchema;`,
     );
   const load = () => {
-    const instance = newInstance("bundled-source");
-    const value = withPluginSourceCaptureDirectory(captures, () => {
-      bindPluginInstanceModuleLoader({
-        instance,
+    const { instance, value } = withPluginSourceCaptureDirectory(captures, () => {
+      const created = newInstance("bundled-source", {
         origin: "bundled",
         source: entry,
         rootDir: root,
       });
-      return instance.loadModule(entry);
+      return { instance: created, value: created.loadModule(entry) };
     });
     expect(instance.sourceDigest).toBeUndefined();
     expect(fs.readdirSync(captures)).toEqual([]);
@@ -288,9 +281,7 @@ it.each(["cjs", "mjs"])(
        };`,
     );
     type BundledModule = { register(): () => number };
-    const previous = newInstance("bundled-recovery");
-    bindPluginInstanceModuleLoader({
-      instance: previous,
+    const previous = newInstance("bundled-recovery", {
       origin: "bundled",
       source: entry,
       rootDir: root,

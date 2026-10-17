@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { BunPluginRuntime } from "./native-module-require.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
@@ -20,20 +21,25 @@ const cleanups = new Map<PluginInstance, number>();
 let retained: ReturnType<PluginInstance["retainConsumer"]> | undefined;
 type Shared = { value: string; count: number };
 type Entry = { value: string; shared: Shared; read(): string };
+type Files = Record<string, string | object>;
+
+function writeFiles(directory: string, files: Files) {
+  for (const [file, contents] of Object.entries(files)) {
+    const filename = path.join(directory, file);
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
+    fs.writeFileSync(filename, typeof contents === "string" ? contents : JSON.stringify(contents));
+  }
+}
 
 function write(value: string) {
-  fs.writeFileSync(
-    path.join(root, "index.ts"),
-    `import { shared } from './helper.ts';
+  writeFiles(root, {
+    "index.ts": `import { shared } from './helper.ts';
      export { shared }; export const value: string = ${JSON.stringify(value)};
      export const read = () => shared.value;`,
-  );
-  fs.writeFileSync(
-    path.join(root, "helper.ts"),
-    `export const shared = { value: ${JSON.stringify(value)}, count: 0 };`,
-  );
-  fs.writeFileSync(path.join(root, "api.ts"), "export { shared } from './helper.ts';");
-  fs.writeFileSync(path.join(root, "extra.ts"), `export const value = ${JSON.stringify(value)};`);
+    "helper.ts": `export const shared = { value: ${JSON.stringify(value)}, count: 0 };`,
+    "api.ts": "export { shared } from './helper.ts';",
+    "extra.ts": `export const value = ${JSON.stringify(value)};`,
+  });
 }
 
 function createInstance(rootDir = root, standalone = false, entry = "index.ts") {
@@ -62,18 +68,14 @@ function load() {
   return { instance, entry, api };
 }
 
-function fixture(name: string, files: Record<string, string>) {
+function fixture(name: string, files: Files) {
   const directory = path.join(home, name);
   roots.push(directory);
   fs.mkdirSync(directory);
-  for (const [file, contents] of Object.entries({
-    "package.json": '{"type":"module"}',
+  writeFiles(directory, {
+    "package.json": { type: "module" },
     ...files,
-  })) {
-    const filename = path.join(directory, file);
-    fs.mkdirSync(path.dirname(filename), { recursive: true });
-    fs.writeFileSync(filename, contents);
-  }
+  });
   return directory;
 }
 
@@ -108,9 +110,7 @@ try {
 }
 
 try {
-  const previousJsx = process.env.JITI_JSX;
-  process.env.JITI_JSX = "1";
-  try {
+  await withEnvAsync({ JITI_JSX: "1" }, async () => {
     for (const extension of ["tsx", "mtsx", "ctsx"]) {
       const entry = `index.${extension}`;
       const directory = fixture(`jsx-${extension}`, {
@@ -134,13 +134,7 @@ try {
       );
       assert.deepEqual(await instance.dispose(), { errors: [] });
     }
-  } finally {
-    if (previousJsx === undefined) {
-      delete process.env.JITI_JSX;
-    } else {
-      process.env.JITI_JSX = previousJsx;
-    }
-  }
+  });
 
   write("before");
   fs.linkSync(path.join(root, "helper.ts"), path.join(root, "hardlinked.ts"));
@@ -183,12 +177,12 @@ try {
   const modes = ["async", "sync", "native"] as const;
   for (const firstMode of modes) {
     const directory = fixture(`maps-${firstMode}`, {
-      "package.json": JSON.stringify({
+      "package.json": {
         type: "module",
         imports: {
           "#choice": { bun: "./bun.cjs", require: "./require.cjs", import: "./import.mjs" },
         },
-      }),
+      },
       "index.ts": `import { createRequire } from 'node:module';
         const native = createRequire(import.meta.url);
         export const read = {
@@ -204,13 +198,12 @@ try {
     const { instance, entry } = loadEntry<{
       read: Record<(typeof modes)[number], (specifier: string) => string | Promise<string>>;
     }>(directory, true);
-    fs.writeFileSync(
-      path.join(directory, "package.json"),
-      JSON.stringify({
+    writeFiles(directory, {
+      "package.json": {
         type: "module",
         imports: { "#choice": "./changed.cjs" },
-      }),
-    );
+      },
+    });
     const results: Partial<Record<(typeof modes)[number], string>> = {};
     for (const mode of [firstMode, ...modes.filter((candidate) => candidate !== firstMode)]) {
       results[mode] = await entry.read[mode]("#choice");
@@ -220,20 +213,20 @@ try {
   }
 
   const deferredDependencyRoot = fixture("deferred-native-dependency", {
-    "package.json": JSON.stringify({
+    "package.json": {
       type: "module",
       dependencies: { "deferred-dependency": "1" },
-    }),
+    },
     "index.ts": "export const bridge = () => import('./bridge.mjs');",
     "bridge.mjs": `import { createRequire } from 'node:module';
       const require = createRequire(import.meta.url);
       export const read = async (name) => (await import(name)).value;
       export const readRequired = (name) => require(name).value;`,
-    "node_modules/deferred-dependency/package.json": JSON.stringify({
+    "node_modules/deferred-dependency/package.json": {
       name: "deferred-dependency",
       type: "module",
       exports: { bun: "./bun.cjs", require: "./require.cjs", import: "./import.mjs" },
-    }),
+    },
     "node_modules/deferred-dependency/bun.cjs": "exports.value = 42;",
     "node_modules/deferred-dependency/require.cjs": "exports.value = 0;",
     "node_modules/deferred-dependency/import.mjs": "export const value = 0;",
@@ -257,22 +250,21 @@ try {
     "late-abs.mjs": "export const value = 41;",
     "late-url.mjs": "export const value = 42;",
   });
-  const conditionalManifest = (custom: string) =>
-    JSON.stringify({
-      name: "conditional-link-dependency",
-      type: "module",
-      exports: {
-        ".": {
-          "openclaw-custom": custom,
-          bun: "./bun.mjs?runtime=bun",
-          import: "./import.mjs",
-        },
-        "./addon": {
-          "node-addons": "./addon.mjs?runtime=addon",
-          bun: "./bun.mjs?runtime=bun",
-        },
+  const conditionalManifest = (custom: string) => ({
+    name: "conditional-link-dependency",
+    type: "module",
+    exports: {
+      ".": {
+        "openclaw-custom": custom,
+        bun: "./bun.mjs?runtime=bun",
+        import: "./import.mjs",
       },
-    });
+      "./addon": {
+        "node-addons": "./addon.mjs?runtime=addon",
+        bun: "./bun.mjs?runtime=bun",
+      },
+    },
+  });
   const conditionalDependency = fixture("conditional-link-dependency", {
     "package.json": conditionalManifest("./custom.mjs?runtime=custom"),
     "first.mjs": "export const value = 48;",
@@ -282,11 +274,11 @@ try {
     "import.mjs": "export const value = 0;",
   });
   const linkedRoot = fixture("dependency-link", {
-    "package.json": JSON.stringify({
+    "package.json": {
       type: "module",
       dependencies: { "linked-dependency": "1" },
       imports: { "#registered": "linked-dependency" },
-    }),
+    },
     "index.ts": "export const bridge = () => import('./bridge.mjs');",
     "bridge.mjs":
       "export const url = import.meta.url; export const read = async (target) => (await import(target)).value;",
@@ -321,14 +313,11 @@ try {
   if (supportsBareOnResolve) {
     assert.equal(await bridge.read("conditional-link-dependency"), 51);
     assert.equal(await bridge.read("conditional-link-dependency/addon"), 50);
-    fs.writeFileSync(
-      path.join(conditionalDependency, "package.json"),
-      conditionalManifest("./replacement.mjs?runtime=replacement"),
-    );
-    fs.writeFileSync(
-      path.join(conditionalDependency, "replacement.mjs"),
-      "export const value = import.meta.url.endsWith('?runtime=replacement') ? 52 : 0;",
-    );
+    writeFiles(conditionalDependency, {
+      "package.json": conditionalManifest("./replacement.mjs?runtime=replacement"),
+      "replacement.mjs":
+        "export const value = import.meta.url.endsWith('?runtime=replacement') ? 52 : 0;",
+    });
     const { entry: replacement } = loadEntry<typeof linkedEntry>(linkedRoot, true);
     assert.equal(await (await replacement.bridge()).read("conditional-link-dependency"), 52);
     assert.equal(await bridge.read("conditional-link-dependency"), 51);
@@ -366,7 +355,7 @@ try {
   }
 
   const nativeRoot = fixture("native-retirement", {
-    "package.json": JSON.stringify({
+    "package.json": {
       type: "module",
       imports: {
         "#exact": {
@@ -382,7 +371,7 @@ try {
         "#missing": "./missing.mjs",
         "#invalid": "../outside.mjs",
       },
-    }),
+    },
     "index.ts": `export const read = async (target: string = 'deep') => {
       const name: string = 'late';
       return (await import('./' + name + '.mjs')).read(target);
@@ -396,10 +385,10 @@ try {
     "targets/blocked.mjs": "export const value = 0;",
     "targets/shadow.mjs": "export const value = 0;",
     "trailer/leaf.mjs": "export const value = 47;",
-    "node_modules/wildcard-alias/package.json": JSON.stringify({
+    "node_modules/wildcard-alias/package.json": {
       type: "module",
       exports: { "./feature/*": "./src/*.mjs" },
-    }),
+    },
     "node_modules/wildcard-alias/src/leaf.mjs": "export const value = 48;",
     "other/exact.mjs": "export const value = 0;",
     "other/leaf.mjs": "export const value = 0;",
