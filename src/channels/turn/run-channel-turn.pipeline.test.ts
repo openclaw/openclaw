@@ -167,6 +167,32 @@ describe("channel turn pipeline", () => {
     expect(onError).toHaveBeenCalledExactlyOnceWith(finalizationError, { kind: "final" });
   });
 
+  it("preserves a null dispatch rejection through the assembled-turn boundary", async () => {
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
+      await params.dispatcherOptions.deliver({ text: "requested final" }, { kind: "final" });
+      const nullRejection: unknown = null;
+      return new Promise((resolve, reject) => {
+        const rejectWithUnknown = reject as (reason?: unknown) => void;
+        void resolve;
+        rejectWithUnknown(nullRejection);
+      });
+    }) as DispatchReplyWithBufferedBlockDispatcher;
+
+    await expect(
+      dispatchTestAssembledTurn({
+        channel: "feishu",
+        routeSessionKey: "agent:main:feishu:peer",
+        ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu" }),
+        recordInboundSession: createRecordInboundSession(),
+        dispatchReplyWithBufferedBlockDispatcher,
+        delivery: {
+          observeMessageSent: true,
+          deliver: async () => ({ visibleReplySent: false }),
+        },
+      }),
+    ).rejects.toThrow("channel dispatch failed");
+  });
+
   it("preserves the visible partial error over other finalization and dispatch failures", async () => {
     const { promise: firstFinalization, reject: rejectFirst } = createDeferred<never>();
     const { promise: secondFinalization, reject: rejectSecond } = createDeferred<never>();
