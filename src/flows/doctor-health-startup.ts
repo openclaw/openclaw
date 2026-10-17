@@ -2,8 +2,9 @@ import fs from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
+import type { BackupSqliteSnapshotFact } from "../commands/backup-resource-inventory.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
-import type { DoctorOptions } from "../commands/doctor-prompter.js";
+import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
@@ -20,6 +21,29 @@ export function exitDoctorHealthFlow(runtime: RuntimeEnv, code: number): void {
     exitCliAfterOutput(runtime, code);
   }
   runtime.exit(code);
+}
+
+export async function runDoctorProgressStep<T>(
+  runtime: RuntimeEnv | undefined,
+  options: Pick<DoctorOptions, "json">,
+  label: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (options.json === true) {
+    return await run();
+  }
+  const output = runtime ?? defaultRuntime;
+  const startedAt = performance.now();
+  output.log(`Doctor: ${label} started`);
+  let finished = false;
+  try {
+    const result = await run();
+    finished = true;
+    return result;
+  } finally {
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    output.log(`Doctor: ${label} ${finished ? "finished" : "failed"} (${elapsedMs}ms)`);
+  }
 }
 
 function stateDirectoryExistsAtDoctorStart(): boolean {
@@ -171,4 +195,71 @@ export async function prepareDoctorStateSchema(
   const receipt = await prepareLegacyStateDatabaseSchema(process.env, integrityCheck);
   throwIfDoctorStateMigrationRefused([receipt]);
   return receipt;
+}
+
+export async function prepareDoctorSchemaMigrations(
+  schemas: DoctorDatabasePreflight,
+  options: DoctorOptions,
+  runtime: RuntimeEnv,
+  verifiedSnapshots: readonly BackupSqliteSnapshotFact[],
+): Promise<void> {
+  await runDoctorProgressStep(runtime, options, "database migration preparation", async () => {
+    const { prepareDoctorDatabaseMigrations } =
+      await import("../commands/doctor-schema-migrations.js");
+    const { createOpenClawAgentDatabasePathMatcher } =
+      await import("../state/openclaw-agent-db.paths.js");
+    const { normalizeAgentId } = await import("../routing/session-key.js");
+    const samePath = createOpenClawAgentDatabasePathMatcher();
+    const discovery = schemas.agentDatabaseMigrationDiscovery?.discovery;
+    const databaseTargets = discovery?.schemaTargets.filter(
+      ({ agentId, path: databasePath, realPath }) =>
+        !schemas.agentRefusals?.some(
+          (refusal) =>
+            normalizeAgentId(refusal.agentId) === normalizeAgentId(agentId) &&
+            refusal.paths.some((pathname) => samePath(pathname, databasePath)),
+        ) &&
+        !schemas.indeterminate.some(
+          (failure) =>
+            failure.kind === "agent" &&
+            (failure.path === databasePath ||
+              discovery.sourceIdentities.get(failure.path)?.realPath === realPath),
+        ),
+    );
+    const backups = await prepareDoctorDatabaseMigrations({
+      env: process.env,
+      check: options.fullIntegrityCheck ? "full" : "quick",
+      databasePaths: databaseTargets?.map((database) => database.path) ?? [],
+      agentDatabaseTargets: databaseTargets,
+      pendingDatabasePaths: schemas.pendingMigrations?.map((database) => database.path) ?? [],
+      pendingMigrations: schemas.pendingMigrations,
+      verifiedSnapshots,
+    });
+    for (const message of [...backups.changes, ...backups.warnings]) {
+      runtime.log(message);
+    }
+    if (schemas.agentDatabaseMigrationDiscovery && backups.versionMigrations) {
+      schemas.agentDatabaseMigrationDiscovery.versionMigrations = backups.versionMigrations;
+    }
+  });
+}
+
+export async function prepareDoctorInstallationChecks(
+  runtime: RuntimeEnv,
+  options: DoctorOptions,
+  prompter: DoctorPrompter,
+  root: string | null,
+): Promise<void> {
+  const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
+  const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");
+  const { noteBunCliLauncherIssues } = await import("../commands/doctor-bun-cli-launcher.js");
+  const { noteStalePluginRuntimeSymlinks } =
+    await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
+  const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
+  await runDoctorProgressStep(runtime, options, "installation checks", async () => {
+    await maybeRepairUiProtocolFreshness(runtime, prompter);
+    await noteSourceInstallIssues(root);
+    await noteBunCliLauncherIssues({ root, prompter });
+    await noteStalePluginRuntimeSymlinks(root);
+    noteStartupOptimizationHints();
+  });
 }

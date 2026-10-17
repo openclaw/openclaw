@@ -392,7 +392,7 @@ it("reuses the admitted original capture and refuses changed evidence before Doc
   });
 });
 
-it("shares one fleet preflight with Doctor admission and its health contribution", async () => {
+it.each([false, true])("reports shared fleet preflight progress (json=%s)", async (json) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       agents: { entries: { main: {}, second: {}, third: {}, fourth: {} } },
@@ -414,16 +414,46 @@ it("shares one fleet preflight with Doctor admission and its health contribution
       runLegacyStateHealth: noOp,
     }).find((contribution) => contribution.id === "doctor:agent-database-admission")!;
     mocks.runContributions.mockImplementation((ctx) => admission.run(ctx));
-    const inspect = vi.spyOn(databasePreflight, "preflightOpenClawDatabaseSchemas");
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const preflight = databasePreflight.preflightOpenClawDatabaseSchemas;
+    const inspect = vi
+      .spyOn(databasePreflight, "preflightOpenClawDatabaseSchemas")
+      .mockImplementation(async (options, purpose) => {
+        if (options.scope !== "state") {
+          entered.resolve();
+          await release.promise;
+        }
+        return await preflight(options, purpose);
+      });
     try {
       vi.mocked(execFile).mockClear();
       vi.mocked(fork).mockClear();
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      await runDoctorHealthFlow(runtime, { nonInteractive: true });
+      const running = runDoctorHealthFlow(runtime, { nonInteractive: true, json });
+      try {
+        await Promise.race([
+          entered.promise,
+          running.then(() => {
+            throw new Error("Doctor completed without entering fleet preflight");
+          }),
+        ]);
+        expect(
+          runtime.log.mock.calls.some(([line]) => line === "Doctor: database preflight started"),
+        ).toBe(!json);
+      } finally {
+        release.resolve();
+        await running;
+      }
 
       expect(mocks.runContributions).toHaveBeenCalledOnce();
       expect(runtime.error).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
+      if (json) {
+        expect(runtime.log.mock.calls.flat().filter((line) => line.startsWith("Doctor:"))).toEqual(
+          [],
+        );
+      }
       expect(inspect.mock.calls.filter(([options]) => options.scope !== "state")).toHaveLength(1);
       const schemaEntry = String(resolveRuntimeProcessEntrypointUrl("agentSchemaInspection"));
       expect(

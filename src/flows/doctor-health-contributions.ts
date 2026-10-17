@@ -634,7 +634,6 @@ async function runDoctorHealthContributionList(
         continue;
       }
       const startedAt = progress ? performance.now() : 0;
-      const warningsBefore = ctx.healthWarningCount ?? 0;
       let failed = false;
       if (progress) {
         ctx.runtime.log(`Doctor: ${contribution.label} started`);
@@ -684,11 +683,8 @@ async function runDoctorHealthContributionList(
         recordDoctorHealthWarnings(ctx, [], [message]);
       } finally {
         if (progress) {
-          const status = failed
-            ? "failed"
-            : (ctx.healthWarningCount ?? 0) > warningsBefore || ctx.configWriteRefusal
-              ? "warning"
-              : "completed";
+          // Legacy runners return no health verdict; structured checks own finding outcomes.
+          const status = failed ? "failed" : "finished";
           ctx.runtime.log(
             `Doctor: ${contribution.label} ${status} (${Math.round(performance.now() - startedAt)}ms)`,
           );

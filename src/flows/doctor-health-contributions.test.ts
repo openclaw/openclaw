@@ -1073,7 +1073,7 @@ describe("doctor health contributions", () => {
     }
   });
 
-  it.each(["maintenance", "reachability", "exec credential"] as const)(
+  it.each(["maintenance", "reachability", "exec credential", "unhealthy"] as const)(
     "skips read-scope gateway probes during %s",
     async (scenario) => {
       const ctx = doctorContext({ env: {} });
@@ -1082,8 +1082,8 @@ describe("doctor health contributions", () => {
       } else {
         mocks.checkGatewayHealth.mockResolvedValue({
           authenticated: false,
-          healthOk: true,
-          status: { ok: true },
+          healthOk: scenario !== "unhealthy",
+          status: { ok: scenario !== "unhealthy" },
         });
       }
       if (scenario === "exec credential") {
@@ -1103,11 +1103,20 @@ describe("doctor health contributions", () => {
           secrets: { providers: { vault: { source: "exec", command: "/bin/false" } } },
         });
       }
-      await getContribution(DOCTOR_GATEWAY_HEALTH_ID).run(ctx);
+      await runDoctorHealthContributionList(ctx, [getContribution(DOCTOR_GATEWAY_HEALTH_ID)]);
       expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
-      expect(ctx.gatewayMemoryProbe).toEqual({ checked: false, ready: false, skipped: true });
+      expect(ctx.gatewayMemoryProbe).toEqual({
+        checked: false,
+        ready: false,
+        skipped: scenario !== "unhealthy",
+      });
       if (scenario === "reachability") {
         expect(ctx).toMatchObject({ healthOk: true, gatewayHealthAuthenticated: false });
+      } else if (scenario === "unhealthy") {
+        expect(ctx.healthOk).toBe(false);
+        expect(ctx.runtime.log).toHaveBeenLastCalledWith(
+          expect.stringMatching(/ finished \(\d+ms\)$/),
+        );
       } else {
         expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
         expect(ctx.gatewayHealthSkipped).toBe(true);

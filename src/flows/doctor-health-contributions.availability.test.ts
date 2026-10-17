@@ -8,17 +8,24 @@ import {
 } from "./doctor-health-contribution.js";
 import {
   createDoctorHealthFlowContext,
+  resolveDoctorHealthContributions,
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
 import { clearHealthChecksForTest } from "./health-check-registry.js";
 
-const { registerBundledHealthChecks } = vi.hoisted(() => ({
+const { note, registerBundledHealthChecks } = vi.hoisted(() => ({
+  note: vi.fn(),
   registerBundledHealthChecks: vi.fn(),
 }));
 vi.mock("./bundled-health-checks.js", () => ({ registerBundledHealthChecks }));
+vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/terminal-core/src/note.js")>()),
+  note,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(clearHealthChecksForTest);
+beforeEach(() => note.mockClear());
 afterEach(clearHealthChecksForTest);
 afterEach(() => vi.restoreAllMocks());
 
@@ -95,7 +102,7 @@ it.each([false, true])(
       await running;
     }
     expect(vi.mocked(ctx.runtime.log).mock.calls).toEqual(
-      json ? [] : [["Doctor: test-progress started"], ["Doctor: test-progress completed (25ms)"]],
+      json ? [] : [["Doctor: test-progress started"], ["Doctor: test-progress finished (25ms)"]],
     );
   },
 );
@@ -123,10 +130,20 @@ it("stops after an optional contribution fails after writing config", async () =
   );
 });
 
-it("reports each contribution's warnings after the update digest is full or deduplicates", async () => {
+it("keeps lifecycle completion separate from legacy notes and bounded warning digests", async () => {
   const warnings = Array.from({ length: 32 }, (_, index) => `warning-${index}`);
-  const ctx = createDoctorHealthFlowContext({ env: {}, updateWarnings: [...warnings] });
+  const root = tempDirs.make("openclaw-doctor-legacy-progress-");
+  const ctx = createDoctorHealthFlowContext({
+    cfg: { agents: { defaults: { workspace: root } } },
+    configPath: `${root}/openclaw.json`,
+    env: {},
+    updateWarnings: [...warnings],
+  });
+  const legacy = resolveDoctorHealthContributions().find(
+    (contribution) => contribution.id === "doctor:gateway-config",
+  )!;
   await runDoctorHealthContributionList(ctx, [
+    legacy,
     createDoctorHealthContribution("doctor:repeat", "test-repeat", async (context) => {
       recordDoctorHealthWarnings(context, [], [warnings[0]!]);
     }),
@@ -136,15 +153,13 @@ it("reports each contribution's warnings after the update digest is full or dedu
     createDoctorHealthContribution("doctor:healthy", "test-healthy", async () => {}),
   ]);
 
+  expect(note).toHaveBeenCalled();
   expect(ctx.updateWarnings).toEqual(warnings);
-  for (const label of ["test-repeat", "test-overflow"]) {
+  for (const label of [legacy.label, "test-repeat", "test-overflow", "test-healthy"]) {
     expect(ctx.runtime.log).toHaveBeenCalledWith(
-      expect.stringMatching(new RegExp(`^Doctor: ${label} warning \\(\\d+ms\\)$`)),
+      expect.stringMatching(new RegExp(`^Doctor: ${label} finished \\(\\d+ms\\)$`)),
     );
   }
-  expect(ctx.runtime.log).toHaveBeenCalledWith(
-    expect.stringMatching(/^Doctor: test-healthy completed \(\d+ms\)$/),
-  );
 });
 
 it("retains unavailable-plugin repair guidance in Doctor output and update warnings", async () => {

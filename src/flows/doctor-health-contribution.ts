@@ -148,11 +148,6 @@ export function recordDoctorHealthWarnings(
       ),
     ...warnings,
   ];
-  const warningCount =
-    added.length + findings.filter((finding) => finding.severity === "error").length;
-  if (warningCount > 0) {
-    ctx.healthWarningCount = (ctx.healthWarningCount ?? 0) + warningCount;
-  }
   ctx.updateWarnings = normalizeUpdatePostInstallDoctorWarnings(
     options?.prepend ? [...added, ...existing] : [...existing, ...added],
   );
