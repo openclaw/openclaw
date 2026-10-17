@@ -11,13 +11,12 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const modelList = (id: string, name: string) => [{ available: true, id, name, provider: "openai" }];
 
 suite.define(() => {
   it("waits for configured inference before sending the first chat turn", async () => {
     const page = await newChatPage(suite);
-    const models = [
-      { available: true, id: "startup-model", name: "Startup Model", provider: "openai" },
-    ];
+    const models = modelList("startup-model", "Startup Model");
     const gateway = await installMockGateway(page, {
       agentModel: "openai/startup-model",
       defaultAgentId: "ops",
@@ -103,13 +102,10 @@ suite.define(() => {
       state: "delta",
     });
     const transcript = page.locator(".chat-thread-inner");
-    await transcript
-      .getByText("First token visible.", { exact: true })
-      .waitFor({ timeout: 10_000 });
+    const firstToken = transcript.getByText("First token visible.", { exact: true });
+    await firstToken.waitFor({ timeout: 10_000 });
     await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
-    await transcript
-      .getByText("First token visible.", { exact: true })
-      .waitFor({ timeout: 10_000 });
+    await firstToken.waitFor({ timeout: 10_000 });
     await expect
       .poll(() => page.locator("[data-chat-model-select]").textContent())
       .toContain("Startup Model");
@@ -161,14 +157,7 @@ suite.define(() => {
     await gateway.resolveDeferred("chat.metadata", { commands: [] });
     await gateway.waitForRequest("models.list");
     await gateway.resolveDeferred("models.list", {
-      models: [
-        {
-          available: true,
-          id: "hydrated-model",
-          name: "Hydrated Model",
-          provider: "openai",
-        },
-      ],
+      models: modelList("hydrated-model", "Hydrated Model"),
     });
     await expect
       .poll(() =>

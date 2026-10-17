@@ -40,6 +40,10 @@ export function textContent(text: string) {
   return [{ type: "text", text }];
 }
 
+export function exactButton(root: Page | Locator, name: string) {
+  return root.getByRole("button", { name, exact: true });
+}
+
 export function chatMessage(role: string, text: string, extra?: Record<string, unknown>) {
   return { role, content: textContent(text), ...extra };
 }
@@ -204,11 +208,11 @@ export async function waitForChatScrollIdle(page: Page): Promise<void> {
       () =>
         page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate(async (element) => {
           const thread = element as HTMLElement;
-          const readGeometry = () => ({
-            clientHeight: thread.clientHeight,
-            scrollHeight: thread.scrollHeight,
-            scrollTop: Math.round(thread.scrollTop),
-          });
+          const readGeometry = () => [
+            thread.clientHeight,
+            thread.scrollHeight,
+            Math.round(thread.scrollTop),
+          ];
           // Returning to the same offset can still leave a virtualizer idle callback pending.
           let scrolled = false;
           const onScroll = () => {
@@ -226,12 +230,7 @@ export async function waitForChatScrollIdle(page: Page): Promise<void> {
               });
             });
             const after = readGeometry();
-            return (
-              !scrolled &&
-              before.clientHeight === after.clientHeight &&
-              before.scrollHeight === after.scrollHeight &&
-              before.scrollTop === after.scrollTop
-            );
+            return !scrolled && before.every((value, index) => value === after[index]);
           } finally {
             thread.removeEventListener("scroll", onScroll);
           }

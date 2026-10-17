@@ -1,15 +1,10 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
-import {
-  takeControlUiScreenshotFrame,
-  takeControlUiViewportScreenshot,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openDetailsPullRequests } from "./chat-details.test-support.ts";
+import { exactButton as publicationAction } from "./chat-flow.test-support.ts";
 import {
   personalAccount,
   personalGeneration,
@@ -19,9 +14,7 @@ import {
 } from "./chat-github-publication.test-support.ts";
 import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-export function publicationAction(root: Page | Locator, name: string) {
-  return root.getByRole("button", { name, exact: true });
-}
+export { publicationAction };
 
 export async function selectPublicationAccount(root: Page | Locator, source: string) {
   await publicationAction(root, "Publication account").click();
@@ -44,20 +37,6 @@ export function installPublicationGateway(
   });
 }
 
-export async function publicationScreenshot(
-  suite: ReturnType<typeof createControlUiE2eSuite>,
-  page: Page,
-  filename: string,
-  targets: Locator[],
-) {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-    await writeFile(
-      path.join(suite.artifactDir, filename),
-      await takeControlUiViewportScreenshot(page, page.locator(".shell"), targets),
-    );
-  }
-}
-
 const unknownAvailability =
   "GitHub publication account verification is unavailable. Reload and retry, or check gh auth status on the Gateway runtime host. Settings connections are optional; My GitHub is separate.";
 function availability(
@@ -71,11 +50,9 @@ function availability(
 export function defineGitHubPublicationAccountTests({
   suite,
   newPublicationContext,
-  captureUiProof,
 }: {
   suite: ReturnType<typeof createControlUiE2eSuite>;
   newPublicationContext: () => Promise<BrowserContext>;
-  captureUiProof: boolean;
 }) {
   it.each([
     availability(
@@ -146,25 +123,6 @@ export function defineGitHubPublicationAccountTests({
       await note.waitFor();
       expect(await refresh.count()).toBe(1);
       expect(await refresh.isEnabled()).toBe(true);
-      if (captureUiProof) {
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          page.locator(".shell"),
-          [publish, note, refresh],
-          {
-            animations: "disabled",
-            elements: [row],
-          },
-        );
-        await writeFile(
-          path.join(suite.artifactDir, `${scenario.name}-availability.png`),
-          frame.png,
-        );
-        await writeFile(
-          path.join(suite.artifactDir, `${scenario.name}-banner.png`),
-          frame.elements[0]!.png,
-        );
-      }
       expect(await note.textContent()).toContain(scenario.message);
     } else {
       expect(await note.count()).toBe(0);
@@ -302,7 +260,7 @@ export function defineGitHubPublicationAccountTests({
     { name: "conflicted", state: "reclaimed", running: false, conflict: true, ready: false },
   ])(
     "gates personal publication for a $name workspace",
-    async ({ name, state, running, conflict, ready }) => {
+    async ({ state, running, conflict, ready }) => {
       const context = await newPublicationContext();
       const page = await context.newPage();
       const now = Date.now();
@@ -339,7 +297,7 @@ export function defineGitHubPublicationAccountTests({
         .click();
       const publish = page.getByRole("button", { name: "Publish PR" });
       await publish.waitFor();
-      await publicationScreenshot(suite, page, `${name}-workspace.png`, [publish]);
+
       await expect.poll(() => publish.isEnabled()).toBe(ready);
       if (conflict) {
         const notice = page.locator(".chat-workspace-conflict-notice");

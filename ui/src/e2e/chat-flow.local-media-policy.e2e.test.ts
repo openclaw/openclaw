@@ -14,41 +14,28 @@ import {
 const suite = createChatFlowE2eSuite();
 const mediaTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const outbound = "/home/node/.openclaw/media/outbound";
+const ticket = "ticket-local";
 
 suite.define(() => {
   it.each([
-    ["audio", `${outbound}/bootstrap-voice.mp3`, "ticket-bootstrap-audio"],
-    ["image", `${outbound}/bootstrap-image.png`, "ticket-bootstrap-image"],
+    ["audio", `${outbound}/voice.mp3`],
+    ["image", `${outbound}/image.png`],
     [
       "image",
       "/projects/chat-worktree/.openclaw/tmp/review/preview.png",
-      "ticket-project-image",
       { revalidatePolicy: true },
     ],
-    [
-      "image",
-      `FILE://${outbound}/bootstrap-uppercase-image.png`,
-      "ticket-bootstrap-uppercase-image",
-    ],
-    [
-      "image",
-      `file:${outbound}/bootstrap-authorityless-image.png`,
-      "ticket-bootstrap-authorityless-image",
-    ],
-    [
-      "audio",
-      "bootstrap-structured-audio.mp3",
-      "ticket-bootstrap-structured-audio",
-      { structured: true },
-    ],
+    ["image", `FILE://${outbound}/upper.png`],
+    ["image", `file:${outbound}/plain.png`],
+    ["audio", "structured.mp3", { structured: true }],
     ...[
       "~/media/report-voice.mp3",
       "/workspace/project/../media/report-voice.mp3",
       "C:\\workspace\\project\\..\\media\\report-voice.mp3",
-    ].map((source) => ["audio", source, "ticket-dollar-home", { attachment: true }] as const),
+    ].map((source) => ["audio", source, { attachment: true }] as const),
   ] as const)(
     "renders local assistant %s through server metadata (%s)",
-    async (kind, fixtureSource, ticket, options = {}) => {
+    async (kind, fixtureSource, options = {}) => {
       const source =
         "structured" in options
           ? `FILE:${path.join(mediaTempDirs.make("control-ui-audio-"), fixtureSource)}`

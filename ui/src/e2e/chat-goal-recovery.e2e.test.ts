@@ -1,11 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/sessions-goal.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage, exactButton, requireRecord } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI goal recovery" });
@@ -46,7 +42,6 @@ function goalSessions(
 
 suite.define(() => {
   it("lets an invalid Goal edit be corrected without reload or recovery", async () => {
-    const artifacts = createControlUiE2eArtifactDir("goal-invalid-edit");
     await suite.withPage(pageOptions, async ({ page }) => {
       const now = Date.now();
       const goal = goalFixture(now, "goal-edit");
@@ -59,9 +54,9 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat/main`);
-      await page.getByRole("button", { name: "Edit goal", exact: true }).click();
+      await exactButton(page, "Edit goal").click();
       const objective = page.locator(".agent-chat__composer-combobox textarea");
-      const save = page.getByRole("button", { name: "Save goal", exact: true });
+      const save = exactButton(page, "Save goal");
       const invalid = page.getByText("Goal update is invalid. Check the objective and try again.", {
         exact: true,
       });
@@ -72,20 +67,9 @@ suite.define(() => {
           async () => (await gateway.getRequests(method)).length > 0 || (await invalid.isVisible()),
         )
         .toBe(true);
-      // Model the Gateway's ordinary schema refusal if invalid input escapes the UI.
-      if ((await gateway.getRequests(method)).length > 0) {
-        await gateway.rejectDeferred(method, {
-          code: "INVALID_REQUEST",
-          message: "Invalid goal edit",
-        });
-        await expect.poll(() => save.isEnabled()).toBe(true);
-      }
-      await page.screenshot({ path: path.join(artifacts, "invalid-edit.png") });
-      expect(await invalid.isVisible()).toBe(true);
       expect(await gateway.getRequests(method)).toHaveLength(0);
-      expect(await page.getByRole("button", { name: "Check outcome", exact: true }).count()).toBe(
-        0,
-      );
+      expect(await invalid.isVisible()).toBe(true);
+      expect(await exactButton(page, "Check outcome").count()).toBe(0);
 
       const corrected = "Verify only the sample deployment";
       await objective.fill(corrected);
@@ -117,7 +101,6 @@ suite.define(() => {
         .toBe(corrected);
       expect(await gateway.getRequests(method)).toHaveLength(1);
       expect(await invalid.count()).toBe(0);
-      await page.screenshot({ path: path.join(artifacts, "corrected-edit.png") });
     });
   });
 
@@ -129,7 +112,6 @@ suite.define(() => {
   ] as const)(
     "bounds $action recovery by its authenticated scope (empty scope=$legacyScope)",
     async ({ action, legacyScope }) => {
-      const artifacts = createControlUiE2eArtifactDir(`goal-recovery-${action}`);
       await suite.withPage(pageOptions, async ({ page }) => {
         if (legacyScope) {
           await page.addInitScript(() => {
@@ -151,19 +133,14 @@ suite.define(() => {
           sessionKey: "agent:main:main",
           heldMethods: [method],
           omitConnectHelloAuth: legacyScope,
-          historyMessages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Deployment checks are ready." }],
-            },
-          ],
+          historyMessages: [chatMessage("assistant", "Deployment checks are ready.")],
           methodResponses: { "sessions.list": sessions },
         });
         await page.goto(`${suite.server.baseUrl}chat/main`);
-        const original = page.getByRole("button", {
-          name: `${action.charAt(0).toUpperCase()}${action.slice(1)} goal`,
-          exact: true,
-        });
+        const original = exactButton(
+          page,
+          `${action.charAt(0).toUpperCase()}${action.slice(1)} goal`,
+        );
         await original.waitFor();
         await page.clock.install();
         await original.click();
@@ -179,28 +156,16 @@ suite.define(() => {
               ),
             ),
           ).toHaveLength(0);
-          await page.screenshot({ path: path.join(artifacts, "recovery-unavailable.png") });
           await page.reload();
           await original.waitFor();
-          expect(
-            await page.getByRole("button", { name: "Check outcome", exact: true }).count(),
-          ).toBe(0);
+          expect(await exactButton(page, "Check outcome").count()).toBe(0);
           expect(await gateway.getRequests(method)).toHaveLength(0);
           return;
         }
         const first = await gateway.waitForRequest(method);
-        if (!isRecord(first.params)) {
-          throw new Error("Missing goal operation parameters");
-        }
+        const firstParams = requireRecord(first.params);
         if (action === "resume") {
-          const card = page.locator(".agent-chat__goal");
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            card,
-            [card.locator(".agent-chat__goal-label")],
-            { animations: "disabled", elements: [card] },
-          );
-          await writeFile(path.join(artifacts, "resume-pending.png"), frame.png);
+          await page.locator(".agent-chat__goal-label").waitFor({ state: "visible" });
           expect(await page.locator(".agent-chat__goal-label").textContent()).toBe(
             "Resuming goal…",
           );
@@ -240,23 +205,17 @@ suite.define(() => {
         } else {
           await expect.poll(() => page.locator(".agent-chat__goal").count()).toBe(0);
         }
-        await page.screenshot({ path: path.join(artifacts, "lost-ack.png") });
-        const checkOutcome = page.getByRole("button", {
-          name: action === "resume" ? "Retry resume" : "Check outcome",
-          exact: true,
-        });
+        const checkOutcome = exactButton(
+          page,
+          action === "resume" ? "Retry resume" : "Check outcome",
+        );
         await expect.poll(() => checkOutcome.isEnabled()).toBe(true);
         expect(await gateway.getSocketCount()).toBe(sockets);
         expect(await gateway.getRequests(method)).toHaveLength(action === "resume" ? 2 : 1);
         if (action === "resume") {
-          const card = page.locator(".agent-chat__goal");
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            card,
-            [card.locator(".agent-chat__goal-label"), checkOutcome],
-            { animations: "disabled", elements: [card], viewport: { width: 390, height: 844 } },
-          );
-          await writeFile(path.join(artifacts, "resume-retry-mobile.png"), frame.png);
+          await page.setViewportSize({ width: 390, height: 844 });
+          await page.locator(".agent-chat__goal-label").waitFor({ state: "visible" });
+          await checkOutcome.waitFor({ state: "visible" });
           expect(await checkOutcome.isVisible()).toBe(true);
           await page.setViewportSize(viewport);
         }
@@ -275,7 +234,7 @@ suite.define(() => {
         const retried = await gateway.waitForRequest(method);
         expect(retried.params).toEqual(first.params);
         await gateway.resolveDeferred(method, {
-          operationId: first.params.operationId,
+          operationId: firstParams.operationId,
           action,
           status: action === "resume" ? "started" : action === "clear" ? "cleared" : "updated",
           goalId: goal.id,
@@ -285,16 +244,10 @@ suite.define(() => {
         });
         await checkOutcome.waitFor({ state: "detached" });
         if (committed) {
-          await page
-            .getByRole("button", {
-              name: action === "pause" ? "Resume goal" : "Pause goal",
-              exact: true,
-            })
-            .waitFor();
+          await exactButton(page, action === "pause" ? "Resume goal" : "Pause goal").waitFor();
         }
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests(method)).toHaveLength(1);
-        await page.screenshot({ path: path.join(artifacts, "reconciled-goal.png") });
       });
     },
   );
@@ -307,11 +260,7 @@ suite.define(() => {
         sessionKey: "agent:main:main",
         heldMethods: [method, "chat.startup"],
         historyMessages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "Goal recovery context loaded." }],
-            timestamp: now,
-          },
+          chatMessage("assistant", "Goal recovery context loaded.", { timestamp: now }),
         ],
         methodResponses: {
           "sessions.list": goalSessions(now, "goal-check-session", goalFixture(now, "goal-check")),
@@ -325,7 +274,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat/main`);
       await gateway.waitForRequest("chat.startup");
       await page.locator(".agent-chat__goal-objective").waitFor();
-      const resume = page.getByRole("button", { name: "Resume goal", exact: true });
+      const resume = exactButton(page, "Resume goal");
       expect(await resume.count()).toBe(0);
       expect(await gateway.getRequests(method)).toHaveLength(0);
       await admitHistory();
@@ -334,18 +283,13 @@ suite.define(() => {
       const first = await gateway.waitForRequest(method);
       expect(first.params).toMatchObject({ sessionId: "goal-check-session" });
       const beforeRetry = (await gateway.getRequests(method)).length;
+      const unavailable = { code: "UNAVAILABLE", message: "Gateway response unavailable" };
       await gateway.deferNext(method);
-      await gateway.rejectDeferred(method, {
-        code: "UNAVAILABLE",
-        message: "Gateway response unavailable",
-      });
+      await gateway.rejectDeferred(method, unavailable);
       await page.clock.fastForward(1_001);
       await gateway.waitForRequest(method, { after: beforeRetry });
-      await gateway.rejectDeferred(method, {
-        code: "UNAVAILABLE",
-        message: "Gateway response unavailable",
-      });
-      const checkOutcome = page.getByRole("button", { name: "Retry resume", exact: true });
+      await gateway.rejectDeferred(method, unavailable);
+      const checkOutcome = exactButton(page, "Retry resume");
       await checkOutcome.waitFor();
       await page.reload();
       await admitHistory();
@@ -354,17 +298,11 @@ suite.define(() => {
       const retried = await gateway.waitForRequest(method);
       expect(retried.params).toEqual(first.params);
       await gateway.deferNext(method);
-      await gateway.rejectDeferred(method, {
-        code: "UNAVAILABLE",
-        message: "Gateway response unavailable",
-      });
+      await gateway.rejectDeferred(method, unavailable);
       await page.clock.fastForward(1_001);
       const automatic = await gateway.waitForRequest(method, { after: 1 });
       expect(automatic.params).toEqual(first.params);
-      await gateway.rejectDeferred(method, {
-        code: "UNAVAILABLE",
-        message: "Gateway response unavailable",
-      });
+      await gateway.rejectDeferred(method, unavailable);
       await page.getByText("Gateway response unavailable", { exact: false }).waitFor();
       expect(await checkOutcome.isEnabled()).toBe(true);
       expect(await gateway.getRequests(method)).toHaveLength(2);

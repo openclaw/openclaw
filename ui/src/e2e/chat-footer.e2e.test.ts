@@ -1,10 +1,8 @@
-import path from "node:path";
 import type { CDPSession, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   closeChatDetails,
@@ -12,7 +10,6 @@ import {
   openDetailsPullRequests,
 } from "./chat-details.test-support.ts";
 import {
-  captureUiProofEnabled,
   chatMessage,
   chatThreadDistanceFromBottom,
   waitForChatScrollIdle,
@@ -30,11 +27,7 @@ const checksMethod = "controlUi.sessionPullRequests.checks";
 const queuedMessages = ["Review the desktop", "Review the phone", "Record the result"];
 
 async function activate(control: Locator, touch: boolean) {
-  if (touch) {
-    await control.tap();
-  } else {
-    await control.press("Enter");
-  }
+  await (touch ? control.tap() : control.press("Enter"));
 }
 
 async function scrollDown(page: Page, point: { x: number; y: number }, client?: CDPSession) {
@@ -99,10 +92,7 @@ suite.define(() => {
     { label: "phone", width: 390, height: 568, touch: true },
   ])(
     "keeps PRs, run notices, dense context, and the input usable on $label",
-    async ({ label, width, height, touch }) => {
-      const proofDir = captureUiProofEnabled
-        ? createControlUiE2eArtifactDir("chat-footer-" + label)
-        : null;
+    async ({ width, height, touch }) => {
       await suite.withPage(
         {
           ...createControlUiE2eContextOptions(),
@@ -114,14 +104,6 @@ suite.define(() => {
           const touchClient = touch ? await page.context().newCDPSession(page) : undefined;
           const pageErrors: string[] = [];
           page.on("pageerror", (error) => pageErrors.push(error.message));
-          const capture = async (stage: string) => {
-            if (proofDir) {
-              await page.screenshot({
-                path: path.join(proofDir, stage + ".png"),
-                animations: "disabled",
-              });
-            }
-          };
           const gateway = await installMockGateway(page, {
             sessionKey,
             featureMethods: [
@@ -223,7 +205,6 @@ suite.define(() => {
           });
           await page.locator(".chat-error").waitFor();
           await waitForChatScrollIdle(page);
-          await capture("01-pr-and-error");
 
           // Details clips overflowing rows; its scrollport must stay above the notice.
           const detailsBottom = await page
@@ -265,7 +246,6 @@ suite.define(() => {
           }));
           expect(boundary.transcriptBottom).toBeLessThanOrEqual(boundary.footerTop);
           await expectInputReachable(page);
-          await capture("02-latest-with-notice");
 
           await openDetailsPullRequests(page);
           await activate(pullRequest.locator(".chat-pr__checks-pill"), touch);
@@ -279,7 +259,7 @@ suite.define(() => {
           expect(menuBounds.y).toBeGreaterThanOrEqual(0);
           expect(menuBounds.y + menuBounds.height).toBeLessThanOrEqual(height);
           await menu.getByRole("link", { name: "Open checks on GitHub" }).click({ trial: true });
-          await capture("03-checks-menu");
+
           await page.keyboard.press("Escape");
           await expect.poll(() => menu.isVisible()).toBe(false);
 
@@ -312,11 +292,14 @@ suite.define(() => {
           await gateway.closeLatest();
           await page.locator(".agent-chat__input--offline").waitFor();
           const composer = page.locator(".agent-chat__composer-combobox textarea");
-          for (const message of queuedMessages) {
-            await composer.fill(message);
-            await composer.press("Enter");
-            await page.locator(".chat-queue__item", { hasText: message }).waitFor();
-          }
+          const queue = async (messages: readonly string[]) => {
+            for (const message of messages) {
+              await composer.fill(message);
+              await composer.press("Enter");
+              await page.locator(".chat-queue__item", { hasText: message }).waitFor();
+            }
+          };
+          await queue(queuedMessages);
           const draft = "Keep every control reachable while reviewing this long draft.\n".repeat(
             12,
           );
@@ -324,7 +307,6 @@ suite.define(() => {
           const persistentContext = page.locator(".chat-footer__context");
           expect(await persistentContext.locator(".chat-queue__item").count()).toBe(3);
           await expectInputReachable(page);
-          await capture("04-dense-context");
 
           // Progress scrolls inside Details rather than chaining into the queue.
           await openChatDetails(page);
@@ -353,7 +335,7 @@ suite.define(() => {
           await expect.poll(() => page.locator(".chat-queue__item").count()).toBe(2);
           expect(await composer.inputValue()).toBe(draft);
           await expectInputReachable(page);
-          await capture("05-context-scrolled");
+
           await waitForChatScrollIdle(page);
           if (!touch) {
             await persistentContext.evaluate((element) => {
@@ -372,11 +354,7 @@ suite.define(() => {
             await waitForChatScrollIdle(page);
             // PRs/progress no longer create footer overflow. Queue enough real
             // messages to preserve the short-pane scroll/reachability contract.
-            for (const message of ["Review narrow footer", "Check short canvas"]) {
-              await composer.fill(message);
-              await composer.press("Enter");
-              await page.locator(".chat-queue__item", { hasText: message }).waitFor();
-            }
+            await queue(["Review narrow footer", "Check short canvas"]);
             await composer.fill(draft);
             for (const paneHeight of [248, 200]) {
               await page.setViewportSize({ width, height: paneHeight });
@@ -391,7 +369,6 @@ suite.define(() => {
               }));
               expect(contextHeight.visible).toBeGreaterThan(0);
               expect(contextHeight.content).toBeGreaterThan(contextHeight.visible);
-              await capture("06-short-pane-" + paneHeight);
             }
           }
           expect(pageErrors).toEqual([]);

@@ -13,15 +13,11 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
-import {
-  publicationAction,
-  publicationScreenshot,
-} from "./chat-github-publication-accounts.test-support.ts";
+import { publicationAction } from "./chat-github-publication-accounts.test-support.ts";
 import { publicationMethods } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI guest shared GitHub publication" });
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const viewport = { width: 1180, height: 800 };
 const sessionKey = "agent:main:guest-publication";
 const publisher = { source: "system-configured", accountId: 1, login: "roboclaw-bot" } as const;
@@ -33,15 +29,12 @@ const options = {
 } satisfies GitHubPublicationOptions;
 const historyText = "The visitor's change is ready for publication.";
 
-function contextOptions(record = false): Parameters<typeof suite.newBrowserContext>[0] {
+function contextOptions(): Parameters<typeof suite.newBrowserContext>[0] {
   return {
     colorScheme: "light",
     locale: "en-US",
     serviceWorkers: "block",
     viewport,
-    ...(record && captureUiProof
-      ? { recordVideo: { dir: suite.artifactDir, size: viewport } }
-      : {}),
   };
 }
 
@@ -92,12 +85,6 @@ async function installGuestGateway(
   });
 }
 
-async function screenshot(page: Page, filename: string) {
-  await publicationScreenshot(suite, page, filename, [
-    page.getByText(historyText, { exact: true }),
-  ]);
-}
-
 async function expectNoPersonalActions(page: Page) {
   expect(await publicationAction(page, "Publication account").count()).toBe(0);
   expect(await publicationAction(page, "Confirm original publication").count()).toBe(0);
@@ -105,7 +92,7 @@ async function expectNoPersonalActions(page: Page) {
 
 suite.define(() => {
   it("publishes an owned guest session through the shared account and recovers its receipt", async () => {
-    await suite.withPage(contextOptions(true), async ({ page }) => {
+    await suite.withPage(contextOptions(), async ({ page }) => {
       const gateway = await installGuestGateway(page);
       const requestId = "8c698e8a-bdc7-4927-a0f2-73a842c2d7b7";
       const requested = {
@@ -133,13 +120,8 @@ suite.define(() => {
       expect(discovered.params).toEqual({ sessionKey, agentId: "main" });
       await openDetailsPullRequests(page);
       const publish = publicationAction(page, "Publish PR");
-      try {
-        await expect.poll(() => publish.count()).toBe(1);
-        await expect.poll(() => publish.isEnabled()).toBe(true);
-      } finally {
-        // This same capture records the missing action when run on the pre-fix source.
-        await screenshot(page, "01-guest-ready.png");
-      }
+      await expect.poll(() => publish.count()).toBe(1);
+      await expect.poll(() => publish.isEnabled()).toBe(true);
       await expectNoPersonalActions(page);
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       await gateway.deferNext("sessions.github.publish");
@@ -153,7 +135,7 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("sessions.github.publish", requested);
       await page.getByText(requested.message, { exact: true }).waitFor({ state: "attached" });
-      await screenshot(page, "02-guest-requested.png");
+
       await gateway.setMethodResponse("sessions.github.status", receipt);
       await gateway.setMethodResponse("sessions.github.options", {
         ...options,
@@ -164,7 +146,6 @@ suite.define(() => {
       expect(status.params).toEqual({ sessionKey, agentId: "main", requestId });
       const openPr = page.getByRole("link", { name: "Open PR", exact: true });
       await expect.poll(() => openPr.getAttribute("href")).toBe(receipt.result.url);
-      await screenshot(page, "03-guest-published.png");
 
       const previousOptions = (await gateway.getRequests("sessions.github.options")).length;
       await reconnectMockGateway(page, gateway);
@@ -180,7 +161,7 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.github.options");
       await openDetailsPullRequests(page);
       await expect.poll(() => openPr.getAttribute("href")).toBe(receipt.result.url);
-      await screenshot(page, "04-guest-recovered.png");
+
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
     });
