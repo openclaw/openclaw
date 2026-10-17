@@ -33,6 +33,14 @@ const png =
   "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAALklEQVR4nO3OoQEAAAyDsP7/9HYGJgJNdtuVDQAAAAAAACAHxH8AAAAAAACAHvBX0fhq85dN7QAAAABJRU5ErkJggg==";
 const readJson = async (file: string) => record(JSON.parse(await readFile(file, "utf8")));
 const sha256 = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+const session = (name: string) => `agent:qa:package-${name}`;
+const privateNonce = (value: string) => /QA-PARENT-PRIVATE-CHILD1-[A-F0-9]{32}/u.exec(value)?.[0];
+const expectJson = (value: unknown) => expect(JSON.stringify(value));
+const until = <T>(
+  check: () => T | Promise<T | undefined> | undefined,
+  timeout = 30_000,
+  interval = 100,
+) => waitForQaTransportCondition(check, timeout, interval);
 
 async function holdProviderRequests(baseUrl: string) {
   let armed = false;
@@ -114,25 +122,36 @@ async function holdProviderRequests(baseUrl: string) {
   };
 }
 
-function requiredSqlValue(row: Record<string, SQLInputValue>, key: string): SQLInputValue {
-  const value = row[key];
-  if (value === undefined) {
-    throw new Error(`missing required SQLite field: ${key}`);
+function checkRow<T extends string>(
+  row: Record<string, SQLInputValue> | undefined,
+  textKeys: T[],
+  valueKeys: string[] = [],
+): asserts row is Record<string, SQLInputValue> & Record<T, string> {
+  if (!row) {
+    throw new Error("expected a persisted row");
   }
-  return value;
-}
-
-function requiredSqlText(row: Record<string, SQLInputValue>, key: string): string {
-  const value = requiredSqlValue(row, key);
-  if (typeof value !== "string") {
-    throw new Error(`expected SQLite text field: ${key}`);
+  for (const key of valueKeys) {
+    if (row[key] === undefined) {
+      throw new Error(`missing required SQLite field: ${key}`);
+    }
   }
-  return value;
+  for (const key of textKeys) {
+    if (typeof row[key] !== "string") {
+      throw new Error(`expected SQLite text field: ${key}`);
+    }
+  }
 }
 
 function record(value: unknown): Record<string, unknown> {
   expect(isRecord(value)).toBe(true);
   return value as Record<string, unknown>;
+}
+
+function schemaVersion(value: unknown) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    throw new Error("expected a safe integer schema version");
+  }
+  return value;
 }
 
 async function observeChat(gateway: QaGatewayChild, events: unknown[]) {
@@ -187,19 +206,9 @@ it.skipIf(!candidateTarball)(
     const candidateManifest = await readJson(path.join(repoRoot, "package.json"));
     const candidateVersion = candidateManifest.version;
     const candidateSchemaVersions = record(record(candidateManifest.openclaw).schemaVersions);
-    const candidateAgentSchemaVersion = candidateSchemaVersions.agent;
-    const candidateSharedSchemaVersion = candidateSchemaVersions.state;
-    if (
-      typeof candidateVersion !== "string" ||
-      typeof candidateAgentSchemaVersion !== "number" ||
-      !Number.isSafeInteger(candidateAgentSchemaVersion) ||
-      typeof candidateSharedSchemaVersion !== "number" ||
-      !Number.isSafeInteger(candidateSharedSchemaVersion)
-    ) {
-      throw new Error(
-        "Candidate package must declare its version and agent/shared schema versions",
-      );
-    }
+    expect(candidateVersion).toBeTypeOf("string");
+    const agentVersion = schemaVersion(candidateSchemaVersions.agent);
+    const sharedVersion = schemaVersion(candidateSchemaVersions.state);
     const published = JSON.parse(
       (await exec("npm", ["view", `openclaw@${releasedVersion}`, "version", "dist", "--json"]))
         .stdout,
@@ -220,8 +229,12 @@ it.skipIf(!candidateTarball)(
     let stateDb: string;
     let passed = false;
 
-    const agentRows = (sql: string, ...args: SQLInputValue[]) => rows(agentDb, sql, ...args);
-    const stateRows = (sql: string, ...args: SQLInputValue[]) => rows(stateDb, sql, ...args);
+    const select = (table: string, key: string, value: SQLInputValue, columns = "*", suffix = "") =>
+      rows(
+        table === "subagent_runs" ? stateDb : agentDb,
+        `SELECT ${columns} FROM ${table} WHERE ${key} = ?${suffix}`,
+        value,
+      );
     function mutateRegistry(sql: string, ...args: SQLInputValue[]) {
       const db = new DatabaseSync(stateDb);
       try {
@@ -231,50 +244,43 @@ it.skipIf(!candidateTarball)(
       }
     }
     const runCompletions = (runId: SQLInputValue, columns = "*", suffix = "") =>
-      agentRows(
-        `SELECT ${columns} FROM session_input_completions WHERE run_id = ?${suffix}`,
-        runId,
-      );
+      select("session_input_completions", "run_id", runId, columns, suffix);
     const debug = async (endpoint: string) =>
       await (await fetch(`${mock.baseUrl}/debug/${endpoint}`)).json();
-    const registryRows = (runId: SQLInputValue) =>
-      rows(stateDb, "SELECT * FROM subagent_runs WHERE run_id = ?", runId);
+    const registryRows = (runId: SQLInputValue) => select("subagent_runs", "run_id", runId);
     const pendingInputs = (sessionKey: string) =>
-      agentRows("SELECT * FROM session_pending_inputs WHERE session_key = ?", sessionKey);
+      select("session_pending_inputs", "session_key", sessionKey);
     const completionRows = (sessionKey: string) =>
-      agentRows(
-        "SELECT * FROM session_input_completions WHERE session_key = ? ORDER BY run_id",
-        sessionKey,
-      );
+      select("session_input_completions", "session_key", sessionKey, "*", " ORDER BY run_id");
     const sessionRow = (key: string) =>
-      agentRows("SELECT current_session_id FROM session_nodes WHERE session_key = ?", key)[0];
+      select("session_nodes", "session_key", key, "current_session_id")[0];
     const transcript = (sessionId: string) =>
-      agentRows(
-        "SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
-        sessionId,
-      );
+      select("transcript_events", "session_id", sessionId, "event_json", " ORDER BY seq");
+    const matchingEvents = (since: number, expected: Record<string, unknown>) =>
+      events
+        .slice(since)
+        .filter(isRecord)
+        .filter((event) => Object.entries(expected).every(([key, value]) => event[key] === value));
     const waitForReply = (
       since: number,
       expected: { sessionKey: unknown; runId?: unknown; state?: string },
       marker: string | RegExp,
     ) =>
-      waitForQaTransportCondition(
+      until(
         () =>
-          events.slice(since).some((event) => {
-            if (
-              !isRecord(event) ||
-              !Object.entries(expected).every(([key, value]) => event[key] === value)
-            ) {
-              return false;
-            }
+          matchingEvents(since, expected).some((event) => {
             const text = JSON.stringify(replies([event.message]));
             return typeof marker === "string" ? text.includes(marker) : marker.test(text);
           }) || undefined,
-        30_000,
-        100,
       );
-    const installedJson = async (args: string[]) =>
-      record(JSON.parse((await runInstalled(args)).stdout));
+    const waitForFinal = (
+      since: number,
+      sessionKey: unknown,
+      runId: unknown,
+      marker: string | RegExp,
+    ) => waitForReply(since, { sessionKey, runId, state: "final" }, marker);
+    const installedJson = async (...args: string[]) =>
+      record(JSON.parse((await runInstalled(...args)).stdout));
 
     async function install(spec: string) {
       await exec("npm", ["install", "-g", "--prefix", prefix, spec, "--no-fund", "--no-audit"], {
@@ -331,39 +337,32 @@ it.skipIf(!candidateTarball)(
       expect(started.runtimeEnv.OPENCLAW_DEV_SOURCE_ROOT).toBeUndefined();
       expect(started.runtimeEnv.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
       observer = await observeChat(started, events);
-      return {
-        gateway: started,
-        agentDb: path.join(
-          started.runtimeEnv.OPENCLAW_STATE_DIR!,
-          "agents",
-          "qa",
-          "agent",
-          "openclaw-agent.sqlite",
-        ),
-        stateDb: path.join(started.runtimeEnv.OPENCLAW_STATE_DIR!, "state", "openclaw.sqlite"),
-      };
+      gateway = started;
+      const stateDir = started.runtimeEnv.OPENCLAW_STATE_DIR!;
+      agentDb = path.join(stateDir, "agents/qa/agent/openclaw-agent.sqlite");
+      stateDb = path.join(stateDir, "state/openclaw.sqlite");
     }
 
     const nativeRuns = (key: string) => readPrivateCompletionNativeRuns(stateDb, key);
     const delivered = (task: ReturnType<typeof nativeRuns>[number]) =>
       task.status === "completed" && task.deliveryStatus === "delivered";
     const waitForChildren = (key: string, settle = false) =>
-      waitForQaTransportCondition(
-        async () => {
-          if (settle) {
-            await mock.terminalRequesters.settle(gateway);
-          }
-          const children = nativeRuns(key);
-          return children.length === 2 && children.every(delivered) ? children : undefined;
-        },
-        120_000,
-        100,
-      );
+      until(async () => {
+        if (settle) {
+          await mock.terminalRequesters.settle(gateway);
+        }
+        const children = nativeRuns(key);
+        return children.length === 2 && children.every(delivered) ? children : undefined;
+      }, 120_000);
 
-    async function send(sessionKey: string, message: string) {
+    async function send(
+      sessionKey: string,
+      message: string,
+      idempotencyKey: string = randomUUID(),
+    ) {
       await gateway.call("sessions.create", { key: sessionKey });
       const accepted = record(
-        await gateway.call("chat.send", { sessionKey, message, idempotencyKey: randomUUID() }),
+        await gateway.call("chat.send", { sessionKey, message, idempotencyKey }),
       );
       expect(accepted.runId).toBeTruthy();
       return accepted;
@@ -384,27 +383,27 @@ it.skipIf(!candidateTarball)(
       return messages
         .filter(isRecord)
         .filter((message) => message.role === "assistant")
-        .map((message) => ({
-          text: message.text,
-          content: Array.isArray(message.content)
-            ? message.content.filter(
+        .map(({ text, content, attachments, mediaUrl, mediaUrls }) => ({
+          text,
+          content: Array.isArray(content)
+            ? content.filter(
                 (block) =>
                   !isRecord(block) ||
                   !["toolCall", "toolcall", "tool_use", "thinking", "reasoning"].includes(
                     String(block.type),
                   ),
               )
-            : message.content,
-          attachments: message.attachments,
-          mediaUrl: message.mediaUrl,
-          mediaUrls: message.mediaUrls,
+            : content,
+          attachments,
+          mediaUrl,
+          mediaUrls,
         }));
     }
 
     function assertPrivateReplies(messages: unknown[]) {
       const rendered = replies(messages);
-      expect(JSON.stringify(rendered)).not.toMatch(privateMarker);
-      expect(JSON.stringify(rendered)).not.toMatch(/\bNO_REPLY\b/u);
+      expectJson(rendered).not.toMatch(privateMarker);
+      expectJson(rendered).not.toMatch(/\bNO_REPLY\b/u);
       for (const reply of rendered) {
         if (Array.isArray(reply.content)) {
           expect(
@@ -413,9 +412,8 @@ it.skipIf(!candidateTarball)(
             ),
           ).toBe(true);
         }
-        expect(reply.attachments ?? []).toEqual([]);
-        expect(reply.mediaUrl).toBeUndefined();
-        expect(reply.mediaUrls ?? []).toEqual([]);
+        const { attachments, mediaUrl, mediaUrls } = reply;
+        expect([attachments ?? [], mediaUrl, mediaUrls ?? []]).toEqual([[], undefined, []]);
       }
     }
 
@@ -424,20 +422,23 @@ it.skipIf(!candidateTarball)(
       expect(page.pendingInputs).toEqual({ items: [], total: 0 });
       expect(Array.isArray(page.messages)).toBe(true);
       const messages = page.messages as unknown[];
-      expect(
-        JSON.stringify(messages.filter((message) => isRecord(message) && message.role === "user")),
+      expectJson(
+        messages.filter((message) => isRecord(message) && message.role === "user"),
       ).not.toMatch(privateMarker);
       assertPrivateReplies(messages);
+    }
+
+    async function assertPrivateSessions(...keys: string[]) {
+      for (const key of keys) {
+        await assertPrivateHistory(key);
+        assertPrivateReplies(capturedReplies(key));
+      }
     }
 
     function capturedReplies(sessionKey: string, since = 0) {
       // This admin observer also receives child-session transcript events. The
       // private handoff controls publication to the parent, not child inspection.
-      return events
-        .slice(since)
-        .filter(isRecord)
-        .filter((event) => event.sessionKey === sessionKey)
-        .map((event) => event.message);
+      return matchingEvents(since, { sessionKey }).map((event) => event.message);
     }
 
     async function privateChain(sessionKey: string) {
@@ -452,30 +453,34 @@ it.skipIf(!candidateTarball)(
       const successfulReceipts = receipts.filter((receipt) => receipt.succeeded === 1);
       expect(successfulReceipts.length).toBeGreaterThanOrEqual(2);
       expect(pendingInputs(sessionKey)).toEqual([]);
-      const stored = stateRows(
-        "SELECT payload_json FROM subagent_runs WHERE requester_session_key = ? ORDER BY run_id",
+      const stored = select(
+        "subagent_runs",
+        "requester_session_key",
         sessionKey,
+        "payload_json",
+        " ORDER BY run_id",
       );
       expect(stored.length).toBeGreaterThanOrEqual(2);
       expect(
         stored.every((row) => record(JSON.parse(String(row.payload_json))).parentCompletion),
       ).toBe(true);
       await assertPrivateHistory(sessionKey);
-      await waitForReply(
-        eventCursor,
-        { sessionKey, runId: kickoff.runId, state: "final" },
-        "Worker started.",
-      );
+      await waitForFinal(eventCursor, sessionKey, kickoff.runId, "Worker started.");
       for (const child of children) {
         expect([typeof child.childSessionKey, typeof child.runId]).toEqual(["string", "string"]);
-        await waitForReply(
-          eventCursor,
-          { sessionKey: child.childSessionKey, runId: child.runId, state: "final" },
-          privateMarker,
-        );
+        await waitForFinal(eventCursor, child.childSessionKey, child.runId, privateMarker);
       }
       assertPrivateReplies(capturedReplies(sessionKey, eventCursor));
       return { sessionKey, children, receipts };
+    }
+
+    async function privatePhase(name: string, key: string) {
+      const result = await privateChain(session(key));
+      phase(name, {
+        privateChildren: result.children.length,
+        processingReceipts: result.receipts.length,
+      });
+      return result;
     }
 
     async function ordinaryChild(sessionKey: string) {
@@ -484,31 +489,25 @@ it.skipIf(!candidateTarball)(
         sessionKey,
         "Subagent terminal reply QA check: silent. Spawn one native worker, then report its completion to this conversation. Do not use ACP.",
       );
-      const child = await waitForQaTransportCondition(
-        async () => {
-          await mock.terminalRequesters.settle(gateway);
-          const currentChild = nativeRuns(sessionKey).find(
-            (task) => task.title === "qa-terminal-silent",
-          );
-          return currentChild && delivered(currentChild) ? currentChild : undefined;
-        },
-        120_000,
-        100,
-      );
-      await waitForQaTransportCondition(
+      const child = await until(async () => {
+        await mock.terminalRequesters.settle(gateway);
+        const currentChild = nativeRuns(sessionKey).find(
+          (task) => task.title === "qa-terminal-silent",
+        );
+        return currentChild && delivered(currentChild) ? currentChild : undefined;
+      }, 120_000);
+      await until(
         async () =>
           JSON.stringify(replies(record(await history(sessionKey)).messages as unknown[])).includes(
             ordinaryMarker,
           ) || undefined,
-        30_000,
-        100,
       );
       // A positive live event qualifies the observation interval after startup.
       await waitForReply(eventCursor, { sessionKey }, ordinaryMarker);
       return child;
     }
 
-    async function runInstalled(args: string[]) {
+    async function runInstalled(...args: string[]) {
       return await exec(process.execPath, [cli, ...args], {
         cwd: prefix,
         env: gateway.runtimeEnv,
@@ -517,12 +516,12 @@ it.skipIf(!candidateTarball)(
       });
     }
 
-    function assertSchema(agentVersion: number, sharedVersion: number) {
-      expect(rows(agentDb, "PRAGMA user_version")[0]?.user_version).toBe(agentVersion);
+    function assertSchema(agentSchema: number, sharedSchema: number) {
+      expect(rows(agentDb, "PRAGMA user_version")[0]?.user_version).toBe(agentSchema);
       expect(rows(agentDb, "SELECT schema_version FROM schema_meta")[0]?.schema_version).toBe(
-        agentVersion,
+        agentSchema,
       );
-      expect(rows(stateDb, "PRAGMA user_version")[0]?.user_version).toBe(sharedVersion);
+      expect(rows(stateDb, "PRAGMA user_version")[0]?.user_version).toBe(sharedSchema);
     }
 
     async function restartState(
@@ -547,8 +546,9 @@ it.skipIf(!candidateTarball)(
       await gateway.restartAfterStateMutation(async (context) => {
         expect(context.stateDir).toBe(originalState);
         if (interruptedInput) {
-          const stopped = agentRows(
-            "SELECT * FROM session_pending_inputs WHERE input_id = ?",
+          const stopped = select(
+            "session_pending_inputs",
+            "input_id",
             interruptedInput.input_id,
           )[0];
           expect(stopped).toMatchObject({ ...interruptedInput, state: "interrupted" });
@@ -564,12 +564,8 @@ it.skipIf(!candidateTarball)(
 
     try {
       await install(candidateTarball!);
-      ({ gateway, agentDb, stateDb } = await start());
-      const fresh = await privateChain("agent:qa:package-fresh-private");
-      phase("fresh-candidate", {
-        privateChildren: fresh.children.length,
-        processingReceipts: fresh.receipts.length,
-      });
+      await start();
+      await privatePhase("fresh-candidate", "fresh-private");
       await observer?.stopAndWait();
       observer = undefined;
       expect(
@@ -578,13 +574,11 @@ it.skipIf(!candidateTarball)(
       owner = undefined;
 
       await install(`openclaw@${releasedVersion}`);
-      ({ gateway, agentDb, stateDb } = await start());
-      const ordinarySession = "agent:qa:package-released-ordinary";
+      await start();
+      const ordinarySession = session("released-ordinary");
       const ordinary = await ordinaryChild(ordinarySession);
       const originalSession = sessionRow(ordinarySession);
-      if (!originalSession || typeof originalSession.current_session_id !== "string") {
-        throw new Error("released ordinary session has no current session ID");
-      }
+      checkRow(originalSession, ["current_session_id"]);
       const originalSessionId = originalSession.current_session_id;
       const originalTranscript = transcript(originalSessionId);
       expect(originalTranscript.length).toBeGreaterThan(0);
@@ -611,16 +605,16 @@ it.skipIf(!candidateTarball)(
         expect((await lstat(repoLink)).isSymbolicLink()).toBe(true);
         expect(await readlink(repoLink)).toBe(repoRoot);
         await unlink(repoLink);
-        const backup = await installedJson([
+        const backup = await installedJson(
           "backup",
           "create",
           "--output",
           backupPath,
           "--verify",
           "--json",
-        ]);
+        );
         expect(backup.verified).toBe(true);
-        const verified = await installedJson(["backup", "verify", backupPath, "--json"]);
+        const verified = await installedJson("backup", "verify", backupPath, "--json");
         expect(verified.ok).toBe(true);
         phase("released-verified-backup", {
           archiveSha256: sha256(await readFile(backupPath)),
@@ -629,70 +623,63 @@ it.skipIf(!candidateTarball)(
         await install(candidateTarball!);
         // The target Doctor owns its declared schema upgrade; a released
         // schema-19 build cannot reopen that upgraded database.
-        await runInstalled(["doctor", "--fix", "--non-interactive"]);
-        assertSchema(candidateAgentSchemaVersion, candidateSharedSchemaVersion);
+        await runInstalled("doctor", "--fix", "--non-interactive");
+        assertSchema(agentVersion, sharedVersion);
       });
       assertOriginalOrdinaryState();
-      const privateState = await privateChain("agent:qa:package-upgraded-private");
-      phase("candidate-doctor-upgrade", {
-        privateChildren: privateState.children.length,
-        processingReceipts: privateState.receipts.length,
-      });
+      const privateState = await privatePhase("candidate-doctor-upgrade", "upgraded-private");
 
       // Subagent execution has its own lane. Hold unrelated Main work so private
       // admission is durable while its parent has not begun consuming the result.
-      const pendingSession = "agent:qa:package-pending-private";
+      const pendingSession = session("pending-private");
       heldProvider.arm();
       const kickoff = await send(
         pendingSession,
         "Subagent terminal reply QA check: private. Review the first child internally and remain silent.",
       );
-      await waitForQaTransportCondition(() => heldProvider.childHeld() || undefined, 30_000, 50);
-      await waitForQaTransportCondition(
-        () =>
-          events.some(
-            (event) => isRecord(event) && event.runId === kickoff.runId && event.state === "final",
-          ) || undefined,
+      await until(() => heldProvider.childHeld() || undefined, 30_000, 50);
+      await until(
+        () => matchingEvents(0, { runId: kickoff.runId, state: "final" }).length || undefined,
         30_000,
         50,
       );
       await send(
-        "agent:qa:package-main-blocker",
+        session("main-blocker"),
         "QA PACKAGE MAIN HOLD. repeated request queued reply gateway qa check",
       );
-      await waitForQaTransportCondition(() => heldProvider.mainHeld() || undefined, 30_000, 50);
+      await until(() => heldProvider.mainHeld() || undefined, 30_000, 50);
       heldProvider.releaseChild();
-      const pendingInput = await waitForQaTransportCondition(
+      const pendingInput = await until(
         async () => {
           await mock.terminalRequesters.settle(gateway);
-          const pendingRow = agentRows(
-            "SELECT * FROM session_pending_inputs WHERE session_key = ? AND state = 'queued'",
+          const pendingRow = select(
+            "session_pending_inputs",
+            "session_key",
             pendingSession,
-          ).find((row) =>
-            requiredSqlText(row, "message_json").includes("QA-PARENT-PRIVATE-CHILD1-"),
+            "*",
+            " AND state = 'queued'",
+          ).find((row) => {
+            checkRow(row, ["message_json"]);
+            return row.message_json.includes("QA-PARENT-PRIVATE-CHILD1-");
+          });
+          if (!pendingRow) {
+            return undefined;
+          }
+          checkRow(
+            pendingRow,
+            ["input_id", "run_id", "session_id", "message_json", "state"],
+            ["consumed_event_id"],
           );
-          return pendingRow
-            ? {
-                ...pendingRow,
-                input_id: requiredSqlText(pendingRow, "input_id"),
-                run_id: requiredSqlText(pendingRow, "run_id"),
-                session_id: requiredSqlText(pendingRow, "session_id"),
-                message_json: requiredSqlText(pendingRow, "message_json"),
-                consumed_event_id: requiredSqlValue(pendingRow, "consumed_event_id"),
-                state: requiredSqlText(pendingRow, "state"),
-              }
-            : undefined;
+          return pendingRow;
         },
         60_000,
         50,
       );
       expect(pendingInput.consumed_event_id).toBeNull();
       expect(record(JSON.parse(pendingInput.message_json)).display).toBe(false);
-      const pendingNonce = /QA-PARENT-PRIVATE-CHILD1-[A-F0-9]{32}/u.exec(
-        pendingInput.message_json,
-      )?.[0];
+      const pendingNonce = privateNonce(pendingInput.message_json);
       expect(pendingNonce).toBeTruthy();
-      expect(JSON.stringify(transcript(pendingInput.session_id))).not.toContain(pendingNonce);
+      expectJson(transcript(pendingInput.session_id)).not.toContain(pendingNonce);
       expect(runCompletions(pendingInput.run_id)).toEqual([]);
       phase("candidate-queued-private-input", {
         sessionId: pendingInput.session_id,
@@ -704,35 +691,25 @@ it.skipIf(!candidateTarball)(
       if (typeof pendingChildKey !== "string") {
         throw new Error("queued private task has no child session key");
       }
-      const captured = stateRows(
-        "SELECT * FROM subagent_runs WHERE child_session_key = ?",
-        pendingChildKey,
-      )[0];
-      if (!captured) {
-        throw new Error("queued private task has no registry envelope");
-      }
-      const capturedRow = {
-        ...captured,
-        run_id: requiredSqlText(captured, "run_id"),
-        child_session_key: requiredSqlText(captured, "child_session_key"),
-        controller_session_key: requiredSqlValue(captured, "controller_session_key"),
-        requester_session_key: requiredSqlText(captured, "requester_session_key"),
-        created_at: requiredSqlValue(captured, "created_at"),
-        payload_json: requiredSqlText(captured, "payload_json"),
-      };
+      const capturedRow = select("subagent_runs", "child_session_key", pendingChildKey)[0];
+      checkRow(
+        capturedRow,
+        ["run_id", "child_session_key", "requester_session_key", "payload_json"],
+        ["controller_session_key", "created_at"],
+      );
       const privatePayload = record(record(JSON.parse(capturedRow.payload_json)).parentCompletion);
       expect(record(privatePayload.execution).status).toBe("terminal");
       expect(record(privatePayload.completion).required).toBe(true);
       expect(["pending", "in_progress"]).toContain(record(privatePayload.delivery).status);
-      expect(JSON.stringify(privatePayload.completion)).toMatch(privateMarker);
-      const settledNonce = /QA-PARENT-PRIVATE-CHILD1-[A-F0-9]{32}/u.exec(
+      expectJson(privatePayload.completion).toMatch(privateMarker);
+      const settledNonce = privateNonce(
         JSON.stringify(
           await history(
             privateState.children.find((child) => child.title === "qa-terminal-private-first")!
               .childSessionKey as string,
           ),
         ),
-      )?.[0];
+      );
       expect(settledNonce).toBeTruthy();
       const restartCursor = record(await debug("request-cursor")).cursor;
       await restartState(async () => {}, pendingInput);
@@ -744,11 +721,8 @@ it.skipIf(!candidateTarball)(
         privateState.children.map((task) => task.childSessionKey),
       );
       const restartRequests = await debug(`requests?after=${String(restartCursor)}`);
-      expect(JSON.stringify(restartRequests)).not.toContain(settledNonce);
-      await assertPrivateHistory(privateState.sessionKey);
-      await assertPrivateHistory(pendingSession);
-      assertPrivateReplies(capturedReplies(privateState.sessionKey));
-      assertPrivateReplies(capturedReplies(pendingSession));
+      expectJson(restartRequests).not.toContain(settledNonce);
+      await assertPrivateSessions(privateState.sessionKey, pendingSession);
       phase("candidate-restart-durability", {
         resumedChildren: resumedChildren.length,
       });
@@ -756,14 +730,14 @@ it.skipIf(!candidateTarball)(
       await restartState(async ({ stateDir, configPath }) => {
         await install(`openclaw@${releasedVersion}`);
         const target = path.join(prefix, "restored-backup");
-        const restored = await installedJson([
+        const restored = await installedJson(
           "backup",
           "restore",
           backupPath,
           "--target",
           target,
           "--json",
-        ]);
+        );
         const manifest = await readJson(
           path.join(target, String(restored.archiveRoot), "manifest.json"),
         );
@@ -782,12 +756,10 @@ it.skipIf(!candidateTarball)(
         }
         assertSchema(19, 17);
       });
-      const rollbackSession = "agent:qa:package-rollback-ordinary";
+      const rollbackSession = session("rollback-ordinary");
       const rollbackChild = await ordinaryChild(rollbackSession);
       assertOriginalOrdinaryState();
-      expect(
-        agentRows("SELECT * FROM session_nodes WHERE session_key = ?", privateState.sessionKey),
-      ).toEqual([]);
+      expect(select("session_nodes", "session_key", privateState.sessionKey)).toEqual([]);
       phase("released-backup-rollback");
 
       // Isolate the feature's registry wire format from the unrelated schema-20
@@ -795,21 +767,14 @@ it.skipIf(!candidateTarball)(
       const probeParent = capturedRow.requester_session_key;
       const probeChild = capturedRow.child_session_key;
       await gateway.call("sessions.create", { key: probeParent });
-      await gateway.call("sessions.create", { key: probeChild });
       const releasedChildEventCursor = events.length;
-      const probeRun = record(
-        await gateway.call("chat.send", {
-          sessionKey: probeChild,
-          idempotencyKey: capturedRow.run_id,
-          message: "Subagent private completion QA worker: second. Finish with the private result.",
-        }),
+      const probeRun = await send(
+        probeChild,
+        "Subagent private completion QA worker: second. Finish with the private result.",
+        capturedRow.run_id,
       );
       expect(probeRun.runId).toBe(capturedRow.run_id);
-      await waitForReply(
-        releasedChildEventCursor,
-        { sessionKey: probeChild, runId: capturedRow.run_id, state: "final" },
-        privateMarker,
-      );
+      await waitForFinal(releasedChildEventCursor, probeChild, capturedRow.run_id, privateMarker);
       const probeCursor = record(await debug("request-cursor")).cursor;
       const probeEventCursor = events.length;
       await restartState(async () => {
@@ -829,19 +794,19 @@ it.skipIf(!candidateTarball)(
       const projection = record(await gateway.call("sessions.list", { agentId: "qa", limit: 100 }));
       expect(Array.isArray(projection.sessions)).toBe(true);
       const listed = projection.sessions as Record<string, unknown>[];
-      expect(
-        listed.find((session) => session.key === rollbackChild.childSessionKey)?.spawnedBy,
-      ).toBe(rollbackSession);
-      const privateChildProjection = listed.find((session) => session.key === probeChild);
+      expect(listed.find((entry) => entry.key === rollbackChild.childSessionKey)?.spawnedBy).toBe(
+        rollbackSession,
+      );
+      const privateChildProjection = listed.find((entry) => entry.key === probeChild);
       expect(privateChildProjection).toBeDefined();
-      expect(privateChildProjection?.spawnedBy).toBeUndefined();
-      expect(privateChildProjection?.controlOwnerSessionKey).toBeUndefined();
-      await ordinaryChild("agent:qa:package-reader-ordinary");
+      expect([
+        privateChildProjection?.spawnedBy,
+        privateChildProjection?.controlOwnerSessionKey,
+      ]).toEqual([undefined, undefined]);
+      await ordinaryChild(session("reader-ordinary"));
       await assertPrivateHistory(probeParent);
       assertPrivateReplies(capturedReplies(probeParent, probeEventCursor));
-      expect(JSON.stringify(await debug(`requests?after=${String(probeCursor)}`))).not.toMatch(
-        privateMarker,
-      );
+      expectJson(await debug(`requests?after=${String(probeCursor)}`)).not.toMatch(privateMarker);
       const remainingRows = registryRows(capturedRow.run_id);
       if (remainingRows.length > 0) {
         expect(remainingRows).toEqual([capturedRow]);
@@ -861,10 +826,10 @@ it.skipIf(!candidateTarball)(
         // Remove only the synthetic probe if the old writer left it intact.
         mutateRegistry("DELETE FROM subagent_runs WHERE run_id = ?", capturedRow.run_id);
         await install(candidateTarball!);
-        await runInstalled(["doctor", "--fix", "--non-interactive"]);
-        assertSchema(candidateAgentSchemaVersion, candidateSharedSchemaVersion);
+        await runInstalled("doctor", "--fix", "--non-interactive");
+        assertSchema(agentVersion, sharedVersion);
       });
-      await ordinaryChild("agent:qa:package-reopened-ordinary");
+      await ordinaryChild(session("reopened-ordinary"));
       assertOriginalOrdinaryState();
       phase("candidate-reupgrade-after-rollback");
       expect(phases).toHaveLength(9);

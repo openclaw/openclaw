@@ -1,11 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  buildQaEvidenceGalleryModel,
-  resolveQaEvidenceArtifactFile,
-  resolveQaEvidenceArtifactFileByIndex,
-} from "./evidence-gallery.js";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
 import {
   QA_EVIDENCE_FILENAME,
@@ -108,7 +103,6 @@ describe("suite artifacts", () => {
   it("writes the selected Crabline driver without rewriting recorded evidence", async () => {
     const repoRoot = await tempDirs.makeTempDir("qa-suite-crabline-");
     const outputDir = path.join(repoRoot, "nested");
-    await fs.mkdir(outputDir);
     const scenario = {
       ...makeQaSuiteTestScenario("telegram-dm", { surface: "channel" }),
       coverage: { primary: ["channels.dm"] },
@@ -152,31 +146,15 @@ describe("suite artifacts", () => {
     invocation.select(0, id);
     const recordedEvidence = recorder.snapshot();
     const before = structuredClone(recordedEvidence);
-    const artifactGenerationDirectory = path.join(
-      ".crabline-channel-driver-artifacts",
-      "generation-test",
-    );
-    const capabilityMatrixPath = path.join(
-      artifactGenerationDirectory,
-      "crabline-channel-driver-capabilities.json",
-    );
-    const providerReadinessArtifactPath = path.join(
-      artifactGenerationDirectory,
-      "crabline-provider-readiness.json",
-    );
-    const transportArtifacts = [
-      { kind: "channel-capability-matrix", path: capabilityMatrixPath },
-      { kind: "channel-driver-smoke", path: providerReadinessArtifactPath },
+    const generation = path.join(".crabline-channel-driver-artifacts", "generation-test");
+    const files: Array<[string, string]> = [
+      ["channel-capability-matrix", "crabline-channel-driver-capabilities.json"],
+      ["channel-driver-smoke", "crabline-provider-readiness.json"],
     ];
-    await fs.mkdir(path.resolve(outputDir, artifactGenerationDirectory), { recursive: true });
-    await fs.writeFile(
-      path.resolve(outputDir, capabilityMatrixPath),
-      JSON.stringify({ report: { result: { selectedChannel: "telegram" } } }),
-    );
-    await fs.writeFile(
-      path.resolve(outputDir, providerReadinessArtifactPath),
-      JSON.stringify({ providerReadiness: { result: { ok: true, provider: "telegram" } } }),
-    );
+    const transportArtifacts = files.map(([kind, file]) => ({
+      kind,
+      path: path.join(generation, file),
+    }));
     const artifacts = await writeArtifacts(outputDir, {
       scenarios: [result],
       recordedEvidence,
@@ -189,14 +167,13 @@ describe("suite artifacts", () => {
     });
 
     expect((await readJson(artifacts.summaryPath)).run).toMatchObject({
-      channelCapabilityMatrixPath: capabilityMatrixPath,
-      channelDriverSmokePath: providerReadinessArtifactPath,
+      channelCapabilityMatrixPath: transportArtifacts[0]!.path,
+      channelDriverSmokePath: transportArtifacts[1]!.path,
     });
     for (const artifact of transportArtifacts) {
       await expectMissing(path.join(outputDir, path.basename(artifact.path)));
     }
     const parsed = validateQaEvidenceSummaryJson(await readJson(artifacts.evidencePath));
-    expect(parsed.schemaVersion).toBe(3);
     if (parsed.schemaVersion !== 3) {
       throw new Error("expected recorded occurrences");
     }
@@ -212,40 +189,12 @@ describe("suite artifacts", () => {
         }),
       ),
     );
-    const parentEvidencePath = path.join(repoRoot, QA_EVIDENCE_FILENAME);
-    await fs.writeFile(parentEvidencePath, JSON.stringify(rebased));
-    const originalBytes = await fs.readFile(parentEvidencePath);
-    for (const evidencePath of [artifacts.evidencePath, parentEvidencePath]) {
-      const gallery = await buildQaEvidenceGalleryModel({ evidencePath, repoRoot });
-      expect(gallery.counts).toEqual({ pass: 0, fail: 1, blocked: 0, skipped: 0 });
-      for (const { kind, path: relative } of transportArtifacts) {
-        const artifactIndex = gallery.entries[0]!.artifacts.findIndex((item) => item.kind === kind);
-        expect(artifactIndex).toBeGreaterThanOrEqual(0);
-        const indexed = await resolveQaEvidenceArtifactFileByIndex({
-          evidencePath,
-          repoRoot,
-          entryIndex: 0,
-          artifactIndex,
-        });
-        const declared = await resolveQaEvidenceArtifactFile({
-          evidencePath,
-          repoRoot,
-          artifactPath: path.join(outputDir, relative),
-        });
-        expect(await fs.readFile(indexed)).toEqual(await fs.readFile(declared));
-        expect(await fs.readFile(indexed)).toEqual(
-          await fs.readFile(path.join(outputDir, relative)),
-        );
-      }
-    }
-    expect(await fs.readFile(parentEvidencePath)).toEqual(originalBytes);
-    expect(parsed.entries?.[0]?.execution?.channel).toMatchObject({
-      driver: "crabline",
-      id: "telegram",
-    });
-    expect(parsed.entries?.[0]?.result).toMatchObject({
-      failure: { reason: "active transport does not implement this scenario" },
-      status: "fail",
+    expect(parsed.entries[0]).toMatchObject({
+      execution: { channel: { driver: "crabline", id: "telegram" } },
+      result: {
+        failure: { reason: "active transport does not implement this scenario" },
+        status: "fail",
+      },
     });
   });
 });

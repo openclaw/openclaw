@@ -5,6 +5,7 @@ import type { QaLabServerHandle } from "./lab-server.types.js";
 import { remapModelRefForForcedRuntime } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
+import { artifactPaths, createTestLab } from "./suite-runtime-parity.test-support.js";
 import {
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
   buildQaIsolatedScenarioWorkerParams,
@@ -38,11 +39,7 @@ const tempDirs = createTempDirHarness();
 const messageToolConfig = () => ({ messages: { groupChat: { visibleReplies: "message_tool" } } });
 const rssSamples = [
   { label: "suite-start", at: "2026-04-22T12:00:00.000Z", gatewayProcessRssBytes: 100_000_000 },
-  {
-    label: "scenario:canary:finish",
-    at: "2026-04-22T12:00:10.000Z",
-    gatewayProcessRssBytes: 140_000_000,
-  },
+  { label: "finish", at: "2026-04-22T12:00:10.000Z", gatewayProcessRssBytes: 140_000_000 },
 ];
 const heapSnapshots = [
   {
@@ -109,19 +106,6 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-function makeQaSuiteTestLabHandle(): QaLabServerHandle {
-  return {
-    baseUrl: "http://127.0.0.1:43123",
-    listenUrl: "http://127.0.0.1:43123",
-    state: {} as QaLabServerHandle["state"],
-    setControlUi: vi.fn(),
-    setScenarioRun: vi.fn(),
-    setLatestReport: vi.fn(),
-    runSelfCheck: vi.fn(async () => ({}) as Awaited<ReturnType<QaLabServerHandle["runSelfCheck"]>>),
-    stop: vi.fn(async () => {}),
-  };
-}
-
 describe("qa suite", () => {
   it("runs the production cleanup plan in dependency order after a failure", async () => {
     const calls: string[] = [];
@@ -183,20 +167,18 @@ describe("qa suite", () => {
   });
 
   it("reports completed counts, labeled failures, and only written artifact paths", () => {
+    const scenarios = (["pass", "fail", "skip"] as const).map((status) => ({
+      name: status,
+      status,
+      steps: [],
+    }));
     const result = {
       outputDir: "/qa-output\nretained",
-      evidencePath: "/qa-output/qa-evidence.json",
-      reportPath: "/qa-output/qa-suite-report.md",
-      summaryPath: "/qa-output/qa-suite-summary.json",
-      report: "",
+      ...artifactPaths,
       ...recordQaSuiteTestResults(
         undefined,
-        ["pass", "fail", "skip"].map((id) => makeQaSuiteTestScenario(id)),
-        [
-          { name: "pass", status: "pass", steps: [] },
-          { name: "fail", status: "fail", steps: [] },
-          { name: "skip", status: "skip", steps: [] },
-        ],
+        scenarios.map(({ name }) => makeQaSuiteTestScenario(name)),
+        scenarios,
       ),
       startedScenarioIds: ["pass", "fail", "skip"],
       watchUrl: "http://127.0.0.1:43123",
@@ -249,12 +231,8 @@ describe("qa suite", () => {
   it("rejects unsupported transport ids before starting the lab", async () => {
     const startLab = vi.fn();
 
-    await expect(
-      runQaFlowSuite({
-        transportId: "qa-nope" as unknown as "qa-channel",
-        startLab,
-      }),
-    ).rejects.toThrow("unsupported QA transport: qa-nope");
+    const run = runQaFlowSuite({ transportId: "qa-nope" as unknown as "qa-channel", startLab });
+    await expect(run).rejects.toThrow("unsupported QA transport: qa-nope");
 
     expect(startLab).not.toHaveBeenCalled();
   });
@@ -264,17 +242,16 @@ describe("qa suite", () => {
     async (channelId) => {
       const adapter = { id: "telegram" } as QaTransportAdapter;
       const create = vi.fn(async () => adapter);
-      await expect(
-        createQaSuiteTransportAdapter({
-          adapterFactories: [{ id: "telegram", matches: () => true, create }],
-          channelDriver: "live",
-          channelId,
-          outputDir: "/tmp/qa-output",
-          transportPolicy: { requireGroupMention: true },
-          state: {} as QaLabServerHandle["state"],
-          transportId: "qa-channel",
-        }),
-      ).resolves.toMatchObject(
+      const selected = await createQaSuiteTransportAdapter({
+        adapterFactories: [{ id: "telegram", matches: () => true, create }],
+        channelDriver: "live",
+        channelId,
+        outputDir: "/tmp/qa-output",
+        transportPolicy: { requireGroupMention: true },
+        state: {} as QaLabServerHandle["state"],
+        transportId: "qa-channel",
+      });
+      expect(selected).toMatchObject(
         channelId
           ? { adapter, driver: "live" }
           : { adapter: { id: "qa-channel" }, driver: "qa-channel" },
@@ -405,21 +382,21 @@ describe("qa suite", () => {
   });
 
   it("records gateway RSS peak and trace samples", () => {
-    expect(
-      buildQaSuiteRuntimeMetrics({
-        startedAt: new Date("2026-04-22T12:00:00.000Z"),
-        finishedAt: new Date("2026-04-22T12:00:12.000Z"),
-        gatewayProcessCpuStartMs: 1_000,
-        gatewayProcessCpuEndMs: 4_000,
-        gatewayProcessRssStartBytes: 100_000_000,
-        gatewayProcessRssEndBytes: 125_000_000,
-        gatewayProcessRssSamples: structuredClone(rssSamples),
-        gatewayHeapSnapshots: structuredClone(heapSnapshots),
-      }),
-    ).toEqual(expectedMetrics);
+    const metrics = buildQaSuiteRuntimeMetrics({
+      startedAt: new Date("2026-04-22T12:00:00.000Z"),
+      finishedAt: new Date("2026-04-22T12:00:12.000Z"),
+      gatewayProcessCpuStartMs: 1_000,
+      gatewayProcessCpuEndMs: 4_000,
+      gatewayProcessRssStartBytes: 100_000_000,
+      gatewayProcessRssEndBytes: 125_000_000,
+      gatewayProcessRssSamples: structuredClone(rssSamples),
+      gatewayHeapSnapshots: structuredClone(heapSnapshots),
+    });
+    expect(metrics).toEqual(expectedMetrics);
   });
 
   it("arms gateway heap checkpoint env only when requested", () => {
+    const option = "--heapsnapshot-signal=SIGQUIT";
     expect(
       buildQaGatewayHeapCheckpointRuntimeEnvPatch({
         OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "0",
@@ -431,16 +408,11 @@ describe("qa suite", () => {
         NODE_OPTIONS: "--max-old-space-size=4096",
       }),
     ).toEqual({
-      NODE_OPTIONS: "--max-old-space-size=4096 --heapsnapshot-signal=SIGQUIT",
+      NODE_OPTIONS: `--max-old-space-size=4096 ${option}`,
     });
-    expect(
-      mergeQaRuntimeEnvPatches(
-        { OPENAI_API_KEY: "mock" },
-        { NODE_OPTIONS: "--heapsnapshot-signal=SIGQUIT" },
-      ),
-    ).toEqual({
+    expect(mergeQaRuntimeEnvPatches({ OPENAI_API_KEY: "mock" }, { NODE_OPTIONS: option })).toEqual({
       OPENAI_API_KEY: "mock",
-      NODE_OPTIONS: "--heapsnapshot-signal=SIGQUIT",
+      NODE_OPTIONS: option,
     });
   });
 
@@ -471,13 +443,8 @@ describe("qa suite", () => {
       writeEvidenceFile: false,
     });
 
-    expect(
-      isolatedWorkerParams({
-        scenario,
-        startLab,
-        input: makeInput(),
-      }),
-    ).toMatchObject({
+    const params = isolatedWorkerParams({ scenario, startLab, input: makeInput() });
+    expect(params).toMatchObject({
       scenarioIds: ["patched-control-ui"],
       ...makeInput(),
       concurrency: 1,
@@ -487,12 +454,8 @@ describe("qa suite", () => {
   });
 
   it("preserves an explicit Control UI override for isolated scenarios", () => {
-    expect(
-      isolatedWorkerParams({
-        outputDir: "/repo/.artifacts/qa-e2e/scenarios/isolated-control-ui-ownership",
-        input: { controlUiEnabled: false },
-      }).controlUiEnabled,
-    ).toBe(false);
+    const params = isolatedWorkerParams({ input: { controlUiEnabled: false } });
+    expect(params.controlUiEnabled).toBe(false);
   });
 
   it("keeps caller-owned serial labs on shared workers without a launcher", () => {
@@ -502,7 +465,7 @@ describe("qa suite", () => {
         gatewayConfigPatch: messageToolConfig(),
       }),
     ];
-    const lab = makeQaSuiteTestLabHandle();
+    const lab = createTestLab();
     const startLab = vi.fn();
 
     const params = { scenarios, concurrency: 1, lab };
@@ -552,9 +515,8 @@ describe("buildQaSuiteSummaryJson", () => {
   });
 
   it("records selected scenarios and realized run metadata", () => {
-    const scenarioIds = ["approval-turn-tool-followthrough", "subagent-handoff", "memory-recall"];
     const run = {
-      scenarioIds,
+      scenarioIds: ["approval", "handoff", "recall"],
       status: "running",
       channel: "telegram",
       channelDriver: "crabline",
@@ -600,7 +562,6 @@ describe("buildQaSuiteSummaryJson", () => {
   it("records optional runtime metrics when provided", () => {
     const metrics = { ...expectedMetrics, gatewayProcessCpuMs: 3_400, gatewayCpuCoreRatio: 0.283 };
     const json = buildQaSuiteSummaryJson({ ...baseParams, metrics: structuredClone(metrics) });
-
     expect(json.metrics).toEqual(metrics);
   });
 });
@@ -635,15 +596,12 @@ describe("Gateway heap snapshot checkpoints", () => {
         return { ok: true };
       },
     };
-    return { gateway, outputDir };
+    return { gateway, outputDir, label: "after turn" };
   }
 
   it("copies the completed snapshot even when an unfinished prefix has stopped growing", async () => {
     const params = await createWriterFixture();
-    const checkpoint = await captureGatewayHeapSnapshotCheckpoint({
-      ...params,
-      label: "after turn",
-    });
+    const checkpoint = await captureGatewayHeapSnapshotCheckpoint(params);
     expect(checkpoint).toBeDefined();
     const artifact = await fs.readFile(path.join(params.outputDir, checkpoint!.path));
     expect(JSON.parse(artifact.toString())).toEqual({ snapshot: { complete: true } });
@@ -654,9 +612,9 @@ describe("Gateway heap snapshot checkpoints", () => {
     "does not publish a snapshot after the Gateway is %s",
     async (outcome) => {
       const params = await createWriterFixture(outcome);
-      await expect(
-        captureGatewayHeapSnapshotCheckpoint({ ...params, label: "after turn" }),
-      ).rejects.toThrow(outcome === "failed" ? "Gateway exited" : "Gateway changed");
+      await expect(captureGatewayHeapSnapshotCheckpoint(params)).rejects.toThrow(
+        outcome === "failed" ? "Gateway exited" : "Gateway changed",
+      );
       await expect(fs.access(params.outputDir)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
