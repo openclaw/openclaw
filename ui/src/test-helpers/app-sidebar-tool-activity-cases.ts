@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayEventFrame } from "../api/gateway.ts";
-import { SidebarSessionNarrationController } from "../components/app-sidebar-session-narration.ts";
+import {
+  createSidebarNarration,
+  type SidebarNarration,
+} from "../components/app-sidebar-session-narration.ts";
 import type { SidebarToolActivity } from "../components/app-sidebar-session-types.ts";
 import { runningRow } from "./app-sidebar-session-narration.ts";
 
-const controllers: SidebarSessionNarrationController[] = [];
+const narrations: SidebarNarration[] = [];
 function gatewayEvent(event: string, payload: unknown): GatewayEventFrame {
   return { type: "event", event, payload };
 }
@@ -19,19 +22,21 @@ function chatDelta(text?: string, deltaText?: string, replace?: boolean): Gatewa
   });
 }
 
-function createToolController() {
+function createToolNarration() {
   const tools: Array<ReadonlyMap<string, SidebarToolActivity>> = [];
   const source = {
     subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
     unsubscribeMessages: vi.fn(() => Promise.resolve()),
   };
-  const controller = new SidebarSessionNarrationController(
-    () => undefined,
-    undefined,
-    (next) => tools.push(next),
-  );
-  controllers.push(controller);
-  controller.sync({
+  const narration = createSidebarNarration();
+  narration.subscribe(() => {
+    const next = narration.read().tools;
+    if (next !== tools.at(-1)) {
+      tools.push(next);
+    }
+  });
+  narrations.push(narration);
+  narration.sync({
     enabled: true,
     connected: true,
     connectionIdentity: {},
@@ -40,7 +45,7 @@ function createToolController() {
     rows: [runningRow("agent:main:run")],
     agentId: "main",
   });
-  return { controller, tools };
+  return { narration, tools };
 }
 describe("Sidebar tool activity", () => {
   it("keeps tool identity separate from commentary and clears it with its run", async () => {
@@ -49,15 +54,9 @@ describe("Sidebar tool activity", () => {
     );
     const unsubscribeMessages = vi.fn(() => Promise.resolve());
     const source = { subscribeMessages, unsubscribeMessages };
-    const updates: Array<ReadonlyMap<string, string>> = [];
-    const tools: Array<ReadonlyMap<string, SidebarToolActivity>> = [];
-    const controller = new SidebarSessionNarrationController(
-      (lines) => updates.push(lines),
-      undefined,
-      (next) => tools.push(next),
-    );
+    const narration = createSidebarNarration();
     const connectionIdentity = {};
-    controller.sync({
+    narration.sync({
       enabled: true,
       connected: true,
       connectionIdentity,
@@ -68,8 +67,8 @@ describe("Sidebar tool activity", () => {
     });
     await Promise.resolve();
 
-    controller.handleEvent(chatDelta("**Reading** files.", "**Reading** files."));
-    controller.handleEvent(
+    narration.handleEvent(chatDelta("**Reading** files.", "**Reading** files."));
+    narration.handleEvent(
       gatewayEvent("session.tool", {
         sessionKey: "agent:main:run",
         runId: "run-1",
@@ -78,18 +77,18 @@ describe("Sidebar tool activity", () => {
       }),
     );
 
-    expect(updates.at(-1)?.get("agent:main:run")).toBe("Reading files.");
+    expect(narration.read().lines.get("agent:main:run")).toBe("Reading files.");
     await vi.advanceTimersByTimeAsync(1_999);
-    expect(updates.at(-1)?.get("agent:main:run")).toBe("Reading files.");
+    expect(narration.read().lines.get("agent:main:run")).toBe("Reading files.");
     await vi.advanceTimersByTimeAsync(1);
-    expect(updates.at(-1)?.get("agent:main:run")).toBe("Reading files.");
-    expect(tools.at(-1)?.get("agent:main:run")?.name).toBe("read");
+    expect(narration.read().lines.get("agent:main:run")).toBe("Reading files.");
+    expect(narration.read().tools.get("agent:main:run")?.name).toBe("read");
 
-    controller.handleEvent(chatDelta("", undefined, true));
-    expect(updates.at(-1)?.size).toBe(0);
-    expect(tools.at(-1)?.get("agent:main:run")?.name).toBe("read");
+    narration.handleEvent(chatDelta("", undefined, true));
+    expect(narration.read().lines.size).toBe(0);
+    expect(narration.read().tools.get("agent:main:run")?.name).toBe("read");
 
-    controller.handleEvent(
+    narration.handleEvent(
       gatewayEvent("chat", {
         sessionKey: "agent:main:run",
         runId: "run-2",
@@ -97,8 +96,8 @@ describe("Sidebar tool activity", () => {
         message: { role: "assistant", content: "A new run" },
       }),
     );
-    expect(tools.at(-1)?.size).toBe(0);
-    controller.handleEvent(
+    expect(narration.read().tools.size).toBe(0);
+    narration.handleEvent(
       gatewayEvent("session.tool", {
         sessionKey: "agent:main:run",
         runId: "run-2",
@@ -106,15 +105,15 @@ describe("Sidebar tool activity", () => {
         data: { name: "plugin.custom_tool" },
       }),
     );
-    expect(tools.at(-1)?.get("agent:main:run")?.name).toBe("plugin.custom_tool");
+    expect(narration.read().tools.get("agent:main:run")?.name).toBe("plugin.custom_tool");
 
-    controller.disconnect();
+    narration.disconnect();
     expect(unsubscribeMessages).toHaveBeenCalledWith({
       key: "agent:main:run",
       agentId: null,
     });
-    expect(updates.at(-1)?.size).toBe(0);
-    expect(tools.at(-1)?.size).toBe(0);
+    expect(narration.read().lines.size).toBe(0);
+    expect(narration.read().tools.size).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -123,16 +122,16 @@ describe("Sidebar tool activity", () => {
     vi.setSystemTime(10_000);
   });
   afterEach(() => {
-    for (const controller of controllers.splice(0)) {
-      controller.disconnect();
+    for (const narration of narrations.splice(0)) {
+      narration.disconnect();
     }
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
   it("projects public tool progress without exposing raw output or unrelated items", () => {
-    const { controller, tools } = createToolController();
+    const { narration, tools } = createToolNarration();
     const emit = (stream: string, data: Record<string, unknown>) =>
-      controller.handleEvent(
+      narration.handleEvent(
         gatewayEvent("session.tool", {
           sessionKey: "agent:main:run",
           runId: "run-1",
@@ -198,7 +197,7 @@ describe("Sidebar tool activity", () => {
     expect(tools).toHaveLength(count);
     emit("tool", { name: "exec", toolCallId: "call-2", phase: "start" });
     expect(tools.at(-1)?.get("agent:main:run")?.text).toBeUndefined();
-    controller.disconnect();
+    narration.disconnect();
     expect(tools.at(-1)?.size).toBe(0);
   });
 
@@ -211,7 +210,7 @@ describe("Sidebar tool activity", () => {
   ])(
     "withdraws matching $stream progress with $metadata metadata when $flag changes",
     ({ stream, flag, metadata }) => {
-      const { controller, tools } = createToolController();
+      const { narration, tools } = createToolNarration();
       const emit = (
         runId: string,
         toolCallId: string,
@@ -233,7 +232,7 @@ describe("Sidebar tool activity", () => {
         } else if (eventStream === "tool" && metadata === "contradictory") {
           payload.name = "other-tool";
         }
-        controller.handleEvent(
+        narration.handleEvent(
           gatewayEvent("session.tool", {
             sessionKey: "agent:main:run",
             runId,
@@ -255,7 +254,7 @@ describe("Sidebar tool activity", () => {
       expect(tools).toHaveLength(visibleCount + 1);
       emit("run-2", "current", { [flag]: true }, stream);
       expect(tools).toHaveLength(visibleCount + 1);
-      controller.disconnect();
+      narration.disconnect();
     },
   );
 
@@ -265,9 +264,9 @@ describe("Sidebar tool activity", () => {
     { flag: "hideFromChannelProgress", toolCallId: "" },
     { flag: "suppressChannelProgress", toolCallId: "" },
   ])("withdraws the matching item with $flag and call ID $toolCallId", ({ flag, toolCallId }) => {
-    const { controller, tools } = createToolController();
+    const { narration, tools } = createToolNarration();
     const emit = (itemId: string, runId: string, data: Record<string, unknown>, stream = "item") =>
-      controller.handleEvent(
+      narration.handleEvent(
         gatewayEvent("session.tool", {
           sessionKey: "agent:main:run",
           runId,
@@ -304,9 +303,9 @@ describe("Sidebar tool activity", () => {
   ])(
     "keeps replacement item identity with call ID $toolCallId and $flag",
     ({ toolCallId, flag }) => {
-      const { controller, tools } = createToolController();
+      const { narration, tools } = createToolNarration();
       const emit = (itemId: string, hidden = false) =>
-        controller.handleEvent(
+        narration.handleEvent(
           gatewayEvent("session.tool", {
             sessionKey: "agent:main:run",
             runId: "run-2",
@@ -333,9 +332,9 @@ describe("Sidebar tool activity", () => {
   );
 
   it("retains prepared item and call identity across matching item and raw-tool frames", () => {
-    const { controller, tools } = createToolController();
+    const { narration, tools } = createToolNarration();
     const emit = (stream: string, data: Record<string, unknown>) =>
-      controller.handleEvent(
+      narration.handleEvent(
         gatewayEvent("session.tool", {
           sessionKey: "agent:main:run",
           runId: "run-2",
@@ -358,10 +357,10 @@ describe("Sidebar tool activity", () => {
   });
 
   it.each(["tool", "item"])("retains the identified tool name after a %s start", (stream) => {
-    const { controller, tools } = createToolController();
+    const { narration, tools } = createToolNarration();
     const toolCallId = stream === "tool" ? "call" : undefined;
     const item = { kind: "tool", itemId: "known-item", title: "Read", phase: "update", toolCallId };
-    controller.handleEvent(
+    narration.handleEvent(
       gatewayEvent("session.tool", {
         sessionKey: "agent:main:run",
         runId: "run-2",
@@ -370,7 +369,7 @@ describe("Sidebar tool activity", () => {
       }),
     );
     const count = tools.length;
-    controller.handleEvent(
+    narration.handleEvent(
       gatewayEvent("session.tool", {
         sessionKey: "agent:main:run",
         runId: "run-2",
@@ -384,7 +383,7 @@ describe("Sidebar tool activity", () => {
       }),
     );
     expect(tools).toHaveLength(count);
-    controller.handleEvent(
+    narration.handleEvent(
       gatewayEvent("session.tool", {
         sessionKey: "agent:main:run",
         runId: "run-2",

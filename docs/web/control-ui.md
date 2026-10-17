@@ -408,6 +408,7 @@ for group controls and filtering.
 Agent names and avatars follow agent and identity updates. While a configured avatar image loads,
 the avatar keeps its tinted background with no face or text. The image appears when ready;
 an emoji or generated face appears only when no image is configured or the image fails to load.
+Agents without an advertised image use their fallback without probing an avatar route.
 Repeated views reuse prepared avatar thumbnails; updating the avatar refreshes its thumbnail.
 Profiles with an uploaded photo or a linked email (for a Gateway-proxied Gravatar) request the
 versioned profile image; profiles with neither use initials without probing an image route. Authenticated

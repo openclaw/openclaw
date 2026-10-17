@@ -1,14 +1,16 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import { withPluginRuntimePluginScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
+  prepareNativeSessionGenerationAuthority,
   reclaimNativeSessionGenerationWithAuthority,
   retainNativeSessionGenerationAuthority,
   resolvePreparedNativeSessionBinding,
@@ -17,6 +19,27 @@ import {
 
 const createSupersededError = (sessionId: string) =>
   new Error(`Session generation is no longer current: ${sessionId}`);
+
+it("warns once for legacy generation preparation and leaves retained authority quiet", async () => {
+  using warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  await withPluginRuntimePluginScope({ pluginId: "native-generation-deprecation" }, async () => {
+    const params = {
+      target: { agentId: "main", sessionId: "ephemeral" },
+      storePath: "unused",
+      createSupersededError,
+    };
+    const retained = await retainNativeSessionGenerationAuthority(params);
+    retained.release();
+    expect(warning).not.toHaveBeenCalled();
+    expect((await prepareNativeSessionGenerationAuthority(params)).state).toBe("ephemeral");
+    expect((await prepareNativeSessionGenerationAuthority(params)).state).toBe("ephemeral");
+  });
+  expect(warning).toHaveBeenCalledOnce();
+  expect(warning.mock.calls[0]?.[0]).toContain("prepareNativeSessionGenerationAuthority");
+  expect(warning.mock.calls[0]?.[0]).toContain("retainNativeSessionGenerationAuthority");
+  expect(warning.mock.calls[0]?.[0]).toContain("Final compatibility day: 2026-12-31");
+  expect(warning.mock.calls[0]?.[0]).toContain("first January 2027 stable release");
+});
 
 describe("native session binding generation authority", () => {
   let storePath: string;

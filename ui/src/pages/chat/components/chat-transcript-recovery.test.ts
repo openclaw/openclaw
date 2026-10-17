@@ -7,7 +7,7 @@ import { resetChatViewState } from "../chat-view-state.ts";
 import { renderChatThread, TranscriptTestHost } from "../test-helpers/chat-transcript-native.tsx";
 import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 import { toggleTranscriptSearch, type ChatThreadProps } from "./chat-thread-interactions.ts";
-import { createTranscriptTestOwner } from "./chat-transcript-owner.test-support.ts";
+import { createChatTranscript } from "./chat-transcript-controller.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -31,17 +31,20 @@ function fullMessage(content: string): FullMessageResult {
 class RecoveryTranscriptElement extends TranscriptTestHost {
   props: ChatThreadProps = threadProps("recovery-pane");
   resetPresentationOnDisconnect = true;
-  private readonly transcript = createTranscriptTestOwner(this, () => this.props.paneId);
+  override readonly transcript = createChatTranscript(
+    () => this.requestRender(),
+    () => this.props.paneId,
+  );
 
   override renderTranscript = () => {
-    const requestUpdate = () => this.requestUpdate();
+    const requestUpdate = () => this.requestRender();
     return renderChatThread({ ...this.props, onRequestUpdate: requestUpdate }, this.transcript, {
       search: requestUpdate,
     });
   };
 
   override disconnectedCallback() {
-    // Match the pane-specific production reset before disconnecting controllers.
+    // Match the pane-specific production reset before disposing the transcript.
     if (this.resetPresentationOnDisconnect) {
       resetChatViewState(this.props.paneId);
     }
@@ -68,7 +71,7 @@ function mountTranscript(
 
 async function searchTranscript(pane: RecoveryTranscriptElement, query: string) {
   if (!pane.querySelector(".agent-chat__search-bar input")) {
-    toggleTranscriptSearch(pane.props.paneId, () => pane.requestUpdate());
+    toggleTranscriptSearch(pane.props.paneId, () => pane.requestRender());
     await pane.updateComplete;
   }
   const input = expectDefined(
@@ -189,14 +192,14 @@ describe("chat transcript full-message recovery", () => {
       pane.resetPresentationOnDisconnect = false;
       pane.remove();
       document.body.append(pane);
-      pane.requestUpdate();
+      pane.requestRender();
       await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
       await pane.updateComplete;
       await flushDeferredRowPrune();
       expect(pane.textContent).not.toContain("Retired body.");
 
       if (phase === "loading") {
-        const updates = vi.spyOn(pane, "requestUpdate");
+        const updates = vi.spyOn(pane, "requestRender");
         retired.resolve(fullMessage("Retired body."));
         await flushDeferredRowPrune();
         expect(updates).not.toHaveBeenCalled();
@@ -220,7 +223,7 @@ describe("chat transcript full-message recovery", () => {
     const loadedRequests = load.mock.calls.length;
 
     first.remove();
-    sibling.requestUpdate();
+    sibling.requestRender();
     await sibling.updateComplete;
     expect(sibling.textContent).toContain("Original answer.");
     expect(load).toHaveBeenCalledTimes(loadedRequests);
@@ -244,7 +247,7 @@ describe("chat transcript full-message recovery", () => {
     const current = mountTranscript("recovery-remount", load);
     await current.updateComplete;
     await flushDeferredRowPrune();
-    const retiredUpdates = vi.spyOn(retired, "requestUpdate");
+    const retiredUpdates = vi.spyOn(retired, "requestRender");
 
     pending.resolve(fullMessage("Retired answer."));
     await flushDeferredRowPrune();
@@ -267,10 +270,10 @@ describe("chat transcript full-message recovery", () => {
         ? { sessionKey: "agent:work:other" }
         : { fullMessageAgentId: "other" }),
     };
-    pane.requestUpdate();
+    pane.requestRender();
     await pane.updateComplete;
     expect(pane.querySelector(".chat-bubble")).toBeNull();
-    toggleTranscriptSearch(pane.props.paneId, () => pane.requestUpdate());
+    toggleTranscriptSearch(pane.props.paneId, () => pane.requestRender());
     await vi.waitFor(() => expect(pane.textContent).toContain("Second scope."));
     expect(load).toHaveBeenLastCalledWith({
       sessionKey: pane.props.sessionKey,
@@ -303,7 +306,7 @@ describe("chat transcript full-message recovery", () => {
     pane.props.messages = [];
     pane.props.pendingInputs = pendingInputs;
     await vi.waitFor(() => expect(pane.textContent).toContain("Accepted input."));
-    pane.requestUpdate();
+    pane.requestRender();
     await pane.updateComplete;
     expect(load).toHaveBeenCalledOnce();
     expect(pane.textContent).toContain("Accepted input.");
@@ -311,14 +314,14 @@ describe("chat transcript full-message recovery", () => {
     expect(pane.querySelector(".chat-bubble")?.textContent).toContain("Accepted input.");
 
     pane.props.pendingInputs = [];
-    pane.requestUpdate();
+    pane.requestRender();
     await pane.updateComplete;
     load.mockResolvedValue(fullMessage("Revisited input."));
     pane.props.pendingInputs = pendingInputs;
-    pane.requestUpdate();
+    pane.requestRender();
     await pane.updateComplete;
     expect(pane.querySelector(".chat-bubble")).toBeNull();
-    toggleTranscriptSearch(pane.props.paneId, () => pane.requestUpdate());
+    toggleTranscriptSearch(pane.props.paneId, () => pane.requestRender());
     await vi.waitFor(() => expect(pane.textContent).toContain("Revisited input."));
     expect(load).toHaveBeenCalledTimes(2);
   });
@@ -339,7 +342,7 @@ describe("chat transcript full-message recovery", () => {
         __openclaw: { id: "assistant-full-1" },
       },
     ];
-    pane.requestUpdate();
+    pane.requestRender();
     await pane.updateComplete;
     expect(pane.querySelector(".chat-bubble")).toBeNull();
     await searchTranscript(pane, "Current source body");
@@ -358,13 +361,13 @@ describe("chat transcript full-message recovery", () => {
     await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
 
     pane.props.messages = [];
-    pane.requestUpdate();
+    pane.requestRender();
     await pane.updateComplete;
     pane.props.messages = [previewMessage];
-    pane.requestUpdate();
+    pane.requestRender();
     await pane.updateComplete;
     await flushDeferredRowPrune();
-    const updates = vi.spyOn(pane, "requestUpdate");
+    const updates = vi.spyOn(pane, "requestRender");
     first.resolve(fullMessage("Obsolete body."));
     await flushDeferredRowPrune();
     expect(updates).not.toHaveBeenCalled();

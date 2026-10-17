@@ -56,6 +56,46 @@ function buildMessages(): [AgentMessage, AgentMessage] {
   ] as [AgentMessage, AgentMessage];
 }
 
+describe("ExtensionRunner persistence binding", () => {
+  it("warns once for legacy binding while awaited persistence binding stays silent", () => {
+    const runner = buildRunner([]);
+    const actions = {
+      ...createExtensionRuntime(),
+      appendEntryAsync: async () => "entry-fixture",
+      setSessionNameAsync: async () => {},
+      setLabelAsync: async () => {},
+    };
+    const contextActions: ExtensionContextActions = {
+      getModel: () => undefined,
+      isIdle: () => true,
+      getSignal: () => undefined,
+      abort: () => {},
+      hasPendingMessages: () => false,
+      shutdown: () => {},
+      getContextUsage: () => undefined,
+      compact: () => {},
+      getSystemPrompt: () => "system",
+    };
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      runner.bindCoreAsync(actions, contextActions);
+      expect(warning).not.toHaveBeenCalled();
+
+      runner.bindCore(actions, contextActions);
+      runner.bindCore(actions, contextActions);
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          "ExtensionRunner.bindCore is deprecated; use bindCoreAsync with ExtensionActionsV2",
+        ),
+        expect.objectContaining({ type: "DeprecationWarning" }),
+      );
+      expect(warning.mock.calls[0]?.[0]).toContain("first January 2027 stable release");
+    } finally {
+      warning.mockRestore();
+    }
+  });
+});
+
 describe("ExtensionRunner.emitContext", () => {
   it("returns the original array without cloning when no context handlers are registered", async () => {
     const messages = buildMessages();

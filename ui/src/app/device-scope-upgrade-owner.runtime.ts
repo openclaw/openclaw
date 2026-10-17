@@ -9,7 +9,7 @@ import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 type UpgradeOperation = { client: GatewayBrowserClient };
 
 /** Owns one live upgrade request independently of whichever UI presents it. */
-export class ScopeUpgradeController {
+export class ScopeUpgradeOwner {
   private current: ApplicationGatewaySnapshot;
   private operation: UpgradeOperation | null = null;
   private value: ScopeUpgradeState = { phase: "hidden" };

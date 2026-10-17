@@ -18,14 +18,12 @@ type behaviorRule struct {
 }
 
 type behaviorFixture struct {
-	Name                      string         `json:"name"`
-	Mode                      string         `json:"mode"`
-	RelPath                   string         `json:"rel_path"`
-	SourceFile                string         `json:"source_file"`
-	ExpectedFile              string         `json:"expected_file,omitempty"`
-	ExpectedOutputContains    []string       `json:"expected_output_contains,omitempty"`
-	ExpectedOutputNotContains []string       `json:"expected_output_not_contains,omitempty"`
-	Rules                     []behaviorRule `json:"rules"`
+	Name         string         `json:"name"`
+	Mode         string         `json:"mode"`
+	RelPath      string         `json:"rel_path"`
+	SourceFile   string         `json:"source_file"`
+	ExpectedFile string         `json:"expected_file"`
+	Rules        []behaviorRule `json:"rules"`
 }
 
 type behaviorFixtureTranslator struct {
@@ -150,22 +148,9 @@ func runBehaviorFixture(t *testing.T, dir string, fixture behaviorFixture) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if fixture.ExpectedFile != "" {
-		want := readFixtureTextInDir(t, dir, fixture.ExpectedFile)
-		if normalizeBehaviorText(got) != normalizeBehaviorText(want) {
-			t.Fatalf("unexpected output\nwant:\n%s\n\ngot:\n%s", want, got)
-		}
-	}
-
-	for _, fragment := range fixture.ExpectedOutputContains {
-		if !strings.Contains(got, fragment) {
-			t.Fatalf("expected output to contain %q\noutput:\n%s", fragment, got)
-		}
-	}
-	for _, fragment := range fixture.ExpectedOutputNotContains {
-		if strings.Contains(got, fragment) {
-			t.Fatalf("expected output to exclude %q\noutput:\n%s", fragment, got)
-		}
+	want := readFixtureTextInDir(t, dir, fixture.ExpectedFile)
+	if normalizeBehaviorText(got) != normalizeBehaviorText(want) {
+		t.Fatalf("unexpected output\nwant:\n%s\n\ngot:\n%s", want, got)
 	}
 }
 

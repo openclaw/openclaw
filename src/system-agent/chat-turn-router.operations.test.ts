@@ -594,13 +594,9 @@ describe("SystemAgentChatEngine operations", () => {
     });
     operationMocks.runConfigSet.mockImplementation(async () => {
       mocks.readConfigFileSnapshot.mockResolvedValue({
-        exists: true,
-        valid: true,
+        ...configSnapshot({ gateway: { port: 18789 } }),
         path: "/tmp/fixture-openclaw.json",
         hash: "published",
-        config: { gateway: { port: 18789 } },
-        sourceConfig: { gateway: { port: 18789 } },
-        issues: [],
       });
       throw writerError;
     });

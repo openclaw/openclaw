@@ -108,7 +108,7 @@ it.each(["answer", "reasoning"] as const)(
         expect(reads, stream).toBe(0);
       }
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   },
 );
@@ -135,13 +135,13 @@ function drawThread(props: ReturnType<typeof threadProps>) {
     draw: () => {
       render(renderChatThread(props, transcript), container);
       flush();
-      transcript.hostConnected();
-      transcript.hostUpdated();
+      transcript.start();
+      transcript.update();
       flush();
     },
     dispose: () => {
       render(null, container);
-      transcript.hostDisconnected();
+      transcript.dispose();
     },
   };
 }
@@ -367,7 +367,7 @@ it("keeps search and gallery caches warm while refreshing streamed and replaced 
     props.messages = [replacement, hit];
     expect(project()).toEqual([replacement, hit, liveMessage()]);
   } finally {
-    transcript.hostDisconnected();
+    transcript.dispose();
   }
 });
 
