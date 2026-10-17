@@ -71,7 +71,9 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 import {
+  hasTelegramAgentChoiceCallbackPrefix,
   hasTelegramOpaqueCallbackPrefix,
+  parseTelegramAgentChoiceCallbackData,
   parseTelegramNativeCommandCallbackData,
   parseTelegramOpaqueCallbackData,
 } from "./native-command-callback-data.js";
@@ -137,14 +139,24 @@ export function createTelegramCallbackRouter({
       const hasReservedModelPrefix = data.startsWith("mdl1~");
       const hasReservedOpaquePrefix = hasTelegramOpaqueCallbackPrefix(data);
       const opaqueCallbackData = parseTelegramOpaqueCallbackData(callback.data?.trimStart());
+      // Agent-authored typed buttons: delivered to the agent, never to plugin handlers.
+      const hasReservedAgentChoicePrefix = hasTelegramAgentChoiceCallbackPrefix(data);
+      const agentChoiceValue = parseTelegramAgentChoiceCallbackData(callback.data?.trimStart());
+      const hasReservedTypedPrefix = hasReservedOpaquePrefix || hasReservedAgentChoicePrefix;
       const genericCallbackText = data.startsWith("/") ? data : `callback_data: ${data}`;
+      // Agent choices stay data even when slash-prefixed; commands use `action.type === "command"`.
       const callbackCommandText =
-        nativeCallbackCommand ?? (opaqueCallbackData ? "" : genericCallbackText);
+        nativeCallbackCommand ??
+        (agentChoiceValue
+          ? `callback_data: ${agentChoiceValue}`
+          : hasReservedTypedPrefix
+            ? ""
+            : genericCallbackText);
       const hasReservedApprovalPrefix = hasTelegramApprovalCallbackPrefix(data);
       const hasReservedQuestionPrefix = hasTelegramQuestionCallbackPrefix(data);
       const typedApprovalCallback = parseTelegramApprovalCallbackData(data);
       const legacyApprovalCallback = parseExecApprovalCommandText(
-        nativeCallbackCommand ?? (opaqueCallbackData ? "" : data),
+        nativeCallbackCommand ?? (hasReservedTypedPrefix ? "" : data),
       );
       const isApprovalCallback = hasReservedApprovalPrefix || legacyApprovalCallback !== null;
       const isRuntimeControlCallback = isApprovalCallback || hasReservedQuestionPrefix;
@@ -163,7 +175,7 @@ export function createTelegramCallbackRouter({
         !isRuntimeControlCallback &&
         inlineButtonsUnavailable &&
         !nativeCallbackCommand &&
-        !hasReservedOpaquePrefix &&
+        !hasReservedTypedPrefix &&
         !hasReservedModelPrefix
       ) {
         return;
@@ -221,7 +233,7 @@ export function createTelegramCallbackRouter({
       if (
         inlineButtonsUnavailable &&
         ((nativeCallbackCommand && !legacyApprovalCallback) ||
-          hasReservedOpaquePrefix ||
+          hasReservedTypedPrefix ||
           hasReservedModelPrefix)
       ) {
         await terminalizeUnavailableCallback();
@@ -300,8 +312,15 @@ export function createTelegramCallbackRouter({
         await approvalRuntime.handleMalformedReserved();
         return;
       }
+      // Agent choices never reach plugin interactive handlers: a valid payload falls
+      // through to the generic text path below; a broken checksum terminalizes.
+      if (hasReservedAgentChoicePrefix && !agentChoiceValue) {
+        await terminalizeUnavailableCallback();
+        return;
+      }
       if (
         !nativeCallbackCommand &&
+        !hasReservedAgentChoicePrefix &&
         !hasReservedModelPrefix &&
         !inlineButtonsUnavailable &&
         (await handleTelegramInteractiveCallback({

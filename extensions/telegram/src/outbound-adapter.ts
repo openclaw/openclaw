@@ -12,7 +12,12 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "./button-types.js";
+import {
+  resolveTelegramInlineButtons,
+  resolveTelegramTypedCallbackOwner,
+  type TelegramButtonBuildOptions,
+  type TelegramInlineButtons,
+} from "./button-types.js";
 import { TELEGRAM_MAX_CAPTION_LENGTH, telegramCaptionDeliveryMetadata } from "./caption.js";
 import {
   canonicalizeTelegramPresentationPayload,
@@ -184,9 +189,12 @@ export async function sendTelegramPayloadMessages(params: {
   to: string;
   payload: ReplyPayload;
   baseOpts: Omit<NonNullable<TelegramSendOpts>, "buttons" | "mediaUrl" | "mediaUrls" | "quoteText">;
+  /** Host-derived owner of typed callback taps; undefined keeps plugin-owned envelopes. */
+  typedCallbackOwner?: TelegramButtonBuildOptions["typedCallbackOwner"];
 }): Promise<Awaited<ReturnType<TelegramSendFn>>> {
   const payload = canonicalizeTelegramPresentationPayload(params.payload, {
     allowWebAppButtons: parseTelegramTarget(params.to).chatType === "direct",
+    typedCallbackOwner: params.typedCallbackOwner,
     richTables: resolveTelegramRichMessages({
       cfg: params.baseOpts.cfg,
       accountId: params.baseOpts.accountId,
@@ -200,11 +208,14 @@ export async function sendTelegramPayloadMessages(params: {
     typeof telegramData?.reaction?.emoji === "string" ? telegramData.reaction.emoji : undefined;
   const text = resolveTelegramInteractiveTextFallback(payload) ?? "";
   const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
-  const buttons = resolveTelegramInlineButtons({
-    buttons: telegramData?.buttons,
-    presentation: payload.presentation,
-    interactive: payload.interactive,
-  });
+  const buttons = resolveTelegramInlineButtons(
+    {
+      buttons: telegramData?.buttons,
+      presentation: payload.presentation,
+      interactive: payload.interactive,
+    },
+    { typedCallbackOwner: params.typedCallbackOwner },
+  );
   const replyToMessageId = parseStrictPositiveInteger(
     telegramData?.reaction?.replyToId ?? params.baseOpts.replyToMessageId,
   );
@@ -383,6 +394,8 @@ export function createTelegramOutboundAdapter(
         { ...payload, presentation },
         {
           allowWebAppButtons: parseTelegramTarget(ctx.to ?? "").chatType === "direct",
+          // Buttons are materialized here, before sendPayload; ownership must be applied now.
+          ...resolveTelegramTypedCallbackOwner(ctx.actionOrigin),
           richTables: resolveTelegramRichMessages({
             cfg: ctx.cfg,
             accountId: ctx.accountId,
@@ -505,6 +518,7 @@ export function createTelegramOutboundAdapter(
           mediaReadFile: params.mediaReadFile,
           forceDocument: params.forceDocument ?? false,
         },
+        ...resolveTelegramTypedCallbackOwner(params.actionOrigin),
       });
       return attachChannelToResult("telegram", toTelegramOutboundResult(result));
     },

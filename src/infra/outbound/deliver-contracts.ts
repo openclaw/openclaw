@@ -156,6 +156,8 @@ type OutboundChannelContext = {
   mediaAccess?: OutboundMediaAccess;
   gatewayClientScopes?: readonly string[];
   conversationReadOrigin?: "delegated" | "direct-operator";
+  /** @internal Model-authored message tool send; its typed callback controls belong to the agent. */
+  actionOrigin?: "message-tool";
   /** @internal Opaque durable intent id forwarded to provider reconciliation hooks. */
   deliveryQueueId?: string;
   /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */

@@ -26,6 +26,9 @@ export function projectQueuedDeliveryOptions(params: QueuedDeliveryPayload) {
     session: params.session,
     gatewayClientScopes: params.gatewayClientScopes,
     preparedMessageId: params.preparedMessageId,
+    // Ownership of typed callback controls is a durable fact of the send, not
+    // of the process that admitted it; replay must render it identically.
+    ...(params.actionOrigin ? { actionOrigin: params.actionOrigin } : {}),
   };
 }
 

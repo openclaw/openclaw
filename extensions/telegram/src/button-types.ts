@@ -21,6 +21,7 @@ import {
   sanitizeTelegramCallbackData,
 } from "./approval-callback-data.js";
 import {
+  buildTelegramAgentChoiceCallbackData,
   buildTelegramNativeCommandCallbackData,
   buildTelegramOpaqueCallbackData,
 } from "./native-command-callback-data.js";
@@ -64,7 +65,26 @@ export type TelegramButtonBuildOptions = {
   allowWebAppButtons?: boolean;
   onDroppedControl?: (control: TelegramDroppedControl) => void;
   questionOptionIndices?: AskUserQuestionOptionIndices;
+  /**
+   * Who receives taps on typed callback buttons. "agent" routes them to the agent
+   * as `callback_data: <value>`; the default keeps plugin-owned opaque envelopes.
+   */
+  typedCallbackOwner?: "agent" | "plugin";
 };
+
+/**
+ * Resolves typed callback ownership from the host-owned send origin. Only a
+ * model-authored `message` tool send (`actionOrigin: "message-tool"`, set by the
+ * host and never read from params or payload data) makes the agent the owner;
+ * every other producer keeps plugin-owned opaque envelopes. Every Telegram
+ * rendering step (presentation render, payload send, action runtime) must go
+ * through this so ownership is identical wherever buttons are materialized.
+ */
+export function resolveTelegramTypedCallbackOwner(
+  actionOrigin: string | undefined,
+): Pick<TelegramButtonBuildOptions, "typedCallbackOwner"> {
+  return actionOrigin === "message-tool" ? { typedCallbackOwner: "agent" } : {};
+}
 
 export function appendTelegramDroppedControlFallback(
   text: string,
@@ -175,9 +195,11 @@ function toTelegramInlineButton(
     Boolean(button.action) ||
     hasTelegramApprovalCallbackPrefix(normalizedCallbackValue) ||
     hasTelegramQuestionCallbackPrefix(normalizedCallbackValue);
-  const callbackDataCandidate = needsOpaqueEnvelope
-    ? buildTelegramOpaqueCallbackData(action.value)
-    : action.value;
+  const callbackDataCandidate = !needsOpaqueEnvelope
+    ? action.value
+    : options?.typedCallbackOwner === "agent"
+      ? buildTelegramAgentChoiceCallbackData(action.value)
+      : buildTelegramOpaqueCallbackData(action.value);
   return callbackButton(
     sanitizeTelegramCallbackData(callbackDataCandidate),
     "invalid_action",

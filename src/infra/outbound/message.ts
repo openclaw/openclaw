@@ -70,6 +70,7 @@ type MessageSendParams = Pick<
   | "deliveryCompletion"
   | "reusePendingDeliveryIntent"
   | "deliveryRetryOwner"
+  | "actionOrigin"
   | "completionRetention"
   | "requireUnknownSendReconciliation"
   | "onDeliveryAttempt"
@@ -365,6 +366,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         deliveryCompletion: params.deliveryCompletion,
         reusePendingDeliveryIntent: params.reusePendingDeliveryIntent,
         deliveryRetryOwner: params.deliveryRetryOwner,
+        actionOrigin: params.actionOrigin,
         completionRetention: params.completionRetention,
         ...(params.onDeliveryIntent ? { onDeliveryIntent: params.onDeliveryIntent } : {}),
         ...(params.onDeliveryAttempt ? { onDeliveryAttempt: params.onDeliveryAttempt } : {}),

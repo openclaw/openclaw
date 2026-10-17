@@ -422,6 +422,37 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     },
   );
 
+  it.each([
+    { origin: "message-tool" as const, callbackData: "tgac1:7ok4o:deploy prod" },
+    { origin: undefined, callbackData: "tgcb1:7ok4o:deploy prod" },
+  ])(
+    "encodes registered typed callback buttons by host send origin ($origin)",
+    async ({ origin, callbackData }) => {
+      await telegramOutbound.sendPayload!({
+        cfg,
+        to: "123",
+        text: "Deploy?",
+        ...(origin ? { actionOrigin: origin } : {}),
+        payload: {
+          text: "Deploy?",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Deploy", action: { type: "callback", value: "deploy prod" } }],
+              },
+            ],
+          },
+        },
+      });
+
+      expect(requests.map(({ method }) => method)).toEqual(["sendMessage"]);
+      expect(requests[0]!.fields.reply_markup).toEqual({
+        inline_keyboard: [[{ text: "Deploy", callback_data: callbackData }]],
+      });
+    },
+  );
+
   it("keeps the native reply on the location after its origin marker", async () => {
     await sendPayload(
       {

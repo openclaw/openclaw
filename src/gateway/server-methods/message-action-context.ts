@@ -24,6 +24,23 @@ import {
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 
+/**
+ * Host-owned ownership facts for a dispatched message action. Only the agent
+ * runtime client authors model sends: it resends proven-not-sent failures itself
+ * (#124279), and plugin-handled sends must see the message-tool origin so channel
+ * adapters can render agent-owned controls. Never derived from request params.
+ */
+export function selectMessageActionOwnership(
+  action: string,
+  trustedContext: { runtimeAgentId: string | undefined },
+): { deliveryRetryOwner: "caller" | undefined; actionOrigin?: "message-tool" } {
+  const modelAuthored = Boolean(trustedContext.runtimeAgentId);
+  return {
+    deliveryRetryOwner: modelAuthored ? "caller" : undefined,
+    ...(modelAuthored && action === "send" ? { actionOrigin: "message-tool" as const } : {}),
+  };
+}
+
 /** Redeem host-only message authority from a trusted local agent runtime. */
 export function resolveAgentRuntimeMessageActionAuthorization(
   client: GatewayClient | null,

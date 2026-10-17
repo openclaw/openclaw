@@ -1,5 +1,7 @@
 const TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX = "tgcmd:";
 const TELEGRAM_OPAQUE_CALLBACK_PREFIX = "tgcb1:";
+// Agent-authored typed callback buttons. The agent, never a plugin, owns these taps.
+const TELEGRAM_AGENT_CHOICE_CALLBACK_PREFIX = "tgac1:";
 
 export function buildTelegramNativeCommandCallbackData(commandText: string): string {
   return `${TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX}${commandText}`;
@@ -15,7 +17,7 @@ export function parseTelegramNativeCommandCallbackData(data?: string | null): st
 }
 
 export function buildTelegramOpaqueCallbackData(value: string): string {
-  return `${TELEGRAM_OPAQUE_CALLBACK_PREFIX}${checksumTelegramOpaqueCallbackValue(value)}:${value}`;
+  return buildChecksummedCallbackData(TELEGRAM_OPAQUE_CALLBACK_PREFIX, value);
 }
 
 export function hasTelegramOpaqueCallbackPrefix(data?: string | null): boolean {
@@ -23,10 +25,30 @@ export function hasTelegramOpaqueCallbackPrefix(data?: string | null): boolean {
 }
 
 export function parseTelegramOpaqueCallbackData(data?: string | null): string | null {
-  if (!data || !hasTelegramOpaqueCallbackPrefix(data)) {
+  return parseChecksummedCallbackData(TELEGRAM_OPAQUE_CALLBACK_PREFIX, data);
+}
+
+export function buildTelegramAgentChoiceCallbackData(value: string): string {
+  return buildChecksummedCallbackData(TELEGRAM_AGENT_CHOICE_CALLBACK_PREFIX, value);
+}
+
+export function hasTelegramAgentChoiceCallbackPrefix(data?: string | null): boolean {
+  return data?.startsWith(TELEGRAM_AGENT_CHOICE_CALLBACK_PREFIX) === true;
+}
+
+export function parseTelegramAgentChoiceCallbackData(data?: string | null): string | null {
+  return parseChecksummedCallbackData(TELEGRAM_AGENT_CHOICE_CALLBACK_PREFIX, data);
+}
+
+function buildChecksummedCallbackData(prefix: string, value: string): string {
+  return `${prefix}${checksumTelegramOpaqueCallbackValue(value)}:${value}`;
+}
+
+function parseChecksummedCallbackData(prefix: string, data?: string | null): string | null {
+  if (!data?.startsWith(prefix)) {
     return null;
   }
-  const encoded = data.slice(TELEGRAM_OPAQUE_CALLBACK_PREFIX.length);
+  const encoded = data.slice(prefix.length);
   const separatorIndex = encoded.indexOf(":");
   const value = encoded.slice(separatorIndex + 1);
   return separatorIndex > 0 &&

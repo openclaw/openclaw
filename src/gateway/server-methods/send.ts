@@ -70,6 +70,7 @@ import {
   resolveAgentRuntimeMessageActionAuthorization,
   resolveAgentRuntimeMessageActionConfig,
   resolveTrustedMessageActionToolContext,
+  selectMessageActionOwnership,
 } from "./message-action-context.js";
 import {
   buildGatewayDeliveryPayload,
@@ -335,7 +336,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                 // it resends proven-not-sent failures itself, so its gateway-owned plugin
                 // delivery must not also stay replayable (#124279). Operator, CLI, and
                 // external RPC clients carry none and keep recovery's replay (#100979).
-                deliveryRetryOwner: trustedContext.runtimeAgentId ? ("caller" as const) : undefined,
+                ...selectMessageActionOwnership(request.action, trustedContext),
                 ...selectMessageActionRequesterIdentity(trustedContext),
                 senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
                   ? request.senderIsOwner === true
@@ -402,11 +403,9 @@ export const sendHandlers: GatewayRequestHandlers = {
                     gatewayOwnedDelivery: true,
                     ...(request.action === "send"
                       ? {
-                          // This RPC owns source-reply receipts and their transcript mirror.
+                          // This RPC owns source-reply receipts and their transcript mirror;
+                          // actionContext already carries the model-authored origin.
                           suppressTranscriptMirror: true,
-                          actionOrigin: trustedContext.runtimeAgentId
-                            ? ("message-tool" as const)
-                            : undefined,
                         }
                       : {}),
                     params: {

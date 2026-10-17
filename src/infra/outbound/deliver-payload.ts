@@ -199,6 +199,7 @@ export function resolveChannelHandlerParams(
     mediaAccess: resolveOutboundMediaAccessForSend(params, mediaSources),
     gatewayClientScopes: params.gatewayClientScopes,
     conversationReadOrigin: params.conversationReadOrigin,
+    actionOrigin: params.actionOrigin,
     preparedMessageId: params.preparedMessageId,
     requiredUnknownSendReconciliation: params.requiredUnknownSendReconciliation,
   };

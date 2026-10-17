@@ -1065,6 +1065,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/node-pairing-migration.test.ts",
   "src/infra/push-apns.store.test.ts",
   "src/infra/outbound/delivery-queue-platform-lease.worker.test.ts",
+  "src/infra/outbound/delivery-queue.action-origin-recovery.test.ts",
   "src/infra/sqlite-worker-existing-schema.test.ts",
   "src/state/openclaw-state-read.existing-schema.test.ts",
   "src/state/openclaw-state-db-readonly.warm-source.test.ts",

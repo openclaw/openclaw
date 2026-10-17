@@ -211,6 +211,7 @@ function createPluginHandler(
     mediaReadFile: params.mediaAccess?.readFile,
     gatewayClientScopes: params.gatewayClientScopes,
     conversationReadOrigin: params.conversationReadOrigin,
+    actionOrigin: params.actionOrigin,
     deliveryQueueId: params.deliveryQueueId,
     preparedMessageId: params.preparedMessageId,
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,

@@ -95,6 +95,12 @@ export type QueuedDeliveryPayload = {
   session?: OutboundSessionContext;
   gatewayClientScopes?: readonly string[];
   preparedMessageId?: string;
+  /**
+   * Host-owned send origin of a model-authored `message` tool call. Persisted
+   * so recovery after a restart renders agent-owned typed controls exactly as
+   * the live send would; absent on every other producer and on older rows.
+   */
+  actionOrigin?: "message-tool";
   deliveryCompletion?: DurableDeliveryCompletion;
   completionRetention?: DeliveryQueueCompletionRetention;
   legacyUnknownSendReconciliation?: Exclude<

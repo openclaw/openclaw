@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import { buildTelegramPresentationButtons, resolveTelegramInlineButtons } from "./button-types.js";
 import {
+  parseTelegramAgentChoiceCallbackData,
   parseTelegramNativeCommandCallbackData,
   parseTelegramOpaqueCallbackData,
 } from "./native-command-callback-data.js";
@@ -114,6 +115,43 @@ describe("buildTelegramPresentationButtons action domains", () => {
     for (const callback of callbacks ?? []) {
       expect(parseTelegramApprovalCallbackData(callback)).toBeNull();
       expect(parseTelegramQuestionCallbackData(callback)).toBeNull();
+    }
+  });
+
+  it("envelopes typed callbacks as agent choices only for the agent owner", () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [
+            { label: "Deploy", action: { type: "callback" as const, value: "deploy prod" } },
+            { label: "Legacy", value: "deploy prod" },
+          ],
+        },
+      ],
+    };
+    const agentRows = buildTelegramPresentationButtons(presentation, {
+      typedCallbackOwner: "agent",
+    });
+    const defaultRows = buildTelegramPresentationButtons(presentation);
+    const pluginRows = buildTelegramPresentationButtons(presentation, {
+      typedCallbackOwner: "plugin",
+    });
+
+    expect(agentRows?.flat().map((button) => button.callback_data)).toEqual([
+      "tgac1:7ok4o:deploy prod",
+      "deploy prod",
+    ]);
+    expect(parseTelegramAgentChoiceCallbackData(agentRows?.[0]?.[0]?.callback_data)).toBe(
+      "deploy prod",
+    );
+    expect(parseTelegramOpaqueCallbackData(agentRows?.[0]?.[0]?.callback_data)).toBeNull();
+    for (const rows of [defaultRows, pluginRows]) {
+      expect(rows?.flat().map((button) => button.callback_data)).toEqual([
+        "tgcb1:7ok4o:deploy prod",
+        "deploy prod",
+      ]);
+      expect(parseTelegramAgentChoiceCallbackData(rows?.[0]?.[0]?.callback_data)).toBeNull();
     }
   });
 

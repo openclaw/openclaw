@@ -251,6 +251,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         inboundEventKind: ctx.inboundEventKind,
         gatewayClientScopes: ctx.gatewayClientScopes,
         deliveryRetryOwner: ctx.deliveryRetryOwner,
+        ...(ctx.actionOrigin ? { actionOrigin: ctx.actionOrigin } : {}),
         onPlatformSendDispatch: ctx.onPlatformSendDispatch,
         assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
         skipQueue: ctx.skipQueue,
