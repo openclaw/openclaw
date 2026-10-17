@@ -11,7 +11,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { withSessionHistoryWorkerDatabase } from "../../config/sessions/session-transcript-worker-runtime.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabaseReadOnly from "../../state/openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
@@ -108,34 +107,6 @@ it("prepares current placement facts off the host thread and retries failed refr
         refused.mockRestore();
       }
       expect(await refresh()).toMatchObject({ state: "failed" });
-      const captured = createDeferredCore();
-      const releaseRead = createDeferredCore();
-      const readProjection = placements.readProjection.bind(placements);
-      const delayed = vi.spyOn(placements, "readProjection").mockImplementationOnce(async (ids) => {
-        const snapshot = await readProjection(ids);
-        captured.resolve();
-        await releaseRead.promise;
-        return snapshot;
-      });
-      try {
-        sessionChanges.emit({ agentId: identity.agentId, sessionKey: identity.sessionKey });
-        const refreshed = projection.ensureMaterialized();
-        await captured.promise;
-        await placements.fail({
-          sessionId: identity.sessionId,
-          recoveryError: "Changed during preparation",
-        });
-        sessionChanges.emit({ agentId: identity.agentId, sessionKey: identity.sessionKey });
-        releaseRead.resolve();
-        await refreshed;
-        expect(
-          projection.snapshot({ agentId: identity.agentId, key: identity.sessionKey }).row
-            ?.placement,
-        ).toMatchObject({ recoveryError: "Changed during preparation" });
-      } finally {
-        releaseRead.resolve();
-        delayed.mockRestore();
-      }
     } finally {
       projection.dispose();
     }

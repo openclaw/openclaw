@@ -170,7 +170,6 @@ async function settleTerminalSessionPersistenceForRestart(
     shutdownLog.warn(
       `terminal session persistence did not settle within ${RESTART_TERMINAL_PERSISTENCE_WAIT_TIMEOUT_MS}ms; preserving restart recovery`,
     );
-    return;
   }
 }
 

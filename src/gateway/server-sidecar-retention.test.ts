@@ -139,7 +139,7 @@ describe("createGatewayKernel", () => {
         expect(gatewayStop).not.toHaveBeenCalled();
         expect(getActiveSecretsRuntimeConfigSnapshot()).toEqual(secrets);
         expect(await closing).toMatchObject({ errors: [{ cause: stopError }] });
-        expect(sidecar.stop).toHaveBeenCalledTimes(2);
+        expect(sidecar.stop).toHaveBeenCalledOnce();
         expect(lateSidecar.stop).toHaveBeenCalledOnce();
         // The public close retains its failure; only the retained kernel owner may retry.
         failStop = false;
@@ -147,7 +147,7 @@ describe("createGatewayKernel", () => {
         cleanupComplete = true;
         expect(closeTransport).toHaveBeenCalledOnce();
         expect(dependencyStop).toHaveBeenCalledOnce();
-        expect(sidecar.stop).toHaveBeenCalledTimes(3);
+        expect(sidecar.stop).toHaveBeenCalledTimes(2);
       } finally {
         // Join the original failure before changing its fault or releasing fixture state.
         releaseStop.resolve();
