@@ -232,6 +232,54 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     },
   );
 
+  it.each(["lookup", "approved-path", "ungranted", "builtin-grant"] as const)(
+    "distinguishes Gateway executable lookup from authorization: %s",
+    async (scenario) => {
+      const executable = path.join(root, "openclaw-lookup-fixture.sh");
+      fs.writeFileSync(executable, "#!/bin/sh\nprintf 'LOOKUP_APPROVED_MARKER\\n'\n", {
+        mode: 0o755,
+      });
+      saveExecApprovals({
+        version: 1,
+        defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+        agents: {
+          main: {
+            allowlist:
+              scenario === "ungranted" || scenario === "builtin-grant"
+                ? []
+                : [{ pattern: executable }],
+          },
+        },
+      });
+      const review = reviewer();
+      const command =
+        scenario === "lookup"
+          ? path.basename(executable)
+          : scenario === "builtin-grant"
+            ? `cd . && ${executable}`
+            : executable;
+      const pending = tool(review, "allowlist").execute("lookup-diagnostic", { command });
+      if (scenario === "approved-path") {
+        const result = await pending;
+        if (result.details.status !== "completed") {
+          throw new Error(`Unexpected exec status: ${result.details.status}`);
+        }
+        expect(result.details.exitCode).toBe(0);
+        expect(result.details.aggregated).toBe("LOOKUP_APPROVED_MARKER");
+        expect(boundary.spawn.mock.calls.length).toBe(1);
+      } else {
+        await expect(pending).rejects.toThrow(
+          scenario === "lookup"
+            ? "exec denied: executable lookup unresolved; check Gateway PATH or use an absolute executable path"
+            : "exec denied: allowlist miss",
+        );
+        expect(boundary.spawn.mock.calls.length).toBe(0);
+      }
+      expect(review.mock.calls.length).toBe(0);
+      expect(vi.mocked(callGatewayTool).mock.calls.length).toBe(0);
+    },
+  );
+
   it("keeps current-policy execution pinned when an allowlisted symlink changes", async () => {
     const bin = path.join(root, "bin");
     fs.mkdirSync(bin);

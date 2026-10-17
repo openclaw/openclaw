@@ -64,6 +64,8 @@ import {
   buildExecApprovalFollowupTarget,
   buildExecApprovalDeniedToolResult,
   buildExecAutoReviewDeniedToolResult,
+  buildGatewayExecAllowlistDeniedMessage,
+  buildGatewayExecApprovalDeniedToolResult,
   formatExecApprovalContinuationSourceOutput,
 } from "./bash-tools.exec-approval-output.js";
 import {
@@ -291,29 +293,6 @@ function buildGatewayExecApprovalFollowupSummary(params: {
       : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;
   }
   return appendExecTimeoutRetryGuidance(summary, params.outcome.exitReason);
-}
-
-function buildGatewayExecApprovalDeniedToolResult(params: {
-  approvalId?: string;
-  deniedReason: string;
-  command: string;
-  cwd: string;
-}): AgentToolResult<ExecToolDetails> {
-  const denialContext = params.approvalId
-    ? `gateway id=${params.approvalId}, ${params.deniedReason}`
-    : params.deniedReason;
-  const text = `Exec denied (${denialContext}): ${params.command}`;
-  return {
-    content: [{ type: "text", text }],
-    details: {
-      status: "failed",
-      exitCode: null,
-      durationMs: 0,
-      aggregated: text,
-      timedOut: params.deniedReason.includes("timeout"),
-      cwd: params.cwd,
-    },
-  };
 }
 
 async function resolveGatewayExecApprovalDrift(params: {
@@ -1465,7 +1444,7 @@ export async function processGatewayAllowlist(
   }
 
   if (hasAllowlistMiss) {
-    throw new Error("exec denied: allowlist miss");
+    throw new Error(buildGatewayExecAllowlistDeniedMessage(allowlistEval));
   }
 
   await commitExecutionAuthorization({
