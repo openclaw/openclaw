@@ -18,7 +18,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
-import type { Context, Model } from "../../llm/types.js";
+import type { Model } from "../../llm/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -135,15 +135,10 @@ it("commits streamed and custom messages off the host thread and adopts the comm
         ),
       );
     const payload = "const value = 42;\n".repeat(1280);
-    const expectNoHostTranscriptSql = () => {
-      expect(
-        sql.queries.filter((query) =>
-          /\b(?:transcript_events|transcript_payloads|session_windows|session_nodes)\b|BEGIN\s+IMMEDIATE/i.test(
-            query,
-          ),
-        ),
-      ).toEqual([]);
-    };
+    const transcriptSql =
+      /\b(?:transcript_events|transcript_payloads|session_windows|session_nodes)\b|BEGIN\s+IMMEDIATE/i;
+    const expectNoHostTranscriptSql = () =>
+      expect(sql.queries.filter((query) => transcriptSql.test(query))).toEqual([]);
     const assertWorkerCommit = async (
       message: Extract<AgentEvent, { type: "message_end" }>["message"],
     ) => {
@@ -231,10 +226,7 @@ it("commits streamed and custom messages off the host thread and adopts the comm
       SessionManager.open(target).appendMessage(makeUserMessage("new turn", 3));
       const before = loadTranscriptEventsSync(target);
       await expect(
-        handleEvent({
-          type: "message_end",
-          message: assistantText("stale reply"),
-        }),
+        handleEvent({ type: "message_end", message: assistantText("stale reply") }),
       ).rejects.toThrow("SQLite transcript changed");
       expect(loadTranscriptEventsSync(target)).toEqual(before);
       expect(committed).toEqual(["assistant", "toolResult", "assistant"]);
@@ -355,10 +347,10 @@ it("keeps the active turn and all steers after an earlier steer receipt rewrites
     });
     const toolStarted = createDeferredCore();
     const releaseTool = createDeferredCore();
-    const requests: Context["messages"][] = [];
+    let requests = 0;
     const words = ["W0XYZ", "W1XYZ", "W2XYZ", "W3XYZ", "W4XYZ"];
     streamMocks.streamSimple.mockImplementation((model, context) => {
-      requests.push(structuredClone(context.messages));
+      requests += 1;
       const text = context.messages
         .filter((message) => message.role === "user")
         .flatMap((message) =>
@@ -370,10 +362,10 @@ it("keeps the active turn and all steers after an earlier steer receipt rewrites
       return createAssistantResultStream(
         createAssistant(
           model,
-          requests.length === 1
+          requests === 1
             ? [{ type: "toolCall", id: "held-tool", name: "hold", arguments: {} }]
             : [{ type: "text", text: words.filter((word) => text.includes(word)).join(" ") }],
-          requests.length === 1 ? "toolUse" : "stop",
+          requests === 1 ? "toolUse" : "stop",
         ),
       );
     });
@@ -481,9 +473,8 @@ it("keeps the active turn and all steers after an earlier steer receipt rewrites
       expect(await Promise.all(attempts.map((attempt) => attempt.outcome))).toEqual(
         words.map(() => ({ status: "accepted" })),
       );
-      expect(requests).toHaveLength(2);
-      const final = session.messages.at(-1);
-      expect(final).toMatchObject({
+      expect(requests).toBe(2);
+      expect(session.messages.at(-1)).toMatchObject({
         role: "assistant",
         content: [{ type: "text", text: "W0XYZ W1XYZ W2XYZ W3XYZ W4XYZ" }],
       });

@@ -111,7 +111,6 @@ it.each(
     );
     const accepted = createDeferredCore();
     const active = session.prompt("active prompt");
-    let terminated = false;
     let outcome: Promise<unknown> | undefined;
     try {
       await awaitGateBeforeSettlement(streaming.promise, active, "Active prompt never streamed");
@@ -135,7 +134,6 @@ it.each(
       const failure = createAssistant(testModel, [], "error");
       held.response.push({ type: "error", reason: "error", error: failure });
       held.response.end();
-      terminated = true;
       await active;
       const result = await outcome;
       expect(session.getSteeringMessages()).toEqual([]);
@@ -145,9 +143,7 @@ it.each(
         surface === "registry" ? { status: "rejected" } : { queued: false },
       );
     } finally {
-      if (!terminated) {
-        held.release();
-      }
+      held.release();
       await Promise.allSettled([active, ...(outcome ? [outcome] : [])]);
       operation.complete();
     }
@@ -192,9 +188,7 @@ it.each([
       return admissionResult;
     });
     const active = session.prompt("active prompt");
-    let settled = false;
-    let result: unknown;
-    let failure: unknown;
+    let settlement: { result?: unknown; failure?: unknown } | undefined;
     let waiting: Promise<void> | undefined;
     const onQueueAccepted = vi.fn((value: boolean) => {
       if (value) {
@@ -207,12 +201,10 @@ it.each([
       const outcome = queue(surface, "input with failed persistence", options);
       waiting = outcome.then(
         (value) => {
-          result = value;
-          settled = true;
+          settlement = { result: value };
         },
         (error: unknown) => {
-          failure = error;
-          settled = true;
+          settlement = { failure: error };
         },
       );
       await awaitGateBeforeSettlement(installed.promise, waiting, "Steering was not installed");
@@ -226,11 +218,12 @@ it.each([
       expect(session.agent.hasQueuedMessages()).toBe(false);
       expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
       if (admission !== "reported") {
-        expect(settled).toBe(false);
+        expect(settlement).toBeUndefined();
         expect(onQueueAccepted).not.toHaveBeenCalled();
       }
       release.resolve();
       await waiting;
+      const { result, failure } = settlement!;
       if (surface === "session") {
         expect(failure).toBe(persistenceError);
       } else {

@@ -1,18 +1,28 @@
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
-import type { Context, Model } from "@openclaw/llm-core";
+import type { Message, Model } from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
 import { runAgentLoop } from "../../../packages/agent-core/src/agent-loop.js";
 import {
   makeAssistantMessage,
+  config as baseConfig,
   model as baseModel,
 } from "../../../packages/agent-core/src/agent-loop.test-support.js";
+import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import { buildOpenAIResponsesReasoningReplayMetadata } from "../../../packages/ai/src/transports/openai-responses-compaction-replay.js";
 import { convertResponsesMessages } from "../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { processResponsesStream } from "../../../packages/ai/src/transports/openai-responses-stream-internal.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { persistAgentSessionMessage } from "./agent-session-transcript.js";
 import { SessionManager } from "./session-manager.js";
+
+function outputItem(phase: "added" | "done", output_index: number, item: unknown) {
+  return { type: `response.output_item.${phase}`, output_index, item };
+}
+
+function isModelMessage(message: AgentMessage): message is Message {
+  return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
+}
 
 it.each([
   "item-done",
@@ -81,33 +91,20 @@ it.each([
       return { content: [{ type: "text" as const, text: "Found." }], details: {} };
     });
     async function* events() {
-      yield {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: { type: "reasoning", id: "rs_test", summary: [] },
-      };
+      yield outputItem("added", 0, { type: "reasoning", id: "rs_test", summary: [] });
       const { encrypted_content: _ciphertext, ...unencryptedReasoning } = reasoning;
       if (!ciphertextArrival.startsWith("terminal-without-item-done")) {
-        yield {
-          type: "response.output_item.done",
-          output_index: 0,
-          item:
-            ciphertextArrival === "item-done"
-              ? { ...reasoning, encrypted_content: "streamed-ciphertext" }
-              : unencryptedReasoning,
-        };
+        yield outputItem(
+          "done",
+          0,
+          ciphertextArrival === "item-done"
+            ? { ...reasoning, encrypted_content: "streamed-ciphertext" }
+            : unencryptedReasoning,
+        );
       }
-      yield {
-        type: "response.output_item.added",
-        output_index: 1,
-        item: { ...call, arguments: "", status: "in_progress" },
-      };
-      yield { type: "response.output_item.done", output_index: 1, item: call };
-      yield {
-        type: "response.output_item.added",
-        output_index: 2,
-        item: { ...answer, status: "in_progress", content: [] },
-      };
+      yield outputItem("added", 1, { ...call, arguments: "", status: "in_progress" });
+      yield outputItem("done", 1, call);
+      yield outputItem("added", 2, { ...answer, status: "in_progress", content: [] });
       yield {
         type: "response.content_part.added",
         output_index: 2,
@@ -119,7 +116,7 @@ it.each([
       await answerStreamed.promise;
       expect(prefixWasPersisted).toBe(false);
       expect(execute).not.toHaveBeenCalled();
-      yield { type: "response.output_item.done", output_index: 2, item: answer };
+      yield outputItem("done", 2, answer);
       terminalSeen = true;
       yield {
         type: "response.completed",
@@ -148,20 +145,15 @@ it.each([
         ],
       },
       {
+        ...baseConfig,
         model,
-        convertToLlm: (history) => history as Context["messages"],
         shouldStopAfterTurn: () => true,
       },
       async (event) => {
         if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
           answerStreamed.resolve();
         }
-        if (
-          event.type !== "message_end" ||
-          (event.message.role !== "user" &&
-            event.message.role !== "assistant" &&
-            event.message.role !== "toolResult")
-        ) {
+        if (event.type !== "message_end" || !isModelMessage(event.message)) {
           return;
         }
         await persistAgentSessionMessage(manager, event.message, {
@@ -181,8 +173,12 @@ it.each([
         void processResponsesStream(events(), output, stream, model, {
           asyncToolExecution: true,
           reasoningReplayMetadata: replayMetadata,
-        }).then(
-          () => {
+        })
+          .catch((error: unknown) => {
+            output.stopReason = "error";
+            output.errorMessage = error instanceof Error ? error.message : String(error);
+          })
+          .then(() => {
             const reason = output.stopReason;
             if (reason === "error" || reason === "aborted") {
               stream.push({ type: "error", reason, error: output });
@@ -190,14 +186,7 @@ it.each([
               stream.push({ type: "done", reason, message: output });
             }
             stream.end();
-          },
-          (error: unknown) => {
-            output.stopReason = "error";
-            output.errorMessage = error instanceof Error ? error.message : String(error);
-            stream.push({ type: "error", reason: "error", error: output });
-            stream.end();
-          },
-        );
+          });
         return stream;
       },
     );
@@ -247,12 +236,7 @@ it.each([
       model,
       {
         messages: [
-          ...persisted.filter(
-            (message) =>
-              message.role === "user" ||
-              message.role === "assistant" ||
-              message.role === "toolResult",
-          ),
+          ...persisted.filter(isModelMessage),
           { role: "user", content: "Continue.", timestamp: 2 },
         ],
       },

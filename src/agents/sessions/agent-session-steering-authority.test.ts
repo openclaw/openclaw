@@ -8,6 +8,7 @@ import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js
 import type {
   ReplyBackendMessageInjectionV2,
   ReplyToolAuthorityOverlay,
+  ReplyToolAuthorityRoute,
 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
@@ -128,13 +129,70 @@ function assertQueued(
   expect(session.getSteeringMessages()).toEqual(accepted ? [text] : []);
 }
 
+function gate() {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  return {
+    hold: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+    wait: (pending: Promise<unknown>, message: string) =>
+      awaitGateBeforeSettlement(entered.promise, pending, message),
+    release: release.resolve,
+  };
+}
+
+async function authorityRun(
+  config: OpenClawConfig,
+  {
+    sessionKey,
+    sessionId,
+    policyKey,
+  }: { sessionKey: string; sessionId: string; policyKey: string },
+  run = createQueueTestRun({ prompt: "input under current caller policy" }),
+  route: ReplyToolAuthorityRoute = run.run,
+) {
+  Object.assign(run.run, {
+    agentId: "main",
+    sessionKey,
+    sessionId,
+    runtimePolicySessionKey: policyKey,
+    senderIsOwner: true,
+    config,
+  });
+  const operation = createTestReplyOperation({ sessionKey, sessionId });
+  await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+  await operation.bindToolAuthorityRouteAsync(route);
+  const { session } = await createTestSession();
+  return { run, operation, session, enqueue: vi.spyOn(session.agent, "admitSteeringMessage") };
+}
+
+function attachInjection(
+  operation: ReturnType<typeof createTestReplyOperation>,
+  injection: ReplyBackendMessageInjectionV2,
+  sessionId: string,
+  sessionKey: string,
+  runId?: string,
+) {
+  const handle = {
+    ...createEmbeddedRunHandle(runId ? { runId } : undefined),
+    kind: "embedded" as const,
+    cancel() {},
+    toolAuthorityFingerprint: operation.toolAuthorityFingerprint,
+    messageInjectionV2: injection,
+  };
+  operation.attachBackend(handle);
+  operation.setPhase("running");
+  setActiveEmbeddedRun(sessionId, handle, sessionKey);
+}
+
 it.each(["allowed", "refused", "revoked"] as const)(
   "retains the independent embedded caller guard through real enqueue: %s",
   async (caller) => {
     const { session } = await createTestSession();
     const enqueue = vi.spyOn(session.agent, "admitSteeringMessage");
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
+    const finalPreparation = gate();
     let canInject = caller !== "refused";
     const onQueueAccepted = vi.fn();
     const sourcePreparation = {
@@ -143,8 +201,7 @@ it.each(["allowed", "refused", "revoked"] as const)(
     };
     const injection = createInjection(session, undefined, undefined, async () => {
       if (caller === "revoked") {
-        entered.resolve();
-        await resume.promise;
+        await finalPreparation.hold();
       }
     });
     const sessionId = `independent-caller-${caller}`;
@@ -161,13 +218,9 @@ it.each(["allowed", "refused", "revoked"] as const)(
     );
     try {
       if (caller === "revoked") {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          outcome,
-          "Final preparation was not reached",
-        );
+        await finalPreparation.wait(outcome, "Final preparation was not reached");
         canInject = false;
-        resume.resolve();
+        finalPreparation.release();
       }
       await expect(outcome).resolves.toMatchObject({ queued: caller === "allowed" });
       assertQueued(session, enqueue, "independent caller input", caller === "allowed");
@@ -177,7 +230,7 @@ it.each(["allowed", "refused", "revoked"] as const)(
         expect(onQueueAccepted).not.toHaveBeenCalledWith(true);
       }
     } finally {
-      resume.resolve();
+      finalPreparation.release();
       await outcome;
     }
   },
@@ -187,32 +240,24 @@ it("orders final steering preparation through the actual session enqueue", async
   vi.useFakeTimers();
   const { session } = await createTestSession();
   const enqueue = vi.spyOn(session.agent, "admitSteeringMessage");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
+  const preparation = gate();
   const steer = (text: string, prepare: () => Promise<void>) =>
     steerPrepared(session, text, () => true, prepare);
-  const first = steer("first", async () => {
-    entered.resolve();
-    await release.promise;
-  });
+  const first = steer("first", preparation.hold);
   const pending = [first];
   try {
-    await awaitGateBeforeSettlement(
-      entered.promise,
-      first,
-      "first final preparation did not start",
-    );
+    await preparation.wait(first, "first final preparation did not start");
     pending.push(steer("second", async () => {}));
     await vi.advanceTimersByTimeAsync(0);
     expect(enqueue).not.toHaveBeenCalled();
-    release.resolve();
+    preparation.release();
     await Promise.all(pending);
     expect(enqueue.mock.calls.map(([message]) => message)).toMatchObject([
       { role: "user", content: [{ type: "text", text: "first" }] },
       { role: "user", content: [{ type: "text", text: "second" }] },
     ]);
   } finally {
-    release.resolve();
+    preparation.release();
     await Promise.allSettled(pending);
   }
 });
@@ -224,8 +269,8 @@ it.each([
   { surface: "talk", changePolicy: true },
 ] as const)(
   "revalidates an independent policy row at $surface enqueue after reader cleanup (policy changed: $changePolicy)",
-  async ({ surface, changePolicy }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  ({ surface, changePolicy }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const config: OpenClawConfig = {
         agents: { defaults: { sandbox: { mode: "all" } } },
         tools: { sandbox: { tools: { deny: ["exec"] } } },
@@ -240,33 +285,16 @@ it.each([
         updatedAt: 1,
         sandboxMode: "off",
       });
-      const run = createQueueTestRun({ prompt: "input under current caller policy" });
-      Object.assign(run.run, {
-        agentId: "main",
+      const { run, operation, session, enqueue } = await authorityRun(config, {
         sessionKey,
         sessionId,
-        runtimePolicySessionKey: policyKey,
-        senderIsOwner: true,
-        config,
+        policyKey,
       });
-      const operation = createTestReplyOperation({ sessionKey, sessionId });
-      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
-      const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
-      const { session } = await createTestSession();
-      const enqueue = vi.spyOn(session.agent, "admitSteeringMessage");
       let atBackend = false;
       const injection = createInjection(session, sessionKey, () => {
         atBackend = true;
       });
-      const handle = {
-        ...createEmbeddedRunHandle({ runId: sessionId, toolAuthorityFingerprint: fingerprint }),
-        kind: "embedded" as const,
-        cancel() {},
-        messageInjectionV2: injection,
-      };
-      operation.attachBackend(handle);
-      operation.setPhase("running");
-      setActiveEmbeddedRun(sessionId, handle, sessionKey);
+      attachInjection(operation, injection, sessionId, sessionKey, sessionId);
       let changed = false;
       const project = operation.projectToolAuthorityFingerprintAsync;
       const delayed = vi
@@ -309,8 +337,7 @@ it.each([
         delayed.mockRestore();
         operation.complete();
       }
-    });
-  },
+    }),
 );
 
 it.each([
@@ -326,8 +353,8 @@ it.each([
   ),
 ])(
   "retains $surface authority after delayed recorder preparation: $change",
-  async ({ change, surface }) => {
-    await withOpenClawTestState({ label: `steering-${change}` }, async ({ env }) => {
+  ({ change, surface }) =>
+    withOpenClawTestState({ label: `steering-${change}` }, async ({ env }) => {
       const config = createCanonicalAgentConfigFixture({
         agents: { defaults: { sandbox: { mode: "all" } } },
       }).config;
@@ -343,21 +370,15 @@ it.each([
       });
       const run = createQueueTestRun({ prompt: "steer", originatingChannel: "webchat" });
       Object.assign(run.run, {
-        agentId: "main",
-        sessionId: "original",
-        sessionKey,
-        runtimePolicySessionKey: policyKey,
-        config,
-        senderIsOwner: true,
         clientCaps: ["ui-commands"],
         gatewayUiCommandTarget: { connId: "browser", profileId: "viewer" },
       });
-      const operation = createTestReplyOperation({ sessionKey, sessionId: "original" });
-      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
-      await operation.bindToolAuthorityRouteAsync({
-        provider: run.run.provider,
-        model: run.run.model,
-      });
+      const { operation, session, enqueue } = await authorityRun(
+        config,
+        { sessionKey, sessionId: "original", policyKey },
+        run,
+        { provider: run.run.provider, model: run.run.model },
+      );
       const overlay: ReplyToolAuthorityOverlay = {
         ...run.run,
         originatingChannel: run.originatingChannel,
@@ -365,12 +386,8 @@ it.each([
         disableTools: false,
         traceAuthorized: false,
       };
-      const { session } = await createTestSession();
-      const enqueue = vi.spyOn(session.agent, "admitSteeringMessage");
-      const recorderEntered = createDeferredCore();
-      const releaseRecorder = createDeferredCore();
-      const policyPrepared = createDeferredCore();
-      const releasePolicy = createDeferredCore();
+      const recorderGate = gate();
+      const policyGate = gate();
       let current = true;
       const assertCurrent = () => {
         if (!current) {
@@ -380,8 +397,7 @@ it.each([
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "steer" },
         resolveInput: async () => {
-          recorderEntered.resolve();
-          await releaseRecorder.promise;
+          await recorderGate.hold();
           return { text: "steer" };
         },
         target: createTestUserTurnTranscriptTarget({
@@ -406,24 +422,14 @@ it.each([
                   async () => {
                     await preparation.prepareCurrent();
                     if (change === "worker-revoked") {
-                      policyPrepared.resolve();
-                      await releasePolicy.promise;
+                      await policyGate.hold();
                     }
                   },
                   options,
                 )) satisfies NonNullable<ReplyBackendMessageInjectionV2["queueMessageAsync"]>,
             }),
       };
-      const handle = {
-        ...createEmbeddedRunHandle(),
-        kind: "embedded",
-        cancel: () => {},
-        toolAuthorityFingerprint: operation.toolAuthorityFingerprint,
-        messageInjectionV2: injection,
-      } as const;
-      operation.attachBackend(handle);
-      operation.setPhase("running");
-      setActiveEmbeddedRun("original", handle, sessionKey);
+      attachInjection(operation, injection, "original", sessionKey);
       const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey)!;
       try {
         const options = {
@@ -443,16 +449,8 @@ it.each([
                 options,
                 assertAllowed(assertCurrent),
               ).then((result) => result.queued);
-        await awaitGateBeforeSettlement(
-          recorderEntered.promise,
-          accepted,
-          "Steering settled before recorder preparation",
-        );
-        if (
-          change === "legacy-session" ||
-          change === "legacy-revision" ||
-          change === "legacy-metadata"
-        ) {
+        await recorderGate.wait(accepted, "Steering settled before recorder preparation");
+        if (change !== "worker-revoked") {
           await updateSessionEntry(
             { agentId: "main", sessionKey: policyKey, storePath: database.path },
             () =>
@@ -460,33 +458,25 @@ it.each([
                 ? { sessionId: "replacement" }
                 : change === "legacy-revision"
                   ? { lifecycleRevision: "replacement" }
-                  : { label: "renamed" },
-          );
-        } else if (change !== "worker-revoked") {
-          await updateSessionEntry(
-            { agentId: "main", sessionKey: policyKey, storePath: database.path },
-            () => ({ sandboxMode: undefined }),
+                  : change === "legacy-metadata"
+                    ? { label: "renamed" }
+                    : { sandboxMode: undefined },
           );
         }
-        releaseRecorder.resolve();
+        recorderGate.release();
         if (change === "worker-revoked") {
-          await awaitGateBeforeSettlement(
-            policyPrepared.promise,
-            accepted,
-            "Steering settled before policy preparation",
-          );
+          await policyGate.wait(accepted, "Steering settled before policy preparation");
           current = false;
-          releasePolicy.resolve();
+          policyGate.release();
         }
         await expect(accepted).resolves.toBe(change === "legacy-metadata");
         assertQueued(session, enqueue, "steer", change === "legacy-metadata");
       } finally {
-        releaseRecorder.resolve();
-        releasePolicy.resolve();
+        recorderGate.release();
+        policyGate.release();
         operation.complete();
       }
-    });
-  },
+    }),
 );
 
 it.each([
@@ -551,28 +541,19 @@ it.each([
       release.resolve();
       if (outcome === "revoked") {
         await expect(pending).rejects.toThrow("active session is finalizing");
-        expect(enqueue).not.toHaveBeenCalled();
-        expect(session.getSteeringMessages()).toEqual([]);
-        expect(notified).not.toHaveBeenCalled();
+      } else if (notificationFails) {
+        const error = await pending.catch((cause: unknown) => cause);
+        expect(error).toBeInstanceOf(MessageInjectionAcceptedUnconfirmedError);
+        expect(error).toMatchObject({
+          cause: cleanupFails
+            ? { errors: [expect.objectContaining({ cause: cleanupError }), notificationError] }
+            : notificationError,
+        });
       } else {
-        if (cleanupFails || notificationFails) {
-          await expect(pending).rejects.toBeInstanceOf(MessageInjectionAcceptedUnconfirmedError);
-          const error = await pending.catch((cause: unknown) => cause);
-          expect(error).toMatchObject({
-            cause:
-              cleanupFails && notificationFails
-                ? { errors: [expect.objectContaining({ cause: cleanupError }), notificationError] }
-                : cleanupFails
-                  ? cleanupError
-                  : notificationError,
-          });
-        } else {
-          await expect(pending).resolves.toBeUndefined();
-        }
-        expect(enqueue).toHaveBeenCalledOnce();
-        expect(session.getSteeringMessages()).toEqual(["owned enqueue"]);
-        expect(notified).toHaveBeenCalledOnce();
+        await expect(pending).resolves.toBeUndefined();
       }
+      assertQueued(session, enqueue, "owned enqueue", outcome !== "revoked");
+      expect(notified).toHaveBeenCalledTimes(outcome === "revoked" ? 0 : 1);
     } finally {
       release.resolve();
       await pending.catch(() => {});

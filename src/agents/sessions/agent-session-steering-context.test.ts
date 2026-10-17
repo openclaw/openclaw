@@ -4,7 +4,7 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { readRuntimePromptMediaFacts } from "../../media/media-facts.js";
 import { buildInterSessionPromptContext } from "../../sessions/input-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -41,12 +41,6 @@ registerAgentSessionLoopTestLifecycle();
 type Session = Awaited<ReturnType<typeof createTestSession>>["session"];
 type BoundaryOptions = NonNullable<Parameters<typeof normalizeMessagesForLlmBoundary>[1]>;
 const textBlock = (text: string) => ({ type: "text" as const, text });
-const userBlock = (text: string) => ({ role: "user", content: [textBlock(text)] });
-const operatorText = (content: string, turnScoped: boolean) => ({
-  role: "user",
-  content,
-  operatorMessage: { turnScoped },
-});
 const extension = (content: string) => ({
   customType: "extension.context",
   content,
@@ -135,331 +129,326 @@ const queueUpdate = (session: Session, text: string, runtime = false) =>
     buildSystemUpdateMessage(text, runtime ? "runtime-context" : "prompt-update", runtime),
   );
 
-describe("AgentSession operator context ordering", () => {
-  it("orders operator context and renews runtime facts after a later extension message", async () => {
-    const requests = captureResponses();
-    const extensionMessage = extension("Hook context");
-    const loader = createResourceLoader(
-      new Map([["before_agent_start", [async () => ({ message: extensionMessage })]]]),
-    );
-    const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
-    installPermissionPrompt(session);
-    let queuedExtension = false;
-    session.agent.subscribe(async (event) => {
-      if (event.type === "turn_end" && !queuedExtension) {
-        queuedExtension = true;
-        await session.sendCustomMessage(
-          { ...extensionMessage, content: "Later extension context" },
-          { deliverAs: "steer" },
-        );
-      }
+type SteeringOptions = Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2];
+async function withHeldPrompt<T>(
+  session: Session,
+  held: ReturnType<typeof holdInitialRequest>,
+  setup: (queue: (text: string, options: SteeringOptions) => Promise<void>) => Promise<T>,
+  prompt = "An unrelated discussion is active.",
+) {
+  const active = session.prompt(prompt);
+  const pending: ReturnType<typeof steerActiveSessionWithOptionalDeliveryWait>[] = [];
+  try {
+    await Promise.race([held.firstRequest.promise, active]);
+    const result = await setup(async (text, options) => {
+      const accepted = createDeferredCore<boolean>();
+      pending.push(
+        steerActiveSessionWithOptionalDeliveryWait(session, text, {
+          ...options,
+          onQueueAccepted: accepted.resolve,
+        }),
+      );
+      expect(await accepted.promise).toBe(true);
     });
-    installBoundary(session, () => ({ inHistorySystemUpdates: true }));
-    queueUpdate(session, "Rules changed");
-    await session.sendCustomMessage(
-      { ...extensionMessage, content: "Queued context" },
-      { deliverAs: "nextTurn" },
-    );
-    queueUpdate(session, "Current facts", true);
+    held.finish();
+    await Promise.all([active, ...pending]);
+    return result;
+  } finally {
+    held.finish();
+    await Promise.allSettled([active, ...pending]);
+  }
+}
 
-    await session.prompt("Question");
-
-    expect(requests[0]?.messages).toMatchObject([
-      { role: "user", content: "Question" },
-      userBlock("Queued context"),
-      userBlock("Hook context"),
-      operatorText("Rules changed", false),
-      operatorText("Current facts", true),
-    ]);
-    expect(requests).toHaveLength(2);
-    expect(requests[1]?.messages.slice(0, requests[0]!.messages.length)).toEqual(
-      requests[0]?.messages,
-    );
-    expect(requests[1]?.messages.slice(-2)).toMatchObject([
-      userBlock("Later extension context"),
-      operatorText("Current facts", true),
-    ]);
-    expect(sessionManager.buildSessionContext().messages.slice(1, 5)).toMatchObject([
-      { customType: "extension.context", content: "Queued context" },
-      { customType: "extension.context", content: "Hook context" },
-      { customType: "openclaw.system-update", content: "Rules changed" },
-      { customType: "openclaw.system-update", content: "Current facts" },
-    ]);
-  });
-
-  it.each([false, true])(
-    "renews runtime facts after tool results without crossing a new user: %s",
-    async (newUser) => {
-      const requests = captureResponses(1);
-      const { session } = await createTestSession({
-        customTools: [
-          refreshTool("Refresh current permissions", async () => {
-            if (newUser) {
-              session.agent.steer({
-                role: "user",
-                content: "Start a different task.",
-                timestamp: 2,
-              });
-            }
-            for (const content of ["First extension context", "Second extension context"]) {
-              await session.sendCustomMessage(extension(content), { deliverAs: "steer" });
-            }
-            return refreshResult();
-          }),
-        ],
-      });
-      installBoundary(session, () => ({ inHistorySystemUpdates: true }));
-      session.agent.steeringMode = "all";
-      session.agent.prepareNextTurn = () => {
-        if (session.messages.at(-1)?.role !== "toolResult") {
-          return undefined;
-        }
-        const cancel = queueUpdate(session, "Withdrawn update");
-        queueUpdate(session, "Permissions changed");
-        cancel();
-        return undefined;
-      };
-      installPermissionPrompt(session);
-      queueUpdate(session, "Initial facts", true);
-
-      await session.prompt("Refresh");
-
-      expect(requests).toHaveLength(2);
-      expect(requests[1]?.messages.slice(0, 2)).toEqual(requests[0]?.messages);
-      expect(requests[1]?.messages.slice(2)).toMatchObject([
-        { role: "assistant", content: [{ type: "toolCall", id: "refresh" }] },
-        {
-          role: "toolResult",
-          toolCallId: "refresh",
-          content: [{ type: "text", text: "Refreshed" }],
-        },
-        ...(newUser ? [{ role: "user", content: "Start a different task." }] : []),
-        userBlock("First extension context"),
-        userBlock("Second extension context"),
-        operatorText("Permissions changed", false),
-        ...(newUser ? [] : [operatorText("Initial facts", true)]),
-      ]);
-      expect(session.messages.at(-1)).toMatchObject({
-        role: "assistant",
-        content: [{ type: "text", text: "Done" }],
-      });
-      expect(JSON.stringify(session.messages)).not.toContain("Withdrawn update");
-      expect(
-        session.messages.filter(
-          (message) => message.role === "custom" && message.content === "Initial facts",
-        ),
-      ).toHaveLength(newUser ? 1 : 2);
-    },
+it("orders operator context and renews runtime facts after a later extension message", async () => {
+  const requests = captureResponses();
+  const extensionMessage = extension("Hook context");
+  const loader = createResourceLoader(
+    new Map([["before_agent_start", [async () => ({ message: extensionMessage })]]]),
   );
-
-  it("keeps one Responses runtime-context carrier visible across three tool rounds", async () => {
-    const requests = captureResponses(3, (round) => `refresh-${round}`);
-    const { session } = await createTestSession({
-      customTools: [refreshTool("Refresh current facts")],
-    });
-    installBoundary(session, () => ({ inHistorySystemUpdates: true }));
-    installPermissionPrompt(session, "openai-responses");
-    const carrierText = projectRuntimeContextFragments(
-      buildInterSessionPromptContext({
-        kind: "inter_session",
-        sourceSessionKey: "agent:main:dashboard:parent",
-        sourceChannel: "webchat",
-        sourceTool: "sessions_send",
-      }).fragments,
-    );
-    queueUpdate(session, carrierText, true);
-
-    await session.prompt("Refresh the facts three times.");
-
-    expect(requests).toHaveLength(4);
-    expect(
-      requests.map(
-        (request) =>
-          request.messages.filter(
-            (message) =>
-              message.role === "user" &&
-              message.operatorMessage?.turnScoped === true &&
-              message.content === carrierText,
-          ).length,
-      ),
-    ).toEqual([1, 1, 1, 1]);
-    expect(
-      session.messages.filter(
-        (message) =>
-          message.role === "custom" &&
-          message.customType === "openclaw.system-update" &&
-          message.content === carrierText,
-      ),
-    ).toHaveLength(1);
+  const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
+  installPermissionPrompt(session);
+  let queuedExtension = false;
+  session.agent.subscribe(async (event) => {
+    if (event.type === "turn_end" && !queuedExtension) {
+      queuedExtension = true;
+      await session.sendCustomMessage(
+        { ...extensionMessage, content: "Later extension context" },
+        { deliverAs: "steer" },
+      );
+    }
   });
+  installBoundary(session, () => ({ inHistorySystemUpdates: true }));
+  queueUpdate(session, "Rules changed");
+  await session.sendCustomMessage(
+    { ...extensionMessage, content: "Queued context" },
+    { deliverAs: "nextTurn" },
+  );
+  queueUpdate(session, "Current facts", true);
+
+  await session.prompt("Question");
+
+  expect(requests[0]?.messages).toMatchObject([
+    { role: "user", content: "Question" },
+    { role: "user", content: [textBlock("Queued context")] },
+    { role: "user", content: [textBlock("Hook context")] },
+    { role: "user", content: "Rules changed", operatorMessage: { turnScoped: false } },
+    { role: "user", content: "Current facts", operatorMessage: { turnScoped: true } },
+  ]);
+  expect(requests).toHaveLength(2);
+  expect(requests[1]?.messages.slice(0, requests[0]!.messages.length)).toEqual(
+    requests[0]?.messages,
+  );
+  expect(requests[1]?.messages.slice(-2)).toMatchObject([
+    { role: "user", content: [textBlock("Later extension context")] },
+    { role: "user", content: "Current facts", operatorMessage: { turnScoped: true } },
+  ]);
+  expect(sessionManager.buildSessionContext().messages.slice(1, 5)).toMatchObject([
+    { customType: "extension.context", content: "Queued context" },
+    { customType: "extension.context", content: "Hook context" },
+    { customType: "openclaw.system-update", content: "Rules changed" },
+    { customType: "openclaw.system-update", content: "Current facts" },
+  ]);
 });
 
-describe("AgentSession quoted steering context", () => {
-  it("keeps every context when all steering messages drain together", async () => {
-    const { requests, firstRequest, finish } = holdInitialRequest("Steering received");
-    const { session } = await createTestSession();
+it.each([false, true])(
+  "renews runtime facts after tool results without crossing a new user: %s",
+  async (newUser) => {
+    const requests = captureResponses(1);
+    const { session } = await createTestSession({
+      customTools: [
+        refreshTool("Refresh current permissions", async () => {
+          if (newUser) {
+            session.agent.steer({
+              role: "user",
+              content: "Start a different task.",
+              timestamp: 2,
+            });
+          }
+          for (const content of ["First extension context", "Second extension context"]) {
+            await session.sendCustomMessage(extension(content), { deliverAs: "steer" });
+          }
+          return refreshResult();
+        }),
+      ],
+    });
+    installBoundary(session, () => ({ inHistorySystemUpdates: true }));
     session.agent.steeringMode = "all";
-    installBoundary(session, () => ({ sessionVersion: 4 }));
-    const initialPrompt = session.prompt("An unrelated discussion is active.");
-    const deliveries: Array<ReturnType<typeof steerActiveSessionWithOptionalDeliveryWait>> = [];
-
-    try {
-      await Promise.race([firstRequest.promise, initialPrompt]);
-      for (const subject of ["invitation", "poster"]) {
-        const accepted = createDeferredCore<boolean>();
-        const contextText = `Replied message (untrusted, for context): ${subject}`;
-        deliveries.push(
-          steerActiveSessionWithOptionalDeliveryWait(session, "Use the same color.", {
-            isInboundUserMessage: true,
-            onQueueAccepted: accepted.resolve,
-            currentInboundContext: quotedContext(contextText),
-          }),
-        );
-        expect(await accepted.promise).toBe(true);
+    session.agent.prepareNextTurn = () => {
+      if (session.messages.at(-1)?.role !== "toolResult") {
+        return undefined;
       }
-      finish();
-      await Promise.all([initialPrompt, ...deliveries]);
+      const cancel = queueUpdate(session, "Withdrawn update");
+      queueUpdate(session, "Permissions changed");
+      cancel();
+      return undefined;
+    };
+    installPermissionPrompt(session);
+    queueUpdate(session, "Initial facts", true);
 
-      expect(requests).toHaveLength(2);
-      const steeringRequest = JSON.stringify(requests[1]?.messages);
-      expect(steeringRequest).toContain("invitation");
-      expect(steeringRequest).toContain("poster");
-    } finally {
-      finish();
-      await Promise.allSettled([initialPrompt, ...deliveries]);
-    }
-  });
+    await session.prompt("Refresh");
 
-  it("persists retained steering context through session reopen", async () => {
-    const claudeModel = {
-      ...testModel,
-      id: "claude-sonnet-4-6",
-      name: "Claude Sonnet 4.6",
-      api: "anthropic-messages",
-      provider: "anthropic",
-    } satisfies Model;
-    const { firstRequest, finish } = holdInitialRequest("Done", () => [
-      { type: "thinking", thinking: "signed thought", thinkingSignature: "signature" },
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.messages.slice(0, 2)).toEqual(requests[0]?.messages);
+    expect(requests[1]?.messages.slice(2)).toMatchObject([
+      { role: "assistant", content: [{ type: "toolCall", id: "refresh" }] },
+      {
+        role: "toolResult",
+        toolCallId: "refresh",
+        content: [{ type: "text", text: "Refreshed" }],
+      },
+      ...(newUser ? [{ role: "user", content: "Start a different task." }] : []),
+      { role: "user", content: [textBlock("First extension context")] },
+      { role: "user", content: [textBlock("Second extension context")] },
+      { role: "user", content: "Permissions changed", operatorMessage: { turnScoped: false } },
+      ...(newUser
+        ? []
+        : [{ role: "user", content: "Initial facts", operatorMessage: { turnScoped: true } }]),
     ]);
-    const { session, sessionManager } = await createTestSession({ model: claudeModel });
-    setSteeringRuntimeContextRetention(session, true);
-    const retainedBoundary = () => ({ appendOnlyRuntimeContext: true, sessionVersion: 4 });
-    installBoundary(session, retainedBoundary);
-    const initialPrompt = session.prompt("An unrelated discussion is active.");
-    let delivery: ReturnType<typeof steerActiveSessionWithOptionalDeliveryWait> | undefined;
+    expect(session.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Done" }],
+    });
+    expect(JSON.stringify(session.messages)).not.toContain("Withdrawn update");
+    expect(
+      session.messages.filter(
+        (message) => message.role === "custom" && message.content === "Initial facts",
+      ),
+    ).toHaveLength(newUser ? 1 : 2);
+  },
+);
 
-    try {
-      await Promise.race([firstRequest.promise, initialPrompt]);
-      const accepted = createDeferredCore<boolean>();
-      const contextText = "Replied message (untrusted, for context): keep violet";
-      delivery = steerActiveSessionWithOptionalDeliveryWait(session, "Use the same color.", {
+it("keeps one Responses runtime-context carrier visible across three tool rounds", async () => {
+  const requests = captureResponses(3, (round) => `refresh-${round}`);
+  const { session } = await createTestSession({
+    customTools: [refreshTool("Refresh current facts")],
+  });
+  installBoundary(session, () => ({ inHistorySystemUpdates: true }));
+  installPermissionPrompt(session, "openai-responses");
+  const carrierText = projectRuntimeContextFragments(
+    buildInterSessionPromptContext({
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:dashboard:parent",
+      sourceChannel: "webchat",
+      sourceTool: "sessions_send",
+    }).fragments,
+  );
+  queueUpdate(session, carrierText, true);
+
+  await session.prompt("Refresh the facts three times.");
+
+  expect(requests).toHaveLength(4);
+  expect(
+    requests.map(
+      (request) =>
+        request.messages.filter(
+          (message) =>
+            message.role === "user" &&
+            message.operatorMessage?.turnScoped === true &&
+            message.content === carrierText,
+        ).length,
+    ),
+  ).toEqual([1, 1, 1, 1]);
+  expect(
+    session.messages.filter(
+      (message) =>
+        message.role === "custom" &&
+        message.customType === "openclaw.system-update" &&
+        message.content === carrierText,
+    ),
+  ).toHaveLength(1);
+});
+it("keeps every context when all steering messages drain together", async () => {
+  const held = holdInitialRequest("Steering received");
+  const { session } = await createTestSession();
+  session.agent.steeringMode = "all";
+  installBoundary(session, () => ({ sessionVersion: 4 }));
+  await withHeldPrompt(session, held, async (queue) => {
+    for (const subject of ["invitation", "poster"]) {
+      const contextText = `Replied message (untrusted, for context): ${subject}`;
+      await queue("Use the same color.", {
         isInboundUserMessage: true,
-        onQueueAccepted: accepted.resolve,
         currentInboundContext: quotedContext(contextText),
       });
-      expect(await accepted.promise).toBe(true);
-      finish();
-      await Promise.all([initialPrompt, delivery]);
-    } finally {
-      finish();
-      await Promise.allSettled([initialPrompt, delivery]);
     }
+  });
+  expect(held.requests).toHaveLength(2);
+  const steeringRequest = JSON.stringify(held.requests[1]?.messages);
+  expect(steeringRequest).toContain("invitation");
+  expect(steeringRequest).toContain("poster");
+});
 
-    session.dispose();
-    const replayRequests = captureResponses();
-    const { session: reopened } = await createTestSession({ model: claudeModel, sessionManager });
-    installBoundary(reopened, retainedBoundary);
-    await reopened.prompt("Continue");
-
-    const replay = JSON.stringify(replayRequests[0]?.messages);
-    expect(replay).toContain("keep violet");
-    expect(replay).toContain("signature");
-    expect(replay.indexOf("keep violet")).toBeLessThan(replay.lastIndexOf("signature"));
+it("persists retained steering context through session reopen", async () => {
+  const claudeModel = {
+    ...testModel,
+    id: "claude-sonnet-4-6",
+    name: "Claude Sonnet 4.6",
+    api: "anthropic-messages",
+    provider: "anthropic",
+  } satisfies Model;
+  const held = holdInitialRequest("Done", () => [
+    { type: "thinking", thinking: "signed thought", thinkingSignature: "signature" },
+  ]);
+  const { session, sessionManager } = await createTestSession({ model: claudeModel });
+  setSteeringRuntimeContextRetention(session, true);
+  const retainedBoundary = () => ({ appendOnlyRuntimeContext: true, sessionVersion: 4 });
+  installBoundary(session, retainedBoundary);
+  await withHeldPrompt(session, held, async (queue) => {
+    const contextText = "Replied message (untrusted, for context): keep violet";
+    await queue("Use the same color.", {
+      isInboundUserMessage: true,
+      currentInboundContext: quotedContext(contextText),
+    });
   });
 
-  it.each(
-    [3, 4].flatMap((sessionVersion) =>
-      ["text", "inline", "offloaded"].map((mediaKind) => ({ sessionVersion, mediaKind })),
-    ),
-  )(
-    "delivers each quoted reply with its own context (v$sessionVersion, $mediaKind)",
-    async ({ sessionVersion, mediaKind }) => {
-      const expandedPrompt = "Use the same color as before.";
-      const useTemplate = mediaKind === "offloaded";
-      const prompt = useTemplate ? "/reuse-color" : expandedPrompt;
-      const loader = createResourceLoader();
-      loader.getPrompts = () => ({
-        prompts: [
-          {
-            name: "reuse-color",
-            description: "Reuse the color",
-            content: expandedPrompt,
-            sourceInfo: createSyntheticSourceInfo("<test-prompt>", { source: "temporary" }),
-            filePath: "/test/prompts/reuse-color.md",
-          },
-        ],
-        diagnostics: [],
-      });
-      const { requests, firstRequest, finish } = holdInitialRequest("Quoted reply received");
-      const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
-      const queued = vi.spyOn(session.agent, "admitSteeringMessage");
-      const registry = createUserTranscriptContextRegistry();
-      guardSessionManager(sessionManager, {
-        onUserMessagePersisted: (persisted, runtime) => {
-          if (runtime) {
-            registry.record(runtime, persisted);
-          }
+  session.dispose();
+  const replayRequests = captureResponses();
+  const { session: reopened } = await createTestSession({ model: claudeModel, sessionManager });
+  installBoundary(reopened, retainedBoundary);
+  await reopened.prompt("Continue");
+
+  const replay = JSON.stringify(replayRequests[0]?.messages);
+  expect(replay).toContain("keep violet");
+  expect(replay).toContain("signature");
+  expect(replay.indexOf("keep violet")).toBeLessThan(replay.lastIndexOf("signature"));
+});
+
+it.each(
+  [3, 4].flatMap((sessionVersion) =>
+    ["text", "inline", "offloaded"].map((mediaKind) => ({ sessionVersion, mediaKind })),
+  ),
+)(
+  "delivers each quoted reply with its own context (v$sessionVersion, $mediaKind)",
+  async ({ sessionVersion, mediaKind }) => {
+    const expandedPrompt = "Use the same color as before.";
+    const useTemplate = mediaKind === "offloaded";
+    const prompt = useTemplate ? "/reuse-color" : expandedPrompt;
+    const loader = createResourceLoader();
+    loader.getPrompts = () => ({
+      prompts: [
+        {
+          name: "reuse-color",
+          description: "Reuse the color",
+          content: expandedPrompt,
+          sourceInfo: createSyntheticSourceInfo("<test-prompt>", { source: "temporary" }),
+          filePath: "/test/prompts/reuse-color.md",
         },
-      });
-      const boundaryOptions = () => ({ sessionVersion, userTranscriptContexts: registry.list() });
-      installBoundary(session, boundaryOptions);
-      const initialPrompt = session.prompt("An unrelated discussion is still active.");
-      const deliveries: Array<ReturnType<typeof steerActiveSessionWithOptionalDeliveryWait>> = [];
-      const images =
-        mediaKind === "inline"
-          ? [
-              { type: "image" as const, data: "Zmlyc3Q=", mimeType: "image/png" },
-              { type: "image" as const, data: "c2Vjb25k", mimeType: "image/jpeg" },
-            ]
-          : undefined;
-      const media =
-        mediaKind === "offloaded"
-          ? [
-              { path: "/test/first.png", contentType: "image/png" },
-              { path: "/test/second.jpg", contentType: "image/jpeg" },
-            ]
-          : undefined;
-      const subjects = ["invitation", "poster"];
-      try {
-        await Promise.race([firstRequest.promise, initialPrompt]);
+      ],
+      diagnostics: [],
+    });
+    const held = holdInitialRequest("Quoted reply received");
+    const { requests } = held;
+    const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
+    const queued = vi.spyOn(session.agent, "admitSteeringMessage");
+    const registry = createUserTranscriptContextRegistry();
+    guardSessionManager(sessionManager, {
+      onUserMessagePersisted: (persisted, runtime) => {
+        if (runtime) {
+          registry.record(runtime, persisted);
+        }
+      },
+    });
+    const boundaryOptions = () => ({ sessionVersion, userTranscriptContexts: registry.list() });
+    installBoundary(session, boundaryOptions);
+    const images =
+      mediaKind === "inline"
+        ? [
+            { type: "image" as const, data: "Zmlyc3Q=", mimeType: "image/png" },
+            { type: "image" as const, data: "c2Vjb25k", mimeType: "image/jpeg" },
+          ]
+        : undefined;
+    const media =
+      mediaKind === "offloaded"
+        ? [
+            { path: "/test/first.png", contentType: "image/png" },
+            { path: "/test/second.jpg", contentType: "image/jpeg" },
+          ]
+        : undefined;
+    const subjects = ["invitation", "poster"];
+    const queuedMessages = await withHeldPrompt(
+      session,
+      held,
+      async (queue) => {
         expect(requests).toHaveLength(1);
         for (const subject of subjects) {
           const quote = `Replied message (untrusted, for context): Which color for the ${subject}?`;
           const contextText = `${quote}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${INTERNAL_RUNTIME_CONTEXT_END}`;
-          const accepted = createDeferredCore<boolean>();
-          deliveries.push(
-            steerActiveSessionWithOptionalDeliveryWait(session, prompt, {
-              isInboundUserMessage: true,
-              waitForTranscriptCommit: useTemplate,
-              onQueueAccepted: accepted.resolve,
-              currentInboundContext: useTemplate
-                ? { text: contextText }
-                : quotedContext(contextText),
-              userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-                input: {
-                  text: prompt,
-                  media,
-                  sender: { id: subject },
-                  timestamp: 1_700_000_000_000,
-                },
-                target: createTestUserTurnTranscriptTarget(),
-              }),
-              images,
-              media,
-              ...(media ? { imageOrder: ["offloaded", "offloaded"] } : {}),
+          await queue(prompt, {
+            isInboundUserMessage: true,
+            waitForTranscriptCommit: useTemplate,
+            currentInboundContext: useTemplate ? { text: contextText } : quotedContext(contextText),
+            userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
+              input: {
+                text: prompt,
+                media,
+                sender: { id: subject },
+                timestamp: 1_700_000_000_000,
+              },
+              target: createTestUserTurnTranscriptTarget(),
             }),
-          );
-          expect(await accepted.promise).toBe(true);
+            images,
+            media,
+            ...(media ? { imageOrder: ["offloaded", "offloaded"] } : {}),
+          });
         }
         const messages = queued.mock.calls
           .map(([message]) => message)
@@ -494,37 +483,34 @@ describe("AgentSession quoted steering context", () => {
             ]);
           }
         }
-        finish();
-        await Promise.all([initialPrompt, ...deliveries]);
+        return messages;
+      },
+      "An unrelated discussion is still active.",
+    );
 
-        expect(requests).toHaveLength(3);
-        for (const [index, request] of requests.slice(1).entries()) {
-          const runtimeContext = request.messages.find(
-            (message) => message.role === "user" && message.runtimeContext !== undefined,
-          );
-          const activeUser = request.messages.findLast(
-            (message) => message.role === "user" && message.runtimeContext === undefined,
-          );
-          expect(JSON.stringify(runtimeContext?.content)).toContain(
-            `Which color for the ${subjects[index]}?`,
-          );
-          expect(JSON.stringify(activeUser?.content)).not.toContain(
-            `Which color for the ${subjects[index]}?`,
-          );
-        }
-        const persisted = sessionManager
-          .getEntries()
-          .filter((entry) => entry.type === "message" && entry.message.role === "user");
-        expect(persisted).toHaveLength(3);
-        for (const [index, entry] of persisted.slice(1).entries()) {
-          expect(entry).toMatchObject({
-            message: { content: images ? messages[index]?.content : prompt },
-          });
-        }
-      } finally {
-        finish();
-        await Promise.allSettled([initialPrompt, ...deliveries]);
-      }
-    },
-  );
-});
+    expect(requests).toHaveLength(3);
+    for (const [index, request] of requests.slice(1).entries()) {
+      const runtimeContext = request.messages.find(
+        (message) => message.role === "user" && message.runtimeContext !== undefined,
+      );
+      const activeUser = request.messages.findLast(
+        (message) => message.role === "user" && message.runtimeContext === undefined,
+      );
+      expect(JSON.stringify(runtimeContext?.content)).toContain(
+        `Which color for the ${subjects[index]}?`,
+      );
+      expect(JSON.stringify(activeUser?.content)).not.toContain(
+        `Which color for the ${subjects[index]}?`,
+      );
+    }
+    const persisted = sessionManager
+      .getEntries()
+      .filter((entry) => entry.type === "message" && entry.message.role === "user");
+    expect(persisted).toHaveLength(3);
+    for (const [index, entry] of persisted.slice(1).entries()) {
+      expect(entry).toMatchObject({
+        message: { content: images ? queuedMessages[index]?.content : prompt },
+      });
+    }
+  },
+);
