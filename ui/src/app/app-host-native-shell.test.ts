@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import "../components/modal-dialog.ts";
 import "../components/sidebar-update-card.tsx";
 import { createTooltip, settleTooltip } from "../components/tooltip.test-support.ts";
@@ -19,6 +19,7 @@ type ShellNavigationState = {
   handleNativeOpenSearch: () => void;
   handleNativeToggleSearch: (event: Event) => void;
   handleNativeNewSession: () => void;
+  handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleNativeNavigate: (event: Event) => void;
   onboarding: boolean;
   afterCommit: () => void;
@@ -309,6 +310,8 @@ describe("OpenClaw native shell", () => {
           togglePalette,
         },
       );
+      document.body.append(shell.elements.commandPalette);
+      onTestFinished(() => shell.elements.commandPalette?.remove());
       shell.runtime = {
         context: nativeSessionContext(navigate, "agent/a", { scopes: [scope] }),
       };
@@ -322,6 +325,18 @@ describe("OpenClaw native shell", () => {
       // preventDefault is the handled signal for the native legacy fallback.
       expect(toggleEvent.defaultPrevented).toBe(true);
       expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=agent%2Fa" });
+
+      const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+      onTestFinished(() => platform.mockRestore());
+      shell.elements.commandPalette.remove();
+      const shortcut = new KeyboardEvent("keydown", {
+        key: "k",
+        metaKey: true,
+        cancelable: true,
+      });
+      shell.handleDocumentKeydown(shortcut);
+      expect(shortcut.defaultPrevented).toBe(true);
+      expect(togglePalette).toHaveBeenCalledOnce();
     },
   );
 

@@ -411,7 +411,8 @@ export class ShellChromeOwner {
       handleNavDrawerKeydown(host, event);
       return;
     }
-    if (!host.elements.commandPalette && isCommandPaletteShortcut(event)) {
+    // A replaced workspace can retain its palette ref after the DOM is detached.
+    if (!host.elements.commandPalette?.isConnected && isCommandPaletteShortcut(event)) {
       event.preventDefault();
       this.togglePalette();
       return;
@@ -588,7 +589,7 @@ export class ShellChromeOwner {
     const host = this.host;
     const overlaySnapshot = host.context?.overlays.snapshot;
     if (
-      host.elements.commandPalette?.isOpen ||
+      (host.elements.commandPalette?.isConnected && host.elements.commandPalette.isOpen) ||
       host.elements.keyboardShortcuts?.isOpen ||
       overlaySnapshot?.devicePairSetupOpen ||
       host.elements.approvalOverlay?.dialogOpen === true ||

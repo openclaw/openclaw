@@ -60,7 +60,7 @@ export class ShellCommandPaletteOwner {
     const palette = this.#host.elements.commandPalette;
     // Opening is an intent, not a prompt transport. Never persist event detail.
     const descriptor = lazyShellEvent(COMMAND_PALETTE_OPEN_EVENT);
-    if (palette) {
+    if (palette?.isConnected) {
       this.loading.handoff(() => {
         // The loader keeps keyboard custody until the replacement accepts focus.
         // Read its final value and recheck ownership at that boundary.
@@ -106,7 +106,7 @@ export class ShellCommandPaletteOwner {
       this.#host.lazyCustomElements.visibleState?.element === this.#host.commandPaletteElement
     ) {
       this.closePending();
-    } else if (this.#host.elements.commandPalette) {
+    } else if (this.#host.elements.commandPalette?.isConnected) {
       this.#host.elements.commandPalette.togglePalette();
     } else {
       this.open();

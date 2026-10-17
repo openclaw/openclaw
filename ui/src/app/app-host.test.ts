@@ -160,7 +160,7 @@ function configureLazyPaletteShell(
     configurable: true,
     get: () =>
       customElements.get(element.tagName)
-        ? { isOpen: false, openPalette, togglePalette: vi.fn() }
+        ? { isConnected: true, isOpen: false, openPalette, togglePalette: vi.fn() }
         : undefined,
   });
   return shell;
@@ -715,7 +715,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     };
     Object.defineProperty(shell.elements, "commandPalette", {
       configurable: true,
-      value: { isOpen: false, openPalette, togglePalette: vi.fn() },
+      value: { isConnected: true, isOpen: false, openPalette, togglePalette: vi.fn() },
     });
 
     const handlePaletteOpen = () => openPalette();

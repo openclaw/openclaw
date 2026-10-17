@@ -92,7 +92,7 @@ function paletteShell(element: TestOptionalCustomElement, open: () => void): Pal
   Object.defineProperty(shell.elements, "commandPalette", {
     get: () =>
       customElements.get(element.tagName)
-        ? { isOpen: false, openPalette: open, togglePalette: open }
+        ? { isConnected: true, isOpen: false, openPalette: open, togglePalette: open }
         : undefined,
   });
   stubRenderedWhenDefined(shell);
