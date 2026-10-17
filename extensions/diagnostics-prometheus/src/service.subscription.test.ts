@@ -40,6 +40,44 @@ it("exports trusted WebSocket event totals and the current operator socket count
   }
 });
 
+it("exports session traffic attribution while keeping aggregate event labels unchanged", () => {
+  const metrics = createMetricsHarness();
+  try {
+    for (const [event, reason] of [
+      ["sessions.changed", "agent.run.started"],
+      ["session.message", "assistant"],
+    ] as const) {
+      for (const delivery of ["subscribed", "roster"] as const) {
+        const observation = {
+          type: "gateway.ws.event",
+          event,
+          count: 2,
+          bytes: 256,
+          sessionEvent: { reason, delivery },
+        } as const;
+        metrics.record(observation);
+        metrics.record({ ...observation, count: 1, bytes: 128 });
+        metrics.record(observation, untrusted);
+      }
+    }
+    const rendered = metrics.render();
+    for (const [event, reason] of [
+      ["sessions.changed", "agent.run.started"],
+      ["session.message", "assistant"],
+    ]) {
+      expect(rendered).toContain(`openclaw_gateway_ws_events_total{event="${event}"} 6`);
+      expect(rendered).toContain(`openclaw_gateway_ws_event_bytes_total{event="${event}"} 768`);
+      for (const delivery of ["subscribed", "roster"]) {
+        const labels = `delivery="${delivery}",event="${event}",reason="${reason}"`;
+        expect(rendered).toContain(`openclaw_gateway_ws_session_event_frames_total{${labels}} 3`);
+        expect(rendered).toContain(`openclaw_gateway_ws_session_event_bytes_total{${labels}} 384`);
+      }
+    }
+  } finally {
+    metrics.stop();
+  }
+});
+
 it("records terminal metrics without reading logs or private diagnostic content", async () => {
   const exporter = createDiagnosticsPrometheusExporter();
   const readPrivateContent = vi.fn(() => ({ toolInput: { text: "private tool input" } }));

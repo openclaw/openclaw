@@ -694,6 +694,7 @@ describe("sessions.changed coalescing", () => {
         agentId: "ops",
         dropIfSlow: true,
         sessionKeys: ["agent:ops:global"],
+        sessionEventSubscriptionKeys: ["agent:ops:global"],
       },
     );
     const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];

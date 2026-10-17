@@ -142,7 +142,9 @@ describe("Plugin link reader panel", () => {
     const filesButton = [
       ...panel.querySelectorAll<HTMLButtonElement>(".lr-section-nav button"),
     ].find((node) => node.textContent?.includes("Files"))!;
+    const deferredFiles = panel.querySelector('[data-reader-section="files"]');
     filesButton.click();
+    expect(document.activeElement).toBe(deferredFiles);
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
     files.resolve({
       ...item(),
@@ -152,6 +154,10 @@ describe("Plugin link reader panel", () => {
     await waitForFast(() =>
       expect(panel.querySelector(".lr-file")?.textContent).toContain("index.ts"),
     );
+    const loadedFiles = panel.querySelector(".lr-files");
+    expect(deferredFiles?.isConnected).toBe(false);
+    filesButton.click();
+    expect(document.activeElement).toBe(loadedFiles);
     checks.resolve({
       ...item(),
       revision: "head-b",

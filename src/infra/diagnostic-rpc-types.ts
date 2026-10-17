@@ -83,7 +83,18 @@ export type DiagnosticGatewayRpcFields = {
     }
 );
 
+export type GatewayWsSessionEventAttribution = {
+  reason: string;
+  delivery: "subscribed" | "roster";
+};
+
 /** Payload-free observations from the physical WebSocket transport. */
 export type DiagnosticGatewayWsFields =
-  | { type: "gateway.ws.event"; event: string; count: number; bytes: number }
+  | {
+      type: "gateway.ws.event";
+      event: string;
+      count: number;
+      bytes: number;
+      sessionEvent?: GatewayWsSessionEventAttribution;
+    }
   | { type: "gateway.ws.connections"; operators: number };

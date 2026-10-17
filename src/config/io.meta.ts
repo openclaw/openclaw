@@ -129,9 +129,12 @@ export function withConfigWriteState<T>(
 /** Persist machine-owned metadata only after the matching config file commit succeeds. */
 export async function recordConfigWriteMetadata(
   deps: { env: NodeJS.ProcessEnv; logger: Pick<typeof console, "warn"> },
-  selection: Awaited<ReturnType<typeof resolveConfigWriteStateSelection>>,
+  selection: Awaited<ReturnType<typeof resolveConfigWriteStateSelection>> | undefined,
   now: string = new Date().toISOString(),
 ): Promise<void> {
+  if (!selection) {
+    return;
+  }
   try {
     if (!selection.ok) {
       throw selection.error;

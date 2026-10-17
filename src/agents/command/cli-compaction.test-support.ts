@@ -92,7 +92,7 @@ export function buildContextEngine(params: { compactCalls: CompactParams[] }): C
   };
 }
 
-export const systemCompactionHost = {
+const systemCompactionHost = {
   sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined },
 } satisfies Parameters<typeof runCliTurnCompactionLifecycle>[1];
 

@@ -62,6 +62,15 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       const attrs = { "openclaw.gateway.ws.event": evt.event };
       runtime.gatewayWsEventsCounter.add(evt.count, attrs);
       runtime.gatewayWsEventBytesCounter.add(evt.bytes, attrs);
+      if (evt.sessionEvent) {
+        const sessionAttrs = {
+          ...attrs,
+          "openclaw.gateway.ws.reason": evt.sessionEvent.reason,
+          "openclaw.gateway.ws.delivery": evt.sessionEvent.delivery,
+        };
+        runtime.gatewayWsSessionEventFramesCounter.add(evt.count, sessionAttrs);
+        runtime.gatewayWsSessionEventBytesCounter.add(evt.bytes, sessionAttrs);
+      }
     },
     recordGatewayWsConnections(
       evt: Extract<DiagnosticEventPayload, { type: "gateway.ws.connections" }>,

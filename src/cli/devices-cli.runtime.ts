@@ -241,6 +241,7 @@ async function approvePairingWithFallback(
       method: "device.pair.approve",
       params: { requestId },
       target: requestId,
+      databaseEngine: "configured",
       onForeignOwner: "refuse",
       runLocal: async ({ env, assertCurrent }) => {
         const gatewayRequestId = normalizeOptionalString(fallback.details.requestId);

@@ -288,7 +288,6 @@ export async function writeConfigFileFromContext(
   const previousWarningFingerprint = loggedConfigWarningFingerprints.get(configPath);
   // Capture before commit so rollback cannot restore a watcher-updated slot.
   options.assertConfigPathForWrite?.();
-  // Repairing an unresolved database setting must remain a config-file operation.
   let stateSelection = databaseAccessAllowed
     ? await resolveConfigWriteStateSelection(snapshot.sourceConfig, deps.env)
     : undefined;
@@ -560,9 +559,7 @@ export async function writeConfigFileFromContext(
       : undefined;
     stateSelection = acceptedStateSelection;
     options.assertConfigPathForWrite?.();
-    if (acceptedStateSelection) {
-      await recordConfigWriteMetadata(deps, acceptedStateSelection);
-    }
+    await recordConfigWriteMetadata(deps, acceptedStateSelection);
     logConfigOverwrite();
     logConfigWriteAnomalies();
     await appendWriteAudit(

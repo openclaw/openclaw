@@ -43,6 +43,18 @@ const OWNED_DATABASE_SELECTION = new Set([
   "secrets reload",
   "approvals pending",
   "exec-approvals pending",
+  // Bundled memory commands select under their configured offline/Gateway owner.
+  "memory",
+  "memory status",
+  "memory index",
+  "memory reset",
+  "memory search",
+  "memory forget",
+  "memory promote",
+  "memory promote-explain",
+  "memory rem-harness",
+  "memory rem-backfill",
+  "memory session-backfill",
   // Service removal/shutdown must work when the invoking shell lacks DB credentials.
   "gateway stop",
   "daemon stop",

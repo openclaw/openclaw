@@ -54,6 +54,15 @@ export function createDiagnosticsMetrics(
       "gateway.rpc.requests",
       "Authenticated Gateway WebSocket requests received",
     ),
+    gatewayWsSessionEventFramesCounter: createCounter(
+      "gateway.ws.session_event_frames",
+      "Outbound session event frames by reason and exact message subscription per socket",
+    ),
+    gatewayWsSessionEventBytesCounter: createCounter(
+      "gateway.ws.session_event_bytes",
+      "Encoded outbound session event bytes by reason and exact message subscription per socket",
+      "By",
+    ),
     gatewayWsEventsCounter: createCounter(
       "gateway.ws.events",
       "Outbound Gateway WebSocket event frames accepted by the sender per socket",

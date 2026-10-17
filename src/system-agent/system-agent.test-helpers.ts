@@ -125,7 +125,7 @@ export function readLastSystemAgentAuditEntry(): unknown {
   return listSystemAgentAuditEntriesForTests().at(-1)?.value;
 }
 
-export function requireTestRecord(value: unknown, label: string): Record<string, unknown> {
+function requireTestRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }

@@ -42,6 +42,9 @@ const recoveryOwnerCommands = [
   ["secrets", "reload"],
   ["approvals", "pending"],
   ["exec-approvals", "pending"],
+  ["memory", "status"],
+  ["memory", "search", "fixture"],
+  ["memory", "session-backfill"],
   ["claws", "build"],
   ["update"],
   ["update", "--dry-run"],
@@ -148,6 +151,7 @@ describe("one-shot CLI engine selection", () => {
     [
       ["agent", "--local", "--agent", "main", "--message", "hello"],
       ["nodes", "custom-plugin-command"],
+      ["memory", "custom-plugin-command"],
       ["reset", "--scope", "full"],
       ["reset", "--scope=config+creds+sessions"],
       ["reset", "--scope=config", "--scope=full"],

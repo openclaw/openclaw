@@ -45,7 +45,12 @@ const config = {
       .map((name) => `packages/${name}`),
     "ui",
   ],
-  ignore: ["scripts/**/*.d.{mts,cts,ts}", "scripts/**/*.test-support.{js,mjs,cjs,ts,mts,cts}"],
+  ignore: [
+    "scripts/**/*.d.{mts,cts,ts}",
+    "scripts/**/*.test-support.{js,mjs,cjs,ts,mts,cts}",
+    // Generated declaration companion; application scans own its executable validator.
+    "packages/gateway-protocol/src/compiled/sender-identity.d.ts",
+  ],
   // Script entrypoints import core and Plugin SDK APIs. Those owners are
   // checked by the application scans; this pass owns only scripts/** exports.
   ignoreIssues: {

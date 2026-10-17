@@ -11,10 +11,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { GatewayRequestFunction } from "../gateway/call.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import {
-  getDatabaseEngineSelection,
-  type DatabaseEngineSelection,
-} from "../infra/database-engine/context.js";
+import type { DatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { DatabasePortRecoveryIntent } from "../infra/database-port-recovery.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
@@ -268,16 +265,6 @@ export async function runWithLocalStateOwner<T>(params: {
     const owner = databasePortRecovery ? undefined : await discover();
     if (owner) {
       return await route(owner);
-    }
-    if (
-      !getDatabaseEngineSelection() &&
-      !databasePortRecovery &&
-      params.databaseAccess !== "none"
-    ) {
-      const { readConfigSnapshotForEngineSelection } =
-        await import("../commands/config-preflight-snapshot.js");
-      await readConfigSnapshotForEngineSelection(env);
-      assertTargetCurrent();
     }
     let lock;
     try {

@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expect } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
-import { backupVerifyCommand } from "../commands/backup-verify.js";
 import { backupCreateCommand } from "../commands/backup.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import {
@@ -23,14 +21,6 @@ export function withDatabase<T>(pathname: string, run: (db: DatabaseSync) => T):
     return run(db);
   } finally {
     db.close();
-  }
-}
-
-export async function writeFiles(root: string, files: Record<string, string>) {
-  for (const [relative, contents] of Object.entries(files)) {
-    const pathname = path.join(root, relative);
-    await fs.mkdir(path.dirname(pathname), { recursive: true });
-    await fs.writeFile(pathname, contents);
   }
 }
 
@@ -84,12 +74,6 @@ export function restoreBackup(
     archive: archive.archivePath,
     target: state.path("restored"),
   });
-}
-
-export async function expectVerifiedBackup(archive: BackupCreateResult) {
-  await expect(
-    backupVerifyCommand(createTestRuntime(), { archive: archive.archivePath }),
-  ).resolves.toMatchObject({ ok: true });
 }
 
 export async function expectAbsent(file: string) {
