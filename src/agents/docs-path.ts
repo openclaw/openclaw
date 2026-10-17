@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolveSandboxPathMapping } from "./path-policy.js";
 import type { SandboxContext } from "./sandbox/types.js";
 
@@ -38,13 +39,14 @@ export async function resolveOpenClawReferencePaths(
       if (!bridge) {
         return null;
       }
-      const resolved = bridge.resolvePath({ filePath: hostPath });
       const mappings = bridge.pathMappings;
-      // Remote bridges expose projections, not host paths; shadows must still match the source.
-      const backingPath = mappings
-        ? resolveSandboxPathMapping(mappings, resolved.containerPath)?.hostPath
-        : resolved.hostPath;
-      return backingPath && fs.realpathSync(backingPath) === hostPath
+      const resolved = bridge.resolvePath({ filePath: mappings ? directory : hostPath });
+      const mapped = mappings ? resolveSandboxPathMapping(mappings, resolved.containerPath) : null;
+      const backingPath = mappings ? mapped?.hostPath : resolved.hostPath;
+      // Preserve mount aliases, but reject shadows and symlinks outside the selected source.
+      return backingPath &&
+        fs.realpathSync(backingPath) === hostPath &&
+        (!mapped || isPathInside(fs.realpathSync(mapped.mapping.hostRoot), hostPath))
         ? resolved.containerPath
         : null;
     } catch {

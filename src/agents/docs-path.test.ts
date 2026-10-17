@@ -72,6 +72,7 @@ describe("resolveOpenClawReferencePaths", () => {
     ["unmounted", null, null],
     ["workspace", "/workspace/docs", "/workspace"],
     ["remote", "/remote/workspace/docs", "/remote/workspace"],
+    ["remote-alias", "/remote/workspace/docs", "/remote/workspace"],
     ["read-only", "/agent/docs", "/agent"],
     ["bind", "/reference", null],
     ["shadow", null, "/workspace"],
@@ -88,7 +89,15 @@ describe("resolveOpenClawReferencePaths", () => {
     if (scenario === "bind") {
       await writeDocsJson(workspace);
     }
-    const workspaceDir = ["workspace", "remote", "shadow"].includes(scenario) ? root : workspace;
+    const workspaceDir =
+      scenario === "remote-alias"
+        ? path.join(workspace, "checkout")
+        : ["workspace", "remote", "shadow"].includes(scenario)
+          ? root
+          : workspace;
+    if (scenario === "remote-alias") {
+      await fs.symlink(root, workspaceDir, "dir");
+    }
     const sandbox = createSandboxTestContext({
       overrides: {
         workspaceDir,
@@ -105,7 +114,7 @@ describe("resolveOpenClawReferencePaths", () => {
               : [],
       },
     });
-    if (scenario === "remote") {
+    if (scenario === "remote" || scenario === "remote-alias") {
       sandbox.fsBridge = createRemoteShellSandboxFsBridge({
         sandbox,
         runtime: {
@@ -130,7 +139,7 @@ describe("resolveOpenClawReferencePaths", () => {
     }
     const references = await resolveOpenClawReferencePaths({
       workspaceDir: sandbox.workspaceDir,
-      cwd: root,
+      cwd: scenario === "remote-alias" ? workspaceDir : root,
       sandbox,
     });
     expect(references).toEqual({ docsPath, sourcePath });
