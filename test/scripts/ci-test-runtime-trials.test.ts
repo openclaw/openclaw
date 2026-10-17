@@ -16,7 +16,7 @@ const processConfig = "test/vitest/vitest.process.config.ts";
 const nodeFile = "src/process/spawn-broker/cleanup.test.ts";
 const bunFile = "src/process/spawn-broker/context.test.ts";
 
-describe("explicit all-test runtime trials", () => {
+describe("CI test runtime policies", () => {
   it.each([
     "src/infra/owned-directory-observation.test.ts",
     "src/infra/tailscale-route-owner.worker.test.ts",
@@ -44,7 +44,7 @@ describe("explicit all-test runtime trials", () => {
     },
   );
 
-  it.each(["node", "bun-compatible", "dual", "bun-all", "dual-all"] as const)(
+  it.each(["node", "bun-all", "dual-all"] as const)(
     "accepts %s without changing the default",
     (policy) => {
       expect(resolveCiTestRuntimePolicy({ OPENCLAW_CI_TEST_RUNTIME_POLICY: policy })).toBe(policy);
@@ -68,9 +68,6 @@ describe("explicit all-test runtime trials", () => {
         { runtime: "bun" },
       ]);
       expect(ciTestShardRequiresBun(selection, policy)).toBe(true);
-      expect(resolveCiTestRuntimeSelections(selection, "bun-compatible")).toEqual([
-        { runtime: "node" },
-      ]);
     },
   );
 
