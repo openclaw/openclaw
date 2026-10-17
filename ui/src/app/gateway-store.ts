@@ -52,6 +52,7 @@ import { readSuspensionPhase } from "./gateway-readiness.ts";
 import { createAvailabilityIndicators } from "./gateway-store.availability.ts";
 import { createGatewayCredentials } from "./gateway-store.credentials.ts";
 import { createDeviceCredentialMethods } from "./gateway-store.device-credential.ts";
+import { createGatewayPresenceObserver } from "./gateway-store.presence.ts";
 import { createGatewaySelfProfile } from "./gateway-store.self-profile.ts";
 import { readHelloPluginCapabilities } from "./plugin-capabilities.ts";
 import {
@@ -152,6 +153,17 @@ export function createApplicationGateway(
   const eventLogListeners = new Set<(events: readonly EventLogEntry[]) => void>();
   const eventLog = createGatewayEventLog();
   const metadataObserver = createGatewayMetadataObserver((current) => current === snapshot);
+  const presenceObserver = createGatewayPresenceObserver({
+    requestSnapshot: () => client!.request("system-presence", { snapshot: true }),
+    publish: (event) => {
+      const eventClient = client;
+      recordGatewayEvent(event);
+      notifyGatewayObservers(eventListeners, event, "event listener", () =>
+        isCurrentClient(eventClient),
+      );
+    },
+    onError: (error) => setSnapshot({ lastError: formatUiError(error) }),
+  });
   const publishEventLogRetirement = (events: readonly EventLogEntry[]) => {
     // Retirement remains valid after a reentrant stop or same-account client replacement.
     notifyGatewayObservers(
@@ -164,6 +176,7 @@ export function createApplicationGateway(
   const setSnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
     const previous = snapshot;
     snapshot = { ...previous, ...patch };
+    presenceObserver.synchronize(snapshot.phase === "connected" ? snapshot.hello : null);
     if (snapshot.phase !== "connecting" && snapshot.phase !== "reconnecting") {
       snapshot.reconnectAt = undefined;
     }
@@ -612,7 +625,10 @@ export function createApplicationGateway(
       onEvent: createGatewayEventObserver({
         isAttached: () => client === nextClient,
         isCurrent: () => isCurrentClient(nextClient),
-        project: (event) => metadataObserver.receive(event, snapshot),
+        project: (event) => {
+          const presenceEvent = presenceObserver.receive(event);
+          return presenceEvent && metadataObserver.receive(presenceEvent, snapshot);
+        },
         record: recordGatewayEvent,
         listeners: eventListeners,
       }),

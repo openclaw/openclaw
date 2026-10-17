@@ -8,6 +8,7 @@ import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.ty
 import type { GatewayOperatorAccessAuthority } from "../operator-access-policy.types.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
+import type { PresenceDeliverySnapshot } from "../presence-delivery.js";
 import type { WorkerConnectionIdentity } from "../worker-environments/connection-identity.js";
 import type {
   GatewayAuthenticatedUserProfile,
@@ -50,6 +51,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   sharedGatewaySessionGeneration?: string;
   authPolicy?: GatewayAuthPolicy;
   presenceKey?: string;
+  /** Last projected roster handed to this transport; absent after a drop or reset request. */
+  presenceSnapshot?: PresenceDeliverySnapshot;
   /** Connection-owned timing facts, reconciled across live peers independently of the TTL cache. */
   personPresence?: { onlineSince: number; lastActivityAt?: number };
   /** Accepted interaction on this exact connection, never copied from another client. */

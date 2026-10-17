@@ -10,6 +10,11 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import {
+  acceptsPresenceDeltas,
+  preparePresenceDelivery,
+  type PresenceDeliverySnapshot,
+} from "./presence-delivery.js";
 import { concatGatewayFrame } from "./serialized-json.js";
 import {
   createGatewayLiveTextDelivery,
@@ -451,6 +456,9 @@ export function createGatewayBroadcaster(params: {
         });
       }
       if (slow && opts?.dropIfSlow) {
+        if (presencePayload) {
+          c.presenceSnapshot = undefined;
+        }
         // Consume the seq for the dropped frame so the client's gap detector
         // sees the loss instead of a silently thinner stream.
         clientSeq.set(c, nextSeq);
@@ -560,6 +568,7 @@ export function createGatewayBroadcaster(params: {
           : (frames.snapshot ??= frameBaseFor(payload));
       let frame: Buffer;
       let delivered: (() => void) | undefined;
+      let presenceSnapshot: PresenceDeliverySnapshot | undefined;
       try {
         if (!sessionProjectionPrepared) {
           // Headers precede source hooks and reads performed while preparing projection.
@@ -594,13 +603,24 @@ export function createGatewayBroadcaster(params: {
           projectPresence ??= params.preparePresenceProjection(presencePayload.presence);
           // Preserve source reads before checking the recipient's current authority.
           const projectedPayload = { ...presencePayload, presence: projectPresence(c) };
-          const reusable =
-            Object.keys(projectedPayload).length === 1 && !("toJSON" in projectedPayload);
-          const cached = reusable ? presenceFragments?.get(projectedPayload.presence) : undefined;
-          payloadFragment = cached ?? serializeFrameField("payload", projectedPayload);
-          if (reusable && typeof payloadFragment === "string") {
-            payloadFragment = Buffer.from(payloadFragment);
-            (presenceFragments ??= new Map()).set(projectedPayload.presence, payloadFragment);
+          if (acceptsPresenceDeltas(c) && opts?.stateVersion?.presence !== undefined) {
+            const prepared = preparePresenceDelivery(
+              c,
+              presencePayload.presence,
+              projectedPayload.presence,
+              opts.stateVersion.presence,
+            );
+            payloadFragment = prepared.fragment;
+            presenceSnapshot = prepared.snapshot;
+          } else {
+            const reusable =
+              Object.keys(projectedPayload).length === 1 && !("toJSON" in projectedPayload);
+            const cached = reusable ? presenceFragments?.get(projectedPayload.presence) : undefined;
+            payloadFragment = cached ?? serializeFrameField("payload", projectedPayload);
+            if (reusable && typeof payloadFragment === "string") {
+              payloadFragment = Buffer.from(payloadFragment);
+              (presenceFragments ??= new Map()).set(projectedPayload.presence, payloadFragment);
+            }
           }
         }
         if (projectSession) {
@@ -672,6 +692,7 @@ export function createGatewayBroadcaster(params: {
           return;
         }
         if (err) {
+          c.presenceSnapshot = undefined;
           delivery.retireDelivery(state);
           log.error(`broadcast send failed conn=${c.connId}: ${formatErrorMessage(err)}`, {
             event,
@@ -686,6 +707,9 @@ export function createGatewayBroadcaster(params: {
         delivered?.();
         state.socket.batchWrites?.();
         state.socket.send(frame, { binary: false }, sent);
+        if (presenceSnapshot && !state.retired) {
+          c.presenceSnapshot = presenceSnapshot;
+        }
         state.socket.recordEventSent?.(event, frame.byteLength, sessionEventMetrics?.(c.connId));
       } catch (err) {
         sent(err instanceof Error ? err : new Error(String(err)));
