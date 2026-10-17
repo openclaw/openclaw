@@ -65,7 +65,7 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
       `${label}: PostgreSQL accepted row`,
     );
   };
-  const transaction = async (action: "BEGIN" | "ROLLBACK") => {
+  const transaction = async (action: "BEGIN" | "COMMIT" | "ROLLBACK") => {
     sqlite.exec(action);
     await client.query(action);
   };
@@ -400,9 +400,24 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
     const navigationSql =
       "INSERT INTO transcript_events(session_id, seq, event_json, created_at, navigation_json) VALUES ('route-window', ?, '{}', 1, ?)";
     let seq = 0;
+    await transaction("BEGIN");
+    await client.query("SET LOCAL track_functions = 'all'");
+    const navigationCalls = async () =>
+      (
+        await client.query<{ calls: number }>(
+          "SELECT coalesce(sum(calls), 0)::integer AS calls FROM pg_stat_xact_user_functions WHERE funcid = 'openclaw_transcript_navigation_check(text)'::regprocedure",
+        )
+      ).rows[0]!.calls;
+    await execute(navigationSql, [++seq, null]);
+    assert.equal(await navigationCalls(), 0, "absent navigation must not invoke JSON validation");
+    await execute(navigationSql, [++seq, JSON.stringify(navigation)]);
+    assert.equal(
+      await navigationCalls(),
+      1,
+      "present navigation must still invoke JSON validation",
+    );
+    await transaction("COMMIT");
     for (const value of [
-      null,
-      JSON.stringify(navigation),
       JSON.stringify({ ...navigation, report: { kind: "leaf" } }),
       JSON.stringify(navigation).replace('"version":1', '"version":1,"version":2'),
       JSON.stringify(navigation).replace(

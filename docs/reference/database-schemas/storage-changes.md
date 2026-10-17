@@ -120,6 +120,19 @@ fragment activation/dependencies and the expected catalog for the state owner;
 it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
 
+The transcript navigation CHECK keeps its JSON validation for present metadata.
+Its PostgreSQL helper is strict, so absent metadata passes the CHECK without
+calling the helper. A fixed `pg_catalog` search path avoids repeatedly parsing
+the helper's CTE during unsuccessful SQL-function inlining attempts.
+Existing experimental PostgreSQL stores can apply the same attributes without
+rewriting rows. With the Gateway stopped and exclusive offline custody, run this
+for each agent schema, replacing `agent_schema` with its actual name:
+
+```sql
+ALTER FUNCTION agent_schema.openclaw_transcript_navigation_check(text)
+  STRICT SET search_path = pg_catalog;
+```
+
 For a manual state-schema check, run `psql` from the generated directory and
 supply the transaction and chosen schema explicitly:
 
