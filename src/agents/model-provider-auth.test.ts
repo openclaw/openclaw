@@ -15,6 +15,7 @@ const synthetic = vi.hoisted(() => ({
   resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
 }));
 
+// mock-isolation: Control synthetic provider auth without loading bundled provider runtimes.
 vi.mock("../plugins/provider-runtime.js", () => synthetic);
 
 const auth = vi.hoisted(() => ({
@@ -33,7 +34,9 @@ const evaluateModelAuth = vi.hoisted(() =>
   })),
 );
 
+// mock-isolation: Supply prepared auth lookups without reading real provider credentials.
 vi.mock("./model-auth.js", () => auth);
+// mock-isolation: Keep auth availability decisions in the suite's controlled resolver.
 vi.mock("./model-auth-availability.js", () => ({
   createModelAuthAvailabilityResolver: vi.fn((_params: unknown) => ({
     evaluateModelAuth,
@@ -41,6 +44,7 @@ vi.mock("./model-auth-availability.js", () => ({
     resolveProviderAuthAvailability: vi.fn(() => false),
   })),
 }));
+// mock-isolation: Use an empty synthetic profile store rather than operator auth state.
 vi.mock("./auth-profiles.js", () => ({
   ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
   ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(() => ({ version: 1, profiles: {} })),

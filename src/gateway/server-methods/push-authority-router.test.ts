@@ -27,9 +27,11 @@ import type { GatewayWsClient } from "../server/ws-types.js";
 import { pushHandlers } from "./push.js";
 import { holdPushStorage, pushClient, pushSubscription } from "./push.test-support.js";
 
+// mock-isolation: Keep APNs registration and delivery outside the router-authority fixture.
 vi.mock("../../infra/push-apns.js", async () =>
   (await import("./push.test-support.js")).mockPushApns(),
 );
+// mock-isolation: The suite controls Web Push storage admission without external delivery.
 vi.mock("../../infra/push-web.js", async () =>
   (await import("./push.test-support.js")).mockPushWeb(),
 );

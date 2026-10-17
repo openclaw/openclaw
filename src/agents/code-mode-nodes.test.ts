@@ -8,6 +8,7 @@ const gatewayMocks = vi.hoisted(() => ({
   readGatewayCallOptions: vi.fn(() => ({})),
 }));
 
+// mock-isolation: Exercise node dispatch without contacting a live Gateway.
 vi.mock("./tools/gateway.js", () => gatewayMocks);
 
 const listedNodes = [

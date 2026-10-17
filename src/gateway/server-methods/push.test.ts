@@ -16,10 +16,12 @@ vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
+// mock-isolation: Supply synthetic APNs registration and delivery outcomes without network calls.
 vi.mock("../../infra/push-apns.js", async () =>
   (await import("./push.test-support.js")).mockPushApns(),
 );
 
+// mock-isolation: Use controlled subscription storage and delivery receipts for handler tests.
 vi.mock("../../infra/push-web.js", async () => ({
   ...(await import("./push.test-support.js")).mockPushWeb(),
   withBoundWebPushSubscriptionByEndpoint: async <T>(

@@ -25,9 +25,11 @@ const { findBoundWebPushSubscriptionByEndpoint, resolveProfileId, snapshotScope 
   }),
 );
 
+// mock-isolation: Keep APNs registration and delivery outside the Web Push authority fixture.
 vi.mock("../../infra/push-apns.js", async () =>
   (await import("./push.test-support.js")).mockPushApns(),
 );
+// mock-isolation: Bind subscription lookup to synthetic authority snapshots without real storage.
 vi.mock("../../infra/push-web.js", async () => ({
   ...(await import("./push.test-support.js")).mockPushWeb(),
   withBoundWebPushSubscriptionByEndpoint: async <T>(

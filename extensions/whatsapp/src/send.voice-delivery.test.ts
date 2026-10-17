@@ -28,6 +28,7 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   return { ...actual, recordChannelActivity };
 });
 
+// mock-isolation: Route voice deliveries only through this suite's synthetic active listeners.
 vi.mock("./connection-controller-runtime-context.js", () => ({
   getWhatsAppConnectionController: vi.fn((accountId: string) => {
     const listener = hoisted.controllerListeners.get(accountId) ?? null;
