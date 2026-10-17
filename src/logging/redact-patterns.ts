@@ -323,8 +323,12 @@ const BARE_PASS_ASSIGNMENT_MATCHER = Object.freeze({
   source: "bare-pass-assignment",
   exec: matchBarePassAssignments,
 });
-const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
-const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
+// Atlassian Cloud account IDs are `digits:uuid` and share the bare Telegram token shape; masking
+// them destroys an identifier the model must echo back (Jira assignee). Telegram secrets are 35
+// characters, so a UUID-shaped suffix is never a token secret and can be excluded safely.
+const UUID_SHAPED_SUFFIX_EXCLUSION = String.raw`(?![0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b)`;
+const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:${UUID_SHAPED_SUFFIX_EXCLUSION}[A-Za-z0-9_-]{20,})\b`;
+const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:${UUID_SHAPED_SUFFIX_EXCLUSION}[A-Za-z0-9_-]{20,})\b`;
 const CREDENTIAL_STYLE_HEADER_KEYS = "x-goog-api-key|api-key|apikey|x-api-token|x-access-token";
 const GATEWAY_SECURITY_HEADER_KEYS =
   "X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token";
