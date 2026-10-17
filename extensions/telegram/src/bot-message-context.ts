@@ -104,6 +104,7 @@ export const buildTelegramMessageContext = async ({
   replyChain = [],
   promptContext = [],
   storeAllowFrom,
+  abortSignal,
   options,
   bot,
   cfg,
@@ -365,6 +366,7 @@ export const buildTelegramMessageContext = async ({
     effectiveGroupAllow,
     groupConfig,
     topicConfig,
+    abortSignal,
     options,
   };
   const bodyResult = await resolveTelegramInboundBody({

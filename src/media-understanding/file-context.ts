@@ -65,8 +65,10 @@ async function classifyFileAttachment(params: {
   limits: FileExtractionLimits;
   skipAttachmentIndexes?: Set<number>;
   assertCurrent?: () => void;
+  signal?: AbortSignal;
 }): Promise<ClassifiedFileAttachment> {
   const { attachment, cache, cfg, limits, skipAttachmentIndexes } = params;
+  params.signal?.throwIfAborted();
   params.assertCurrent?.();
   const attachmentFilename =
     attachment.path ?? (attachment.url ? attachmentUrlDisplayName(attachment.url) : undefined);
@@ -104,11 +106,14 @@ async function classifyFileAttachment(params: {
       timeoutMs: limits.timeoutMs,
     });
   } catch (err) {
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     if (shouldLogVerbose()) {
       logVerbose(`media: file attachment skipped (buffer): ${String(err)}`);
     }
     return { outcome: { kind: "read-failure" }, filename: displayFilename };
   }
+  params.signal?.throwIfAborted();
   params.assertCurrent?.();
   const filename = attachment.fileName ?? bufferResult.fileName;
   const classification: AttachmentClassification = bufferResult.classification;
@@ -193,13 +198,17 @@ async function classifyFileAttachment(params: {
       config: cfg,
       classification,
       mimeType: attachment.mime,
+      signal: params.signal,
     });
   } catch (err) {
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     if (shouldLogVerbose()) {
       logVerbose(`media: file attachment skipped (extract): ${String(err)}`);
     }
     return { outcome: { kind: "read-failure" }, filename, mimeType };
   }
+  params.signal?.throwIfAborted();
   params.assertCurrent?.();
   return {
     outcome: resolveFileExtractionOutcome({
@@ -219,9 +228,11 @@ export async function extractFileContext(params: {
   limits: FileExtractionLimits;
   skipAttachmentIndexes?: Set<number>;
   assertCurrent?: () => void;
+  signal?: AbortSignal;
   selfServePathsEnabled: boolean;
 }) {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
+  params.signal?.throwIfAborted();
   const blocks: AttachmentContextBlock[] = [];
   const images: ExtractedFileImage[] = [];
   const localPathSelfServeUpgrades: LocalPathSelfServeUpgrade[] = [];
@@ -233,7 +244,9 @@ export async function extractFileContext(params: {
       limits,
       skipAttachmentIndexes,
       assertCurrent: params.assertCurrent,
+      signal: params.signal,
     }).finally(() => cache.releaseBuffer(attachment.index));
+    params.signal?.throwIfAborted();
     params.assertCurrent?.();
     if (outcome.kind === "extracted" || outcome.kind === "rendered-to-images") {
       images.push(
@@ -291,6 +304,7 @@ export async function prepareFileContextFromMedia(params: {
   accountId?: string;
   maxChars: number;
   assertCurrent: () => void;
+  signal?: AbortSignal;
 }) {
   return await renderInboundDocumentContext({
     ctx: {
@@ -302,6 +316,7 @@ export async function prepareFileContextFromMedia(params: {
     workspaceDir: params.workspaceDir,
     maxChars: params.maxChars,
     assertCurrent: params.assertCurrent,
+    signal: params.signal,
   });
 }
 
@@ -314,7 +329,9 @@ export async function renderInboundDocumentContext(params: {
   workspaceDir?: string;
   maxChars?: number;
   assertCurrent?: () => void;
+  signal?: AbortSignal;
 }): Promise<InboundDocumentContext> {
+  params.signal?.throwIfAborted();
   params.assertCurrent?.();
   const { ctx, cfg } = params;
   const limits = resolveFileExtractionLimits(cfg);
@@ -330,6 +347,7 @@ export async function renderInboundDocumentContext(params: {
     includeDefaultLocalPathRoots: false,
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
     workspaceDir: params.workspaceDir,
+    signal: params.signal,
   });
   try {
     const context = await extractFileContext({
@@ -342,7 +360,9 @@ export async function renderInboundDocumentContext(params: {
           : { ...limits, maxChars: Math.min(limits.maxChars, params.maxChars) },
       selfServePathsEnabled: false,
       assertCurrent: params.assertCurrent,
+      signal: params.signal,
     });
+    params.signal?.throwIfAborted();
     params.assertCurrent?.();
     return {
       text: applyAttachmentMarkerBudget(context.blocks).join("\n\n"),

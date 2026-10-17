@@ -124,6 +124,17 @@ async function runFile(
   request: MediaRequestOverrides,
   execution?: MediaExecutionContext,
 ): Promise<RunMediaUnderstandingFileResult> {
+  const mediaExecution = execution
+    ? {
+        ...execution,
+        signal: params.signal
+          ? AbortSignal.any([execution.signal, params.signal])
+          : execution.signal,
+      }
+    : params.signal
+      ? { signal: params.signal }
+      : undefined;
+  assertMediaExecutionCurrent(mediaExecution);
   const { cfg } = params;
   const requestTimeoutSeconds =
     typeof params.timeoutMs === "number" &&
@@ -181,6 +192,7 @@ async function runFile(
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
+    ...(mediaExecution ? { signal: mediaExecution.signal } : {}),
   });
 
   try {
@@ -197,8 +209,9 @@ async function runFile(
       config,
       activeModel: params.activeModel,
       request,
-      execution,
+      execution: mediaExecution,
     });
+    assertMediaExecutionCurrent(mediaExecution);
     if (result.outputs.length === 0 && result.decision.outcome === "failed") {
       throw new Error(
         normalizeDecisionReason(findDecisionReason(result.decision, "failed")) ??
@@ -216,8 +229,12 @@ async function runFile(
       output,
       decision: result.decision,
     };
+  } catch (error) {
+    assertMediaExecutionCurrent(mediaExecution);
+    throw error;
   } finally {
     await cache.cleanup();
+    assertMediaExecutionCurrent(mediaExecution);
   }
 }
 
@@ -229,6 +246,7 @@ export async function describeImageFile(
 
 /** Reads and normalizes image input once before explicit-model fallback attempts. */
 export async function prepareImageDescriptionInput(params: PrepareImageDescriptionInputParams) {
+  params.signal?.throwIfAborted();
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const input = { ...params, timeoutMs };
   const attachments = normalizeMediaAttachments(
@@ -237,6 +255,7 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: input.mediaUrl ? undefined : resolveFileLocalRoots(input.filePath),
     ssrfPolicy: input.cfg.tools?.web?.fetch?.ssrfPolicy,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
   let image: { buffer: Buffer; fileName: string; mime?: string };
   try {
@@ -245,21 +264,27 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
       maxBytes: DEFAULT_MAX_BYTES.image,
       timeoutMs,
     });
+    params.signal?.throwIfAborted();
     image = {
       buffer: media.buffer,
       fileName: media.fileName,
       // Capture the cache MIME and caller fallback before releasing its temporary files.
       mime: media.mime ?? concreteMime(input.mime),
     };
+  } catch (error) {
+    params.signal?.throwIfAborted();
+    throw error;
   } finally {
     await cache.cleanup();
   }
+  params.signal?.throwIfAborted();
   const normalizedImage = await normalizeImageDescriptionInput({
     buffer: image.buffer,
     fileName: image.fileName,
     mime: image.mime,
     maxBytes: DEFAULT_MAX_BYTES.image,
   });
+  params.signal?.throwIfAborted();
   return {
     buffer: normalizedImage.buffer,
     fileName: image.fileName,
@@ -268,6 +293,7 @@ export async function prepareImageDescriptionInput(params: PrepareImageDescripti
 }
 
 export async function describePreparedImageWithModel(params: DescribePreparedImageWithModelParams) {
+  params.signal?.throwIfAborted();
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
@@ -286,7 +312,8 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
     agentDir,
     workspaceDir: params.workspaceDir,
   });
-  return await describeImage({
+  params.signal?.throwIfAborted();
+  const result = await describeImage({
     buffer: image.buffer,
     fileName: image.fileName ?? params.image.fileName,
     mime: image.mime,
@@ -299,12 +326,16 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
     ...(params.agentId ? { agentId: params.agentId } : {}),
     agentDir,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
   });
+  params.signal?.throwIfAborted();
+  return result;
 }
 
 /** Describes one image with an explicit provider/model, bypassing configured media model selection. */
 export async function describeImageFileWithModel(params: DescribeImageFileWithModelParams) {
   const image = await prepareImageDescriptionInput(params);
+  params.signal?.throwIfAborted();
   return await describePreparedImageWithModel({
     ...params,
     image,
@@ -312,6 +343,7 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
 }
 
 export async function extractStructuredWithModel(params: ExtractStructuredWithModelParams) {
+  params.signal?.throwIfAborted();
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   if (!params.input.some((entry) => entry.type === "image")) {
     throw new Error("Structured extraction requires at least one image input.");
@@ -323,7 +355,7 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
   if (!provider?.extractStructured) {
     throw new Error(`Provider does not support structured extraction: ${params.provider}`);
   }
-  return await provider.extractStructured({
+  const result = await provider.extractStructured({
     input: params.input,
     instructions: params.instructions,
     schemaName: params.schemaName,
@@ -337,7 +369,10 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
     timeoutMs,
     cfg: params.cfg,
     agentDir: params.agentDir ?? "",
+    ...(params.signal ? { signal: params.signal } : {}),
   });
+  params.signal?.throwIfAborted();
+  return result;
 }
 
 export async function describeVideoFile(

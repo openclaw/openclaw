@@ -11,6 +11,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
+import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
 
 const mediaUnderstandingApplyRuntimeLoader = createLazyImportLoader(
@@ -34,14 +35,17 @@ export async function applyMediaUnderstandingIfNeeded(params: {
   activeModel: ActiveMediaModel;
   processingMode?: "audio-only" | "files-only" | "audio-and-files";
   selfServeLocalPaths?: boolean;
+  signal?: AbortSignal;
 }): Promise<ApplyMediaUnderstandingResult | undefined> {
   if (!hasInboundMediaForUnderstanding(params.ctx)) {
     return undefined;
   }
   try {
     const { applyMediaUnderstanding } = await mediaUnderstandingApplyRuntimeLoader.load();
+    assertReplyPreprocessingActive(params.signal);
     return await applyMediaUnderstanding(params);
   } catch (err) {
+    assertReplyPreprocessingActive(params.signal);
     logVerbose(
       `media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );
