@@ -8,10 +8,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveAgentRunSessionTarget as resolveAgentRunSessionTargetImpl } from "./run-session-target.js";
 
-function seedSessionEntry(...args: Parameters<typeof upsertSessionEntryCore>) {
-  return withSessionHistoryBudgetSweepsForTest(() => upsertSessionEntryCore(...args));
-}
-
 type ResolveTargetParams = Omit<
   Parameters<typeof resolveAgentRunSessionTargetImpl>[0],
   "missingSessionKey"
@@ -41,16 +37,17 @@ describe("agent run session target", () => {
     );
   }
 
-  function marker() {
-    return formatSqliteSessionFileMarker({
+  const marker = () =>
+    formatSqliteSessionFileMarker({
       agentId: "main",
       sessionId: "legacy-session",
       storePath,
     });
-  }
 
   function seed(sessionId: string, sessionKey: string, agentId = "main", updatedAt = 1) {
-    return seedSessionEntry({ agentId, sessionKey, storePath }, { sessionId, updatedAt });
+    return withSessionHistoryBudgetSweepsForTest(() =>
+      upsertSessionEntryCore({ agentId, sessionKey, storePath }, { sessionId, updatedAt }),
+    );
   }
 
   function expectKeyedTarget(params: ResolveTargetParams, sessionKey: string, agentId?: string) {
@@ -80,12 +77,14 @@ describe("agent run session target", () => {
     sessionKey: "agent:main:compat-session",
   };
 
-  it("uses the session id as the compatibility key when callers omit sessionKey", async () => {
-    await expect(resolveStoredTarget({ sessionId: "compat-session" }, "create")).resolves.toEqual({
-      ...compatTarget,
-      storePath,
-    });
-  });
+  it.each([undefined, "compat-session"])(
+    "creates the compatibility key with sessionFile=%s",
+    async (sessionFile) => {
+      await expect(
+        resolveStoredTarget({ sessionId: "compat-session", sessionFile }, "create"),
+      ).resolves.toEqual({ ...compatTarget, storePath });
+    },
+  );
 
   it("resolves an existing keyed row before creating a session-id compatibility key", async () => {
     const sessionId = "2fb701ef-6425-4c48-9b6f-5a170aa2477e";
@@ -175,12 +174,6 @@ describe("agent run session target", () => {
     ).rejects.toMatchObject(missingTarget);
   });
 
-  it("round-trips a plain compatibility key through sessionFile", async () => {
-    await expect(
-      resolveStoredTarget({ sessionId: "compat-session", sessionFile: "compat-session" }, "create"),
-    ).resolves.toEqual({ ...compatTarget, storePath });
-  });
-
   it("matches a partial typed target key against its compatibility token", async () => {
     await expectKeyedTarget(
       {
@@ -213,16 +206,16 @@ describe("agent run session target", () => {
     ).resolves.toMatchObject({ sessionKey: "agent:main:legacy-session", storePath });
   });
 
-  it("rejects a partial typed key from another marker agent", async () => {
+  it.each([
+    { sessionId: "legacy-session", sessionKey: "agent:worker:legacy-session" },
+    { agentId: "worker", sessionId: "legacy-session" },
+  ])("rejects a partial typed identity conflicting with its marker: %j", async (sessionTarget) => {
     await expect(
       resolveAgentRunSessionTarget({
         config: {},
         sessionId: "legacy-session",
         sessionFile: marker(),
-        sessionTarget: {
-          sessionId: "legacy-session",
-          sessionKey: "agent:worker:legacy-session",
-        },
+        sessionTarget,
       }),
     ).rejects.toThrow("Legacy SQLite transcript marker conflicts");
   });
@@ -247,17 +240,6 @@ describe("agent run session target", () => {
         sessionTarget: { agentId: "main", sessionId: "legacy-session" },
       }),
     ).rejects.toThrow("File-backed transcript targets are unsupported");
-  });
-
-  it("rejects a partial typed target that conflicts with a legacy marker", async () => {
-    await expect(
-      resolveAgentRunSessionTarget({
-        config: {},
-        sessionId: "legacy-session",
-        sessionFile: marker(),
-        sessionTarget: { agentId: "worker", sessionId: "legacy-session" },
-      }),
-    ).rejects.toThrow("Legacy SQLite transcript marker conflicts");
   });
 
   it("ignores a stale legacy marker when a complete typed target is present", async () => {

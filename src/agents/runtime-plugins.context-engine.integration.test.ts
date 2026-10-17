@@ -240,6 +240,8 @@ it("retains the adopted engine through reload, accepted commit and engine dispos
   const engine = lease.begin().engine;
   const original = (await engine.assemble({ sessionId: "retained-session", messages: [] }))
     .systemPromptAddition;
+  const originalEvents = () =>
+    events.filter(({ owner }) => owner === original).map(({ kind }) => kind);
   const lateAssemble = engine.assemble.bind(engine);
   let rawRetirement: Promise<void> | undefined;
   let nextLease: Awaited<ReturnType<typeof createContextEngineLogicalTurnLease>> | undefined;
@@ -292,13 +294,10 @@ it("retains the adopted engine through reload, accepted commit and engine dispos
     ).resolves.toEqual({ status: "committed" });
     expect(observation.deferredPluginIds).toEqual([plugin.id]);
     expect(retired).toBe(false);
-    expect(events.filter(({ owner }) => owner === original).map(({ kind }) => kind)).toEqual([
-      "created",
-      "committed",
-    ]);
+    expect(originalEvents()).toEqual(["created", "committed"]);
     await lease.dispose();
     await rawRetirement;
-    expect(events.filter(({ owner }) => owner === original).map(({ kind }) => kind)).toEqual([
+    expect(originalEvents()).toEqual([
       "created",
       "committed",
       "engine-disposed",

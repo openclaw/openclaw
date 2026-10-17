@@ -36,7 +36,6 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
@@ -77,26 +76,22 @@ afterEach(async () => {
 function createChannelOwner(
   marker: string,
   gateway: GatewayContextResolver,
-  options: {
+  {
+    config: ownerConfig = config,
+    workspaceDir = "/fixture/gateway",
+    manifestRegistry = manifests,
+    env = process.env,
+  }: {
     config?: OpenClawConfig;
     workspaceDir?: string;
     manifestRegistry?: PluginManifestRegistry;
     env?: NodeJS.ProcessEnv;
   } = {},
 ) {
-  const subagent: PluginRuntime["subagent"] = {
-    complete: vi.fn<PluginRuntime["subagent"]["complete"]>(),
-    forkSession: vi.fn<PluginRuntime["subagent"]["forkSession"]>(),
-    run: vi.fn<PluginRuntime["subagent"]["run"]>(),
-    waitForRun: vi.fn<PluginRuntime["subagent"]["waitForRun"]>(),
-    getSessionMessages: vi.fn<PluginRuntime["subagent"]["getSessionMessages"]>(),
-    deleteSession: vi.fn<PluginRuntime["subagent"]["deleteSession"]>(),
-  };
-  bindGatewayContextResolver(subagent, gateway);
-  const runtime = createPluginRuntime({ subagent });
+  const runtime = createPluginRuntime();
+  bindGatewayContextResolver(runtime.subagent, gateway);
   bindGatewayContextResolver(runtime, gateway);
   const builder = createTestPluginRegistry(runtime);
-  const manifestRegistry = options.manifestRegistry ?? manifests;
   const manifest = manifestRegistry.plugins[0]!;
   const record = createPluginRecord({
     id: pluginId,
@@ -114,7 +109,6 @@ function createChannelOwner(
       preferBuiltPluginArtifacts: true,
     }),
   });
-  const ownerConfig = options.config ?? config;
   const api = builder.createApi(record, { config: ownerConfig, registrationMode: "full" });
   const send = vi.fn(async () => ({ channel: pluginId, messageId: marker }));
   api.registerChannel({
@@ -126,7 +120,6 @@ function createChannelOwner(
   builder.registry.plugins.push(record);
   const instance = getPluginInstance(record)!;
   instances.push(instance);
-  const workspaceDir = options.workspaceDir ?? "/fixture/gateway";
   const metadataSnapshot = createPluginMetadataSnapshot({
     config: ownerConfig,
     workspaceDir,
@@ -138,15 +131,14 @@ function createChannelOwner(
     activationSourceConfig: ownerConfig,
     autoEnabledReasons: {},
     workspaceDir,
-    env: options.env ?? process.env,
+    env,
     manifestRegistry,
     metadataSnapshot,
     preferBuiltPluginArtifacts: true,
     logger: { info() {}, warn() {}, error() {} },
   });
   return {
-    ...builder,
-    record,
+    registry: builder.registry,
     instance,
     send,
     metadataSnapshot,
@@ -197,11 +189,8 @@ async function acquire(owners: ReturnType<typeof prepareOwners>) {
 }
 
 function expectTransport(registry: PluginRegistry, messageId: string) {
-  return expect(
-    registry.channels[0]!.plugin.outbound!.sendText!(sendParams),
-  ).resolves.toMatchObject({
-    messageId,
-  });
+  const send = registry.channels[0]!.plugin.outbound!.sendText!;
+  return expect(send(sendParams)).resolves.toMatchObject({ messageId });
 }
 
 describe("prepared channel runtime ownership", () => {

@@ -180,21 +180,15 @@ describe("agent runtime plugin registries", () => {
     for (const mock of Object.values(hoisted)) {
       mock.mockReset();
     }
-    hoisted.resolveAgentHarnessOwnerPluginIds.mockReturnValue(["codex"]);
     hoisted.loadPluginMetadataSnapshot.mockImplementation((params: { workspaceDir?: string }) => ({
       ...createMetadataSnapshot(params.workspaceDir),
       pluginIds: undefined,
     }));
     hoisted.loadPluginRegistryHandle.mockImplementation(() => createEmptyPluginRegistry());
-    hoisted.adoptRuntimeContextEngineRegistrations.mockImplementation((target) => target);
-    hoisted.adoptRuntimeWidgetPresenterRegistrations.mockImplementation((target) => target);
     hoisted.resolveAgentRuntimePluginLoadPlan.mockImplementation(({ config }) => ({
       config,
       pluginIds: ["codex", "memory-core"],
     }));
-    hoisted.resolveAgentRuntimePluginSelections.mockImplementation(
-      (_config, selections) => selections,
-    );
   });
 
   afterEach(() => {
@@ -345,14 +339,14 @@ describe("agent runtime plugin registries", () => {
         ).toBe(metadataSnapshot);
         expect(getCurrentPluginMetadataSnapshot(readParams)).toBeUndefined();
 
-        const inbound = withPluginRuntimeRegistryScope(activeRegistry, () =>
-          createPreparedInboundRegistryLoader()(
-            { allowGatewaySubagentBinding: true, config, workspaceDir },
-            metadataSnapshot,
+        expect(
+          withPluginRuntimeRegistryScope(activeRegistry, () =>
+            createPreparedInboundRegistryLoader()(
+              { allowGatewaySubagentBinding: true, config, workspaceDir },
+              metadataSnapshot,
+            ),
           ),
-        );
-
-        expect(inbound).toBe(activeRegistry);
+        ).toBe(activeRegistry);
         expect(hoisted.loadPluginRegistryHandle).not.toHaveBeenCalled();
       });
     } finally {
@@ -398,12 +392,11 @@ describe("agent runtime plugin registries", () => {
         activeRegistry.plugins[0]!.origin = "global";
         break;
     }
-
-    const inbound = withPluginRuntimeRegistryScope(activeRegistry, () =>
-      createPreparedInboundRegistryLoader()(input, fixture.metadataSnapshot),
-    );
-
-    expect(inbound).not.toBe(activeRegistry);
+    expect(
+      withPluginRuntimeRegistryScope(activeRegistry, () =>
+        createPreparedInboundRegistryLoader()(input, fixture.metadataSnapshot),
+      ),
+    ).not.toBe(activeRegistry);
     expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledOnce();
   });
 
@@ -445,31 +438,16 @@ describe("agent runtime plugin registries", () => {
     expect(hoisted.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "globally disabled plugins with an unknown owner",
-      config: disabledConfig,
-      runtime: "custom-harness",
-      expectedOwner: "no plugin can register agent harness",
-      expectedReason: "Plugins are disabled",
-      expectedMetadataLoads: 0,
-    },
-    {
-      name: "a restrictive allowlist",
-      config: {
-        plugins: { allow: ["openai", "memory-core"] },
-      } satisfies OpenClawConfig,
-      runtime: "codex",
-      expectedOwner: 'Owner plugin "codex" is not activatable',
-      expectedReason: "not in allowlist",
-      expectedMetadataLoads: 1,
-    },
-  ])(
-    "reports exact policy facts for direct hosts with $name",
-    async ({ config, runtime, expectedOwner, expectedReason, expectedMetadataLoads }) => {
+  it.each(["disabled", "allowlisted"])(
+    "reports exact policy facts for %s direct hosts",
+    async (policy) => {
+      const disabled = policy === "disabled";
+      const config: OpenClawConfig = disabled
+        ? disabledConfig
+        : { plugins: { allow: ["openai", "memory-core"] } };
       const pluginRegistry = createEmptyPluginRegistry();
       hoisted.loadPluginRegistryHandle.mockReturnValue(pluginRegistry);
-      if (config.plugins.enabled !== false) {
+      if (!disabled) {
         hoisted.loadPluginMetadataSnapshot.mockReturnValue(
           createPluginMetadataSnapshot({
             config,
@@ -494,7 +472,7 @@ describe("agent runtime plugin registries", () => {
             provider: "openai",
             modelId: "gpt-5.5",
             config,
-            agentHarnessRuntimeOverride: runtime,
+            agentHarnessRuntimeOverride: disabled ? "custom-harness" : "codex",
             workspaceDir: directWorkspaceDir,
             pluginRegistry: getPluginRuntimeGatewayRequestScope()?.pluginRegistry,
           });
@@ -503,12 +481,14 @@ describe("agent runtime plugin registries", () => {
 
       expectPolicyError(
         error,
-        expectedOwner,
-        expectedReason,
+        disabled
+          ? "no plugin can register agent harness"
+          : 'Owner plugin "codex" is not activatable',
+        disabled ? "Plugins are disabled" : "not in allowlist",
         "reason=owner-plugin-not-activatable",
       );
       expect((error as Error).message).not.toContain("absent from this prepared plugin generation");
-      expect(hoisted.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(expectedMetadataLoads);
+      expect(hoisted.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(disabled ? 0 : 1);
     },
   );
 

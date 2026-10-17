@@ -84,6 +84,12 @@ describe("resolveRequesterToolPolicies", () => {
         },
       },
     });
+    const delegatedToolPolicy = {
+      requesterSessionKey: root,
+      targetAgentId: "worker",
+      deny: [],
+      requesterDeny: ["exec"],
+    };
     const visibleEntry: SessionEntry = {
       sessionId: `${visible}-session`,
       updatedAt: 1,
@@ -91,12 +97,7 @@ describe("resolveRequesterToolPolicies", () => {
       spawnedBy: root,
       inheritedToolPolicyVersion: 1,
       inheritedToolDeny: ["exec"],
-      delegatedToolPolicy: {
-        requesterSessionKey: root,
-        targetAgentId: "worker",
-        deny: [],
-        requesterDeny: ["exec"],
-      },
+      delegatedToolPolicy,
     };
     await writeSession(visible, visibleEntry);
     await writeSession(helper, {
@@ -104,12 +105,7 @@ describe("resolveRequesterToolPolicies", () => {
       spawnedBy: visible,
       inheritedToolPolicyVersion: 1,
       inheritedToolDeny: ["exec"],
-      delegatedToolPolicy: {
-        requesterSessionKey: root,
-        targetAgentId: "worker",
-        deny: [],
-        requesterDeny: [],
-      },
+      delegatedToolPolicy: { ...delegatedToolPolicy, requesterDeny: [] },
     });
     const resolve = () =>
       resolveRequesterToolPolicies({
@@ -231,21 +227,29 @@ describe("resolveRequesterToolPolicies", () => {
     const trustedInternalHandoff = consumeSubagentCompletionToolHandoff(consumption);
     expect(trustedInternalHandoff).toBeDefined();
     current = authority !== "revoked";
+    const request = {
+      config: config(),
+      sessionKey: targetSessionKey,
+      sessionId: registration.targetSessionId,
+      inputProvenance: {
+        kind: "inter_session" as const,
+        sourceTool: "subagent_settle",
+        sourceSessionKey: registration.sourceSessionKey,
+      },
+      trustedInternalHandoff,
+    };
     const resolve = () =>
       resolveRequesterToolPolicies({
-        config: config(),
-        sessionKey: targetSessionKey,
+        ...request,
         sessionId:
           authority === "stale requester" ? "replacement-session" : registration.targetSessionId,
         ...(authority === "external sender" ? { senderId: "mallory" } : {}),
         modelProvider: consumption.provider,
         modelId: consumption.model,
         inputProvenance: {
+          ...request.inputProvenance,
           kind: authority === "external sender" ? "external_user" : "inter_session",
-          sourceTool: "subagent_settle",
-          sourceSessionKey: registration.sourceSessionKey,
         },
-        trustedInternalHandoff,
       });
     const result = await withPreparedSessionCapabilityRead(resolve);
     if (authority !== "current") {
@@ -262,19 +266,11 @@ describe("resolveRequesterToolPolicies", () => {
 
     const snapshot = prepareReplyToolAuthority({
       run: {
-        config: config(),
-        sessionKey: targetSessionKey,
-        sessionId: registration.targetSessionId,
+        ...request,
         sessionFile: path.join(tempDir, "requester.jsonl"),
         workspaceDir: tempDir,
         provider: consumption.provider,
         model: consumption.model,
-        inputProvenance: {
-          kind: "inter_session",
-          sourceTool: "subagent_settle",
-          sourceSessionKey: registration.sourceSessionKey,
-        },
-        trustedInternalHandoff,
       },
     });
     try {
@@ -335,21 +331,17 @@ describe("resolveRequesterToolPolicies", () => {
   });
 
   it.each([
-    { label: "no tools", runtimeToolAllowlist: [], allowed: false },
+    { label: "no tools", runtimeToolAllowlist: [] },
     {
       label: "intersected wildcard",
       runtimeToolAllowlist: attachToolAllowlistIntersection(["*", "message"], [["*"], ["message"]]),
+    },
+  ])("enforces $label web-search authority for the current turn", ({ runtimeToolAllowlist }) => {
+    expect(resolveWebSearchToolPolicy({ runtimeToolAllowlist })).toEqual({
       allowed: false,
-    },
-  ])(
-    "enforces $label web-search authority for the current turn",
-    ({ runtimeToolAllowlist, allowed }) => {
-      expect(resolveWebSearchToolPolicy({ runtimeToolAllowlist })).toEqual({
-        allowed,
-        persistentAllowed: true,
-      });
-    },
-  );
+      persistentAllowed: true,
+    });
+  });
 
   it("does not re-resolve group sender policy for a verified child", async () => {
     const parentSessionKey = "agent:main:telegram:group:dev";
