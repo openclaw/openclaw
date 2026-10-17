@@ -1,22 +1,25 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { createGatewayRequestMock } from "../test-helpers/gateway-client.ts";
 import { TEST_LINK_READER, testLinkPreview } from "../test-helpers/link-reader.ts";
 import { LazyHovercardBootstrap } from "./lazy-hovercard-registration.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
+import {
+  cardPart,
+  createLinkFixture,
+  hover,
+  hovercard,
+  hovercardTestClock,
+  leave,
+  pointer,
+} from "./link-reader.test-support.ts";
 const ELEMENT_NAME = "test-link-reader-interaction-" + crypto.randomUUID();
 customElements.define(ELEMENT_NAME, class extends LinkReaderHovercardProvider {});
 const ISSUE_HREF = "https://github.com/openclaw/openclaw/issues/99815";
 function createLink(href: string) {
-  const provider = document.createElement(ELEMENT_NAME) as LinkReaderHovercardProvider;
-  provider.readers = [TEST_LINK_READER];
-  const anchor = document.createElement("a");
-  anchor.href = href;
-  anchor.textContent = "Item";
-  provider.append(anchor);
-  document.body.append(provider);
-  return { provider, anchor };
+  return createLinkFixture(ELEMENT_NAME, href);
 }
 function issuePreviewResponse(overrides: Record<string, unknown> = {}) {
   return {
@@ -27,28 +30,19 @@ function issuePreviewResponse(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
-function createIssueLink() {
+function createIssueLink(request = createGatewayRequestMock(async () => issuePreviewResponse())) {
   const link = createLink(ISSUE_HREF);
-  const request = vi.fn().mockResolvedValue(issuePreviewResponse());
   link.provider.client = { request } as unknown as GatewayBrowserClient;
   return { ...link, request };
 }
-const hovercard = () => document.querySelector<HTMLElement>(".link-reader-hovercard");
-const titleLinkInCard = () =>
-  document.querySelector<HTMLAnchorElement>("a.link-reader-hovercard__title");
+function pendingIssue() {
+  const pending = createDeferred<ReturnType<typeof issuePreviewResponse>>();
+  return { pending, ...createIssueLink(createGatewayRequestMock(() => pending.promise)) };
+}
+const titleLinkInCard = () => cardPart<HTMLAnchorElement>("title");
 const cardLinks = () => [
   ...document.querySelectorAll<HTMLAnchorElement>(".link-reader-hovercard a[href]"),
 ];
-async function hover(anchor: HTMLAnchorElement) {
-  await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
-  anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
-  await vi.advanceTimersByTimeAsync(250);
-}
-function leave(anchor: HTMLAnchorElement, relatedTarget: EventTarget = document.body) {
-  anchor.dispatchEvent(
-    new MouseEvent("pointerout", { bubbles: true, composed: true, relatedTarget }),
-  );
-}
 function observeHovercardMounts() {
   const titles: string[] = [];
   const observer = new MutationObserver((records) => {
@@ -65,16 +59,7 @@ function observeHovercardMounts() {
   return titles;
 }
 describe("generic preview portal lifecycle", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-05T10:00:00Z"));
-  });
-  afterEach(async () => {
-    document.body.replaceChildren();
-    await Promise.resolve();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+  hovercardTestClock();
   it("forwards the pane session only to opted-in readers and retires private cached metadata", async () => {
     const href = "https://ghe.example.test/example/project/pull/7";
     const { provider, anchor } = createLink(href);
@@ -167,13 +152,10 @@ describe("generic preview portal lifecycle", () => {
     "mounts a settled $outcome preview for $trigger intent with reachable links",
     async ({ trigger, outcome }) => {
       const mountedCards = observeHovercardMounts();
-      const pending = createDeferred<ReturnType<typeof issuePreviewResponse>>();
-      const { anchor, provider } = createLink(ISSUE_HREF);
-      const request = vi.fn().mockReturnValue(pending.promise);
-      provider.client = { request } as unknown as GatewayBrowserClient;
+      const { pending, anchor, provider, request } = pendingIssue();
       await provider.updateComplete;
       if (trigger === "pointer") {
-        anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+        pointer(anchor, "pointerover");
         await vi.advanceTimersByTimeAsync(249);
         expect(request).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
@@ -227,15 +209,7 @@ describe("generic preview portal lifecycle", () => {
     { dismissal: "disconnect", settlement: "success" },
   ])("does not mount a late $settlement after $dismissal", async ({ dismissal, settlement }) => {
     const mountedCards = observeHovercardMounts();
-    const pending = createDeferred<ReturnType<typeof issuePreviewResponse>>();
-    const { anchor, provider } = createLink(ISSUE_HREF);
-    let signal: AbortSignal | undefined;
-    provider.client = {
-      request: vi.fn((_method, _params, options: { signal: AbortSignal }) => {
-        signal = options.signal;
-        return pending.promise;
-      }),
-    } as unknown as GatewayBrowserClient;
+    const { pending, anchor, provider, request } = pendingIssue();
     await provider.updateComplete;
     if (dismissal === "focus leave") {
       anchor.focus();
@@ -243,26 +217,21 @@ describe("generic preview portal lifecycle", () => {
     } else {
       await hover(anchor);
     }
+    const signal = request.mock.calls[0]?.[2]?.signal;
     expect(signal).toBeDefined();
-    if (dismissal === "pointer leave") {
-      leave(anchor);
-    } else if (dismissal === "focus leave") {
-      anchor.blur();
-    } else if (dismissal === "Escape") {
-      anchor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
-    } else if (dismissal === "click") {
-      anchor.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    } else if (dismissal === "route replacement") {
-      provider.replaceChildren();
-    } else if (dismissal === "href change") {
-      anchor.href = "https://example.com/changed";
-    } else if (dismissal === "agent change") {
-      provider.agentId = "other-agent";
-    } else if (dismissal === "client change") {
-      provider.client = null;
-    } else {
-      provider.remove();
-    }
+    const dismiss: Record<string, () => void> = {
+      "pointer leave": () => leave(anchor),
+      "focus leave": () => anchor.blur(),
+      Escape: () =>
+        anchor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" })),
+      click: () => anchor.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+      "route replacement": () => provider.replaceChildren(),
+      "href change": () => Object.assign(anchor, { href: "https://example.com/changed" }),
+      "agent change": () => Object.assign(provider, { agentId: "other-agent" }),
+      "client change": () => Object.assign(provider, { client: null }),
+      disconnect: () => provider.remove(),
+    };
+    dismiss[dismissal]!();
     await vi.advanceTimersByTimeAsync(0);
     expect(signal?.aborted).toBe(true);
     if (settlement === "success") {
@@ -306,9 +275,7 @@ describe("generic preview portal lifecycle", () => {
       }
       expect(mountedCards).toEqual(["Keep hover previews reachable"]);
       expect(titleLinkInCard()?.href).toBe(replacement.href);
-      expect(
-        hovercard()?.querySelector<HTMLAnchorElement>(".link-reader-hovercard__subtitle")?.href,
-      ).toBe(replacement.href);
+      expect(cardPart<HTMLAnchorElement>("subtitle")?.href).toBe(replacement.href);
       expect(anchor.hasAttribute("aria-controls")).toBe(false);
     },
   );
@@ -552,11 +519,7 @@ describe("generic preview portal lifecycle", () => {
       tag,
       load: () => loaded.promise,
     });
-    const provider = document.createElement(tag) as LinkReaderHovercardProvider;
-    const anchor = document.createElement("a");
-    anchor.href = ISSUE_HREF;
-    provider.append(anchor);
-    document.body.append(provider);
+    const { provider, anchor } = createLinkFixture(tag, ISSUE_HREF);
     const staleRequest = vi.fn();
     provider.client = { request: staleRequest } as unknown as GatewayBrowserClient;
     provider.agentId = "first-agent";
@@ -586,7 +549,7 @@ describe("generic preview portal lifecycle", () => {
     provider.append(pane);
     pane.append(anchor);
     await provider.updateComplete;
-    anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+    pointer(anchor, "pointerover");
     if (phase === "held") {
       await vi.advanceTimersByTimeAsync(250);
       expect(hovercard()).not.toBeNull();

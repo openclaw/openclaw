@@ -5,6 +5,7 @@ import { GatewayRequestError } from "../api/gateway.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import type { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
+import { hovercard as card, pointer } from "./link-reader.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import { settleTooltip } from "./tooltip.test-support.ts";
@@ -25,13 +26,10 @@ vi.mock(import("./link-reader-hovercard.ts"), async (original) => {
 const tag = "openclaw-link-reader-hovercard-provider";
 const href = "https://github.com/openclaw/openclaw/issues/99815";
 const response = { url: href, title: "Preview ready" };
-const card = () => document.querySelector(".link-reader-hovercard");
 const tooltip = () =>
   document.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip");
 const titleIsOpen = () =>
   Boolean(tooltip()?.shadowRoot?.querySelector(".tooltip-surface")?.matches(":popover-open"));
-const pointer = (target: Element, type: string, relatedTarget?: EventTarget) =>
-  target.dispatchEvent(new MouseEvent(type, { bubbles: true, composed: true, relatedTarget }));
 let dispose: () => void;
 beforeEach(() => {
   vi.useFakeTimers();
@@ -204,8 +202,7 @@ it("keeps rendered GitHub links free of native titles across preview closure and
     for (const link of links) {
       expect.soft(link.hasAttribute("title")).toBe(false);
       expect(link.querySelector("[title]")).toBeNull();
-      expect(link.href).toBe(href);
-      expect(link.target).toBe("_blank");
+      expect(link).toMatchObject({ href, target: "_blank" });
     }
   };
   expect(links).toHaveLength(15);
@@ -242,22 +239,18 @@ it("keeps rendered GitHub links free of native titles across preview closure and
   expect(links[0]?.textContent).toBe("openclaw/openclaw#99815");
   expect(anchor.textContent).toBe("the related issue");
   expect(links[2]?.querySelector("img")?.alt).toBe("Issue icon");
-  expect(links[3]?.getAttribute("aria-label")).toBe("Issue details");
+  for (const index of [3, 6, 9, 10, 12]) {
+    expect(links[index]?.getAttribute("aria-label")).toBe("Issue details");
+  }
+  for (const index of [4, 5, 7, 8, 11]) {
+    expect(links[index]?.hasAttribute("aria-label")).toBe(false);
+  }
   expect(links[4]?.textContent).toBe("<button>");
-  expect(links[4]?.hasAttribute("aria-label")).toBe(false);
   expect(links[5]?.textContent).toBe("*");
-  expect.soft(links[5]?.hasAttribute("aria-label")).toBe(false);
   expect(links[6]?.textContent).toBe("");
-  expect(links[6]?.getAttribute("aria-label")).toBe("Issue details");
   expect(links[7]?.querySelector("progress")?.value).toBe(1);
   expect(links[7]?.querySelector("progress")?.getAttribute("aria-label")).toBe("Build status");
-  expect.soft(links[7]?.hasAttribute("aria-label")).toBe(false);
-  expect(links[8]?.hasAttribute("aria-label")).toBe(false);
   expect.soft(links[8]?.querySelector("progress")?.getAttribute("aria-label")).toBe("Build status");
-  expect.soft(links[9]?.getAttribute("aria-label")).toBe("Issue details");
-  expect(links[10]?.getAttribute("aria-label")).toBe("Issue details");
-  expect(links[11]?.hasAttribute("aria-label")).toBe(false);
-  expect(links[12]?.getAttribute("aria-label")).toBe("Issue details");
   const ordinary = provider.querySelector<HTMLAnchorElement>('a[href="https://example.com"]')!;
   pointer(child, "pointerout", ordinary);
   pointer(anchor, "pointerleave", ordinary);

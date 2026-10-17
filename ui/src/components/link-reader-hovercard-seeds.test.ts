@@ -1,11 +1,20 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
+import {
+  cardPart,
+  createLinkFixture,
+  expectIncludes,
+  hover,
+  hovercard,
+  hovercardTestClock,
+  leave,
+} from "./link-reader.test-support.ts";
 
 const TAG = `test-github-seeded-hovercard-${crypto.randomUUID()}`;
 customElements.define(TAG, class extends LinkReaderHovercardProvider {});
@@ -28,54 +37,24 @@ const details = {
   updatedAt: "2026-07-05T09:55:00Z",
 };
 
-function createSeededLink() {
+function createSeededLink(tag = TAG, href = PR_HREF + "#discussion_r1", scoped = true) {
   const pending = createDeferred<unknown>();
   const client = {
     request: vi.fn().mockReturnValue(pending.promise),
     connectionGeneration: 1,
     recoveryScope: "principal-a",
   };
-  const provider = document.createElement(TAG) as LinkReaderHovercardProvider;
-  provider.client = client as unknown as GatewayBrowserClient;
-  provider.agentId = "row-agent";
-  provider.readers = [TEST_LINK_READER];
-  provider.previewSeeds = [seed];
-  const anchor = document.createElement("a");
-  anchor.href = PR_HREF + "#discussion_r1";
-  anchor.textContent = "#99815";
-  provider.append(anchor);
-  document.body.append(provider);
-  return { pending, client, provider, anchor };
-}
-
-function hovercard() {
-  return document.querySelector<HTMLElement>(".link-reader-hovercard");
-}
-
-async function hover(anchor: HTMLAnchorElement) {
-  await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
-  anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
-  await vi.advanceTimersByTimeAsync(250);
-}
-
-function leave(anchor: HTMLAnchorElement) {
-  anchor.dispatchEvent(
-    new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
-  );
+  const properties = {
+    client: (scoped ? client : { request: client.request }) as unknown as GatewayBrowserClient,
+    agentId: "row-agent",
+    previewSeeds: [seed],
+  };
+  const link = createLinkFixture(tag, href, properties, scoped ? "#99815" : "");
+  return { pending, client, ...link };
 }
 
 describe("GitHub hovercards with authorized session details", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-05T10:00:00Z"));
-  });
-
-  afterEach(async () => {
-    document.body.replaceChildren();
-    await Promise.resolve();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+  hovercardTestClock();
 
   it.each(["hover", "focus"])("shows known details before enrichment for %s", async (trigger) => {
     const { pending, client, provider, anchor } = createSeededLink();
@@ -87,17 +66,11 @@ describe("GitHub hovercards with authorized session details", () => {
       await vi.advanceTimersByTimeAsync(0);
     }
     const card = hovercard();
-    expect(card?.textContent).toContain(seed.title);
-    expect(card?.textContent).toContain("Merged");
-    expect(card?.textContent).toContain("+42");
-    expect(card?.textContent).toContain("−7");
-    expect(card?.textContent).toContain("Cached details");
+    expectIncludes(card, seed.title, "Merged", "+42", "−7", "Cached details");
     expect(card?.querySelector("time")).toBeNull();
-    expect(card?.querySelector(".link-reader-hovercard__author")).toBeNull();
+    expect(cardPart("author", card)).toBeNull();
     expect(card?.getAttribute("aria-label")).not.toContain("by ");
-    expect(card?.querySelector<HTMLAnchorElement>(".link-reader-hovercard__title")?.href).toBe(
-      anchor.href,
-    );
+    expect(cardPart<HTMLAnchorElement>("title", card)?.href).toBe(anchor.href);
     expect(client.request.mock.calls[0]?.[1]).toMatchObject({
       agentId: "row-agent",
       url: anchor.href,
@@ -130,13 +103,13 @@ describe("GitHub hovercards with authorized session details", () => {
     ];
     await hover(anchor);
     const card = hovercard();
-    expect(card?.querySelector(".link-reader-hovercard__author")?.getAttribute("href")).toBeNull();
+    expect(cardPart("author", card)?.getAttribute("href")).toBeNull();
     expect(card?.querySelectorAll("img")).toHaveLength(1);
     const face = card?.querySelector("img");
     expect(face?.crossOrigin).toBe("anonymous");
     face?.dispatchEvent(new Event("error"));
     expect(face && (!face.isConnected || face.hidden)).toBe(true);
-    expect(card?.querySelector(".link-reader-hovercard__coauthors-more")?.textContent).toBe("+2");
+    expect(cardPart("coauthors-more", card)?.textContent).toBe("+2");
     const imageUrl =
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=";
     pending.resolve({
@@ -146,30 +119,17 @@ describe("GitHub hovercards with authorized session details", () => {
       coAuthorCount: 3,
     });
     await vi.advanceTimersByTimeAsync(0);
-    const loaded = card?.querySelector(".link-reader-hovercard__coauthors img");
+    const loaded = cardPart("coauthors img", card);
     expect(loaded?.getAttribute("src")).toBe(imageUrl);
     loaded?.dispatchEvent(new Event("load"));
     expect(loaded?.hasAttribute("hidden")).toBe(false);
-    expect(card?.querySelector(".link-reader-hovercard__author")?.getAttribute("href")).toBe(
-      "https://github.com/octocat",
-    );
+    expect(cardPart("author", card)?.getAttribute("href")).toBe("https://github.com/octocat");
   });
 
   it("replays session seeds assigned before the lazy provider upgrades", async () => {
     const tag = "test-github-seeded-lazy-upgrade";
-    const provider = document.createElement(tag) as LinkReaderHovercardProvider;
-    const pending = createDeferred<unknown>();
-    const request = vi.fn().mockReturnValue(pending.promise);
-    provider.client = {
-      request,
-    } as unknown as GatewayBrowserClient;
-    provider.agentId = "row-agent";
-    provider.readers = [TEST_LINK_READER];
-    provider.previewSeeds = [seed];
-    const anchor = document.createElement("a");
-    anchor.href = PR_HREF;
-    provider.append(anchor);
-    document.body.append(provider);
+    const { provider, anchor, pending, client } = createSeededLink(tag, PR_HREF, false);
+    const { request } = client;
     anchor.focus();
     expect(document.activeElement).toBe(anchor);
     customElements.define(tag, class extends LinkReaderHovercardProvider {});
@@ -193,18 +153,15 @@ describe("GitHub hovercards with authorized session details", () => {
     await hover(anchor);
     pending.reject(new GatewayRequestError({ code: "UNAVAILABLE", message }));
     await vi.advanceTimersByTimeAsync(0);
-    expect(hovercard()?.textContent).toContain(seed.title);
-    expect(hovercard()?.textContent).toContain("Cached details");
-    expect(hovercard()?.textContent).toContain(message);
-    leave(anchor);
+    expectIncludes(hovercard(), seed.title, "Cached details", message);
+    leave(anchor, document.body, false);
     await vi.advanceTimersByTimeAsync(120);
     expect(hovercard()).toBeNull();
     await hover(anchor);
-    expect(hovercard()?.textContent).toContain(seed.title);
-    expect(hovercard()?.textContent).toContain(message);
+    expectIncludes(hovercard(), seed.title, message);
     expect(client.request).toHaveBeenCalledTimes(1);
 
-    leave(anchor);
+    leave(anchor, document.body, false);
     await vi.advanceTimersByTimeAsync(30_000);
     client.request.mockResolvedValue(details);
     await hover(anchor);
@@ -253,7 +210,7 @@ describe("GitHub hovercards with authorized session details", () => {
     provider.previewSeeds = [{ ...seed, metadata: undefined }];
     await hover(anchor);
     expect(hovercard()?.querySelectorAll(".link-reader-hovercard__metric")).toHaveLength(0);
-    leave(anchor);
+    leave(anchor, document.body, false);
     await vi.advanceTimersByTimeAsync(120);
     anchor.href = "https://github.com/openclaw/openclaw/pull/99816";
     await hover(anchor);

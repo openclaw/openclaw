@@ -1,10 +1,17 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { TEST_LINK_READER, testLinkPreview } from "../test-helpers/link-reader.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
 import { resolveLinkReaderTarget } from "./link-reader-target.ts";
+import {
+  createLinkFixture,
+  hover,
+  hovercard,
+  hovercardTestClock,
+  leave,
+} from "./link-reader.test-support.ts";
 
 const TAG = `test-github-prefetch-${crypto.randomUUID()}`;
 customElements.define(TAG, class extends LinkReaderHovercardProvider {});
@@ -12,13 +19,7 @@ const ISSUE_HREF = "https://github.com/openclaw/openclaw/issues/99815";
 const issuePreviewResponse = testLinkPreview;
 
 function createIssueLink() {
-  const provider = document.createElement(TAG) as LinkReaderHovercardProvider;
-  provider.readers = [TEST_LINK_READER];
-  const anchor = document.createElement("a");
-  anchor.href = ISSUE_HREF;
-  anchor.textContent = "#99815";
-  provider.append(anchor);
-  document.body.append(provider);
+  const { provider, anchor } = createLinkFixture(TAG, ISSUE_HREF, {}, "#99815");
   const request = vi.fn().mockResolvedValue(issuePreviewResponse());
   provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
   const warm = (signal = new AbortController().signal) =>
@@ -26,26 +27,8 @@ function createIssueLink() {
   return { provider, anchor, request, warm };
 }
 
-async function hover(anchor: HTMLAnchorElement) {
-  await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
-  anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
-  await vi.advanceTimersByTimeAsync(250);
-}
-
-function leave(anchor: HTMLAnchorElement) {
-  anchor.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, composed: true }));
-}
-
-const hovercard = () => document.querySelector<HTMLElement>(".link-reader-hovercard");
-
 describe("GitHub hovercard prefetch subscriptions", () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(async () => {
-    document.body.replaceChildren();
-    await Promise.resolve();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+  hovercardTestClock(false);
   it.each(["agent", "destination"])(
     "projects inline facts without extra requests until %s changes",
     async (change) => {
@@ -158,7 +141,7 @@ describe("GitHub hovercard prefetch subscriptions", () => {
         firstScope.abort();
       } else {
         if (consumer === "hover") {
-          leave(anchor);
+          leave(anchor, null);
         } else {
           anchor.blur();
         }
@@ -179,7 +162,7 @@ describe("GitHub hovercard prefetch subscriptions", () => {
       expect(request).toHaveBeenCalledTimes(1);
       if (consumer === "hover") {
         firstScope.abort();
-        leave(anchor);
+        leave(anchor, null);
         await vi.advanceTimersByTimeAsync(120);
         await hover(anchor);
         expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
