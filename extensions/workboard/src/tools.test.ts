@@ -704,14 +704,26 @@ describe("workboard tools", () => {
       boardId: "planning",
       idempotencyKey: "planning:rough",
     });
+    const specify = expectDefined(tools.get("workboard_specify"), "workboard specify tool");
+    expect(Value.Check(specify.parameters, { id: parent.id, expectedUpdatedAt: 1 })).toBe(true);
+    expect(Value.Check(specify.parameters, { id: parent.id, expectedUpdatedAt: "1" })).toBe(false);
     const specified = readPayload(
-      await tools.get("workboard_specify")?.execute("call-specify", {
+      await specify.execute("call-specify", {
         id: parent.id,
         title: "Specified",
         summary: "Ready to split.",
+        expectedUpdatedAt: parent.updatedAt,
       }),
     );
     expect(specified.card).toMatchObject({ title: "Specified", status: "todo" });
+    await expect(
+      specify.execute("call-specify-stale", {
+        id: parent.id,
+        title: "Specified from the stale read",
+        expectedUpdatedAt: parent.updatedAt,
+      }),
+    ).rejects.toMatchObject({ name: "WorkboardCardConflictError" });
+    expect(await store.get(parent.id)).toEqual(specified.card);
 
     const decomposed = readPayload(
       await tools.get("workboard_decompose")?.execute("call-decompose", {

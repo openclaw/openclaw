@@ -147,6 +147,12 @@ export function createWorkboardOrchestrationTools(params: {
         maxRetries: Type.Optional(Type.Number({ description: "Retry budget." })),
         summary: Type.Optional(Type.String({ description: "Specification summary comment." })),
         token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
+        expectedUpdatedAt: Type.Optional(
+          Type.Number({
+            description:
+              "Optional card revision from a prior read. The specify fails with a conflict when the card changed since then.",
+          }),
+        ),
       }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(asNonArrayRecord(rawParams));

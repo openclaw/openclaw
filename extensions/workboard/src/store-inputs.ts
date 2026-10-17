@@ -181,6 +181,8 @@ export type WorkboardBoardInput = {
 };
 export type WorkboardSpecifyInput = WorkboardCardPatch & {
   summary?: unknown;
+  /** Caller revision guard; the card must still be at this updatedAt. */
+  expectedUpdatedAt?: unknown;
 };
 export type WorkboardDecomposeInput = {
   summary?: unknown;

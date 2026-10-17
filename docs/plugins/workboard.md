@@ -737,9 +737,10 @@ read/write scopes as boards:
 | `operator.write` | `cards.diagnostics.refresh`, create/captureSession/update/move/delete/comment/link/linkDependency/proof/artifact, attachment add/delete, worker log, protocol violation, claim/heartbeat/release/promote/reassign/reclaim/complete/block/unblock/start, `cards.dispatch`, `cards.bulk`, archive, `boards.upsert`/`archive`/`delete`, `cards.specify`/`decompose`, notification subscribe/delete/advance |
 | `operator.write` | `sessionsBoard.update`, `sessionsBoard.move`                                                                                                                                                                                                                                                                                                                                                            |
 
-`workboard.cards.update`, `workboard.cards.move`, `workboard.cards.archive`, and
-`workboard.cards.delete` accept an optional `expectedUpdatedAt` request field.
-Pass the finite numeric `updatedAt` from the card you read to guard the write.
+`workboard.cards.update`, `workboard.cards.move`, `workboard.cards.specify`,
+`workboard.cards.archive`, and `workboard.cards.delete` accept an optional
+`expectedUpdatedAt` request field. The `workboard_specify` tool accepts the same
+field. Pass the finite numeric `updatedAt` from the card you read to guard the write.
 If the card has changed, the request fails with `workboard_conflict` and returns
 its latest card in `error.details.card` (`error.details.type` is
 `workboard_card_conflict`). Review that card before retrying. Omitting the field

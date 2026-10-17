@@ -3054,6 +3054,81 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("rejects specify when the caller revision is stale and keeps every persisted field", async () => {
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const card = await store.create({ title: "Rough idea", status: "triage" });
+    await store.addComment(card.id, { body: "caller-visible comment" });
+    const readCopy = (await store.get(card.id))!;
+    const newer = await store.update(card.id, {
+      title: "Edited by another host",
+      notes: "notes from the concurrent editor",
+    });
+
+    await expect(
+      store.specify(card.id, {
+        title: "Specified from the stale read",
+        summary: "stale summary",
+        expectedUpdatedAt: readCopy.updatedAt,
+      }),
+    ).rejects.toMatchObject({ name: "WorkboardCardConflictError", current: newer });
+
+    const current = (await store.get(card.id))!;
+    expect(current).toEqual(newer);
+    expect(current.status).toBe("triage");
+    expect(current.metadata?.comments?.map((comment) => comment.body)).toEqual([
+      "caller-visible comment",
+    ]);
+    expect(current.events?.map((event) => event.kind)).toEqual(
+      newer.events?.map((event) => event.kind),
+    );
+  });
+
+  it("accepts specify when the caller revision still matches", async () => {
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const card = await store.create({ title: "Rough idea", status: "triage" });
+    const readCopy = (await store.get(card.id))!;
+
+    const specified = await store.specify(card.id, {
+      title: "Specified",
+      summary: "Ready to work",
+      expectedUpdatedAt: readCopy.updatedAt,
+    });
+
+    expect(specified).toMatchObject({ title: "Specified", status: "todo" });
+    expect(
+      specified.metadata?.comments?.filter((comment) => comment.body === "Ready to work"),
+    ).toHaveLength(1);
+    expect(specified.events?.at(-1)).toMatchObject({ kind: "specified" });
+  });
+
+  it("rejects a non-numeric caller revision on specify before writing", async () => {
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const card = await store.create({ title: "Rough idea", status: "triage" });
+
+    await expect(
+      store.specify(card.id, { title: "Specified", expectedUpdatedAt: "not-a-number" }),
+    ).rejects.toThrow("expectedUpdatedAt must be a finite number.");
+
+    await expect(store.get(card.id)).resolves.toEqual(card);
+  });
+
+  it("lets exactly one of two specify calls at the same revision win", async () => {
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const card = await store.create({ title: "Race me", status: "triage" });
+    const readCopy = (await store.get(card.id))!;
+
+    const results = await Promise.allSettled([
+      store.specify(card.id, { title: "race a", expectedUpdatedAt: readCopy.updatedAt }),
+      store.specify(card.id, { title: "race b", expectedUpdatedAt: readCopy.updatedAt }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      reason: { name: "WorkboardCardConflictError" },
+    });
+    await expect(store.get(card.id)).resolves.toMatchObject({ title: "race a", status: "todo" });
+  });
+
   it("preserves parent child links when decomposition leaves the parent open", async () => {
     const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const parent = await store.create({ title: "Parent", status: "triage" });

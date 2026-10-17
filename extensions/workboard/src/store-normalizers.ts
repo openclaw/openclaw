@@ -366,6 +366,16 @@ export function normalizeTimestamp(value: unknown, fallback: number): number {
   return resolveOptionalIntegerOption(value, { min: 0 }) ?? fallback;
 }
 
+export function normalizeExpectedUpdatedAt(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error("expectedUpdatedAt must be a finite number.");
+  }
+  return value;
+}
+
 function normalizeAttempt(record: Record<string, unknown>): WorkboardRunAttempt | null {
   const id = normalizeOptionalString(record.id);
   const startedAt = normalizeTimestamp(record.startedAt, 0);

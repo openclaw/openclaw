@@ -51,6 +51,7 @@ import {
   deriveChildIdempotencyKey,
   normalizeArtifact,
   normalizeBoundedString,
+  normalizeExpectedUpdatedAt,
   normalizeProofInput,
   normalizeStatus,
   normalizeStringList,
@@ -458,7 +459,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           summary: summary ?? existing.metadata?.automation?.summary,
         },
       };
-      const { summary: _summary, status: _status, ...cardPatch } = input;
+      const { summary: _summary, status: _status, expectedUpdatedAt, ...cardPatch } = input;
       return await this.updateCard(
         existing,
         {
@@ -466,7 +467,12 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           status: "todo",
           metadata,
         },
-        { enforceStatusHolds: true, event: { kind: "specified" }, eventAt: now },
+        {
+          enforceStatusHolds: true,
+          event: { kind: "specified" },
+          eventAt: now,
+          expectedUpdatedAt: normalizeExpectedUpdatedAt(expectedUpdatedAt),
+        },
       );
     });
   }
