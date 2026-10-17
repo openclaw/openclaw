@@ -159,6 +159,39 @@ function requestOptions(
   } as unknown as GatewayRequestHandlerOptions;
 }
 
+function questionCreator(assertActive = assertCurrent) {
+  return {
+    sessionKey,
+    requesterProfileId: "alice",
+    fingerprint: "creator",
+    project: () => "creator",
+    assertActive,
+  };
+}
+function pendingQuestion(
+  questions: Parameters<typeof buildAgentQuestionRequestQuestions>[0],
+  id = "pending-gateway-id",
+) {
+  return manager.request({
+    id,
+    sessionKey,
+    agentId: "main",
+    timeoutMs: 120000,
+    questions: buildAgentQuestionRequestQuestions(questions),
+  });
+}
+function upload(name = "part.stl", extra: Record<string, unknown> = {}) {
+  return { action: "upload", files: [{ name, mimeType: "model/stl", content: "AA==" }], ...extra };
+}
+function workspaceUploads() {
+  return createMcpAppWorkspaceUploadProvider({
+    workspaceDir: state.root,
+    agentId: "main",
+    sessionKey,
+    assertCurrent,
+  });
+}
+
 async function fixture(
   params: {
     target?: "resource_link" | "mcp_app_tool";
@@ -231,16 +264,7 @@ async function fixture(
       },
     },
   };
-  const uploadResources =
-    params.upload ??
-    (params.kind
-      ? createMcpAppWorkspaceUploadProvider({
-          workspaceDir: state.root,
-          agentId: "main",
-          sessionKey,
-          assertCurrent,
-        })
-      : undefined);
+  const uploadResources = params.upload ?? (params.kind ? workspaceUploads() : undefined);
   const form = await createMcpAppFormResourceContext({
     origin: {
       runtime,
@@ -283,13 +307,7 @@ async function fixture(
         });
   cleanups.push(claim.dispose);
   if (params.register !== false) {
-    manager.request({
-      id: requestId,
-      sessionKey,
-      agentId: "main",
-      timeoutMs: 120000,
-      questions: buildAgentQuestionRequestQuestions(questions),
-    });
+    pendingQuestion(questions, requestId);
   }
   const base = {
     sessionKey,
@@ -307,6 +325,8 @@ async function fixture(
   return {
     form,
     invoke,
+    preview: (action: Record<string, unknown> = {}, requester = "alice") =>
+      invoke({ action: "preview", optionIndex: 0, ...action }, requester),
     base,
     readResource,
     callTool,
@@ -324,39 +344,23 @@ async function fixture(
 describe("registered MCP form resource route", () => {
   it("binds model-created resources to the existing question creator profile and its live authority", async () => {
     let creatorCurrent = true;
-    const creator = {
-      sessionKey,
-      requesterProfileId: "alice",
-      fingerprint: "creator",
-      project: () => "creator",
-      assertActive: () => {
-        if (!creatorCurrent) {
-          throw new Error("question creator revoked");
-        }
-      },
-    };
+    const creator = questionCreator(() => {
+      if (!creatorCurrent) {
+        throw new Error("question creator revoked");
+      }
+    });
     const f = await withAgentQuestionAnswerAuthority(
       createAgentQuestionAnswerAuthority(creator),
       () => fixture({ kind: "file", requesterId: null }),
     );
-    const upload = {
-      action: "upload",
-      files: [{ name: "part.stl", mimeType: "model/stl", content: "AA==" }],
-    };
-    expect((await f.invoke(upload, "bob"))[0]).toBe(false);
-    expect((await f.invoke(upload, "alice"))[0]).toBe(true);
+    expect((await f.invoke(upload(), "bob"))[0]).toBe(false);
+    expect((await f.invoke(upload(), "alice"))[0]).toBe(true);
     creatorCurrent = false;
-    expect((await f.invoke({ action: "preview", optionIndex: 0 }, "alice"))[0]).toBe(false);
+    expect((await f.preview())[0]).toBe(false);
     expect(f.readResource).not.toHaveBeenCalled();
   });
   it("refuses origin metadata that conflicts with the admitted question creator", async () => {
-    const authority = createAgentQuestionAnswerAuthority({
-      sessionKey,
-      requesterProfileId: "alice",
-      fingerprint: "creator",
-      project: () => "creator",
-      assertActive: assertCurrent,
-    });
+    const authority = createAgentQuestionAnswerAuthority(questionCreator());
     await expect(
       withAgentQuestionAnswerAuthority(authority, () => fixture({ requesterId: "bob" })),
     ).rejects.toThrow("does not match its question creator");
@@ -387,10 +391,9 @@ describe("registered MCP form resource route", () => {
         "question.waitAnswer": async (request: GatewayRequestHandlerOptions) => {
           expect(request.client).toBe(options.client);
           const reply = await f.invoke({
+            ...upload(),
             requestId: pendingId,
             viewId: pendingViewId,
-            action: "upload",
-            files: [{ name: "part.stl", mimeType: "model/stl", content: "AA==" }],
           });
           expect(reply[0]).toBe(true);
           request.respond(true, {
@@ -442,16 +445,7 @@ describe("registered MCP form resource route", () => {
         content: { files: [expect.stringMatching(/^file:/)] },
       });
       expect(manager.get(pendingId)?.status).toBe("cancelled");
-      expect(
-        (
-          await f.invoke({
-            requestId: pendingId,
-            viewId: pendingViewId,
-            action: "preview",
-            optionIndex: 0,
-          })
-        )[0],
-      ).toBe(false);
+      expect((await f.preview({ requestId: pendingId, viewId: pendingViewId }))[0]).toBe(false);
     } finally {
       await client.close();
       await server.close();
@@ -460,42 +454,28 @@ describe("registered MCP form resource route", () => {
 
   it("reads only the originating server’s declared preview using the pending Gateway question id", async () => {
     const f = await fixture();
-    const reply = await f.invoke({ action: "preview", optionIndex: 0 });
+    const reply = await f.preview();
     expect(reply[0]).toBe(true);
     expect(reply[1]).toEqual({ preview: { contents: [{ text: "private-preview" }] } });
     expect(f.readResource).toHaveBeenCalledWith("origin", "parts://declared");
-    expect(
-      (await f.invoke({ action: "preview", optionIndex: 0, requestId: "upstream-id" }))[0],
-    ).toBe(false);
+    expect((await f.preview({ requestId: "upstream-id" }))[0]).toBe(false);
     expect(
       (
-        await f.invoke({
-          action: "preview",
-          optionIndex: 0,
+        await f.preview({
           target: { type: "resource_link", uri: "parts://secret" },
         })
       )[0],
     ).toBe(false);
-    expect((await f.invoke({ action: "preview", optionIndex: 1 }))[0]).toBe(false);
+    expect((await f.preview({ optionIndex: 1 }))[0]).toBe(false);
     expect(f.readResource).toHaveBeenCalledTimes(1);
   });
 
   it("rejects other requesters, sessions and forged pending records even when viewId was copied", async () => {
     const f = await fixture();
-    expect((await f.invoke({ action: "preview", optionIndex: 0 }, "bob"))[0]).toBe(false);
-    expect(
-      (await f.invoke({ action: "preview", optionIndex: 0, sessionKey: "agent:main:other" }))[0],
-    ).toBe(false);
-    manager.request({
-      id: "forged",
-      sessionKey,
-      agentId: "main",
-      timeoutMs: 120000,
-      questions: buildAgentQuestionRequestQuestions(f.questions),
-    });
-    expect((await f.invoke({ action: "preview", optionIndex: 0, requestId: "forged" }))[0]).toBe(
-      false,
-    );
+    expect((await f.preview({}, "bob"))[0]).toBe(false);
+    expect((await f.preview({ sessionKey: "agent:main:other" }))[0]).toBe(false);
+    pendingQuestion(f.questions, "forged");
+    expect((await f.preview({ requestId: "forged" }))[0]).toBe(false);
     expect(f.readResource).not.toHaveBeenCalled();
   });
 
@@ -504,21 +484,15 @@ describe("registered MCP form resource route", () => {
     manager.close();
     await manager.drain();
     manager = new QuestionManager(createTestGatewayScheduler());
-    manager.request({
-      id: f.base.requestId,
-      sessionKey,
-      agentId: "main",
-      timeoutMs: 120000,
-      questions: buildAgentQuestionRequestQuestions(f.questions),
-    });
-    expect((await f.invoke({ action: "preview", optionIndex: 0 }))[0]).toBe(false);
+    pendingQuestion(f.questions, f.base.requestId);
+    expect((await f.preview())[0]).toBe(false);
     expect(f.readResource).not.toHaveBeenCalled();
   });
 
   it("releases form authority when the actual pending question owner retires", async () => {
     const f = await fixture();
     f.claim.dispose();
-    expect((await f.invoke({ action: "preview", optionIndex: 0 }))[0]).toBe(false);
+    expect((await f.preview())[0]).toBe(false);
     expect(f.readResource).not.toHaveBeenCalled();
   });
 
@@ -527,12 +501,7 @@ describe("registered MCP form resource route", () => {
     async (reason) => {
       const gate = createDeferred();
       const entered = createDeferred();
-      const provider = createMcpAppWorkspaceUploadProvider({
-        workspaceDir: state.root,
-        sessionKey,
-        agentId: "main",
-        assertCurrent,
-      });
+      const provider = workspaceUploads();
       const f = await fixture({
         kind: "file",
         upload: async (request) => {
@@ -541,10 +510,7 @@ describe("registered MCP form resource route", () => {
           return provider(request);
         },
       });
-      const pending = f.invoke({
-        action: "upload",
-        files: [{ name: "part.stl", mimeType: "model/stl", content: "AA==" }],
-      });
+      const pending = f.invoke(upload());
       await entered.promise;
       if (reason === "origin") {
         state.current = false;
@@ -567,7 +533,7 @@ describe("registered MCP form resource route", () => {
       entered.resolve();
       return gate.promise;
     });
-    const pending = f.invoke({ action: "preview", optionIndex: 0 });
+    const pending = f.preview();
     await entered.promise;
     manager.cancel(f.base.requestId);
     gate.resolve({ contents: [{ uri: "parts://declared", text: "must-not-leak" }] });
@@ -582,14 +548,14 @@ describe("registered MCP form resource route", () => {
       throw new Error("approval policy changed");
     });
     f.prepareToolCall.mockResolvedValueOnce(guard);
-    expect((await f.invoke({ action: "preview", optionIndex: 0 }))[0]).toBe(false);
+    expect((await f.preview())[0]).toBe(false);
     expect(guard).toHaveBeenCalled();
     expect(f.callTool).not.toHaveBeenCalled();
   });
 
   it("prepares App previews with CURRENT request options and disposes their sandbox leases", async () => {
     const f = await fixture({ target: "mcp_app_tool" });
-    const reply = await f.invoke({ action: "preview", optionIndex: 0 });
+    const reply = await f.preview();
     expect(reply[0]).toBe(true);
     expect(f.prepareToolCall).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -644,41 +610,12 @@ describe("registered MCP form resource route", () => {
 
   it("derives upload restrictions from the live question and never accepts arbitrary URI text", async () => {
     const f = await fixture({ kind: "file" });
-    expect(
-      (
-        await f.invoke({
-          action: "upload",
-          files: [{ name: "evil.exe", mimeType: "model/stl", content: "AA==" }],
-        })
-      )[0],
-    ).toBe(false);
-    expect(
-      (
-        await f.invoke({
-          action: "upload",
-          files: [{ name: "../part.stl", mimeType: "model/stl", content: "AA==" }],
-        })
-      )[0],
-    ).toBe(false);
-    expect(
-      (
-        await f.invoke({
-          action: "upload",
-          files: [{ name: "part.stl", mimeType: "model/stl", content: "AA==" }],
-          accept: ["*"],
-        })
-      )[0],
-    ).toBe(false);
+    expect((await f.invoke(upload("evil.exe")))[0]).toBe(false);
+    expect((await f.invoke(upload("../part.stl")))[0]).toBe(false);
+    expect((await f.invoke(upload("part.stl", { accept: ["*"] })))[0]).toBe(false);
     expect(f.form.context.isUploadedResource("files", "file:///arbitrary.stl")).toBe(false);
     state.uploads = false;
-    expect(
-      (
-        await f.invoke({
-          action: "upload",
-          files: [{ name: "part.stl", mimeType: "model/stl", content: "AA==" }],
-        })
-      )[0],
-    ).toBe(false);
+    expect((await f.invoke(upload()))[0]).toBe(false);
     expect(await readdir(state.root)).toEqual([]);
   });
 });

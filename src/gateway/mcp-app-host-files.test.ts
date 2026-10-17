@@ -1,6 +1,7 @@
 import { watchFile, writeFileSync } from "node:fs";
 import { appendFile, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { setImmediate as settle } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -109,6 +110,29 @@ async function invoke(method: string, params: Record<string, unknown>, profileId
   });
   return respond.mock.calls[0]!;
 }
+function read(params: Record<string, unknown> = {}) {
+  return invoke("mcp.app.readResource", { uri, ...params });
+}
+function write(params: Record<string, unknown>, profileId = "alice") {
+  return invoke("mcp.app.writeResource", { uri, ...params }, profileId);
+}
+function expectUpdate() {
+  expect(publish).toHaveBeenCalledWith(
+    "mcp.app.resourceUpdated",
+    { viewId, uri },
+    new Set(["alice"]),
+  );
+}
+function trackView() {
+  const view = getMcpAppViewLease(viewId, runtime)!;
+  disposers.push(() => {
+    clearTimeout(view.expiryTimer);
+    for (const dispose of view.disposeCallbacks ?? []) {
+      dispose();
+    }
+  });
+  return view;
+}
 
 async function launchFileView() {
   runtime.callTool = async () => ({ content: [] });
@@ -152,15 +176,9 @@ async function launchFileView() {
   });
   expect(respond.mock.calls[0]?.[0]).toBe(true);
   viewId = respond.mock.calls[0]![1].viewId;
-  const view = getMcpAppViewLease(viewId, runtime)!;
+  const view = trackView();
   uri = view.hostFile!.resourceUri;
   expect(view.toolInput).toEqual({ file: { name: "part.stl", resourceUri: uri } });
-  disposers.push(() => {
-    clearTimeout(view.expiryTimer);
-    for (const dispose of view.disposeCallbacks ?? []) {
-      dispose();
-    }
-  });
 }
 
 beforeEach(async () => {
@@ -201,13 +219,7 @@ beforeEach(async () => {
     hostFile,
   });
   viewId = descriptor!.viewId;
-  const view = getMcpAppViewLease(viewId, runtime)!;
-  disposers.push(() => {
-    clearTimeout(view.expiryTimer);
-    for (const dispose of view.disposeCallbacks ?? []) {
-      dispose();
-    }
-  });
+  trackView();
 });
 afterEach(() => {
   for (const dispose of disposers.splice(0)) {
@@ -260,7 +272,7 @@ describe("registered MCP App host-file routes", () => {
       runtime.sessionKey = memoryKey;
       getMcpAppViewLease(viewId, runtime)!.hostFile = file;
       opening.abort();
-      const result = await invoke("mcp.app.readResource", {
+      const result = await read({
         sessionKey: memoryKey,
         uri: file.resourceUri,
         _meta: { "openai/resource": { representation: "text" } },
@@ -268,7 +280,7 @@ describe("registered MCP App host-file routes", () => {
       expect(result[0]).toBe(true);
       expect(result[1].contents[0].text).toBe("solid original");
       memorySessionActorOwners.closeDatabase(owner);
-      const closed = await invoke("mcp.app.readResource", {
+      const closed = await read({
         sessionKey: memoryKey,
         uri: file.resourceUri,
       });
@@ -281,8 +293,7 @@ describe("registered MCP App host-file routes", () => {
   it("mints opaque URIs and serves explicit text/blob representations without host paths", async () => {
     expect(uri.startsWith("openclaw-file://")).toBe(true);
     expect(uri).not.toContain("part.stl");
-    const text = await invoke("mcp.app.readResource", {
-      uri,
+    const text = await read({
       _meta: { "openai/resource": { representation: "text" } },
     });
     expect(text[0]).toBe(true);
@@ -292,24 +303,22 @@ describe("registered MCP App host-file routes", () => {
       _meta: { "openai/resource": { writable: true, etag: expect.any(String) } },
     });
     expect(JSON.stringify(text[1])).not.toContain(state.root);
-    const blob = await invoke("mcp.app.readResource", { uri });
+    const blob = await read();
     expect(blob[1].contents[0].blob).toBe(Buffer.from("solid original").toString("base64"));
   });
 
   it("requires writable read admission and reports saved/conflict/too-large without overwriting conflicts", async () => {
-    expect((await invoke("mcp.app.writeResource", { uri, text: "no read" }))[0]).toBe(false);
-    const read = await invoke("mcp.app.readResource", { uri });
-    const etag = read[1].contents[0]._meta["openai/resource"].etag;
-    const saved = await invoke("mcp.app.writeResource", {
-      uri,
+    expect((await write({ text: "no read" }))[0]).toBe(false);
+    const result = await read();
+    const etag = result[1].contents[0]._meta["openai/resource"].etag;
+    const saved = await write({
       text: "solid edited",
       ifMatch: etag,
     });
     expect(saved[1]).toMatchObject({ outcome: "saved", etag: expect.any(String) });
-    const conflict = await invoke("mcp.app.writeResource", { uri, text: "stale", ifMatch: etag });
+    const conflict = await write({ text: "stale", ifMatch: etag });
     expect(conflict[1]).toEqual({ outcome: "conflict", etag: saved[1].etag });
-    const large = await invoke("mcp.app.writeResource", {
-      uri,
+    const large = await write({
       blob: Buffer.alloc(256 * 1024 + 1).toString("base64"),
     });
     expect(large[1]).toEqual({ outcome: "too-large", maxBytes: 256 * 1024 });
@@ -317,31 +326,27 @@ describe("registered MCP App host-file routes", () => {
   });
 
   it("round-trips binary writes and rejects forged URI, foreign requester, and revoked grant", async () => {
-    await invoke("mcp.app.readResource", { uri });
+    await read();
     const bytes = Buffer.from([0, 255, 1]);
-    expect(
-      (await invoke("mcp.app.writeResource", { uri, blob: bytes.toString("base64") }))[1].outcome,
-    ).toBe("saved");
+    expect((await write({ blob: bytes.toString("base64") }))[1].outcome).toBe("saved");
     expect(await readFile(path.join(state.root, "part.stl"))).toEqual(bytes);
-    expect((await invoke("mcp.app.readResource", { uri: "openclaw-file://forged" }))[0]).toBe(
-      false,
-    );
-    expect((await invoke("mcp.app.writeResource", { uri, text: "foreign" }, "bob"))[0]).toBe(false);
+    expect((await read({ uri: "openclaw-file://forged" }))[0]).toBe(false);
+    expect((await write({ text: "foreign" }, "bob"))[0]).toBe(false);
     allowed = false;
-    expect((await invoke("mcp.app.writeResource", { uri, text: "revoked" }))[0]).toBe(false);
+    expect((await write({ text: "revoked" }))[0]).toBe(false);
     expect(await readFile(path.join(state.root, "part.stl"))).toEqual(bytes);
   });
 
   it("rechecks workspace session identity and synchronously revoked grant before file commit", async () => {
-    await invoke("mcp.app.readResource", { uri });
+    await read();
     const view = getMcpAppViewLease(viewId, runtime)!;
     let assertions = 0;
     view.authorizeAppInteraction = () => ++assertions < 4;
-    expect((await invoke("mcp.app.writeResource", { uri, text: "not committed" }))[0]).toBe(false);
+    expect((await write({ text: "not committed" }))[0]).toBe(false);
     expect(await readFile(path.join(state.root, "part.stl"), "utf8")).toBe("solid original");
     view.authorizeAppInteraction = () => true;
     state.sessionId = "replacement";
-    expect((await invoke("mcp.app.readResource", { uri }))[0]).toBe(false);
+    expect((await read())[0]).toBe(false);
   });
 
   it("publishes after a rename gap and subsequent writes", async () => {
@@ -351,31 +356,21 @@ describe("registered MCP App host-file routes", () => {
     const file = path.join(state.root, "part.stl");
     await rename(file, `${file}.bak`);
     await notified.promise;
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await settle();
     expect(getMcpAppViewLease(viewId, runtime)?.disposeCallbacks?.size).toBe(1);
     notified = createDeferred();
     publish.mockClear();
     await writeFile(file, "solid replacement");
     await notified.promise;
-    expect(publish).toHaveBeenCalledWith(
-      "mcp.app.resourceUpdated",
-      { viewId, uri },
-      new Set(["alice"]),
-    );
+    expectUpdate();
     notified = createDeferred();
     publish.mockClear();
     await writeFile(file, "solid updated replacement");
     await notified.promise;
-    expect(publish).toHaveBeenCalledWith(
-      "mcp.app.resourceUpdated",
-      { viewId, uri },
-      new Set(["alice"]),
-    );
+    expectUpdate();
     connection.abort();
     expect(getMcpAppViewLease(viewId, runtime)?.disposeCallbacks?.size).toBe(0);
-    expect((await invoke("mcp.app.readResource", { uri }))[0]).toBe(false);
+    expect((await read())[0]).toBe(false);
   });
 
   it("stops polling when the connection closes during a rename gap", async () => {
@@ -411,21 +406,13 @@ describe("registered MCP App host-file routes", () => {
     expect((await invoke("mcp.app.subscribeResource", { uri }))[0]).toBe(true);
     await rename(file, `${file}.bak`);
     await withinTest(stopped.promise, signal);
-    expect(publish).toHaveBeenCalledWith(
-      "mcp.app.resourceUpdated",
-      { viewId, uri },
-      new Set(["alice"]),
-    );
+    expectUpdate();
     const notified = createDeferred();
     publish.mockClear();
     publish.mockImplementation(() => notified.resolve());
     await writeFile(file, "solid updated replacement");
     await withinTest(notified.promise, signal);
-    expect(publish).toHaveBeenCalledWith(
-      "mcp.app.resourceUpdated",
-      { viewId, uri },
-      new Set(["alice"]),
-    );
+    expectUpdate();
   });
 
   it("keeps file notifications alive after the accepted subscription request finishes", async ({
@@ -468,11 +455,7 @@ describe("registered MCP App host-file routes", () => {
         await rename(`${file}.tmp`, file);
       }
       await withinTest(notified.promise, signal);
-      expect(publish).toHaveBeenCalledWith(
-        "mcp.app.resourceUpdated",
-        { viewId, uri },
-        new Set(["alice"]),
-      );
+      expectUpdate();
       expect(JSON.parse(owner.socket.send.mock.calls[0]![0])).toMatchObject({
         event: "mcp.app.resourceUpdated",
         payload: { viewId, uri },

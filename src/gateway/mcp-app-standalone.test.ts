@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { setImmediate as settle } from "node:timers/promises";
 import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -16,6 +17,27 @@ import {
   runtime,
   view,
 } from "./mcp-app-standalone.http.test-support.js";
+
+type Host = Awaited<ReturnType<typeof createSerializedHost>>;
+function call(host: Host, id: string | number) {
+  host.emit({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "app-only" } });
+}
+function expectReply(host: Host, id: string | number, result: unknown) {
+  expect(host.postMessage).toHaveBeenCalledWith(
+    { jsonrpc: "2.0", id, result },
+    "http://127.0.0.1:18790",
+  );
+}
+function appRequest(ticket: string, params: Partial<Parameters<typeof request>[0]> = {}) {
+  return request({
+    url: "/__openclaw__/mcp-app/view",
+    authorization: `MCP-App ${ticket}`,
+    ...params,
+  });
+}
+function operations(ticket: string) {
+  return (body: unknown) => appRequest(ticket, { method: "POST", body });
+}
 
 describe("MCP App standalone host", () => {
   beforeEach(resetStandaloneMcpAppTestState);
@@ -58,12 +80,7 @@ describe("MCP App standalone host", () => {
     expect(issued.ticket).not.toContain("agent:main:main");
     expect(issued.expiresAtMs).toBe(nowMs + 2 * 60_000);
     expect(issueTicket({ sessionKey: "agent:main:main", view, nowMs: nowMs + 1 })).toEqual(issued);
-    const invoke = (ticket: string, now = nowMs) =>
-      request({
-        url: "/__openclaw__/mcp-app/view",
-        authorization: `MCP-App ${ticket}`,
-        now,
-      });
+    const invoke = (ticket: string, now = nowMs) => appRequest(ticket, { now });
     expect((await invoke(issued.ticket)).res.statusCode).toBe(200);
     expect(mocks.peekSessionMcpRuntime).toHaveBeenCalledWith({ sessionKey: "agent:main:main" });
     const suffix = issued.ticket.endsWith("x") ? "y" : "x";
@@ -115,27 +132,20 @@ describe("MCP App standalone host", () => {
     });
 
     expect(readOnly.ticket).not.toBe(stronger.ticket);
-    const payload = await request({
-      url: "/__openclaw__/mcp-app/view",
-      authorization: `MCP-App ${readOnly.ticket}`,
-    });
+    const payload = await appRequest(readOnly.ticket);
     expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toMatchObject({
       serverTools: false,
     });
 
-    const denied = await request({
-      url: "/__openclaw__/mcp-app/view",
+    const denied = await appRequest(readOnly.ticket, {
       method: "POST",
-      authorization: `MCP-App ${readOnly.ticket}`,
       body: { method: "tools/call", params: { name: "app-only", arguments: {} } },
     });
     expect(denied.res.statusCode).toBe(403);
     expect(runtime.callTool).not.toHaveBeenCalled();
 
-    const allowed = await request({
-      url: "/__openclaw__/mcp-app/view",
+    const allowed = await appRequest(stronger.ticket, {
       method: "POST",
-      authorization: `MCP-App ${stronger.ticket}`,
       body: { method: "tools/call", params: { name: "app-only", arguments: {} } },
     });
     expect(allowed.res.statusCode).toBe(200);
@@ -254,7 +264,7 @@ describe("MCP App standalone host", () => {
     const route = "/__openclaw__/mcp-app/view";
     expect((await request({ url: route })).res.statusCode).toBe(401);
     expect((await request({ url: `${route}?ticket=${issued.ticket}` })).res.statusCode).toBe(401);
-    const accepted = await request({ url: route, authorization: `MCP-App ${issued.ticket}` });
+    const accepted = await appRequest(issued.ticket);
     expect(accepted.res.statusCode).toBe(200);
     expect(JSON.parse(String(accepted.end.mock.calls[0]?.[0]))).toMatchObject({
       html: view.html,
@@ -262,14 +272,10 @@ describe("MCP App standalone host", () => {
       serverTools: true,
       serverResources: true,
     });
-    expect(
-      (await request({ url: route, authorization: `MCP-App ${issued.ticket}` })).res.statusCode,
-    ).toBe(200);
+    expect((await appRequest(issued.ticket)).res.statusCode).toBe(200);
     for (const replacement of [null, { ...runtime, sessionId: "runtime-replaced" }]) {
       mocks.peekSessionMcpRuntime.mockReturnValue(replacement);
-      expect(
-        (await request({ url: route, authorization: `MCP-App ${issued.ticket}` })).res.statusCode,
-      ).toBe(401);
+      expect((await appRequest(issued.ticket)).res.statusCode).toBe(401);
     }
     mocks.peekSessionMcpRuntime.mockReturnValue(runtime);
     for (const replacement of [
@@ -277,16 +283,14 @@ describe("MCP App standalone host", () => {
       { ...view, sessionId: "runtime-replaced" },
     ]) {
       mocks.getMcpAppViewLease.mockReturnValue(replacement);
-      expect(
-        (await request({ url: route, authorization: `MCP-App ${issued.ticket}` })).res.statusCode,
-      ).toBe(401);
+      expect((await appRequest(issued.ticket)).res.statusCode).toBe(401);
     }
   });
 
   it("cancels only the active serialized request", async () => {
     const id = 0;
     const host = await createSerializedHost();
-    host.emit({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "app-only" } });
+    call(host, id);
     const operation = host.operations[0]!;
     const cancel = { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id } };
     host.emit(cancel, { source: {} });
@@ -297,37 +301,27 @@ describe("MCP App standalone host", () => {
     host.emit(cancel);
     expect(operation.signal?.aborted).toBe(true);
     operation.result.resolve("late response");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await settle();
     expect(host.postMessage.mock.calls.filter(([message]) => message.id === id)).toEqual([]);
     expect(host.timeout).toHaveBeenCalledTimes(1);
 
-    host.emit({ jsonrpc: "2.0", id: "next", method: "tools/call", params: { name: "app-only" } });
+    call(host, "next");
     host.emit(cancel);
     expect(host.operations[1]?.signal?.aborted).toBe(false);
     host.operations[1]!.result.resolve("next result");
-    await vi.waitFor(() =>
-      expect(host.postMessage).toHaveBeenCalledWith(
-        { jsonrpc: "2.0", id: "next", result: "next result" },
-        "http://127.0.0.1:18790",
-      ),
-    );
+    await vi.waitFor(() => expectReply(host, "next", "next result"));
   });
 
   it("keeps the original reply when an active ID collides with initialization", async () => {
     const host = await createSerializedHost();
-    host.emit({ jsonrpc: "2.0", id: 0, method: "tools/call", params: { name: "app-only" } });
+    call(host, 0);
     host.emit({ jsonrpc: "2.0", id: 0, method: "ui/initialize", params: {} });
     host.emit({ ...host.initialize, id: 0 });
     expect(host.operations).toHaveLength(1);
     expect(host.postMessage).not.toHaveBeenCalled();
     host.operations[0]!.result.resolve("original result");
     await vi.waitFor(() => expect(host.postMessage).toHaveBeenCalledTimes(1));
-    expect(host.postMessage).toHaveBeenCalledWith(
-      { jsonrpc: "2.0", id: 0, result: "original result" },
-      "http://127.0.0.1:18790",
-    );
+    expectReply(host, 0, "original result");
   });
 
   it("retires resource reads when the page closes", async () => {
@@ -341,29 +335,25 @@ describe("MCP App standalone host", () => {
     host.emit({ jsonrpc: "2.0", id: 2, method, params: {} });
     expect(host.operations).toHaveLength(1);
     host.operations[0]!.result.resolve("late result");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await settle();
     expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
   });
 
   it("requests one fresh document on a persisted live-host return without replaying work", async () => {
     const host = await createSerializedHost();
-    host.emit({ jsonrpc: "2.0", id: "old", method: "tools/call", params: { name: "app-only" } });
+    call(host, "old");
     expect(host.operations).toHaveLength(1);
     host.pagehide(true);
     expect(host.operations[0]!.signal?.aborted).toBe(true);
     host.operations[0]!.result.resolve("late result");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await settle();
     expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
     // Observe the real serialized owner's Location API, not simulated browser cache eligibility.
     host.pageshow(true);
     expect(host.reload).toHaveBeenCalledOnce();
     host.pageshow(true);
     expect(host.reload).toHaveBeenCalledOnce();
-    host.emit({ jsonrpc: "2.0", id: "next", method: "tools/call", params: { name: "app-only" } });
+    call(host, "next");
     expect(host.operations).toHaveLength(1);
     expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
   });
@@ -372,34 +362,25 @@ describe("MCP App standalone host", () => {
     const host = await createSerializedHost();
     host.pageshow(true);
     expect(host.reload).not.toHaveBeenCalled();
-    host.emit({ jsonrpc: "2.0", id: "live", method: "tools/call", params: { name: "app-only" } });
+    call(host, "live");
     expect(host.operations).toHaveLength(1);
     host.operations[0]!.result.resolve("live result");
-    await vi.waitFor(() =>
-      expect(host.postMessage).toHaveBeenCalledWith(
-        { jsonrpc: "2.0", id: "live", result: "live result" },
-        "http://127.0.0.1:18790",
-      ),
-    );
+    await vi.waitFor(() => expectReply(host, "live", "live result"));
   });
 
   it("does not resurrect a failed host after persisted history events", async () => {
-    const host = await createSerializedHost({
-      operationStatus: 401,
-    });
-    host.emit({ jsonrpc: "2.0", id: "old", method: "tools/call", params: { name: "app-only" } });
+    const host = await createSerializedHost({ operationStatus: 401 });
+    call(host, "old");
     host.operations[0]!.result.resolve("rejected");
     await vi.waitFor(() => expect(host.frame.remove).toHaveBeenCalledOnce());
     host.pagehide(true);
     expect(host.operations[0]!.signal?.aborted).toBe(true);
     host.pageshow(true);
     expect(host.reload).not.toHaveBeenCalled();
-    host.emit({ jsonrpc: "2.0", id: "next", method: "tools/call", params: { name: "app-only" } });
+    call(host, "next");
     expect(host.operations).toHaveLength(1);
     host.operations[0]!.result.resolve("late result");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await settle();
     expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
   });
 
@@ -421,9 +402,7 @@ describe("MCP App standalone host", () => {
         } else {
           initialBody.reject(new Error("retired initial body failed"));
         }
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await settle();
         expect(host.replaceChildren).not.toHaveBeenCalled();
         host.pageshow(true);
         expect(host.reload).toHaveBeenCalledTimes(persisted ? 1 : 0);
@@ -441,12 +420,7 @@ describe("MCP App standalone host", () => {
       method: "notifications/cancelled",
       params: { requestId: "cancelled" },
     };
-    host.emit({
-      jsonrpc: "2.0",
-      id: "cancelled",
-      method: "tools/call",
-      params: { name: "app-only" },
-    });
+    call(host, "cancelled");
     try {
       const operation = host.operations[0]!;
       await vi.waitFor(() => expect(operation.response?.bodyUsed).toBe(true));
@@ -454,9 +428,7 @@ describe("MCP App standalone host", () => {
       expect(operation.signal?.aborted).toBe(true);
       expect(operation.signal?.reason.name).toBe("AbortError");
       // Native Response consumption rejects from the stream's actual AbortError; drain promise jobs.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await settle();
       expect(host.frame.remove).not.toHaveBeenCalled();
       expect(host.replaceChildren).toHaveBeenCalledTimes(1);
       expect(host.postMessage).not.toHaveBeenCalled();
@@ -467,7 +439,7 @@ describe("MCP App standalone host", () => {
 
   it("accepts a teardown response in the opposite request-ID namespace", async () => {
     const host = await createSerializedHost();
-    host.emit({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "app-only" } });
+    call(host, 1);
     host.emit({ jsonrpc: "2.0", method: "ui/notifications/request-teardown" });
     expect(host.postMessage).toHaveBeenCalledWith(
       { jsonrpc: "2.0", id: 1, method: "ui/resource-teardown", params: {} },
@@ -477,9 +449,7 @@ describe("MCP App standalone host", () => {
     expect(host.frame.remove).toHaveBeenCalledOnce();
     expect(host.operations[0]?.signal?.aborted).toBe(true);
     host.operations[0]!.result.resolve("late result");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await settle();
     expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
   });
 
@@ -492,12 +462,7 @@ describe("MCP App standalone host", () => {
       if (message.method === "ui/resource-teardown") {
         cleanup = Promise.resolve().then(async () => {
           await existingReply.promise;
-          host.emit({
-            jsonrpc: "2.0",
-            id: "save",
-            method: "tools/call",
-            params: { name: "app-only" },
-          });
+          call(host, "save");
           await savedReply.promise;
           host.emit({ jsonrpc: "2.0", id: message.id, result: {} });
         });
@@ -508,12 +473,7 @@ describe("MCP App standalone host", () => {
       }
     });
     try {
-      host.emit({
-        jsonrpc: "2.0",
-        id: "existing",
-        method: "tools/call",
-        params: { name: "app-only" },
-      });
+      call(host, "existing");
       host.emit({ jsonrpc: "2.0", method: "ui/notifications/request-teardown" });
       expect(cleanup).toBeDefined();
       expect(host.frame.remove).not.toHaveBeenCalled();
@@ -525,10 +485,7 @@ describe("MCP App standalone host", () => {
       expect(host.frame.remove).not.toHaveBeenCalled();
       save.result.resolve("cleanup saved");
       await cleanup;
-      expect(host.postMessage).toHaveBeenCalledWith(
-        { jsonrpc: "2.0", id: "save", result: "cleanup saved" },
-        "http://127.0.0.1:18790",
-      );
+      expectReply(host, "save", "cleanup saved");
       expect(host.frame.remove).toHaveBeenCalledOnce();
       host.timers[0]!.run();
       expect(host.frame.remove).toHaveBeenCalledOnce();
@@ -548,7 +505,7 @@ describe("MCP App standalone host", () => {
       const host = await createSerializedHost();
       const teardown = { jsonrpc: "2.0", method: "ui/notifications/request-teardown" };
       host.emit(teardown);
-      host.emit({ jsonrpc: "2.0", id: "save", method: "tools/call", params: { name: "app-only" } });
+      call(host, "save");
       expect(host.operations).toHaveLength(1);
       expect(host.operations[0]!.signal?.aborted).toBe(false);
       host.emit(teardown);
@@ -563,11 +520,9 @@ describe("MCP App standalone host", () => {
       expect(host.operations[0]!.signal?.aborted).toBe(true);
       host.pageshow(true);
       expect(host.reload).not.toHaveBeenCalled();
-      host.emit({ jsonrpc: "2.0", id: "late", method: "tools/call", params: { name: "app-only" } });
+      call(host, "late");
       host.operations[0]!.result.resolve("late save result");
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await settle();
       expect(host.operations).toHaveLength(1);
       expect(host.postMessage.mock.calls.filter(([message]) => "result" in message)).toEqual([]);
     },
@@ -576,7 +531,7 @@ describe("MCP App standalone host", () => {
   it("keeps simultaneous numeric and string request IDs independent", async () => {
     const host = await createSerializedHost();
     for (const id of [7, "7"]) {
-      host.emit({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "app-only" } });
+      call(host, id);
     }
     expect(host.operations).toHaveLength(2);
     host.emit({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 7 } });
@@ -585,41 +540,26 @@ describe("MCP App standalone host", () => {
     host.operations[0]!.result.resolve("cancelled number");
     host.operations[1]!.result.resolve("live string");
     await vi.waitFor(() => expect(host.postMessage).toHaveBeenCalledTimes(1));
-    expect(host.postMessage).toHaveBeenCalledWith(
-      { jsonrpc: "2.0", id: "7", result: "live string" },
-      "http://127.0.0.1:18790",
-    );
+    expectReply(host, "7", "live string");
   });
 
   it("does not let a retired completion affect a reused request ID", async () => {
     const host = await createSerializedHost();
-    const call = { jsonrpc: "2.0", id: 0, method: "tools/call", params: { name: "app-only" } };
-    host.emit(call);
+    call(host, 0);
     host.emit({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 0 } });
     // MCP forbids session ID reuse; old completion cleanup must still be harmless.
-    host.emit(call);
+    call(host, 0);
     host.operations[0]!.result.resolve("retired result");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await settle();
     expect(host.postMessage).not.toHaveBeenCalled();
     host.operations[1]!.result.resolve("current result");
     await vi.waitFor(() => expect(host.postMessage).toHaveBeenCalledTimes(1));
-    expect(host.postMessage).toHaveBeenCalledWith(
-      { jsonrpc: "2.0", id: 0, result: "current result" },
-      "http://127.0.0.1:18790",
-    );
+    expectReply(host, 0, "current result");
   });
 
   it("executes only owning-server app-visible allowed tools and resources", async () => {
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
-    const invoke = (body: unknown) =>
-      request({
-        url: "/__openclaw__/mcp-app/view",
-        method: "POST",
-        authorization: `MCP-App ${issued.ticket}`,
-        body,
-      });
+    const invoke = operations(issued.ticket);
 
     const tool = await invoke({
       method: "tools/call",
@@ -652,10 +592,8 @@ describe("MCP App standalone host", () => {
     view.authorizeAppInteraction = vi.fn(async () => grantActive);
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
 
-    const pending = request({
-      url: "/__openclaw__/mcp-app/view",
+    const pending = appRequest(issued.ticket, {
       method: "POST",
-      authorization: `MCP-App ${issued.ticket}`,
       body: { method: "tools/call", params: { name: "app-only", arguments: {} } },
     });
     await catalogStarted.promise;
@@ -674,20 +612,11 @@ describe("MCP App standalone host", () => {
   it("denies resource reads from reconstructed read-only views", async () => {
     Object.assign(view, { readOnly: true });
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
-    const payload = await request({
-      url: "/__openclaw__/mcp-app/view",
-      authorization: `MCP-App ${issued.ticket}`,
-    });
+    const payload = await appRequest(issued.ticket);
     expect(JSON.parse(String(payload.end.mock.calls[0]?.[0]))).toMatchObject({
       serverResources: false,
     });
-    const invoke = (body: unknown) =>
-      request({
-        url: "/__openclaw__/mcp-app/view",
-        method: "POST",
-        authorization: `MCP-App ${issued.ticket}`,
-        body,
-      });
+    const invoke = operations(issued.ticket);
     expect(
       (await invoke({ method: "tools/call", params: { name: "app-only", arguments: {} } })).res
         .statusCode,
@@ -702,13 +631,7 @@ describe("MCP App standalone host", () => {
   it("does not accept standalone server operations without explicit run authority", async () => {
     Object.assign(view, { allowedAppToolNames: undefined });
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
-    const invoke = (body: unknown) =>
-      request({
-        url: "/__openclaw__/mcp-app/view",
-        method: "POST",
-        authorization: `MCP-App ${issued.ticket}`,
-        body,
-      });
+    const invoke = operations(issued.ticket);
 
     expect((await invoke({ method: "tools/list", params: {} })).res.statusCode).toBe(403);
     expect(
@@ -725,23 +648,13 @@ describe("MCP App standalone host", () => {
   it("revalidates expiry and enforces request concurrency through the ticket boundary", async () => {
     const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
     const invoke = (now: number) =>
-      request({
-        url: "/__openclaw__/mcp-app/view",
+      appRequest(issued.ticket, {
         method: "POST",
-        authorization: `MCP-App ${issued.ticket}`,
         now,
         body: { method: "resources/list", params: {} },
       });
     view.activeRequests = 4;
-    expect(
-      (
-        await request({
-          url: "/__openclaw__/mcp-app/view",
-          authorization: `MCP-App ${issued.ticket}`,
-          now: nowMs,
-        })
-      ).res.statusCode,
-    ).toBe(429);
+    expect((await appRequest(issued.ticket, { now: nowMs })).res.statusCode).toBe(429);
     expect((await invoke(nowMs)).res.statusCode).toBe(403);
     view.activeRequests = 0;
     expect((await invoke(issued.expiresAtMs + 1)).res.statusCode).toBe(401);
@@ -750,10 +663,8 @@ describe("MCP App standalone host", () => {
     const clock = () => currentTime;
     expect(
       (
-        await request({
-          url: "/__openclaw__/mcp-app/view",
+        await appRequest(issued.ticket, {
           method: "POST",
-          authorization: `MCP-App ${issued.ticket}`,
           clock,
           beforeBody: () => {
             currentTime = issued.expiresAtMs + 1;
@@ -773,10 +684,8 @@ describe("MCP App standalone host", () => {
     expect((await request({ url: "/__openclaw__/mcp-app/other" })).handled).toBe(false);
     expect(
       (
-        await request({
-          url: "/__openclaw__/mcp-app/view",
+        await appRequest(issued.ticket, {
           method: "POST",
-          authorization: `MCP-App ${issued.ticket}`,
           body: { method: "gateway.call", params: {} },
         })
       ).res.statusCode,
