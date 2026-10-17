@@ -719,8 +719,9 @@ avatar bytes are not part of enumeration. Mention directory preparation respects
 the existing profile-version invalidation, then evaluates current requester,
 session, and role policy and publishes the RPC response in one synchronous step.
 Prepared directory rows are descriptive
-facts, never permission or current alias authority. Project recents retain a narrow
-fresh primary-profile and alias query for their disclosure scope. Profile creation,
+facts, never permission or current alias authority. Project recents prepare aliases
+from the committed profile catalog and retain live merge-authority checks across
+their disclosure waits. Profile creation,
 display-name and role changes, explicit avatar uploads, identity merges, and final
 identity/permission lookups keep their existing native owners.
 
@@ -728,8 +729,9 @@ Chat startup prepares its requester from the profile catalog retained by the
 session projection. Metadata reads the current merge head after preparation
 waits and rejects a changed client identity or retired physical database. A
 missing catalog leaves optional metadata unavailable without opening SQLite.
-Legacy email clients resolve their alias through the read-only worker; only
-a missing alias enters the shared-state writer and existing profile transaction.
+Legacy email clients resolve their alias through the canonical profile owner,
+reusing its committed email bindings when resident and its existing profile
+transaction otherwise.
 Committed creation updates the same resident catalog before profile observers,
 including retained reconciliation when result delivery fails. Other profile
 mutation and authorization paths retain their existing owners. Schema, migration,

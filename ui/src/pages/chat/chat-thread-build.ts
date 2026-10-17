@@ -237,6 +237,7 @@ export function buildChatItems(
       items.push({
         kind: "divider",
         key: `divider:model-fallback:${itemKey}`,
+        systemEvent: "info",
         label: t(
           fallback.phase === "restored"
             ? "chat.composer.modelRestoredEvent"

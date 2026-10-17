@@ -12,11 +12,11 @@ export function subscribeChatPaneStartup(
   context: Pick<ApplicationContext, "placementStartup">,
   getState: () => ChatPageHost | undefined,
 ): () => void {
+  // Admit each accepted initial turn before waking followers parked behind recovery.
   return context.placementStartup.subscribe(() => {
     const state = getState();
     if (state) {
       admitChatSubmission(state, getChatPendingInputs(state)?.page.items);
-      // Project the accepted initial turn before waking followers parked behind recovery.
       if (!parseCatalogSessionKey(state.sessionKey)) {
         void resumeStoredChatOutboxes(state);
       }

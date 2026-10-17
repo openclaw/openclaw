@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { EngineConnection, PostgresSqlConnection } from "../sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
+  getOrLoadSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "../sqlite-database-admission.js";
@@ -86,6 +87,11 @@ const admissionKey: SqliteDatabaseAdmissionKey<PostgresPhysicalFacts> = {
 
 export function getPostgresPhysicalFacts(db: EngineConnection) {
   return getSqliteDatabaseAdmission(db, admissionKey);
+}
+
+/** Operator projections consume admission evidence without opening or probing a store. */
+export function getPostgresPhysicalFactsForPath(path: string) {
+  return getOrLoadSqliteDatabaseAdmissionForPath(path, admissionKey, () => undefined);
 }
 
 /** The anchor carries PG admission facts without treating its native catalog as application data. */

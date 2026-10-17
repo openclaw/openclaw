@@ -21,7 +21,10 @@ import {
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIStringContentWrapper,
 } from "../../llm/providers/stream-wrappers/openai.js";
-import { createOpenRouterSystemCacheWrapper } from "../../llm/providers/stream-wrappers/proxy.js";
+import {
+  createOpenRouterSystemCacheWrapper,
+  OPENROUTER_RESPONSE_CACHE_TTL_KEYS,
+} from "../../llm/providers/stream-wrappers/proxy.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { SimpleStreamOptions } from "../../llm/types.js";
 import {
@@ -392,12 +395,7 @@ function canonicalizeExtraParamAlias(
 
 const OPENROUTER_RESPONSE_CACHE_PARAM_ALIASES = [
   ["responseCache", "response_cache"],
-  [
-    "responseCacheTtlSeconds",
-    "response_cache_ttl_seconds",
-    "responseCacheTtl",
-    "response_cache_ttl",
-  ],
+  OPENROUTER_RESPONSE_CACHE_TTL_KEYS,
   ["responseCacheClear", "response_cache_clear"],
 ] as const;
 

@@ -4,6 +4,7 @@ import type { ControlUiSettingsView } from "openclaw/plugin-sdk/control-ui";
 import { createSignal } from "solid-js";
 import { createMemoryOverviewController } from "./controller.ts";
 import { createTranslator } from "./i18n/index.ts";
+import { memoriesView } from "./memories.tsx";
 import { createMemoryOverview } from "./overview.tsx";
 
 export const pluginId = "memory-core";
@@ -61,4 +62,5 @@ export const settingsViews: readonly ControlUiSettingsView[] = [
       };
     },
   },
+  memoriesView,
 ];

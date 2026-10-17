@@ -17,7 +17,6 @@ import {
   collectServiceFiles,
   isLegacyLabel,
   isPotentialGatewayServiceName,
-  readServiceFile,
   scanSystemdDir,
   type ExtraGatewayService,
   type ServiceFileInspectionError,
@@ -445,7 +444,13 @@ async function scanGatewayServices(
           continue;
         }
         const backupPath = path.join(userDir, `${name}.service.bak`);
-        if ((await readServiceFile(backupPath)) !== null) {
+        const backup = await fs.readFile(backupPath).catch((error: unknown) => {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            errors.push({ source: backupPath, message: "Service path could not be inspected." });
+          }
+          return null;
+        });
+        if (backup !== null) {
           push({
             platform: "linux",
             label,

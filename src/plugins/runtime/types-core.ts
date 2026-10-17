@@ -441,7 +441,7 @@ export type PluginRuntimeCore = {
           assertCurrent: () => void;
         }>
       >;
-      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. */
+      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
       patchSessionEntry: (
         params: RuntimeSessionStoreEntryPatchParams,
       ) => Promise<RuntimeSessionEntry | null>;
@@ -451,7 +451,7 @@ export type PluginRuntimeCore = {
         params: RuntimeSessionWorkAdmissionParams,
         run: (signal: AbortSignal) => Promise<T>,
       ) => Promise<T>;
-      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. */
+      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
       updateSessionStoreEntry: (
         params: RuntimeSessionStoreEntryUpdateParams,
       ) => Promise<RuntimeSessionEntry | null>;
@@ -540,7 +540,7 @@ export type PluginRuntimeCore = {
     ) => import("../../music-generation/types.js").MusicGenerationProvider[];
   };
   webSearch: {
-    /** @deprecated Await listProvidersAsync so discovery policy is prepared off-thread. Final compatibility day: 2026-12-31. */
+    /** @deprecated Await listProvidersAsync so discovery policy is prepared off-thread. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
     listProviders: (
       params?: RuntimeProviderListParams,
     ) => import("../web-provider-types.js").PluginWebSearchProviderEntry[];

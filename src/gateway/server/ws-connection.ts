@@ -44,7 +44,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       return;
     }
     // Install before ws parses the first frame; the upgrade emits synchronously.
-    if (!installGatewayDeflateCodec(socket) && !warnedDeflateCodec) {
+    const compression = installGatewayDeflateCodec(socket);
+    if (!compression && !warnedDeflateCodec) {
       warnedDeflateCodec = true;
       params.logWsControl.warn(
         "unsupported ws permessage-deflate extension; compressed frames use the slower ws path",
@@ -52,6 +53,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     }
     let batched = false;
     Object.assign(socket, {
+      acceptsDeflatedSegments: compression?.acceptsDeflatedSegments ?? false,
       batchWrites() {
         if (batched) {
           return;

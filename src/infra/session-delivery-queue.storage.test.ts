@@ -301,7 +301,6 @@ describe("session-delivery queue storage", () => {
           {
             message: "only missing media",
             expectedMediaUrls: ["/tmp/two.png"],
-            suppressTextDelivery: true,
           },
           queueContext,
         );
@@ -319,7 +318,6 @@ describe("session-delivery queue storage", () => {
             "/tmp/one.png": [{ type: "image", artifactId: "artifact-one" }],
             "/tmp/two.png": [{ type: "image", artifactId: "artifact-two" }],
           },
-          suppressTextDelivery: true,
         });
       });
       sqlCalls.expectIdle();

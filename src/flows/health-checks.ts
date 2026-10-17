@@ -40,6 +40,8 @@ export interface HealthFinding {
   readonly target?: string;
   readonly requirement?: string;
   readonly fixHint?: string;
+  /** Structured, secret-free observations for operator JSON reports. */
+  readonly details?: Record<string, unknown>;
 }
 
 type HealthCheckMode = "doctor" | "lint" | "fix";

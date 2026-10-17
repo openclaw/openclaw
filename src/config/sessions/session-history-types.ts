@@ -72,6 +72,7 @@ export type ChatHistoryPageAnchor = Pick<ChatHistoryPageCursor, "sessionId" | "s
 
 export type ChatHistoryPage = {
   encodedResponse?: ChatHistoryResponsePage<Uint8Array<ArrayBuffer>>;
+  encodedMessagesDeflate?: Uint8Array<ArrayBuffer>;
   windowReset?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
@@ -91,6 +92,7 @@ export type ChatHistoryPage = {
 
 export type ChatHistoryPageParams = {
   encodeResponse?: boolean;
+  deflateResponse?: boolean;
   includePluginSteering?: boolean;
   compactionMetrics?: LegacyCompactionMetrics;
   entry: InternalSessionEntry | undefined;

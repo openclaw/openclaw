@@ -335,10 +335,13 @@ it("deduplicates legacy session methods across managers while preserving immedia
       expect(manager.getEntry(info)).toMatchObject({ id: info, type: "session_info" });
     }
   });
-  expect(warning).toHaveBeenCalledExactlyOnceWith(
-    expect.stringContaining(
-      "Plugin session-compat-family: SessionManager.appendCustomEntry is deprecated; use appendCustomEntryAsync",
-    ),
-    { code: "DEP_SESSION_PERSISTENCE", type: "DeprecationWarning" },
-  );
+  expect(warning).toHaveBeenCalledTimes(2);
+  for (const method of ["appendCustomEntry", "appendSessionInfo"]) {
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `Plugin session-compat-family: SessionManager.${method} is deprecated; use ${method}Async`,
+      ),
+      { code: "DEP_SESSION_PERSISTENCE", type: "DeprecationWarning" },
+    );
+  }
 });

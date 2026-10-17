@@ -1,14 +1,15 @@
+/** @jsxImportSource @solidjs/web */
+import { render } from "@solidjs/web";
+import type {
+  AgentsWorkspaceGetResult,
+  ControlUiSettingsContext,
+  ControlUiSettingsSnapshot,
+  ControlUiSettingsView,
+  MemorySearchResponse,
+} from "openclaw/plugin-sdk/control-ui";
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
-import type { AgentsWorkspaceGetResult } from "../../../../packages/gateway-protocol/src/index.js";
-import type { MemorySearchResponse } from "../../../../src/gateway/server-methods/memory-search.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { formatUiError } from "../../lib/format-error.ts";
-import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import "../../styles/memory-memories.css";
-
-registerEnglishCatalog(registerSettingsEnglish);
+import { createTranslator } from "./i18n/index.ts";
+import "./memories.css";
 
 type SearchResult = MemorySearchResponse["results"][number];
 type SearchState =
@@ -20,11 +21,9 @@ type DetailState =
   | { kind: "ready"; content: string }
   | { kind: "error"; message: string };
 
-export type MemoryMemoriesProps = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  methodAdvertised: boolean;
-  agentId: string | null;
+type MemoryMemoriesProps = {
+  context: ControlUiSettingsContext;
+  snapshot: ControlUiSettingsSnapshot;
 };
 
 function resultKey(result: SearchResult, index: number): string {
@@ -60,16 +59,10 @@ function FileContent(props: { content: string; result: SearchResult }) {
   );
 }
 
-export function MemoryMemories(props: MemoryMemoriesProps) {
-  // Search drafts and outstanding reads belong to this agent and connection.
-  const identity = createMemo(
-    () => [props.agentId, props.client, props.connected, props.methodAdvertised],
-    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
-  );
-  return <For each={[identity()]}>{() => <MemorySearch {...props} />}</For>;
-}
-
-function MemorySearch(props: MemoryMemoriesProps) {
+function MemoryMemories(props: MemoryMemoriesProps) {
+  const t = createTranslator(() => props.snapshot.locale);
+  const methodAdvertised = () =>
+    props.snapshot.advertisedMethods?.includes("memory.search") === true;
   const [query, setQuery] = createSignal("");
   const [searchState, setSearchState] = createSignal<SearchState>({ kind: "idle" });
   const [openResultKey, setOpenResultKey] = createSignal<string | null>(null);
@@ -84,9 +77,14 @@ function MemorySearch(props: MemoryMemoriesProps) {
 
   async function search(value: string) {
     const normalizedQuery = value.trim();
-    const client = props.connected ? props.client : null;
-    const agentId = props.agentId;
-    if (!normalizedQuery || !client || !agentId || !props.methodAdvertised) {
+    const agentId = props.snapshot.agentId;
+    if (
+      !normalizedQuery ||
+      !props.snapshot.connected ||
+      !agentId ||
+      !methodAdvertised() ||
+      props.context.signal.aborted
+    ) {
       return;
     }
     const request = {};
@@ -97,19 +95,23 @@ function MemorySearch(props: MemoryMemoriesProps) {
     setOpenResultKey(null);
     setDetails(new Map());
     try {
-      const result = await client.request<MemorySearchResponse>("memory.search", {
+      const result = await props.context.request<MemorySearchResponse>("memory.search", {
         query: normalizedQuery,
         agentId,
       });
-      if (searchRequest !== request || props.agentId !== agentId || props.client !== client) {
+      if (searchRequest !== request || props.context.signal.aborted) {
         return;
       }
       setSearchState({ kind: "ready", query: normalizedQuery, ...result });
     } catch (error) {
-      if (searchRequest !== request || props.agentId !== agentId || props.client !== client) {
+      if (searchRequest !== request || props.context.signal.aborted) {
         return;
       }
-      setSearchState({ kind: "error", query: normalizedQuery, message: formatUiError(error) });
+      setSearchState({
+        kind: "error",
+        query: normalizedQuery,
+        message: props.context.formatError(error),
+      });
     }
   }
 
@@ -122,24 +124,27 @@ function MemorySearch(props: MemoryMemoriesProps) {
   }
 
   async function loadDetail(path: string) {
-    const client = props.connected ? props.client : null;
-    const agentId = props.agentId;
-    if (!client || !agentId) {
+    const agentId = props.snapshot.agentId;
+    if (
+      !props.snapshot.connected ||
+      !agentId ||
+      !methodAdvertised() ||
+      props.context.signal.aborted
+    ) {
       return;
     }
     const request = {};
     detailRequests.set(path, request);
     setDetails((current) => new Map(current).set(path, { kind: "loading" }));
     try {
-      const response = await client.request<AgentsWorkspaceGetResult>("agents.workspace.get", {
-        agentId,
-        path,
-      });
-      if (
-        detailRequests.get(path) !== request ||
-        props.agentId !== agentId ||
-        props.client !== client
-      ) {
+      const response = await props.context.request<AgentsWorkspaceGetResult>(
+        "agents.workspace.get",
+        {
+          agentId,
+          path,
+        },
+      );
+      if (detailRequests.get(path) !== request || props.context.signal.aborted) {
         return;
       }
       const detail: DetailState =
@@ -148,15 +153,11 @@ function MemorySearch(props: MemoryMemoriesProps) {
           : { kind: "error", message: t("memoryPage.memories.fileUnsupported") };
       setDetails((current) => new Map(current).set(path, detail));
     } catch (error) {
-      if (
-        detailRequests.get(path) !== request ||
-        props.agentId !== agentId ||
-        props.client !== client
-      ) {
+      if (detailRequests.get(path) !== request || props.context.signal.aborted) {
         return;
       }
       setDetails((current) =>
-        new Map(current).set(path, { kind: "error", message: formatUiError(error) }),
+        new Map(current).set(path, { kind: "error", message: props.context.formatError(error) }),
       );
     }
   }
@@ -320,51 +321,62 @@ function MemorySearch(props: MemoryMemoriesProps) {
 
   return (
     <openclaw-memory-memories>
-      <ShellLayoutBoundary traits={{ settingsPage: true }}>
-        <div class="settings-page memory-memories">
-          {!props.methodAdvertised ? (
-            <p class="memory-memories__unavailable">
-              {t("memoryPage.memories.gatewayUpdateRequired")}
-            </p>
-          ) : (
-            <>
-              <form
-                class="memory-memories__search"
-                role="search"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void search(query());
-                }}
+      <div class="settings-page memory-memories">
+        {!methodAdvertised() ? (
+          <p class="memory-memories__unavailable">
+            {t("memoryPage.memories.gatewayUpdateRequired")}
+          </p>
+        ) : (
+          <>
+            <form
+              class="memory-memories__search"
+              role="search"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void search(query());
+              }}
+            >
+              <label class="settings-control__sr-label" for="memory-search-input">
+                {t("memoryPage.memories.searchLabel")}
+              </label>
+              <input
+                id="memory-search-input"
+                type="search"
+                class="settings-input"
+                value={query()}
+                placeholder={t("memoryPage.memories.searchPlaceholder")}
+                onInput={(event) => setQuery(event.currentTarget.value)}
+              />
+              <button
+                class="btn btn--sm primary"
+                type="submit"
+                disabled={
+                  !props.snapshot.connected ||
+                  !props.snapshot.agentId ||
+                  !query().trim() ||
+                  searchState().kind === "loading"
+                }
               >
-                <label class="settings-control__sr-label" for="memory-search-input">
-                  {t("memoryPage.memories.searchLabel")}
-                </label>
-                <input
-                  id="memory-search-input"
-                  type="search"
-                  class="settings-input"
-                  value={query()}
-                  placeholder={t("memoryPage.memories.searchPlaceholder")}
-                  onInput={(event) => setQuery(event.currentTarget.value)}
-                />
-                <button
-                  class="btn btn--sm primary"
-                  type="submit"
-                  disabled={
-                    !props.connected ||
-                    !props.agentId ||
-                    !query().trim() ||
-                    searchState().kind === "loading"
-                  }
-                >
-                  {t("memoryPage.memories.searchButton")}
-                </button>
-              </form>
-              <SearchStatus />
-            </>
-          )}
-        </div>
-      </ShellLayoutBoundary>
+                {t("memoryPage.memories.searchButton")}
+              </button>
+            </form>
+            <SearchStatus />
+          </>
+        )}
+      </div>
     </openclaw-memory-memories>
   );
 }
+
+export const memoriesView: ControlUiSettingsView = {
+  placement: { section: "memory", panel: "memories" },
+  mount(container, context) {
+    // Only the host's imperative lifetime writes this presentation projection.
+    const [snapshot, setSnapshot] = createSignal(context.props, { ownedWrite: true });
+    const dispose = render(
+      () => <MemoryMemories context={context} snapshot={snapshot()} />,
+      container,
+    );
+    return { update: setSnapshot, dispose };
+  },
+};

@@ -38,6 +38,7 @@ export class ProcessesPanelData {
     private readonly context: ApplicationContext,
     private readonly changed: () => void,
   ) {
+    // Connection edges retire polling scopes synchronously, including while the pane is hidden.
     this.unsubscribe = context.gateway.subscribe(() => this.reconcile());
     // This synchronous polling owner binds document visibility until dispose().
     this.visibilityDocument?.addEventListener("visibilitychange", this.visibilityChanged);

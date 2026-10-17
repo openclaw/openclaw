@@ -1,3 +1,4 @@
+import { worktreeReadOperations } from "../agents/worktrees/registry-read.kernel.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { sessionUpstreamReadOperations } from "../sessions/session-upstream-links.kernel.js";
@@ -7,6 +8,12 @@ import {
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  agentProvenance: () =>
+    import("./agent-provenance.kernel.js").then((m) => m.agentProvenanceReadOperations),
+  managedImages: () =>
+    import("../gateway/managed-image-record-store.kernel.js").then(
+      (m) => m.managedImageRecordReadOperations,
+    ),
   githubPublications: () =>
     import("./github-publication.read.worker.js").then((m) => m.publicationReadOperations),
   deviceIdentity: () =>
@@ -17,6 +24,8 @@ const loaders = {
     import("./config-machine-state.read.worker.js").then((m) => m.machineStateReadOperations),
   projects: () =>
     import("../projects/project-registry.kernel.js").then((m) => m.projectRegistryReadOperations),
+  // Cleanup-state reads already require this kernel in the same read-worker graph.
+  worktrees: async () => worktreeReadOperations,
   agentDeletion: () =>
     import("../agents/agent-delete-session-store-safety.kernel.js").then(
       (m) => m.agentDeletionSessionStoreReadOperations,

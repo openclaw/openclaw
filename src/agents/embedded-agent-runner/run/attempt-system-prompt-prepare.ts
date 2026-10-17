@@ -208,6 +208,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   const openClawReferences =
     params.referencePaths ??
     (await resolveOpenClawReferencePaths({
+      sandbox: params.setup.sandbox,
       workspaceDir: params.setup.effectiveWorkspace,
       argv1: process.argv[1],
       cwd: params.setup.effectiveCwd,

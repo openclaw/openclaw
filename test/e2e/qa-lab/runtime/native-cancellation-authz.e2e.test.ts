@@ -295,6 +295,7 @@ describe("native child cancellation authority", () => {
                 ownerKey: ROUTE_OWNER,
               });
               expect(released).toBe(true);
+              await withinTest(activation.mock.results[0]!.value, signal);
               expect(getGatewayContextResolver(subagentRuns.get(runId)!)).toBeDefined();
             } finally {
               releaseActivation.resolve();

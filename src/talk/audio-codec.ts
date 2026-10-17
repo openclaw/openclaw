@@ -349,18 +349,26 @@ export function pcmToMulaw(pcm: Buffer): Buffer {
 /** Expand G.711 mu-law bytes into little-endian signed 16-bit PCM samples. */
 export function mulawToPcm(mulaw: Buffer): Buffer {
   const pcm = Buffer.alloc(mulaw.length * 2);
+  mulawToPcmInto(mulaw, pcm);
+  return pcm;
+}
+
+/** Decode into an exact-size destination that does not overlap the mu-law input. */
+export function mulawToPcmInto(mulaw: Buffer, pcm: Buffer): void {
+  if (pcm.length !== mulaw.length * 2) {
+    throw new RangeError("PCM destination must contain two bytes per mu-law sample");
+  }
   const pcmView = canUseInt16View(pcm) ? int16View(pcm) : undefined;
   if (pcmView) {
     for (let i = 0; i < mulaw.length; i += 1) {
       pcmView[i] = clamp16(mulawToLinear(mulaw[i] ?? 0));
     }
-    return pcm;
+    return;
   }
 
   for (let i = 0; i < mulaw.length; i += 1) {
     pcm.writeInt16LE(clamp16(mulawToLinear(mulaw[i] ?? 0)), i * 2);
   }
-  return pcm;
 }
 
 /** Resample signed 16-bit PCM to 8 kHz and encode it as G.711 mu-law. */

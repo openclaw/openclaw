@@ -108,7 +108,11 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
         id: type.slot,
         label: type.label,
         class: "side-panel-type-menu__item session-menu__item",
-        content: <PanelTypeOption type={type} />,
+        icon: <Icon name={type.icon} class="side-panel-type-option__icon" />,
+        labelClass: "side-panel-type-option__label",
+        details: type.shortcut ? (
+          <KeyboardShortcut combo={type.shortcut} class="side-panel-type-option__shortcut" />
+        ) : undefined,
       })),
   );
   return (
