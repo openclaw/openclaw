@@ -160,10 +160,11 @@ suite.define(() => {
 
         await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
         await page.evaluate("globalThis.__name = (fn) => fn");
-        const warm = await page.evaluate(persistColdLoadWarmState, {
+        const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
           sessionKey: fixture.selectedSessionKey,
           sidebarView: "online",
-        });
+        };
+        const warm = await page.evaluate(persistColdLoadWarmState, warmInput);
         expect(warm).toMatchObject({
           databaseVersion: 8,
           projectionVersion: 3,

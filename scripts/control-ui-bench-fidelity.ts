@@ -58,14 +58,22 @@ export function parseFidelityCpuReport(text: string): CpuReport {
       break;
     }
     const match = /^\s*(\d+(?:\.\d+)?)\s+([^\s]+\.[cm]?[jt]sx?):(\d+)\s+(.+)$/u.exec(line);
-    if (!match || match[2].includes("node_modules") || match[2].includes("@")) {
+    const [, duration, rawSource, rawLine, rawName] = match ?? [];
+    if (
+      !duration ||
+      !rawSource ||
+      !rawLine ||
+      !rawName ||
+      rawSource.includes("node_modules") ||
+      rawSource.includes("@")
+    ) {
       continue;
     }
-    const source = sourcePath(match[2]);
-    const sourceLine = Number(match[3]);
+    const source = sourcePath(rawSource);
+    const sourceLine = Number(rawLine);
     const key = `${source}:${sourceLine}`;
-    const milliseconds = Number(match[1]);
-    const name = match[4].trim();
+    const milliseconds = Number(duration);
+    const name = rawName.trim();
     const previous = grouped.get(key);
     if (previous) {
       previous.milliseconds = Math.max(previous.milliseconds, milliseconds);
@@ -93,7 +101,11 @@ export function fidelityDistribution(samples: number[]): Distribution {
   const quantile = (fraction: number) => {
     const index = (ordered.length - 1) * fraction;
     const lower = Math.floor(index);
-    return ordered[lower] + (ordered[Math.ceil(index)] - ordered[lower]) * (index - lower);
+    // SAFETY: Nonempty samples and fractions in [0, 1] keep both indexes within ordered.
+    const low = ordered[lower]!;
+    // SAFETY: The same quantile bounds cover the upper index.
+    const high = ordered[Math.ceil(index)]!;
+    return low + (high - low) * (index - lower);
   };
   return { median: quantile(0.5), q1: quantile(0.25), q3: quantile(0.75), samples };
 }
@@ -106,16 +118,19 @@ function semanticNames(fn: AppFunction): string[] {
 
 function matchingFunction(live: AppFunction, bench: CpuReport, liveReport: CpuReport) {
   // Source-map lines can move between revisions; use a named function only if unique on both sides.
-  const names = semanticNames(live).filter(
-    (name) =>
-      liveReport.functions.filter((fn) => fn.source === live.source && fn.names.includes(name))
-        .length === 1,
+  const names = new Set(
+    semanticNames(live).filter(
+      (name) =>
+        liveReport.functions.filter((fn) => fn.source === live.source && fn.names.includes(name))
+          .length === 1,
+    ),
   );
   const named = bench.functions.filter(
-    (fn) => fn.source === live.source && fn.names.some((name) => names.includes(name)),
+    (fn) => fn.source === live.source && fn.names.some((name) => names.has(name)),
   );
-  if (named.length === 1) {
-    return { fn: named[0], match: "name" };
+  const [unique] = named;
+  if (named.length === 1 && unique) {
+    return { fn: unique, match: "name" };
   }
   const exact = bench.functions.find((fn) => fn.source === live.source && fn.line === live.line);
   return exact ? { fn: exact, match: "location" } : undefined;
@@ -150,10 +165,11 @@ export function compareFidelity(
   }
   const functions = live.functions.slice(0, TOP_FUNCTIONS).map((fn) => {
     const liveShare = (fn.milliseconds / live.busyMs) * 100;
-    const matched = runs.map((run) => matchingFunction(fn, run.cpu, live));
-    const shares = fidelityDistribution(
-      runs.map((run, index) => ((matched[index]?.fn.milliseconds ?? 0) / run.cpu.busyMs) * 100),
-    );
+    const samples = runs.map((run) => {
+      const match = matchingFunction(fn, run.cpu, live);
+      return { match, share: ((match?.fn.milliseconds ?? 0) / run.cpu.busyMs) * 100 };
+    });
+    const shares = fidelityDistribution(samples.map((sample) => sample.share));
     const ratio = shares.median / liveShare;
     return {
       source: fn.source,
@@ -163,9 +179,9 @@ export function compareFidelity(
       liveShare,
       benchShare: shares,
       ratio,
-      matchedRuns: matched.filter(Boolean).length,
-      matches: matched.map((match) => match?.match ?? "missing"),
-      pass: matched.every(Boolean) && ratio >= 0.5 && ratio <= 2,
+      matchedRuns: samples.filter((sample) => sample.match).length,
+      matches: samples.map((sample) => sample.match?.match ?? "missing"),
+      pass: samples.every((sample) => sample.match) && ratio >= 0.5 && ratio <= 2,
     };
   });
   const methods = new Set([
@@ -266,16 +282,15 @@ async function readScenario(
   }
   const live = parseFidelityCpuReport(await readFile(scenario.liveCpu, "utf8"));
   const liveRpcs = parseFidelityRpcCounts(await readJson(scenario.liveRpcs));
+  const runNumber = (filename: string) => Number(filename.slice(4, filename.indexOf(".")));
   const runFiles = (await readdir(directory))
     .filter((filename) => /^run-\d+\.metrics\.json$/u.test(filename))
-    .toSorted(
-      (a, b) => Number(a.split("-")[1].split(".")[0]) - Number(b.split("-")[1].split(".")[0]),
-    );
+    .toSorted((a, b) => runNumber(a) - runNumber(b));
   const scratch = await mkdtemp(path.join(tmpdir(), "control-ui-fidelity-"));
   try {
     const runs: BenchRun[] = [];
     for (const filename of runFiles) {
-      const run = Number(filename.split("-")[1].split(".")[0]);
+      const run = runNumber(filename);
       const metrics = await readJson(path.join(directory, filename));
       if (
         !record(metrics) ||
