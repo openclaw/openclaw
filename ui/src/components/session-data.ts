@@ -54,7 +54,7 @@ import {
   subscribeSessionDataGatewayEvents,
   subscribeSessionCatalogBrowserEvents,
 } from "./session-data-events.ts";
-import { SessionLineageController } from "./session-lineage-controller.ts";
+import { SessionLineageOwner } from "./session-lineage.ts";
 import { SidebarOwnerSessionCounts } from "./sidebar-owner-session-counts.ts";
 
 /** Gateway-backed session-list and external-catalog data ownership. */
@@ -112,7 +112,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   // Retiring the epoch aborts it so a dialog open across a reconnect dismisses
   // itself instead of confirming into a mutation scope that no longer applies.
   private sessionMutationAbortController = new AbortController();
-  private readonly lineage = new SessionLineageController(
+  private readonly lineage = new SessionLineageOwner(
     this,
     () => ({ routeId: this.inputs.activeRouteId, key: this.inputs.getRouteSessionKey() }),
     () => this.childSessionScope,
