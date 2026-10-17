@@ -42,7 +42,9 @@ const target = { agentId: "main", sessionKey: parentKey };
 const parent = () => loadSessionEntry(target);
 const child = () => subagentRuns.get(childRunId);
 
-async function seedYieldedParent() {
+async function completeChild() {
+  // Only external requester delivery is unavailable; registry and persistence stay real.
+  fixture.wake.mockResolvedValue(false);
   await writeSubagentSessionEntry({
     stateDir: fixture.stateDir,
     agentId: "main",
@@ -59,13 +61,6 @@ async function seedYieldedParent() {
     startedAt,
     sessionEntry: { sessionId: childId, lifecycleRevision: "original-incarnation" },
   });
-}
-
-async function completeChild() {
-  // Only the external requester delivery is unavailable. Registry publication,
-  // descendant traversal, parent persistence, and restart marking stay real.
-  fixture.wake.mockResolvedValue(false);
-  await seedYieldedParent();
   emitAgentEvent({
     runId: childRunId,
     sessionKey: childKey,

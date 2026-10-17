@@ -98,6 +98,18 @@ async function setup() {
   };
 }
 
+async function blockLane(queueKey: string) {
+  const lane = resolveEmbeddedSessionLane(queueKey);
+  const entered = createDeferred();
+  const release = createDeferred();
+  const blocker = enqueueCommandInLane(lane, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  return { lane, release, blocker };
+}
+
 function followup(
   prompt: string,
   targetSessionId = sessionId,
@@ -121,24 +133,16 @@ it("UI-style narrow Stop clears owned lane entries through their signals and pre
   const ownFollowup = followup("owned");
   const foreignFollowup = followup("foreign", "previous-incarnation");
   const queue = FOLLOWUP_QUEUES.get(key);
-  const lane = resolveEmbeddedSessionLane(key);
-  const entered = createDeferred();
-  const release = createDeferred();
-  const blocker = enqueueCommandInLane(lane, async () => {
-    entered.resolve();
-    await release.promise;
-  });
-  await entered.promise;
-  const activeTask = vi.fn(async () => "active");
-  const queuedTask = vi.fn(async () => "queued");
-  const foreignTask = vi.fn(async () => "foreign");
-  const maintenanceTask = vi.fn(async () => "maintenance");
-  const queuedTasks = [
-    enqueueCommandInLane(lane, activeTask, { abortSignal: fixture.active.controller.signal }),
-    enqueueCommandInLane(lane, queuedTask, { abortSignal: fixture.queued.controller.signal }),
-    enqueueCommandInLane(lane, foreignTask, { abortSignal: foreign.controller.signal }),
-    enqueueCommandInLane(lane, maintenanceTask),
-  ];
+  const { lane, release, blocker } = await blockLane(key);
+  const tasks = ["active", "queued", "foreign", "maintenance"].map((label) =>
+    vi.fn(async () => label),
+  );
+  const signals = [fixture.active, fixture.queued, foreign].map(
+    ({ controller }) => controller.signal,
+  );
+  const queuedTasks = tasks.map((task, index) =>
+    enqueueCommandInLane(lane, task, { abortSignal: signals[index] }),
+  );
   const settled = Promise.allSettled(queuedTasks);
   try {
     await fixture.stop();
@@ -147,9 +151,7 @@ it("UI-style narrow Stop clears owned lane entries through their signals and pre
       { ok: true, abortedRunId: "queued", status: "aborted" },
       undefined,
     ]);
-    expect(fixture.active.controller.signal.aborted).toBe(true);
-    expect(fixture.queued.controller.signal.aborted).toBe(true);
-    expect(foreign.controller.signal.aborted).toBe(false);
+    expect(signals.map((signal) => signal.aborted)).toEqual([true, true, false]);
     expect(fixture.context.chatQueuedTurns.get("foreign")).toBe(foreign);
     expect(ownFollowup.settled).toHaveBeenCalledOnce();
     expect(foreignFollowup.settled).not.toHaveBeenCalled();
@@ -157,8 +159,7 @@ it("UI-style narrow Stop clears owned lane entries through their signals and pre
     expect(queue?.items).toEqual([foreignFollowup.run]);
     expect(queue?.abortController.signal.aborted).toBe(false);
     expect(getQueueSize(lane)).toBe(3);
-    expect(activeTask).not.toHaveBeenCalled();
-    expect(queuedTask).not.toHaveBeenCalled();
+    expect(tasks.slice(0, 2).map((task) => task.mock.calls.length)).toEqual([0, 0]);
     release.resolve();
     await blocker;
     expect((await settled).map((result) => result.status)).toEqual([
@@ -167,8 +168,7 @@ it("UI-style narrow Stop clears owned lane entries through their signals and pre
       "fulfilled",
       "fulfilled",
     ]);
-    expect(foreignTask).toHaveBeenCalledOnce();
-    expect(maintenanceTask).toHaveBeenCalledOnce();
+    expect(tasks.slice(2).map((task) => task.mock.calls.length)).toEqual([1, 1]);
   } finally {
     release.resolve();
     await Promise.allSettled([blocker, ...queuedTasks]);
@@ -205,14 +205,7 @@ it.each([true, false])(
       sharedKey,
       "research-next",
     );
-    const lane = resolveEmbeddedSessionLane(sharedKey);
-    const entered = createDeferred();
-    const release = createDeferred();
-    const blocker = enqueueCommandInLane(lane, async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    await entered.promise;
+    const { lane, release, blocker } = await blockLane(sharedKey);
     const command = (label: string, target?: { agentId: string; sessionId: string }) =>
       enqueueCommandInLane(
         lane,

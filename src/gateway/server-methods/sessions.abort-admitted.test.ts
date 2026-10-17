@@ -53,12 +53,11 @@ function stop(
 function interruptRun(runId: string, interrupted?: () => void) {
   const controller = new AbortController();
   const onInterrupt = vi.fn((reason?: Error) => {
-    if (controller.signal.aborted) {
-      return undefined;
+    if (!controller.signal.aborted) {
+      controller.abort(reason);
+      interrupted?.();
+      return { runId };
     }
-    controller.abort(reason);
-    interrupted?.();
-    return { runId };
   });
   return { controller, onInterrupt };
 }
@@ -141,9 +140,9 @@ async function exerciseAdmittedStop(
   registration?.markExecutionStarted();
   const controllerAbort = vi.fn();
   registration?.controller.signal.addEventListener("abort", controllerAbort, { once: true });
-  let responseEntry: ReturnType<typeof sessions.loadSessionEntry>;
+  let ack: ReturnType<typeof sessions.loadSessionEntry>;
   const respond = vi.fn<Parameters<typeof handleGatewayRequest>[0]["respond"]>(() => {
-    responseEntry = sessions.loadSessionEntry(target);
+    ack = sessions.loadSessionEntry(target);
   });
   try {
     await withExecRequestTurn({ identity: run }, async () => {
@@ -178,11 +177,7 @@ async function exerciseAdmittedStop(
     );
     if (mode === "live") {
       expect(isAgentRunDirectAbortReason(onInterrupt.mock.calls[0]?.[0])).toBe(true);
-      expect(responseEntry).toMatchObject({
-        status: "killed",
-        abortedLastRun: true,
-        lastRunId: runId,
-      });
+      expect(ack).toMatchObject({ status: "killed", abortedLastRun: true, lastRunId: runId });
     }
     if (mode === "already-aborted") {
       expect(onInterrupt.mock.results[0]?.value).toBeUndefined();
@@ -297,8 +292,8 @@ it.each(["before signal", "after signal", "between admissions"] as const)(
       if (second) {
         expect(isAgentRunDirectAbortReason(first.onInterrupt.mock.calls[0]?.[0])).toBe(true);
         expect(first.controller.signal.aborted).toBe(true);
-        expect(second.onInterrupt).not.toHaveBeenCalled();
         expect(second.controller.signal.aborted).toBe(false);
+        expect(second.onInterrupt).not.toHaveBeenCalled();
       }
       expect(sessions.loadSessionEntry({ ...target, readConsistency: "latest" })).toEqual(before);
       expect(respond).not.toHaveBeenCalled();

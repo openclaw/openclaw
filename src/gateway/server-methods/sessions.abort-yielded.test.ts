@@ -52,6 +52,11 @@ const childKey = "agent:main:subagent:yielded-child";
 const childId = "yielded-child-session";
 const childRunId = "yielded-child-run";
 const target = { agentId: "main", sessionKey: parentKey };
+const markStartupRecovery = () =>
+  markStartupOrphanedMainSessionsForRecovery({
+    cfg: getRuntimeConfig(),
+    stateDir: fixture.stateDir,
+  });
 
 async function seedYieldedParent() {
   await writeSubagentSessionEntry({
@@ -179,12 +184,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
       expect((await getSubagentRunByChildSessionKey(childKey))?.killReconciliation).toMatchObject({
         suppressTaskDelivery: true,
       });
-      expect(
-        await markStartupOrphanedMainSessionsForRecovery({
-          cfg: getRuntimeConfig(),
-          stateDir: fixture.stateDir,
-        }),
-      ).toMatchObject({ marked: 0 });
+      expect(await markStartupRecovery()).toMatchObject({ marked: 0 });
       expect(loadSessionEntry(target)).toMatchObject({
         status: "killed",
         abortedLastRun: true,
@@ -246,12 +246,7 @@ it.each([false, true])(
           lastRunId: parentRunId,
         });
         await fixture.settle();
-        expect(
-          await markStartupOrphanedMainSessionsForRecovery({
-            cfg: getRuntimeConfig(),
-            stateDir: fixture.stateDir,
-          }),
-        ).toMatchObject({ marked: 0 });
+        expect(await markStartupRecovery()).toMatchObject({ marked: 0 });
       } else {
         expect(loadSessionEntry(target)).toEqual(before);
       }

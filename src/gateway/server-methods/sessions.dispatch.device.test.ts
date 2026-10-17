@@ -85,6 +85,7 @@ function listNodes(nodes: readonly ReturnType<typeof connectedNode>[]) {
 
 type ContextOptions = Parameters<typeof makeDispatchTestContext>[0];
 type DeviceHarness = Awaited<ReturnType<typeof createHarness>>;
+const execCommand = "codex.exec-server.stdio.v1";
 const nodeRegistry = (nodes: readonly NodeWorkerSupervisorNodeProof[]) =>
   ({ get: (id: string) => nodes.find((node) => node.nodeId === id) }) as never;
 
@@ -333,14 +334,7 @@ describe("sessions.dispatch device targets", () => {
       );
       try {
         await entered.promise;
-        expect(assigned.toSorted()).toEqual([
-          "first",
-          "first",
-          "second",
-          "second",
-          "third",
-          "third",
-        ]);
+        expect(assigned.toSorted()).toEqual(nodes.flatMap(({ nodeId }) => [nodeId, nodeId]));
       } finally {
         release.resolve();
         await Promise.all(requests);
@@ -547,7 +541,7 @@ describe("sessions.dispatch device targets", () => {
         cloudPlacement: {
           mode: "remote-exec",
           devicePlacement: {
-            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+            requiredNodeCommands: [execCommand],
             consumesWorkerSlot: false,
           },
         },
@@ -574,14 +568,14 @@ describe("sessions.dispatch device targets", () => {
       {
         name: "missing",
         declaredCommands: ["system.run"],
-        commandPolicy: { allow: ["codex.exec-server.stdio.v1"] },
+        commandPolicy: { allow: [execCommand] },
         expectedMessage:
           "paired-device command codex.exec-server.stdio.v1 is not advertised by node device-1; enable the plugin or node capability that provides this command on that node, then restart the node (openclaw node restart) and approve its updated command surface",
       },
       {
         name: "declared but denied",
-        declaredCommands: ["system.run", "codex.exec-server.stdio.v1"],
-        commandPolicy: { deny: ["codex.exec-server.stdio.v1"] },
+        declaredCommands: ["system.run", execCommand],
+        commandPolicy: { deny: [execCommand] },
         expectedMessage:
           "paired-device command codex.exec-server.stdio.v1 is blocked by Gateway policy for node device-1; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry",
       },
@@ -630,7 +624,7 @@ describe("sessions.dispatch device targets", () => {
       const respond = await dispatchDevice(
         {
           getRuntimeConfig: () => ({
-            gateway: { nodes: { commands: { allow: ["codex.exec-server.stdio.v1"] } } },
+            gateway: { nodes: { commands: { allow: [execCommand] } } },
           }),
           workerPlacementDispatchService: { dispatch },
         },

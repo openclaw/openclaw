@@ -37,6 +37,7 @@ import { sessionSharingTestContext } from "./sessions-sharing.test-support.js";
 
 const fixture = useSubagentControlFixture();
 const requesterSessionKey = "agent:main:main";
+const requester = { requesterSessionKey, requesterAgentId: "main" };
 afterEach(() => {
   revokeRequesterCronAuthority(requesterSessionKey);
   vi.useRealTimers();
@@ -48,8 +49,7 @@ function yieldTool(requesterTurnRunId: string) {
     sessionId: `${requesterSessionKey}-session`,
     onYield,
     claimYield: createRequesterYieldCallback({
-      requesterSessionKey,
-      requesterAgentId: "main",
+      ...requester,
       requesterTurnRunId,
     }),
   });
@@ -66,18 +66,15 @@ function writeSession(sessionKey = requesterSessionKey, lifecycleRevision = "ori
   });
 }
 
-function registerChild(
-  requesterTurnRunId: string,
-  runId: string,
-  sessionEntry = { sessionId: `${runId}-session` },
-) {
+function registerChild(requesterTurnRunId: string, runId: string, writtenSessionKey?: string) {
   return registerSubagentRun({
     runId,
     childSessionKey: `agent:main:subagent:${runId}`,
     childAgentId: "main",
-    sessionEntry,
-    requesterSessionKey,
-    requesterAgentId: "main",
+    sessionEntry: writtenSessionKey
+      ? expectDefined(loadSessionEntry({ agentId: "main", sessionKey: writtenSessionKey }))
+      : { sessionId: `${runId}-session` },
+    ...requester,
     requesterTurnRunId,
     requesterDisplayKey: requesterSessionKey,
     task: "Finish the acknowledged cohort handoff",
@@ -92,6 +89,8 @@ function pauseGate() {
   return {
     entered: entered.promise,
     release: release.resolve,
+    waitFor: (operation: PromiseLike<unknown>) =>
+      awaitGateBeforeSettlement(entered.promise, operation, "Operation skipped its held gate"),
     hold: () => {
       entered.resolve();
       return release.promise;
@@ -133,25 +132,13 @@ async function createYieldedChild(withSibling = false) {
     childSessionKey: `agent:main:subagent:${childRunId}`,
     expectsCompletionMessage: true,
   }));
-  for (const sessionKey of [
-    requesterSessionKey,
-    ...children.map((child) => child.childSessionKey),
-  ]) {
-    await writeSession(sessionKey, "initial-transfer");
+  await writeSession(requesterSessionKey, "initial-transfer");
+  for (const child of children) {
+    await writeSession(child.childSessionKey, "initial-transfer");
   }
   for (const child of children) {
-    await registerChild(
-      requesterTurnRunId,
-      child.runId,
-      expectDefined(
-        loadSessionEntry({ agentId: "main", sessionKey: child.childSessionKey }),
-        "cohort child session",
-      ),
-    );
+    await registerChild(requesterTurnRunId, child.runId, child.childSessionKey);
   }
-  const nativePersistence = await vi.importActual<typeof registryPersistence>(
-    "../../agents/subagents/registry/subagent-registry-persistence.js",
-  );
   const { tool } = yieldTool(requesterTurnRunId);
   await expect(tool.execute("yield-cohort", {})).resolves.toMatchObject({
     details: { status: "yielded" },
@@ -159,11 +146,9 @@ async function createYieldedChild(withSibling = false) {
   return {
     entry: expectDefined(subagentRuns.get(runId), "original cohort child"),
     entries: children.map((child) => expectDefined(subagentRuns.get(child.runId), "cohort member")),
-    nativePersistence,
     settle: (requesterYielded = true) =>
       settleRequesterAfterSessionSpawns({
-        requesterSessionKey,
-        requesterAgentId: "main",
+        ...requester,
         requesterTurnRunId,
         requesterYielded,
         acceptedSessionSpawns: children,
@@ -207,11 +192,7 @@ it.each(["unchanged", "empty"] as const)(
           (error: unknown) => ({ error }),
         );
         try {
-          await awaitGateBeforeSettlement(
-            restoreGate.entered,
-            yielding,
-            "Yield bypassed the held canonical restore",
-          );
+          await restoreGate.waitFor(yielding);
           const facts = await Promise.all(
             preparations.mock.results.flatMap((result) =>
               result.type === "return" ? [result.value] : [],
@@ -249,7 +230,7 @@ it.each(["source retirement", "transport failure after commit"] as const)(
   "never repeats the acknowledged cohort commit after its %s result",
   async (outcome) => {
     vi.useFakeTimers();
-    const { entry, settle, nativePersistence } = await createYieldedChild();
+    const { entry, settle } = await createYieldedChild();
     let closing: Promise<void> | undefined;
     const counter = observeCohortWrites(() => {
       if (outcome === "transport failure after commit") {
@@ -275,7 +256,7 @@ it.each(["source retirement", "transport failure after commit"] as const)(
       expect(fixture.wake).not.toHaveBeenCalled();
       await closing;
       await closeOpenClawStateDatabaseAsync();
-      await nativePersistence.restoreSubagentRunsFromDisk({ runs: subagentRuns });
+      await registryPersistence.restoreSubagentRunsFromDisk({ runs: subagentRuns });
       const restored = expectDefined(subagentRuns.get(entry.runId), "released durable cohort");
       expect(restored).not.toBe(entry);
       expect(restored.requesterTurnRunId).toBeUndefined();
@@ -327,11 +308,7 @@ it.each([false, true])(
     void first.catch(() => {});
     let opposite: Promise<boolean> | undefined;
     try {
-      await awaitGateBeforeSettlement(
-        acknowledgement.entered,
-        first,
-        "Cohort skipped its held acknowledgement",
-      );
+      await acknowledgement.waitFor(first);
       opposite = settle(!requesterYielded);
       void opposite.catch(() => {});
       await vi.dynamicImportSettled();
@@ -383,23 +360,17 @@ it("rejects an overlapping claim without releasing the first authority preparati
     const first = tool.execute("first-authority-yield", {});
     void first.catch(() => {});
     let second: ReturnType<typeof tool.execute> | undefined;
-    let secondSettled = false;
+    const secondSettled = vi.fn();
     try {
-      await awaitGateBeforeSettlement(
-        acknowledgement.entered,
-        first,
-        "Initial intent skipped its held acknowledgement",
-      );
-      second = tool.execute("joined-authority-yield", {}).finally(() => {
-        secondSettled = true;
-      });
+      await acknowledgement.waitFor(first);
+      second = tool.execute("joined-authority-yield", {}).finally(secondSettled);
       void second.catch(() => {});
       await secondRead.entered;
       const releases = acceptedFacts.map((facts) => vi.spyOn(facts, "release"));
       acknowledgement.release();
       await expect(first).resolves.toMatchObject({ details: { status: "yielded" } });
       await vi.dynamicImportSettled();
-      expect(secondSettled).toBe(false);
+      expect(secondSettled).not.toHaveBeenCalled();
       expect(onYield).toHaveBeenCalledOnce();
       secondRead.release();
       await expect(second).rejects.toThrow("Another requester transfer is already pending");
