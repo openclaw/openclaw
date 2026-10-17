@@ -401,11 +401,11 @@ suite.define(() => {
     const modelSelect = control(main, "model-select").first();
     await modelSelect.waitFor(visible);
     expect(await modelSelect.textContent()).toContain("Claude Opus 4.5");
+    await modelSelect.click();
     await expect
       .poll(() => control(main, "model-default").first().getAttribute("aria-selected"))
       .toBe("true");
 
-    await modelSelect.click();
     await selectChatModelOption(option(main, "openai/gpt-5.5"));
     const firstPatch = await gateway.waitForRequest("sessions.patch");
     expect(requireRecord(firstPatch.params)).toEqual({

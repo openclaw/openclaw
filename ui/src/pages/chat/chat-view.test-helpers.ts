@@ -30,6 +30,7 @@ type ChatModelControlsProps = Parameters<typeof ChatModelControls>[0];
 const modelControlsUpdates = new WeakMap<HTMLElement, (props: ChatModelControlsProps) => void>();
 
 export function renderChatModelControls(props: ChatModelControlsProps, container: HTMLDivElement) {
+  props = { ...props, modelPickerOpen: props.modelPickerOpen ?? true };
   const update = modelControlsUpdates.get(container);
   if (update) {
     update(props);

@@ -152,10 +152,10 @@ suite.define(() => {
         const openai = picker.locator(
           '[data-chat-model-provider-group="openai"] [data-chat-model-provider-toggle]',
         );
+        await trigger.click();
         await expect
           .poll(() => picker.locator("[data-chat-model-provider-toggle]").count())
           .toBe(2);
-        await trigger.click();
         const auth = picker.locator(
           '[data-chat-model-provider="openai"] .chat-controls__auth-meta',
         );
@@ -234,9 +234,9 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat`);
           const picker = page.locator(".agent-chat__input .chat-controls__model-picker").first();
           const trigger = picker.locator("[data-chat-model-select]");
-          await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
           await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
           await trigger.click();
+          await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
           await page.mouse.move(0, 0);
           const search = picker.locator("[data-chat-model-search]");
           const query = key.startsWith("Arrow") ? "" : "anthropic";

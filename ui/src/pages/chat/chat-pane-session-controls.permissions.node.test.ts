@@ -183,7 +183,7 @@ function createControlsFixture(
   });
   const container = document.createElement("div");
   document.body.append(container);
-  renderPaneModelControl(controls.composerControls, container);
+  renderPaneModelControl(controls.composerControls, container, true);
   const effort = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
   effort.open = true;
   effort.dispatchEvent(new Event("toggle"));
