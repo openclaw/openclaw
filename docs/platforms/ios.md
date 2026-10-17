@@ -726,6 +726,7 @@ Agents can still operate the iOS app through OpenClaw by invoking node commands,
 - Voice wake sends recognized commands to the active session; use Talk mode for spoken assistant replies.
 - OpenAI realtime Talk uses client-owned WebRTC when `talk.realtime.transport` is `webrtc`; an explicit `gateway-relay` configuration remains Gateway-owned. See [Talk mode](/nodes/talk).
 - Talk-capable iOS nodes advertise the `talk` capability and can declare `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once`; the Gateway allows those push-to-talk commands by default for trusted Talk-capable nodes.
+- When `talk.ptt.stop` arrives or chat dictation finishes, capture stops at once; the transcript then waits up to 1.5 seconds for Speech to finalize words heard before release, as on macOS.
 - iOS may suspend background audio; treat voice features as best-effort when the app is not active.
 
 ### Start live voice with Siri or Shortcuts
