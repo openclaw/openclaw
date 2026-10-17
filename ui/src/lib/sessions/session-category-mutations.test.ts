@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { setImmediate as flushRead } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -26,11 +27,6 @@ const receipt = (overrides: Partial<GatewaySessionRow>, updatedAt = 2) => ({
   path: "",
   entry: { ...initial, updatedAt, ...overrides },
 });
-const flushRead = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-
 function setup(readList?: (params: unknown) => Promise<ReturnType<typeof sessionsResult>>) {
   const replies = [createDeferred<unknown>(), createDeferred<unknown>()];
   const list = createDeferred<ReturnType<typeof sessionsResult>>();
@@ -38,21 +34,20 @@ function setup(readList?: (params: unknown) => Promise<ReturnType<typeof session
   let reads = 0;
   let writes = 0;
   const client = createTestGatewayClient(async (method, params) => {
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
-    }
-    if (method === "sessions.patch") {
-      return replies[writes++]!.promise;
-    }
-    if (method === "sessions.list") {
-      if (readList) {
-        return readList(params);
-      }
-      if (++reads === 1) {
-        return result({}, 1);
-      }
-      listStarted.resolve();
-      return list.promise;
+    switch (method) {
+      case "sessions.subscribe":
+        return { subscribed: true };
+      case "sessions.patch":
+        return replies[writes++]!.promise;
+      case "sessions.list":
+        if (readList) {
+          return readList(params);
+        }
+        if (++reads === 1) {
+          return result({}, 1);
+        }
+        listStarted.resolve();
+        return list.promise;
     }
     throw new Error(`Unexpected method: ${method}`);
   });
@@ -93,20 +88,15 @@ describe("session category mutations", () => {
   it.each([false, true])(
     "settles a cleared category before its list refresh (pin=%s)",
     async (pin) => {
-      const pending = h.sessions.patch(
-        initial.key,
-        { category: null, ...(pin ? { pinned: true } : {}) },
-        options,
-      );
+      const changes = { category: null, ...(pin ? { pinned: true } : {}) };
+      const pending = h.sessions.patch(initial.key, changes, options);
       if (pin) {
         expect(h.sessions.state.result?.sessions[0]).toMatchObject({ pinned: true });
       }
       expect(h.category()).toBeUndefined();
-      if (pin) {
-        h.replies[0]!.resolve(receipt({ category: undefined, pinnedAt: 7 }, 7));
-      } else {
-        h.confirm(0, undefined);
-      }
+      h.replies[0]!.resolve(
+        receipt({ category: undefined, ...(pin ? { pinnedAt: 7 } : {}) }, pin ? 7 : 2),
+      );
       await h.listStarted.promise;
       expect(h.category()).toBeUndefined();
       await expect(pending).resolves.toMatchObject({ ok: true });
@@ -140,11 +130,11 @@ describe("session category mutations", () => {
   });
 
   it.each([
-    { rejected: 1, newest: null, code: "INVALID_REQUEST", message: "move rejected", kept: "Beta" },
-    { rejected: 0, newest: "Gamma", code: "FORBIDDEN", message: "first denied", kept: "Gamma" },
+    [1, null, "INVALID_REQUEST", "move rejected", "Beta"],
+    [0, "Gamma", "FORBIDDEN", "first denied", "Gamma"],
   ] as const)(
-    "rolls back only rejected intent $rejected",
-    async ({ rejected, newest, code, message, kept }) => {
+    "rolls back only rejected intent %i",
+    async (rejected, newest, code, message, kept) => {
       const moves = [h.move("Beta"), h.move(newest)];
       if (rejected === 1) {
         h.confirm(0, "Beta");

@@ -26,12 +26,10 @@ describe("session deletion generation ownership", () => {
       };
       if (source === "history") {
         h.sessions.reconcile(h.alpha);
+      } else if (source === "changed") {
+        h.changed(payload);
       } else {
-        h.emitEvent({
-          type: "event",
-          event: source === "changed" ? "sessions.changed" : "session.message",
-          payload,
-        });
+        h.message(payload);
       }
       expect(h.rows()).toEqual([current, h.sibling]);
     },
@@ -181,16 +179,8 @@ describe("session deletion generation ownership", () => {
       await h.sessions.refreshList({ ...currentScope, force: true });
       const operation = h.sessions.delete(current.key, { expectedSessionId: current.sessionId });
       h.sessions.reconcile(h.alpha);
-      h.emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: { ...h.alpha, sessionKey: h.alpha.key, reason: "send" },
-      });
-      h.emitEvent({
-        type: "event",
-        event: "session.message",
-        payload: { session: h.alpha, hasActiveRun: false },
-      });
+      h.changed({ ...h.alpha, sessionKey: h.alpha.key, reason: "send" });
+      h.message({ session: h.alpha, hasActiveRun: false });
       expect(h.sessions.deletionState(current.key)).toBe("pending");
       expect(h.rows()).toEqual([h.sibling]);
       expect(h.sessions.listSnapshot(scope).result?.sessions).not.toContainEqual(h.alpha);
@@ -222,7 +212,7 @@ describe("session deletion generation ownership", () => {
         return;
       }
       h.setRows([replacement, h.sibling]);
-      expect((await h.read(kind, scope, scope, true))?.sessions).toContainEqual(replacement);
+      expect((await h.read(kind, scope, true))?.sessions).toContainEqual(replacement);
       expect(h.sessions.deletionState(h.alpha.key)).toBeUndefined();
     },
   );
@@ -235,7 +225,7 @@ describe("session deletion generation ownership", () => {
       h.hold();
       await h.refresh([h.sibling]);
       h.setListResponse(staleList.promise);
-      const stale = h.read(kind, scope, scope);
+      const stale = h.read(kind, scope);
       const { key: sessionKey, sessionId } = h.alpha;
       h.changed({ sessionKey, reason: "delete", sessionId, agentId: "main" });
       const replacement = { ...h.alpha, sessionId: "replacement-alpha" };

@@ -25,10 +25,7 @@ export function createGatewayHarness(
     phase: "connected",
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
-    hello:
-      featureMethods === undefined
-        ? null
-        : ({ features: { methods: featureMethods } } as GatewayHelloOk),
+    hello: featureMethods ? ({ features: { methods: featureMethods } } as GatewayHelloOk) : null,
     selfUser: options?.selfUser ?? null,
     ...options?.initial,
   };
@@ -36,9 +33,7 @@ export function createGatewayHarness(
   const events = new Set<(event: GatewayEventFrame) => void>();
   const update = (patch: Partial<Snapshot>) => {
     snapshot = { ...snapshot, ...patch };
-    for (const listener of changes) {
-      listener(snapshot);
-    }
+    changes.forEach((listener) => listener(snapshot));
   };
   return {
     gateway: {
@@ -52,19 +47,13 @@ export function createGatewayHarness(
     update,
     publish: (connected: boolean, nextClient = snapshot.client) =>
       update({ client: nextClient, phase: connected ? "connected" : "reconnecting" }),
-    emitEvent(event: GatewayEventFrame) {
-      for (const listener of events) {
-        listener(event);
-      }
-    },
+    emitEvent: (event: GatewayEventFrame) => events.forEach((listener) => listener(event)),
   };
 }
 
 export function createTestSessionCapability(gateway: SessionGateway, selectedId = "main") {
-  const sessions = createSessionCapability(gateway, {
-    state: { selectedId },
-    subscribe: () => () => undefined,
-  });
+  const selection = { state: { selectedId }, subscribe: () => () => undefined };
+  const sessions = createSessionCapability(gateway, selection);
   const dispose = sessions.dispose;
   let disposed = false;
   sessions.dispose = () => {
@@ -79,16 +68,13 @@ export function createTestSessionCapability(gateway: SessionGateway, selectedId 
   return sessions;
 }
 
-export function sessionsResult(
-  sessions: SessionsListResult["sessions"],
-  ts = 1,
-): SessionsListResult {
+export function sessionsResult(rows: SessionsListResult["sessions"], ts = 1): SessionsListResult {
   return {
     ts,
     path: "(multiple)",
-    count: sessions.length,
+    count: rows.length,
     defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
+    sessions: rows,
   };
 }
 
@@ -116,14 +102,12 @@ export function sessionChangedEvent(key: string): GatewayEventFrame {
 
 export function createSessionCapabilityHarness(
   request: GatewayBrowserClient["request"],
-  options?: { ownerId?: string },
+  { ownerId }: { ownerId?: string } = {},
 ) {
   const { gateway, emitEvent } = createGatewayHarness(
     { request } as GatewayBrowserClient,
     undefined,
-    {
-      selfUser: options?.ownerId ? { id: options.ownerId } : null,
-    },
+    { selfUser: ownerId ? { id: ownerId } : null },
   );
   return { sessions: createTestSessionCapability(gateway), emitEvent };
 }
@@ -133,17 +117,13 @@ export function createSubscriptionHydrationHarness(
   savedAgentId: string | null = null,
 ) {
   const client = { request } as GatewayBrowserClient;
-  const {
-    gateway: state,
-    emitEvent,
-    update,
-  } = createGatewayHarness(client, undefined, {
+  const h = createGatewayHarness(client, undefined, {
     initial: { client: null, phase: "reconnecting", assistantAgentId: null },
   });
-  const gateway = Object.assign(state, {
+  const gateway = Object.assign(h.gateway, {
     connection: { gatewayUrl: "ws://gateway.example.test" },
     setSessionKey(sessionKey: string) {
-      update({ sessionKey });
+      h.update({ sessionKey });
     },
   });
   const selection = createAgentSelectionCapability(
@@ -167,8 +147,8 @@ export function createSubscriptionHydrationHarness(
     gateway,
     selection,
     sessions,
-    emitEvent,
-    connect: () => update({ client, phase: "connected", assistantAgentId: "main" }),
-    disconnect: () => update({ phase: "reconnecting" }),
+    emitEvent: h.emitEvent,
+    connect: () => h.update({ client, phase: "connected", assistantAgentId: "main" }),
+    disconnect: () => h.update({ phase: "reconnecting" }),
   };
 }

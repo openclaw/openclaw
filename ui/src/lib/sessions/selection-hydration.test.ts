@@ -21,12 +21,8 @@ import {
 const requireRecord = createRequireRecord("object", "expected-label");
 type Sessions = ReturnType<typeof createSubscriptionHydrationHarness>["sessions"];
 
-function row(
-  key: string,
-  updatedAt = 1,
-  fields: Partial<GatewaySessionRow> = {},
-): GatewaySessionRow {
-  return { key, kind: "direct", updatedAt, ...fields };
+function row(key: string, updatedAt = 1, fields: Partial<GatewaySessionRow> = {}) {
+  return { key, kind: "direct" as const, updatedAt, ...fields };
 }
 
 function listRequest(
@@ -327,56 +323,55 @@ describe("session selection hydration", () => {
     }
   });
 
-  it("hydrates the saved agent before hello and retains its roster when page scope widens", async () => {
-    const { gateway, selection, sessions, connect, request, result } = writerHarness(
-      false,
-      "writer",
+  it.each([false, true])("retains the writer roster across reconnect=%s", async (reconnect) => {
+    const { gateway, selection, sessions, connect, disconnect, request, result } = writerHarness(
+      reconnect,
+      reconnect ? null : "writer",
     );
-    expect(gateway.snapshot.assistantAgentId).toBeNull();
-    expect(selection.state.selectedId).toBe("writer");
+    const writerQuery = { agentId: "writer", search: "draft", archived: true, limit: 25 };
+    if (!reconnect) {
+      expect(gateway.snapshot.assistantAgentId).toBeNull();
+      expect(selection.state.selectedId).toBe("writer");
+    }
     connect();
     await vi.advanceTimersByTimeAsync(0);
-
-    expect(request).toHaveBeenCalledWith(
-      "sessions.list",
-      expect.objectContaining({ agentId: "writer" }),
-    );
+    if (reconnect) {
+      expect(sessions.state.agentId).toBe("main");
+      await sessions.refresh({
+        agentId: "main",
+        search: "draft",
+        archivedFilter: "archived",
+        limit: 25,
+        force: true,
+      });
+      disconnect();
+      selection.set("writer");
+      connect();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining(writerQuery),
+      );
+    } else {
+      expect(request).toHaveBeenCalledWith(
+        "sessions.list",
+        expect.objectContaining({ agentId: "writer" }),
+      );
+    }
     expectRoster(sessions, "writer", result);
     const requestsBeforeScopeChange = request.mock.calls.length;
-
-    selection.setScope(null);
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    expect(selection.state).toEqual({ selectedId: "writer", scopeId: null });
-    expectRoster(sessions, "writer", result);
-    expect(request).toHaveBeenCalledTimes(requestsBeforeScopeChange);
-  });
-
-  it("retains an offline agent selection and list filters through reconnect refreshes", async () => {
-    const { selection, sessions, connect, disconnect, request, result } = writerHarness(true);
-    const writerQuery = { agentId: "writer", search: "draft", archived: true, limit: 25 };
-    connect();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(sessions.state.agentId).toBe("main");
-    await sessions.refresh({
-      agentId: "main",
-      search: "draft",
-      archivedFilter: "archived",
-      limit: 25,
-      force: true,
-    });
-
-    disconnect();
-    selection.set("writer");
-    connect();
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(request).toHaveBeenLastCalledWith("sessions.list", expect.objectContaining(writerQuery));
-    expectRoster(sessions, "writer", result);
-
-    await sessions.refreshReplacement();
-
-    expect(request).toHaveBeenLastCalledWith("sessions.list", expect.objectContaining(writerQuery));
+    if (reconnect) {
+      await sessions.refreshReplacement();
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining(writerQuery),
+      );
+    } else {
+      selection.setScope(null);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(selection.state).toEqual({ selectedId: "writer", scopeId: null });
+      expect(request).toHaveBeenCalledTimes(requestsBeforeScopeChange);
+    }
     expectRoster(sessions, "writer", result);
   });
 });

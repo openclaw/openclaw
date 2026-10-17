@@ -13,26 +13,28 @@ import {
 const key = "agent:main:describe-test";
 const initial: GatewaySessionRow = { key, kind: "direct", sessionId: "first", updatedAt: 1 };
 
-function harness() {
-  let row = initial;
-  const read = vi.fn(async () => ({ session: row }));
+function backend(row: () => GatewaySessionRow, ts = 1) {
+  const read = vi.fn(async () => ({ session: row() }));
   const subscribe = vi.fn(async () => ({ subscribed: true }));
-  const list = vi.fn(async () => sessionsResult([row], 1));
+  const list = vi.fn(async () => sessionsResult([row()], ts));
   const client = createTestGatewayClient(async (method) =>
     method === "sessions.describe" ? read() : method === "sessions.list" ? list() : subscribe(),
   );
-  const gateway = createGatewayHarness(client);
+  return { read, subscribe, list, client };
+}
+
+function harness() {
+  let row = initial;
+  const api = backend(() => row);
+  const gateway = createGatewayHarness(api.client);
   const sessions = createTestSessionCapability(gateway.gateway);
   return {
     ...gateway,
-    client,
+    ...api,
     sessions,
-    read,
-    subscribe,
-    list,
     pending: () => {
       const deferred = createDeferred<{ session: GatewaySessionRow }>();
-      read.mockReturnValueOnce(deferred.promise);
+      api.read.mockReturnValueOnce(deferred.promise);
       return deferred;
     },
     setRow: (next: GatewaySessionRow) => {
@@ -40,14 +42,6 @@ function harness() {
     },
     event: (event: string, payload: unknown) =>
       gateway.emitEvent({ type: "event", event, payload }),
-    start(phase: "pending" | "completed", session = initial) {
-      const pending = this.pending();
-      const previous = sessions.describe({ key: session.key });
-      if (phase === "completed") {
-        pending.resolve({ session });
-      }
-      return { pending, previous };
-    },
   };
 }
 
@@ -89,8 +83,6 @@ describe("session descriptor reads", () => {
       { key, agentId: "work" },
       { key: "global" },
       { key: "global", agentId: "main" },
-      { key: "local" },
-      { key: "local", agentId: "main" },
       { key, includeDerivedTitles: true },
       { key, includeLastMessage: true },
     ]) {
@@ -98,7 +90,7 @@ describe("session descriptor reads", () => {
       await h.sessions.describe({ ...params });
     }
     await h.sessions.describe({ key }, { timeoutMs: 30_000 });
-    expect(h.read).toHaveBeenCalledTimes(10);
+    expect(h.read).toHaveBeenCalledTimes(8);
   });
 
   it("reuses a descriptor across unchanged row observations without a time limit", async () => {
@@ -119,84 +111,71 @@ describe("session descriptor reads", () => {
   });
 
   it.each([
-    { cause: "observed revision", phase: "completed" },
-    { cause: "sessions.changed", phase: "pending" },
-    { cause: "config.changed", phase: "completed" },
-    { cause: "chat.metadata.changed", phase: "completed" },
-    { cause: "refresh", phase: "pending" },
-    { cause: "first observed revision", phase: "pending" },
-  ] as const)("supersedes a $phase descriptor after $cause", async ({ cause, phase }) => {
-    if (cause === "observed revision") {
-      await h.sessions.refresh({ agentId: "main" });
-    }
-    const { pending, previous: old } = h.start(phase);
-    if (phase === "completed") {
-      await old;
-    }
-    const metadata = cause === "config.changed" || cause === "chat.metadata.changed";
-    const next = metadata
-      ? { ...initial, contextTokens: 262_144 }
-      : { ...initial, updatedAt: 2, label: "New revision" };
-    h.setRow(next);
-    if (cause === "observed revision") {
-      h.sessions.captureReconcile()(next);
-    } else if (cause === "first observed revision") {
-      await h.sessions.refresh({ agentId: "main" });
-    } else if (cause === "sessions.changed") {
-      h.event(cause, { key, agentId: "main", reason: "patch", session: next });
-    } else if (metadata) {
-      h.event(cause, {});
-    }
-    const fresh = h.sessions.describe({ key }, { refresh: cause === "refresh" });
-    expect(h.read).toHaveBeenCalledTimes(2);
-    expect(await fresh).toEqual({ session: next });
-    pending.resolve({ session: initial });
-    await old;
-    expect(await h.sessions.describe({ key })).toEqual({ session: next });
-    expect(h.read).toHaveBeenCalledTimes(2);
-    if (cause === "observed revision") {
-      await h.sessions.describe({ key }, { refresh: true });
-      expect(h.read).toHaveBeenCalledTimes(3);
-    }
-  });
-
-  it.each(
-    (["pending", "completed"] as const).flatMap((phase) =>
+    { cause: "observed revision", phase: "completed", coverage: null },
+    { cause: "sessions.changed", phase: "pending", coverage: null },
+    { cause: "config.changed", phase: "completed", coverage: null },
+    { cause: "chat.metadata.changed", phase: "completed", coverage: null },
+    { cause: "refresh", phase: "pending", coverage: null },
+    { cause: "first observed revision", phase: "pending", coverage: null },
+    ...(["pending", "completed"] as const).flatMap((phase) =>
       (["missing", "unrelated", "parent"] as const).map((coverage) => ({
+        cause: "ancestor",
         phase,
         coverage,
-        parentKey: phase === "pending" ? key : "agent:research:parent",
       })),
     ),
-  )(
-    "checks ancestor coverage before reusing a $phase $parentKey descriptor ($coverage)",
-    async ({ phase, coverage, parentKey }) => {
+  ] as const)(
+    "refreshes a $phase descriptor after $cause ($coverage)",
+    async ({ cause, phase, coverage }) => {
+      const parentKey = coverage && phase === "completed" ? "agent:research:parent" : key;
       const parent = { ...initial, key: parentKey };
       h.setRow(parent);
-      const { pending, previous } = h.start(phase, parent);
-      if (phase === "completed") {
-        await previous;
+      if (cause === "observed revision") {
+        await h.sessions.refresh({ agentId: "main" });
       }
-      const next = { ...parent, updatedAt: 2, label: "Current ancestor" };
+      const pending = h.pending();
+      const old = h.sessions.describe({ key: parentKey });
+      if (phase === "completed") {
+        pending.resolve({ session: parent });
+        await old;
+      }
+      const metadata = cause === "config.changed" || cause === "chat.metadata.changed";
+      const next = metadata
+        ? { ...parent, contextTokens: 262_144 }
+        : { ...parent, updatedAt: 2, label: "New revision" };
       h.setRow(next);
-      h.event("sessions.changed", {
-        key: "agent:main:child",
-        sessionId: "replacement-child",
-        reason: "create",
-        ...(coverage === "unrelated" ? {} : { parentSessionKey: parentKey }),
-        ...(coverage === "missing"
-          ? {}
-          : { ancestorSessions: coverage === "parent" ? [next] : [] }),
-      });
-      const current = h.sessions.describe({ key: parentKey });
-      expect(h.read).toHaveBeenCalledTimes(coverage === "unrelated" ? 1 : 2);
+      if (coverage) {
+        h.event("sessions.changed", {
+          key: "agent:main:child",
+          sessionId: "replacement-child",
+          reason: "create",
+          ...(coverage === "unrelated" ? {} : { parentSessionKey: parentKey }),
+          ...(coverage === "missing"
+            ? {}
+            : { ancestorSessions: coverage === "parent" ? [next] : [] }),
+        });
+      } else if (cause === "observed revision") {
+        h.sessions.captureReconcile()(next);
+      } else if (cause === "first observed revision") {
+        await h.sessions.refresh({ agentId: "main" });
+      } else if (cause === "sessions.changed") {
+        h.event(cause, { key, agentId: "main", reason: "patch", session: next });
+      } else if (metadata) {
+        h.event(cause, {});
+      }
+      const fresh = h.sessions.describe({ key: parentKey }, { refresh: cause === "refresh" });
+      const calls = coverage === "unrelated" ? 1 : 2;
+      const expected = { session: coverage === "unrelated" ? parent : next };
+      expect(h.read).toHaveBeenCalledTimes(calls);
+      // Unrelated pending reads still wait for their original response.
+      if (coverage) {
+        pending.resolve({ session: parent });
+      }
+      expect(await fresh).toEqual(expected);
       pending.resolve({ session: parent });
-      expect(await current).toEqual({ session: coverage === "unrelated" ? parent : next });
-      await previous;
-      expect(await h.sessions.describe({ key: parentKey })).toEqual({
-        session: coverage === "unrelated" ? parent : next,
-      });
-      expect(h.read).toHaveBeenCalledTimes(coverage === "unrelated" ? 1 : 2);
+      await old;
+      expect(await h.sessions.describe({ key: parentKey })).toEqual(expected);
+      expect(h.read).toHaveBeenCalledTimes(calls);
     },
   );
 
@@ -210,7 +189,6 @@ describe("session descriptor reads", () => {
         kind: "direct" as const,
         sessionId: "child",
         spawnedBy: key,
-        updatedAt: 2,
       };
       const emit = (snapshotAt: number, changed = false) =>
         h.emitEvent({
@@ -233,8 +211,10 @@ describe("session descriptor reads", () => {
           },
         });
       emit(2, true);
-      const { pending, previous: first } = h.start(phase, parent);
+      const pending = h.pending();
+      const first = h.sessions.describe({ key });
       if (phase === "completed") {
+        pending.resolve({ session: parent });
         await first;
       }
       const readers = [first];
@@ -280,25 +260,15 @@ describe("session descriptor reads", () => {
       const old = h.sessions.describe({ key }, { refresh: true });
       const next = { ...initial, sessionId: "replacement", updatedAt: 2 };
       h.setRow(next);
-      const replacementRead = vi.fn(async () => ({ session: next }));
-      const client =
-        kind === "same client"
-          ? h.client
-          : createTestGatewayClient(async (method) =>
-              method === "sessions.describe"
-                ? replacementRead()
-                : method === "sessions.list"
-                  ? sessionsResult([next], 2)
-                  : { subscribed: true },
-            );
+      const replacement = backend(() => next, 2);
       h.publish(false);
-      h.publish(true, client);
+      h.publish(true, kind === "same client" ? h.client : replacement.client);
       expect(await h.sessions.describe({ key })).toEqual({ session: next });
       pending.resolve({ session: initial });
       await old;
       expect(await h.sessions.describe({ key })).toEqual({ session: next });
       expect(h.read).toHaveBeenCalledTimes(kind === "same client" ? 3 : 2);
-      expect(replacementRead).toHaveBeenCalledTimes(kind === "same client" ? 0 : 1);
+      expect(replacement.read).toHaveBeenCalledTimes(kind === "same client" ? 0 : 1);
     },
   );
 

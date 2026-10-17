@@ -2,9 +2,11 @@ import { onTestFinished } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
+import type { SessionListScope } from "./session-capability.ts";
 import { createSessionDeletionHarness as createHarness } from "./session-deletion.test-support.ts";
 
 export const allSessions = { archivedFilter: "all" as const };
+type ReadKind = "primary" | "managed" | "enumeration";
 
 export function createDeletionHarness(...args: Parameters<typeof createHarness>) {
   const h = createHarness(...args);
@@ -35,22 +37,19 @@ export function createDeletionHarness(...args: Parameters<typeof createHarness>)
       onTestFinished(() => deferred.resolve(sessionsResult([], 1)));
       return deferred;
     },
-    read: (
-      kind: "primary" | "managed" | "enumeration",
-      scope: Parameters<typeof h.sessions.list>[0] = allSessions,
-      enumerationScope?: Parameters<typeof h.sessions.list>[0],
-      force = kind === "primary",
-    ) => {
+    read: (kind: ReadKind, scope?: SessionListScope, force = kind === "primary") => {
       if (kind === "enumeration") {
-        return h.sessions.list(enumerationScope);
+        return h.sessions.list(scope);
       }
-      const query = kind === "managed" ? scope : {};
+      const query = kind === "managed" ? (scope ?? allSessions) : {};
       return h.sessions
         .refreshList({ ...query, ...(force ? { force: true } : {}) })
         .then(() => h.sessions.listSnapshot(query).result);
     },
     changed: (payload: unknown) =>
       h.emitEvent({ type: "event", event: "sessions.changed", payload }),
+    message: (payload: unknown) =>
+      h.emitEvent({ type: "event", event: "session.message", payload }),
     finish: <T>(operation: Promise<T>, key = h.alpha.key, deleted = false) => {
       h.responses.get(key)!.resolve({ deleted });
       return operation;
