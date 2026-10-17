@@ -1,5 +1,5 @@
 import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
@@ -8,6 +8,12 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  expectAttribute,
+  expectCount,
+  expectText,
+  styles,
+} from "./activity-assertions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { readThemedPopupPaint } from "./popup-theme.test-support.ts";
 
@@ -16,10 +22,6 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-let outputDir: string;
-beforeEach(() => {
-  outputDir = createControlUiE2eArtifactDir("session-activity-feed");
-});
 const proofPhase = process.env.OPENCLAW_MENU_THEME_PROOF_PHASE;
 const person = (id: string, label: string) => ({
   identity: { type: "profile" as const, id },
@@ -46,6 +48,7 @@ suite.define(() => {
         viewport: { height: 900, width: 1280 },
       },
       async ({ page }) => {
+        const outputDir = createControlUiE2eArtifactDir("session-activity-feed");
         const capture = (name: string, fullPage = false) =>
           page.screenshot({
             animations: "disabled",
@@ -157,6 +160,11 @@ suite.define(() => {
           ],
           ts: now,
         };
+        const filtered = (keys: string[]) => ({
+          ...sessionList,
+          count: keys.length,
+          sessions: sessionList.sessions.filter((row) => keys.includes(row.key)),
+        });
         await installMockGateway(page, {
           hasMultipleSessionSharingIdentities: true,
           presenceUsers: [
@@ -192,23 +200,11 @@ suite.define(() => {
               cases: [
                 {
                   match: { involvingProfileId: "profile-carol" },
-                  response: {
-                    ...sessionList,
-                    count: 2,
-                    sessions: sessionList.sessions.filter((row) =>
-                      [gatewayHandoffKey, nightlyMaintenanceKey].includes(row.key),
-                    ),
-                  },
+                  response: filtered([gatewayHandoffKey, nightlyMaintenanceKey]),
                 },
                 {
                   match: { involvingProfileId: "profile-alice" },
-                  response: {
-                    ...sessionList,
-                    count: 3,
-                    sessions: sessionList.sessions.filter((row) =>
-                      [releaseKey, designKey, incidentNotesKey].includes(row.key),
-                    ),
-                  },
+                  response: filtered([releaseKey, designKey, incidentNotesKey]),
                 },
                 { response: sessionList },
               ],
@@ -221,8 +217,8 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
         const onlineView = page.locator('[data-navigation-view="online"]');
         await onlineView.click();
-        await expect.poll(() => onlineView.getAttribute("aria-pressed")).toBe("true");
-        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(5);
+        await expectAttribute(onlineView, "aria-pressed").toBe("true");
+        await expectCount(page.locator(".sidebar-online__person")).toBe(5);
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
           path: path.join(outputDir, "01-sidebar-users-online-light.png"),
@@ -238,14 +234,14 @@ suite.define(() => {
           { gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl) },
         );
         await page.reload();
-        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("dash");
+        await expectAttribute(page.locator("html"), "data-theme").toBe("dash");
 
         await evaluateControlUiContext(page, (context) => {
           context.navigate("activity");
         });
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         const activityPage = page.locator("openclaw-activity-page");
-        await expect.poll(() => activityPage.count()).toBe(1);
+        await expectCount(activityPage).toBe(1);
         await activityPage.locator(".activity-pulse__bars").waitFor();
         expect(await activityPage.locator(".activity-pulse__bars > span").count()).toBe(
           sessionList.activityPulse.buckets.length,
@@ -260,15 +256,11 @@ suite.define(() => {
           .evaluate((element) => element.getBoundingClientRect().left);
         expect(Math.abs(introLeft - tabsLeft)).toBeLessThanOrEqual(8);
         await activityPage.locator(".activity-feed__people-trigger").click();
-        await expect
-          .poll(() =>
-            activityPage
-              .locator(
-                '.activity-feed__people-row[data-activity-person]:not([data-activity-person=""])',
-              )
-              .count(),
-          )
-          .toBe(3);
+        await expectCount(
+          activityPage.locator(
+            '.activity-feed__people-row[data-activity-person]:not([data-activity-person=""])',
+          ),
+        ).toBe(3);
         const peoplePopover = activityPage.locator(".activity-feed__people-popover:popover-open");
         const peoplePaint = await readThemedPopupPaint(peoplePopover, "body");
         if (proofPhase) {
@@ -280,33 +272,33 @@ suite.define(() => {
         const activitySession = (key: string) =>
           activityFeed.locator(`[data-activity-session="${key}"]`);
         const automationGroup = activityFeed.locator("[data-activity-automation-group]");
-        await expect.poll(() => automationGroup.count()).toBe(1);
-        await expect.poll(() => automationGroup.getAttribute("aria-expanded")).toBe("false");
+        await expectCount(automationGroup).toBe(1);
+        await expectAttribute(automationGroup, "aria-expanded").toBe("false");
         for (const key of nonAutomationKeys) {
-          await expect.poll(() => activitySession(key).count()).toBe(1);
+          await expectCount(activitySession(key)).toBe(1);
         }
         for (const key of automationKeys) {
-          await expect.poll(() => activitySession(key).count()).toBe(0);
+          await expectCount(activitySession(key)).toBe(0);
         }
         await automationGroup.click();
-        await expect.poll(() => automationGroup.getAttribute("aria-expanded")).toBe("true");
+        await expectAttribute(automationGroup, "aria-expanded").toBe("true");
         for (const key of automationKeys) {
-          await expect.poll(() => activitySession(key).count()).toBe(1);
+          await expectCount(activitySession(key)).toBe(1);
         }
         await automationGroup.click();
-        await expect.poll(() => automationGroup.getAttribute("aria-expanded")).toBe("false");
+        await expectAttribute(automationGroup, "aria-expanded").toBe("false");
         for (const key of automationKeys) {
-          await expect.poll(() => activitySession(key).count()).toBe(0);
+          await expectCount(activitySession(key)).toBe(0);
         }
         for (const key of nonAutomationKeys) {
-          await expect.poll(() => activitySession(key).count()).toBe(1);
+          await expectCount(activitySession(key)).toBe(1);
         }
 
         const liveRow = activitySession(releaseKey);
-        await expect.poll(() => liveRow.locator(".activity-feed__run-dot").count()).toBe(1);
-        await expect
-          .poll(() => liveRow.locator(".activity-feed__session-headline").textContent())
-          .toContain("Waiting on a fictional mock approval");
+        await expectCount(liveRow.locator(".activity-feed__run-dot")).toBe(1);
+        await expectText(liveRow.locator(".activity-feed__session-headline")).toContain(
+          "Waiting on a fictional mock approval",
+        );
         const inspectRun = liveRow.locator("xpath=following-sibling::a");
         await liveRow.hover();
         await expect
@@ -334,13 +326,11 @@ suite.define(() => {
           .poll(() => activityPage.locator('[data-activity-identity="profile-alice"]').isVisible())
           .toBe(true);
         const attributionIcon = activityPage.locator(".activity-feed__device-attribution");
-        await expect.poll(() => attributionIcon.locator("svg").count()).toBe(1);
+        await expectCount(attributionIcon.locator("svg")).toBe(1);
         await expect.poll(async () => (await attributionIcon.boundingBox())?.width).toBe(16);
-        await expect
-          .poll(() =>
-            activityPage.locator(".activity-feed__viewing-list .activity-feed__session").count(),
-          )
-          .toBe(2);
+        await expectCount(
+          activityPage.locator(".activity-feed__viewing-list .activity-feed__session"),
+        ).toBe(2);
         await capture("06-person-activity.png");
 
         await activityPage.locator(".activity-feed__people-clear").click();
@@ -348,14 +338,10 @@ suite.define(() => {
         await activityPage.locator(".activity-feed__people-trigger").click();
         await activityPage.locator('[data-activity-person="profile-carol"]').click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-carol");
-        await expect.poll(() => activitySession(nightlyMaintenanceKey).count()).toBe(1);
-        await expect
-          .poll(() =>
-            activitySession(nightlyMaintenanceKey)
-              .locator('[data-activity-created-via="cron"]')
-              .count(),
-          )
-          .toBe(1);
+        await expectCount(activitySession(nightlyMaintenanceKey)).toBe(1);
+        await expectCount(
+          activitySession(nightlyMaintenanceKey).locator('[data-activity-created-via="cron"]'),
+        ).toBe(1);
         await capture("06-automation-creator-desktop.png");
 
         await activityPage.locator(".activity-feed__people-clear").click();
@@ -389,22 +375,15 @@ suite.define(() => {
         expect(
           Math.max(...automationGroupChildTops) - Math.min(...automationGroupChildTops),
         ).toBeLessThan(3);
-        expect(
-          await activityFeed.evaluate((element) => {
-            const style = getComputedStyle(element);
-            return {
-              backgroundColor: style.backgroundColor,
-              borderTopWidth: style.borderTopWidth,
-            };
-          }),
-        ).toEqual({ backgroundColor: "rgba(0, 0, 0, 0)", borderTopWidth: "0px" });
+        expect(await styles(activityFeed, ["background-color", "border-top-width"])).toEqual([
+          "rgba(0, 0, 0, 0)",
+          "0px",
+        ]);
         await activityPage.locator(".activity-feed__people-trigger").click();
         await activityPage.locator('[data-activity-person="profile-carol"]').click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-carol");
-        await expect.poll(() => activitySession(nightlyMaintenanceKey).count()).toBe(1);
-        await expect
-          .poll(() => activityFeed.locator('[data-activity-created-via="cron"]').count())
-          .toBe(2);
+        await expectCount(activitySession(nightlyMaintenanceKey)).toBe(1);
+        await expectCount(activityFeed.locator('[data-activity-created-via="cron"]')).toBe(2);
         await capture("07-automation-creator-mobile.png", true);
       },
     );

@@ -1,11 +1,19 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { BrowserContext, Locator, Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import type { AuditRunInspectResult } from "../../../packages/gateway-protocol/src/schema/audit-run.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  expectAttribute,
+  expectCount,
+  readBox,
+  scrollRemainder,
+  showHeading,
+  showText,
+} from "./activity-assertions.test-support.ts";
 import {
   decisionDisplay,
   presentResult,
@@ -74,17 +82,29 @@ function ambiguousResult(
   };
 }
 
-async function newContext(options: { video?: boolean } = {}): Promise<BrowserContext> {
+async function withPage(run: (page: Page) => Promise<void>, options: { video?: boolean } = {}) {
   if (captureUiProof) {
     await mkdir(path.join(proofDir, "video"), { recursive: true });
   }
-  return suite.newBrowserContext({
+  const context = await suite.newBrowserContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 1000, width: 1440 },
     ...(captureUiProof && options.video
       ? { recordVideo: { dir: path.join(proofDir, "video"), size: { height: 1000, width: 1440 } } }
       : {}),
+  });
+  try {
+    await run(await context.newPage());
+  } finally {
+    await suite.closeBrowserContext(context);
+  }
+}
+
+function installInspector(page: Page, response: unknown) {
+  return installMockGateway(page, {
+    featureMethods: ["audit.run.inspect"],
+    methodResponses: { "audit.run.inspect": response },
   });
 }
 
@@ -139,89 +159,95 @@ async function expectReferenceCounts(page: Page, count: string) {
   }
 }
 
+function approval(
+  id: number,
+  outcome: Parameters<typeof decisionDisplay>[0]["outcome"],
+  reasonCode: string,
+  coverageState: Parameters<typeof decisionDisplay>[0]["coverageState"] = "enforced",
+) {
+  return decisionDisplay({
+    id: `approval-decision:${id}`,
+    summary: `Approval ${id}`,
+    outcome,
+    reasonCode,
+    coverageState,
+    remediation: outcome === "allowed" ? "No follow-up is required." : `Review approval ${id}.`,
+  });
+}
+
 suite.define(() => {
   it("deep-links, reloads durable evidence, and exposes text-first accessible states", async () => {
-    const context = await newContext({ video: true });
-    const page = await context.newPage();
-    const runId = "run:durable/one";
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["audit.run.inspect"],
-      methodResponses: { "audit.run.inspect": presentResult(runId) },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}activity?view=run&run=${encodeURIComponent(runId)}`);
-      await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
-      expect(await gateway.waitForRequest("audit.run.inspect")).toMatchObject({
-        params: { runId, decisionLimit: 50, executionLimit: 50 },
-      });
-      expect((await gateway.getRequests("audit.run.inspect")).length).toBe(1);
-
-      expect(await page.getByRole("tab", { name: "Run inspector" }).count()).toBe(0);
-      const modePanel = page.locator("#activity-mode-panel");
-      expect(await modePanel.getAttribute("role")).toBeNull();
-      expect(await modePanel.getAttribute("aria-labelledby")).toBeNull();
-      const backToSessions = page.getByRole("link", { name: "Back to sessions" });
-      await backToSessions.waitFor();
-      expect(await backToSessions.getAttribute("href")).toBe("/activity");
-      await page.getByRole("status", { name: "Inspection coverage: Unattributed" }).waitFor();
-      for (const state of ["Present", "Absent", "Unknown", "Unsupported"]) {
-        await page.locator(`[aria-label="Evidence state: ${state}"]`).first().waitFor();
-      }
-      for (const dimension of [
-        "Trust domain",
-        "Ingress",
-        "Invoker",
-        "Represented subject",
-        "Sponsor",
-        "Agent principal",
-        "Runtime instance",
-        "Applicable grant 1",
-        "Assurance evidence 1",
-        "Lineage",
-      ]) {
-        await page.getByText(dimension, { exact: true }).waitFor();
-      }
-      await page.getByText("Best-effort audit warning", { exact: false }).waitFor();
-      await page
-        .getByText("Additional decision receipts are available", { exact: false })
-        .waitFor();
-      expect(await page.getByText("receipt-safe-ref", { exact: false }).count()).toBe(0);
-      expect(await page.getByText("context-safe-ref", { exact: false }).count()).toBe(0);
-      expect(await page.getByText("execution-safe-ref", { exact: false }).count()).toBe(0);
-      await screenshot(page, "01-present-unattributed.png");
-
-      await page.reload();
-      await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
-      expect(await gateway.waitForRequest("audit.run.inspect")).toMatchObject({
-        params: { runId, decisionLimit: 50, executionLimit: 50 },
-      });
-      expect((await gateway.getRequests("audit.run.inspect")).length).toBe(1);
-
-      await backToSessions.click();
-      await page.getByRole("tab", { name: "Sessions" }).waitFor();
-      expect(await page.getByRole("tab").count()).toBe(2);
-      expect(await page.getByRole("tab", { name: "Run inspector" }).count()).toBe(0);
-      const liveTab = page.getByRole("tab", { name: "Live activity" });
-      await liveTab.focus();
-      await expect
-        .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim()))
-        .toBe("Live activity");
-      await page.keyboard.press("Enter");
-      await page.locator(".activity-empty").waitFor();
-      await expect
-        .poll(() => modePanel.getAttribute("aria-labelledby"))
-        .toBe("activity-mode-tab-live");
-      expect(new URL(page.url()).search).toBe("?view=live");
-      await page.goBack();
-      await expect
-        .poll(() => page.getByRole("tab", { name: "Sessions" }).getAttribute("aria-selected"))
-        .toBe("true");
-      await page.goBack();
-      await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    await withPage(
+      async (page) => {
+        const runId = "run:durable/one";
+        const gateway = await installInspector(page, presentResult(runId));
+        await page.goto(
+          `${suite.server.baseUrl}activity?view=run&run=${encodeURIComponent(runId)}`,
+        );
+        await showHeading(page, "Identity and authority");
+        expect(await gateway.waitForRequest("audit.run.inspect")).toMatchObject({
+          params: { runId, decisionLimit: 50, executionLimit: 50 },
+        });
+        expect((await gateway.getRequests("audit.run.inspect")).length).toBe(1);
+        expect(await page.getByRole("tab", { name: "Run inspector" }).count()).toBe(0);
+        const modePanel = page.locator("#activity-mode-panel");
+        expect(await modePanel.getAttribute("role")).toBeNull();
+        expect(await modePanel.getAttribute("aria-labelledby")).toBeNull();
+        const backToSessions = page.getByRole("link", { name: "Back to sessions" });
+        await backToSessions.waitFor();
+        expect(await backToSessions.getAttribute("href")).toBe("/activity");
+        await page.getByRole("status", { name: "Inspection coverage: Unattributed" }).waitFor();
+        for (const state of ["Present", "Absent", "Unknown", "Unsupported"]) {
+          await page.locator(`[aria-label="Evidence state: ${state}"]`).first().waitFor();
+        }
+        for (const dimension of [
+          "Trust domain",
+          "Ingress",
+          "Invoker",
+          "Represented subject",
+          "Sponsor",
+          "Agent principal",
+          "Runtime instance",
+          "Applicable grant 1",
+          "Assurance evidence 1",
+          "Lineage",
+        ]) {
+          await showText(page, dimension);
+        }
+        await showText(page, "Best-effort audit warning", false);
+        await showText(page, "Additional decision receipts are available", false);
+        expect(await page.getByText("receipt-safe-ref", { exact: false }).count()).toBe(0);
+        expect(await page.getByText("context-safe-ref", { exact: false }).count()).toBe(0);
+        expect(await page.getByText("execution-safe-ref", { exact: false }).count()).toBe(0);
+        await screenshot(page, "01-present-unattributed.png");
+        await page.reload();
+        await showHeading(page, "Identity and authority");
+        expect(await gateway.waitForRequest("audit.run.inspect")).toMatchObject({
+          params: { runId, decisionLimit: 50, executionLimit: 50 },
+        });
+        expect((await gateway.getRequests("audit.run.inspect")).length).toBe(1);
+        await backToSessions.click();
+        await page.getByRole("tab", { name: "Sessions" }).waitFor();
+        expect(await page.getByRole("tab").count()).toBe(2);
+        expect(await page.getByRole("tab", { name: "Run inspector" }).count()).toBe(0);
+        const liveTab = page.getByRole("tab", { name: "Live activity" });
+        await liveTab.focus();
+        await expect
+          .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim()))
+          .toBe("Live activity");
+        await page.keyboard.press("Enter");
+        await page.locator(".activity-empty").waitFor();
+        await expectAttribute(modePanel, "aria-labelledby").toBe("activity-mode-tab-live");
+        expect(new URL(page.url()).search).toBe("?view=live");
+        await page.goBack();
+        await expectAttribute(page.getByRole("tab", { name: "Sessions" }), "aria-selected").toBe(
+          "true",
+        );
+        await page.goBack();
+        await showHeading(page, "Identity and authority");
+      },
+      { video: true },
+    );
   });
 
   it("pages, deep-links, and safely explains approval and unsupported receipts", async () => {
@@ -229,22 +255,8 @@ suite.define(() => {
     const privateResolutionRef = "U2_R6_BROWSER_RESOLUTION_REF_SECRET_f907";
     const privateMessageReceiptId = "U2_R6_BROWSER_MESSAGE_RECEIPT_ID_SECRET_761e";
     const privateEventId = "U2_R6_BROWSER_EVENT_ID_SECRET_b442";
-    const allowed = decisionDisplay({
-      id: "approval-decision:101",
-      summary: "An exec approval allowed the requested action.",
-      outcome: "allowed",
-      reasonCode: "operator_approval_allowed_by_reviewer",
-      coverageState: "enforced",
-      remediation: "No follow-up is required.",
-    });
-    const denied = decisionDisplay({
-      id: "approval-decision:102",
-      summary: "An exec approval stopped the requested action.",
-      outcome: "denied",
-      reasonCode: "operator_approval_denied_by_reviewer",
-      coverageState: "enforced",
-      remediation: "Review the denial before requesting a new action.",
-    });
+    const allowed = approval(101, "allowed", "operator_approval_allowed_by_reviewer");
+    const denied = approval(102, "denied", "operator_approval_denied_by_reviewer");
     Object.assign(denied, {
       receiptId: privateApprovalReceiptId,
       resolutionRef: privateResolutionRef,
@@ -252,38 +264,15 @@ suite.define(() => {
       arguments: { token: "credential-value" },
       payload: "raw-payload",
     });
-    const expired = decisionDisplay({
-      id: "approval-decision:103",
-      summary: "An exec approval expired before a decision arrived.",
-      outcome: "denied",
-      reasonCode: "operator_approval_expired",
-      coverageState: "enforced",
-      remediation: "Request the action again and resolve the new approval before its deadline.",
-    });
-    const cancelled = decisionDisplay({
-      id: "approval-decision:104",
-      summary: "An exec approval was cancelled when the run ended.",
-      outcome: "denied",
-      reasonCode: "operator_approval_cancelled_run_aborted",
-      coverageState: "enforced",
-      remediation: "Start a new run if the action is still needed.",
-    });
-    const unknown = decisionDisplay({
-      id: "approval-decision:105",
-      summary: "A retained approval could not be bound to this execution.",
-      outcome: "unknown",
-      reasonCode: "operator_approval_execution_link_missing",
-      coverageState: "unknown",
-      remediation: "Inspect the exact retained binding before trusting attribution.",
-    });
-    const unsupported = decisionDisplay({
-      id: "approval-decision:106",
-      summary: "This observation has no Phase 0 enforcement contract.",
-      outcome: "not-applicable",
-      reasonCode: "observation_enforcement_unsupported",
-      coverageState: "unsupported",
-      remediation: "Treat this as an observation, not an authorization decision.",
-    });
+    const expired = approval(103, "denied", "operator_approval_expired");
+    const cancelled = approval(104, "denied", "operator_approval_cancelled_run_aborted");
+    const unknown = approval(105, "unknown", "operator_approval_execution_link_missing", "unknown");
+    const unsupported = approval(
+      106,
+      "not-applicable",
+      "observation_enforcement_unsupported",
+      "unsupported",
+    );
     const delivered = decisionDisplay({
       id: "message-decision:2000000000007",
       summary: "An outbound message was delivered.",
@@ -301,56 +290,46 @@ suite.define(() => {
     });
     const firstPage = receiptPage([allowed, denied], "a:10:2");
     const secondPage = receiptPage([expired, cancelled, unknown, unsupported, delivered]);
-    const context = await newContext();
-    await context.addInitScript(() => {
-      const recordedUrls: string[] = [];
-      const instrument = (method: "pushState" | "replaceState") => {
-        const original = history[method].bind(history);
-        history[method] = ((data: unknown, unused: string, url?: string | URL | null) => {
-          if (url !== undefined && url !== null) {
-            recordedUrls.push(String(url));
-          }
-          original(data, unused, url);
-        }) as History[typeof method];
-      };
-      instrument("pushState");
-      instrument("replaceState");
-      Object.defineProperty(window, "activityHistoryUrls", { value: recordedUrls });
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["audit.run.inspect"],
-      methodResponses: {
-        "audit.run.inspect": {
-          cases: [
-            { match: { decisionCursor: "a:10:2" }, response: secondPage },
-            { match: { runId: "receipt-matrix" }, response: firstPage },
-          ],
-        },
-      },
-    });
-
-    try {
+    await withPage(async (page) => {
+      await page.addInitScript(() => {
+        const recordedUrls: string[] = [];
+        const instrument = (method: "pushState" | "replaceState") => {
+          const original = history[method].bind(history);
+          history[method] = ((data: unknown, unused: string, url?: string | URL | null) => {
+            if (url !== undefined && url !== null) {
+              recordedUrls.push(String(url));
+            }
+            original(data, unused, url);
+          }) as History[typeof method];
+        };
+        instrument("pushState");
+        instrument("replaceState");
+        Object.defineProperty(window, "activityHistoryUrls", { value: recordedUrls });
+      });
+      const gateway = await installInspector(page, {
+        cases: [
+          { match: { decisionCursor: "a:10:2" }, response: secondPage },
+          { match: { runId: "receipt-matrix" }, response: firstPage },
+        ],
+      });
       await page.goto(`${suite.server.baseUrl}activity?view=run&run=receipt-matrix`);
       await page.getByRole("list", { name: "Decision receipt list" }).waitFor();
-      await page.getByRole("heading", { name: "Receipt detail" }).waitFor();
+      await showHeading(page, "Receipt detail");
       await page.getByText("Allowed", { exact: true }).first().waitFor();
       await page.getByText("Enforced", { exact: true }).first().waitFor();
-      await page.getByText("operator_approval_allowed_by_reviewer", { exact: true }).waitFor();
-      await page.getByText("Display provenance", { exact: true }).waitFor();
-      await page.getByText("Verified producer", { exact: true }).waitFor();
-      await page.getByText("operator-approval", { exact: true }).waitFor();
-      await page.getByText("No follow-up is required.", { exact: true }).waitFor();
+      await showText(page, "operator_approval_allowed_by_reviewer");
+      await showText(page, "Display provenance");
+      await showText(page, "Verified producer");
+      await showText(page, "operator-approval");
+      await showText(page, "No follow-up is required.");
       await expectReferenceCounts(page, "1");
-
       const deniedLink = page.getByText(denied.action.summary!, { exact: true }).locator("..");
       await deniedLink.focus();
       await page.keyboard.press("Enter");
-      await page.getByText("operator_approval_denied_by_reviewer", { exact: true }).waitFor();
+      await showText(page, "operator_approval_denied_by_reviewer");
       expect(new URL(page.url()).searchParams.get("receipt")).toBe("approval-decision:102");
       await page.reload();
-      await page.getByText("operator_approval_denied_by_reviewer", { exact: true }).waitFor();
-
+      await showText(page, "operator_approval_denied_by_reviewer");
       await page.getByRole("button", { name: "Load more receipts" }).click();
       expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toMatchObject({
         runId: "receipt-matrix",
@@ -358,30 +337,29 @@ suite.define(() => {
         decisionLimit: 50,
       });
       await page.getByText(expired.action.summary!, { exact: true }).click();
-      await page.getByText("operator_approval_expired", { exact: true }).waitFor();
+      await showText(page, "operator_approval_expired");
       const selectedUrl = new URL(page.url());
       expect(selectedUrl.searchParams.get("receipt")).toBe("approval-decision:103");
       expect(selectedUrl.searchParams.get("decision")).toBe("a:10:2");
       await page.reload();
-      await page.getByText("operator_approval_expired", { exact: true }).waitFor();
+      await showText(page, "operator_approval_expired");
       expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toMatchObject({
         runId: "receipt-matrix",
         decisionCursor: "a:10:2",
         decisionLimit: 50,
       });
-
       for (const [receipt, reasonCode] of [
         [cancelled, "operator_approval_cancelled_run_aborted"],
         [unknown, "operator_approval_execution_link_missing"],
         [unsupported, "observation_enforcement_unsupported"],
       ] as const) {
         await page.getByText(receipt.action.summary!, { exact: true }).click();
-        await page.getByText(reasonCode, { exact: true }).waitFor();
+        await showText(page, reasonCode);
       }
       await page.getByText("Unknown", { exact: true }).first().waitFor();
       await page.getByText("Unsupported", { exact: true }).first().waitFor();
       await page.getByText(delivered.action.summary!, { exact: true }).click();
-      await page.getByText("message_delivered", { exact: true }).waitFor();
+      await showText(page, "message_delivered");
       expect(new URL(page.url()).searchParams.get("receipt")).toBe(
         "message-decision:2000000000007",
       );
@@ -433,9 +411,7 @@ suite.define(() => {
         }
       }
       await screenshot(page, "16-receipt-detail-message.png");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("renders the Gateway's unverified receipt state without claiming a verified producer", async () => {
@@ -458,95 +434,72 @@ suite.define(() => {
       },
     ]);
 
-    const context = await newContext({ video: true });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      featureMethods: ["audit.run.inspect"],
-      methodResponses: { "audit.run.inspect": response },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}activity?view=run&run=receipt-matrix`);
-      await page.getByRole("heading", { name: "Receipt detail" }).waitFor();
-      await page.getByText("Unknown", { exact: true }).first().waitFor();
-      await page
-        .getByText("Receipt-controlled explanations and next steps are hidden", {
-          exact: false,
-        })
-        .waitFor();
-      await expectReferenceCounts(page, "0");
-
-      const detail = page.locator(".run-inspector__receipt-detail");
-      await detail.getByText("decision_fact_display_unverified", { exact: true }).waitFor();
-      await detail.getByText("decision.display_provenance", { exact: true }).waitFor();
-      expect(await detail.getByText("Verified producer", { exact: true }).count()).toBe(0);
-      await screenshot(
-        page,
-        "18-unverified-receipt-privacy.png",
-        detail.getByText("decision_fact_display_unverified", { exact: true }),
-      );
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    await withPage(
+      async (page) => {
+        await installInspector(page, response);
+        await page.goto(`${suite.server.baseUrl}activity?view=run&run=receipt-matrix`);
+        await showHeading(page, "Receipt detail");
+        await page.getByText("Unknown", { exact: true }).first().waitFor();
+        await showText(page, "Receipt-controlled explanations and next steps are hidden", false);
+        await expectReferenceCounts(page, "0");
+        const detail = page.locator(".run-inspector__receipt-detail");
+        await showText(detail, "decision_fact_display_unverified");
+        await showText(detail, "decision.display_provenance");
+        expect(await detail.getByText("Verified producer", { exact: true }).count()).toBe(0);
+        await screenshot(
+          page,
+          "18-unverified-receipt-privacy.png",
+          detail.getByText("decision_fact_display_unverified", { exact: true }),
+        );
+      },
+      { video: true },
+    );
   });
 
   it("keeps loaded receipts visible when later-page inspection fails", async () => {
-    const context = await newContext();
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      featureMethods: ["audit.run.inspect"],
-      methodResponses: {
-        "audit.run.inspect": {
-          cases: [
-            {
-              match: { decisionCursor: "a:10:2" },
-              response: {
-                __mockError: {
-                  code: "INVALID_REQUEST",
-                  message: "decision cursor is no longer retained",
-                },
+    await withPage(async (page) => {
+      await installInspector(page, {
+        cases: [
+          {
+            match: { decisionCursor: "a:10:2" },
+            response: {
+              __mockError: {
+                code: "INVALID_REQUEST",
+                message: "decision cursor is no longer retained",
               },
             },
-            {
-              match: { runId: "receipt-page-error" },
-              response: {
-                ...receiptPage(
-                  [
-                    decisionDisplay({
-                      id: "approval-decision:107",
-                      summary: "A denied approval remains visible.",
-                      outcome: "denied",
-                      reasonCode: "operator_approval_denied_by_reviewer",
-                      coverageState: "enforced",
-                      remediation: "Review the recorded denial.",
-                    }),
-                  ],
-                  "a:10:2",
-                ),
-                run: {
-                  runId: "receipt-page-error",
-                  executionId: "execution-safe-ref",
-                  status: "known",
-                },
+          },
+          {
+            match: { runId: "receipt-page-error" },
+            response: {
+              ...receiptPage(
+                [
+                  decisionDisplay({
+                    id: "approval-decision:107",
+                    summary: "A denied approval remains visible.",
+                    outcome: "denied",
+                    reasonCode: "operator_approval_denied_by_reviewer",
+                    coverageState: "enforced",
+                    remediation: "Review the recorded denial.",
+                  }),
+                ],
+                "a:10:2",
+              ),
+              run: {
+                runId: "receipt-page-error",
+                executionId: "execution-safe-ref",
+                status: "known",
               },
             },
-          ],
-        },
-      },
-    });
-
-    try {
+          },
+        ],
+      });
       await page.goto(`${suite.server.baseUrl}activity?view=run&run=receipt-page-error`);
       await page.getByText("A denied approval remains visible.", { exact: true }).first().waitFor();
       await page.getByRole("button", { name: "Load more receipts" }).click();
-      await page
-        .getByRole("alert")
-        .getByText("More receipts could not be loaded", { exact: false })
-        .waitFor();
+      await showText(page.getByRole("alert"), "More receipts could not be loaded", false);
       await page.getByText("A denied approval remains visible.", { exact: true }).first().waitFor();
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("restarts stale receipt deep links on page one while preserving the exact selector", async () => {
@@ -554,35 +507,27 @@ suite.define(() => {
       { kind: "run", id: "run:stale/deep-link" },
       { kind: "execution", id: "execution:stale/deep-link" },
     ] as const) {
-      const context = await newContext();
-      const page = await context.newPage();
-      const receiptId = `private-receipt-${scenario.kind}`;
-      const decisionCursor = `a:1786000000000:${scenario.kind === "run" ? "41" : "42"}`;
-      const firstPage = presentResult(
-        scenario.kind === "run" ? scenario.id : "run-for-exact-execution",
-        scenario.kind === "execution" ? scenario.id : "execution-for-run",
-      );
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["audit.run.inspect"],
-        methodResponses: {
-          "audit.run.inspect": {
-            cases: [
-              {
-                match: { decisionCursor },
-                response: {
-                  __mockError: {
-                    code: "INVALID_REQUEST",
-                    message: "decision cursor is no longer retained",
-                  },
+      await withPage(async (page) => {
+        const receiptId = `private-receipt-${scenario.kind}`;
+        const decisionCursor = `a:1786000000000:${scenario.kind === "run" ? "41" : "42"}`;
+        const firstPage = presentResult(
+          scenario.kind === "run" ? scenario.id : "run-for-exact-execution",
+          scenario.kind === "execution" ? scenario.id : "execution-for-run",
+        );
+        const gateway = await installInspector(page, {
+          cases: [
+            {
+              match: { decisionCursor },
+              response: {
+                __mockError: {
+                  code: "INVALID_REQUEST",
+                  message: "decision cursor is no longer retained",
                 },
               },
-              { match: { [`${scenario.kind}Id`]: scenario.id }, response: firstPage },
-            ],
-          },
-        },
-      });
-
-      try {
+            },
+            { match: { [`${scenario.kind}Id`]: scenario.id }, response: firstPage },
+          ],
+        });
         const search = new URLSearchParams({
           view: "run",
           [scenario.kind]: scenario.id,
@@ -590,21 +535,20 @@ suite.define(() => {
           decision: decisionCursor,
         });
         await page.goto(`${suite.server.baseUrl}activity?${search.toString()}`);
-        await page.getByRole("heading", { name: "Run inspection failed" }).waitFor();
+        await showHeading(page, "Run inspection failed");
         const restart = page.getByRole("button", { name: "Restart inspection" });
         await restart.waitFor();
         expect(await page.getByRole("button", { name: "Retry inspection" }).count()).toBe(0);
         const errorText = (await page.locator(".run-inspector__panel").textContent()) ?? "";
         expect(errorText).not.toContain(receiptId);
         expect(errorText).not.toContain(decisionCursor);
-
         const requestCount = (await gateway.getRequests("audit.run.inspect")).length;
         await restart.focus();
         await expect
           .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim()))
           .toBe("Restart inspection");
         await page.keyboard.press("Enter");
-        await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
+        await showHeading(page, "Identity and authority");
         const request = await gateway.waitForRequest("audit.run.inspect", { after: requestCount });
         const expectedParams = {
           [`${scenario.kind}Id`]: scenario.id,
@@ -620,27 +564,23 @@ suite.define(() => {
         );
         expect(restartedUrl.searchParams.get("receipt")).toBeNull();
         expect(restartedUrl.searchParams.get("decision")).toBeNull();
-      } finally {
-        await suite.closeBrowserContext(context);
-      }
+      });
     }
   });
 
   it("keeps a populated Live activity stream bounded after adding the mode switcher", async () => {
-    const context = await newContext();
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      sessionKey: "agent:main:main",
-      sessions: [{ key: "agent:main:main", kind: "direct", hasActiveRun: true, status: "running" }],
-    });
-
-    try {
+    await withPage(async (page) => {
+      const gateway = await installMockGateway(page, {
+        sessionKey: "agent:main:main",
+        sessions: [
+          { key: "agent:main:main", kind: "direct", hasActiveRun: true, status: "running" },
+        ],
+      });
       await page.goto(`${suite.server.baseUrl}activity?view=live`);
       await page.locator(".activity-empty").waitFor();
       await gateway.waitForRequest("sessions.messages.subscribe", {
         match: { key: "agent:main:main" },
       });
-
       for (let index = 0; index < 40; index += 1) {
         await gateway.emitGatewayEvent("agent", {
           runId: `run-layout-${index}`,
@@ -656,84 +596,41 @@ suite.define(() => {
           },
         });
       }
-
       const stream = page.locator(".activity-stream");
-      await expect.poll(() => page.locator(".activity-entry").count()).toBe(40);
-      const layout = await page.locator("#activity-mode-panel").evaluate((modePanel) => {
-        const livePanel = modePanel.querySelector<HTMLElement>("#activity-live-panel");
-        const streamElement = modePanel.querySelector<HTMLElement>(".activity-stream");
-        if (!livePanel || !streamElement) {
-          throw new Error("Live Activity layout is incomplete");
-        }
-        const modeStyle = getComputedStyle(modePanel);
-        const liveStyle = getComputedStyle(livePanel);
-        const workspace = modePanel.closest<HTMLElement>(".settings-workspace--fill-height");
-        return {
-          documentScrollHeight: document.documentElement.scrollHeight,
-          liveDisplay: liveStyle.display,
-          liveFlexGrow: liveStyle.flexGrow,
-          modeDisplay: modeStyle.display,
-          modeFlexGrow: modeStyle.flexGrow,
-          streamBottom: streamElement.getBoundingClientRect().bottom,
-          streamClientHeight: streamElement.clientHeight,
-          streamScrollHeight: streamElement.scrollHeight,
-          viewportHeight: window.innerHeight,
-          workspaceBottom: workspace?.getBoundingClientRect().bottom ?? 0,
-        };
+      await expectCount(page.locator(".activity-entry")).toBe(40);
+      const mode = await readBox(page.locator("#activity-mode-panel"));
+      const live = await readBox(page.locator("#activity-live-panel"));
+      const layout = await readBox(stream);
+      const workspace = await readBox(page.locator(".settings-workspace--fill-height"));
+      expect({ mode, live }).toMatchObject({
+        mode: { display: "flex", flexGrow: "1" },
+        live: { display: "flex", flexGrow: "1" },
       });
-      expect(layout.modeDisplay).toBe("flex");
-      expect(layout.modeFlexGrow).toBe("1");
-      expect(layout.liveDisplay).toBe("flex");
-      expect(layout.liveFlexGrow).toBe("1");
-      expect(layout.streamScrollHeight).toBeGreaterThan(layout.streamClientHeight);
-      expect(layout.streamBottom).toBeLessThanOrEqual(layout.workspaceBottom + 1);
-      expect(layout.documentScrollHeight).toBeLessThanOrEqual(layout.viewportHeight + 1);
+      expect(layout.scrollHeight).toBeGreaterThan(layout.clientHeight);
+      expect(layout.bottom).toBeLessThanOrEqual(workspace.bottom + 1);
+      expect(layout.documentHeight).toBeLessThanOrEqual(layout.viewportHeight + 1);
       await stream.evaluate((element) => {
         element.scrollTop = element.scrollHeight;
         element.dispatchEvent(new Event("scroll"));
       });
-      await expect
-        .poll(() =>
-          stream.evaluate(
-            (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
-          ),
-        )
-        .toBeLessThanOrEqual(1);
+      await expect.poll(() => scrollRemainder(stream)).toBeLessThanOrEqual(1);
       await screenshot(page, "13-populated-live-activity.png");
-
       await page.setViewportSize({ height: 900, width: 720 });
-      const mobileLayout = await page.locator("main.content").evaluate((content) => {
-        const outlet = content.querySelector("openclaw-router-outlet");
-        const streamElement = content.querySelector<HTMLElement>(".activity-stream");
-        if (!outlet || !streamElement) {
-          throw new Error("Mobile Live Activity layout is incomplete");
-        }
-        return {
-          contentClientHeight: content.clientHeight,
-          contentOverflowY: getComputedStyle(content).overflowY,
-          contentScrollHeight: content.scrollHeight,
-          outletDisplay: getComputedStyle(outlet).display,
-        };
+      const mobile = await readBox(page.locator("main.content"));
+      expect(mobile.overflowY).toBe("auto");
+      expect(await readBox(page.locator("main.content openclaw-router-outlet"))).toMatchObject({
+        display: "block",
       });
-      expect(mobileLayout.contentOverflowY).toBe("auto");
-      expect(mobileLayout.outletDisplay).toBe("block");
-      expect(mobileLayout.contentScrollHeight).toBeGreaterThan(mobileLayout.contentClientHeight);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+      expect(await page.locator("main.content .activity-stream").count()).toBe(1);
+      expect(mobile.scrollHeight).toBeGreaterThan(mobile.clientHeight);
+    });
   });
 
   it("keeps populated desktop run evidence reachable without taking mobile page scrolling", async () => {
-    const context = await newContext();
-    const page = await context.newPage();
-    const runId = "run:bounded/inspector";
-    await page.setViewportSize({ height: 640, width: 900 });
-    await installMockGateway(page, {
-      featureMethods: ["audit.run.inspect"],
-      methodResponses: { "audit.run.inspect": presentResult(runId) },
-    });
-
-    try {
+    await withPage(async (page) => {
+      const runId = "run:bounded/inspector";
+      await page.setViewportSize({ height: 640, width: 900 });
+      await installInspector(page, presentResult(runId));
       await page.goto(`${suite.server.baseUrl}activity?view=run&run=${encodeURIComponent(runId)}`);
       const inspector = page.locator(".run-inspector");
       const finalReceiptContent = page.getByText(
@@ -741,30 +638,14 @@ suite.define(() => {
         { exact: true },
       );
       await finalReceiptContent.waitFor({ state: "attached" });
-
-      const desktopLayout = await inspector.evaluate((element) => ({
-        clientHeight: element.clientHeight,
-        documentScrollHeight: document.documentElement.scrollHeight,
-        overflowY: getComputedStyle(element).overflowY,
-        scrollHeight: element.scrollHeight,
-        viewportHeight: window.innerHeight,
-      }));
+      const desktopLayout = await readBox(inspector);
       expect(desktopLayout.overflowY).toBe("auto");
       expect(desktopLayout.scrollHeight).toBeGreaterThan(desktopLayout.clientHeight);
-      expect(desktopLayout.documentScrollHeight).toBeLessThanOrEqual(
-        desktopLayout.viewportHeight + 1,
-      );
-
+      expect(desktopLayout.documentHeight).toBeLessThanOrEqual(desktopLayout.viewportHeight + 1);
       await inspector.evaluate((element) => {
         element.scrollTop = element.scrollHeight;
       });
-      await expect
-        .poll(() =>
-          inspector.evaluate(
-            (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
-          ),
-        )
-        .toBeLessThanOrEqual(1);
+      await expect.poll(() => scrollRemainder(inspector)).toBeLessThanOrEqual(1);
       const finalContentPosition = await measureWithinAncestor(
         finalReceiptContent,
         ".run-inspector",
@@ -772,109 +653,81 @@ suite.define(() => {
       expect(finalContentPosition.elementTop).toBeGreaterThanOrEqual(
         finalContentPosition.ancestorTop,
       );
-      // Bound is 2, not 1: the scroll poll above tolerates a <=1px remainder
-      // (scrollHeight/clientHeight are integer-rounded) and the rects here are
-      // fractional, so sub-pixel rendering can add up to another pixel.
+      // The 1px integer scroll remainder plus fractional rect rounding permits 2px here.
       expect(finalContentPosition.elementBottom).toBeLessThanOrEqual(
         finalContentPosition.ancestorBottom + 2,
       );
       await screenshot(page, "14-bounded-run-inspector.png");
-
       await page.setViewportSize({ height: 900, width: 720 });
-      const mobileLayout = await page.locator("main.content").evaluate((content) => {
-        const inspectorElement = content.querySelector<HTMLElement>(".run-inspector");
-        if (!inspectorElement) {
-          throw new Error("Mobile run inspector layout is incomplete");
-        }
-        return {
-          contentClientHeight: content.clientHeight,
-          contentOverflowY: getComputedStyle(content).overflowY,
-          contentScrollHeight: content.scrollHeight,
-          inspectorClientHeight: inspectorElement.clientHeight,
-          inspectorScrollHeight: inspectorElement.scrollHeight,
-        };
-      });
-      expect(mobileLayout.contentOverflowY).toBe("auto");
-      expect(mobileLayout.contentScrollHeight).toBeGreaterThan(mobileLayout.contentClientHeight);
-      expect(mobileLayout.inspectorScrollHeight).toBeLessThanOrEqual(
-        mobileLayout.inspectorClientHeight + 1,
-      );
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+      const mobile = await readBox(page.locator("main.content"));
+      const mobileInspector = await readBox(page.locator("main.content .run-inspector"));
+      expect(mobile.overflowY).toBe("auto");
+      expect(mobile.scrollHeight).toBeGreaterThan(mobile.clientHeight);
+      expect(mobileInspector.scrollHeight).toBeLessThanOrEqual(mobileInspector.clientHeight + 1);
+    });
   });
 
   it("renders empty, typed unavailable, corrupt, and expired results without guessing", async () => {
-    const context = await newContext();
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["audit.run.inspect"],
-      methodResponses: {
-        "audit.run.inspect": {
-          cases: [
-            {
-              match: { runId: "missing" },
-              response: unavailableResult({ state: "unknown", reasonCode: "run_not_found" }),
-            },
-            {
-              match: { runId: "expired" },
-              response: unavailableResult({
-                state: "unsupported",
-                reasonCode: "identity_context_unavailable",
-                remediation: [
-                  {
-                    code: "run_again_after_expiry",
-                    text: "This run is outside the 30-day retention window.",
-                  },
-                ],
-              }),
-            },
-            {
-              match: { runId: "corrupt" },
-              response: unavailableResult({
-                state: "unknown",
-                reasonCode: "identity_context_corrupt",
-              }),
-            },
-            {
-              match: { runId: "ambiguous", executionCursor: "50" },
-              response: ambiguousResult("ambiguous", "execution-candidate-51"),
-            },
-            {
-              match: { runId: "ambiguous" },
-              response: ambiguousResult("ambiguous", "execution-candidate-1", "50"),
-            },
-            {
-              match: { executionId: "execution-candidate-1" },
-              response: presentResult("ambiguous", "execution-candidate-1"),
-            },
-            {
-              match: { executionId: "execution-candidate-51" },
-              response: presentResult("ambiguous", "execution-candidate-51"),
-            },
-          ],
-        },
-      },
-    });
-
-    try {
+    await withPage(async (page) => {
+      const gateway = await installInspector(page, {
+        cases: [
+          {
+            match: { runId: "missing" },
+            response: unavailableResult({ state: "unknown", reasonCode: "run_not_found" }),
+          },
+          {
+            match: { runId: "expired" },
+            response: unavailableResult({
+              state: "unsupported",
+              reasonCode: "identity_context_unavailable",
+              remediation: [
+                {
+                  code: "run_again_after_expiry",
+                  text: "This run is outside the 30-day retention window.",
+                },
+              ],
+            }),
+          },
+          {
+            match: { runId: "corrupt" },
+            response: unavailableResult({
+              state: "unknown",
+              reasonCode: "identity_context_corrupt",
+            }),
+          },
+          {
+            match: { runId: "ambiguous", executionCursor: "50" },
+            response: ambiguousResult("ambiguous", "execution-candidate-51"),
+          },
+          {
+            match: { runId: "ambiguous" },
+            response: ambiguousResult("ambiguous", "execution-candidate-1", "50"),
+          },
+          {
+            match: { executionId: "execution-candidate-1" },
+            response: presentResult("ambiguous", "execution-candidate-1"),
+          },
+          {
+            match: { executionId: "execution-candidate-51" },
+            response: presentResult("ambiguous", "execution-candidate-51"),
+          },
+        ],
+      });
       await page.goto(`${suite.server.baseUrl}activity?view=run`);
-      await page.getByRole("heading", { name: "No run selected" }).waitFor();
+      await showHeading(page, "No run selected");
       expect((await gateway.getRequests("audit.run.inspect")).length).toBe(0);
       await screenshot(page, "02-empty.png");
-
       for (const [runId, heading, screenshotName] of [
         ["missing", "Run not found", "03-not-found.png"],
         ["expired", "Identity evidence expired", "04-expired.png"],
         ["corrupt", "Identity evidence is corrupt", "05-corrupt.png"],
       ] as const) {
         await page.goto(`${suite.server.baseUrl}activity?view=run&run=${runId}`);
-        await page.getByRole("heading", { name: heading }).waitFor();
+        await showHeading(page, heading);
         await screenshot(page, screenshotName);
       }
-
       await page.goto(`${suite.server.baseUrl}activity?view=run&run=ambiguous`);
-      await page.getByRole("heading", { name: "Multiple executions match this run" }).waitFor();
+      await showHeading(page, "Multiple executions match this run");
       await screenshot(page, "11-ambiguous.png");
       await page.getByRole("button", { name: "Load more executions" }).click();
       await page.getByRole("link", { name: "execution-candidate-51" }).waitFor();
@@ -886,48 +739,40 @@ suite.define(() => {
       });
       expect(await page.getByRole("button", { name: "Load more executions" }).count()).toBe(0);
       await page.getByRole("link", { name: "execution-candidate-51" }).click();
-      await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
+      await showHeading(page, "Identity and authority");
       expect(new URL(page.url()).searchParams.get("execution")).toBe("execution-candidate-51");
       expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toEqual({
         executionId: "execution-candidate-51",
         decisionLimit: 50,
       });
       await screenshot(page, "12-exact-selection.png");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("shows loading, request failure, retry, and disconnected states", async () => {
-    const context = await newContext();
-    const page = await context.newPage();
-    const runId = "retry-run";
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["audit.run.inspect"],
-      deferredMethods: ["audit.run.inspect"],
-      methodResponses: { "audit.run.inspect": presentResult(runId) },
-    });
-
-    try {
+    await withPage(async (page) => {
+      const runId = "retry-run";
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["audit.run.inspect"],
+        deferredMethods: ["audit.run.inspect"],
+        methodResponses: { "audit.run.inspect": presentResult(runId) },
+      });
       await page.goto(`${suite.server.baseUrl}activity?view=run&run=${runId}`);
-      await page.getByRole("heading", { name: "Loading run inspection" }).waitFor();
+      await showHeading(page, "Loading run inspection");
       await screenshot(page, "06-loading.png");
       await gateway.rejectDeferred("audit.run.inspect", {
         code: "UNAVAILABLE",
         message: "temporarily unavailable",
         retryable: true,
       });
-      await page.getByRole("heading", { name: "Run inspection failed" }).waitFor();
+      await showHeading(page, "Run inspection failed");
       await screenshot(page, "07-error.png");
       await page.getByRole("button", { name: "Retry inspection" }).click();
-      await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
-
+      await showHeading(page, "Identity and authority");
       await gateway.closeLatest(1006, "network unavailable");
-      await page.getByRole("heading", { name: "Gateway disconnected" }).waitFor();
+      await showHeading(page, "Gateway disconnected");
       await screenshot(page, "08-disconnected.png");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("distinguishes missing access from an older unsupported Gateway", async () => {
@@ -947,20 +792,16 @@ suite.define(() => {
         screenshotName: "10-unsupported-gateway.png",
       },
     ] as const) {
-      const context = await newContext();
-      const page = await context.newPage();
-      const gateway = await installMockGateway(page, {
-        featureMethods: [...scenario.featureMethods],
-        operatorScopes: [...scenario.operatorScopes],
-      });
-      try {
+      await withPage(async (page) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...scenario.featureMethods],
+          operatorScopes: [...scenario.operatorScopes],
+        });
         await page.goto(`${suite.server.baseUrl}activity?view=run&run=${scenario.name}`);
-        await page.getByRole("heading", { name: scenario.heading }).waitFor();
+        await showHeading(page, scenario.heading);
         expect((await gateway.getRequests("audit.run.inspect")).length).toBe(0);
         await screenshot(page, scenario.screenshotName);
-      } finally {
-        await suite.closeBrowserContext(context);
-      }
+      });
     }
   });
 });
