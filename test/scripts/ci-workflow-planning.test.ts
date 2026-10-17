@@ -105,7 +105,17 @@ describe("PostgreSQL conformance selection", () => {
       "max-parallel": 2,
       matrix: { shard: ["infra", "integrations"] },
     });
-    expect(job["timeout-minutes"]).toBe(30);
+    for (const [shard, timeout] of [
+      ["infra", 60],
+      ["integrations", 30],
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(job["timeout-minutes"], {
+          eventName: "pull_request",
+          matrix: { shard },
+        }),
+      ).toBe(timeout);
+    }
     expect(
       evaluateWorkflowExpression(job["runs-on"], {
         eventName: "pull_request",

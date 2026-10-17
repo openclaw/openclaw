@@ -4512,7 +4512,8 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_postgres_conformance == 'true'
     runs-on: *ubuntu_linux_runner
-    timeout-minutes: 30
+    # Full port/recovery coverage exceeds 30 minutes on the hosted infra runner.
+    timeout-minutes: ${{ matrix.shard == 'infra' && 60 || 30 }}
     strategy:
       fail-fast: false
       max-parallel: 2
