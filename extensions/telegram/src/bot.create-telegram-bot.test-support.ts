@@ -19,8 +19,12 @@ export const telegramBotInfoForTest = {
   allows_users_to_create_topics: false,
 } satisfies TelegramBotInfo;
 
-function fileRef(fileId: string) {
-  return { file_id: fileId, file_unique_id: `unique-${fileId}` };
+function fileRef(fileId: string, filePath?: string) {
+  return {
+    file_id: fileId,
+    file_unique_id: `unique-${fileId}`,
+    ...(filePath ? { file_path: filePath } : {}),
+  };
 }
 
 function photoRef(fileId: string) {
@@ -51,12 +55,7 @@ export function createChannelPostContext(params: {
     me: { username: "openclaw_bot" },
     getFile: async () =>
       params.getFileResult ??
-      (photoFileId
-        ? {
-            ...fileRef(photoFileId),
-            file_path: `photos/${photoFileId}.jpg`,
-          }
-        : {}),
+      (photoFileId ? fileRef(photoFileId, `photos/${photoFileId}.jpg`) : {}),
   };
 }
 
@@ -81,10 +80,7 @@ export async function waitForTelegramMockCalls(
   mock: { mock: { calls: unknown[] } },
   count: number,
 ) {
-  for (let index = 0; index < 80; index++) {
-    if (mock.mock.calls.length >= count) {
-      return;
-    }
+  for (let index = 0; index < 80 && mock.mock.calls.length < count; index++) {
     await delay(25);
   }
 }
@@ -145,12 +141,7 @@ export function createTelegramPrivateMediaContext(params: {
       from: { id: 55, is_bot: false, first_name: "u" },
     },
     me: { username: "openclaw_bot" },
-    getFile:
-      params.getFile ??
-      (async () => ({
-        ...fileRef(params.fileId),
-        file_path: `documents/${params.fileId}`,
-      })),
+    getFile: params.getFile ?? (async () => fileRef(params.fileId, `documents/${params.fileId}`)),
   };
 }
 

@@ -1,10 +1,14 @@
-// Real grammY ingress and Bot API sockets: stalled forum metadata must not block delivery.
-import { createServer, type Server } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
 import { Bot } from "grammy";
+import type { Message } from "grammy/types";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { afterEach, expect, it, vi } from "vitest";
 import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
 import {
   createTelegramInboundPipeline,
@@ -17,226 +21,160 @@ import {
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
-import { createTelegramIngressResolver } from "./ingress.js";
 import * as telegramRequestTimeouts from "./request-timeouts.js";
 import { setTelegramRuntime } from "./runtime.js";
 
-describe("Telegram supergroup ingress with a stalled Bot API response body", () => {
-  const liveSockets = new Set<Socket>();
-  let server: Server;
-  let apiRoot: string;
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
+
+it("dispatches DMs immediately and the supergroup after cancelling its stalled socket", async () => {
+  setTelegramRuntime(createPluginRuntimeMock());
   let getChatRequests = 0;
   let closedSocketCount = 0;
-  let resolveResponseHeaders: (() => void) | undefined;
-  let resolveSocketClosed: (() => void) | undefined;
+  const headersReceived = createDeferred<void>();
+  const socketClosed = createDeferred<void>();
 
-  beforeAll(async () => {
-    setTelegramRuntime(createPluginRuntimeMock());
-    server = createServer((request, response) => {
+  await withServer(
+    (request, response) => {
       if (!request.url?.endsWith("/getChat")) {
         response.writeHead(404);
         response.end();
         return;
       }
       getChatRequests += 1;
+      request.socket.once("close", () => {
+        closedSocketCount += 1;
+        socketClosed.resolve();
+      });
       response.writeHead(200, { "content-type": "application/json" });
       response.write('{"ok":true,"result":{"id":-100364');
-    });
-    server.on("connection", (socket) => {
-      liveSockets.add(socket);
-      socket.once("close", () => {
-        liveSockets.delete(socket);
-        closedSocketCount += 1;
-        resolveSocketClosed?.();
+    },
+    async (apiRoot) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const canonicalRequestTimeout = telegramRequestTimeouts.resolveTelegramRequestTimeoutMs;
+      vi.spyOn(telegramRequestTimeouts, "resolveTelegramRequestTimeoutMs").mockImplementation(
+        (method, configuredTimeoutSeconds) =>
+          method === "getchat" ? 100 : canonicalRequestTimeout(method, configuredTimeoutSeconds),
+      );
+
+      const clientFetch = createTelegramClientFetch({
+        fetchImpl: asTelegramClientFetch(globalThis.fetch),
       });
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  });
-
-  afterAll(async () => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    for (const socket of liveSockets) {
-      socket.destroy();
-    }
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  });
-
-  it("dispatches DMs immediately and the supergroup after cancelling its stalled socket", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const canonicalRequestTimeout = telegramRequestTimeouts.resolveTelegramRequestTimeoutMs;
-    vi.spyOn(telegramRequestTimeouts, "resolveTelegramRequestTimeoutMs").mockImplementation(
-      (method, configuredTimeoutSeconds) =>
-        method === "getchat" ? 100 : canonicalRequestTimeout(method, configuredTimeoutSeconds),
-    );
-
-    const clientFetch = createTelegramClientFetch({
-      fetchImpl: asTelegramClientFetch(globalThis.fetch),
-    });
-    if (!clientFetch) {
-      throw new Error("expected production Telegram client fetch wrapper");
-    }
-    const observeClientFetch: typeof clientFetch = async (input, init) => {
-      const response = await clientFetch(input, init);
-      resolveResponseHeaders?.();
-      return response;
-    };
-    const botInfo = telegramBotInfoForTest;
-    const bot = new Bot("123456:integration-token", {
-      botInfo,
-      client: { apiRoot, fetch: asTelegramClientFetch(observeClientFetch) },
-    });
-    const dispatched = vi.fn<TelegramMessagePipeline["processMessageWithReplyChain"]>(async () => ({
-      kind: "completed",
-    }));
-    const emptyAllow = {
-      entries: [],
-      hasWildcard: false,
-      hasEntries: false,
-      invalidEntries: [],
-    };
-    const params: RegisterTelegramHandlerParams = {
-      accountId: "default",
-      ownerAgentId: "main",
-      bot,
-      cfg: { messages: { inbound: { debounceMs: 0 } } },
-      mediaMaxBytes: 1,
-      opts: { token: "123456:integration-token", botInfo },
-      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
-      telegramCfg: {},
-      logger: getChildLogger({ module: "telegram/forum-ingress-test" }),
-      resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: true }),
-      resolveGroupActivation: () => undefined,
-      resolveGroupRequireMention: () => false,
-      resolveTelegramGroupConfig: () => ({}),
-      shouldSkipUpdate: () => false,
-      processMessage: async () => ({ kind: "completed" }),
-    };
-    const authorizeInboundMessage = vi.fn<
-      ReturnType<typeof createTelegramHandlerAuthorization>["authorizeInboundMessage"]
-    >(async (inbound) => {
-      const resolver = createTelegramIngressResolver({ accountId: "default" });
-      return {
-        allowed: true as const,
-        resolveChannelIngress: async (contextBinding) =>
-          await resolver.message({
-            subject: { stableId: inbound.senderId },
-            conversation: {
-              kind: inbound.isGroup ? "group" : "direct",
-              id: String(inbound.chatId),
-            },
-            contextBinding,
-            dmPolicy: "open",
-            groupPolicy: "open",
-          }),
-        effectiveDmAllow: emptyAllow,
-        context: {
-          commandAuthorizedByConfig: false,
-          cfg: params.cfg,
-          telegramCfg: {},
-          allowFrom: [],
-          dmPolicy: "open" as const,
-          threadSpec: inbound.isGroup ? ({ scope: "none" } as const) : ({ scope: "dm" } as const),
-          storeAllowFrom: [],
-          effectiveGroupAllow: emptyAllow,
-          hasGroupAllowOverride: false,
-        },
+      if (!clientFetch) {
+        throw new Error("expected production Telegram client fetch wrapper");
+      }
+      const observeClientFetch: typeof clientFetch = async (input, init) => {
+        const response = await clientFetch(input, init);
+        headersReceived.resolve();
+        return response;
       };
-    });
-    const authorization = {
-      ...createTelegramHandlerAuthorization(params),
-      authorizeInboundMessage,
-    };
-    const message: TelegramMessagePipeline = {
-      ...createTelegramMessagePipeline(params),
-      releaseDispatchDedupeClaims: () => undefined,
-      claimMessageDispatchDedupe: async () => ({ process: true, claims: [] }),
-      resolveTelegramSessionState: async () => ({
-        agentId: "integration",
-        bindingMode: { kind: "none" as const },
-        sessionEntry: undefined,
-        sessionKey: "integration",
-        storePath: "integration",
-        model: undefined,
-      }),
-      resolvePromptContextAmbientWatermark: async () => undefined,
-      recordMessageForReplyChain: async (msg) => ({
-        messageId: String(msg.message_id),
-        sender: "integration sender",
-        sourceMessage: msg,
-      }),
-      processMessageWithReplyChain: dispatched,
-    };
-    const pipeline = createTelegramInboundPipeline({ params, message, authorization });
-    registerTelegramInboundHandlers({ bot, pipeline });
+      const botInfo = telegramBotInfoForTest;
+      const bot = new Bot("123456:integration-token", {
+        botInfo,
+        client: { apiRoot, fetch: asTelegramClientFetch(observeClientFetch) },
+      });
+      const completed = async () => ({ kind: "completed" as const });
+      const dispatched = vi.fn<TelegramMessagePipeline["processMessageWithReplyChain"]>(completed);
+      const telegramCfg = { dmPolicy: "open", groupPolicy: "open" } as const;
+      const params: RegisterTelegramHandlerParams = {
+        accountId: "default",
+        ownerAgentId: "main",
+        bot,
+        cfg: { messages: { inbound: { debounceMs: 0 } }, channels: { telegram: telegramCfg } },
+        mediaMaxBytes: 1,
+        opts: { token: "123456:integration-token", botInfo },
+        runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+        telegramCfg,
+        logger: getChildLogger({ module: "telegram/forum-ingress-test" }),
+        resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: true }),
+        resolveGroupActivation: () => undefined,
+        resolveGroupRequireMention: () => false,
+        resolveTelegramGroupConfig: () => ({}),
+        shouldSkipUpdate: () => false,
+        processMessage: completed,
+      };
+      setRuntimeConfigSnapshot(params.cfg);
+      const authorization = createTelegramHandlerAuthorization(params);
+      const authorizeInboundMessage = vi.spyOn(authorization, "authorizeInboundMessage");
+      const message: TelegramMessagePipeline = {
+        ...createTelegramMessagePipeline(params),
+        releaseDispatchDedupeClaims: () => undefined,
+        claimMessageDispatchDedupe: async () => ({ process: true, claims: [] }),
+        resolveTelegramSessionState: async () => ({
+          agentId: "integration",
+          bindingMode: { kind: "none" as const },
+          sessionEntry: undefined,
+          sessionKey: "integration",
+          storePath: "integration",
+          model: undefined,
+        }),
+        resolvePromptContextAmbientWatermark: async () => undefined,
+        recordMessageForReplyChain: async (msg) => ({
+          messageId: String(msg.message_id),
+          sender: "integration sender",
+          sourceMessage: msg,
+        }),
+        processMessageWithReplyChain: dispatched,
+      };
+      const pipeline = createTelegramInboundPipeline({ params, message, authorization });
+      registerTelegramInboundHandlers({ bot, pipeline });
 
-    const headersReceived = new Promise<void>((resolve) => {
-      resolveResponseHeaders = resolve;
-    });
-    const socketClosed = new Promise<void>((resolve) => {
-      resolveSocketClosed = resolve;
-    });
-    const groupDelivery = bot.handleUpdate({
-      update_id: 1,
-      message: {
-        message_id: 11,
-        date: 1_700_000_000,
-        chat: { id: -100364, type: "supergroup", title: "Integration group" },
-        from: { id: 111, is_bot: false, first_name: "Group sender" },
-        text: "group message",
-      },
-    });
-    void groupDelivery.catch(() => undefined);
-    // The client must receive headers before the deadline advances: the regression
-    // cleared the deadline after fetch resolved, leaving body consumption unbounded.
-    await Promise.race([
-      headersReceived,
-      groupDelivery.then(() => {
-        throw new Error("group delivery settled before the metadata response headers");
-      }),
-    ]);
+      const deliver = (chat: Message["chat"], id: number) =>
+        bot.handleUpdate({
+          update_id: id,
+          message: {
+            message_id: id * 11,
+            date: 1_700_000_000 + id - 1,
+            chat,
+            from: { id: id * 111, is_bot: false, first_name: "Sender" },
+            text: "message",
+          },
+        });
+      const groupDelivery = deliver(
+        { id: -100364, type: "supergroup", title: "Integration group" },
+        1,
+      );
+      void groupDelivery.catch(() => undefined);
+      // The client must receive headers before the deadline advances: the regression
+      // cleared the deadline after fetch resolved, leaving body consumption unbounded.
+      await Promise.race([
+        headersReceived.promise,
+        groupDelivery.then(() => {
+          throw new Error("group delivery settled before the metadata response headers");
+        }),
+      ]);
 
-    await bot.handleUpdate({
-      update_id: 2,
-      message: {
-        message_id: 22,
-        date: 1_700_000_001,
-        chat: { id: 222, type: "private", first_name: "DM sender" },
-        from: { id: 222, is_bot: false, first_name: "DM sender" },
-        text: "direct message",
-      },
-    });
-    expect(dispatched).toHaveBeenCalledTimes(1);
-    expect(dispatched.mock.calls[0]?.[0].msg.chat.id).toBe(222);
-    expect(authorizeInboundMessage.mock.calls[0]?.[0]).toMatchObject({
-      chatId: 222,
-      isGroup: false,
-      isForum: false,
-    });
+      await deliver({ id: 222, type: "private", first_name: "DM sender" }, 2);
+      expect(dispatched).toHaveBeenCalledTimes(1);
+      expect(dispatched.mock.calls[0]?.[0].msg.chat.id).toBe(222);
+      expect(authorizeInboundMessage.mock.calls[0]?.[0]).toMatchObject({
+        chatId: 222,
+        isGroup: false,
+        isForum: false,
+      });
 
-    const groupResult = Promise.race([
-      groupDelivery.then(() => "dispatched" as const),
-      new Promise<"stalled">((resolve) => {
-        setTimeout(() => resolve("stalled"), 1_000);
-      }),
-    ]);
+      const groupResult = Promise.race([
+        groupDelivery.then(() => "dispatched" as const),
+        new Promise<"stalled">((resolve) => {
+          setTimeout(() => resolve("stalled"), 1_000);
+        }),
+      ]);
 
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(await groupResult).toBe("dispatched");
-    expect(dispatched).toHaveBeenCalledTimes(2);
-    expect(dispatched.mock.calls[1]?.[0].msg.chat.id).toBe(-100364);
-    expect(authorizeInboundMessage.mock.calls[1]?.[0]).toMatchObject({
-      chatId: -100364,
-      isGroup: true,
-      isForum: false,
-    });
-    expect(getChatRequests).toBe(1);
-    await socketClosed;
-    expect(closedSocketCount).toBeGreaterThan(0);
-  });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await groupResult).toBe("dispatched");
+      expect(dispatched).toHaveBeenCalledTimes(2);
+      expect(dispatched.mock.calls[1]?.[0].msg.chat.id).toBe(-100364);
+      expect(authorizeInboundMessage.mock.calls[1]?.[0]).toMatchObject({
+        chatId: -100364,
+        isGroup: true,
+        isForum: false,
+      });
+      expect(getChatRequests).toBe(1);
+      await socketClosed.promise;
+      expect(closedSocketCount).toBeGreaterThan(0);
+    },
+  );
 });

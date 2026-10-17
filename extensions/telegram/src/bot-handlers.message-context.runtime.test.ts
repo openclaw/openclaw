@@ -1,4 +1,3 @@
-// Telegram tests cover forum topic recovery from the real message cache.
 import type { Message } from "grammy/types";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -46,19 +45,31 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => (
   resolveStorePath: resolveStorePathMock,
 }));
 
-function createRuntime(cfg: OpenClawConfig = {}) {
-  storeScopeId += 1;
-  resolveStorePathMock.mockReturnValue(
-    `/tmp/openclaw-telegram-thread-recovery-${storeScopeId}/store.json`,
-  );
+function createRuntime(cfg: OpenClawConfig = {}, accountId = "default") {
   return createTelegramMessageContextRuntime({
     cfg,
-    accountId: "default",
+    accountId,
     ownerAgentId: "main",
     opts: {},
     telegramCfg: cfg.channels?.telegram ?? {},
   });
 }
+
+function isolateStoreScope() {
+  resolveStorePathMock.mockReturnValue(
+    `/tmp/openclaw-telegram-thread-recovery-${++storeScopeId}/store.json`,
+  );
+}
+
+beforeEach(() => {
+  resolveStorePathMock.mockClear();
+  isolateStoreScope();
+});
+
+afterEach(() => {
+  resetTelegramMessageCacheForTest();
+  clearTelegramRuntimeForTest();
+});
 
 function promptContext(
   runtime: ReturnType<typeof createRuntime>,
@@ -89,11 +100,6 @@ function forumMessage(messageId: number, threadId?: number): Message {
 }
 
 describe("resolveCachedMessageThreadSpec", () => {
-  beforeEach(() => {
-    resolveStorePathMock.mockClear();
-    resetTelegramMessageCacheForTest();
-  });
-
   it("keeps account cache ownership separate from a topic-routed session owner", async () => {
     const resolveStorePath = resolveStorePathMock.mockImplementation(
       (_store?: string, options?: { agentId?: string }) =>
@@ -106,13 +112,7 @@ describe("resolveCachedMessageThreadSpec", () => {
       },
       bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "*" } }],
     } as OpenClawConfig;
-    createTelegramMessageContextRuntime({
-      cfg,
-      accountId: "primary",
-      ownerAgentId: "main",
-      opts: {},
-      telegramCfg: {},
-    });
+    createRuntime(cfg, "primary");
     const sessionRuntime = createTelegramMessageSessionRuntime({
       accountId: "primary",
       resolveTelegramGroupConfig: () => ({ topicConfig: { agentId: "research" } }),
@@ -140,8 +140,6 @@ describe("resolveCachedMessageThreadSpec", () => {
   it("returns undefined for a message that is not in the cache", async () => {
     const runtime = createRuntime();
 
-    // Cache miss must stay unknown; the reaction handler drops rather than
-    // attributing the reaction to the General topic.
     await expect(
       runtime.resolveCachedMessageThreadSpec({ chatId: CHAT_ID, messageId: 404 }),
     ).resolves.toBeUndefined();
@@ -203,13 +201,17 @@ describe("automatic Telegram retained history workload", () => {
     resolveStorePathMock.mockReturnValue(storePath);
     return {
       cfg,
-      runtime: createTelegramMessageContextRuntime({
-        cfg,
-        telegramCfg,
-        accountId,
-        ownerAgentId: "main",
-        opts: {},
-      }),
+      runtime: createRuntime(cfg, accountId),
+      read: (before: string, limit: number) =>
+        readTelegramHistory({
+          cache: createTelegramMessageCache({ scope }),
+          cfg,
+          accountId,
+          chatId,
+          threadId: TOPIC_ID,
+          before,
+          limit,
+        }),
     };
   }
 
@@ -230,9 +232,7 @@ describe("automatic Telegram retained history workload", () => {
           version: 1,
           sourceMessage,
           historyEligible: true,
-          ...(sourceMessage.message_thread_id === undefined
-            ? {}
-            : { threadId: String(sourceMessage.message_thread_id) }),
+          threadId: sourceMessage.message_thread_id?.toString(),
         };
         return {
           plugin_id: "telegram",
@@ -280,11 +280,6 @@ describe("automatic Telegram retained history workload", () => {
     );
   });
 
-  afterEach(() => {
-    resetTelegramMessageCacheForTest();
-    clearTelegramRuntimeForTest();
-  });
-
   afterAll(async () => {
     resetPluginStateStoreForTests();
     closeOpenClawStateDatabaseForTest();
@@ -310,7 +305,7 @@ describe("automatic Telegram retained history workload", () => {
   ])(
     "does not extend the physical window to fill $name matches",
     async ({ threadId, restricted, expected }) => {
-      const { runtime, cfg } = historyRuntime(
+      const { runtime, cfg, read } = historyRuntime(
         restricted
           ? { groupPolicy: "allowlist", groupAllowFrom: ["10"], groups: { "*": { enabled: true } } }
           : { groupPolicy: "open" },
@@ -326,15 +321,7 @@ describe("automatic Telegram retained history workload", () => {
       expect(reads.pages).toBeLessThanOrEqual(2);
 
       if (threadId !== undefined) {
-        const earlier = await readTelegramHistory({
-          cache: createTelegramMessageCache({ scope }),
-          cfg,
-          accountId,
-          chatId,
-          threadId,
-          before: "50300",
-          limit: 3,
-        });
+        const earlier = await read("50300", 3);
         expect(earlier.messages.map((entry) => entry.messageId)).toEqual([
           "50254",
           "50255",
@@ -365,27 +352,13 @@ describe("automatic Telegram retained history workload", () => {
       resetTelegramMessageCacheForTest();
       reads = { pages: 0, rows: 0, lookups: 0, fullReads: 0 };
     }
-    const { cfg } = historyRuntime();
-    const earlier = await readTelegramHistory({
-      cache: createTelegramMessageCache({ scope }),
-      cfg,
-      accountId,
-      chatId,
-      threadId: 77,
-      before: "2",
-      limit: 1,
-    });
+    const earlier = await historyRuntime().read("2", 1);
     expect(earlier.messages.map((entry) => entry.body)).toEqual(["The launch code is cobalt."]);
     expect(earlier.hasMore).toBe(false);
   });
 });
 
 describe("Telegram same-turn reset context", () => {
-  afterEach(() => {
-    resetTelegramMessageCacheForTest();
-    clearTelegramRuntimeForTest();
-  });
-
   it("keeps soft-reset context but drops a hard reset in group chats", async () => {
     const telegramCfg: TelegramAccountConfig = { groupPolicy: "open" };
     const cfg: OpenClawConfig = { channels: { telegram: telegramCfg } };
@@ -397,6 +370,7 @@ describe("Telegram same-turn reset context", () => {
       from: { id: 10, is_bot: false, first_name: "Participant" },
     } satisfies Message;
     for (const text of ["/new", "/reset@openclaw_bot", "/reset soft continue"]) {
+      isolateStoreScope();
       const runtime = createRuntime(cfg);
       await runtime.recordMessageForReplyChain(previous);
       const msg = { ...previous, message_id: 101, date: previous.date + 1, text };
