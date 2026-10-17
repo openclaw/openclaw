@@ -325,7 +325,7 @@ describe("runSearchSetupFlow", () => {
         const result = await runSearchSetupFlow(
           config,
           createNonExitingRuntime(),
-          createWizardPrompter({ select: vi.fn(async () => "grok" as const), text }),
+          createWizardPrompter({ text }, { defaultSelect: "grok" }),
           {
             quickstartDefaults: mode === "quickstart",
             secretInputMode: mode === "reference-mode" ? "ref" : "plaintext",

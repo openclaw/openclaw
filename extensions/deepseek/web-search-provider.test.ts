@@ -46,15 +46,18 @@ describe("DeepSeek search execution", () => {
   });
 
   it("sends only the search request and maps model summaries without full content", async () => {
-    const fetch = vi.fn().mockResolvedValue(response());
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(response());
     vi.stubGlobal("fetch", fetch);
     const query = 'OpenClaw site:github.com lang:en after:2026 "release notes"';
     const result = await searchTool().execute({ query, count: 1 });
     expect(fetch).toHaveBeenCalledOnce();
-    const [url, init] = fetch.mock.calls[0];
+    const [url, init] = fetch.mock.calls[0] ?? [];
     expect(url).toBe("https://api.deepseek.com/v1/tools/search");
-    expect(init.method).toBe("POST");
-    expect(new Headers(init.headers).get("Authorization")).toBe(`Bearer ${KEY}`);
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${KEY}`);
+    if (typeof init?.body !== "string") {
+      throw new Error("Expected serialized search request body");
+    }
     expect(JSON.parse(init.body)).toEqual({ query, count: 1, need_content: false });
     expect(result).toMatchObject({
       provider: "deepseek",
@@ -106,18 +109,18 @@ describe("DeepSeek search execution", () => {
     },
   ])("resolves $name without inheriting a chat endpoint", async ({ config, env, expected }) => {
     vi.stubEnv("DEEPSEEK_API_KEY", env);
-    const fetch = vi.fn().mockResolvedValue(response());
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(response());
     vi.stubGlobal("fetch", fetch);
     await searchTool(config).execute({ query: `credential ${expected}` });
-    expect(fetch.mock.calls[0][0]).toBe("https://api.deepseek.com/v1/tools/search");
-    expect(new Headers(fetch.mock.calls[0][1].headers).get("Authorization")).toBe(
+    expect(fetch.mock.calls[0]?.[0]).toBe("https://api.deepseek.com/v1/tools/search");
+    expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
       `Bearer ${expected}`,
     );
   });
 
   it("reports missing and unresolved credentials without network access", async () => {
     vi.stubEnv("DEEPSEEK_API_KEY", undefined);
-    const fetch = vi.fn();
+    const fetch = vi.fn<typeof globalThis.fetch>();
     vi.stubGlobal("fetch", fetch);
     await expect(searchTool().execute({ query: "missing credential" })).resolves.toMatchObject({
       error: "missing_deepseek_api_key",
@@ -131,11 +134,15 @@ describe("DeepSeek search execution", () => {
   });
 
   it("accepts 128 Unicode code points but never truncates oversized queries", async () => {
-    const fetch = vi.fn().mockResolvedValue(response());
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(response());
     vi.stubGlobal("fetch", fetch);
     const query = "🦞".repeat(128);
     await searchTool().execute({ query });
-    expect(JSON.parse(fetch.mock.calls[0][1].body).query).toBe(query);
+    const body = fetch.mock.calls[0]?.[1]?.body;
+    if (typeof body !== "string") {
+      throw new Error("Expected serialized search request body");
+    }
+    expect(JSON.parse(body).query).toBe(query);
     await expect(searchTool().execute({ query: query + "a" })).resolves.toMatchObject({
       error: "invalid_query",
     });
@@ -157,7 +164,7 @@ describe("DeepSeek search execution", () => {
     "max_tokens",
     "max_tokens_per_page",
   ])("rejects %s before buying a search", async (key) => {
-    const fetch = vi.fn();
+    const fetch = vi.fn<typeof globalThis.fetch>();
     vi.stubGlobal("fetch", fetch);
     await expect(
       searchTool().execute({
@@ -169,7 +176,7 @@ describe("DeepSeek search execution", () => {
   });
 
   it("uses shared count defaults/config and rejects invalid counts before fetching", async () => {
-    const fetch = vi.fn(async () => response());
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => response());
     vi.stubGlobal("fetch", fetch);
     await searchTool().execute({ query: "count defaults" });
     await searchTool({}, { maxResults: 2 }).execute({ query: "count configured" });
@@ -179,14 +186,19 @@ describe("DeepSeek search execution", () => {
         "count must be an integer",
       );
     }
-    expect(fetch.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).count)).toEqual([
-      5, 2, 10,
-    ]);
+    expect(
+      fetch.mock.calls.map(([, init]) => {
+        if (typeof init?.body !== "string") {
+          throw new Error("Expected serialized search request body");
+        }
+        return JSON.parse(init.body).count;
+      }),
+    ).toEqual([5, 2, 10]);
   });
 
   it("caches empty results, partitions by count/key/query, and honors current TTL", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-    const fetch = vi.fn(async () => jsonResponse({ results: [] }));
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => jsonResponse({ results: [] }));
     vi.stubGlobal("fetch", fetch);
     const tool = searchTool();
     const query = "cache identity DeepSeek";
@@ -210,7 +222,7 @@ describe("DeepSeek search execution", () => {
   it("falls back to UI snippets, preserves ordering, and caps returned rows", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
+      vi.fn<typeof globalThis.fetch>().mockResolvedValue(
         jsonResponse({
           results: [
             {
@@ -251,7 +263,7 @@ describe("DeepSeek search execution", () => {
     "rejects malformed response %s without caching",
     async (body) => {
       const fetch = vi
-        .fn()
+        .fn<typeof globalThis.fetch>()
         .mockResolvedValueOnce(new Response(body))
         .mockResolvedValueOnce(response());
       vi.stubGlobal("fetch", fetch);
@@ -267,7 +279,7 @@ describe("DeepSeek search execution", () => {
     "preserves HTTP %s, redacts reflected credentials, and does not retry/cache failure",
     async (status) => {
       const fetch = vi
-        .fn()
+        .fn<typeof globalThis.fetch>()
         .mockResolvedValueOnce(new Response(`reflected Bearer ${KEY}`, { status }))
         .mockResolvedValueOnce(response());
       vi.stubGlobal("fetch", fetch);
@@ -286,12 +298,12 @@ describe("DeepSeek search execution", () => {
     let resolveResponse!: (response: Response) => void;
     const started = Promise.withResolvers<void>();
     const fetch = vi
-      .fn()
-      .mockImplementationOnce((_url: unknown, init: RequestInit) => {
+      .fn<typeof globalThis.fetch>()
+      .mockImplementationOnce((_url, init) => {
         started.resolve();
         return new Promise<Response>((resolve) => {
           resolveResponse = resolve;
-          expect(init.signal).toBeDefined();
+          expect(init?.signal).toBeDefined();
         });
       })
       .mockResolvedValue(response());
