@@ -37,6 +37,7 @@ import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
+import { projectChatRun } from "./chat-run-projection.ts";
 import {
   moveQueuedChatMessage,
   resumeStoredChatOutboxes,
@@ -670,5 +671,5 @@ export function createPageState(
     invalidateImageLightbox(state);
     renderLifecycle.invalidate();
   };
-  return projectChatOutboxQueue(state);
+  return projectChatRun(projectChatOutboxQueue(state));
 }

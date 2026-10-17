@@ -257,6 +257,7 @@ it("bounds exact resident selection without SQLite and sees committed label chan
     const resolve = (p: SessionsResolveParams) => preparedResolve(projection, p);
 
     await projection.ensureMaterialized();
+    await resolve({ key });
     {
       using reads = observeReads();
       const selections = vi.spyOn(projection, "selectEntries");

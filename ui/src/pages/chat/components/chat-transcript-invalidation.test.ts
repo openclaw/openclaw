@@ -22,6 +22,7 @@ import {
   getExpandedToolCards,
   getExpandedUserMessages,
   getExpansionStateVersion,
+  setExpansionState,
 } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
@@ -929,6 +930,7 @@ describe("chat transcript invalidation", () => {
       ...props,
       paneId: "tool-visibility-pane",
       sessionKey: toolVisibilitySession,
+      transcriptVisible: true,
       messages: [
         { role: "user", content: "tool visibility prompt", timestamp: 1 },
         {
@@ -978,15 +980,37 @@ describe("chat transcript invalidation", () => {
       "false",
     ]);
     expectDefined(disclosureButtons()[0], "first mounted tool disclosure").click();
-    await renderToolVisibility();
+    await waitForSolid(() =>
+      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
+        "true",
+        "false",
+      ]),
+    );
     expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
-    await renderToolVisibility();
+    await waitForSolid(() =>
+      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
+        "true",
+        "true",
+      ]),
+    );
     expectDefined(disclosureButtons()[1], "second mounted tool disclosure").click();
+    await waitForSolid(() =>
+      expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
+        "true",
+        "false",
+      ]),
+    );
+
+    await renderToolVisibility({ ...toolVisibilityProps, transcriptVisible: false });
+    setExpansionState(visibilityState, expandedToolId, false);
+    flush();
+    expect(disclosureButtons()[0]?.getAttribute("aria-expanded")).toBe("true");
     await renderToolVisibility();
-    expect(disclosureButtons().map((button) => button.getAttribute("aria-expanded"))).toEqual([
-      "true",
-      "false",
-    ]);
+    expect(disclosureButtons()[0]?.getAttribute("aria-expanded")).toBe("false");
+    setExpansionState(visibilityState, expandedToolId, true);
+    await waitForSolid(() =>
+      expect(disclosureButtons()[0]?.getAttribute("aria-expanded")).toBe("true"),
+    );
 
     await renderToolVisibility({ ...toolVisibilityProps, showToolCalls: false });
     expect(disclosureButtons()).toHaveLength(0);
@@ -1005,7 +1029,7 @@ describe("chat transcript invalidation", () => {
         (message) => !("toolCallId" in message && message.toolCallId === "expanded-tool"),
       ),
     });
-    expect(visibilityState.has(expandedToolId)).toBe(false);
+    expect(visibilityState.get(expandedToolId)).toBe(true);
     expect(visibilityState.get(collapsedToolId)).toBe(false);
   });
 });

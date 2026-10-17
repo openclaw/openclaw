@@ -76,7 +76,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     return this.state?.realtimeTalk;
   }
 
-  readProviderReviewState() {
+  readState() {
     return this.state;
   }
 
