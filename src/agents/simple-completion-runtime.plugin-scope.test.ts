@@ -431,6 +431,16 @@ module.exports = {
       providerId: "unrelated-provider",
       runtimeMessage: "unrelated provider runtime must remain cold",
     });
+    const agentOwners = ["memory", "context"].map((kind) => {
+      const rootDir = path.join(tempRoot, kind);
+      fs.mkdirSync(rootDir);
+      return createColdPluginFixture({
+        rootDir,
+        pluginId: `expensive-${kind}`,
+        manifest: kind === "memory" ? { kind: "memory" } : {},
+        runtimeMessage: "Simple completions must not evaluate agent-owned plugins",
+      });
+    });
     fs.writeFileSync(
       selected.runtimeSource,
       `const fs = require("node:fs");
@@ -449,11 +459,15 @@ module.exports = {
         defaults: { model: `${selected.providerId}/primary-model@work` },
       },
       plugins: {
-        load: { paths: [selected.rootDir, unrelated.rootDir] },
-        slots: { memory: "none" },
+        load: {
+          paths: [selected.rootDir, unrelated.rootDir, ...agentOwners.map((p) => p.rootDir)],
+        },
+        slots: { memory: "expensive-memory", contextEngine: "expensive-context" },
         entries: {
           [selected.pluginId]: { enabled: true },
           [unrelated.pluginId]: { enabled: true },
+          "expensive-memory": { enabled: true },
+          "expensive-context": { enabled: true },
         },
       },
     } satisfies OpenClawConfig;
@@ -504,11 +518,16 @@ module.exports = {
       expect(modelResolver).toHaveBeenCalledOnce();
       expect(isColdPluginRuntimeLoaded(selected)).toBe(true);
       expect(isColdPluginRuntimeLoaded(unrelated)).toBe(false);
+      for (const owner of agentOwners) {
+        expect(isColdPluginRuntimeLoaded(owner)).toBe(false);
+      }
       expect(preparedRuntime?.metadataSnapshot.pluginIds).toContain(selected.pluginId);
       expect(preparedRuntime?.metadataSnapshot.pluginIds).not.toContain(unrelated.pluginId);
-      expect(preparedRuntime?.metadataSnapshot.plugins.map((plugin) => plugin.id)).toEqual([
-        selected.pluginId,
-      ]);
+      expect(
+        preparedRuntime?.pluginRegistry?.plugins
+          .filter((plugin) => plugin.status === "loaded")
+          .map((plugin) => plugin.id),
+      ).toEqual([selected.pluginId]);
     } finally {
       await acquiredResource?.[Symbol.asyncDispose]();
     }
