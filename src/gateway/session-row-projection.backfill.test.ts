@@ -183,7 +183,9 @@ it("keeps the latest visible assistant preview across user followups and clears 
       touchSessionEntry: false,
     });
     for (let pass = 0; pass < 2; pass++) {
-      const published = observeSessionRowBackfill([target.sessionKey]);
+      const published = observeSessionRowBackfill([target.sessionKey], undefined, (row) =>
+        row.lastAssistantMessage?.text === "Ready to review" ? row.key : "",
+      );
       const projection = await createTestProjection({ cfg, modelCatalog: [] });
       try {
         await withinTest(published, signal);
@@ -193,7 +195,9 @@ it("keeps the latest visible assistant preview across user followups and clears 
         });
         expect(projection.snapshot(query, {}).row?.lastAssistantMessage).toBeUndefined();
         if (pass === 1) {
-          const appended = observeSessionRowBackfill([target.sessionKey]);
+          const appended = observeSessionRowBackfill([target.sessionKey], undefined, (row) =>
+            row.lastAssistantMessage?.text === "Latest answer" ? row.key : "",
+          );
           await persistSessionTranscriptTurn(target, {
             messages: [
               { message: { role: "assistant", content: "Latest answer", timestamp: 600 } },
@@ -207,7 +211,12 @@ it("keeps the latest visible assistant preview across user followups and clears 
             text: "Latest answer",
             timestamp: 600,
           });
-          const followedUp = observeSessionRowBackfill([target.sessionKey]);
+          const followedUp = observeSessionRowBackfill([target.sessionKey], undefined, (row) =>
+            row.lastAssistantMessage?.text === "Latest answer" &&
+            row.lastMessagePreview === "One more question"
+              ? row.key
+              : "",
+          );
           await persistSessionTranscriptTurn(target, {
             messages: [{ message: { role: "user", content: "One more question", timestamp: 700 } }],
             touchSessionEntry: false,
