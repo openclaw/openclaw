@@ -1,9 +1,5 @@
-import {
-  createServer,
-  request as httpRequest,
-  type ClientRequest,
-  type ServerResponse,
-} from "node:http";
+import { createServer, request as httpRequest, type ServerResponse } from "node:http";
+import { text } from "node:stream/consumers";
 import { expect, vi } from "vitest";
 import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
 import {
@@ -61,7 +57,7 @@ export async function startWatchNodeHttpRuntime(
     ...(options?.now ? { now: options.now } : {}),
   });
   const connectHandled = createDeferred();
-  const requests: Array<Promise<PromiseSettledResult<void>[]>> = [];
+  const requests: Promise<void>[] = [];
   const server = createServer((req, res) => {
     const isConnect = req.url === "/api/nodes/watch/connect";
     if (isConnect && options?.onConnectResponseStart) {
@@ -77,33 +73,29 @@ export async function startWatchNodeHttpRuntime(
         return res;
       }) as typeof res.end;
     }
-    requests.push(
-      Promise.allSettled([
-        runtime
-          .handleRequest(req, res)
-          .then((handled) => {
-            if (!handled && !res.writableEnded) {
-              res.statusCode = 404;
-              res.end();
-            }
-            if (req.url === "/api/nodes/watch/poll" && !res.writableEnded) {
-              options?.onPollReady?.(res);
-            }
-          })
-          .finally(() => {
-            if (isConnect) {
-              connectHandled.resolve();
-            }
-          }),
-      ]),
-    );
+    const handling = runtime
+      .handleRequest(req, res)
+      .then((handled) => {
+        if (!handled && !res.writableEnded) {
+          res.statusCode = 404;
+          res.end();
+        }
+        if (req.url === "/api/nodes/watch/poll" && !res.writableEnded) {
+          options?.onPollReady?.(res);
+        }
+      })
+      .finally(() => {
+        if (isConnect) {
+          connectHandled.resolve();
+        }
+      });
+    requests.push(handling);
+    void handling.catch(() => {});
   });
   cleanups.push(async () => {
     runtime.close();
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-    const results = (await Promise.all(requests)).flat();
+    await server[Symbol.asyncDispose]();
+    const results = await Promise.allSettled(requests);
     for (const result of results) {
       if (result.status === "rejected") {
         throw result.reason;
@@ -214,43 +206,31 @@ export async function connectWatchNode({
   Parameters<typeof makeConnectParams>[0],
   "identity" | "client" | "bootstrapToken" | "deviceToken" | "commands" | "permissions"
 >): Promise<Response> {
-  const challenge = await readJson(await fetch(`${baseUrl}/challenge`));
-  return postWatchNode(
-    `${baseUrl}/connect`,
-    makeConnectParams({
-      ...params,
-      nonce: String(challenge.nonce),
-      signedAt: Number(challenge.ts),
-    }),
-  );
+  const { nonce, ts } = await readJson(await fetch(`${baseUrl}/challenge`));
+  const connect = makeConnectParams({ ...params, nonce: String(nonce), signedAt: Number(ts) });
+  return postWatchNode(`${baseUrl}/connect`, connect);
 }
 
 export function startPartialJsonRequest(params: { url: string; authorization: string }) {
-  let request!: ClientRequest;
-  const response = new Promise<{ statusCode: number; body: string }>((resolve, reject) => {
-    request = httpRequest(
-      params.url,
-      {
-        method: "POST",
-        headers: {
-          authorization: params.authorization,
-          "content-type": "application/json",
-        },
+  const response = createDeferred<{ statusCode: number; body: string }>();
+  const request = httpRequest(
+    params.url,
+    {
+      method: "POST",
+      headers: {
+        authorization: params.authorization,
+        "content-type": "application/json",
       },
-      (result) => {
-        const chunks: Buffer[] = [];
-        result.on("data", (chunk: Buffer) => chunks.push(chunk));
-        result.once("end", () => {
-          resolve({
-            statusCode: result.statusCode ?? 0,
-            body: Buffer.concat(chunks).toString("utf8"),
-          });
-        });
-      },
-    );
-    request.once("error", reject);
-  });
-  return { request, response };
+    },
+    (result) => {
+      void text(result).then(
+        (body) => response.resolve({ statusCode: result.statusCode ?? 0, body }),
+        response.reject,
+      );
+    },
+  );
+  request.once("error", response.reject);
+  return { request, response: response.promise };
 }
 
 export async function waitForLastConnectedMetadata(baseDir: string, nodeId: string): Promise<void> {

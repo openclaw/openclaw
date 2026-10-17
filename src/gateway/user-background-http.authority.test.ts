@@ -1,9 +1,8 @@
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../config/io.js";
-import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { ensureDeviceToken, revokeDeviceToken } from "../infra/device-pairing-tokens.js";
@@ -95,12 +94,11 @@ function barrier(image: boolean) {
   return {
     release: () => release.resolve(),
     entered: (response: Promise<Response>) =>
-      Promise.race([
+      awaitGateBeforeSettlement(
         entered.promise,
-        response.then((result) => {
-          throw new Error("Request completed before authority barrier: " + result.status);
-        }),
-      ]),
+        response,
+        "Request completed before authority barrier",
+      ),
   };
 }
 
@@ -149,19 +147,16 @@ it.each([
     }));
     const profile = ensureGatewayOwnerProfile("Background owner");
     const assetId = await upload(profile.id);
+    const device = { deviceId: "background-reader", role: "operator", scopes: ["operator.read"] };
     const request = await requestDevicePairing({
-      deviceId: "background-reader",
+      ...device,
       publicKey: "fixture-key",
-      role: "operator",
-      scopes: ["operator.read"],
       clientId: "openclaw-control-ui",
       clientMode: "webchat",
     });
     await approveDevicePairing(request.request.requestId, { callerScopes: ["operator.read"] });
     const token = await ensureDeviceToken({
-      deviceId: "background-reader",
-      role: "operator",
-      scopes: ["operator.read"],
+      ...device,
       issuer: {
         kind: "shared-gateway-auth",
         generation: resolveSharedGatewaySessionGeneration(currentAuth, [])!,
@@ -207,10 +202,9 @@ it.each([
           expect(result.headers.get("access-control-allow-origin")).toBeNull();
           expect(result.headers.get("access-control-allow-credentials")).toBeNull();
         }
-        expect(result.status).toBe(
-          change === "unchanged" || change === "origin-revoked" ? 200 : 401,
-        );
-        if (change === "unchanged" || change === "origin-revoked") {
+        const authorized = change === "unchanged" || change === "origin-revoked";
+        expect(result.status).toBe(authorized ? 200 : 401);
+        if (authorized) {
           expect(new Uint8Array(await result.arrayBuffer())).toEqual(JPEG);
         } else {
           expect(result.headers.get("content-type")).not.toMatch(/^image\//);
@@ -236,19 +230,18 @@ it.each(["role-reduced", "profile-reassigned"] as const)(
         allowLoopback: true,
       },
     };
-    const reader: GatewayOperatorRoleDefinition = {
-      agents: "*" as const,
-      sessions: { others: "view" as const },
-      scopes: ["operator.read"],
-    };
-    let config: OpenClawConfig = {
+    const roleConfig = (scopes: string[]): OpenClawConfig => ({
       gateway: {
         auth,
         trustedProxies: ["127.0.0.1"],
         controlUi: { allowedOrigins: ["https://control.example.test"] },
-        roles: { default: "reader", definitions: { reader } },
+        roles: {
+          default: "reader",
+          definitions: { reader: { agents: "*", sessions: { others: "view" }, scopes } },
+        },
       },
-    };
+    });
+    let config = roleConfig(["operator.read"]);
     vi.mocked(getRuntimeConfig).mockImplementation(() => config);
     const profile = ensureProfileForEmail("reader@example.test");
     const assetId = await upload(profile.id);
@@ -290,12 +283,7 @@ it.each(["role-reduced", "profile-reassigned"] as const)(
           const current = await getUserBackground(profile.id);
           expect(current).toMatchObject({ status: "ok", asset: { assetId: foreignAssetId } });
         } else {
-          config = {
-            gateway: {
-              ...config.gateway,
-              roles: { default: "reader", definitions: { reader: { ...reader, scopes: [] } } },
-            },
-          };
+          config = roleConfig([]);
         }
         wait.release();
         const result = await response;
