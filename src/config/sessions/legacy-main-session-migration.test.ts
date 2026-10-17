@@ -38,9 +38,21 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
-type LegacyMainSessionMigrationOutcomeKind = Awaited<
-  ReturnType<typeof migrateLegacyMainSessionKeys>
->["outcomes"][number]["kind"];
+function migrate(
+  fixture: Pick<ReturnType<typeof createFixture>, "cfg" | "env">,
+  mode: "detect" | "doctor-fix" = "detect",
+) {
+  return migrateLegacyMainSessionKeys({ cfg: fixture.cfg, env: fixture.env, mode });
+}
+
+function claim(databaseAgentId: string, pathname: string, key = `agent:${databaseAgentId}:chat`) {
+  return { databaseAgentId, databasePath: pathname, key };
+}
+
+const explicitAgents = { ownership: "explicit", entries: { ops: {}, research: {} } } as const;
+function storeFixture(store: string) {
+  return createFixture({ agents: { entries: { ops: {} } }, session: { store } });
+}
 
 describe("legacy main session migration", () => {
   it("scales legacy store path inspection linearly with the fleet", async () => {
@@ -59,11 +71,7 @@ describe("legacy main session migration", () => {
       }
       const realpath = vi.spyOn(fs.realpathSync, "native");
       try {
-        const result = await migrateLegacyMainSessionKeys({
-          cfg: fixture.cfg,
-          env: fixture.env,
-          mode: "detect",
-        });
+        const result = await migrate(fixture);
         expect(result).toMatchObject({ complete: true, outcomes: [{ kind: "no-legacy-rows" }] });
         const inspected = realpath.mock.calls
           .map(([pathname]) => String(pathname))
@@ -79,11 +87,8 @@ describe("legacy main session migration", () => {
 
   it("migrates an in-place alias atomically to the owner key", async () => {
     const storePath = path.join(tempDirs.make("in-place-migration-"), "sessions.sqlite");
-    const fixture = createFixture({
-      agents: { entries: { ops: {} } },
-      session: { store: storePath },
-    });
-    seedClaim({ databaseAgentId: "main", databasePath: storePath, key: "agent:main:chat" });
+    const fixture = storeFixture(storePath);
+    seedClaim(claim("main", storePath));
     runOpenClawAgentWriteTransaction(
       (database) => {
         writeSessionProgressCard(database.db, "agent:main:chat", {
@@ -99,21 +104,13 @@ describe("legacy main session migration", () => {
     );
 
     const { result, committed } = await recordHarnessDeletions(() =>
-      migrateLegacyMainSessionKeys({
-        cfg: fixture.cfg,
-        env: fixture.env,
-        mode: "doctor-fix",
-      }),
+      migrate(fixture, "doctor-fix"),
     );
 
     expect(outcomeKinds(result)).toContain("migrated-in-place");
     expect(committed).toEqual(["agent:main:chat"]);
-    expect(
-      readClaim({ databaseAgentId: "main", databasePath: storePath, key: "agent:main:chat" }),
-    ).toBeUndefined();
-    expect(
-      readClaim({ databaseAgentId: "main", databasePath: storePath, key: "agent:ops:chat" }),
-    ).toBeDefined();
+    expect(readClaim(claim("main", storePath))).toBeUndefined();
+    expect(readClaim(claim("main", storePath, "agent:ops:chat"))).toBeDefined();
     const migratedArtifacts = runOpenClawAgentWriteTransaction(
       (database) => ({
         heartbeat: database.db
@@ -133,111 +130,48 @@ describe("legacy main session migration", () => {
     });
   });
 
-  const closedOutcomeCases = [
-    {
-      kind: "not-armed",
-      run: async () => {
-        const fixture = createFixture({ agents: { entries: { main: {}, ops: {} } } });
-        const result = await migrateLegacyMainSessionKeys({
-          cfg: fixture.cfg,
-          env: fixture.env,
-          mode: "detect",
-        });
+  it.each(["not-armed", "migrated-in-place", "divergent-aliases"] as const)(
+    "reports the %s outcome",
+    async (kind) => {
+      const root = tempDirs.make("outcome-stores-");
+      const main = claim("main", path.join(root, "sessions.main.sqlite"));
+      const ops = claim("main", path.join(root, "sessions.ops.sqlite"));
+      const fixture =
+        kind === "not-armed"
+          ? createFixture({ agents: { entries: { main: {}, ops: {} } } })
+          : storeFixture(
+              kind === "migrated-in-place"
+                ? main.databasePath
+                : path.join(root, "sessions.{agentId}.sqlite"),
+            );
+      if (kind === "migrated-in-place") {
+        seedClaim(main);
+      } else if (kind === "divergent-aliases") {
+        seedClaim({ ...main, entry: { sessionId: "alias-one", updatedAt: 100 } });
+        seedClaim({ ...ops, entry: { sessionId: "alias-two", updatedAt: 200 } });
+      }
+      const result = await migrate(fixture);
+      expect(outcomeKinds(result)).toContain(kind);
+      if (kind === "divergent-aliases") {
+        expect(readClaim(main)).toBeDefined();
+        expect(readClaim(ops)).toBeDefined();
+      } else {
         expect(result.changes).toEqual([]);
-        return result;
-      },
+      }
     },
-    {
-      kind: "migrated-in-place",
-      run: async () => {
-        const fixture = createFixture({
-          agents: { entries: { ops: {} } },
-          session: { store: path.join(tempDirs.make("shared-store-"), "sessions.sqlite") },
-        });
-        seedClaim({
-          databaseAgentId: "main",
-          databasePath: fixture.cfg.session!.store!,
-          key: "agent:main:chat",
-        });
-        const result = await migrateLegacyMainSessionKeys({
-          cfg: fixture.cfg,
-          env: fixture.env,
-          mode: "detect",
-        });
-        expect(result.changes).toEqual([]);
-        return result;
-      },
-    },
-    {
-      kind: "divergent-aliases",
-      run: async () => {
-        const root = tempDirs.make("alias-stores-");
-        const fixture = createFixture({
-          agents: { entries: { ops: {} } },
-          session: { store: path.join(root, "sessions.{agentId}.sqlite") },
-        });
-        seedClaim({
-          databaseAgentId: "main",
-          databasePath: path.join(root, "sessions.main.sqlite"),
-          entry: { sessionId: "alias-one", updatedAt: 100 },
-          key: "agent:main:chat",
-        });
-        seedClaim({
-          databaseAgentId: "main",
-          databasePath: path.join(root, "sessions.ops.sqlite"),
-          entry: { sessionId: "alias-two", updatedAt: 200 },
-          key: "agent:main:chat",
-        });
-        const result = await migrateLegacyMainSessionKeys({
-          cfg: fixture.cfg,
-          env: fixture.env,
-          mode: "detect",
-        });
-        expect(
-          readClaim({
-            databaseAgentId: "main",
-            databasePath: path.join(root, "sessions.main.sqlite"),
-            key: "agent:main:chat",
-          }),
-        ).toBeDefined();
-        expect(
-          readClaim({
-            databaseAgentId: "main",
-            databasePath: path.join(root, "sessions.ops.sqlite"),
-            key: "agent:main:chat",
-          }),
-        ).toBeDefined();
-        return result;
-      },
-    },
-  ] satisfies Array<{
-    kind: LegacyMainSessionMigrationOutcomeKind;
-    run: () => Promise<Awaited<ReturnType<typeof migrateLegacyMainSessionKeys>>>;
-  }>;
-
-  it.each(closedOutcomeCases)("reports the $kind outcome", async ({ kind, run }) => {
-    expect(outcomeKinds(await run())).toContain(kind);
-  });
+  );
 
   it("preserves a canonical owner created while alias deletion is preparing", async () => {
     const storePath = path.join(tempDirs.make("in-place-owner-race-"), "sessions.sqlite");
-    const fixture = createFixture({
-      agents: { entries: { ops: {} } },
-      session: { store: storePath },
-    });
-    const sourceTarget = {
-      databaseAgentId: "main",
-      databasePath: storePath,
-      key: "agent:main:chat",
-    };
+    const fixture = storeFixture(storePath);
+    const sourceTarget = claim("main", storePath);
     const canonicalTarget = { ...sourceTarget, key: "agent:ops:chat" };
     seedClaim(sourceTarget);
     const sourceBefore = readClaim(sourceTarget);
     let canonicalBefore: ReturnType<typeof readClaim>;
 
     const { result, committed } = await recordHarnessDeletions(
-      () =>
-        migrateLegacyMainSessionKeys({ cfg: fixture.cfg, env: fixture.env, mode: "doctor-fix" }),
+      () => migrate(fixture, "doctor-fix"),
       () => {
         seedClaim({
           ...canonicalTarget,
@@ -259,47 +193,28 @@ describe("legacy main session migration", () => {
     async (hasHumanOwner) => {
       const fixture = createFixture();
       const mainPath = databasePath(fixture.stateDir, "main");
-      seedClaim({
-        databaseAgentId: "main",
-        databasePath: mainPath,
-        entry: { sessionId: "legacy", updatedAt: 100 },
-        key: "agent:main:chat",
-      });
+      seedClaim({ ...claim("main", mainPath), entry: { sessionId: "legacy", updatedAt: 100 } });
       if (hasHumanOwner) {
         assignHumanOwner(mainPath);
       }
       seedClaim({
-        databaseAgentId: "main",
-        databasePath: mainPath,
+        ...claim("main", mainPath, "agent:ops:legacy-main-conflict-1"),
         entry: { sessionId: "occupied", updatedAt: 50 },
-        key: "agent:ops:legacy-main-conflict-1",
       });
       seedClaim({
-        databaseAgentId: "ops",
-        databasePath: databasePath(fixture.stateDir, "ops"),
+        ...claim("ops", databasePath(fixture.stateDir, "ops")),
         entry: { sessionId: "canonical", updatedAt: 200 },
-        key: "agent:ops:chat",
       });
 
       const { result, committed } = await recordHarnessDeletions(() =>
-        migrateLegacyMainSessionKeys({
-          cfg: fixture.cfg,
-          env: fixture.env,
-          mode: "doctor-fix",
-        }),
+        migrate(fixture, "doctor-fix"),
       );
 
       expect(committed).toEqual(["agent:main:chat"]);
       const outcome = result.outcomes.find((entry) => entry.kind === "divergent-canonical");
       expect(outcome?.quarantinedKeys).toEqual(["agent:ops:legacy-main-conflict-2"]);
-      expect(
-        readClaim({ databaseAgentId: "main", databasePath: mainPath, key: "agent:main:chat" }),
-      ).toBeUndefined();
-      const quarantined = readClaim({
-        databaseAgentId: "main",
-        databasePath: mainPath,
-        key: "agent:ops:legacy-main-conflict-2",
-      });
+      expect(readClaim(claim("main", mainPath))).toBeUndefined();
+      const quarantined = readClaim(claim("main", mainPath, "agent:ops:legacy-main-conflict-2"));
       expect(quarantined?.events).toEqual(['{"type":"message","id":"event-1","text":"hello"}']);
       expect(quarantined?.entry.owner).toEqual(hasHumanOwner ? humanOwner : undefined);
     },
@@ -308,43 +223,20 @@ describe("legacy main session migration", () => {
   it("uses an explicit migration owner when the multi-agent roster is unambiguous", async () => {
     const resolved = createFixture({
       agents: {
-        ownership: "explicit",
+        ...explicitAgents,
         defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
       },
       session: { store: path.join(tempDirs.make("fixed-store-owner-"), "sessions.sqlite") },
     });
-    const unresolved = createFixture({
-      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-    });
-    seedClaim({
-      databaseAgentId: "main",
-      databasePath: databasePath(unresolved.stateDir, "main"),
-      key: "agent:main:chat",
-    });
+    const unresolved = createFixture({ agents: explicitAgents });
+    seedClaim(claim("main", databasePath(unresolved.stateDir, "main")));
     const perAgentPinned = createFixture({
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
+      agents: { ...explicitAgents, defaults: { sessionStore: { agentId: "ops" } } },
     });
 
-    const armed = await migrateLegacyMainSessionKeys({
-      cfg: resolved.cfg,
-      env: resolved.env,
-      mode: "detect",
-    });
-    const notArmed = await migrateLegacyMainSessionKeys({
-      cfg: unresolved.cfg,
-      env: unresolved.env,
-      mode: "detect",
-    });
-    const perAgentArmed = await migrateLegacyMainSessionKeys({
-      cfg: perAgentPinned.cfg,
-      env: perAgentPinned.env,
-      mode: "detect",
-    });
+    const armed = await migrate(resolved);
+    const notArmed = await migrate(unresolved);
+    const perAgentArmed = await migrate(perAgentPinned);
 
     expect(armed).toMatchObject({ armed: true, ownerAgentId: "ops" });
     expect(notArmed).toMatchObject({
@@ -356,15 +248,9 @@ describe("legacy main session migration", () => {
   });
 
   it("proves an unresolved-owner store clean when it has no legacy rows", async () => {
-    const fixture = createFixture({
-      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-    });
+    const fixture = createFixture({ agents: explicitAgents });
 
-    const result = await migrateLegacyMainSessionKeys({
-      cfg: fixture.cfg,
-      env: fixture.env,
-      mode: "detect",
-    });
+    const result = await migrate(fixture);
 
     expect(result).toMatchObject({
       armed: false,
@@ -379,15 +265,11 @@ describe("legacy main session migration", () => {
     const unreadablePath = path.join(tempDirs.make("unresolved-unreadable-"), "sessions.sqlite");
     fs.symlinkSync(`${unreadablePath}.missing`, unreadablePath);
     const fixture = createFixture({
-      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      agents: explicitAgents,
       session: { store: unreadablePath },
     });
 
-    const result = await migrateLegacyMainSessionKeys({
-      cfg: fixture.cfg,
-      env: fixture.env,
-      mode: "detect",
-    });
+    const result = await migrate(fixture);
 
     expect(result).toMatchObject({
       armed: false,
@@ -402,32 +284,17 @@ describe("legacy main session migration", () => {
     const absent = createFixture();
     const unreadablePath = path.join(tempDirs.make("detect-unreadable-"), "sessions.sqlite");
     fs.symlinkSync(`${unreadablePath}.missing`, unreadablePath);
-    const unreadable = createFixture({
-      agents: { entries: { ops: {} } },
-      session: { store: unreadablePath },
-    });
+    const unreadable = storeFixture(unreadablePath);
 
-    const absentResult = await migrateLegacyMainSessionKeys({
-      cfg: absent.cfg,
-      env: absent.env,
-      mode: "detect",
-    });
-    const unreadableResult = await migrateLegacyMainSessionKeys({
-      cfg: unreadable.cfg,
-      env: unreadable.env,
-      mode: "detect",
-    });
+    const absentResult = await migrate(absent);
+    const unreadableResult = await migrate(unreadable);
 
     expect(absentResult).toMatchObject({ complete: true, outcomes: [{ kind: "no-legacy-rows" }] });
     expect(outcomeKinds(unreadableResult)).toContain("store-unreadable");
     expect(unreadableResult.warnings.join("\n")).toContain(unreadablePath);
-    await expect(
-      migrateLegacyMainSessionKeys({
-        cfg: unreadable.cfg,
-        env: unreadable.env,
-        mode: "doctor-fix",
-      }),
-    ).rejects.toThrow(`cannot read legacy session store ${unreadablePath}`);
+    await expect(migrate(unreadable, "doctor-fix")).rejects.toThrow(
+      `cannot read legacy session store ${unreadablePath}`,
+    );
   });
 });
 
@@ -576,13 +443,13 @@ it("reports legacy session repairs without rewriting stored claims at startup", 
 it("keys the startup shortcut to source layout and makes Doctor rescan", async () => {
   const { cfg, env, stateDir } = createFixture();
   const root = path.dirname(stateDir);
-  const claim = (agentId: string, key: string, pathname = databasePath(stateDir, agentId)) => ({
+  const target = (agentId: string, key: string, pathname = databasePath(stateDir, agentId)) => ({
     databaseAgentId: agentId,
     databasePath: pathname,
     key,
   });
   const mainPath = databasePath(stateDir, "main");
-  seedClaim({ ...claim("main", "agent:other:keep"), events: [] });
+  seedClaim({ ...target("main", "agent:other:keep"), events: [] });
   await migrateLegacyMainSessionKeys({ cfg, env, mode: "doctor-fix" });
 
   const changedStore = await migrateLegacyMainSessionKeys({
@@ -597,15 +464,15 @@ it("keys the startup shortcut to source layout and makes Doctor rescan", async (
   expect(changedStore.ledgerComplete).toBe(false);
 
   const restoredPath = path.join(root, "restored-main.sqlite");
-  seedClaim({ ...claim("main", "agent:main:restored", restoredPath), events: [] });
+  seedClaim({ ...target("main", "agent:main:restored", restoredPath), events: [] });
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   fs.renameSync(mainPath, `${mainPath}.before-restore`);
   fs.renameSync(restoredPath, mainPath);
   const restored = await migrateLegacyMainSessionKeys({ cfg, env, mode: "doctor-fix" });
   expect(restored.outcomes.map((outcome) => outcome.kind)).toContain("migrated-cross-store");
-  expect(readClaim(claim("main", "agent:main:restored"))).toBeUndefined();
-  expect(readClaim(claim("ops", "agent:ops:restored"))).toBeDefined();
+  expect(readClaim(target("main", "agent:main:restored"))).toBeUndefined();
+  expect(readClaim(target("ops", "agent:ops:restored"))).toBeDefined();
 
   const jsonPath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
   fs.mkdirSync(path.dirname(jsonPath), { recursive: true });
@@ -614,13 +481,13 @@ it("keys the startup shortcut to source layout and makes Doctor rescan", async (
   expect(laterJson.outcomes.map((outcome) => outcome.kind)).toContain("legacy-json-store");
   fs.unlinkSync(jsonPath);
 
-  seedClaim({ ...claim("main", "agent:main:late"), events: [] });
+  seedClaim({ ...target("main", "agent:main:late"), events: [] });
   const startupShortcut = await migrateLegacyMainSessionKeys({ cfg, env, mode: "detect" });
   expect(startupShortcut.outcomes).toEqual([
     { kind: "no-legacy-rows", detail: "matching completed ledger" },
   ]);
   expect(startupShortcut.ledgerComplete).toBe(true);
-  expect(readClaim(claim("main", "agent:main:late"))).toBeDefined();
+  expect(readClaim(target("main", "agent:main:late"))).toBeDefined();
 
   const creationScan = await migrateLegacyMainSessionKeys({
     cfg,
@@ -630,11 +497,11 @@ it("keys the startup shortcut to source layout and makes Doctor rescan", async (
   });
   expect(creationScan.ledgerComplete).toBe(false);
   expect(creationScan.outcomes.map((outcome) => outcome.kind)).toContain("migrated-cross-store");
-  expect(readClaim(claim("main", "agent:main:late"))).toBeDefined();
+  expect(readClaim(target("main", "agent:main:late"))).toBeDefined();
 
   const repaired = await migrateLegacyMainSessionKeys({ cfg, env, mode: "doctor-fix" });
   expect(repaired.ledgerComplete).toBe(true);
   expect(repaired.outcomes.map((outcome) => outcome.kind)).toContain("migrated-cross-store");
-  expect(readClaim(claim("main", "agent:main:late"))).toBeUndefined();
-  expect(readClaim(claim("ops", "agent:ops:late"))).toBeDefined();
+  expect(readClaim(target("main", "agent:main:late"))).toBeUndefined();
+  expect(readClaim(target("ops", "agent:ops:late"))).toBeDefined();
 });

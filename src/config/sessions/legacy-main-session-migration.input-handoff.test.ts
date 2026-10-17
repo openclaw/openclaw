@@ -68,20 +68,16 @@ function createInputHandoff(sharedStore = false) {
     path: target.databasePath,
   });
   const rows = (target: ClaimTarget) =>
-    runOpenClawAgentWriteTransaction(
-      ({ db }) => ({
-        pending: db
-          .prepare("SELECT * FROM session_pending_inputs WHERE session_key = ? ORDER BY seq")
-          .all(target.key)
-          .map(({ seq: _seq, ...row }) => row),
-        completions: db
-          .prepare(
-            "SELECT * FROM session_input_completions WHERE session_key = ? ORDER BY idempotency_key",
-          )
-          .all(target.key),
-      }),
-      options(target),
-    );
+    runOpenClawAgentWriteTransaction(({ db }) => {
+      const read = (table: string, order: string) =>
+        db
+          .prepare(`SELECT * FROM ${table} WHERE session_key = ? ORDER BY ${order}`)
+          .all(target.key);
+      return {
+        pending: read("session_pending_inputs", "seq").map(({ seq: _seq, ...row }) => row),
+        completions: read("session_input_completions", "idempotency_key"),
+      };
+    }, options(target));
   const accept = async (
     target: ClaimTarget,
     runId: string,
@@ -153,108 +149,90 @@ function createInputHandoff(sharedStore = false) {
 }
 
 describe("legacy main session input handoff", () => {
+  it.each([false, true])(
+    "preserves accepted and consumed inputs (shared store: %s)",
+    async (sharedStore) => {
+      const f = createInputHandoff(sharedStore);
+      const queued = await f.accept(f.source, "queued");
+      const cancelled = await f.accept(f.source, "cancelled", { disposition: "cancelled" });
+      const consumed = await f.accept(f.source, "consumed", { collected: true });
+      // A crash can leave the persisted row queued after its process-local owner has disappeared.
+      runOpenClawAgentWriteTransaction(({ db }) => {
+        db.prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?").run(
+          queued.inputId,
+        );
+      }, f.options(f.source));
+      const before = f.rows(f.source);
+      expect(before.pending).toHaveLength(3);
+      const consumedByEventId = before.pending[2]!.consumed_event_id;
+      expect(consumedByEventId).toEqual(expect.any(String));
+
+      expect(await f.migrate()).toMatchObject({ complete: true });
+
+      expect(readClaim(f.source)).toBeUndefined();
+      expect(f.rows(f.destination)).toEqual({
+        pending: before.pending.map((row) =>
+          Object.assign({}, row, {
+            session_key: f.destination.key,
+            state: row.input_id === cancelled.inputId ? "cancelled" : "interrupted",
+          }),
+        ),
+        completions: [],
+      });
+      expect(await listSessionPendingInputs(f.scope(f.destination))).toMatchObject({
+        total: 2,
+        items: [
+          { id: queued.inputId, message: queued.message, state: "interrupted" },
+          { id: cancelled.inputId, message: cancelled.message, state: "cancelled" },
+        ],
+      });
+      expect(
+        await listSessionPendingInputReceipts(f.scope(f.destination), { runIds: ["consumed"] }),
+      ).toEqual([{ runId: "consumed", state: "consumed", consumedByEventId }]);
+      expect(await f.accept(f.destination, "consumed")).toMatchObject({
+        state: "consumed",
+        inputId: consumed.inputId,
+        message: consumed.message,
+      });
+      expect(() => queued.run(() => "stale work")).toThrow("ownership ended");
+    },
+  );
+
   it.each([
-    { name: "cross-store", sharedStore: false },
-    { name: "in-place", sharedStore: true },
-  ])("preserves accepted and consumed inputs through $name migration", async ({ sharedStore }) => {
-    const f = createInputHandoff(sharedStore);
-    const queued = await f.accept(f.source, "queued");
-    const cancelled = await f.accept(f.source, "cancelled", { disposition: "cancelled" });
-    const consumed = await f.accept(f.source, "consumed", { collected: true });
-    // A crash can leave the persisted row queued after its process-local owner has disappeared.
-    runOpenClawAgentWriteTransaction(({ db }) => {
-      db.prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?").run(
-        queued.inputId,
+    ["operator Stop in-place", stopped, undefined, true, false, true],
+    ["final destination", completed, stopped, true, true],
+    ["final source over retryable destination", stopped, interrupted, true, false],
+    ["newer retryable source", failed, interrupted, false, false],
+    ["newer retryable destination", interrupted, failed, false, true],
+  ] as const)(
+    "preserves %s completion semantics",
+    async (_name, source, destination, final, retainDestination, sharedStore = false) => {
+      const f = createInputHandoff(sharedStore);
+      await f.accept(f.source, "private-result", { completion: source });
+      f.setCompletedAt(f.source, retainDestination ? 100 : 200);
+      if (destination) {
+        seedClaim({ ...f.destination, entry: f.entry, events: f.events });
+        await f.accept(f.destination, "private-result", { completion: destination });
+        f.setCompletedAt(f.destination, retainDestination ? 200 : 100);
+      }
+      const retained = f.rows(retainDestination ? f.destination : f.source).completions;
+      expect(retained).toHaveLength(1);
+
+      expect(await f.migrate()).toMatchObject({ complete: true });
+
+      expect(readClaim(f.source)).toBeUndefined();
+      expect(f.rows(f.destination).completions).toEqual(
+        retained.map((row) => Object.assign({}, row, { session_key: f.destination.key })),
       );
-    }, f.options(f.source));
-    const before = f.rows(f.source);
-    expect(before.pending).toHaveLength(3);
-    const consumedByEventId = before.pending[2]!.consumed_event_id;
-    expect(consumedByEventId).toEqual(expect.any(String));
-
-    expect(await f.migrate()).toMatchObject({ complete: true });
-
-    expect(readClaim(f.source)).toBeUndefined();
-    expect(f.rows(f.destination)).toEqual({
-      pending: before.pending.map((row) =>
-        Object.assign({}, row, {
-          session_key: f.destination.key,
-          state: row.input_id === cancelled.inputId ? "cancelled" : "interrupted",
-        }),
-      ),
-      completions: [],
-    });
-    expect(await listSessionPendingInputs(f.scope(f.destination))).toMatchObject({
-      total: 2,
-      items: [
-        { id: queued.inputId, message: queued.message, state: "interrupted" },
-        { id: cancelled.inputId, message: cancelled.message, state: "cancelled" },
-      ],
-    });
-    expect(
-      await listSessionPendingInputReceipts(f.scope(f.destination), { runIds: ["consumed"] }),
-    ).toEqual([{ runId: "consumed", state: "consumed", consumedByEventId }]);
-    expect(await f.accept(f.destination, "consumed")).toMatchObject({
-      state: "consumed",
-      inputId: consumed.inputId,
-      message: consumed.message,
-    });
-    expect(() => queued.run(() => "stale work")).toThrow("ownership ended");
-  });
-
-  it.each([
-    { name: "operator Stop in-place", source: stopped, final: true, sharedStore: true },
-    {
-      name: "final destination",
-      source: completed,
-      destination: stopped,
-      final: true,
-      retainDestination: true,
+      const retry = await f.accept(f.destination, "private-result");
+      expect(retry.completion).toEqual(
+        final ? (retainDestination ? destination : source) : undefined,
+      );
+      if (final) {
+        expect(() => retry.run(() => "replayed work")).toThrow("already completed");
+      }
     },
-    {
-      name: "final source over retryable destination",
-      source: stopped,
-      destination: interrupted,
-      final: true,
-    },
-    { name: "newer retryable source", source: failed, destination: interrupted, final: false },
-    {
-      name: "newer retryable destination",
-      source: interrupted,
-      destination: failed,
-      final: false,
-      retainDestination: true,
-    },
-  ])("preserves $name completion semantics", async (scenario) => {
-    const f = createInputHandoff(scenario.sharedStore);
-    await f.accept(f.source, "private-result", { completion: scenario.source });
-    f.setCompletedAt(f.source, scenario.retainDestination ? 100 : 200);
-    if (scenario.destination) {
-      seedClaim({ ...f.destination, entry: f.entry, events: f.events });
-      await f.accept(f.destination, "private-result", { completion: scenario.destination });
-      f.setCompletedAt(f.destination, scenario.retainDestination ? 200 : 100);
-    }
-    const retained = f.rows(scenario.retainDestination ? f.destination : f.source).completions;
-    expect(retained).toHaveLength(1);
-
-    expect(await f.migrate()).toMatchObject({ complete: true });
-
-    expect(readClaim(f.source)).toBeUndefined();
-    expect(f.rows(f.destination).completions).toEqual(
-      retained.map((row) => Object.assign({}, row, { session_key: f.destination.key })),
-    );
-    const retry = await f.accept(f.destination, "private-result");
-    expect(retry.completion).toEqual(
-      scenario.final
-        ? scenario.retainDestination
-          ? scenario.destination
-          : scenario.source
-        : undefined,
-    );
-    if (scenario.final) {
-      expect(() => retry.run(() => "replayed work")).toThrow("already completed");
-    }
-  });
+  );
 
   it.each(["pending input", "completion"] as const)(
     "retains source evidence when a %s changes during deletion preparation",

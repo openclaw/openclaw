@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
+import type { SQLOutputValue } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import {
@@ -23,6 +24,8 @@ import {
 import { recordLegacyAcpMigrationSources } from "./session-accessor.sqlite-acp-provenance.js";
 
 const { createFixture } = setupLegacyMainSessionMigrationTests();
+const rekey = (rows: Record<string, SQLOutputValue>[], sessionKey: string) =>
+  rows.map((row) => ({ ...row, session_key: sessionKey }));
 
 function createNodeHandoff(existingCanonical = false) {
   const fixture = createFixture();
@@ -171,40 +174,25 @@ describe("legacy main session node artifact handoff", () => {
     const before = f.artifacts(f.source);
     expect(before.tabs).toHaveLength(1);
     expect(before.widgets).toHaveLength(1);
-    const rekey = (rows: typeof before.tabs) =>
-      rows.map((row) => ({
-        ...row,
-        session_key: f.destination.key,
-      }));
-
     expect(await f.migrate()).toMatchObject({ complete: true });
 
     expect(f.artifacts(f.destination)).toEqual({
-      tabs: rekey(before.tabs),
-      widgets: rekey(before.widgets),
-      progress: rekey(before.progress),
-      heartbeat: before.heartbeat.map((row) =>
-        Object.assign({}, row, {
-          session_key: f.destination.key,
-          run_session_key: f.destination.key,
-        }),
+      tabs: rekey(before.tabs, f.destination.key),
+      widgets: rekey(before.widgets, f.destination.key),
+      progress: rekey(before.progress, f.destination.key),
+      heartbeat: rekey(before.heartbeat, f.destination.key).map((row) =>
+        Object.assign({}, row, { run_session_key: f.destination.key }),
       ),
-      suggestions: rekey(before.suggestions),
-      participants: rekey(before.participants),
+      suggestions: rekey(before.suggestions, f.destination.key),
+      participants: rekey(before.participants, f.destination.key),
       members: [],
     });
     expect(readClaim(f.source)).toBeUndefined();
     expect(readProvenance(f.source)).toBeUndefined();
     expect(readProvenance(f.destination)).toEqual([provenance]);
-    expect(f.artifacts(f.source)).toEqual({
-      tabs: [],
-      widgets: [],
-      progress: [],
-      heartbeat: [],
-      suggestions: [],
-      participants: [],
-      members: [],
-    });
+    expect(f.artifacts(f.source)).toEqual(
+      Object.fromEntries(Object.keys(before).map((key) => [key, []])),
+    );
     const retained = f.artifacts(f.destination);
     expect(await f.migrate()).toMatchObject({ complete: true, ledgerComplete: true });
     expect(f.artifacts(f.destination)).toEqual(retained);
@@ -238,20 +226,16 @@ describe("legacy main session node artifact handoff", () => {
     expect(await f.migrate()).toMatchObject({ complete: true });
 
     const after = f.artifacts(f.destination);
-    expect(after.tabs).toEqual(canonical.tabs);
-    expect(after.widgets).toEqual(
-      source.widgets.map((row) => Object.assign({}, row, { session_key: f.destination.key })),
-    );
-    expect(after.progress).toEqual(canonical.progress);
+    expect(after).toEqual({
+      ...canonical,
+      widgets: rekey(source.widgets, f.destination.key),
+      participants: canonical.participants.map((row) =>
+        Object.assign({}, row, { last_prompted_at: 30 }),
+      ),
+    });
     expect(
       f.withDatabase(f.destination, ({ db }) => readSessionProgressCard(db, f.destination.key)),
     ).toBeNull();
-    expect(after.heartbeat).toEqual(canonical.heartbeat);
-    expect(after.suggestions).toEqual(canonical.suggestions);
-    expect(after.participants).toEqual(
-      canonical.participants.map((row) => ({ ...row, last_prompted_at: 30 })),
-    );
-    expect(after.members).toEqual(canonical.members);
     expect(readClaim(f.source)).toBeUndefined();
     expect(await f.migrate()).toMatchObject({ complete: true, ledgerComplete: true });
     expect(f.artifacts(f.destination)).toEqual(after);
@@ -292,20 +276,19 @@ describe("legacy main session node artifact handoff", () => {
           copiedArtifacts = f.artifacts(f.destination);
           expect(copiedArtifacts.widgets).toHaveLength(1);
           f.withDatabase(target, ({ db }) => {
+            const get = (sql: string) => db.prepare(sql).get(target.key);
             const readNode = () => ({
-              entry: db
-                .prepare(`SELECT entry_json, current_session_id, updated_at
-                FROM session_nodes WHERE session_key = ?`)
-                .get(target.key),
+              entry: get(`SELECT entry_json, current_session_id, updated_at
+                FROM session_nodes WHERE session_key = ?`),
               windows: db
                 .prepare("SELECT * FROM session_windows WHERE session_key = ? ORDER BY session_id")
                 .all(target.key),
             });
             const nodeBefore = readNode();
-            const widgetBefore = db
-              .prepare(`SELECT revision, sha256, updated_at, length(html) AS bytes
-              FROM board_widgets WHERE session_key = ? AND name = 'status'`)
-              .get(target.key);
+            const readWidget = () =>
+              get(`SELECT revision, sha256, updated_at, length(html) AS bytes
+              FROM board_widgets WHERE session_key = ? AND name = 'status'`);
+            const widgetBefore = readWidget();
             changedRows = Number(
               artifact === "widget"
                 ? db
@@ -319,18 +302,12 @@ describe("legacy main session node artifact handoff", () => {
                     .run(target.key).changes,
             );
             expect(readNode()).toEqual(nodeBefore);
-            const widgetAfter = db
-              .prepare(`SELECT revision, sha256, updated_at, length(html) AS bytes
-              FROM board_widgets WHERE session_key = ? AND name = 'status'`)
-              .get(target.key);
-            expect(widgetAfter).toEqual(widgetBefore);
+            expect(readWidget()).toEqual(widgetBefore);
             if (artifact === "widget") {
               expect(
-                db
-                  .prepare(
-                    "SELECT hex(html) AS html FROM board_widgets WHERE session_key = ? AND name = 'status'",
-                  )
-                  .get(target.key),
+                get(
+                  "SELECT hex(html) AS html FROM board_widgets WHERE session_key = ? AND name = 'status'",
+                ),
               ).toEqual({ html: changedHtml.toString("hex").toUpperCase() });
             }
           });
