@@ -121,6 +121,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     // Startup attaches one host for this mounted pane's lifetime.
     const state = runtime.readProviderReviewState();
     const goals = state && projectOwner(chatGoalOperations(state), (owner) => owner);
+    const discussion = projectOwner(runtime.sessionDiscussion, (owner) => owner.snapshot);
     const boardProvider = createMemo(() => {
       revision();
       return runtime.subscribedBoardProvider;
@@ -186,6 +187,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         progress.read();
         projects.read();
         goals?.read();
+        discussion.read();
         board().forEach((source) => source.read());
         i18nRevision();
         sources.forEach((source) => source?.read());
