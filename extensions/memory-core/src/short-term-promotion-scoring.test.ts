@@ -81,12 +81,8 @@ async function writeCalibrationStore(workspaceDir: string): Promise<void> {
     createRecallEntry("genuine-a", 3, 0.58, {
       conceptTags: ["backup", "backups", "glacier", "s3"],
     }),
-    createRecallEntry("genuine-b", 3, 0.6, {
-      conceptTags: ["backup", "backups", "glacier", "s3"],
-    }),
-    createRecallEntry("genuine-c", 3, 0.62, {
-      conceptTags: ["backup", "glacier", "s3"],
-    }),
+    createRecallEntry("genuine-b", 3, 0.6, { conceptTags: ["backup", "backups", "glacier", "s3"] }),
+    createRecallEntry("genuine-c", 3, 0.62, { conceptTags: ["backup", "glacier", "s3"] }),
     ...[0.2, 0.3, 0.4].map((avgScore, index) =>
       createRecallEntry(`filler-${index}`, 3, avgScore, {
         snippet: "Routine heartbeat completed successfully.",
@@ -113,13 +109,7 @@ async function writeCalibrationStore(workspaceDir: string): Promise<void> {
         .filter((entry) => entry.key.startsWith("genuine-"))
         .map((entry) => [
           entry.key,
-          {
-            key: entry.key,
-            lightHits: 3,
-            remHits: 3,
-            lastLightAt: NOW_ISO,
-            lastRemAt: NOW_ISO,
-          },
+          { key: entry.key, lightHits: 3, remHits: 3, lastLightAt: NOW_ISO, lastRemAt: NOW_ISO },
         ]),
     ),
   });
@@ -188,30 +178,21 @@ describe("short-term promotion score calibration", () => {
     await expect(rankCandidates(workspaceDir, { minScore: 0.540001 })).resolves.toHaveLength(0);
   });
 
-  it("preserves unambiguous recall-only legacy query diversity", async () => {
-    const workspaceDir = await createTempWorkspace("promotion-recall-only-upgrade-");
-    const legacy = createRecallEntry("legacy-recall-only", 3, 1, {
-      recallCount: 3,
-      dailyCount: 0,
+  it.each([
+    { name: "recall-only", recallCount: 3, dailyCount: 0, minUniqueQueries: 3, retained: 1 },
+    { name: "mixed", recallCount: 1, dailyCount: 2, minUniqueQueries: 1, retained: 0 },
+  ])("preserves only unambiguous $name legacy query diversity", async (entry) => {
+    const workspaceDir = await createTempWorkspace("promotion-legacy-upgrade-");
+    const legacy = createRecallEntry(`legacy-${entry.name}`, 3, 1, {
+      recallCount: entry.recallCount,
+      dailyCount: entry.dailyCount,
     });
     delete legacy.userQueryHashes;
     await writeRecallEntries(workspaceDir, { legacy });
-
-    const ranked = await rankCandidates(workspaceDir, { minUniqueQueries: 3 });
-
-    expect(ranked).toHaveLength(1);
-    expect(ranked[0]?.uniqueQueries).toBe(3);
-  });
-
-  it("fails closed for ambiguous mixed legacy query hashes", async () => {
-    const workspaceDir = await createTempWorkspace("promotion-mixed-upgrade-");
-    const legacy = createRecallEntry("legacy-mixed", 3, 1, {
-      recallCount: 1,
-      dailyCount: 2,
-    });
-    delete legacy.userQueryHashes;
-    await writeRecallEntries(workspaceDir, { legacy });
-
-    await expect(rankCandidates(workspaceDir, { minUniqueQueries: 1 })).resolves.toHaveLength(0);
+    const ranked = await rankCandidates(workspaceDir, { minUniqueQueries: entry.minUniqueQueries });
+    expect(ranked).toHaveLength(entry.retained);
+    if (entry.retained) {
+      expect(ranked[0]?.uniqueQueries).toBe(3);
+    }
   });
 });
