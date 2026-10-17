@@ -412,68 +412,55 @@ describe.skipIf(process.platform === "win32")(
       "$surface startup releases only after descendant exit (denied=$denyGroupSignals)",
       { timeout: 45_000 },
       async ({ denyGroupSignals, surface }, { signal }) => {
-        const result = await reproduce(denyGroupSignals, surface, signal);
-        expect(result.scenarioCalls).toBe(0);
-        const repaired = result.events.findIndex(
-          (event) => event.kind === "plugin-repair-completed",
+        const { events, releases, suiteError, groupProbeCount, scenarioCalls } = await reproduce(
+          denyGroupSignals,
+          surface,
+          signal,
         );
+        const eventsOf = (kind: string) => events.filter((event) => event.kind === kind);
+        const first = (kind: string) => events.findIndex((event) => event.kind === kind);
+        const last = (kind: string) => events.findLastIndex((event) => event.kind === kind);
+        const errorText = JSON.stringify(serializeError(suiteError));
+        expect(scenarioCalls).toBe(0);
+        const repaired = first("plugin-repair-completed");
         if (surface === "gateway") {
           expect(repaired).toBeGreaterThan(-1);
-          expect(
-            result.events.findIndex((event) => event.kind === "gateway-start"),
-          ).toBeGreaterThan(repaired);
+          expect(first("gateway-start")).toBeGreaterThan(repaired);
         } else {
           expect(repaired).toBe(-1);
         }
-        expect(result.events.filter((event) => event.kind === "gateway-start")).toHaveLength(
-          surface === "gateway" ? 1 : 0,
-        );
-        expect(result.events.filter((event) => event.kind === `${surface}-start`)).toHaveLength(1);
-        expect(result.events.find((event) => event.kind === "leader-exit")).toMatchObject({
-          exitCode: 17,
-        });
-        expect(result.events.some((event) => event.kind === "descendant-failsafe-exit")).toBe(
-          false,
-        );
-        expect(result.groupProbeCount).toBeGreaterThan(0);
-        const signals = result.events.filter((event) => event.kind === "group-signal");
+        expect(eventsOf("gateway-start")).toHaveLength(surface === "gateway" ? 1 : 0);
+        expect(eventsOf(`${surface}-start`)).toHaveLength(1);
+        expect(eventsOf("leader-exit")[0]).toMatchObject({ exitCode: 17 });
+        expect(eventsOf("descendant-failsafe-exit")).toHaveLength(0);
+        expect(groupProbeCount).toBeGreaterThan(0);
+        const signals = eventsOf("group-signal");
         expect(signals.length).toBeGreaterThan(0);
         expect(
           signals.every((event) => event.leaderAlive === false && event.descendantAlive === true),
         ).toBe(true);
-        const afterCleanup = result.events.findIndex(
-          (event) => event.kind === "transport-after-gateway-stop",
-        );
-        const rejected = result.events.findIndex((event) => event.kind === "suite-rejected");
+        const afterCleanup = first("transport-after-gateway-stop");
+        const rejected = first("suite-rejected");
         expect(rejected).toBeGreaterThan(-1);
         if (denyGroupSignals) {
           expect(afterCleanup).toBe(-1);
-          expect(result.releases).toEqual([]);
-          expect(
-            result.events.findLastIndex((event) => event.kind === "lease-heartbeat"),
-          ).toBeGreaterThan(rejected);
+          expect(releases).toEqual([]);
+          expect(last("lease-heartbeat")).toBeGreaterThan(rejected);
+          expect(suiteError).toBeInstanceOf(AggregateError);
+          expect(errorText).toContain("process tree remained alive");
         } else {
-          expect(result.releases.length).toBeGreaterThan(0);
-          expect(result.releases.every((release) => !release.groupAlive)).toBe(true);
-          expect(afterCleanup).toBeGreaterThan(
-            result.events.findLastIndex((event) => event.kind === "group-signal"),
-          );
+          expect(releases.length).toBeGreaterThan(0);
+          expect(releases.every((release) => !release.groupAlive)).toBe(true);
+          expect(afterCleanup).toBeGreaterThan(last("group-signal"));
+          expect(suiteError).toBeInstanceOf(Error);
         }
-        if (denyGroupSignals) {
-          expect(result.suiteError).toBeInstanceOf(AggregateError);
-          expect(JSON.stringify(serializeError(result.suiteError))).toContain(
-            "process tree remained alive",
-          );
-        } else {
-          expect(result.suiteError).toBeInstanceOf(Error);
-        }
-        expect(JSON.stringify(serializeError(result.suiteError))).toContain(
+        expect(errorText).toContain(
           surface === "gateway"
             ? "gateway exited before listening (exitCode=17"
             : "OpenClaw CLI exited 17",
         );
         expect(
-          result.releases.every((release) => !release.descendantAlive),
+          releases.every((release) => !release.descendantAlive),
           "credential lease released while the failed-start gateway descendant was still alive",
         ).toBe(true);
       },

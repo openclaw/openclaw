@@ -1,15 +1,8 @@
-// Qa Lab tests cover gateway rpc client plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type GatewayRequestOptions = {
   expectFinal?: boolean;
   timeoutMs?: number;
-};
-
-type GatewayReconnectPausedInfo = {
-  code: number;
-  detailCode?: string;
-  reason: string;
 };
 
 const gatewayRpcMock = vi.hoisted(() => {
@@ -58,20 +51,22 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
 
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 
-function gatewayClientCallback(name: "onClose" | "onHelloOk") {
+function startClient(options: Partial<Parameters<typeof startQaGatewayRpcClient>[0]> = {}) {
+  return startQaGatewayRpcClient({
+    wsUrl: "ws://127.0.0.1:18789",
+    token: "qa-token",
+    logs: () => "qa logs",
+    ...options,
+  });
+}
+
+function gatewayClientCallback(name: "onClose" | "onHelloOk" | "onReconnectPaused") {
   const callback = gatewayRpcMock.clients[0]?.options[name];
   if (typeof callback !== "function") {
     throw new Error(`expected Gateway client ${name} callback`);
   }
-  return () => callback({ protocol: 3, server: { version: "fixture-version" } });
-}
-
-function pauseGatewayReconnect(info: GatewayReconnectPausedInfo) {
-  const callback = gatewayRpcMock.clients[0]?.options.onReconnectPaused;
-  if (typeof callback !== "function") {
-    throw new Error("expected Gateway client onReconnectPaused callback");
-  }
-  (callback as (info: GatewayReconnectPausedInfo) => void)(info);
+  return (info: unknown = { protocol: 3, server: { version: "fixture-version" } }) =>
+    callback(info);
 }
 
 describe("startQaGatewayRpcClient", () => {
@@ -79,19 +74,18 @@ describe("startQaGatewayRpcClient", () => {
   afterEach(() => vi.useRealTimers());
 
   it("retains only observed hello identity and clears it across disconnect and stop", async () => {
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "",
-    });
+    const client = await startClient({ logs: () => "" });
     expect(client.evidenceIdentity).toEqual({ protocol: 3, version: "fixture-version" });
     const identity = client.evidenceIdentity!;
     identity.version = "caller-mutation";
     expect(client.evidenceIdentity?.version).toBe("fixture-version");
     gatewayClientCallback("onClose")();
     expect(client.evidenceIdentity).toBeNull();
-    const hello = gatewayRpcMock.clients[0]!.options.onHelloOk as (hello: unknown) => void;
-    hello({ protocol: 4, server: { version: "replacement" }, auth: { token: "never-retain" } });
+    gatewayClientCallback("onHelloOk")({
+      protocol: 4,
+      server: { version: "replacement" },
+      auth: { token: "never-retain" },
+    });
     expect(client.evidenceIdentity).toEqual({ protocol: 4, version: "replacement" });
     await client.stop();
     expect(client.evidenceIdentity).toBeNull();
@@ -105,9 +99,8 @@ describe("startQaGatewayRpcClient", () => {
         publicKeyPem: "fixture-public-key",
         privateKeyPem: "fixture-private-key",
       };
-      const client = await startQaGatewayRpcClient({
+      const client = await startClient({
         wsUrl: "ws://proof-candidate:19879",
-        token: "qa-token",
         logs: () => "",
         deviceIdentity,
         scopes,
@@ -123,20 +116,11 @@ describe("startQaGatewayRpcClient", () => {
   );
 
   it("dispatches concurrent requests over the same client", async () => {
-    let releaseFirst: (() => void) | undefined;
+    const held = Promise.withResolvers<{ ok: boolean }>();
     gatewayRpcMock.request
-      .mockImplementationOnce(
-        async () =>
-          await new Promise<{ ok: boolean }>((resolve) => {
-            releaseFirst = () => resolve({ ok: true });
-          }),
-      )
+      .mockImplementationOnce(() => held.promise)
       .mockResolvedValueOnce({ ok: true });
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "qa logs",
-    });
+    const client = await startClient();
 
     const firstRequest = client.request("health");
     await Promise.resolve();
@@ -145,10 +129,7 @@ describe("startQaGatewayRpcClient", () => {
 
     await vi.waitFor(() => expect(gatewayRpcMock.request).toHaveBeenCalledTimes(2));
     await expect(secondRequest).resolves.toEqual({ ok: true });
-    if (!releaseFirst) {
-      throw new Error("expected first request to be held");
-    }
-    releaseFirst();
+    held.resolve({ ok: true });
     await expect(firstRequest).resolves.toEqual({ ok: true });
   });
 
@@ -159,11 +140,7 @@ describe("startQaGatewayRpcClient", () => {
       aborted: false,
     });
 
-    const startup = startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "qa logs",
-    });
+    const startup = startClient();
     const rejection = expect(startup).rejects.toThrow(
       "gateway request deadline exceeded\nGateway logs:\nqa logs",
     );
@@ -174,11 +151,7 @@ describe("startQaGatewayRpcClient", () => {
   });
 
   it("waits for reconnect before dispatching a request", async () => {
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "qa logs",
-    });
+    const client = await startClient();
     gatewayClientCallback("onClose")();
 
     const request = client.request("status", {}, { timeoutMs: 5_000 });
@@ -193,11 +166,7 @@ describe("startQaGatewayRpcClient", () => {
   it("applies the request deadline while waiting for reconnect", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "qa logs",
-    });
+    const client = await startClient();
     gatewayClientCallback("onClose")();
 
     const request = client.request("status", {}, { deadlineMs: 1_250, timeoutMs: 5_000 });
@@ -209,13 +178,9 @@ describe("startQaGatewayRpcClient", () => {
   });
 
   it("preserves a terminal reconnect failure through the following close", async () => {
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "qa logs",
-    });
+    const client = await startClient();
 
-    pauseGatewayReconnect({
+    gatewayClientCallback("onReconnectPaused")({
       code: 1008,
       detailCode: "AUTH_FAILED",
       reason: "authentication failed",
@@ -231,11 +196,7 @@ describe("startQaGatewayRpcClient", () => {
 
   it("does not replay a request whose Gateway error says it is not connected", async () => {
     gatewayRpcMock.request.mockRejectedValueOnce(new Error("gateway not connected"));
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "qa logs",
-    });
+    const client = await startClient();
 
     await expect(client.request("agent.run")).rejects.toThrow("gateway not connected");
     expect(gatewayRpcMock.request).toHaveBeenCalledOnce();
@@ -243,9 +204,7 @@ describe("startQaGatewayRpcClient", () => {
 
   it("wraps normalized request failures with redacted gateway logs", async () => {
     gatewayRpcMock.request.mockRejectedValueOnce("gateway rejected request");
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
+    const client = await startClient({
       logs: () => "OPENCLAW_GATEWAY_TOKEN=secret-token",
     });
 
@@ -256,11 +215,7 @@ describe("startQaGatewayRpcClient", () => {
   });
 
   it("rejects a request waiting for reconnect when stopped", async () => {
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "qa logs",
-    });
+    const client = await startClient();
     gatewayClientCallback("onClose")();
     const request = client.request("health");
 
