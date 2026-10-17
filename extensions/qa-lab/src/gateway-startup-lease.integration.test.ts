@@ -1,9 +1,10 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { inspect } from "node:util";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
@@ -71,9 +72,7 @@ if (command === "descendant") {
 type Identity = { leaderPid: number; pgid: number; descendantPid?: number };
 type Event = { at: number; kind: string; [key: string]: unknown };
 const validPid = (pid: number) => Number.isSafeInteger(pid) && pid > 1;
-// Finally preserves ordering and runs every cleanup, with the last failure winning.
-const cleanupInOrder = (...steps: Array<() => unknown>) =>
-  steps.reduce((previous, cleanup) => previous.finally(cleanup), Promise.resolve());
+const serializeError = (error: unknown) => inspect(error, { depth: null });
 
 function readIdentity(root: string): Identity | undefined {
   const identityPath = path.join(root, "identity.json");
@@ -89,17 +88,6 @@ function readIdentity(root: string): Identity | undefined {
     throw new Error("invalid owned fixture identity; refusing to signal");
   }
   return identity;
-}
-
-function serializeError(error: unknown): unknown {
-  return error instanceof Error
-    ? {
-        name: error.name,
-        message: error.message,
-        ...(error.cause ? { cause: serializeError(error.cause) } : {}),
-        ...(error instanceof AggregateError ? { errors: error.errors.map(serializeError) } : {}),
-      }
-    : String(error);
 }
 
 async function reproduce(
@@ -151,7 +139,7 @@ async function reproduce(
 
   // A local synthetic broker doubles as the supplied lab's readiness endpoint.
   // Requests/headers/payloads are never recorded; the release observation is PID-only.
-  const server = createServer((request, response) => {
+  const handleRequest: Parameters<typeof withServer>[0] = (request, response) => {
     request.resume();
     response.setHeader("content-type", "application/json");
     let payload: unknown = { status: "ok" };
@@ -181,191 +169,178 @@ async function reproduce(
       return;
     }
     response.end(JSON.stringify(payload));
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("missing local broker address");
-  }
-  const baseUrl = `http://127.0.0.1:${address.port}`;
+  };
   const state = createQaBusState();
-  const unexpected = () => {
-    throw new Error("startup failure must precede lab publication");
-  };
-  const lab: QaLabServerHandle = {
-    baseUrl,
-    listenUrl: baseUrl,
-    state,
-    setControlUi: unexpected,
-    setScenarioRun: unexpected,
-    setLatestReport: unexpected,
-    runSelfCheck: async () => unexpected(),
-    stop: async () => {
-      record("suite-lab-finish");
-      state.reset(true);
-    },
-  };
-  const factory: QaTransportAdapterFactory = {
-    id: "startup-lease-fixture",
-    matches: ({ channelId, driver }) => channelId === "startup-lease-fixture" && driver === "live",
-    async create({ credentials }) {
-      const lease = await credentials.acquire({
-        kind: "synthetic-startup-lease",
-        source: "convex",
-        role: "ci",
-        resolveEnvPayload: () => {
-          throw new Error("real env credentials forbidden");
-        },
-        parsePayload: (payload) => {
-          if (JSON.stringify(payload) !== '{"synthetic":true}') {
-            throw new Error("non-synthetic lease payload forbidden");
-          }
-          return { synthetic: true };
-        },
-      });
-      const heartbeat = credentials.startHeartbeat(lease);
-      stopHeartbeat = () => heartbeat.stop();
-      return {
-        id: "startup-lease-fixture",
-        label: "Synthetic lease",
-        accountId: "sut",
-        requiredPluginIds: [],
-        supportedActions: [],
-        sendInbound: unexpected,
-        createGatewayConfig: () => ({}),
-        waitReady: async () => unexpected(),
-        buildAgentDelivery: unexpected,
-        handleAction: async () => unexpected(),
-        createReportNotes: () => [],
-        cleanup: async () => {
-          record("transport-before-gateway-stop");
-        },
-        cleanupAfterGatewayStop: async () => {
-          record("transport-after-gateway-stop");
-          await releaseQaCredentialLease(lease, heartbeat);
-        },
-      };
-    },
-  };
-  vi.stubEnv("OPENCLAW_QA_CONVEX_SITE_URL", baseUrl);
-  vi.stubEnv("OPENCLAW_QA_CONVEX_SECRET_CI", "synthetic-only");
-  vi.stubEnv("OPENCLAW_QA_ALLOW_INSECURE_HTTP", "1");
-  vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN", undefined);
-  vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", undefined);
-  const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-    const identity = readIdentity(root);
-    if (identity && pid === -identity.pgid) {
-      if (signal === 0) {
-        groupProbeCount += 1;
-      } else if (signal === "SIGTERM" || signal === "SIGKILL") {
-        record("group-signal", { signal, denied: denyGroupSignals, ...snapshot() });
-        if (denyGroupSignals) {
-          throw Object.assign(new Error("synthetic EPERM for owned fixture group"), {
-            code: "EPERM",
-          });
-        }
-      }
-    }
-    return realKill(pid, signal);
-  });
+  let cleaned = snapshot();
   try {
-    record("suite-start", { denyGroupSignals });
-    const context: QaSuiteResolvedRunContext = {
-      startedAt: new Date(),
-      repoRoot,
-      outputDir: root,
-      transportId: "qa-channel",
-      selectedScenarios: [],
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      fastMode: true,
-      enabledPluginIds: [],
-      gatewayConfigPatches: [],
-      gatewayRuntimeOptions: undefined,
-      concurrency: 1,
-      progressEnabled: true,
-      gatewayHeapCheckpointsEnabled: false,
-    };
-    try {
-      await runQaFlowSuiteStandard(
-        {
-          startLab: async () => lab,
-          controlUiEnabled: false,
-          channelDriver: "live",
-          channelId: "startup-lease-fixture",
-          adapterFactories: [factory],
-          sutOpenClawCommand: {
-            executablePath: process.execPath,
-            argsPrefix: [fixturePath, root, surface],
-            tempParentDir,
-            usePackagedPlugins: true,
-          },
-        },
-        context,
-        async () => {
-          scenarioCalls += 1;
-          return unexpected();
-        },
-      );
-    } catch (error) {
-      suiteError = error;
-      record("suite-rejected", { error: serializeError(error), ...snapshot() });
-    }
-    if (denyGroupSignals) {
-      const nextHeartbeat = Promise.withResolvers<void>();
-      onHeartbeat = () => nextHeartbeat.resolve();
-      await withinTest(nextHeartbeat.promise, testSignal);
-    }
-  } finally {
-    killSpy.mockRestore();
-    let cleaned: ReturnType<typeof snapshot>;
-    try {
-      record("fault-restored", { groupProbeCount });
-      const identity = readIdentity(root);
-      if (identity && alive(-identity.pgid)) {
-        record("diagnostic-force-kill", snapshot());
-        expect(signalQaPosixProcessGroup(identity.pgid, "SIGKILL")).toBeUndefined();
-      }
-      const deadline = Date.now() + 5_000;
-      cleaned = snapshot();
-      while (cleaned.groupAlive && Date.now() < deadline) {
-        await sleep(25);
-        cleaned = snapshot();
-      }
-      record("process-cleanup-verified", cleaned);
-    } finally {
-      await cleanupInOrder(
-        () => stopHeartbeat?.(),
-        () =>
-          new Promise<void>((resolve, reject) => {
-            server.close((error) => (error ? reject(error) : resolve()));
-            server.closeAllConnections();
-          }),
-        () => {
-          vi.unstubAllEnvs();
+    await withServer(handleRequest, async (baseUrl) => {
+      const unexpected = () => {
+        throw new Error("startup failure must precede lab publication");
+      };
+      const lab: QaLabServerHandle = {
+        baseUrl,
+        listenUrl: baseUrl,
+        state,
+        setControlUi: unexpected,
+        setScenarioRun: unexpected,
+        setLatestReport: unexpected,
+        runSelfCheck: async () => unexpected(),
+        stop: async () => {
+          record("suite-lab-finish");
           state.reset(true);
         },
-      );
-    }
-    if (!cleaned.groupAlive && !cleaned.descendantAlive && !cleaned.leaderAlive) {
-      await fs.rm(tempParentDir, { recursive: true, force: true });
-    }
-    record("cleanup-complete", {
-      ...cleaned,
-      brokerListening: server.listening,
-      tempParentRemoved: !existsSync(tempParentDir),
+      };
+      const factory: QaTransportAdapterFactory = {
+        id: "startup-lease-fixture",
+        matches: ({ channelId, driver }) =>
+          channelId === "startup-lease-fixture" && driver === "live",
+        async create({ credentials }) {
+          const lease = await credentials.acquire({
+            kind: "synthetic-startup-lease",
+            source: "convex",
+            role: "ci",
+            resolveEnvPayload: () => {
+              throw new Error("real env credentials forbidden");
+            },
+            parsePayload: (payload) => {
+              if (JSON.stringify(payload) !== '{"synthetic":true}') {
+                throw new Error("non-synthetic lease payload forbidden");
+              }
+              return { synthetic: true };
+            },
+          });
+          const heartbeat = credentials.startHeartbeat(lease);
+          stopHeartbeat = () => heartbeat.stop();
+          return {
+            id: "startup-lease-fixture",
+            label: "Synthetic lease",
+            accountId: "sut",
+            requiredPluginIds: [],
+            supportedActions: [],
+            sendInbound: unexpected,
+            createGatewayConfig: () => ({}),
+            waitReady: async () => unexpected(),
+            buildAgentDelivery: unexpected,
+            handleAction: async () => unexpected(),
+            createReportNotes: () => [],
+            cleanup: async () => {
+              record("transport-before-gateway-stop");
+            },
+            cleanupAfterGatewayStop: async () => {
+              record("transport-after-gateway-stop");
+              await releaseQaCredentialLease(lease, heartbeat);
+            },
+          };
+        },
+      };
+      vi.stubEnv("OPENCLAW_QA_CONVEX_SITE_URL", baseUrl);
+      vi.stubEnv("OPENCLAW_QA_CONVEX_SECRET_CI", "synthetic-only");
+      vi.stubEnv("OPENCLAW_QA_ALLOW_INSECURE_HTTP", "1");
+      vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN", undefined);
+      vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", undefined);
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        const identity = readIdentity(root);
+        if (identity && pid === -identity.pgid) {
+          if (signal === 0) {
+            groupProbeCount += 1;
+          } else if (signal === "SIGTERM" || signal === "SIGKILL") {
+            record("group-signal", { signal, denied: denyGroupSignals, ...snapshot() });
+            if (denyGroupSignals) {
+              throw Object.assign(new Error("synthetic EPERM for owned fixture group"), {
+                code: "EPERM",
+              });
+            }
+          }
+        }
+        return realKill(pid, signal);
+      });
+      try {
+        record("suite-start", { denyGroupSignals });
+        const context: QaSuiteResolvedRunContext = {
+          startedAt: new Date(),
+          repoRoot,
+          outputDir: root,
+          transportId: "qa-channel",
+          selectedScenarios: [],
+          providerMode: "mock-openai",
+          primaryModel: "mock-openai/gpt-5.6-luna",
+          alternateModel: "mock-openai/gpt-5.6-luna-alt",
+          fastMode: true,
+          enabledPluginIds: [],
+          gatewayConfigPatches: [],
+          gatewayRuntimeOptions: undefined,
+          concurrency: 1,
+          progressEnabled: true,
+          gatewayHeapCheckpointsEnabled: false,
+        };
+        try {
+          await runQaFlowSuiteStandard(
+            {
+              startLab: async () => lab,
+              controlUiEnabled: false,
+              channelDriver: "live",
+              channelId: "startup-lease-fixture",
+              adapterFactories: [factory],
+              sutOpenClawCommand: {
+                executablePath: process.execPath,
+                argsPrefix: [fixturePath, root, surface],
+                tempParentDir,
+                usePackagedPlugins: true,
+              },
+            },
+            context,
+            async () => {
+              scenarioCalls += 1;
+              return unexpected();
+            },
+          );
+        } catch (error) {
+          suiteError = error;
+          record("suite-rejected", { error: serializeError(error), ...snapshot() });
+        }
+        if (denyGroupSignals) {
+          const nextHeartbeat = Promise.withResolvers<void>();
+          onHeartbeat = () => nextHeartbeat.resolve();
+          await withinTest(nextHeartbeat.promise, testSignal);
+        }
+      } finally {
+        killSpy.mockRestore();
+        try {
+          record("fault-restored", { groupProbeCount });
+          const identity = readIdentity(root);
+          if (identity && alive(-identity.pgid)) {
+            record("diagnostic-force-kill", snapshot());
+            expect(signalQaPosixProcessGroup(identity.pgid, "SIGKILL")).toBeUndefined();
+          }
+          const deadline = Date.now() + 5_000;
+          cleaned = snapshot();
+          while (cleaned.groupAlive && Date.now() < deadline) {
+            await sleep(25);
+            cleaned = snapshot();
+          }
+          record("process-cleanup-verified", cleaned);
+        } finally {
+          await stopHeartbeat?.();
+        }
+      }
     });
-    console.log(`startup lease evidence: ${path.relative(repoRoot, root)}`);
-    expect(cleaned).toMatchObject({
-      leaderAlive: false,
-      descendantAlive: false,
-      groupAlive: false,
-    });
+  } finally {
+    vi.unstubAllEnvs();
+    state.reset(true);
   }
+  if (!cleaned.groupAlive && !cleaned.descendantAlive && !cleaned.leaderAlive) {
+    await fs.rm(tempParentDir, { recursive: true, force: true });
+  }
+  record("cleanup-complete", {
+    ...cleaned,
+    tempParentRemoved: !existsSync(tempParentDir),
+  });
+  console.log(`startup lease evidence: ${path.relative(repoRoot, root)}`);
+  expect(cleaned).toMatchObject({
+    leaderAlive: false,
+    descendantAlive: false,
+    groupAlive: false,
+  });
   const events = readFileSync(eventsPath, "utf8")
     .trim()
     .split("\n")

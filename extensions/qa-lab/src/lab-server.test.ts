@@ -347,20 +347,28 @@ describe("qa-lab server", () => {
     await expect(response.json()).resolves.toEqual({ error: requestError.message });
   });
 
-  it("dispatches explicit mixed-kind selections through the suite planner", async () => {
-    const lab = await startLab();
-    resolveSuite(await suiteResult(), "suite");
-
-    const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
-      channelDriver: "crabline",
-      providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-luna",
-      scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
-    });
-
-    expect(response.status).toBe(202);
-    expect(await response.json()).toMatchObject({
+  it.each<{
+    name: string;
+    selection: Partial<QaLabRunSelection>;
+    launch: Record<string, unknown>;
+    plan?: unknown;
+    kind?: string;
+    watchUrl?: string;
+    completed?: Record<string, unknown>;
+    useLabWatchUrl?: boolean;
+    adapterCalls?: number;
+    matchingAdapter?: boolean;
+  }>([
+    {
+      name: "dispatches explicit mixed-kind selections through the suite planner",
+      selection: {
+        channelDriver: "crabline",
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna",
+        scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
+      },
+      kind: "suite",
       plan: {
         executionKinds: ["flow", "playwright"],
         selectedScenarios: [
@@ -368,67 +376,141 @@ describe("qa-lab server", () => {
           { id: "browser-talk-start-stop", declaredChannel: null, effectiveChannel: null },
         ],
       },
-    });
-    await expectSuiteLaunch({
-      alternateModel: "openai/gpt-5.6-luna",
-      channelDriver: "crabline",
-      controlUiEnabled: true,
-      primaryModel: "openai/gpt-5.6-luna",
-      providerMode: "live-frontier",
-      scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
-    });
-    expect(liveTransportMock.listAdapterFactories).not.toHaveBeenCalled();
-    await expectBootstrap(lab.baseUrl, {
-      runner: {
-        status: "completed",
-        artifacts: { watchUrl: lab.baseUrl },
-        selection: { scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"] },
+      launch: {
+        alternateModel: "openai/gpt-5.6-luna",
+        channelDriver: "crabline",
+        controlUiEnabled: true,
+        primaryModel: "openai/gpt-5.6-luna",
+        providerMode: "live-frontier",
+        scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
       },
-    });
+      adapterCalls: 0,
+      completed: { selection: { scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"] } },
+    },
+    {
+      name: "keeps mock providers independent from real channel adapters",
+      selection: {
+        channelDriver: "live",
+        providerMode: "mock-openai",
+        scenarioIds: ["dm-chat-baseline"],
+      },
+      watchUrl: "http://runtime-watch.invalid",
+      launch: {
+        adapterFactories: liveTransportMock.adapterFactories,
+        channelDriver: "live",
+        providerMode: "mock-openai",
+      },
+      adapterCalls: 1,
+      completed: {},
+    },
+    {
+      name: "launches a plural-only catalog scenario on its selected live channel",
+      matchingAdapter: true,
+      selection: {
+        profile: "all",
+        channel: "buzz",
+        channelDriver: "live",
+        providerMode: "mock-openai",
+        scenarioIds: ["channel-canary"],
+      },
+      plan: {
+        selectedScenarios: [
+          { id: "channel-canary", declaredChannel: null, effectiveChannel: "buzz" },
+        ],
+      },
+      launch: { channelDriver: "live", channelId: "buzz", scenarioIds: ["channel-canary"] },
+    },
+    {
+      name: "returns the resolved runtime-pair-lane plan and launches it with independent live transport",
+      matchingAdapter: true,
+      useLabWatchUrl: true,
+      selection: {
+        profile: "all",
+        channel: "telegram",
+        channelDriver: "live",
+        evidenceMode: "slim",
+        providerMode: "mock-openai",
+        runtimePair: ["openclaw", "codex"],
+        runtimePairLane: "core",
+      },
+      plan: {
+        executionKinds: ["flow"],
+        selectedScenarios: expect.arrayContaining([
+          expect.objectContaining({ id: "runtime-first-hour-20-turn" }),
+        ]),
+        exclusions: expect.arrayContaining([
+          expect.objectContaining({ scenarioId: "codex-plugin-cold-install" }),
+        ]),
+      },
+      launch: {
+        adapterFactories: liveTransportMock.adapterFactories,
+        channelDriver: "live",
+        channelId: "telegram",
+        evidenceMode: "slim",
+        providerMode: "mock-openai",
+        runtimePair: ["openclaw", "codex"],
+      },
+    },
+  ])("$name", async (fixture) => {
+    if (fixture.matchingAdapter) {
+      liveTransportMock.adapterFactories[0]!.matches.mockReturnValue(true);
+    }
+    const lab = await startLab();
+    const result = await suiteResult(
+      fixture.watchUrl
+        ? { watchUrl: fixture.watchUrl }
+        : fixture.useLabWatchUrl
+          ? { watchUrl: lab.baseUrl }
+          : undefined,
+    );
+    resolveSuite(result, fixture.kind);
+    const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", fixture.selection);
+    expect(response.status).toBe(202);
+    if (fixture.plan) {
+      expect(await response.json()).toMatchObject({ plan: fixture.plan });
+    }
+    await expectSuiteLaunch(fixture.launch);
+    if (fixture.adapterCalls !== undefined) {
+      expect(liveTransportMock.listAdapterFactories).toHaveBeenCalledTimes(fixture.adapterCalls);
+    }
+    if (fixture.completed) {
+      await expectBootstrap(lab.baseUrl, {
+        runner: {
+          status: "completed",
+          artifacts: { watchUrl: fixture.watchUrl ?? lab.baseUrl },
+          ...fixture.completed,
+        },
+      });
+    }
   });
 
-  it.each([
-    { label: "failed", status: "fail" as const },
-    { label: "skipped", status: "skip" as const },
-  ])(
-    "marks $label suite results failed while preserving generated artifacts",
-    async ({ status }) => {
-      const lab = await startLab();
-      const result = await suiteResult({
-        scenarios: [{ name: "Channel chat baseline", status, steps: [] }],
-      });
-      resolveSuite(result);
-
-      const response = await postBaselineSuite(lab.baseUrl);
-
-      expect(response.status).toBe(202);
-      await vi.waitFor(async () => {
-        const bootstrap = await readBootstrap(lab.baseUrl);
-        expect(bootstrap).toMatchObject({
-          runner: {
-            status: "failed",
-            error: "QA suite reported 1 failed or skipped scenario(s).",
-            artifacts: {
-              outputDir: result.outputDir,
-              evidencePath: result.evidencePath,
-              reportPath: result.reportPath,
-              summaryPath: result.summaryPath,
-            },
-          },
-          latestReport: { outputPath: result.reportPath, markdown: result.report },
-        });
-      });
-    },
-  );
-
-  it.each([
+  it.each<{
+    name: string;
+    scenarios?: NonNullable<Parameters<typeof suiteResult>[0]>["scenarios"];
+    summary?: string;
+    implicit?: boolean;
+    expectedError: string | null;
+    fullArtifacts?: boolean;
+  }>([
     {
-      label: "invalid",
+      name: "marks failed suite results failed while preserving generated artifacts",
+      scenarios: [{ name: "Channel chat baseline", status: "fail", steps: [] }],
+      expectedError: "QA suite reported 1 failed or skipped scenario(s).",
+      fullArtifacts: true,
+    },
+    {
+      name: "marks skipped suite results failed while preserving generated artifacts",
+      scenarios: [{ name: "Channel chat baseline", status: "skip", steps: [] }],
+      expectedError: "QA suite reported 1 failed or skipped scenario(s).",
+      fullArtifacts: true,
+    },
+    {
+      name: "fails closed on an invalid suite summary while preserving artifacts",
       summary: "{invalid-summary",
       expectedError: "Could not parse QA summary JSON",
     },
     {
-      label: "empty",
+      name: "fails closed on an empty suite summary while preserving artifacts",
       summary: JSON.stringify({
         run: { status: "completed" },
         counts: { total: 0, passed: 0, failed: 0, skipped: 0 },
@@ -436,30 +518,10 @@ describe("qa-lab server", () => {
       }),
       expectedError: "did not include any executed scenarios",
     },
-  ])(
-    "fails closed on an $label suite summary while preserving artifacts",
-    async (invalidResult) => {
-      const lab = await startLab();
-      const result = await suiteResult();
-      await writeFile(result.summaryPath, invalidResult.summary, "utf8");
-      resolveSuite(result);
-
-      const response = await postBaselineSuite(lab.baseUrl);
-
-      expect(response.status).toBe(202);
-      await expectBootstrap(lab.baseUrl, {
-        runner: {
-          status: "failed",
-          error: expect.stringContaining(invalidResult.expectedError),
-          artifacts: { summaryPath: result.summaryPath },
-        },
-      });
-    },
-  );
-
-  it("keeps implicit suites green for catalog-verified report-only optional skips", async () => {
-    const lab = await startLab();
-    const result = await suiteResult({
+    {
+      name: "keeps implicit suites green for catalog-verified report-only optional skips",
+      implicit: true,
+      expectedError: null,
       scenarios: [
         { name: "Channel chat baseline", status: "pass", steps: [] },
         {
@@ -469,73 +531,45 @@ describe("qa-lab server", () => {
           details: "image_generate mock provider report-only: tool unavailable",
         },
       ],
-    });
+    },
+  ])("$name", async (fixture) => {
+    const lab = await startLab();
+    const result = await suiteResult({ scenarios: fixture.scenarios });
+    if (fixture.summary) {
+      await writeFile(result.summaryPath, fixture.summary, "utf8");
+    }
     resolveSuite(result);
-
-    const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
-      profile: "all",
-      channelDriver: "crabline",
-      providerMode: "live-frontier",
-    });
-
+    const response = await (fixture.implicit
+      ? postLabJson(lab.baseUrl, "/api/scenario/suite", {
+          profile: "all",
+          channelDriver: "crabline",
+          providerMode: "live-frontier",
+        })
+      : postBaselineSuite(lab.baseUrl));
     expect(response.status).toBe(202);
-    await expectBootstrap(lab.baseUrl, { runner: { status: "completed", error: null } });
-  });
-
-  it("keeps mock providers independent from real channel adapters", async () => {
-    const lab = await startLab();
-    resolveSuite(
-      await suiteResult({
-        watchUrl: "http://runtime-watch.invalid",
-      }),
-    );
-
-    const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
-      channelDriver: "live",
-      providerMode: "mock-openai",
-      scenarioIds: ["dm-chat-baseline"],
-    });
-
-    expect(response.status).toBe(202);
-    await vi.waitFor(() => expect(suiteLaunchMock.runQaSuite).toHaveBeenCalledTimes(1));
-    expect(liveTransportMock.listAdapterFactories).toHaveBeenCalledTimes(1);
-    expect(suiteLaunchMock.runQaSuite).toHaveBeenCalledWith(
-      expect.objectContaining({
-        adapterFactories: liveTransportMock.adapterFactories,
-        channelDriver: "live",
-        providerMode: "mock-openai",
-      }),
-    );
     await expectBootstrap(lab.baseUrl, {
-      runner: { status: "completed", artifacts: { watchUrl: "http://runtime-watch.invalid" } },
-    });
-  });
-
-  it("launches a plural-only catalog scenario on its selected live channel", async () => {
-    liveTransportMock.adapterFactories[0]!.matches.mockReturnValue(true);
-    const lab = await startLab();
-    resolveSuite(await suiteResult());
-
-    const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
-      profile: "all",
-      channel: "buzz",
-      channelDriver: "live",
-      providerMode: "mock-openai",
-      scenarioIds: ["channel-canary"],
-    });
-
-    expect(response.status).toBe(202);
-    expect(await response.json()).toMatchObject({
-      plan: {
-        selectedScenarios: [
-          { id: "channel-canary", declaredChannel: null, effectiveChannel: "buzz" },
-        ],
+      runner: {
+        status: fixture.expectedError === null ? "completed" : "failed",
+        error:
+          fixture.fullArtifacts || fixture.expectedError === null
+            ? fixture.expectedError
+            : expect.stringContaining(fixture.expectedError),
+        ...(fixture.fullArtifacts
+          ? {
+              artifacts: {
+                outputDir: result.outputDir,
+                evidencePath: result.evidencePath,
+                reportPath: result.reportPath,
+                summaryPath: result.summaryPath,
+              },
+            }
+          : fixture.summary
+            ? { artifacts: { summaryPath: result.summaryPath } }
+            : {}),
       },
-    });
-    await expectSuiteLaunch({
-      channelDriver: "live",
-      channelId: "buzz",
-      scenarioIds: ["channel-canary"],
+      ...(fixture.fullArtifacts
+        ? { latestReport: { outputPath: result.reportPath, markdown: result.report } }
+        : {}),
     });
   });
 
@@ -712,50 +746,6 @@ describe("qa-lab server", () => {
     expect(suiteLaunchMock.runQaSuite).not.toHaveBeenCalled();
   });
 
-  it("returns the resolved runtime-pair-lane plan and launches it with independent live transport", async () => {
-    liveTransportMock.adapterFactories[0]!.matches.mockReturnValue(true);
-    const lab = await startLab();
-    resolveSuite(
-      await suiteResult({
-        watchUrl: lab.baseUrl,
-      }),
-    );
-
-    const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
-      profile: "all",
-      channel: "telegram",
-      channelDriver: "live",
-      evidenceMode: "slim",
-      providerMode: "mock-openai",
-      runtimePair: ["openclaw", "codex"],
-      runtimePairLane: "core",
-    });
-
-    expect(response.status).toBe(202);
-    const payload = (await response.json()) as {
-      plan: {
-        executionKinds: string[];
-        exclusions: Array<{ scenarioId: string }>;
-        selectedScenarios: Array<{ id: string }>;
-      };
-    };
-    expect(payload.plan.executionKinds).toEqual(["flow"]);
-    expect(payload.plan.selectedScenarios.map((scenario) => scenario.id)).toContain(
-      "runtime-first-hour-20-turn",
-    );
-    expect(payload.plan.exclusions.map((exclusion) => exclusion.scenarioId)).toContain(
-      "codex-plugin-cold-install",
-    );
-    await expectSuiteLaunch({
-      adapterFactories: liveTransportMock.adapterFactories,
-      channelDriver: "live",
-      channelId: "telegram",
-      evidenceMode: "slim",
-      providerMode: "mock-openai",
-      runtimePair: ["openclaw", "codex"],
-    });
-  });
-
   it("returns explicit exclusions and errors without launching unsupported execution kinds", async () => {
     const lab = await startLab();
 
@@ -889,7 +879,6 @@ describe("qa-lab server", () => {
       text: "must not survive shutdown",
     });
     const slowInbound = httpRequest(new URL("/api/inbound/message", lab.listenUrl), {
-      method: "POST",
       headers: {
         "content-type": "application/json",
         "content-length": Buffer.byteLength(inboundBody),
@@ -1469,31 +1458,14 @@ describe("qa-lab server", () => {
 
   it("serves proxy capture sessions, events, and query rows", async () => {
     const store = captureMock.store;
-    store.upsertSession({
-      id: "qa-capture-session",
-      startedAt: Date.now(),
-      mode: "proxy-run",
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-    });
-    const eventDefaults = {
-      sessionId: "qa-capture-session",
-      sourceScope: "openclaw",
-      sourceProcess: "openclaw",
-      protocol: "https",
-      direction: "outbound",
-      kind: "request",
-      method: "POST",
-    } as const;
+    store.upsertSession({ id: "qa-capture-session" });
+    const eventDefaults = { sessionId: "qa-capture-session" };
     for (const index of [0, 1]) {
       store.recordEvent({
         ...eventDefaults,
-        ts: Date.now() + index,
         flowId: `flow-${index + 1}`,
         host: "api.example.com",
-        path: "/v1/send",
         dataText: '{"hello":"world"}',
-        dataSha256: "abc",
         metaJson: JSON.stringify({
           provider: "openai",
           api: "responses",
@@ -1504,10 +1476,8 @@ describe("qa-lab server", () => {
     }
     store.recordEvent({
       ...eventDefaults,
-      ts: Date.now() + 2,
       flowId: "flow-3",
       host: "127.0.0.1:11434",
-      path: "/api/chat",
       metaJson: JSON.stringify({
         provider: "ollama",
         model: "kimi-k2.5:cloud",
@@ -1544,27 +1514,23 @@ describe("qa-lab server", () => {
       model: "kimi-k2.5:cloud",
     });
 
-    const coverage = (await (
-      await fetchWithRetry(`${lab.baseUrl}/api/capture/coverage?sessionId=qa-capture-session`)
-    ).json()) as {
+    expect(
+      await getLabJson(lab.baseUrl, "/api/capture/coverage?sessionId=qa-capture-session"),
+    ).toMatchObject({
       coverage: {
-        totalEvents: number;
-        unlabeledEventCount: number;
-        providers: Array<{ value: string; count: number }>;
-        models: Array<{ value: string; count: number }>;
-        localPeers: Array<{ value: string; count: number }>;
-      };
-    };
-    expect(coverage.coverage).toMatchObject({ totalEvents: 3, unlabeledEventCount: 0 });
-    for (const [items, value, count] of [
-      [coverage.coverage.providers, "openai", 2],
-      [coverage.coverage.providers, "ollama", 1],
-      [coverage.coverage.models, "gpt-5.6-luna", 2],
-      [coverage.coverage.models, "kimi-k2.5:cloud", 1],
-      [coverage.coverage.localPeers, "127.0.0.1:11434", 1],
-    ] as const) {
-      expect(items.find((item) => item.value === value)?.count).toBe(count);
-    }
+        totalEvents: 3,
+        unlabeledEventCount: 0,
+        providers: expect.arrayContaining([
+          { value: "openai", count: 2 },
+          { value: "ollama", count: 1 },
+        ]),
+        models: expect.arrayContaining([
+          { value: "gpt-5.6-luna", count: 2 },
+          { value: "kimi-k2.5:cloud", count: 1 },
+        ]),
+        localPeers: expect.arrayContaining([{ value: "127.0.0.1:11434", count: 1 }]),
+      },
+    });
 
     expect(
       await getLabJson(
