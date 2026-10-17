@@ -44,4 +44,23 @@ const whatsappApproval = createChannelApprovalAuth({
 });
 
 export const getWhatsAppApprovalApprovers = whatsappApproval.resolveApprovers;
-export const whatsappApprovalAuth = whatsappApproval.approvalAuth;
+
+type WhatsAppApprovalActionInput = Parameters<
+  typeof whatsappApproval.approvalAuth.authorizeActorAction
+>[0];
+
+export const whatsappApprovalAuth = {
+  ...whatsappApproval.approvalAuth,
+  authorizeActorAction(input: WhatsAppApprovalActionInput) {
+    // A configured approver list that names no usable number (for example `[""]`) must deny
+    // everyone. Falling through would reach the empty-approver path, which authorizes the
+    // implicit same-chat fallback and would let any admitted sender approve.
+    if (hasExplicitWhatsAppApprovers(input) && getWhatsAppApprovalApprovers(input).length === 0) {
+      return {
+        authorized: false,
+        reason: `❌ You are not authorized to approve ${input.approvalKind} requests on WhatsApp.`,
+      } as const;
+    }
+    return whatsappApproval.approvalAuth.authorizeActorAction(input);
+  },
+};

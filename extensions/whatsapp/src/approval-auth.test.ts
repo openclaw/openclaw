@@ -1,4 +1,5 @@
 // Whatsapp tests cover approval auth plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   getWhatsAppApprovalApprovers,
@@ -105,6 +106,38 @@ describe("whatsappApprovalAuth", () => {
       const cfg = { channels: { whatsapp: { allowFrom: ["+15559990000"], execApprovals } } };
       expect(getWhatsAppApprovalApprovers({ cfg })).toEqual(["+15559990000"]);
       expect(hasExplicitWhatsAppApprovers({ cfg })).toBe(false);
+    }
+  });
+
+  it("denies everyone when execApprovals.approvers names no usable number", () => {
+    // A configured list that normalizes to nothing must not fall through to the implicit
+    // same-chat authorization that an empty approver set means (pairing admits other senders).
+    for (const approvers of [[""], ["not-a-number"], ["120363401234567890@g.us"]]) {
+      const cfg: OpenClawConfig = {
+        channels: {
+          whatsapp: {
+            dmPolicy: "pairing",
+            allowFrom: ["+15551230000"],
+            execApprovals: { approvers },
+          },
+        },
+      };
+      expect(getWhatsAppApprovalApprovers({ cfg })).toEqual([]);
+      for (const senderId of ["+15559990000", "+15551230000"]) {
+        for (const approvalKind of ["exec", "plugin"] as const) {
+          expect(
+            whatsappApprovalAuth.authorizeActorAction({
+              cfg,
+              senderId,
+              action: "approve",
+              approvalKind,
+            }),
+          ).toEqual({
+            authorized: false,
+            reason: `❌ You are not authorized to approve ${approvalKind} requests on WhatsApp.`,
+          });
+        }
+      }
     }
   });
 

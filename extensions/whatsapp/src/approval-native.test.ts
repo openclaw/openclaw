@@ -1,4 +1,5 @@
 import { createNativeApprovalTestFixture } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { whatsappApprovalCapability } from "./approval-native.js";
 
@@ -228,6 +229,20 @@ describe("whatsapp approval capability", () => {
         request: buildExecRequest(owner),
       }),
     ).toEqual({ to: owner, accountId: "default" });
+    // The generic forwarder does not deliver a session-route card to the non-approver either,
+    // while explicit targets and the approver's own chat are untouched.
+    const block = whatsappApprovalCapability.delivery?.shouldBlockForwardingFallback;
+    const fallback = (cfg: OpenClawConfig, to: string, source: "session" | "target") =>
+      block?.({
+        cfg,
+        approvalKind: "exec",
+        target: { channel: "whatsapp", to, source },
+        request: fromContact,
+      });
+    expect(fallback(named, contact, "session")).toBe(true);
+    expect(fallback(named, owner, "session")).toBe(false);
+    expect(fallback(named, contact, "target")).toBe(false);
+    expect(fallback(unnamed, contact, "session")).toBe(false);
     // Unchanged without execApprovals: the contact's own chat still gets the prompt.
     expect(
       await native?.resolveOriginTarget?.({

@@ -108,4 +108,42 @@ function buildWhatsAppPendingPayload(
   };
 }
 
-export const whatsappApprovalCapability: ChannelApprovalCapability = whatsappApproval.capability;
+/**
+ * With named approvers, the generic forwarder must not deliver a session-route card to a direct
+ * chat whose peer may not approve it either: the native handler already sends that request to the
+ * approvers' own chats, and the peer could not act on the card. Explicit targets are untouched.
+ */
+function isNonApproverSessionFallback(params: {
+  cfg: OpenClawConfig;
+  target: { channel: string; to: string; accountId?: string | null; source?: "session" | "target" };
+}): boolean {
+  if (params.target.source !== "session" || params.target.channel !== "whatsapp") {
+    return false;
+  }
+  const accountId = params.target.accountId ?? undefined;
+  if (!hasExplicitWhatsAppApprovers({ cfg: params.cfg, accountId })) {
+    return false;
+  }
+  const to = normalizeWhatsAppMessagingTarget(params.target.to) ?? params.target.to;
+  if (isWhatsAppGroupJid(to)) {
+    return false;
+  }
+  const approvers = getWhatsAppApprovalApprovers({ cfg: params.cfg, accountId });
+  if (approvers.includes("*")) {
+    return false;
+  }
+  const peer = normalizeWhatsAppApproverId(to);
+  return peer === undefined || !approvers.includes(peer);
+}
+
+const baseDelivery = whatsappApproval.capability.delivery;
+
+export const whatsappApprovalCapability: ChannelApprovalCapability = {
+  ...whatsappApproval.capability,
+  delivery: {
+    ...baseDelivery,
+    shouldBlockForwardingFallback: (params) =>
+      baseDelivery?.shouldBlockForwardingFallback?.(params) === true ||
+      isNonApproverSessionFallback(params),
+  },
+};
