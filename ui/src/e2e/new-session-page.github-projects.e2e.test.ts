@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -16,10 +17,39 @@ import {
   installMockGateway,
   navigateInApp,
   pollLocatorText,
+  pollCount,
+  pollAttribute,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const viewport = { height: 900, width: 1280 };
+const localRepository = {
+  workspace: WORKSPACE,
+  workspaceGit: false,
+  agentModel: "openai/gpt-4.1",
+  models: [{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }],
+};
+
+function projectContextOptions(video = false): BrowserContextOptions {
+  return {
+    locale: "en-US",
+    serviceWorkers: "block",
+    ...(video
+      ? {
+          recordVideo: { dir: path.join(suite.artifactDir, "project-registry"), size: viewport },
+          viewport,
+        }
+      : {}),
+  };
+}
+
+async function selectRemoteProject(page: Page, query: string, name: RegExp) {
+  await page.locator("#new-session-project-trigger").click();
+  const picker = page.locator(".oc-popover.new-session-page__project-popover");
+  await picker.getByRole("searchbox", { name: "Search projects or paste a Git URL" }).fill(query);
+  await picker.getByRole("button", { name }).click();
+}
 const remoteSearchResult = {
   credential: "missing",
   projects: [
@@ -56,10 +86,7 @@ suite.define(() => {
             }, storageKey);
           }
           const gateway = await installMockGateway(page, {
-            workspace: WORKSPACE,
-            workspaceGit: false,
-            agentModel: "openai/gpt-4.1",
-            models: [{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }],
+            ...localRepository,
             featureMethods: [
               "projects.list",
               "environments.list",
@@ -159,10 +186,7 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
-          workspace: WORKSPACE,
-          workspaceGit: false,
-          agentModel: "openai/gpt-4.1",
-          models: [{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }],
+          ...localRepository,
           featureMethods: [
             "projects.list",
             "projects.searchRemote",
@@ -189,12 +213,7 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("projects.list");
-        await page.locator("#new-session-project-trigger").click();
-        const projects = page.locator(".oc-popover.new-session-page__project-popover");
-        await projects
-          .getByRole("searchbox", { name: "Search projects or paste a Git URL" })
-          .fill("acme");
-        await projects.getByRole("button", { name: /acme\/private-repo/u }).click();
+        await selectRemoteProject(page, "acme", /acme\/private-repo/u);
         const selected = page.locator("#new-session-project-trigger");
         await pollLocatorText(selected).toContain("acme/private-repo");
         await page.locator(".new-session-page__message").fill("keep the draft message");
@@ -245,10 +264,7 @@ suite.define(() => {
           { key: storageKey, workspace: WORKSPACE },
         );
         const gateway = await installMockGateway(page, {
-          workspace: WORKSPACE,
-          workspaceGit: false,
-          agentModel: "openai/gpt-4.1",
-          models: [{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }],
+          ...localRepository,
           featureMethods: [
             "projects.list",
             "sessions.create",
@@ -277,9 +293,9 @@ suite.define(() => {
         await pollLocatorText(page.locator("#new-session-project-trigger")).toContain(
           "acme/private-repo",
         );
-        await expect
-          .poll(() => page.locator("#new-session-where-trigger").getAttribute("data-cloud-profile"))
-          .toBe("qa-worker");
+        await pollAttribute(page.locator("#new-session-where-trigger"), "data-cloud-profile").toBe(
+          "qa-worker",
+        );
         await page.locator("#new-session-checkout-trigger").click();
         const branch = checkoutBaseRefInput(page);
         await branch.waitFor();
@@ -307,83 +323,63 @@ suite.define(() => {
   });
 
   it("offers a worktree for a GitHub result before its checkout exists", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        ...(captureUiProofEnabled
-          ? {
-              recordVideo: {
-                dir: path.join(suite.artifactDir, "project-registry"),
-                size: { height: 900, width: 1280 },
-              },
-              viewport: { height: 900, width: 1280 },
-            }
-          : {}),
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          workspace: WORKSPACE,
-          workspaceGit: false,
-          featureMethods: [
-            "chat.metadata",
-            "chat.startup",
-            "projects.add",
-            "projects.list",
-            "projects.searchRemote",
-            "sessions.create",
-          ],
-          methodResponses: {
-            "projects.list": { projects: [] },
-            "projects.searchRemote": remoteSearchResult,
-            "sessions.create": { key: "agent:main:github-worktree-e2e" },
-          },
-        });
-        await page.goto(`${suite.server.baseUrl}new`);
-        await gateway.waitForRequest("projects.list");
-        await page.locator("#new-session-project-trigger").click();
-        const projects = page.locator(".oc-popover.new-session-page__project-popover");
-        await projects
-          .getByRole("searchbox", { name: "Search projects or paste a Git URL" })
-          .fill("openclaw");
-        await projects.getByRole("button", { name: /openclaw\/openclaw/u }).click();
+    await suite.withPage(projectContextOptions(captureUiProofEnabled), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        workspace: WORKSPACE,
+        workspaceGit: false,
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "projects.add",
+          "projects.list",
+          "projects.searchRemote",
+          "sessions.create",
+        ],
+        methodResponses: {
+          "projects.list": { projects: [] },
+          "projects.searchRemote": remoteSearchResult,
+          "sessions.create": { key: "agent:main:github-worktree-e2e" },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("projects.list");
+      await selectRemoteProject(page, "openclaw", /openclaw\/openclaw/u);
 
-        await captureProjectUiProof(suite, page, "github-worktree-direct.png");
-        const checkout = page.locator("#new-session-checkout-trigger");
-        await expect.poll(() => checkout.isVisible()).toBe(true);
-        await pollLocatorText(checkout).toContain("Current checkout");
-        await checkout.click();
-        const checkoutPopover = page.locator(".oc-popover.new-session-page__checkout-popover");
-        await checkoutPopover
-          .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
-          .click();
-        await expect.poll(() => checkout.getAttribute("data-worktree")).toBe("true");
-        await pollLocatorText(checkout.locator(".new-session-page__trigger-label")).toBe(
-          "New worktree from main",
-        );
-        const baseRef = checkoutBaseRefInput(checkoutPopover);
-        expect(await baseRef.getAttribute("placeholder")).toBe("From");
-        expect(await baseRef.inputValue()).toBe("main");
-        expect(await checkoutPopover.locator("datalist option").count()).toBe(0);
-        await captureProjectUiProof(suite, page, "github-worktree-selected.png", {
-          surface: checkoutPopover,
-          content: [baseRef],
-        });
-        await page.locator(".new-session-page__message").fill("inspect the worktree");
-        await page.getByRole("button", { name: "Start session" }).click();
+      await captureProjectUiProof(suite, page, "github-worktree-direct.png");
+      const checkout = page.locator("#new-session-checkout-trigger");
+      await expect.poll(() => checkout.isVisible()).toBe(true);
+      await pollLocatorText(checkout).toContain("Current checkout");
+      await checkout.click();
+      const checkoutPopover = page.locator(".oc-popover.new-session-page__checkout-popover");
+      await checkoutPopover
+        .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
+        .click();
+      await expect.poll(() => checkout.getAttribute("data-worktree")).toBe("true");
+      await pollLocatorText(checkout.locator(".new-session-page__trigger-label")).toBe(
+        "New worktree from main",
+      );
+      const baseRef = checkoutBaseRefInput(checkoutPopover);
+      expect(await baseRef.getAttribute("placeholder")).toBe("From");
+      expect(await baseRef.inputValue()).toBe("main");
+      expect(await checkoutPopover.locator("datalist option").count()).toBe(0);
+      await captureProjectUiProof(suite, page, "github-worktree-selected.png", {
+        surface: checkoutPopover,
+        content: [baseRef],
+      });
+      await page.locator(".new-session-page__message").fill("inspect the worktree");
+      await page.getByRole("button", { name: "Start session" }).click();
 
-        const create = await gateway.waitForRequest("sessions.create");
-        expect(create.params).toMatchObject({
-          projectGitUrl: "https://github.com/openclaw/openclaw.git",
-          worktree: true,
-          message: "inspect the worktree",
-        });
-        expect(create.params).not.toHaveProperty("projectId");
-        expect(create.params).toHaveProperty("worktreeBaseRef", "main");
-        expect(await gateway.getRequests("projects.add")).toHaveLength(0);
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-      },
-    );
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        projectGitUrl: "https://github.com/openclaw/openclaw.git",
+        worktree: true,
+        message: "inspect the worktree",
+      });
+      expect(create.params).not.toHaveProperty("projectId");
+      expect(create.params).toHaveProperty("worktreeBaseRef", "main");
+      expect(await gateway.getRequests("projects.add")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+    });
   });
 
   it.each([
@@ -404,19 +400,9 @@ suite.define(() => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
       ? path.join(suite.artifactDir, "project-registry")
       : undefined;
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      ...(captureUiProofEnabled || artifactDir
-        ? {
-            recordVideo: {
-              dir: path.join(suite.artifactDir, "project-registry"),
-              size: { height: 900, width: 1280 },
-            },
-            viewport: { height: 900, width: 1280 },
-          }
-        : {}),
-    });
+    const context = await suite.browser.newContext(
+      projectContextOptions(Boolean(captureUiProofEnabled || artifactDir)),
+    );
     const page = await context.newPage();
     const sessionKey = "agent:main:cloned-project-e2e";
     const sessionId = "cloned-project-session";
@@ -509,27 +495,11 @@ suite.define(() => {
       historyMessages: [],
       presenceUsers: [{ id: "synthetic-author", name: "Synthetic Author", self: true }],
       inFlightRun: {
-        runId,
+        ...history.inFlightRun,
         startedAt: Date.now(),
-        events: [
-          {
-            runId,
-            sessionKey,
-            seq: 1,
-            stream: "run_status",
-            ts: Date.now(),
-            data: { phase: "preparing_workspace" },
-          },
-        ],
+        events: history.inFlightRun.events.map((event) => ({ ...event, ts: Date.now() })),
       },
-      sessionInfo: {
-        hasActiveRun: true,
-        activeRunIds: [runId],
-        key: sessionKey,
-        sessionId,
-        kind: "direct",
-        status: "running",
-      },
+      sessionInfo: history.sessionInfo,
       featureMethods: [
         "chat.abort",
         "chat.metadata",
@@ -675,9 +645,7 @@ suite.define(() => {
         );
       }
       await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
-      await expect
-        .poll(() => page.locator(".chat-group.user img.chat-message-image").count())
-        .toBe(1);
+      await pollCount(page.locator(".chat-group.user img.chat-message-image")).toBe(1);
       await expect.poll(readImage).toEqual({ inline: true, usable: true });
       const observed = await transition.evaluate(async (sampler) => {
         await new Promise(requestAnimationFrame);

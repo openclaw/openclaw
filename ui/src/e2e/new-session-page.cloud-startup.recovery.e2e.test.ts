@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementPausedRecovery } from "../lib/sessions/session-placement-recovery.ts";
@@ -20,6 +21,8 @@ import {
   ONE_PIXEL_PNG_B64,
   pastePng,
   pollLocatorText,
+  pollValue,
+  pollAttribute,
   replaceGatewayClient,
   waitForCommittedChatRoute,
   waitForGatewayRecoveryScope,
@@ -27,6 +30,61 @@ import {
 
 const suite = createNewSessionPageE2eSuite();
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
+function cloudWorkspaceResponses() {
+  return {
+    "agents.list": createCloudAgentsListResponse(),
+    "environments.list": {
+      environments: [],
+      profiles: [{ id: "aws", providerId: "crabbox" }],
+    },
+    "worktrees.branches": {
+      branches: [{ kind: "local", name: "main" }],
+      defaultBranch: "main",
+      repositoryStatus: "git",
+    },
+  };
+}
+
+async function openCloudDraft(page: Page, gateway: Awaited<ReturnType<typeof installMockGateway>>) {
+  await page.goto(`${suite.server.baseUrl}new`);
+  await gateway.waitForRequest("environments.list");
+  await page.locator("#new-session-where-trigger").click();
+  await page
+    .locator(".oc-popover.new-session-page__where-popover")
+    .getByRole("button", { name: "aws", exact: true })
+    .click();
+}
+
+function readRecovery(page: Page) {
+  return page.evaluate(() => {
+    const key = Object.keys(sessionStorage).find((candidate) =>
+      candidate.startsWith("openclaw.new-session.session-placement-recovery.v1:"),
+    );
+    return key
+      ? (JSON.parse(sessionStorage.getItem(key) ?? "null") as {
+          sessionKey: string;
+          message: string;
+          messageId: string;
+          phase: string;
+          agentId: string;
+          target: { kind: string; profileId: string };
+        })
+      : null;
+  });
+}
+
+async function captureRecovery(page: Page, name: string, content: Locator[]) {
+  if (!captureUiProof) {
+    return;
+  }
+  const file = path.join(suite.artifactDir, name);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(
+    file,
+    await takeControlUiViewportScreenshot(page, page.locator(".shell"), content),
+  );
+}
 
 suite.define(() => {
   it("retries a saved unsent cloud turn on its already-active worker", async () => {
@@ -113,11 +171,8 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       if (captureUiProof) {
         await alert.locator("summary").click();
-        await writeFile(
-          path.join(suite.artifactDir, "late-active-retry-before.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [initialTurn]),
-        );
       }
+      await captureRecovery(page, "late-active-retry-before.png", [initialTurn]);
 
       await retry.click();
       expect(await gateway.waitForRequest("sessions.send")).toMatchObject({
@@ -142,15 +197,7 @@ suite.define(() => {
       ]) {
         expect(await gateway.getRequests(method)).toHaveLength(0);
       }
-      if (captureUiProof) {
-        await writeFile(
-          path.join(suite.artifactDir, "late-active-retry-after.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-            initialTurn,
-            composer,
-          ]),
-        );
-      }
+      await captureRecovery(page, "late-active-retry-after.png", [initialTurn, composer]);
     });
   });
 
@@ -240,11 +287,7 @@ suite.define(() => {
             },
           ],
         },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
+        "worktrees.branches": cloudWorkspaceResponses()["worktrees.branches"],
         "sessions.dispatch": {
           placement: { state: "active", environmentId: "worker-create-recovery" },
         },
@@ -269,9 +312,9 @@ suite.define(() => {
       await expect.poll(() => place.getAttribute("data-test-picker-ready")).toBe("true");
       await page.locator('[data-value="cloud:aws"]').click();
       await page.locator('[data-value="machine:fast"]').click();
-      await expect
-        .poll(() => page.locator("#new-session-where-trigger").getAttribute("data-machine-class"))
-        .toBe("fast");
+      await pollAttribute(page.locator("#new-session-where-trigger"), "data-machine-class").toBe(
+        "fast",
+      );
       await page.locator(".new-session-page__message").fill(message);
       await pastePng(page.locator(".new-session-page__message"));
       await expectPastedPngImage(page.getByRole("img", { name: "pixel.png" }));
@@ -309,9 +352,7 @@ suite.define(() => {
       });
       await page.reload();
       await gateway.waitForRequest("environments.list");
-      await expect
-        .poll(() => page.locator(".new-session-page__message").inputValue())
-        .toBe(message);
+      await pollValue(page.locator(".new-session-page__message")).toBe(message);
       await pollLocatorText(
         page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
       ).toBe("aws");
@@ -326,14 +367,9 @@ suite.define(() => {
           )
           .toBe("false");
       } finally {
-        if (captureUiProof) {
-          await writeFile(
-            path.join(suite.artifactDir, "personal-account-recovery.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-              page.locator(".new-session-page__message"),
-            ]),
-          );
-        }
+        await captureRecovery(page, "personal-account-recovery.png", [
+          page.locator(".new-session-page__message"),
+        ]);
       }
       await page.getByRole("button", { name: "Start session" }).click();
       const retryCreate = await gateway.waitForRequest("sessions.create");
@@ -381,41 +417,18 @@ suite.define(() => {
       deferredMethods: ["sessions.create", "sessions.delete"],
       workspaceGit: true,
       methodResponses: {
-        "agents.list": createCloudAgentsListResponse(),
-        "environments.list": {
-          environments: [],
-          profiles: [{ id: "aws", providerId: "crabbox" }],
-        },
+        ...cloudWorkspaceResponses(),
         "sessions.patch": { ok: true },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
       },
     });
 
-    const readRecovery = () =>
-      page.evaluate(() => {
-        const key = Object.keys(sessionStorage).find((candidate) =>
-          candidate.startsWith("openclaw.new-session.session-placement-recovery.v1:"),
-        );
-        return key ? (JSON.parse(sessionStorage.getItem(key) ?? "null") as unknown) : null;
-      });
-
     try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
-      await page
-        .locator(".oc-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "aws", exact: true })
-        .click();
+      await openCloudDraft(page, gateway);
       await page.locator(".new-session-page__message").fill(message);
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       const sessionKey = (create.params as { key: string }).key;
-      const staged = await readRecovery();
+      const staged = await readRecovery(page);
 
       await page.evaluate(() => {
         history.pushState(null, "", "new?agent=cloud");
@@ -453,7 +466,7 @@ suite.define(() => {
         target: { kind: "profile"; profileId: string };
         agentId: string;
       };
-      expect(await readRecovery()).toMatchObject({
+      expect(await readRecovery(page)).toMatchObject({
         sessionKey,
         messageId: stagedIdentity.messageId,
         message,
@@ -492,16 +505,7 @@ suite.define(() => {
         deferredMethods: ["sessions.create"],
         workspaceGit: true,
         methodResponses: {
-          "agents.list": createCloudAgentsListResponse(),
-          "environments.list": {
-            environments: [],
-            profiles: [{ id: "aws", providerId: "crabbox" }],
-          },
-          "worktrees.branches": {
-            branches: [{ kind: "local", name: "main" }],
-            defaultBranch: "main",
-            repositoryStatus: "git",
-          },
+          ...cloudWorkspaceResponses(),
           "sessions.patch": { ok: true },
           "sessions.delete": { deleted: true },
           "sessions.dispatch": {
@@ -510,30 +514,9 @@ suite.define(() => {
           "sessions.send": { runId: "run-replacement-create", status: "started" },
         },
       });
-      const readRecovery = () =>
-        page.evaluate(() => {
-          const key = Object.keys(sessionStorage).find((candidate) =>
-            candidate.startsWith("openclaw.new-session.session-placement-recovery.v1:"),
-          );
-          return key
-            ? (JSON.parse(sessionStorage.getItem(key) ?? "null") as {
-                sessionKey: string;
-                message: string;
-                messageId: string;
-                phase: string;
-                target: { kind: string; profileId: string };
-              })
-            : null;
-        });
 
       try {
-        await page.goto(`${suite.server.baseUrl}new`);
-        await gateway.waitForRequest("environments.list");
-        await page.locator("#new-session-where-trigger").click();
-        await page
-          .locator(".oc-popover.new-session-page__where-popover")
-          .getByRole("button", { name: "aws", exact: true })
-          .click();
+        await openCloudDraft(page, gateway);
         const composer = page.locator(".new-session-page__message");
         await composer.fill(message);
         const start = page.getByRole("button", { name: "Start session" });
@@ -549,13 +532,7 @@ suite.define(() => {
         await interrupted.waitFor();
         await expect.poll(() => composer.isDisabled()).toBe(true);
         await expect.poll(() => start.isDisabled()).toBe(true);
-        if (captureUiProof) {
-          await mkdir(path.join(suite.artifactDir, "cloud-session-recovery"), { recursive: true });
-          await writeFile(
-            path.join(suite.artifactDir, "cloud-session-recovery", "01-interrupted.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [interrupted]),
-          );
-        }
+        await captureRecovery(page, "cloud-session-recovery/01-interrupted.png", [interrupted]);
         const reset = interrupted.getByRole("button", { name: "Reset", exact: true });
         expect(await reset.count()).toBe(1);
         await reset.click();
@@ -564,13 +541,8 @@ suite.define(() => {
         await expect.poll(() => composer.isEnabled()).toBe(true);
         await expect.poll(() => composer.inputValue()).toBe(message);
         await expect.poll(() => start.isEnabled()).toBe(true);
-        expect(await readRecovery()).toBeNull();
-        if (captureUiProof) {
-          await writeFile(
-            path.join(suite.artifactDir, "cloud-session-recovery", "02-recovered.png"),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [composer]),
-          );
-        }
+        expect(await readRecovery(page)).toBeNull();
+        await captureRecovery(page, "cloud-session-recovery/02-recovered.png", [composer]);
 
         const previousCreateCount = (await gateway.getRequests("sessions.create")).length;
         await gateway.deferNext("sessions.create");
@@ -580,7 +552,7 @@ suite.define(() => {
         });
         const nextKey = String((nextCreate.params as { key?: string }).key);
         expect(nextKey).not.toBe(abandonedKey);
-        const nextRecovery = await readRecovery();
+        const nextRecovery = await readRecovery(page);
         expect(nextRecovery).toMatchObject({
           sessionKey: nextKey,
           message,
@@ -618,12 +590,14 @@ suite.define(() => {
           page.locator(".new-session-page__starting .chat-working-indicator"),
         ).toContain("Starting");
         expect(await composer.count()).toBe(0);
-        await expect.poll(readRecovery).toMatchObject({
-          sessionKey: nextKey,
-          messageId: nextRecovery?.messageId,
-          message,
-          phase: "creating",
-        });
+        await expect
+          .poll(() => readRecovery(page))
+          .toMatchObject({
+            sessionKey: nextKey,
+            messageId: nextRecovery?.messageId,
+            message,
+            phase: "creating",
+          });
 
         await gateway.resolveDeferred("sessions.create", { key: nextKey });
         expect(await gateway.waitForRequest("sessions.dispatch")).toMatchObject({
@@ -650,16 +624,7 @@ suite.define(() => {
       deferredMethods: ["sessions.send"],
       workspaceGit: true,
       methodResponses: {
-        "agents.list": createCloudAgentsListResponse(),
-        "environments.list": {
-          environments: [],
-          profiles: [{ id: "aws", providerId: "crabbox" }],
-        },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
+        ...cloudWorkspaceResponses(),
         "sessions.create": { key: sessionKey, sessionId: "session-storage-recovery" },
         "sessions.dispatch": {
           ok: true,
@@ -701,13 +666,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
-      await page
-        .locator(".oc-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "aws", exact: true })
-        .click();
+      await openCloudDraft(page, gateway);
       await page.evaluate(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
         Storage.prototype.setItem = function (key: string, value: string) {
@@ -762,13 +721,7 @@ suite.define(() => {
       await expect.poll(() => followUp.isDisabled()).toBe(false);
       await followUp.fill("Unsent follow-up while checking delivery");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      const recovery = await page.evaluate(() => {
-        const key = Object.keys(sessionStorage).find((candidate) =>
-          candidate.startsWith("openclaw.new-session.session-placement-recovery.v1:"),
-        );
-        return key ? JSON.parse(sessionStorage.getItem(key) ?? "null") : null;
-      });
-      expect(recovery).toMatchObject({
+      expect(await readRecovery(page)).toMatchObject({
         phase: "paused",
         reason: "unconfirmed",
         messageId: (firstSend.params as { idempotencyKey: string }).idempotencyKey,

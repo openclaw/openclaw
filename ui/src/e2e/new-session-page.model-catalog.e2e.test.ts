@@ -2,6 +2,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
@@ -15,10 +16,69 @@ import {
   installMockGateway,
   navigateInApp,
   pollLocatorText,
+  pollCount,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const luna: ModelCatalogEntry = {
+  available: true,
+  id: "gpt-5.6-luna",
+  name: "GPT-5.6 Luna",
+  provider: "openai",
+};
+
+function identityScenario(identity: boolean) {
+  return {
+    ...(identity ? { presenceUsers: [{ id: "person-a", name: "Sample Person", self: true }] } : {}),
+    featureMethods: [
+      "chat.metadata",
+      "chat.startup",
+      "sessions.create",
+      ...(identity ? ["users.prefs.get", "users.prefs.set"] : []),
+    ],
+  };
+}
+
+async function savePreference(
+  page: Page,
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  storageKey: string,
+  preference: object,
+  identity: boolean,
+) {
+  await page.evaluate(
+    ({ key, value }) => localStorage.setItem(key, JSON.stringify({ agents: { main: value } })),
+    { key: storageKey, value: preference },
+  );
+  if (identity) {
+    await gateway.setMethodResponse("users.prefs.get", {
+      status: "ok",
+      entries: { "new-session.migration.v1": true, "new-session.v1:main": preference },
+    });
+    await gateway.emitGatewayEvent("users.prefs.changed", { profileId: "person-a" });
+  }
+}
+
+async function captureCatalog(page: Page, name: string, content?: Locator[]) {
+  if (!captureUiProof) {
+    return;
+  }
+  const file = path.join(suite.artifactDir, name);
+  await mkdir(path.dirname(file), { recursive: true });
+  if (content) {
+    await writeFile(
+      file,
+      await takeControlUiViewportScreenshot(
+        page,
+        page.locator(".chat-controls__model-picker > [data-anchored-overlay]"),
+        content,
+      ),
+    );
+  } else {
+    await page.screenshot({ animations: "disabled", path: file });
+  }
+}
 
 function catalogDiscoveryRequests(
   requests: Array<{ params?: unknown }>,
@@ -143,15 +203,7 @@ suite.define(() => {
           agentModel: "fixture/one",
           models: [model, { ...model, id: "two", name: "Retained two" }],
           operatorScopes: ["operator.admin", "operator.read", "operator.write"],
-          ...(identity
-            ? { presenceUsers: [{ id: "person-a", name: "Sample Person", self: true }] }
-            : {}),
-          featureMethods: [
-            "chat.metadata",
-            "chat.startup",
-            "sessions.create",
-            ...(identity ? ["users.prefs.get", "users.prefs.set"] : []),
-          ],
+          ...identityScenario(identity),
           methodResponses: {
             "users.prefs.get": { status: "ok", entries: { "new-session.migration.v1": true } },
             "agents.list": {
@@ -185,18 +237,7 @@ suite.define(() => {
         await expect.poll(() => root.locator("[data-chat-model-option]").count()).toBe(2);
         await navigateInApp(page, "agents-home");
         await expect.poll(() => root.count()).toBe(0);
-        await page.evaluate(
-          ({ key, value }) =>
-            localStorage.setItem(key, JSON.stringify({ agents: { main: value } })),
-          { key: storageKey, value: preference },
-        );
-        if (identity) {
-          await gateway.setMethodResponse("users.prefs.get", {
-            status: "ok",
-            entries: { "new-session.migration.v1": true, "new-session.v1:main": preference },
-          });
-          await gateway.emitGatewayEvent("users.prefs.changed", { profileId: "person-a" });
-        }
+        await savePreference(page, gateway, storageKey, preference, identity);
         const reads = (await gateway.getRequests("models.list")).length;
         await gateway.deferNext("models.list");
         await gateway.emitGatewayEvent("chat.metadata.changed", {});
@@ -283,15 +324,7 @@ suite.define(() => {
           const gateway = await installMockGateway(page, {
             agentModel: "fixture/one",
             models,
-            ...(identity
-              ? { presenceUsers: [{ id: "person-a", name: "Sample Person", self: true }] }
-              : {}),
-            featureMethods: [
-              "chat.metadata",
-              "chat.startup",
-              "sessions.create",
-              ...(identity ? ["users.prefs.get", "users.prefs.set"] : []),
-            ],
+            ...identityScenario(identity),
             methodResponses: {
               "users.prefs.get": { status: "ok", entries: { "new-session.migration.v1": true } },
               "sessions.catalog.list": { catalogs: [] },
@@ -317,18 +350,7 @@ suite.define(() => {
           expect(await gateway.getRequests("models.list")).toHaveLength(reads);
           await navigateInApp(page, "agents-home");
           await expect.poll(() => root.count()).toBe(0);
-          await page.evaluate(
-            ({ key, value }) =>
-              localStorage.setItem(key, JSON.stringify({ agents: { main: value } })),
-            { key: storageKey, value: preference },
-          );
-          if (identity) {
-            await gateway.setMethodResponse("users.prefs.get", {
-              status: "ok",
-              entries: { "new-session.migration.v1": true, "new-session.v1:main": preference },
-            });
-            await gateway.emitGatewayEvent("users.prefs.changed", { profileId: "person-a" });
-          }
+          await savePreference(page, gateway, storageKey, preference, identity);
           await gateway.deferNext("models.list");
           await gateway.emitGatewayEvent("chat.metadata.changed", {});
           await navigateInApp(page, "new-session", "?agent=main");
@@ -340,12 +362,7 @@ suite.define(() => {
           await expect
             .poll(() => root.locator(".chat-controls__model-menu").isVisible())
             .toBe(true);
-          if (captureUiProof) {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(suite.artifactDir, `retained-${width}-pending.png`),
-            });
-          }
+          await captureCatalog(page, `retained-${width}-pending.png`);
           await expect.poll(() => rows.count()).toBe(2);
           expect(await gateway.getRequests("connect")).toHaveLength(1);
           expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
@@ -358,9 +375,7 @@ suite.define(() => {
           await gateway.resolveDeferred("models.list", {
             models: [models[0], { ...models[1], id: "three", name: "Retained three" }],
           });
-          await expect
-            .poll(() => root.locator('[data-chat-model-option="fixture/three"]').count())
-            .toBe(1);
+          await pollCount(root.locator('[data-chat-model-option="fixture/three"]')).toBe(1);
           expect(await root.locator('[data-chat-model-option="fixture/two"]').count()).toBe(0);
           expect(await search.inputValue()).toBe("Retained");
           expect(await search.evaluate((element) => element === document.activeElement)).toBe(true);
@@ -372,12 +387,7 @@ suite.define(() => {
           expect(menu!.y + menu!.height).toBeLessThanOrEqual(height);
           expect(await composer.boundingBox()).toEqual(before);
           expect(await gateway.getRequests("users.prefs.set")).toHaveLength(0);
-          if (captureUiProof) {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(suite.artifactDir, `retained-${width}-replacement.png`),
-            });
-          }
+          await captureCatalog(page, `retained-${width}-replacement.png`);
           await page.keyboard.press("Escape");
           expect(await search.inputValue()).toBe("");
           expect(await search.evaluate((element) => element === document.activeElement)).toBe(true);
@@ -472,12 +482,7 @@ suite.define(() => {
           .poll(() => page.locator(".chat-controls__model-picker").textContent())
           .toContain("No models available");
         await expect.poll(accountFitsMenu).toBe(true);
-        if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(suite.artifactDir, "personal-account-01-no-default.png"),
-          });
-        }
+        await captureCatalog(page, "personal-account-01-no-default.png");
         await accountTrigger.click();
         await gateway.deferNext("models.list", { authProfileId: account.authProfileId });
         await picker
@@ -495,12 +500,7 @@ suite.define(() => {
         await expect.poll(() => start.getAttribute("aria-disabled")).toBe("false");
         await expect.poll(() => page.locator("[data-chat-model-catalog-state]").count()).toBe(0);
         await expect.poll(accountFitsMenu).toBe(true);
-        if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(suite.artifactDir, "personal-account-02-selected.png"),
-          });
-        }
+        await captureCatalog(page, "personal-account-02-selected.png");
         await accountTrigger.click();
         await picker.getByText("Automatic (new-chat default)", { exact: true }).click();
         await expect.poll(() => start.getAttribute("aria-disabled")).toBe("true");
@@ -541,15 +541,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         agentModel: "openai/gpt-5.6-luna",
         heldMethods: ["models.list"],
-        models: [
-          {
-            available: true,
-            id: "gpt-5.6-luna",
-            name: "GPT-5.6 Luna",
-            provider: "openai",
-            reasoning: true,
-          },
-        ],
+        models: [{ ...luna, reasoning: true }],
       });
 
       await page.goto(`${suite.server.baseUrl}new`);
@@ -611,12 +603,7 @@ suite.define(() => {
           "sessions.create": { key: "agent:main:context-window", runStarted: true },
         },
         models: [
-          {
-            available: true,
-            id: "gpt-5.6-luna",
-            name: "GPT-5.6 Luna",
-            provider: "openai",
-          },
+          luna,
           {
             available: true,
             id: "claude-fable-5",
@@ -705,9 +692,7 @@ suite.define(() => {
           .toBe(true);
         expect(await page.locator("[data-chat-model-option]").count()).toBe(0);
         if (startup) {
-          await expect
-            .poll(() => page.getByText("Models unavailable", { exact: true }).count())
-            .toBeGreaterThan(0);
+          await pollCount(page.getByText("Models unavailable", { exact: true })).toBeGreaterThan(0);
           expect(await gateway.getRequests("models.list")).toHaveLength(1);
         }
         await gateway.setMethodResponse("models.list", { commands: [], models });
@@ -718,9 +703,7 @@ suite.define(() => {
         }
         await modelSelect.click();
         await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
-        await expect
-          .poll(() => page.locator("[data-chat-model-option]").count())
-          .toBe(models.length);
+        await pollCount(page.locator("[data-chat-model-option]")).toBe(models.length);
         expect(await page.locator("[data-chat-model-catalog-state]").count()).toBe(0);
         if (startup) {
           await expect
@@ -760,14 +743,7 @@ suite.define(() => {
           : {}),
       },
       async ({ page }) => {
-        const models = [
-          {
-            available: true,
-            id: "gpt-5.6-luna",
-            name: "GPT-5.6 Luna",
-            provider: "openai",
-          },
-        ];
+        const models = [luna];
         const unavailable = {
           __mockError: {
             code: "UNAVAILABLE",
@@ -826,16 +802,9 @@ suite.define(() => {
         ).toBe("GPT-5.6 Luna");
         expect(await page.getByText("Models unavailable", { exact: true }).count()).toBe(0);
         expect(await gateway.getRequests("models.list")).toHaveLength(1);
-        if (captureUiProof) {
-          await writeFile(
-            path.join(suite.artifactDir, "new-session-catalog-retry", "01-cli-agents-retry.png"),
-            await takeControlUiViewportScreenshot(
-              page,
-              page.locator(".chat-controls__model-picker > [data-anchored-overlay]"),
-              [errorState],
-            ),
-          );
-        }
+        await captureCatalog(page, "new-session-catalog-retry/01-cli-agents-retry.png", [
+          errorState,
+        ]);
 
         await gateway.setMethodResponse("sessions.catalog.list", {
           cases: [
@@ -879,20 +848,9 @@ suite.define(() => {
           page.locator('[data-chat-model-target="anthropic"] .chat-controls__model-option-name'),
         ).toBe("Claude Code");
         expect(await errorState.count()).toBe(0);
-        if (captureUiProof) {
-          await writeFile(
-            path.join(
-              suite.artifactDir,
-              "new-session-catalog-retry",
-              "02-cli-agents-recovered.png",
-            ),
-            await takeControlUiViewportScreenshot(
-              page,
-              page.locator(".chat-controls__model-picker > [data-anchored-overlay]"),
-              [page.locator('[data-chat-model-target="anthropic"]')],
-            ),
-          );
-        }
+        await captureCatalog(page, "new-session-catalog-retry/02-cli-agents-recovered.png", [
+          page.locator('[data-chat-model-target="anthropic"]'),
+        ]);
       },
     );
   });
