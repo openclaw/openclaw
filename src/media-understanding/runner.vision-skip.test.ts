@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { resolvePluginRegistryLoadCacheKey } from "../plugins/loader.js";
 import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -164,13 +165,27 @@ async function applyImage(
   return expectDefined(result, "image context");
 }
 
-function imageProvider(id: string): MediaUnderstandingProvider {
-  return {
-    id,
-    capabilities: ["image"],
-    describeImage: async ({ model }) => ({ text: plantedVisionSentinel, model }),
-  };
+function imageProvider(
+  id: string,
+  describeImage: MediaUnderstandingProvider["describeImage"] = async ({ model }) => ({
+    text: plantedVisionSentinel,
+    model,
+  }),
+): MediaUnderstandingProvider {
+  return { id, capabilities: ["image"], describeImage };
 }
+
+function imageConfig(models: MediaUnderstandingModelConfig[]): OpenClawConfig {
+  return { tools: { media: { models } } };
+}
+function configuredProvider(id: string, baseUrl: string, apiKey?: string): OpenClawConfig {
+  return { models: { providers: { [id]: { baseUrl, apiKey, models: [] } } } };
+}
+const describeSentinel = () =>
+  vi.fn(async ({ model }: { model: string }) => ({
+    text: plantedVisionSentinel,
+    model,
+  }));
 
 function imageRegistry(provider: MediaUnderstandingProvider) {
   return new Map([[provider.id, provider]]);
@@ -189,15 +204,9 @@ function expectImageOutput(
 }
 
 const activeVisionModel = { provider: "openai", model: "gpt-4.1" };
-const explicitImageConfig: OpenClawConfig = {
-  tools: {
-    media: {
-      models: [
-        { provider: "openrouter", model: "google/gemini-2.5-flash", capabilities: ["image"] },
-      ],
-    },
-  },
-};
+const explicitImageConfig = imageConfig([
+  { provider: "openrouter", model: "google/gemini-2.5-flash", capabilities: ["image"] },
+]);
 
 describe("runCapability image skip", () => {
   beforeAll(async () => {
@@ -219,13 +228,10 @@ describe("runCapability image skip", () => {
       provider: "minimax",
       input: ["text", "image"],
     });
-    const describeImage = vi.fn(async ({ model }: { model: string }) => ({
-      text: plantedVisionSentinel,
-      model,
-    }));
+    const describeImage = describeSentinel();
     const ctx = await applyImage({
       cfg: { agents: { defaults: { imageModel: { primary: "minimax/MiniMax-M3" } } } },
-      providers: { minimax: { id: "minimax", capabilities: ["image"], describeImage } },
+      providers: { minimax: imageProvider("minimax", describeImage) },
       activeModel: { provider: "minimax", model: "MiniMax-M3" },
     });
     expect(findImageDecision(ctx)).toMatchObject({ outcome: "skipped", nativeVisionActive: true });
@@ -322,14 +328,11 @@ describe("runCapability image skip", () => {
   });
 
   it("uses explicit image models even when the active model supports vision", async () => {
-    const describeImage = vi.fn(async ({ model }: { model: string }) => ({
-      text: plantedVisionSentinel,
-      model,
-    }));
+    const describeImage = describeSentinel();
     const ctx = await applyImage(
       {
         cfg: explicitImageConfig,
-        providers: { openrouter: { id: "openrouter", capabilities: ["image"], describeImage } },
+        providers: { openrouter: imageProvider("openrouter", describeImage) },
         activeModel: activeVisionModel,
       },
       4,
@@ -351,28 +354,20 @@ describe("runCapability image skip", () => {
   it("lets per-request image prompts override entry prompts", async () => {
     let seenPrompt: string | undefined;
     const result = await runImage({
-      cfg: {
-        tools: {
-          media: {
-            models: [
-              {
-                provider: "openrouter",
-                model: "google/gemini-2.5-flash",
-                prompt: "entry prompt",
-                capabilities: ["image"],
-              },
-            ],
-          },
+      cfg: imageConfig([
+        {
+          provider: "openrouter",
+          model: "google/gemini-2.5-flash",
+          prompt: "entry prompt",
+          capabilities: ["image"],
         },
-      },
-      providerRegistry: imageRegistry({
-        id: "openrouter",
-        capabilities: ["image"],
-        describeImage: async ({ prompt, model }) => {
+      ]),
+      providerRegistry: imageRegistry(
+        imageProvider("openrouter", async ({ prompt, model }) => {
           seenPrompt = prompt;
           return { text: "request prompt ok", model };
-        },
-      }),
+        }),
+      ),
       request: { prompt: "Use this request prompt" },
       activeModel: activeVisionModel,
     });
@@ -397,16 +392,14 @@ describe("runCapability image skip", () => {
           },
         },
       },
-      providerRegistry: imageRegistry({
-        id: "ollama",
-        capabilities: ["image"],
-        describeImage: async ({ model }) => {
+      providerRegistry: imageRegistry(
+        imageProvider("ollama", async ({ model }) => {
           if (model === "moondream") {
             throw new Error("primary blocked");
           }
           return { text: `ok ${model}`, model };
-        },
-      }),
+        }),
+      ),
     });
     expectImageOutput(result, "ollama", "qwen2.5vl:7b", "ok qwen2.5vl:7b");
     expect(result.decision.attachments[0]?.attempts).toEqual([
@@ -495,25 +488,13 @@ describe("runCapability image skip", () => {
   it("auto-selects configured OpenRouter image providers with a resolved model", async () => {
     let seenModel: string | undefined;
     const result = await runImage({
-      cfg: {
-        models: {
-          providers: {
-            openrouter: {
-              apiKey: "test-openrouter-key",
-              baseUrl: "https://openrouter.ai/api/v1",
-              models: [],
-            },
-          },
-        },
-      },
-      providerRegistry: imageRegistry({
-        id: "openrouter",
-        capabilities: ["image"],
-        describeImage: async ({ model }) => {
+      cfg: configuredProvider("openrouter", "https://openrouter.ai/api/v1", "test-openrouter-key"),
+      providerRegistry: imageRegistry(
+        imageProvider("openrouter", async ({ model }) => {
           seenModel = model;
           return { text: "openrouter ok", model };
-        },
-      }),
+        }),
+      ),
     });
     expectImageOutput(result, "openrouter", "auto", "openrouter ok");
     expect(seenModel).toBe("auto");
@@ -521,17 +502,7 @@ describe("runCapability image skip", () => {
 
   it("skips configured image providers without an auto-resolvable model", async () => {
     const result = await runImage({
-      cfg: {
-        models: {
-          providers: {
-            "custom-image": {
-              apiKey: "test-custom-key",
-              baseUrl: "https://image.example/v1",
-              models: [],
-            },
-          },
-        },
-      },
+      cfg: configuredProvider("custom-image", "https://image.example/v1", "test-custom-key"),
       providerRegistry: imageRegistry(imageProvider("custom-image")),
     });
     expect(result.outputs).toHaveLength(0);

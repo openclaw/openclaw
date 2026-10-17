@@ -53,6 +53,14 @@ async function runAudioEntry(
   return result;
 }
 
+function expectExec(
+  command: string,
+  args: unknown[],
+  options: unknown = { timeoutMs: 60_000, maxBuffer: CLI_OUTPUT_MAX_BUFFER },
+) {
+  expect(runExecMock).toHaveBeenCalledExactlyOnceWith(command, args, options);
+}
+
 function runModels({ ctx, media, cache }: Fixture, models: MediaUnderstandingModelConfig[]) {
   return runCapability({
     capability: "audio",
@@ -181,11 +189,7 @@ describe("media-understanding CLI audio entry", () => {
         },
         { type: "cli", provider: "working-transcribe", outcome: "success" },
       ]);
-      expect(runExecMock).toHaveBeenCalledExactlyOnceWith(
-        "working-transcribe",
-        [expect.any(String)],
-        expect.any(Object),
-      );
+      expectExec("working-transcribe", [expect.any(String)], expect.any(Object));
     });
   });
 
@@ -193,7 +197,7 @@ describe("media-understanding CLI audio entry", () => {
     await withAudioFixture("openclaw-cli-custom-input", async (fixture) => {
       const args = ["describe", path.basename(fixture.mediaPath)];
       expect((await runFixture(fixture, { command: "agy", args }))?.text).toBe("cli transcript");
-      expect(runExecMock).toHaveBeenCalledExactlyOnceWith(
+      expectExec(
         "agy",
         args,
         expect.objectContaining({ cwd: path.dirname(await fs.realpath(fixture.mediaPath)) }),
@@ -201,56 +205,39 @@ describe("media-understanding CLI audio entry", () => {
     });
   });
 
-  it.each<[string, string | undefined, Overrides["request"], string, string]>([
-    ["capability", undefined, undefined, "fr", "entry prompt"],
-  ])(
-    "uses %s language and prompt precedence",
-    async (_source, language, request, expected, prompt) => {
-      const verbose = vi.spyOn(globals, "shouldLogVerbose").mockReturnValue(true);
-      const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
-      try {
-        await runAudioEntry(
-          {
-            command: "mock-transcriber",
-            args: [
-              "--prompt",
-              "{{Prompt}}",
-              "--language",
-              "{{Language}}",
-              "--file",
-              "{{MediaPath}}",
-            ],
-            prompt: "entry prompt",
-            language,
-          },
-          { config: { prompt: "configured prompt", language: "fr" }, request },
-        );
-        expect(runExecMock).toHaveBeenCalledExactlyOnceWith(
-          "mock-transcriber",
-          ["--prompt", prompt, "--language", expected, "--file", expect.any(String)],
-          { timeoutMs: 60_000, maxBuffer: CLI_OUTPUT_MAX_BUFFER },
-        );
-        expect(JSON.stringify(log.mock.calls)).not.toContain(prompt);
-      } finally {
-        log.mockRestore();
-        verbose.mockRestore();
-      }
-    },
-  );
+  it("uses capability language and entry prompt precedence without logging prompts", async () => {
+    const verbose = vi.spyOn(globals, "shouldLogVerbose").mockReturnValue(true);
+    const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+    try {
+      await runAudioEntry(
+        {
+          command: "mock-transcriber",
+          args: ["--prompt", "{{Prompt}}", "--language", "{{Language}}", "--file", "{{MediaPath}}"],
+          prompt: "entry prompt",
+        },
+        { config: { prompt: "configured prompt", language: "fr" } },
+      );
+      expectExec("mock-transcriber", [
+        "--prompt",
+        "entry prompt",
+        "--language",
+        "fr",
+        "--file",
+        expect.any(String),
+      ]);
+      expect(JSON.stringify(log.mock.calls)).not.toContain("entry prompt");
+    } finally {
+      log.mockRestore();
+      verbose.mockRestore();
+    }
+  });
 
   it("substitutes an unset language as an empty argument instead of dropping it", async () => {
-    // No language at any level leaves {{Language}} unpopulated. Templates substitute
-    // an empty string rather than dropping the argument, so a flag-style pair keeps
-    // its flag and gains an empty value; CLI args stay literal by contract.
     await runAudioEntry({
       command: "mock-transcriber",
       args: ["--language", "{{Language}}", "--file", "{{AttachmentPath}}"],
     });
-    expect(runExecMock).toHaveBeenCalledExactlyOnceWith(
-      "mock-transcriber",
-      ["--language", "", "--file", expect.any(String)],
-      { timeoutMs: 60_000, maxBuffer: CLI_OUTPUT_MAX_BUFFER },
-    );
+    expectExec("mock-transcriber", ["--language", "", "--file", expect.any(String)]);
   });
 
   it.each(transcriptFileCases)("honors $name transcript file authority", async (testCase) => {
@@ -398,20 +385,17 @@ describe("media-understanding CLI audio entry", () => {
     await expect(fs.stat(scratchDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each([{ name: "default srt output", extra: [] }])(
-    "preserves parakeet stdout for $name without a file contract",
-    async ({ extra }) => {
-      const result = await withEnvAsync(
-        { PARAKEET_OUTPUT_FORMAT: undefined, PARAKEET_OUTPUT_TEMPLATE: undefined },
-        async () =>
-          await runAudioEntry({
-            command: "parakeet-mlx",
-            args: ["{{MediaPath}}", "--output-dir", "{{OutputDir}}", ...extra],
-          }),
-      );
-      expect(result?.text).toBe("cli transcript");
-    },
-  );
+  it("preserves parakeet stdout for default srt output without a file contract", async () => {
+    const result = await withEnvAsync(
+      { PARAKEET_OUTPUT_FORMAT: undefined, PARAKEET_OUTPUT_TEMPLATE: undefined },
+      () =>
+        runAudioEntry({
+          command: "parakeet-mlx",
+          args: ["{{MediaPath}}", "--output-dir", "{{OutputDir}}"],
+        }),
+    );
+    expect(result?.text).toBe("cli transcript");
+  });
 
   it("surfaces unexpected transcript file read errors", async () => {
     runExecMock.mockImplementationOnce(async (_command, args: string[]) => {

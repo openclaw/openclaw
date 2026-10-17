@@ -1,9 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { ProviderAuthError } from "../agents/model-auth-runtime-shared.js";
-import type { OpenClawConfig } from "../config/types.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createWhisperExecutable } from "./local-audio.test-support.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
@@ -22,15 +19,24 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
 function registry(providers: Record<string, MediaUnderstandingProvider>) {
   return new Map(Object.entries(providers));
 }
-function audioConfig(extra: Partial<OpenClawConfig> = {}): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        openai: { baseUrl: "https://api.openai.com/v1", apiKey: "test-key", models: [] },
-      },
-    },
-    ...extra,
-  };
+function audioProvider(
+  id: string,
+  options: Omit<MediaUnderstandingProvider, "id">,
+): MediaUnderstandingProvider {
+  return { id, capabilities: ["audio"], ...options };
+}
+const remoteProviders = {
+  openai: { baseUrl: "https://api.openai.com/v1", models: [] },
+  mistral: { baseUrl: "https://api.mistral.ai/v1", models: [] },
+};
+const activeModel = { provider: "openai", model: "chat-model" };
+function withLocalTools(run: (binDir: string) => Promise<void>) {
+  return withTestDir({ prefix: "openclaw-auto-prepare-" }, (binDir) =>
+    withEnvAsync(
+      { PATH: binDir, SHERPA_ONNX_MODEL_DIR: undefined, WHISPER_CPP_MODEL: undefined },
+      () => run(binDir),
+    ),
+  );
 }
 type RunParams = Parameters<typeof runCapability>[0];
 async function runAudio(
@@ -70,14 +76,12 @@ describe("runCapability audio", () => {
     try {
       const result = await runAudio({
         cfg: {},
-        activeModel: { provider: "openai", model: "chat-model" },
+        activeModel,
         providerRegistry: registry({
-          openai: {
-            id: "openai",
-            capabilities: ["audio"],
+          openai: audioProvider("openai", {
             defaultModels: { audio: "transcription-default" },
             transcribeAudioWithContext,
-          },
+          }),
         }),
       });
       expect(result.decision.outcome).toBe("success");
@@ -101,12 +105,7 @@ describe("runCapability audio", () => {
       const transcribeAudio = vi.fn(async () => ({ text: "authored fallback transcript" }));
       const result = await runAudio({
         cfg: {
-          models: {
-            providers: {
-              openai: { baseUrl: "https://api.openai.com/v1", models: [] },
-              mistral: { baseUrl: "https://api.mistral.ai/v1", models: [] },
-            },
-          },
+          models: { providers: remoteProviders },
           ...(explicit
             ? {
                 tools: {
@@ -120,16 +119,14 @@ describe("runCapability audio", () => {
               }
             : {}),
         },
-        activeModel: { provider: "openai", model: "chat-model" },
+        activeModel,
         providerRegistry: registry({
-          openai: {
-            id: "openai",
-            capabilities: ["audio"],
+          openai: audioProvider("openai", {
             transcribeAudioWithContext: async () => {
               throw rejected;
             },
-          },
-          mistral: { id: "mistral", capabilities: ["audio"], transcribeAudio },
+          }),
+          mistral: audioProvider("mistral", { transcribeAudio }),
         }),
       });
       expect(result.decision.outcome).toBe(explicit ? "success" : "failed");
@@ -147,7 +144,6 @@ describe("runCapability audio", () => {
   );
 
   it("continues to local transcription when subscription preparation rejects the request", async () => {
-    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-prepare-fallback-"));
     const rejected = new Error(
       "This subscription route cannot use the configured endpoint or prompt.",
     );
@@ -158,29 +154,25 @@ describe("runCapability audio", () => {
         return { ok: false as const, error: rejected };
       },
     );
-    try {
-      await createWhisperExecutable(binDir);
-      await withAudioFixture("openclaw-auto-prepare-fallback", async ({ ctx, media, cache }) => {
-        const result = await withEnvAsync(
-          { PATH: binDir, SHERPA_ONNX_MODEL_DIR: undefined, WHISPER_CPP_MODEL: undefined },
-          () =>
-            runCapability({
-              capability: "audio",
-              ctx,
-              media,
-              attachments: cache,
-              cfg: {
-                models: {
-                  providers: { openai: { baseUrl: "https://custom.example/v1", models: [] } },
-                },
-                tools: { media: { audio: { prompt: "Preserve names." } } },
-              },
-              activeModel: { provider: "openai", model: "chat-model" },
-              providerRegistry: registry({
-                openai: { id: "openai", capabilities: ["audio"], transcribeAudioWithContext },
-              }),
-            }),
-        );
+    await withAudioFixture("openclaw-auto-prepare-fallback", async ({ ctx, media, cache }) => {
+      await withLocalTools(async (binDir) => {
+        await createWhisperExecutable(binDir);
+        const result = await runCapability({
+          capability: "audio",
+          ctx,
+          media,
+          attachments: cache,
+          cfg: {
+            models: {
+              providers: { openai: { baseUrl: "https://custom.example/v1", models: [] } },
+            },
+            tools: { media: { audio: { prompt: "Preserve names." } } },
+          },
+          activeModel,
+          providerRegistry: registry({
+            openai: audioProvider("openai", { transcribeAudioWithContext }),
+          }),
+        });
         expect(result.decision.outcome).toBe("success");
         expect(result.outputs[0]?.text).toBe("mocked-local-whisper");
         expect(result.decision.attachments[0]?.attempts).toContainEqual(
@@ -192,40 +184,28 @@ describe("runCapability audio", () => {
         );
         expect(transcribeAudioWithContext).toHaveBeenCalledTimes(1);
       });
-    } finally {
-      await fs.rm(binDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("keeps missing credentials unavailable without recording a failed attempt", async () => {
-    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auto-prepare-no-auth-"));
     const transcribeAudioWithContext = vi.fn(async () => ({
       ok: false as const,
       error: new ProviderAuthError("missing-provider-auth", "openai", "No configured credentials"),
     }));
-    try {
-      await withEnvAsync(
-        { PATH: binDir, SHERPA_ONNX_MODEL_DIR: undefined, WHISPER_CPP_MODEL: undefined },
-        async () => {
-          const result = await runAudio({
-            cfg: {},
-            providerRegistry: registry({
-              openai: {
-                id: "openai",
-                capabilities: ["audio"],
-                autoPriority: { audio: 20 },
-                transcribeAudioWithContext,
-              },
-            }),
-          });
-          expect(result.decision.outcome).toBe("skipped");
-          expect(result.decision.attachments[0]?.attempts).toEqual([]);
-          expect(transcribeAudioWithContext).toHaveBeenCalledTimes(1);
-        },
-      );
-    } finally {
-      await fs.rm(binDir, { recursive: true, force: true });
-    }
+    await withLocalTools(async () => {
+      const result = await runAudio({
+        cfg: {},
+        providerRegistry: registry({
+          openai: audioProvider("openai", {
+            autoPriority: { audio: 20 },
+            transcribeAudioWithContext,
+          }),
+        }),
+      });
+      expect(result.decision.outcome).toBe("skipped");
+      expect(result.decision.attachments[0]?.attempts).toEqual([]);
+      expect(transcribeAudioWithContext).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("skips OpenAI audio auto-selection when only ChatGPT OAuth is available", async () => {
@@ -248,26 +228,17 @@ describe("runCapability audio", () => {
     try {
       const result = await runAudio({
         cfg: {
-          models: {
-            providers: {
-              openai: { baseUrl: "https://api.openai.com/v1", models: [] },
-              mistral: { baseUrl: "https://api.mistral.ai/v1", models: [] },
-            },
-          },
+          models: { providers: remoteProviders },
         },
         providerRegistry: registry({
-          openai: {
-            id: "openai",
-            capabilities: ["audio"],
+          openai: audioProvider("openai", {
             defaultModels: { audio: "gpt-4o-transcribe" },
             transcribeAudio: openai,
-          },
-          mistral: {
-            id: "mistral",
-            capabilities: ["audio"],
+          }),
+          mistral: audioProvider("mistral", {
             defaultModels: { audio: "voxtral-mini-latest" },
             transcribeAudio: mistral,
-          },
+          }),
         }),
       });
       expect(result.decision.outcome).toBe("success");
@@ -305,12 +276,14 @@ describe("runCapability audio", () => {
       async ({ ctx, media, cache }) => {
         const result = await runCapability({
           capability: "audio",
-          cfg: audioConfig(),
+          cfg: {
+            models: { providers: { openai: { ...remoteProviders.openai, apiKey: "test-key" } } },
+          },
           ctx,
           media,
           attachments: cache,
           providerRegistry: buildProviderRegistry({
-            openai: { id: "openai", capabilities: ["audio"], transcribeAudio },
+            openai: audioProvider("openai", { transcribeAudio }),
           }),
         });
         expect(transcribeAudio).not.toHaveBeenCalled();

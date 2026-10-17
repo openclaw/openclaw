@@ -1,5 +1,3 @@
-// Media-understanding runtime tests cover file APIs, provider dispatch, disabled
-// state, cleanup, remote references, and direct model-backed image calls.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
@@ -12,20 +10,22 @@ import {
   transcribeAudioFile,
   resolveAudioInputBudget,
 } from "./runtime.js";
-import type {
-  MediaAttachment,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-} from "./types.js";
+import type { MediaAttachment, MediaUnderstandingProvider } from "./types.js";
 
 const mocks = vi.hoisted(() => {
-  const cleanup = vi.fn(async () => {});
-  const getBuffer = vi.fn(async () => ({
+  const remoteImage = {
     buffer: Buffer.from("remote-image"),
     fileName: "photo.png",
     mime: "image/png",
     size: 12,
-  }));
+  };
+  const optimize = async (params: { buffer: Buffer; fileName?: string; mime?: string }) => ({
+    buffer: Buffer.concat([Buffer.from("optimized:"), params.buffer]),
+    fileName: params.fileName,
+    mime: params.mime,
+  });
+  const cleanup = vi.fn(async () => {});
+  const getBuffer = vi.fn(async () => remoteImage);
   return {
     buildProviderRegistry: vi.fn(() => new Map()),
     createMediaAttachmentCache: vi.fn(() => ({ cleanup, getBuffer })),
@@ -35,13 +35,8 @@ const mocks = vi.hoisted(() => {
     getMediaUnderstandingProvider: vi.fn(),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
     convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
-    optimizeImageDescriptionInput: vi.fn(
-      async (params: { buffer: Buffer; fileName?: string; mime?: string }) => ({
-        buffer: Buffer.concat([Buffer.from("optimized:"), params.buffer]),
-        fileName: params.fileName,
-        mime: params.mime,
-      }),
-    ),
+    optimizeImageDescriptionInput: vi.fn(optimize),
+    defaults: { remoteImage, optimize },
     runCapability: vi.fn(),
     cleanup,
     getBuffer,
@@ -86,6 +81,31 @@ function requireRunCapabilityRequest(): unknown {
   return call[0];
 }
 
+function imageOutput(text: string) {
+  return {
+    kind: "image.description" as const,
+    attachmentIndex: 0,
+    provider: "vision-plugin",
+    model: "vision-v1",
+    text,
+  };
+}
+const localImage = { filePath: "/tmp/sample.jpg", mime: "image/jpeg", cfg: {} };
+const structuredDefaults = {
+  input: [
+    {
+      type: "image" as const,
+      buffer: Buffer.from("image-bytes"),
+      fileName: "fact.png",
+      mime: "image/png",
+    },
+  ],
+  instructions: "Return JSON.",
+  provider: "vision-plugin",
+  model: "vision-json",
+  cfg: {},
+};
+
 const IMAGE_MODEL_DEFAULTS = {
   provider: "zai",
   model: "glm-4.6v",
@@ -96,38 +116,19 @@ const IMAGE_MODEL_DEFAULTS = {
 
 describe("media-understanding runtime", () => {
   afterEach(() => {
-    mocks.buildProviderRegistry.mockReset();
-    mocks.createMediaAttachmentCache.mockReset();
+    const { defaults, ...resettable } = mocks;
+    for (const mock of Object.values(resettable)) {
+      mock.mockReset();
+    }
     mocks.createMediaAttachmentCache.mockReturnValue({
       cleanup: mocks.cleanup,
       getBuffer: mocks.getBuffer,
     });
-    mocks.normalizeMediaAttachments.mockReset();
-    mocks.normalizeMediaProviderId.mockReset();
-    mocks.buildMediaUnderstandingRegistry.mockReset();
-    mocks.getMediaUnderstandingProvider.mockReset();
-    mocks.describeImageWithModel.mockReset();
     mocks.describeImageWithModel.mockResolvedValue({ text: "generic image ok", model: "vision" });
-    mocks.convertHeicToJpeg.mockReset();
     mocks.convertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
-    mocks.optimizeImageDescriptionInput.mockClear();
-    mocks.optimizeImageDescriptionInput.mockImplementation(
-      async (params: { buffer: Buffer; fileName?: string; mime?: string }) => ({
-        buffer: Buffer.concat([Buffer.from("optimized:"), params.buffer]),
-        fileName: params.fileName,
-        mime: params.mime,
-      }),
-    );
-    mocks.runCapability.mockReset();
-    mocks.cleanup.mockReset();
+    mocks.optimizeImageDescriptionInput.mockImplementation(defaults.optimize);
     mocks.cleanup.mockResolvedValue(undefined);
-    mocks.getBuffer.mockReset();
-    mocks.getBuffer.mockResolvedValue({
-      buffer: Buffer.from("remote-image"),
-      fileName: "photo.png",
-      mime: "image/png",
-      size: 12,
-    });
+    mocks.getBuffer.mockResolvedValue(defaults.remoteImage);
   });
 
   it("returns disabled state without loading providers", async () => {
@@ -138,17 +139,8 @@ describe("media-understanding runtime", () => {
     await expect(
       runMediaUnderstandingFile({
         capability: "image",
-        filePath: "/tmp/sample.jpg",
-        mime: "image/jpeg",
-        cfg: {
-          tools: {
-            media: {
-              image: {
-                enabled: false,
-              },
-            },
-          },
-        } as OpenClawConfig,
+        ...localImage,
+        cfg: { tools: { media: { image: { enabled: false } } } },
         agentDir: "/tmp/agent",
       }),
     ).resolves.toEqual({
@@ -171,13 +163,7 @@ describe("media-understanding runtime", () => {
   });
 
   it("passes media scope context through file media understanding requests", async () => {
-    const output: MediaUnderstandingOutput = {
-      kind: "image.description",
-      attachmentIndex: 0,
-      provider: "vision-plugin",
-      model: "vision-v1",
-      text: "image ok",
-    };
+    const output = imageOutput("image ok");
     mocks.normalizeMediaAttachments.mockReturnValue([
       { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
     ]);
@@ -186,9 +172,7 @@ describe("media-understanding runtime", () => {
     });
 
     await describeImageFile({
-      filePath: "/tmp/sample.jpg",
-      mime: "image/jpeg",
-      cfg: {} as OpenClawConfig,
+      ...localImage,
       scopeContext: {
         sessionKey: "agent:main:telegram:dm:123",
         channel: "telegram",
@@ -212,64 +196,42 @@ describe("media-understanding runtime", () => {
     });
   });
 
-  it("passes workspaceDir through audio and video file helpers", async () => {
-    mocks.runCapability.mockResolvedValue({
-      outputs: [],
-      decision: { capability: "video", outcome: "skipped", attachments: [] },
-    });
-    mocks.normalizeMediaAttachments.mockReturnValue([
-      { index: 0, path: "/tmp/sample.mp4", mime: "video/mp4" },
-    ]);
-
-    await describeVideoFile({
-      filePath: "/tmp/sample.mp4",
-      mime: "video/mp4",
-      cfg: {} as OpenClawConfig,
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-    });
-
-    expect(requireRunCapabilityRequest()).toMatchObject({
-      capability: "video",
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-    });
-
-    mocks.runCapability.mockReset();
-    mocks.runCapability.mockResolvedValue({
-      outputs: [],
-      decision: { capability: "audio", outcome: "skipped", attachments: [] },
-    });
-    mocks.normalizeMediaAttachments.mockReturnValue([
-      { index: 0, path: "/tmp/sample.ogg", mime: "audio/ogg" },
-    ]);
-
-    await transcribeAudioFile({
+  it.each([
+    { capability: "video", filePath: "/tmp/sample.mp4", mime: "video/mp4", run: describeVideoFile },
+    {
+      capability: "audio",
       filePath: "/tmp/sample.ogg",
       mime: "audio/ogg",
-      cfg: {} as OpenClawConfig,
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-    });
-
-    expect(requireRunCapabilityRequest()).toMatchObject({
-      capability: "audio",
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-    });
-  });
+      run: transcribeAudioFile,
+    },
+  ] as const)(
+    "passes workspaceDir through $capability file helpers",
+    async ({ capability, filePath, mime, run }) => {
+      mocks.runCapability.mockResolvedValue({
+        outputs: [],
+        decision: { capability, outcome: "skipped", attachments: [] },
+      });
+      mocks.normalizeMediaAttachments.mockReturnValue([{ index: 0, path: filePath, mime }]);
+      await run({
+        filePath,
+        mime,
+        cfg: {},
+        agentDir: "/tmp/agent",
+        workspaceDir: "/tmp/workspace",
+      });
+      expect(requireRunCapabilityRequest()).toMatchObject({
+        capability,
+        agentDir: "/tmp/agent",
+        workspaceDir: "/tmp/workspace",
+      });
+    },
+  );
 
   it("passes per-request image prompts into media understanding config", async () => {
     const media = [{ index: 0, url: "https://example.com/photo.png", mime: "image/png" }];
     const providerRegistry = new Map();
     const cache = { cleanup: mocks.cleanup, getBuffer: mocks.getBuffer };
-    const output: MediaUnderstandingOutput = {
-      kind: "image.description",
-      attachmentIndex: 0,
-      provider: "vision-plugin",
-      model: "vision-v1",
-      text: "button count ok",
-    };
+    const output = imageOutput("button count ok");
     mocks.buildProviderRegistry.mockReturnValue(providerRegistry);
     mocks.createMediaAttachmentCache.mockReturnValue(cache);
     mocks.normalizeMediaAttachments.mockReturnValue(media);
@@ -439,17 +401,7 @@ describe("media-understanding runtime", () => {
     mocks.getMediaUnderstandingProvider.mockReturnValue({ id: "vision-plugin", extractStructured });
 
     await extractStructuredWithModel({
-      input: [
-        {
-          type: "image",
-          buffer: Buffer.from("image-bytes"),
-          fileName: "fact.png",
-          mime: "image/png",
-        },
-      ],
-      instructions: "Return JSON.",
-      provider: "vision-plugin",
-      model: "vision-json",
+      ...structuredDefaults,
       timeoutMs: Number.MAX_SAFE_INTEGER,
       cfg: {} as OpenClawConfig,
     });
@@ -462,11 +414,8 @@ describe("media-understanding runtime", () => {
   it("rejects text-only structured extraction before provider lookup", async () => {
     await expect(
       extractStructuredWithModel({
+        ...structuredDefaults,
         input: [{ type: "text", text: "Extract the fact." }],
-        instructions: "Return JSON.",
-        provider: "vision-plugin",
-        model: "vision-json",
-        cfg: {} as OpenClawConfig,
       }),
     ).rejects.toThrow("Structured extraction requires at least one image input.");
 
@@ -481,18 +430,7 @@ describe("media-understanding runtime", () => {
 
     await expect(
       extractStructuredWithModel({
-        input: [
-          {
-            type: "image",
-            buffer: Buffer.from("image-bytes"),
-            fileName: "fact.png",
-            mime: "image/png",
-          },
-        ],
-        instructions: "Return JSON.",
-        provider: "vision-plugin",
-        model: "vision-json",
-        cfg: {} as OpenClawConfig,
+        ...structuredDefaults,
       }),
     ).rejects.toThrow("Provider does not support structured extraction: vision-plugin");
   });
