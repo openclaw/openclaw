@@ -14,7 +14,12 @@ import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
 } from "./accounts.js";
-import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
+import {
+  getWhatsAppApprovalApprovers,
+  hasExplicitWhatsAppApprovers,
+  normalizeWhatsAppApproverId,
+  whatsappApprovalAuth,
+} from "./approval-auth.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppMessagingTarget } from "./normalize-target.js";
 
 function isWhatsAppApprovalTransportEnabled(params: {
@@ -36,16 +41,28 @@ const whatsappApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
     normalizeTo: normalizeWhatsAppMessagingTarget,
     resolveApprovers: getWhatsAppApprovalApprovers,
     // Group conversations require explicit approvers; implicit same-chat auth
-    // would otherwise let any participant approve the request.
-    isOriginTargetAllowed: ({ cfg, accountId, target }) =>
-      !isWhatsAppGroupJid(target.to) || getWhatsAppApprovalApprovers({ cfg, accountId }).length > 0,
+    // would otherwise let any participant approve the request. With named
+    // approvers (`execApprovals.approvers`), a direct chat only gets the prompt
+    // when its peer may approve it; otherwise the prompt goes to the approvers'
+    // own chats instead of sitting with someone who cannot act on it.
+    isOriginTargetAllowed: ({ cfg, accountId, target }) => {
+      const approvers = getWhatsAppApprovalApprovers({ cfg, accountId });
+      if (isWhatsAppGroupJid(target.to)) {
+        return approvers.length > 0;
+      }
+      if (!hasExplicitWhatsAppApprovers({ cfg, accountId }) || approvers.includes("*")) {
+        return true;
+      }
+      const peer = normalizeWhatsAppApproverId(target.to);
+      return peer !== undefined && approvers.includes(peer);
+    },
   },
   describeExecApprovalSetup: ({ accountId }) => {
     const prefix =
       accountId && accountId !== "default"
         ? `channels.whatsapp.accounts.${accountId}`
         : "channels.whatsapp";
-    return `WhatsApp supports native exec approvals for this account when \`approvals.exec.enabled\` is true and the route allows WhatsApp. Link WhatsApp and keep the gateway running; configure \`${prefix}.allowFrom\` to restrict approvers.`;
+    return `WhatsApp supports native exec approvals for this account when \`approvals.exec.enabled\` is true and the route allows WhatsApp. Link WhatsApp and keep the gateway running; configure \`${prefix}.execApprovals.approvers\` to name who may approve (it falls back to \`${prefix}.allowFrom\`).`;
   },
   render: {
     exec: {
@@ -91,4 +108,42 @@ function buildWhatsAppPendingPayload(
   };
 }
 
-export const whatsappApprovalCapability: ChannelApprovalCapability = whatsappApproval.capability;
+/**
+ * With named approvers, the generic forwarder must not deliver a session-route card to a direct
+ * chat whose peer may not approve it either: the native handler already sends that request to the
+ * approvers' own chats, and the peer could not act on the card. Explicit targets are untouched.
+ */
+function isNonApproverSessionFallback(params: {
+  cfg: OpenClawConfig;
+  target: { channel: string; to: string; accountId?: string | null; source?: "session" | "target" };
+}): boolean {
+  if (params.target.source !== "session" || params.target.channel !== "whatsapp") {
+    return false;
+  }
+  const accountId = params.target.accountId ?? undefined;
+  if (!hasExplicitWhatsAppApprovers({ cfg: params.cfg, accountId })) {
+    return false;
+  }
+  const to = normalizeWhatsAppMessagingTarget(params.target.to) ?? params.target.to;
+  if (isWhatsAppGroupJid(to)) {
+    return false;
+  }
+  const approvers = getWhatsAppApprovalApprovers({ cfg: params.cfg, accountId });
+  if (approvers.includes("*")) {
+    return false;
+  }
+  const peer = normalizeWhatsAppApproverId(to);
+  return peer === undefined || !approvers.includes(peer);
+}
+
+const baseDelivery = whatsappApproval.capability.delivery;
+
+export const whatsappApprovalCapability: ChannelApprovalCapability = {
+  ...whatsappApproval.capability,
+  delivery: {
+    ...baseDelivery,
+    shouldBlockForwardingFallback: (params) =>
+      baseDelivery?.shouldBlockForwardingFallback?.(params) === true ||
+      isNonApproverSessionFallback(params),
+  },
+};
