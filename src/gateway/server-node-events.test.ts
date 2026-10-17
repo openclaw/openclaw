@@ -11,6 +11,7 @@ import {
   prepareGatewaySuspend,
   resumeGatewaySuspend,
 } from "../infra/gateway-suspend-coordinator.js";
+import { ApnsRegistrationPairingChangedError } from "../infra/push-apns-store.errors.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -22,15 +23,22 @@ import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js"
 import { handleNodeEvent } from "./server-node-events.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
+const { buildSessionLookup, makeNodeClient, runtimeMocks } =
+  await import("./server-node-events.test-support.js");
 const {
-  buildSessionLookup,
-  makeNodeClient,
-  loadOrCreateProcessDeviceIdentityMock,
-  parseMessageWithAttachmentsMock,
-  persistInboundImagesForTranscriptMock,
-  runtimeMocks,
-  updatePairedDevicePresenceMock,
-} = await import("./server-node-events.test-support.js");
+  enqueueSystemEvent: enqueueSystemEventMock,
+  requestHeartbeat: requestHeartbeatMock,
+  agentCommandFromIngress: agentCommandMock,
+  upsertSessionEntryCore: upsertSessionEntryMock,
+  loadSessionEntry: loadSessionEntryMock,
+  registerApnsRegistration: registerApnsRegistrationVi,
+  normalizeChannelId: normalizeChannelIdVi,
+  sendDurableMessageBatch: sendDurableMessageBatchMock,
+  loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
+  parseMessageWithAttachments: parseMessageWithAttachmentsMock,
+  persistInboundImagesForTranscript: persistInboundImagesForTranscriptMock,
+  updatePairedDevicePresence: updatePairedDevicePresenceMock,
+} = runtimeMocks;
 
 const sentDurableMessageBatchResult: Extract<DurableMessageBatchSendResult, { status: "sent" }> = {
   status: "sent",
@@ -50,15 +58,6 @@ function waitForFast<T>(callback: () => T | Promise<T>) {
   return vi.waitFor(callback, { interval: 1 });
 }
 
-const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
-const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
-const agentCommandMock = runtimeMocks.agentCommandFromIngress;
-const upsertSessionEntryMock = runtimeMocks.upsertSessionEntryCore;
-const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
-const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
-const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
-const sendDurableMessageBatchMock = runtimeMocks.sendDurableMessageBatch;
-
 beforeEach(() => {
   resetGatewayWorkAdmission();
   enqueueSystemEventMock.mockReset().mockReturnValue(true);
@@ -72,6 +71,26 @@ beforeEach(() => {
 });
 
 afterEach(resetGatewayWorkAdmission);
+
+function delayedCurrentness(initialChecks: number, signalAt = initialChecks + 1) {
+  const entered = createDeferred();
+  const decision = createDeferred<boolean>();
+  let checks = 0;
+  const check = vi.fn(() => {
+    checks += 1;
+    if (checks <= initialChecks) {
+      return true;
+    }
+    if (checks === signalAt) {
+      entered.resolve();
+    }
+    return decision.promise;
+  });
+  return { check, entered: entered.promise, resolve: decision.resolve };
+}
+
+const prepareSuspend = (requestId: string) =>
+  prepareGatewaySuspend({ requestId, pauseScheduling: vi.fn(), resumeScheduling: vi.fn() });
 
 async function runAdmittedNodeEvent(
   ctx: NodeEventContext,
@@ -88,24 +107,14 @@ async function runAdmittedNodeEvent(
 }
 
 function expectSuspendBusyWithRootWork(requestId: string): void {
-  expect(
-    prepareGatewaySuspend({
-      requestId,
-      pauseScheduling: vi.fn(),
-      resumeScheduling: vi.fn(),
-    }),
-  ).toMatchObject({
+  expect(prepareSuspend(requestId)).toMatchObject({
     status: "busy",
     blockers: expect.arrayContaining([expect.objectContaining({ kind: "root-request", count: 1 })]),
   });
 }
 
 function expectSuspendReady(requestId: string): void {
-  const result = prepareGatewaySuspend({
-    requestId,
-    pauseScheduling: vi.fn(),
-    resumeScheduling: vi.fn(),
-  });
+  const result = prepareSuspend(requestId);
   expect(result).toMatchObject({ status: "ready", activeCount: 0, blockers: [] });
   if (result.status === "ready") {
     expect(resumeGatewaySuspend(result.suspensionId)).toMatchObject({
@@ -278,9 +287,7 @@ describe("node exec events", () => {
     async (inTransaction) => {
       const warn = vi.fn();
       if (inTransaction) {
-        registerApnsRegistrationVi.mockRejectedValueOnce(
-          new runtimeMocks.ApnsRegistrationPairingChangedError(),
-        );
+        registerApnsRegistrationVi.mockRejectedValueOnce(new ApnsRegistrationPairingChangedError());
       }
       const result = await handleNodeEvent(
         { ...buildCtx(), logGateway: { warn } },
@@ -376,19 +383,8 @@ describe("voice transcript events", () => {
       persistedEntry = patch;
       return patch;
     });
-    const detachedChecksStarted = createDeferred();
-    const detachedAdmission = createDeferred<boolean>();
-    let checkCount = 0;
-    const isConnectionCurrent = vi.fn(() => {
-      checkCount += 1;
-      if (checkCount <= 2) {
-        return true;
-      }
-      if (checkCount === 4) {
-        detachedChecksStarted.resolve();
-      }
-      return detachedAdmission.promise;
-    });
+    const gate = delayedCurrentness(2, 4);
+    const isConnectionCurrent = gate.check;
     const payload = {
       text: "one command for a new session",
       eventId: "new-session-replay",
@@ -398,8 +394,8 @@ describe("voice transcript events", () => {
     const firstReplay = emit("voice.transcript", payload, { isConnectionCurrent });
     const duplicateReplay = emit("voice.transcript", payload, { isConnectionCurrent });
     await Promise.all([firstReplay, duplicateReplay]);
-    await detachedChecksStarted.promise;
-    detachedAdmission.resolve(true);
+    await gate.entered;
+    gate.resolve(true);
     await waitForFast(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
 
     expect(upsertSessionEntryMock).toHaveBeenCalledTimes(1);
@@ -411,17 +407,7 @@ describe("voice transcript events", () => {
   it("rechecks a queued replay after an earlier stale reservation is released", async () => {
     const addChatRun = vi.fn();
     const ctx = buildCtx({ addChatRun });
-    const staleCheckStarted = createDeferred();
-    const staleAdmission = createDeferred<boolean>();
-    let staleCheckCount = 0;
-    const isStaleConnectionCurrent = vi.fn(() => {
-      staleCheckCount += 1;
-      if (staleCheckCount === 1) {
-        return true;
-      }
-      staleCheckStarted.resolve();
-      return staleAdmission.promise;
-    });
+    const stale = delayedCurrentness(1);
     let replayCurrent = true;
     const isReplayConnectionCurrent = vi.fn(() => replayCurrent);
     const payload = {
@@ -430,9 +416,9 @@ describe("voice transcript events", () => {
     };
 
     await handleNodeEvent(ctx, "node-stale-queued-voice", nodeEvent("voice.transcript", payload), {
-      isConnectionCurrent: isStaleConnectionCurrent,
+      isConnectionCurrent: stale.check,
     });
-    await staleCheckStarted.promise;
+    await stale.entered;
     await handleNodeEvent(
       ctx,
       "node-replay-invalidated-while-queued",
@@ -442,7 +428,7 @@ describe("voice transcript events", () => {
     await waitForFast(() => expect(isReplayConnectionCurrent).toHaveBeenCalledTimes(2));
 
     replayCurrent = false;
-    staleAdmission.resolve(false);
+    stale.resolve(false);
     await waitForFast(() => expect(isReplayConnectionCurrent).toHaveBeenCalledTimes(3));
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
 
@@ -952,85 +938,66 @@ describe("agent request events", () => {
     expect(updatePairedDevicePresenceMock).toHaveBeenCalledTimes(1);
   });
 
-  it("stores host stats on the current connection without Accessibility or prompt changes", async () => {
-    const registry = new NodeRegistry();
-    const client = makeNodeClient("stats-connection", "stats-node");
-    const session = registry.register(client, { pairingIdentity: "stats-identity" });
-    const broadcast = vi.fn();
-    const ctx: NodeEventContext = {
-      ...buildCtx(),
-      broadcast,
-      updateNodeHostStats: (params) => registry.updateHostStats(params),
-    };
-    const stats = {
-      cpuCount: 8,
-      loadAverage: [1.5, 1, 0.5],
-      memoryTotalBytes: 8192,
-      memoryFreeBytes: 4096,
-      diskTotalBytes: 32768,
-      diskAvailableBytes: 16384,
-    };
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(100_000);
-    setActiveNodeContexts([{ nodeId: "active-computer" }]);
-    try {
-      await expect(
-        handleNodeEvent(ctx, session.nodeId, nodeEvent("node.host.stats", stats), {
-          connId: client.connId,
-          presenceAllowed: false,
-        }),
-      ).resolves.toEqual(eventResult("node.host.stats", "updated", true));
-      expect(session.hostStats).toEqual({ ...stats, updatedAtMs: 100_000 });
-      expect(broadcast).toHaveBeenCalledExactlyOnceWith(
-        "node.hostStats",
-        { nodeId: session.nodeId, hostStats: { ...stats, updatedAtMs: 100_000 } },
-        { dropIfSlow: true },
-      );
-      expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "active-computer" });
-      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-      expect(updatePairedDevicePresenceMock).not.toHaveBeenCalled();
-    } finally {
-      nowSpy.mockRestore();
-      setActiveNodeContexts([]);
-      registry.unregister(client.connId);
-    }
-  });
-
-  it.each(["stale", "invalidated"] as const)(
-    "rejects host stats from a %s connection without replacing the live snapshot",
+  it.each(["current", "stale", "invalidated"] as const)(
+    "handles host stats from a %s connection without changing activity or the live snapshot",
     async (connection) => {
       const registry = new NodeRegistry();
       const client = makeNodeClient("stats-connection", "stats-node");
       const session = registry.register(client, { pairingIdentity: "stats-identity" });
-      const stats = { cpuCount: 4, memoryTotalBytes: 8192, memoryFreeBytes: 4096 };
-      registry.updateHostStats({
-        nodeId: session.nodeId,
-        connId: client.connId,
-        stats,
-        observedAtMs: 100,
+      const broadcast = vi.fn();
+      const { emit } = nodeFixture(session.nodeId, {
+        broadcast,
+        updateNodeHostStats: (params) => registry.updateHostStats(params),
       });
+      const current = connection === "current";
+      const stats = current
+        ? {
+            cpuCount: 8,
+            loadAverage: [1.5, 1, 0.5],
+            memoryTotalBytes: 8192,
+            memoryFreeBytes: 4096,
+            diskTotalBytes: 32768,
+            diskAvailableBytes: 16384,
+          }
+        : { cpuCount: 4, memoryTotalBytes: 8192, memoryFreeBytes: 4096 };
+      if (!current) {
+        registry.updateHostStats({
+          nodeId: session.nodeId,
+          connId: client.connId,
+          stats,
+          observedAtMs: 100,
+        });
+      }
       if (connection === "invalidated") {
         registry.invalidateConnectionForPairingChange(client.connId);
       }
-      const broadcast = vi.fn();
-      const ctx: NodeEventContext = {
-        ...buildCtx(),
-        broadcast,
-        updateNodeHostStats: (params) => registry.updateHostStats(params),
-      };
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(100_000);
+      setActiveNodeContexts([{ nodeId: "active-computer" }]);
       try {
         await expect(
-          handleNodeEvent(
-            ctx,
-            session.nodeId,
-            nodeEvent("node.host.stats", { ...stats, memoryFreeBytes: 1024 }),
-            {
-              connId: connection === "stale" ? "retired-connection" : client.connId,
-            },
-          ),
-        ).resolves.toEqual(eventResult("node.host.stats", "stale_connection"));
-        expect(session.hostStats).toEqual({ ...stats, updatedAtMs: 100 });
-        expect(broadcast).not.toHaveBeenCalled();
+          emit("node.host.stats", current ? stats : { ...stats, memoryFreeBytes: 1024 }, {
+            connId: connection === "stale" ? "retired-connection" : client.connId,
+            presenceAllowed: false,
+          }),
+        ).resolves.toEqual(
+          eventResult("node.host.stats", current ? "updated" : "stale_connection", current),
+        );
+        expect(session.hostStats).toEqual({ ...stats, updatedAtMs: current ? 100_000 : 100 });
+        if (current) {
+          expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+            "node.hostStats",
+            { nodeId: session.nodeId, hostStats: { ...stats, updatedAtMs: 100_000 } },
+            { dropIfSlow: true },
+          );
+        } else {
+          expect(broadcast).not.toHaveBeenCalled();
+        }
+        expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "active-computer" });
+        expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+        expect(updatePairedDevicePresenceMock).not.toHaveBeenCalled();
       } finally {
+        nowSpy.mockRestore();
+        setActiveNodeContexts([]);
         registry.unregister(client.connId);
       }
     },
@@ -1054,79 +1021,48 @@ describe("agent request events", () => {
     },
   );
 
-  it("updates authenticated accessibility-backed node activity without a system event", async () => {
-    const broadcast = vi.fn();
-    const updateNodePresenceActivity = vi.fn(() => ({
-      lastActiveAtMs: 90_000,
-      presenceUpdatedAtMs: 100_000,
-    }));
-    const ctx: NodeEventContext = {
-      ...buildCtx(),
-      broadcast,
-      updateNodePresenceActivity,
-    };
-    const result = await handleNodeEvent(
-      ctx,
-      "mac-node",
-      nodeEvent("node.presence.activity", { idleSeconds: 10 }),
-      { connId: "conn-1", deviceId: "mac-node", presenceAllowed: true },
-    );
-
-    expect(result).toEqual(eventResult("node.presence.activity", "updated", true));
-    expect(updateNodePresenceActivity).toHaveBeenCalledWith({
-      nodeId: "mac-node",
-      connId: "conn-1",
-      idleSeconds: 10,
-    });
-    expect(broadcast).toHaveBeenCalledWith(
-      "node.presence",
-      { nodeId: "mac-node", lastActiveAtMs: 90_000, presenceUpdatedAtMs: 100_000 },
-      { dropIfSlow: true },
-    );
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects node activity without the advertised accessibility permission", async () => {
-    const updateNodePresenceActivity = vi.fn();
-    const ctx: NodeEventContext = { ...buildCtx(), updateNodePresenceActivity };
-    const result = await handleNodeEvent(
-      ctx,
-      "mac-node",
-      nodeEvent("node.presence.activity", { idleSeconds: 0 }),
-      { connId: "conn-1", deviceId: "mac-node", presenceAllowed: false },
-    );
-
-    expect(result).toEqual(eventResult("node.presence.activity", "permission_required"));
-    expect(updateNodePresenceActivity).not.toHaveBeenCalled();
-  });
-
-  it("clears authenticated node activity without requiring Accessibility", async () => {
-    const broadcast = vi.fn();
-    const clearNodePresenceActivity = vi.fn(() => true);
-    const ctx: NodeEventContext = {
-      ...buildCtx(),
-      broadcast,
-      clearNodePresenceActivity,
-    };
-    const result = await handleNodeEvent(
-      ctx,
-      "mac-node",
-      nodeEvent("node.presence.activity", { action: "clear" }),
-      { connId: "conn-1", deviceId: "mac-node", presenceAllowed: false },
-    );
-
-    expect(result).toEqual(eventResult("node.presence.activity", "cleared", true));
-    expect(clearNodePresenceActivity).toHaveBeenCalledWith({
-      nodeId: "mac-node",
-      connId: "conn-1",
-    });
-    expect(broadcast).toHaveBeenCalledWith(
-      "node.presence",
-      { nodeId: "mac-node", lastActiveAtMs: null, presenceUpdatedAtMs: null },
-      { dropIfSlow: true },
-    );
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["updated", { idleSeconds: 10 }, true],
+    ["permission_required", { idleSeconds: 0 }, false],
+    ["cleared", { action: "clear" }, false],
+  ] as const)(
+    "handles authenticated node activity: %s",
+    async (reason, payload, presenceAllowed) => {
+      const activity = { lastActiveAtMs: 90_000, presenceUpdatedAtMs: 100_000 };
+      const broadcast = vi.fn();
+      const updateNodePresenceActivity = vi.fn(() => activity);
+      const clearNodePresenceActivity = vi.fn(() => true);
+      const { emit } = nodeFixture("mac-node", {
+        broadcast,
+        updateNodePresenceActivity,
+        clearNodePresenceActivity,
+      });
+      const allowed = reason !== "permission_required";
+      expect(
+        await emit("node.presence.activity", payload, {
+          connId: "conn-1",
+          deviceId: "mac-node",
+          presenceAllowed,
+        }),
+      ).toEqual(eventResult("node.presence.activity", reason, allowed));
+      const identity = { nodeId: "mac-node", connId: "conn-1" };
+      expect(updateNodePresenceActivity.mock.calls).toEqual(
+        reason === "updated" ? [[{ ...identity, idleSeconds: 10 }]] : [],
+      );
+      expect(clearNodePresenceActivity.mock.calls).toEqual(
+        reason === "cleared" ? [[identity]] : [],
+      );
+      const timestamps =
+        reason === "updated" ? activity : { lastActiveAtMs: null, presenceUpdatedAtMs: null };
+      const notification = [
+        "node.presence",
+        { nodeId: "mac-node", ...timestamps },
+        { dropIfSlow: true },
+      ];
+      expect(broadcast.mock.calls).toEqual(allowed ? [notification] : []);
+      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("chat subscribe/unsubscribe events", () => {

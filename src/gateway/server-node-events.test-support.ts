@@ -3,28 +3,18 @@ import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntryAsync as loadSessionEntryTypeAsync } from "./session-entry-load.test-support.js";
+import type { resolveGatewayModelSupportsImages } from "./session-utils.js";
+
+type ImageSupportParams = Parameters<typeof resolveGatewayModelSupportsImages>[0];
 
 export const buildSessionLookup = (
   sessionKey: string,
-  entry: {
-    agentHarnessId?: string;
-    modelSelectionLocked?: boolean;
-    sessionId?: string;
-    model?: string;
-    modelProvider?: string;
-    lastChannel?: string;
-    lastTo?: string;
-    lastAccountId?: string;
-    lastThreadId?: string | number;
-    updatedAt?: number;
-    label?: string;
-    spawnedBy?: string;
-    parentSessionKey?: string;
-  } = {},
+  entry: Partial<SessionEntry> & { lastChannel?: string; lastTo?: string } = {},
 ): Awaited<ReturnType<typeof loadSessionEntryTypeAsync>> => ({
   cfg: { session: { mainKey: "main" } } as OpenClawConfig,
   agentId: resolveAgentIdFromSessionKey(sessionKey, "main"),
@@ -40,26 +30,15 @@ export const buildSessionLookup = (
   legacyKey: undefined,
 });
 
-const runtimeMocks = vi.hoisted(() => ({
+export const runtimeMocks = vi.hoisted(() => ({
   agentCommandFromIngress: vi.fn().mockResolvedValue(undefined),
-  ApnsRegistrationPairingChangedError: class ApnsRegistrationPairingChangedError extends Error {
-    constructor() {
-      super("node pairing changed before APNs registration");
-      this.name = "ApnsRegistrationPairingChangedError";
-    }
-  },
   deleteMediaBuffer: vi.fn(async () => {}),
-  deliverOutboundPayloads: vi.fn(async () => {}),
   enqueueSystemEvent: vi.fn(),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
   getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "main" } })),
   INLINE_IMAGE_DURABLE_OMISSION_MARKER:
     "[image attachment omitted: durable managed media claim unavailable]",
-  loadOrCreateProcessDeviceIdentity: vi.fn(() => ({
-    deviceId: "gateway-device-1",
-    publicKeyPem: "public",
-    privateKeyPem: "private",
-  })),
+  loadOrCreateProcessDeviceIdentity: vi.fn(() => ({ deviceId: "gateway-device-1" })),
   loadSessionEntry: vi.fn((sessionKey: string, _opts?: unknown) => buildSessionLookup(sessionKey)),
   upsertSessionEntryCore: vi.fn(),
   normalizeChannelId: vi.fn((channel?: string | null) => channel ?? null),
@@ -70,17 +49,7 @@ const runtimeMocks = vi.hoisted(() => ({
   resolveSystemMainSessionTarget: vi.fn(() => ({ agentId: "ops", sessionKey: "agent:ops:main" })),
   resolveChatAttachmentMaxBytes: vi.fn(() => 20 * 1024 * 1024),
   resolveGatewayModelSupportsImages: vi.fn(
-    async ({
-      loadGatewayModelCatalog,
-      provider,
-      model,
-    }: {
-      loadGatewayModelCatalog: () => Promise<
-        Array<{ id: string; provider: string; input?: string[] }>
-      >;
-      provider?: string;
-      model?: string;
-    }) => {
+    async ({ loadGatewayModelCatalog, provider, model }: ImageSupportParams) => {
       if (!model) {
         return true;
       }
@@ -158,7 +127,6 @@ vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
 
 vi.mock("../infra/push-apns.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/push-apns.js")>()),
-  ApnsRegistrationPairingChangedError: runtimeMocks.ApnsRegistrationPairingChangedError,
   registerApnsRegistration: runtimeMocks.registerApnsRegistration,
 }));
 
@@ -202,33 +170,24 @@ vi.mock("./ws-log.js", async (importOriginal) => ({
   formatForLog: runtimeMocks.formatForLog,
 }));
 
-export const {
-  loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
-  parseMessageWithAttachments: parseMessageWithAttachmentsMock,
-  persistInboundImagesForTranscript: persistInboundImagesForTranscriptMock,
-  updatePairedDevicePresence: updatePairedDevicePresenceMock,
-} = runtimeMocks;
-export { runtimeMocks };
+const deviceProof = {
+  publicKey: "public-key",
+  signature: "signature",
+  signedAt: 1,
+  nonce: "nonce",
+};
 
 export function makeNodeClient(connId: string, nodeId: string): GatewayWsClient {
+  const socket = { readyState: WebSocket.OPEN, send: () => {} };
   return {
     connId,
     usesSharedGatewayAuth: false,
-    socket: {
-      readyState: WebSocket.OPEN,
-      send: () => {},
-    } as unknown as GatewayWsClient["socket"],
+    socket: socket as unknown as GatewayWsClient["socket"],
     connect: {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
       client: { id: "node-host", version: "1.0.0", platform: "linux", mode: "node" },
-      device: {
-        id: nodeId,
-        publicKey: "public-key",
-        signature: "signature",
-        signedAt: 1,
-        nonce: "nonce",
-      },
+      device: { ...deviceProof, id: nodeId },
     } as GatewayWsClient["connect"],
   };
 }

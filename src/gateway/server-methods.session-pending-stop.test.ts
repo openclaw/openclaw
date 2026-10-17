@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
@@ -21,7 +21,8 @@ import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 const key = "agent:main:pending-stop";
-
+const scope = { agentId: "main", sessionKey: key };
+const aborted = { status: "timeout", summary: "aborted" };
 const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
 async function createPendingOwner(profileName: string) {
@@ -31,16 +32,13 @@ async function createPendingOwner(profileName: string) {
   const cfg = rolePolicyConfig();
   setRuntimeConfigSnapshot(cfg);
   const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+  const id = client.authenticatedUserProfile!.profileId;
   const entry = {
     sessionId: "original",
     updatedAt: 1,
-    createdActor: {
-      type: "human" as const,
-      source: "profile" as const,
-      id: client.authenticatedUserProfile!.profileId,
-    },
+    createdActor: { type: "human" as const, source: "profile" as const, id },
   };
-  await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+  await upsertSessionEntryCore(scope, entry);
   const stop = async (runId: string) => {
     const respond = vi.fn();
     await handleGatewayRequest({
@@ -56,119 +54,95 @@ async function createPendingOwner(profileName: string) {
   return { client, cfg, context, entry, stop };
 }
 
-describe("pending Stop producer binding", () => {
-  it.each(["current", "replacement"] as const)(
-    "uses the agent reservation's original row across %s admission",
-    async (target) => {
-      await withOpenClawTestState(profileState, async () => {
-        const { client, cfg, context, entry, stop } =
-          await createPendingOwner("pending-agent-owner");
-        const runId = `pending-agent-${target}`;
-        const request = {
-          message: "queued",
-          sessionKey: key,
-          agentId: "main",
-          idempotencyKey: runId,
-        };
-        const lifecycle = createAgentDedupeLifecycle({
-          cfg,
-          request,
-          runId,
-          agentDedupeKeys: [`agent:${runId}`],
-          suppressVisibleSessionEffects: false,
-          ownerConnId: client.connId,
-          context,
-          io: createAgentTurnIo(vi.fn()),
-        });
-        expect(
-          await prepareAgentRequestRouting({
-            cfg,
-            request,
-            runId,
-            context,
-            respond: vi.fn(),
-            isRawModelRun: false,
-            agentDedupeKeys: [`agent:${runId}`],
-            reserveDedupe: lifecycle.reserve,
-            bindDedupeSessionTarget: lifecycle.bindSessionTarget,
-            clearDedupe: lifecycle.clearUnaccepted,
-          }),
-        ).toBeDefined();
-        expect(context.chatAbortControllers.size).toBe(0);
-        const pending = context.dedupe.get(`agent:${runId}`);
-        if (target === "replacement") {
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey: key },
-            { ...entry, sessionId: "replacement" },
-          );
-        }
-        expect(await stop(runId)).toMatchObject({ aborted: target === "current" });
-        if (target === "replacement") {
-          expect(context.dedupe.get(`agent:${runId}`)).toBe(pending);
-        } else {
-          expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject({
-            status: "timeout",
-            summary: "aborted",
-          });
-        }
-      });
-    },
-  );
-
-  it("keeps a real chat admission abortable while its original session lifecycle is held", async () => {
+it.each(["current", "replacement"] as const)(
+  "uses the agent reservation's original row across %s admission",
+  async (target) => {
     await withOpenClawTestState(profileState, async () => {
-      await loadOrCreateProcessDeviceIdentityAsync();
-      const { client, context, stop } = await createPendingOwner("pending-chat-owner");
-      const runId = "pending-chat-admission";
-      const request = await normalizeChatSendRequest({
-        params: { sessionKey: key, message: "queued", idempotencyKey: runId },
-        client,
+      const { client, cfg, context, entry, stop } = await createPendingOwner("pending-agent-owner");
+      const runId = `pending-agent-${target}`;
+      const request = { message: "queued", ...scope, idempotencyKey: runId };
+      const routing = { cfg, request, runId, context, agentDedupeKeys: [`agent:${runId}`] };
+      const lifecycle = createAgentDedupeLifecycle({
+        ...routing,
+        suppressVisibleSessionEffects: false,
+        ownerConnId: client.connId,
+        io: createAgentTurnIo(vi.fn()),
       });
-      if (!request.ok) {
-        throw new Error(request.error);
+      expect(
+        await prepareAgentRequestRouting({
+          ...routing,
+          respond: vi.fn(),
+          isRawModelRun: false,
+          reserveDedupe: lifecycle.reserve,
+          bindDedupeSessionTarget: lifecycle.bindSessionTarget,
+          clearDedupe: lifecycle.clearUnaccepted,
+        }),
+      ).toBeDefined();
+      expect(context.chatAbortControllers.size).toBe(0);
+      const pending = context.dedupe.get(`agent:${runId}`);
+      if (target === "replacement") {
+        await upsertSessionEntryCore(scope, { ...entry, sessionId: "replacement" });
       }
-      const session = await prepareChatSendSession({ request: request.value, client, context });
-      if (!session.ok) {
-        throw new Error("chat session preparation failed");
-      }
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const hold = runExclusiveSessionLifecycleMutation("drain", {
-        scope: session.value.storePath,
-        identities: [key, "original"],
-        run: async () => {
-          entered.resolve();
-          await release.promise;
-        },
-      });
-      await entered.promise;
-      const preparedSession = await qualifyChatSendSession(session.value);
-      const admission = admitChatSend({
-        request: request.value,
-        session: preparedSession,
-        client,
-        context,
-        respond: vi.fn(),
-      });
-      try {
-        await vi.waitFor(() =>
-          expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true),
-        );
-        expect(context.chatAbortControllers.has(runId)).toBe(false);
-        expect(await stop(runId)).toMatchObject({ aborted: true, runIds: [runId] });
-        expect(context.dedupe.get(`chat:${runId}`)?.payload).toMatchObject({
-          status: "timeout",
-          summary: "aborted",
-        });
-      } finally {
-        release.resolve();
-        await hold;
-        const settled = await admission;
-        if (settled.ok) {
-          settled.value.cleanupAdmittedRun();
-        }
-        expect(settled.ok).toBe(false);
+      expect(await stop(runId)).toMatchObject({ aborted: target === "current" });
+      if (target === "replacement") {
+        expect(context.dedupe.get(`agent:${runId}`)).toBe(pending);
+      } else {
+        expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject(aborted);
       }
     });
+  },
+);
+
+it("keeps a real chat admission abortable while its original session lifecycle is held", async () => {
+  await withOpenClawTestState(profileState, async () => {
+    await loadOrCreateProcessDeviceIdentityAsync();
+    const { client, context, stop } = await createPendingOwner("pending-chat-owner");
+    const runId = "pending-chat-admission";
+    const request = await normalizeChatSendRequest({
+      params: { sessionKey: key, message: "queued", idempotencyKey: runId },
+      client,
+    });
+    if (!request.ok) {
+      throw new Error(request.error);
+    }
+    const session = await prepareChatSendSession({ request: request.value, client, context });
+    if (!session.ok) {
+      throw new Error("chat session preparation failed");
+    }
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const hold = runExclusiveSessionLifecycleMutation("drain", {
+      scope: session.value.storePath,
+      identities: [key, "original"],
+      run: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    await entered.promise;
+    const preparedSession = await qualifyChatSendSession(session.value);
+    const admission = admitChatSend({
+      request: request.value,
+      session: preparedSession,
+      client,
+      context,
+      respond: vi.fn(),
+    });
+    try {
+      await vi.waitFor(() =>
+        expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true),
+      );
+      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(await stop(runId)).toMatchObject({ aborted: true, runIds: [runId] });
+      expect(context.dedupe.get(`chat:${runId}`)?.payload).toMatchObject(aborted);
+    } finally {
+      release.resolve();
+      await hold;
+      const settled = await admission;
+      if (settled.ok) {
+        settled.value.cleanupAdmittedRun();
+      }
+      expect(settled.ok).toBe(false);
+    }
   });
 });
