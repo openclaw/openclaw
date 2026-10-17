@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -11,26 +12,58 @@ import {
 
 const suite = createChatFlowE2eSuite();
 
+const placement = <State extends "failed" | "local" | "active">(state: State, generation = 2) => ({
+  state,
+  generation,
+  createdAtMs: 1,
+  updatedAtMs: generation,
+  stateChangedAtMs: generation,
+});
+function recoverySession(id: string, label: string) {
+  return {
+    key: `agent:main:${id}`,
+    sessionId: `${id}-session`,
+    label,
+    kind: "direct" as const,
+    updatedAt: Date.now(),
+  };
+}
+function proof(page: Page, name: string) {
+  const dir =
+    process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? createControlUiE2eArtifactDir(name) : null;
+  return async (filename: string) => {
+    if (dir) {
+      await page.screenshot({ path: path.join(dir, filename + ".png") });
+    }
+  };
+}
+async function openFailure(page: Page, message: string) {
+  const failure = page.locator(".chat-error").filter({ hasText: message });
+  await failure
+    .locator("summary strong")
+    .getByText("Couldn't finish this reply. Check the conversation before trying again.")
+    .waitFor();
+  await failure.locator("summary").click();
+  const details = failure.getByLabel("Error details", { exact: true });
+  await details.waitFor();
+  expect(await details.textContent()).toBe(`Runner failed: ${message}`);
+  return failure;
+}
+function expectSameSession(page: Page, key: string) {
+  expect(new URL(page.url()).pathname).toBe(
+    new URL(controlUiSessionUrl(suite.server.baseUrl, key)).pathname,
+  );
+}
+
 suite.define(() => {
   it("sends the next message from a recoverable failed worker without restarting the conversation", async () => {
     const context = await suite.newBrowserContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
-    const proofDir =
-      process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-        ? createControlUiE2eArtifactDir("failed-worker-send-recovery")
-        : null;
+    const capture = proof(page, "failed-worker-send-recovery");
     const session = {
-      key: "agent:main:worker-continuation",
-      sessionId: "worker-continuation-session",
-      label: "Continue after worker recovery",
-      kind: "direct",
-      updatedAt: Date.now(),
+      ...recoverySession("worker-continuation", "Continue after worker recovery"),
       placement: {
-        state: "failed",
-        generation: 2,
-        createdAtMs: 1,
-        updatedAtMs: 2,
-        stateChangedAtMs: 2,
+        ...placement("failed"),
         environmentId: "worker-previous",
         recoveryAction: "restart",
         retryOnSend: true,
@@ -47,22 +80,9 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
-      const failure = page
-        .locator(".chat-error")
-        .filter({ hasText: session.placement.recoveryError });
-      await failure
-        .locator("summary strong")
-        .getByText("Couldn't finish this reply. Check the conversation before trying again.")
-        .waitFor();
-      await failure.locator("summary").click();
-      await failure.getByLabel("Error details", { exact: true }).waitFor();
-      expect(await failure.getByLabel("Error details", { exact: true }).textContent()).toBe(
-        `Runner failed: ${session.placement.recoveryError}`,
-      );
+      await openFailure(page, session.placement.recoveryError);
       const composer = page.getByRole("textbox", { name: "Chat composer" });
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "failed-worker-composer.png") });
-      }
+      await capture("failed-worker-composer");
       expect(await composer.isEnabled()).toBe(true);
       expect(
         await page.getByText("Restart this session to continue.", { exact: true }).count(),
@@ -79,9 +99,7 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.reclaim")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      expect(new URL(page.url()).pathname).toBe(
-        new URL(controlUiSessionUrl(suite.server.baseUrl, session.key)).pathname,
-      );
+      expectSameSession(page, session.key);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -90,22 +108,11 @@ suite.define(() => {
   it("recovers a failed cloud session locally and clears its previous failure during restart", async () => {
     const context = await suite.newBrowserContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
-    const proofDir =
-      process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-        ? createControlUiE2eArtifactDir("cloud-local-recovery")
-        : null;
+    const capture = proof(page, "cloud-local-recovery");
     const session = {
-      key: "agent:main:cloud-recovery",
-      sessionId: "cloud-recovery-session",
-      label: "Recover cloud session",
-      kind: "direct",
-      updatedAt: Date.now(),
+      ...recoverySession("cloud-recovery", "Recover cloud session"),
       placement: {
-        state: "failed",
-        generation: 2,
-        createdAtMs: 1,
-        updatedAtMs: 2,
-        stateChangedAtMs: 2,
+        ...placement("failed"),
         recoveryAction: "restart",
         recoveryError: "Cloud worker disappeared: worker provider no longer recognizes the lease.",
       },
@@ -125,25 +132,12 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
-      const error = page
-        .locator(".chat-error")
-        .filter({ hasText: session.placement.recoveryError });
-      await error
-        .locator("summary strong")
-        .getByText("Couldn't finish this reply. Check the conversation before trying again.")
-        .waitFor();
-      await error.locator("summary").click();
-      await error.getByLabel("Error details", { exact: true }).waitFor();
-      expect(await error.getByLabel("Error details", { exact: true }).textContent()).toBe(
-        `Runner failed: ${session.placement.recoveryError}`,
-      );
+      const error = await openFailure(page, session.placement.recoveryError);
       await page.getByRole("button", { name: "Restart session…", exact: true }).click();
       const local = page.locator('[data-value="gateway"]');
       await local.waitFor();
       await local.click();
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "local-recovery-picker.png") });
-      }
+      await capture("local-recovery-picker");
       await gateway.deferNext("sessions.reclaim");
       await page.getByRole("button", { name: "Restart session", exact: true }).click();
       const request = await gateway.waitForRequest("sessions.reclaim");
@@ -154,19 +148,11 @@ suite.define(() => {
       });
       await page.getByText("Restarting session…", { exact: true }).first().waitFor();
       await expect.poll(() => error.count()).toBe(0);
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "restarting-error-cleared.png") });
-      }
+      await capture("restarting-error-cleared");
 
       const recovered = {
         ...session,
-        placement: {
-          state: "local",
-          generation: 3,
-          createdAtMs: 1,
-          updatedAtMs: 3,
-          stateChangedAtMs: 3,
-        },
+        placement: placement("local", 3),
       } satisfies GatewaySessionRow;
       await gateway.setSessionsListResponse(chatSessionListResponse([recovered]));
       await gateway.resolveDeferred("sessions.reclaim", {
@@ -179,9 +165,7 @@ suite.define(() => {
       await expect.poll(() => error.count()).toBe(0);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      expect(new URL(page.url()).pathname).toBe(
-        new URL(controlUiSessionUrl(suite.server.baseUrl, session.key)).pathname,
-      );
+      expectSameSession(page, session.key);
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -190,24 +174,11 @@ suite.define(() => {
   it("dispatches a local repository-only session before accepting another turn", async () => {
     const context = await suite.newBrowserContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
-    const proofDir =
-      process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-        ? createControlUiE2eArtifactDir("repository-placement-recovery")
-        : null;
+    const capture = proof(page, "repository-placement-recovery");
     const session = {
-      key: "agent:main:repository-recovery",
-      sessionId: "repository-recovery-session",
-      label: "Recover repository session",
-      kind: "direct",
-      updatedAt: Date.now(),
+      ...recoverySession("repository-recovery", "Recover repository session"),
       repositoryWorkspaceId: "repository-workspace-1",
-      placement: {
-        state: "local",
-        generation: 2,
-        createdAtMs: 1,
-        updatedAtMs: 2,
-        stateChangedAtMs: 2,
-      },
+      placement: placement("local"),
       agentRuntime: {
         id: "openclaw",
         cloudPlacementSupported: true,
@@ -248,9 +219,7 @@ suite.define(() => {
       await page.getByText("Repository worker required", { exact: true }).waitFor();
       expect(await composer.isEnabled()).toBe(false);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "worker-required.png") });
-      }
+      await capture("worker-required");
 
       await page
         .locator(".agent-chat__disabled-banner")
@@ -258,9 +227,7 @@ suite.define(() => {
         .click();
       await page.locator('[data-value="device:runner"]').click();
       expect(await page.locator('[data-value="gateway"]').count()).toBe(0);
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "worker-picker.png") });
-      }
+      await capture("worker-picker");
       await gateway.deferNext("sessions.dispatch");
       await page.getByRole("button", { name: "Continue on worker", exact: true }).click();
       const request = await gateway.waitForRequest("sessions.dispatch");
@@ -274,11 +241,7 @@ suite.define(() => {
       const recovered = {
         ...session,
         placement: {
-          state: "active",
-          generation: 3,
-          createdAtMs: 1,
-          updatedAtMs: 3,
-          stateChangedAtMs: 3,
+          ...placement("active", 3),
           environmentId: "node:runner",
           activeOwnerEpoch: 1,
           workerBundleHash: "a".repeat(64),
@@ -302,9 +265,7 @@ suite.define(() => {
         sessionKey: session.key,
         message: "Continue after repository recovery",
       });
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "follow-up-accepted.png") });
-      }
+      await capture("follow-up-accepted");
     } finally {
       await suite.closeBrowserContext(context);
     }

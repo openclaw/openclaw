@@ -117,26 +117,28 @@ suite.define(() => {
       await mkdir(path.dirname(target), { recursive: true });
       await copyFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"), target);
     }
-    await appendTranscriptMessage(
-      { agentId: "main", sessionKey, sessionId: String(session.sessionId), env: owner.env },
-      {
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: [
-                "Synthetic image preview proof. The project image belongs to this task's worktree.",
-                `MEDIA:${projectImage}`,
-                `MEDIA:${outsideImage}`,
-                `MEDIA:${siblingImage}`,
-              ].join("\n\n"),
-            },
-          ],
-          timestamp: Date.now(),
+    const append = <Message>(message: Message) =>
+      appendTranscriptMessage(
+        { agentId: "main", sessionKey, sessionId: String(session.sessionId), env: owner.env },
+        { message },
+      );
+    const introduction =
+      "Synthetic image preview proof. The project image belongs to this task's worktree.";
+    await append({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: [
+            introduction,
+            `MEDIA:${projectImage}`,
+            `MEDIA:${outsideImage}`,
+            `MEDIA:${siblingImage}`,
+          ].join("\n\n"),
         },
-      },
-    );
+      ],
+      timestamp: Date.now(),
+    });
     const dashboard = await owner.cli(["dashboard", "--json"]);
     expect(dashboard.code, dashboard.stderr).toBe(0);
     const issued = new URL((JSON.parse(dashboard.stdout) as { browserUrl: string }).browserUrl);
@@ -164,28 +166,11 @@ suite.define(() => {
             await page.screenshot({ path: path.join(suite.artifactDir, name) });
           }
         };
-        const open = async () => {
-          expect((await page.goto(url.toString()))?.status()).toBe(404);
-          await enterControlUiSession(page);
-          await waitForControlUiGatewayReady(page);
-          await page
-            .getByText(
-              "Synthetic image preview proof. The project image belongs to this task's worktree.",
-              { exact: true },
-            )
-            .waitFor();
-        };
-        await open();
+        expect((await page.goto(url.toString()))?.status()).toBe(404);
+        await enterControlUiSession(page);
+        await waitForControlUiGatewayReady(page);
+        await page.getByText(introduction, { exact: true }).waitFor();
         const projectPreview = page.locator('img.chat-message-image[src*="project.png"]');
-        // Capture the original denial as well as the repaired state with this same scenario.
-        await expect
-          .poll(
-            async () =>
-              (await page.getByText("Outside allowed folders", { exact: false }).count()) > 0 ||
-              ((await projectPreview.count()) > 0 && (await decoded(projectPreview)) > 0),
-          )
-          .toBe(true);
-        await capture("01-project-workspace.png");
         await expect.poll(() => decoded(projectPreview)).toBeGreaterThan(0);
         await capture("01-project-workspace-ready.png");
         const selected = page
@@ -248,29 +233,24 @@ suite.define(() => {
         const saved = await withEnvAsync({ OPENCLAW_STATE_DIR: owner.env.OPENCLAW_STATE_DIR }, () =>
           saveMediaBuffer(bytes, "text/plain", "inbound", undefined, filename),
         );
-        await appendTranscriptMessage(
-          { agentId: "main", sessionKey, sessionId: String(session.sessionId), env: owner.env },
-          {
-            message: {
-              role: "user",
-              timestamp: Date.now(),
-              content: "Synthetic original-filename download proof.",
-              __openclaw: {
-                media: [
-                  {
-                    url: `media://inbound/${saved.id}`,
-                    contentType: "text/plain",
-                    kind: "document",
-                    fileName: filename,
-                    sizeBytes: bytes.length,
-                    origin: "file",
-                    hydrationSuppressed: true,
-                  },
-                ],
+        await append({
+          role: "user",
+          timestamp: Date.now(),
+          content: "Synthetic original-filename download proof.",
+          __openclaw: {
+            media: [
+              {
+                url: `media://inbound/${saved.id}`,
+                contentType: "text/plain",
+                kind: "document",
+                fileName: filename,
+                sizeBytes: bytes.length,
+                origin: "file",
+                hydrationSuppressed: true,
               },
-            },
+            ],
           },
-        );
+        });
         await page.reload();
         await waitForControlUiGatewayReady(page);
         const fileCard = page
@@ -294,24 +274,6 @@ suite.define(() => {
         await downloadFile(
           page.locator("openclaw-chat-detail-panel:visible").locator("a[download]"),
         );
-        if (captureEnabled) {
-          await writeFile(
-            path.join(suite.artifactDir, "evidence.json"),
-            JSON.stringify(
-              {
-                sessionKey,
-                projectWorkspaceRendered: true,
-                outsidePathTooltip: true,
-                selectedImageAllowed: true,
-                siblingRemainedBlocked: true,
-                fullAccessRenderedAll: true,
-                restoredProtectionBlockedOutside: true,
-              },
-              null,
-              2,
-            ),
-          );
-        }
       },
     );
   });

@@ -1,4 +1,5 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
+import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
 import {
   controlUiBundledSettingsStorageKey,
@@ -15,6 +16,30 @@ import {
 
 const suite = createChatFlowE2eSuite();
 const POSITION_RAIL_MIN_TRANSCRIPT_HEIGHT = 360;
+
+function railMessages(count: number, prefix: string, text: (index: number) => string) {
+  return Array.from({ length: count }, (_, index) => ({
+    __openclaw: { id: `${prefix}-${index}`, seq: index + 1 },
+    role: index % 2 === 0 ? "user" : "assistant",
+    content: [{ type: "text", text: text(index) }],
+  }));
+}
+const scrollTop = (locator: Locator) => locator.evaluate((element) => element.scrollTop);
+const markerFits = (marker: Locator, requireKeyboardFocus = false) =>
+  marker.evaluate((element, keyboard) => {
+    const rect = element.getBoundingClientRect();
+    const scroller = element.closest(".chat-position-rail__marks")!;
+    const viewport = scroller.getBoundingClientRect();
+    // Scroll ranges round the local height before adding its fractional page position.
+    return (
+      rect.top >= viewport.top &&
+      rect.bottom <= viewport.top + scroller.clientHeight &&
+      (!keyboard ||
+        (element === document.activeElement &&
+          rect.bottom <
+            document.querySelector(".agent-chat__composer-shell")!.getBoundingClientRect().top))
+    );
+  }, requireKeyboardFocus);
 
 function readPositionRailGeometry(page: Page) {
   return page.locator(".chat-position-rail__marks").evaluate((element) => {
@@ -83,16 +108,12 @@ suite.define(() => {
         { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
         async ({ page }) => {
           await installMockGateway(page, {
-            historyMessages: Array.from({ length: 80 }, (_, index) => ({
-              __openclaw: { id: `resize-navigation-${index}`, seq: index + 1 },
-              role: index % 2 === 0 ? "user" : "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: `Conversation checkpoint ${index + 1}: review the notes and confirm the next step.`,
-                },
-              ],
-            })),
+            historyMessages: railMessages(
+              80,
+              "resize-navigation",
+              (index) =>
+                `Conversation checkpoint ${index + 1}: review the notes and confirm the next step.`,
+            ),
           });
           await page.addInitScript(createControlUiMockSameOriginGatewayScript());
           await page.goto(`${suite.server.baseUrl}chat`);
@@ -102,7 +123,7 @@ suite.define(() => {
           const transcript = page.locator(".chat-thread");
           await transcript.hover();
           await page.mouse.wheel(0, -30000);
-          await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
+          await expect.poll(() => scrollTop(transcript)).toBe(0);
           await expect
             .poll(() => readPositionRailGeometry(page))
             .toMatchObject({
@@ -155,16 +176,12 @@ suite.define(() => {
             sessionInfo,
             sessions: [sessionInfo],
             inFlightRun: { runId, startedAt: Date.now() },
-            historyMessages: Array.from({ length: count }, (_, index) => ({
-              __openclaw: { id: `stable-rail-${index}`, seq: index + 1 },
-              role: index % 2 === 0 ? "user" : "assistant",
-              content: [
-                {
-                  type: "text",
-                  text: `${direction === "rtl" ? "راجع الملاحظات. " : ""}Conversation checkpoint ${index + 1}: review the notes and confirm the next step.${count <= 8 && index === count - 1 ? "\n\nSupporting context keeps this small set of turns scrollable while testing the rail anchor.".repeat(16) : ""}`,
-                },
-              ],
-            })),
+            historyMessages: railMessages(
+              count,
+              "stable-rail",
+              (index) =>
+                `${direction === "rtl" ? "راجع الملاحظات. " : ""}Conversation checkpoint ${index + 1}: review the notes and confirm the next step.${count <= 8 && index === count - 1 ? "\n\nSupporting context keeps this small set of turns scrollable while testing the rail anchor.".repeat(16) : ""}`,
+            ),
             featureMethods: [...defaultControlUiFeatureMethods, "progressCard.get"],
             methodResponses: {
               "progressCard.get": {
@@ -299,9 +316,7 @@ suite.define(() => {
                 expect(position.display).toBe("none");
                 continue;
               }
-              expect(position.display).toBe("block");
-              expect(position.track).toBe(anchor.track);
-              expect(position.tick).toBe(anchor.tick);
+              expect(position).toMatchObject({ display: "block", ...anchor });
             }
           };
           for (const open of [true, false, true, false, true]) {
@@ -486,25 +501,7 @@ suite.define(() => {
             if (index > 0) {
               await page.keyboard.press("ArrowDown");
             }
-            await expect
-              .poll(() =>
-                markerForIndex(index).evaluate((element) => {
-                  const marker = element.getBoundingClientRect();
-                  const scroller = element.closest(".chat-position-rail__marks")!;
-                  const viewport = scroller.getBoundingClientRect();
-                  const composerTop = document
-                    .querySelector(".agent-chat__composer-shell")!
-                    .getBoundingClientRect().top;
-                  return (
-                    element === document.activeElement &&
-                    marker.top >= viewport.top &&
-                    // Scroll ranges round the local height before adding its fractional page position.
-                    marker.bottom <= viewport.top + scroller.clientHeight &&
-                    marker.bottom < composerTop
-                  );
-                }),
-              )
-              .toBe(true);
+            await expect.poll(() => markerFits(markerForIndex(index), true)).toBe(true);
           }
           const preview = page.locator(".chat-position-rail__preview");
           const previewClearsComposer = () =>
@@ -534,32 +531,16 @@ suite.define(() => {
           await expect.poll(previewClearsComposer).toBe(true);
           await page.mouse.move(900, 20);
           await markers.last().press("Home");
-          await expect
-            .poll(() => markers.first().evaluate((element) => element === document.activeElement))
-            .toBe(true);
+          await browserExpect(markers.first()).toBeFocused();
           await markers.first().press("End");
-          await expect
-            .poll(() => markers.last().evaluate((element) => element === document.activeElement))
-            .toBe(true);
+          await browserExpect(markers.last()).toBeFocused();
           await markers.last().press("Escape");
           if (count === 80 && direction === "ltr") {
             await page.locator(".chat-thread").focus();
             await page.keyboard.press("ControlOrMeta+f");
             await page.locator(".agent-chat__search-bar input").fill("Conversation checkpoint 80:");
             await expect.poll(() => markers.count()).toBe(1);
-            await expect
-              .poll(() =>
-                markers.first().evaluate((element) => {
-                  const marker = element.getBoundingClientRect();
-                  const scroller = element.closest(".chat-position-rail__marks")!;
-                  const viewport = scroller.getBoundingClientRect();
-                  return (
-                    marker.top >= viewport.top &&
-                    marker.bottom <= viewport.top + scroller.clientHeight
-                  );
-                }),
-              )
-              .toBe(true);
+            await expect.poll(() => markerFits(markers.first())).toBe(true);
             await page.locator(".agent-chat__search-bar button").click();
             await expect
               .poll(() => markers.first().getAttribute("aria-label"))
@@ -572,19 +553,7 @@ suite.define(() => {
             await scrollChatThreadToTop(page);
             await page.setViewportSize({ width: 1440, height: 1000 });
             await track.waitFor();
-            await expect
-              .poll(() =>
-                marks.locator('[aria-current="true"]').evaluate((element) => {
-                  const marker = element.getBoundingClientRect();
-                  const scroller = element.closest(".chat-position-rail__marks")!;
-                  const viewport = scroller.getBoundingClientRect();
-                  return (
-                    marker.top >= viewport.top &&
-                    marker.bottom <= viewport.top + scroller.clientHeight
-                  );
-                }),
-              )
-              .toBe(true);
+            await expect.poll(() => markerFits(marks.locator('[aria-current="true"]'))).toBe(true);
           }
         },
       );
@@ -597,13 +566,11 @@ suite.define(() => {
         const sessionKey = "agent:main:main";
         await installMockGateway(page, {
           sessionKey,
-          historyMessages: Array.from({ length: 80 }, (_, index) => ({
-            __openclaw: { id: `docked-rail-${index}`, seq: index + 1 },
-            role: index % 2 === 0 ? "user" : "assistant",
-            content: [
-              { type: "text", text: `Review checkpoint ${index + 1} and its supporting notes.` },
-            ],
-          })),
+          historyMessages: railMessages(
+            80,
+            "docked-rail",
+            (index) => `Review checkpoint ${index + 1} and its supporting notes.`,
+          ),
         });
         await page.addInitScript(createControlUiMockSameOriginGatewayScript());
         await page.addInitScript(
@@ -645,13 +612,13 @@ suite.define(() => {
         await expectPositionRailAtEnd(page);
         await transcript.hover();
         await page.mouse.wheel(0, -30000);
-        await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
+        await expect.poll(() => scrollTop(transcript)).toBe(0);
         await waitForChatScrollIdle(page);
         const top = (await track.boundingBox())!.y;
         await transcript.evaluate((element) => {
           element.scrollTop = 200;
         });
-        await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(200);
+        await expect.poll(() => scrollTop(transcript)).toBe(200);
         expect((await track.boundingBox())!.y).toBe(top);
         await marks.evaluate((element) => {
           element.scrollTop = 0;
@@ -666,9 +633,7 @@ suite.define(() => {
         await transcript.focus();
         await page.keyboard.press("Tab");
         await page.keyboard.press("Home");
-        await expect
-          .poll(() => first.evaluate((element) => element === document.activeElement))
-          .toBe(true);
+        await browserExpect(first).toBeFocused();
         await preview.waitFor();
         expect((await preview.boundingBox())!.y).toBeGreaterThanOrEqual(
           (await transcript.boundingBox())!.y,

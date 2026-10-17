@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
 import {
@@ -39,6 +40,26 @@ const directory: UsersListResult = {
   ],
 };
 
+async function routeAvatars(page: Page, requests: string[]) {
+  await page.route("**/api/users/**/avatar*", (route) => {
+    requests.push(route.request().url());
+    return route.fulfill({
+      contentType: "image/png",
+      body: readFileSync("ui/public/apple-touch-icon.png"),
+    });
+  });
+}
+const referenceBounds = (references: Locator) =>
+  references.evaluateAll((elements) =>
+    elements.map((element) => {
+      const { x, y, width, height } = element.getBoundingClientRect();
+      return { x, y, width, height };
+    }),
+  );
+const cardLinks = (card: Locator) =>
+  card.locator("a").evaluateAll((links) => links.map((link) => link.getAttribute("href")));
+const cardText = async (card: Locator) => (await card.textContent())?.replace(/\s+/gu, " ");
+
 suite.define(() => {
   it.each([
     { width: 1280, colorScheme: "light" as const, scale: 1, font: "var(--font-body)" },
@@ -50,13 +71,7 @@ suite.define(() => {
         { viewport: { width: viewport.width, height: 900 }, colorScheme: viewport.colorScheme },
         async ({ page }) => {
           const avatarRequests: string[] = [];
-          await page.route("**/api/users/**/avatar*", async (route) => {
-            avatarRequests.push(route.request().url());
-            await route.fulfill({
-              contentType: "image/png",
-              body: readFileSync("ui/public/apple-touch-icon.png"),
-            });
-          });
+          await routeAvatars(page, avatarRequests);
           const gateway = await installMockGateway(page, {
             deferredMethods: ["users.list"],
             historyMessages: [
@@ -101,12 +116,7 @@ suite.define(() => {
           await expect.poll(() => references.locator('[data-avatar-state="none"]').count()).toBe(2);
           expect(await references.locator("img").count()).toBe(0);
           expect(avatarRequests).toEqual([]);
-          const before = await references.evaluateAll((elements) =>
-            elements.map((element) => {
-              const { x, y, width, height } = element.getBoundingClientRect();
-              return { x, y, width, height };
-            }),
-          );
+          const before = await referenceBounds(references);
           await captureUiProof(suite, page, "mention-directory", `${viewport.width}-before.png`);
           await gateway.resolveDeferred("users.list", {
             profiles: [
@@ -129,14 +139,7 @@ suite.define(() => {
           expect(avatarRequests.map((url) => new URL(url).pathname + new URL(url).search)).toEqual([
             "/api/users/profile-photo/avatar?v=2",
           ]);
-          expect(
-            await references.evaluateAll((elements) =>
-              elements.map((element) => {
-                const { x, y, width, height } = element.getBoundingClientRect();
-                return { x, y, width, height };
-              }),
-            ),
-          ).toEqual(before);
+          expect(await referenceBounds(references)).toEqual(before);
           for (const offset of await geometry()) {
             expect(Math.abs(offset)).toBeLessThanOrEqual(1);
           }
@@ -203,22 +206,16 @@ suite.define(() => {
         await sidebarPerson.hover();
         const card = page.locator(".person-activity-hovercard[role=dialog]");
         await card.getByRole("link", { name: /Release checklist/ }).waitFor();
-        const sidebarText = (await card.textContent())?.replace(/\s+/gu, " ");
-        const sidebarLinks = await card
-          .locator("a")
-          .evaluateAll((links) => links.map((link) => link.getAttribute("href")));
+        const sidebarText = await cardText(card);
+        const sidebarLinks = await cardLinks(card);
         await captureUiProof(suite, page, "person-card-parity", "sidebar.png");
         await page.keyboard.press("Escape");
         const reference = page.locator(".markdown-person-reference");
         await reference.focus();
         await card.locator("h2").waitFor();
         await captureUiProof(suite, page, "person-card-parity", "chat.png");
-        expect((await card.textContent())?.replace(/\s+/gu, " ")).toBe(sidebarText);
-        expect(
-          await card
-            .locator("a")
-            .evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
-        ).toEqual(sidebarLinks);
+        expect(await cardText(card)).toBe(sidebarText);
+        expect(await cardLinks(card)).toEqual(sidebarLinks);
         expect(await card.textContent()).not.toContain("Unqualified identity");
         expect(await card.textContent()).not.toContain("hidden");
         await gateway.emitGatewayEvent("presence", {
@@ -270,13 +267,7 @@ suite.define(() => {
         },
         async ({ page }) => {
           const avatarRequests: string[] = [];
-          await page.route("**/api/users/**/avatar*", (route) => {
-            avatarRequests.push(new URL(route.request().url()).pathname);
-            return route.fulfill({
-              contentType: "image/png",
-              body: readFileSync("ui/public/apple-touch-icon.png"),
-            });
-          });
+          await routeAvatars(page, avatarRequests);
           const gateway = await installMockGateway(page, {
             historyMessages,
             methodResponses: { "users.list": directory },
@@ -286,18 +277,8 @@ suite.define(() => {
           const reference = page.locator(".markdown-person-reference");
           await reference.waitFor();
           expect(await reference.count()).toBe(1);
-          expect(await reference.textContent()).toBe(label);
-          expect(await reference.evaluate((node) => getComputedStyle(node).borderWidth)).toBe(
-            "0px",
-          );
-          expect(
-            await reference
-              .locator(".markdown-person-reference__prefix")
-              .evaluate((node) => node.getBoundingClientRect().width),
-          ).toBe(0);
           const avatar = reference.locator(".markdown-person-reference__avatar");
           await expect.poll(() => avatar.locator("img").count()).toBe(1);
-          expect(await avatar.getAttribute("aria-hidden")).toBe("true");
           expect(
             await reference.evaluate((node) => {
               const range = document.createRange();
@@ -307,10 +288,29 @@ suite.define(() => {
               selection.addRange(range);
               const copiedText = selection.toString();
               selection.removeAllRanges();
-              return copiedText;
+              return {
+                text: node.textContent,
+                copiedText,
+                border: getComputedStyle(node).borderWidth,
+                prefixWidth: node
+                  .querySelector(".markdown-person-reference__prefix")!
+                  .getBoundingClientRect().width,
+                avatarHidden: node
+                  .querySelector(".markdown-person-reference__avatar")!
+                  .getAttribute("aria-hidden"),
+                message: node.closest(".chat-bubble")!.getAttribute("data-message-text"),
+              };
             }),
-          ).toBe(label);
-          expect(avatarRequests).not.toContain("/api/users/profile-old/avatar");
+          ).toEqual({
+            text: label,
+            copiedText: label,
+            border: "0px",
+            prefixWidth: 0,
+            avatarHidden: "true",
+            message: text,
+          });
+          const avatarPaths = () => avatarRequests.map((url) => new URL(url).pathname);
+          expect(avatarPaths()).not.toContain("/api/users/profile-old/avatar");
           const avatarSize = await avatar.boundingBox();
           expect(avatarSize?.width).toBeGreaterThan(0);
           expect(avatarSize?.width).toBe(avatarSize?.height);
@@ -325,11 +325,6 @@ suite.define(() => {
             ),
           );
           await captureUiProof(suite, page, "person-references", input + "-message.png");
-          expect(
-            await reference
-              .locator("xpath=ancestor::*[contains(@class, 'chat-bubble')]")
-              .getAttribute("data-message-text"),
-          ).toBe(text);
           expect(await gateway.getRequests("users.list")).toHaveLength(1);
           if (input === "keyboard") {
             await reference.focus();
@@ -350,7 +345,7 @@ suite.define(() => {
                 .evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0),
             )
             .toBe(true);
-          expect(avatarRequests).toContain("/api/users/profile-ada/avatar");
+          expect(avatarPaths()).toContain("/api/users/profile-ada/avatar");
           await captureUiProof(suite, page, "person-references", input + "-card.png");
           expect(await reference.getAttribute("aria-expanded")).toBe("true");
           expect(await gateway.getRequests("users.list")).toHaveLength(2);

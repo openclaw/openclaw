@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
@@ -24,12 +25,48 @@ const publicationContextOptions = () => ({
   viewport: { height: 800, width: 1180 },
 });
 
+const repository = { owner: "synthetic", repo: "publication-demo" };
+function pullRequest(number: number, branch: string, title: string, state = "merged") {
+  return {
+    ...repository,
+    number,
+    branch,
+    title,
+    url: `https://github.com/synthetic/publication-demo/pull/${number}`,
+    state,
+  };
+}
+
+async function capture(page: Page, name: string, surface: Locator, highlights: Locator[]) {
+  if (captureUiProof) {
+    await writeFile(
+      path.join(suite.artifactDir, `${name}.png`),
+      await takeControlUiViewportScreenshot(page, surface, highlights),
+    );
+  }
+}
+
+function installPublicationGateway(
+  page: Page,
+  overrides: Parameters<typeof installMockGateway>[1] = {},
+) {
+  return installMockGateway(page, {
+    communityInvite: false,
+    featureMethods: publicationMethods,
+    ...overrides,
+    methodResponses: {
+      [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+      "sessions.github.options": publicationOptions,
+      ...overrides.methodResponses,
+    },
+  });
+}
+
 suite.define(() => {
   it("keeps a merged transcript PR separate from an idle publication workspace", async () => {
     await suite.withPage(publicationContextOptions(), async ({ page }) => {
       const href = "https://github.com/synthetic/publication-demo/pull/42";
-      const gateway = await installMockGateway(page, {
-        communityInvite: false,
+      const gateway = await installPublicationGateway(page, {
         featureMethods: [
           ...publicationMethods,
           TEST_LINK_READER.linkReader.previewMethod!,
@@ -44,8 +81,6 @@ suite.define(() => {
           },
         ],
         methodResponses: {
-          [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
-          "sessions.github.options": publicationOptions,
           [TEST_LINK_READER.linkReader.previewMethod!]: {
             url: href,
             subtitle: "synthetic/publication-demo #42",
@@ -68,12 +103,7 @@ suite.define(() => {
         .toContain("Merged");
       await page.keyboard.press("Escape");
       await openChatDetails(page);
-      if (captureUiProof) {
-        await writeFile(
-          path.join(suite.artifactDir, "merged-pr-discovery.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".chat-prs"), [chip]),
-        );
-      }
+      await capture(page, "merged-pr-discovery", page.locator(".chat-prs"), [chip]);
       expect(await chip.getAttribute("data-link-reader-tone")).toBe("accent");
       expect(await page.locator(".chat-prs").textContent()).not.toContain("Publishing");
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
@@ -82,44 +112,22 @@ suite.define(() => {
       expect(await page.locator(".chat-prs").textContent()).toContain("openclaw/review-request");
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       expect(await gateway.getRequests(TEST_LINK_READER.linkReader.previewMethod!)).toHaveLength(1);
-      if (captureUiProof) {
-        await writeFile(
-          path.join(suite.artifactDir, "merged-pr-idle-workspace.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".chat-prs"), [chip]),
-        );
-      }
+      await capture(page, "merged-pr-idle-workspace", page.locator(".chat-prs"), [chip]);
     });
   });
 
   it("shows unavailable cached PR state distinctly and clears the warning after recovery", async () => {
     await suite.withPage(publicationContextOptions(), async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        communityInvite: false,
-        featureMethods: publicationMethods,
-        methodResponses: {
-          [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
-          "sessions.github.options": publicationOptions,
-        },
-      });
+      const gateway = await installPublicationGateway(page);
       await page.goto(suite.server.baseUrl + "chat");
       await openChatDetails(page);
       const key = await waitForWatchedSessionKey(gateway);
-      const repository = { owner: "synthetic", repo: "publication-demo" };
       const emit = (status: "ready" | "unavailable", state: "open" | "merged" = "open") =>
         gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
           sessions: {
             [key]: {
               repository,
-              pullRequests: [
-                {
-                  ...repository,
-                  number: 43,
-                  branch: "feature/current-task",
-                  title: "Current task",
-                  url: "https://github.com/synthetic/publication-demo/pull/43",
-                  state,
-                },
-              ],
+              pullRequests: [pullRequest(43, "feature/current-task", "Current task", state)],
               rateLimited: false,
               status,
             },
@@ -134,12 +142,7 @@ suite.define(() => {
       await expect.poll(() => warning.getAttribute("aria-label")).toContain("last known state");
       expect(await warning.getAttribute("aria-label")).not.toContain("rate limit");
       expect(await row.textContent()).toContain("#43");
-      if (captureUiProof) {
-        await writeFile(
-          path.join(suite.artifactDir, "unavailable-pr-status.png"),
-          await takeControlUiViewportScreenshot(page, row, [warning]),
-        );
-      }
+      await capture(page, "unavailable-pr-status", row, [warning]);
       expect(await row.locator("article").getAttribute("data-state")).toBe("merged");
       await emit("ready", "merged");
       await expect.poll(() => warning.count()).toBe(0);
@@ -173,11 +176,8 @@ suite.define(() => {
         nextAction:
           "The pull request base or its Git history could not be verified. Check repository read access, connectivity, and local Git objects before retrying publication.",
       };
-      const gateway = await installMockGateway(page, {
-        communityInvite: false,
-        featureMethods: publicationMethods,
+      const gateway = await installPublicationGateway(page, {
         methodResponses: {
-          [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
           "sessions.github.options": {
             ...publicationOptions,
             latestShared: { result: failure, confirmation: null },
@@ -191,17 +191,7 @@ suite.define(() => {
       await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
         sessions: {
           [key]: {
-            pullRequests: [
-              {
-                owner: "synthetic",
-                repo: "publication-demo",
-                number: 45,
-                branch: "feature/finished-task",
-                title: "Completed task",
-                url: "https://github.com/synthetic/publication-demo/pull/45",
-                state: "merged",
-              },
-            ],
+            pullRequests: [pullRequest(45, "feature/finished-task", "Completed task")],
             rateLimited: false,
             status: "ready",
           },
@@ -210,13 +200,7 @@ suite.define(() => {
       const surface = page.locator(".chat-prs");
       const merged = surface.locator('article[data-state="merged"]');
       await merged.waitFor();
-      // Capture the actual baseline before the regression assertion as well as the repaired state.
-      if (captureUiProof) {
-        await writeFile(
-          path.join(suite.artifactDir, "failed-publication-merged.png"),
-          await takeControlUiViewportScreenshot(page, surface, [merged]),
-        );
-      }
+      await capture(page, "failed-publication-merged", surface, [merged]);
       expect(await merged.textContent()).not.toContain(failure.nextAction);
       expect(await merged.locator("[data-publication-account]").count()).toBe(0);
       const history = surface.locator("details.chat-pr__publication-history");
@@ -256,12 +240,7 @@ suite.define(() => {
         expect(color).not.toBe(tokens.danger);
         expect([tokens.muted, tokens.text]).toContain(color);
       }
-      if (captureUiProof) {
-        await writeFile(
-          path.join(suite.artifactDir, "failed-publication-expanded.png"),
-          await takeControlUiViewportScreenshot(page, surface, [merged, guidance, refresh]),
-        );
-      }
+      await capture(page, "failed-publication-expanded", surface, [merged, guidance, refresh]);
       const readsBefore = (await gateway.getRequests("sessions.github.options")).length;
       await refresh.click();
       await gateway.waitForRequest("sessions.github.options", { after: readsBefore });
@@ -274,13 +253,7 @@ suite.define(() => {
       const published = {
         pullRequests: [
           {
-            owner: "synthetic",
-            repo: "publication-demo",
-            number: 45,
-            branch: "feature/finished-task",
-            title: "Completed task",
-            url: "https://github.com/synthetic/publication-demo/pull/45",
-            state: "merged",
+            ...pullRequest(45, "feature/finished-task", "Completed task"),
             headSha: "f".repeat(40),
           },
         ],
@@ -304,12 +277,7 @@ suite.define(() => {
       });
       await gateway.waitForRequest("sessions.github.options", { after: beforeRetirement });
       await expect.poll(() => history.count()).toBe(0);
-      if (captureUiProof) {
-        await writeFile(
-          path.join(suite.artifactDir, "superseded-publication-retired.png"),
-          await takeControlUiViewportScreenshot(page, surface, [merged]),
-        );
-      }
+      await capture(page, "superseded-publication-retired", surface, [merged]);
       await page.reload();
       await openChatDetails(page);
       const reloadedKey = await waitForWatchedSessionKey(gateway);
@@ -326,8 +294,7 @@ suite.define(() => {
             status: "ready",
             rateLimited: false,
             branch: {
-              owner: "synthetic",
-              repo: "publication-demo",
+              ...repository,
               branch: "feature/next-work",
               changedFiles: 1,
             },
@@ -361,7 +328,6 @@ suite.define(() => {
 
   it("recovers shared receipts and observes committed status without publishing", async () => {
     await suite.withPage(publicationContextOptions(), async ({ page }) => {
-      const repository = { owner: "synthetic", repo: "publication-demo" };
       const branch = "openclaw/shared-read-proof";
       const publisher = publicationOptions.shared;
       const requestId = "bdca439a-e787-4f9f-b5f3-a878c662cc77";
@@ -381,12 +347,10 @@ suite.define(() => {
         url: "https://github.com/synthetic/publication-demo/pull/44",
       };
       const completed = { result: published, confirmation: null };
-      const gateway = await installMockGateway(page, {
-        communityInvite: false,
+      const gateway = await installPublicationGateway(page, {
         featureMethods: [...publicationMethods, "sessions.subscribe"],
         deferredMethods: ["sessions.github.status"],
         methodResponses: {
-          [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
           "sessions.subscribe": { subscribed: true },
           "sessions.github.options": {
             ...publicationOptions,
@@ -451,27 +415,15 @@ suite.define(() => {
       await openChatDetails(page);
       await gateway.waitForRequest("sessions.github.options", { after: beforeReconnect });
       await page.getByRole("link", { name: "Open PR", exact: true }).waitFor();
-      if (captureUiProof) {
-        const row = page.locator(".chat-prs");
-        await writeFile(
-          path.join(suite.artifactDir, "shared-publication-reconnected.png"),
-          await takeControlUiViewportScreenshot(page, row, [row.locator("a.chat-pr__create")]),
-        );
-      }
+      const row = page.locator(".chat-prs");
+      await capture(page, "shared-publication-reconnected", row, [
+        row.locator("a.chat-pr__create"),
+      ]);
       await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
         sessions: {
           [key]: {
             repository,
-            pullRequests: [
-              {
-                ...repository,
-                number: 44,
-                branch,
-                title: "Shared publication",
-                url: published.url,
-                state: "merged",
-              },
-            ],
+            pullRequests: [pullRequest(44, branch, "Shared publication")],
             rateLimited: false,
             status: "ready",
           },
@@ -482,14 +434,7 @@ suite.define(() => {
       await expect.poll(() => rows.getAttribute("data-state")).toBe("merged");
       expect(await rows.textContent()).not.toContain("Publish as");
       expect(await page.getByRole("button", { name: "Choose a new publication" }).count()).toBe(0);
-      if (captureUiProof) {
-        await writeFile(
-          path.join(suite.artifactDir, "shared-publication-merged.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".chat-prs"), [
-            rows.locator(".chat-pr__number"),
-          ]),
-        );
-      }
+      await capture(page, "shared-publication-merged", row, [rows.locator(".chat-pr__number")]);
       await rows
         .getByRole("button", {
           name: "Actions for pull request synthetic/publication-demo#44",
