@@ -573,7 +573,7 @@ describe("gateway agent handler", () => {
       expect.objectContaining({
         code: ErrorCodes.UNAVAILABLE,
         message: expect.stringContaining(
-          "Configure agents.defaults.imageModel or tools.media.image.models",
+          "Configure agents.defaults.imageModel or tools.media.models",
         ),
       }),
       expect.objectContaining({ runId }),

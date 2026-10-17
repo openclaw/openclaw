@@ -36,7 +36,7 @@ export async function prepareAgentImageUnderstanding(params: {
     )
   ) {
     throw new Error(
-      "Image attachments could not be analyzed. Configure agents.defaults.imageModel or tools.media.image.models with an available vision model, then retry.",
+      "Image attachments could not be analyzed. Configure agents.defaults.imageModel or tools.media.models with an available vision model, then retry.",
     );
   }
   return {

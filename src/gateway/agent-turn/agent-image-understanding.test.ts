@@ -108,7 +108,7 @@ describe("agent image understanding", () => {
 
   it("names the configuration step when no vision provider is configured", async () => {
     await expect(prepare({})).rejects.toThrow(
-      "Configure agents.defaults.imageModel or tools.media.image.models with an available vision model, then retry.",
+      "Configure agents.defaults.imageModel or tools.media.models with an available vision model, then retry.",
     );
     expect(describeImage).not.toHaveBeenCalled();
   });
