@@ -1,5 +1,6 @@
 // Google tests cover video generation provider plugin behavior.
 import type { Video } from "@google/genai";
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
@@ -600,7 +601,9 @@ describe("google video generation provider", () => {
         }
         if (phase === "headers") {
           return new Promise<Response>((_resolve, reject) => {
-            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            signal.addEventListener("abort", () => reject(toStringifiedError(signal.reason)), {
+              once: true,
+            });
             started.resolve();
           });
         }
