@@ -1,6 +1,4 @@
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import type { Response } from "playwright";
+import type { Page, Response } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
@@ -23,7 +21,20 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const proofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+function createContext(width: number, height: number) {
+  return suite.browser.newContext({
+    colorScheme: "dark",
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport: { width, height },
+  });
+}
+
+async function visit(page: Page, route: RouteId) {
+  const pathname = pathForRoute(route);
+  await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+  await waitForControlUiRoute(page, { pathname, routeId: route });
+}
 
 const introRoutes = [
   "appearance",
@@ -128,34 +139,19 @@ const standaloneHeaderCases = [
 ] as const satisfies ReadonlyArray<{ route: RouteId; subtitle: string }>;
 
 function createCronLayoutMethodResponses() {
-  const jobs: CronJob[] = [
-    {
-      id: "healthy",
-      configRevision: "healthy-revision",
-      name: "Healthy automation",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "healthy" },
-      state: { lastRunStatus: "ok" },
-    },
-    {
-      id: "failing",
-      configRevision: "failing-revision",
-      name: "Failing automation",
-      enabled: true,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "systemEvent", text: "failing" },
-      state: { lastRunStatus: "error" },
-    },
-  ];
+  const jobs: CronJob[] = (["healthy", "failing"] as const).map((id) => ({
+    id,
+    configRevision: `${id}-revision`,
+    name: id === "healthy" ? "Healthy automation" : "Failing automation",
+    enabled: true,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: id },
+    state: { lastRunStatus: id === "healthy" ? "ok" : "error" },
+  }));
   return {
     "agents.list": {
       agents: [
@@ -227,7 +223,6 @@ suite.define(() => {
   });
 
   it("loads provider-settings copy after New Session and Chat without startup errors", async () => {
-    const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     await suite.withPage(
       createControlUiE2eContextOptions(),
       async ({ context, page: firstPage }) => {
@@ -282,12 +277,6 @@ suite.define(() => {
             await openModelSetup(page);
             await page.getByText(/Find existing connections or prepare a local model/).waitFor();
           }
-          if (recordVisuals) {
-            await page.screenshot({
-              path: path.join(suite.artifactDir, `${isSettings ? "settings" : pathname}.png`),
-              fullPage: true,
-            });
-          }
         }
         // Observe without intercepting requests; keep documents alive until every
         // captured body is read, so teardown cannot cancel the work being asserted.
@@ -308,12 +297,7 @@ suite.define(() => {
   });
 
   it("aligns settings-style workspace headers with their content columns", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
+    const context = await createContext(1440, 900);
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: createCronLayoutMethodResponses(),
@@ -321,9 +305,7 @@ suite.define(() => {
 
     try {
       for (const { route, subtitle } of standaloneHeaderCases) {
-        const pathname = pathForRoute(route);
-        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
-        await waitForControlUiRoute(page, { pathname, routeId: route });
+        await visit(page, route);
 
         const header = page.locator(".content-header--settings").last();
         const content = page.locator(".settings-page").last();
@@ -350,12 +332,7 @@ suite.define(() => {
   });
 
   it("aligns every mobile settings page with the topbar content", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 844, width: 390 },
-    });
+    const context = await createContext(390, 844);
     let page = await context.newPage();
     await installMockGateway(page);
 
@@ -378,18 +355,14 @@ suite.define(() => {
         }, route);
 
       for (const route of mobileSettingsRoutes) {
-        const pathname = pathForRoute(route);
-        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
-        await waitForControlUiRoute(page, { pathname, routeId: route });
+        await visit(page, route);
         await expect
           .poll(() => readShellInsets(route), { message: `${route} settings shell alignment` })
           .toEqual({ contentPaddingInline: 12, topbarPaddingInline: 12 });
       }
 
       for (const route of mobileStandaloneSettingsPageRoutes) {
-        const pathname = pathForRoute(route);
-        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
-        await waitForControlUiRoute(page, { pathname, routeId: route });
+        await visit(page, route);
         const settingsPage = page.locator(".settings-page").last();
         await settingsPage.waitFor({ state: "attached" });
         expect(
@@ -404,9 +377,7 @@ suite.define(() => {
         await page.close();
         page = await context.newPage();
         await installMockGateway(page);
-        const pathname = pathForRoute(route);
-        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
-        await waitForControlUiRoute(page, { pathname, routeId: route });
+        await visit(page, route);
         const header = page.locator(".content-header").last();
         const title = header.locator(".page-title");
         const workspace = page.locator(".settings-workspace").last();
@@ -529,12 +500,7 @@ suite.define(() => {
   });
 
   it("keeps Automations search above one tab-and-action row", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 844, width: 390 },
-    });
+    const context = await createContext(390, 844);
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: createCronLayoutMethodResponses(),
@@ -597,15 +563,6 @@ suite.define(() => {
           "Healthy automation",
         ]);
 
-        if (proofEnabled) {
-          const proofDir = path.join(suite.artifactDir, "settings-layout-audit");
-          await mkdir(proofDir, { recursive: true });
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(proofDir, `automations-toolbar-${viewport.width}.png`),
-          });
-        }
         await page.locator(".agent-select__trigger").click();
         const pickerTitle = page.locator(".agent-select__menu-title");
         await pickerTitle.waitFor();
@@ -615,17 +572,7 @@ suite.define(() => {
             .locator(".agent-select__menu")
             .evaluate((menu) => getComputedStyle(menu).opacity),
         ).toBe("1");
-        if (proofEnabled) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(
-              suite.artifactDir,
-              "settings-layout-audit",
-              `automations-agent-picker-${viewport.width}.png`,
-            ),
-          });
-        }
+
         await page.keyboard.press("Escape");
       }
     } finally {
@@ -634,12 +581,7 @@ suite.define(() => {
   });
 
   it("uses the shared tab system for Communications without duplicate section help", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
+    const context = await createContext(1440, 900);
     const page = await context.newPage();
     const config = {
       messages: { queueLimit: 5, responsePrefix: "[OpenClaw]" },
@@ -737,31 +679,10 @@ suite.define(() => {
       await expect.poll(() => advanced.count()).toBe(1);
       await expect.poll(() => advanced.getAttribute("open")).toBeNull();
       await expect.poll(() => advancedSummary.textContent()).toContain("Advanced settings");
-      if (proofEnabled) {
-        await mkdir(path.join(suite.artifactDir, "settings-layout-audit"), { recursive: true });
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "settings-layout-audit"),
-            "communications-messages.png",
-          ),
-        });
-      }
 
       await advancedSummary.click();
       await expect.poll(() => advanced.getAttribute("open")).not.toBeNull();
       await expect.poll(() => page.getByText("Response prefix", { exact: true }).count()).toBe(1);
-      if (proofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "settings-layout-audit"),
-            "communications-advanced-expanded.png",
-          ),
-        });
-      }
 
       await page.locator("#config-sections-tab-tts").click();
       await page.waitForFunction(() =>
@@ -769,16 +690,6 @@ suite.define(() => {
       );
       expect(await page.locator("#config-sections-tab-tts").getAttribute("active")).not.toBeNull();
       expect(await page.locator(".settings-section__help-button").count()).toBe(0);
-      if (proofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            path.join(suite.artifactDir, "settings-layout-audit"),
-            "communications-voice.png",
-          ),
-        });
-      }
 
       await page.setViewportSize({ height: 844, width: 390 });
       await expect
@@ -807,20 +718,11 @@ suite.define(() => {
   });
 
   it("keeps settings rows, introductions, section headings, and Learn more links on one layout system", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
+    const context = await createContext(1440, 900);
     const page = await context.newPage();
     await installMockGateway(page);
 
     try {
-      if (proofEnabled) {
-        await mkdir(path.join(suite.artifactDir, "settings-layout-audit"), { recursive: true });
-      }
-
       let auditedPairCount = 0;
       for (const route of settingsRowRoutes) {
         const pathname = pathForRoute(route);
@@ -875,16 +777,6 @@ suite.define(() => {
             })
             .toBe(2);
           expect(await page.locator(".settings-page__intro").count()).toBe(0);
-          if (proofEnabled) {
-            await page.screenshot({
-              animations: "disabled",
-              fullPage: true,
-              path: path.join(
-                path.join(suite.artifactDir, "settings-layout-audit"),
-                `${route}.png`,
-              ),
-            });
-          }
         }
 
         if ((sectionAlignmentRoutes as readonly string[]).includes(route)) {
@@ -1004,16 +896,6 @@ suite.define(() => {
               groupClearance: 12,
               overlapsAction: false,
             });
-
-          if (proofEnabled && viewport.width === 1440) {
-            await section.screenshot({
-              animations: "disabled",
-              path: path.join(
-                path.join(suite.artifactDir, "settings-layout-audit"),
-                `action-${sectionCase.route}.png`,
-              ),
-            });
-          }
         }
       }
     } finally {

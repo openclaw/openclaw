@@ -56,6 +56,28 @@ async function createContext(colorScheme?: "dark" | "light"): Promise<BrowserCon
   });
 }
 
+function installPrefsGateway(page: Page, initial: ReturnType<typeof configResponse>) {
+  return installMockGateway(page, { methodResponses: { "config.get": initial } });
+}
+
+async function openAppearance(prefs: Record<string, unknown>, hash: string, clock = false) {
+  const context = await createContext();
+  const page = await context.newPage();
+  if (clock) {
+    await page.clock.install();
+  }
+  const gateway = await installPrefsGateway(page, configResponse(prefs, hash));
+  return { context, page, gateway };
+}
+
+async function expectLightTheme(page: Page) {
+  await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
+  await expect.poll(() => page.locator("html").getAttribute("data-theme-resolved")).toBe("light");
+  await expect
+    .poll(() => readSettingsMirror(page))
+    .toMatchObject({ theme: "claw", themeMode: "light" });
+}
+
 async function waitForRequestCount(
   gateway: MockGatewayControls,
   method: string,
@@ -125,61 +147,6 @@ async function readPendingPrefStorage(page: Page): Promise<Record<string, unknow
       .filter((key) => key.startsWith("openclaw.control.serverPrefs.pending.v1:"))
       .map((key) => JSON.parse(localStorage.getItem(key) ?? "null") as Record<string, unknown>),
   );
-}
-
-async function observePreferenceReplay(page: Page): Promise<void> {
-  await evaluateControlUiContext(page, ({ gateway, runtimeConfig }) => {
-    const trace: { phase: string; connected: boolean; canPatch: boolean | undefined }[] = [];
-    Object.assign(window, { preferenceReplayTrace: trace });
-    const record = () => {
-      trace.push({
-        phase: gateway.snapshot.phase,
-        connected: runtimeConfig.state.connected,
-        canPatch: runtimeConfig.canPatch,
-      });
-    };
-    record();
-    const unsubscribeGateway = gateway.subscribe(record);
-    const unsubscribeConfig = runtimeConfig.subscribe(record);
-    window.addEventListener(
-      "pagehide",
-      () => {
-        unsubscribeGateway();
-        unsubscribeConfig();
-      },
-      { once: true },
-    );
-  });
-}
-
-async function waitForPreferenceReplay(page: Page, gateway: MockGatewayControls) {
-  try {
-    return await gateway.waitForRequest("config.patch");
-  } catch (error) {
-    const state = await evaluateControlUiContext(
-      page,
-      ({ gateway: source, runtimeConfig, theme }) => {
-        return {
-          phase: source.snapshot.phase,
-          connected: runtimeConfig.state.connected,
-          clientMatches: runtimeConfig.state.client === source.snapshot.client,
-          canPatch: runtimeConfig.canPatch,
-          loading: runtimeConfig.state.configLoading,
-          saving: runtimeConfig.state.configSaving,
-          draftDirty: runtimeConfig.state.configFormDirty,
-          theme: theme.settings.theme,
-          // SAFETY: observePreferenceReplay installs this test-only trace before either reconnect.
-          trace: (Reflect.get(window, "preferenceReplayTrace") as unknown[]).slice(-24),
-        };
-      },
-    );
-    console.error("[prefs-reconnect] replay failure", state, {
-      pendingKeys: (await readPendingPrefStorage(page)).map((prefs) => Object.keys(prefs)),
-      configReads: (await gateway.getRequests("config.get")).length,
-      preferenceWrites: (await gateway.getRequests("config.patch")).length,
-    });
-    throw error;
-  }
 }
 
 function themeCard(page: Page, theme: "claw" | "knot" | "dash") {
@@ -298,13 +265,7 @@ suite.define(() => {
       await gateway.waitForRequest("config.get");
       await gateway.waitForRequest("users.prefs.get");
       await gateway.waitForRequest("chat.startup");
-      await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
-      await expect
-        .poll(() => page.locator("html").getAttribute("data-theme-resolved"))
-        .toBe("light");
-      await expect
-        .poll(() => readSettingsMirror(page))
-        .toMatchObject({ theme: "claw", themeMode: "light" });
+      await expectLightTheme(page);
 
       await gateway.setOnline(false);
       const identity = page.locator("openclaw-app-sidebar .sidebar-identity-card");
@@ -313,30 +274,22 @@ suite.define(() => {
       expect(await identity.getAttribute("title")).toBe(await identity.getAttribute("aria-label"));
       await page.locator(".agent-chat__input--offline").waitFor();
 
-      await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
-      await expect
-        .poll(() => page.locator("html").getAttribute("data-theme-resolved"))
-        .toBe("light");
-      await expect
-        .poll(() => readSettingsMirror(page))
-        .toMatchObject({ theme: "claw", themeMode: "light" });
+      await expectLightTheme(page);
     } finally {
       await context.close();
     }
   });
 
   it("replays an offline theme edit after a same-client reconnect", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    await page.clock.install();
-    const initial = configResponse({ theme: "claw", themeMode: "system" }, "prefs-a-1");
+    const { context, page, gateway } = await openAppearance(
+      { theme: "claw", themeMode: "system" },
+      "prefs-a-1",
+      true,
+    );
     const committed = configResponse(
       { theme: "knot", themeMode: "system", accent: "theme" },
       "prefs-a-2",
     );
-    const gateway = await installMockGateway(page, {
-      methodResponses: { "config.get": initial },
-    });
 
     try {
       const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
@@ -344,7 +297,6 @@ suite.define(() => {
       await themeCard(page, "claw").waitFor();
       await gateway.waitForRequest("config.get");
       const configGetsBeforeEdit = (await gateway.getRequests("config.get")).length;
-      await observePreferenceReplay(page);
       await gateway.deferNext("config.patch");
 
       await proxyReconnect(page, gateway, async () => {
@@ -357,7 +309,7 @@ suite.define(() => {
 
       // Reconnect owns one authoritative read even while the pending LWW preference shadows it.
       await waitForRequestCount(gateway, "config.get", configGetsBeforeEdit + 1);
-      const patch = await waitForPreferenceReplay(page, gateway);
+      const patch = await gateway.waitForRequest("config.patch");
       expect(patchPrefs(patch)).toEqual({ theme: "knot", accent: "theme" });
 
       await gateway.setMethodResponse("config.get", committed);
@@ -379,17 +331,15 @@ suite.define(() => {
   });
 
   it("keeps offline intent through read-only reconnect and dispatches once after authorization", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    await page.clock.install();
-    const initial = configResponse({ theme: "claw", themeMode: "system" }, "prefs-scope-1");
+    const { context, page, gateway } = await openAppearance(
+      { theme: "claw", themeMode: "system" },
+      "prefs-scope-1",
+      true,
+    );
     const committed = configResponse(
       { theme: "knot", themeMode: "system", accent: "theme" },
       "prefs-scope-2",
     );
-    const gateway = await installMockGateway(page, {
-      methodResponses: { "config.get": initial },
-    });
 
     try {
       const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
@@ -397,7 +347,6 @@ suite.define(() => {
       await themeCard(page, "claw").waitFor();
       await gateway.waitForRequest("config.get");
 
-      await observePreferenceReplay(page);
       await proxyReconnect(page, gateway, async () => {
         await themeCard(page, "knot").click();
         await expectThemeActive(page, "knot");
@@ -416,7 +365,7 @@ suite.define(() => {
         await gateway.setOperatorScopes(["operator.admin", "operator.read", "operator.write"]);
       });
 
-      const patch = await waitForPreferenceReplay(page, gateway);
+      const patch = await gateway.waitForRequest("config.patch");
       expect(patchPrefs(patch)).toEqual({ theme: "knot", accent: "theme" });
       await gateway.resolveDeferred("config.patch", committed);
       await expectThemeActive(page, "knot");
@@ -434,12 +383,8 @@ suite.define(() => {
     const pageB = await context.newPage();
     await pageA.clock.install();
     const initial = configResponse({ theme: "claw", themeMode: "system" }, "prefs-tabs-1");
-    const gatewayA = await installMockGateway(pageA, {
-      methodResponses: { "config.get": initial },
-    });
-    const gatewayB = await installMockGateway(pageB, {
-      methodResponses: { "config.get": initial },
-    });
+    const gatewayA = await installPrefsGateway(pageA, initial);
+    const gatewayB = await installPrefsGateway(pageB, initial);
     try {
       await Promise.all([
         pageA.goto(`${suite.server.baseUrl}settings/appearance`),
@@ -489,12 +434,8 @@ suite.define(() => {
     const pageA = await contextA.newPage();
     const pageB = await contextB.newPage();
     const initial = configResponse({ theme: "claw" }, "prefs-b-1");
-    const gatewayA = await installMockGateway(pageA, {
-      methodResponses: { "config.get": initial },
-    });
-    const gatewayB = await installMockGateway(pageB, {
-      methodResponses: { "config.get": initial },
-    });
+    const gatewayA = await installPrefsGateway(pageA, initial);
+    const gatewayB = await installPrefsGateway(pageB, initial);
 
     try {
       await Promise.all([
@@ -548,12 +489,10 @@ suite.define(() => {
   });
 
   it("applies a server delta without reverting a pending local key", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    const initial = configResponse({ locale: "en", theme: "claw" }, "prefs-c-1");
-    const gateway = await installMockGateway(page, {
-      methodResponses: { "config.get": initial },
-    });
+    const { context, page, gateway } = await openAppearance(
+      { locale: "en", theme: "claw" },
+      "prefs-c-1",
+    );
 
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);

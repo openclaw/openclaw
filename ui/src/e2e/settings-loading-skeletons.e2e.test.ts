@@ -1,5 +1,6 @@
-import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -14,32 +15,18 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const proofStage = process.env.OPENCLAW_UI_PROOF_STAGE ?? "after";
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const captureBeforeProof = captureUiProof && proofStage === "before";
-
-async function captureScreenshot(
-  target: import("playwright").Locator,
-  name: string,
-): Promise<void> {
-  if (!captureUiProof) {
-    return;
-  }
-  await target.screenshot({
-    animations: "disabled",
-    path: path.join(suite.artifactDir, `${proofStage}-${name}.png`),
-  });
+async function visit(page: Page, routeId: RouteId) {
+  const pathname = pathForRoute(routeId);
+  await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+  await waitForControlUiRoute(page, { pathname, routeId });
 }
 
-async function captureLoadingState(
-  target: import("playwright").Locator,
-  name: string,
-): Promise<void> {
+function configSnapshot(config: Record<string, unknown>, hash: string) {
+  return { config, hash, issues: [], raw: JSON.stringify(config), valid: true };
+}
+
+async function expectLoading(target: import("playwright").Locator): Promise<void> {
   await target.waitFor({ state: "visible" });
-  await captureScreenshot(target, name);
-  if (captureBeforeProof) {
-    return;
-  }
   const skeletons = target.locator(".settings-loading-skeleton");
   await expect.poll(() => skeletons.count()).toBeGreaterThan(0);
   expect(
@@ -76,24 +63,14 @@ suite.define(() => {
             mainKey: "main",
             scope: "agent",
           },
-          "config.get": {
-            config: {},
-            hash: "settings-loading-models",
-            issues: [],
-            raw: "{}",
-            valid: true,
-          },
+          "config.get": configSnapshot({}, "settings-loading-models"),
           "models.list": { models: [] },
           "models.authStatus": { providers: [], ts: Date.now() },
           "sessions.usage": { aggregates: { byProvider: [] } },
           "usage.status": { providers: [] },
         },
       });
-      await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/model-providers",
-        routeId: "model-providers",
-      });
+      await visit(page, "model-providers");
       await gateway.waitForRequest("models.authStatus");
       const authStatusRequestCount = (await gateway.getRequests("models.authStatus")).length;
       await gateway.deferNext("models.authStatus");
@@ -106,7 +83,7 @@ suite.define(() => {
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Reviewer");
       await gateway.waitForRequest("models.authStatus", { after: authStatusRequestCount });
-      await captureLoadingState(page.locator(".settings-page").first(), "models");
+      await expectLoading(page.locator(".settings-page").first());
     });
   });
 
@@ -126,12 +103,8 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}settings/channels`);
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/channels",
-        routeId: "channels",
-      });
-      await captureLoadingState(page.locator(".settings-page").first(), "channels-pairing");
+      await visit(page, "channels");
+      await expectLoading(page.locator(".settings-page").first());
     });
   });
 
@@ -144,30 +117,19 @@ suite.define(() => {
         },
         presenceUsers: [{ host: "Gateway", id: "gateway", mode: "gateway" }],
       });
-      await page.goto(`${suite.server.baseUrl}settings/devices`);
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/devices",
-        routeId: "devices",
-      });
+      await visit(page, "devices");
       await gateway.waitForRequest("device.pair.list");
       await gateway.deferNext("device.pair.list");
       await gateway.emitGatewayEvent("device.pair.requested", {});
-      await captureLoadingState(
-        page.locator(".settings-section", { hasText: "Devices" }).first(),
-        "devices",
-      );
+      await expectLoading(page.locator(".settings-section", { hasText: "Devices" }).first());
     });
   });
 
   it("renders the MCP server load as a skeleton", async () => {
     await withPage(async (page) => {
       await installMockGateway(page, { heldMethods: ["config.get"] });
-      await page.goto(`${suite.server.baseUrl}settings/mcp`);
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/mcp",
-        routeId: "mcp",
-      });
-      await captureLoadingState(page.locator(".mcp-server-list"), "mcp");
+      await visit(page, "mcp");
+      await expectLoading(page.locator(".mcp-server-list"));
     });
   });
 
@@ -179,7 +141,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}settings/plugins`);
       await gateway.waitForRequest("plugins.list");
-      await captureLoadingState(page.locator("#plugin-settings-panel"), "plugins-panel");
+      await expectLoading(page.locator("#plugin-settings-panel"));
     });
   });
 
@@ -202,10 +164,7 @@ suite.define(() => {
         routeId: "plugin-settings",
         search: "?tab=advanced",
       });
-      await captureLoadingState(
-        page.locator("#plugin-settings-advanced .settings-section"),
-        "plugins-advanced",
-      );
+      await expectLoading(page.locator("#plugin-settings-advanced .settings-section"));
     });
   });
 
@@ -223,10 +182,9 @@ suite.define(() => {
           },
         ],
       });
-      await page.goto(`${suite.server.baseUrl}settings/profile`);
-      await waitForControlUiRoute(page, { pathname: "/settings/profile", routeId: "profile" });
+      await visit(page, "profile");
       await gateway.waitForRequest("users.self");
-      await captureLoadingState(page.locator("#settings-profile-identity"), "profile-identity");
+      await expectLoading(page.locator("#settings-profile-identity"));
     });
   });
 
@@ -245,13 +203,9 @@ suite.define(() => {
             scope: "agent",
           },
           "config.get": {
-            config,
+            ...configSnapshot(config, "settings-loading-tools"),
             sourceConfig: config,
             runtimeConfig: config,
-            hash: "settings-loading-tools",
-            issues: [],
-            raw: JSON.stringify(config),
-            valid: true,
           },
         },
       });
@@ -259,16 +213,8 @@ suite.define(() => {
       await gateway.waitForRequest("tools.catalog");
       await gateway.waitForRequest("tools.effective");
       const panel = page.locator("#agent-panel");
-      await captureLoadingState(
-        panel.locator(".settings-section", { hasText: "Tool preview" }).first(),
-        "agent-tools-available",
-      );
-      await captureLoadingState(
-        captureBeforeProof
-          ? panel.locator(".callout", { hasText: "Loading runtime tool catalog" }).first()
-          : panel.locator(".settings-section", { hasText: "Tool catalog" }).first(),
-        "agent-tools-catalog",
-      );
+      await expectLoading(panel.locator(".settings-section", { hasText: "Tool preview" }).first());
+      await expectLoading(panel.locator(".settings-section", { hasText: "Tool catalog" }).first());
     });
   });
 
@@ -278,11 +224,10 @@ suite.define(() => {
         featureMethods: [...defaultControlUiFeatureMethods, "openclaw.changes.list"],
         heldMethods: ["openclaw.changes.list"],
       });
-      await page.goto(`${suite.server.baseUrl}custodian`);
-      await waitForControlUiRoute(page, { pathname: "/custodian", routeId: "custodian" });
+      await visit(page, "custodian");
       await page.getByRole("button", { name: "History", exact: true }).click();
       await gateway.waitForRequest("openclaw.changes.list");
-      await captureLoadingState(page.locator(".custodian__history"), "custodian-history");
+      await expectLoading(page.locator(".custodian__history"));
     });
   });
 
@@ -304,8 +249,7 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}custodian`);
-      await waitForControlUiRoute(page, { pathname: "/custodian", routeId: "custodian" });
+      await visit(page, "custodian");
       const historyToggle = page.getByRole("button", { name: "History", exact: true });
       await historyToggle.click();
       await gateway.waitForRequest("openclaw.changes.list");
@@ -321,7 +265,6 @@ suite.define(() => {
       const spinner = history.locator(".custodian__history-spinner");
       await spinner.waitFor({ state: "visible" });
       expect(await history.locator(".settings-loading-skeleton").count()).toBe(0);
-      await captureScreenshot(history, "custodian-refresh");
     });
   });
 
@@ -332,13 +275,9 @@ suite.define(() => {
         heldMethods: ["approval.history"],
         operatorScopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
       });
-      await page.goto(`${suite.server.baseUrl}settings/approvals`);
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/approvals",
-        routeId: "approvals",
-      });
+      await visit(page, "approvals");
       await gateway.waitForRequest("approval.history");
-      await captureLoadingState(page.locator(".settings-page").first(), "approvals-history");
+      await expectLoading(page.locator(".settings-page").first());
     });
   });
 
@@ -370,23 +309,16 @@ suite.define(() => {
             channelAccounts: {},
             channelDefaultAccountId: {},
           },
-          "config.get": {
-            config,
-            hash: "settings-loading-channel-schema",
-            issues: [],
-            raw: JSON.stringify(config),
-            valid: true,
-          },
+          "config.get": configSnapshot(config, "settings-loading-channel-schema"),
         },
       });
-      await page.goto(`${suite.server.baseUrl}settings/channels`);
-      await waitForControlUiRoute(page, { pathname: "/settings/channels", routeId: "channels" });
+      await visit(page, "channels");
       await gateway.waitForRequest("config.schema");
       await page
         .locator("button.channels-item, button.channels-item__detail", { hasText: "WhatsApp" })
         .first()
         .click();
-      await captureLoadingState(page.locator(".channels-detail"), "channels-schema");
+      await expectLoading(page.locator(".channels-detail"));
     });
   });
 
@@ -395,27 +327,16 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         heldMethods: ["config.schema"],
         methodResponses: {
-          "config.get": {
-            config: {},
-            hash: "settings-loading-config-schema",
-            issues: [],
-            raw: "{}",
-            valid: true,
-          },
+          "config.get": configSnapshot({}, "settings-loading-config-schema"),
         },
       });
-      await page.goto(`${suite.server.baseUrl}settings/infrastructure`);
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/infrastructure",
-        routeId: "infrastructure",
-      });
+      await visit(page, "infrastructure");
       await gateway.waitForRequest("config.schema");
       const panel = page.locator("#config-section-panel");
       const spinner = panel.locator(".config-loading__spinner");
       await spinner.waitFor({ state: "visible" });
       expect(await spinner.isVisible()).toBe(true);
       expect(await panel.locator(".settings-loading-skeleton").count()).toBe(0);
-      await captureScreenshot(panel, "config-schema");
     });
   });
 
@@ -444,7 +365,7 @@ suite.define(() => {
         expect(textBox).not.toBeNull();
         expect(controlBox).not.toBeNull();
         expect(controlBox!.y).toBeGreaterThanOrEqual(textBox!.y + textBox!.height);
-        await captureLoadingState(page.locator(".settings-page").first(), "secrets-mobile");
+        await expectLoading(page.locator(".settings-page").first());
       },
     );
   });
@@ -462,7 +383,7 @@ suite.define(() => {
       await installMockGateway(page);
       try {
         await page.goto(`${suite.server.baseUrl}settings/appearance`);
-        await captureLoadingState(page.locator(".settings-sidebar"), "settings-sidebar");
+        await expectLoading(page.locator(".settings-sidebar"));
       } finally {
         releaseSidebar?.();
       }

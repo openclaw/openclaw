@@ -1,16 +1,10 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   installMockGateway,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
-import {
-  captureSettingsSidebarUiProof,
-  captureSidebarUiProof,
-  createSidebarCustomizationSuite,
-} from "./sidebar-customization.test-support.ts";
+import { createSidebarCustomizationSuite } from "./sidebar-customization.test-support.ts";
 
 const suite = createSidebarCustomizationSuite("Settings media permission lifetime");
 
@@ -119,6 +113,10 @@ async function events(page: Page) {
   return page.evaluate(() => [...window.settingsMediaProof.events]);
 }
 
+async function eventCount(page: Page, type: MediaEvent["type"]) {
+  return (await events(page)).filter((event) => event.type === type).length;
+}
+
 async function settle(page: Page, enumerationId: number, rejectEnumeration = false) {
   return page.evaluate(
     ({ id, reject }) => {
@@ -155,64 +153,36 @@ suite.define(() => {
   for (const kind of ["microphone", "camera"] as const) {
     for (const transition of ["route leave", "disconnect", "second await", "stay"] as const) {
       it(`${kind}: ${transition}`, async () => {
-        const caseId = `${kind}-${transition.replaceAll(" ", "-")}`;
-        const artifactDir = suite.artifactDir;
         const context = await suite.newBrowserContext({
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 1000, width: 1440 },
-          recordVideo:
-            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-              ? { dir: artifactDir, size: { height: 1000, width: 1440 } }
-              : undefined,
         });
         const page = await context.newPage();
-        const record: Record<string, unknown> = {
-          schema: "openclaw-settings-media-permission-proof-v1",
-          caseId,
-          kind,
-          transition,
-          status: "fail",
-          boundary: "synthetic MediaDevices; native permission UI not exercised",
-        };
-        let gateway: Awaited<ReturnType<typeof installMockGateway>> | undefined;
         try {
           await installMediaBoundary(page, transition === "second await");
-          gateway = await installMockGateway(page);
+          await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}new`);
           await page.locator(".new-session-page__message").waitFor({ state: "visible" });
           await page.keyboard.press("Control+Shift+,");
           let { sidebar } = await waitForControlUiSettingsTakeover(page);
           const configOwner = await page.locator("openclaw-config-page").elementHandle();
           expect(configOwner).not.toBeNull();
-          record.ownerConnectedAtGesture = await configOwner!.evaluate(
+          const ownerConnectedAtGesture = await configOwner!.evaluate(
             (element) => element.isConnected,
           );
-          expect(record.ownerConnectedAtGesture).toBe(true);
-          await expect
-            .poll(() =>
-              events(page).then((rows) => rows.filter((row) => row.type === "enumerate").length),
-            )
-            .toBe(2);
+          expect(ownerConnectedAtGesture).toBe(true);
+          await expect.poll(() => eventCount(page, "enumerate")).toBe(2);
           const picker = () => page.locator(`select[data-settings-${kind}]`);
-          const proofSurface = page.locator(".shell");
           await picker().click();
           await page.keyboard.press("Escape");
           expect(new URL(page.url()).pathname).toBe("/settings/appearance");
-          await captureSettingsSidebarUiProof(suite, sidebar, "appearance-sidebar.png");
-          await captureSidebarUiProof(suite, page, "appearance-pending.png", proofSurface, [
-            picker(),
-          ]);
           const target = kind === "microphone" ? 1 : 2;
           const other = target === 1 ? 2 : 1;
           await settle(page, other);
           if (transition === "second await") {
             await settle(page, target, true);
-            await expect
-              .poll(() =>
-                events(page).then((rows) => rows.filter((row) => row.type === "enumerate").length),
-              )
-              .toBe(3);
+            await expect.poll(() => eventCount(page, "enumerate")).toBe(3);
           }
           if (transition === "disconnect") {
             await sidebar.locator(".settings-sidebar__item").first().focus();
@@ -231,17 +201,15 @@ suite.define(() => {
             await expect.poll(() => pageTitle.textContent()).toBe("Advanced");
             await expect.poll(() => page.locator(".settings-select--media-device").count()).toBe(0);
           }
-          record.exitRoute = new URL(page.url()).pathname;
-          record.ownerConnectedAfterExit = await configOwner!.evaluate(
+          const ownerConnectedAfterExit = await configOwner!.evaluate(
             (element) => element.isConnected,
           );
           if (transition === "disconnect") {
-            expect(record.ownerConnectedAfterExit).toBe(false);
+            expect(ownerConnectedAfterExit).toBe(false);
           }
           const settlementSurface = await settle(page, transition === "second await" ? 3 : target);
-          record.settlementSurface = settlementSurface;
           if (transition === "route leave" || transition === "second await") {
-            expect(record.ownerConnectedAfterExit).toBe(true);
+            expect(ownerConnectedAfterExit).toBe(true);
             expect(settlementSurface).toMatchObject({
               route: "/settings/advanced",
               ownerConnected: true,
@@ -250,18 +218,8 @@ suite.define(() => {
             });
           }
           await renderedAfterMediaSettlement(page);
-          record.eventsAfterSettlement = await events(page);
-          record.probesAfterSettlement = (await events(page)).filter(
-            (row) => row.type === "probe",
-          ).length;
-          const settledContent = page.locator(
-            transition === "disconnect"
-              ? ".new-session-page__message"
-              : "openclaw-config-page .content-header--settings .page-title",
-          );
-          await captureSidebarUiProof(suite, page, "settled-surface.png", proofSurface, [
-            settledContent,
-          ]);
+          const probesAfterSettlement = await eventCount(page, "probe");
+          let probesBeforeFreshGesture = 0;
           if (transition !== "stay") {
             if (transition === "disconnect") {
               await page.keyboard.press("Control+Shift+,");
@@ -271,18 +229,11 @@ suite.define(() => {
             }
             await picker().waitFor({ state: "visible" });
             await renderedAfterMediaSettlement(page);
-            record.probesBeforeFreshGesture = (await events(page)).filter(
-              (row) => row.type === "probe",
-            ).length;
+            probesBeforeFreshGesture = await eventCount(page, "probe");
             await picker().click();
             await page.keyboard.press("Escape");
             await renderedAfterMediaSettlement(page);
           }
-          record.finalEvents = await events(page);
-          record.finalRoute = new URL(page.url()).pathname;
-          await captureSidebarUiProof(suite, page, "fresh-gesture-result.png", proofSurface, [
-            picker(),
-          ]);
           const rows = await events(page);
           const probes = rows.filter((row) => row.type === "probe");
           const pointers = rows.filter((row) => row.type === "pointer");
@@ -292,27 +243,13 @@ suite.define(() => {
             kind === "microphone" ? { audio: true } : { video: true },
           ]);
           expect(rows.filter((row) => row.type === "stop")).toHaveLength(1);
-          expect(record.probesAfterSettlement).toBe(transition === "stay" ? 1 : 0);
+          expect(probesAfterSettlement).toBe(transition === "stay" ? 1 : 0);
           if (transition !== "stay") {
-            expect(record.probesBeforeFreshGesture).toBe(0);
+            expect(probesBeforeFreshGesture).toBe(0);
           }
-          expect(record.finalRoute).toBe("/settings/appearance");
-          record.status = "pass";
-        } catch (error) {
-          record.error = error instanceof Error ? error.message : String(error);
-          throw error;
+          expect(new URL(page.url()).pathname).toBe("/settings/appearance");
         } finally {
-          record.requests = gateway ? await gateway.getRequests() : [];
-          record.finalEvents ??= await events(page).catch(() => []);
-          try {
-            await suite.closeBrowserContext(context);
-            record.contextClosed = true;
-          } finally {
-            await writeFile(
-              path.join(artifactDir, "observations.json"),
-              `${JSON.stringify(record, null, 2)}\n`,
-            );
-          }
+          await suite.closeBrowserContext(context);
         }
       });
     }

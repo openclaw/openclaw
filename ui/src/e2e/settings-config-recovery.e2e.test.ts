@@ -1,3 +1,4 @@
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -19,6 +20,20 @@ const snapshot = {
 };
 const configPath = "/settings/openclaw.json";
 const recoveryBackupPath = `${configPath}.bak`;
+const missing = { ...snapshot, exists: false, config: {}, raw: null, hash: "missing" };
+
+async function edit(prefix: Locator, value: string) {
+  await prefix.fill(value);
+  await prefix.press("Tab");
+}
+
+function publicationError(rollbackStatus: string) {
+  return {
+    code: "UNAVAILABLE",
+    message: `Config publication failed after removing ${configPath}: included config changed since last load. Restoration: ${rollbackStatus}. Inspect recovery backups at ${recoveryBackupPath}.`,
+    details: { publication: "partial", rollbackStatus, configPath, recoveryBackupPath },
+  };
+}
 
 const scenario = {
   methodResponses: {
@@ -56,15 +71,9 @@ suite.define(() => {
           const prefix = page.getByRole("textbox", { name: "Outbound Response Prefix" });
           await prefix.waitFor();
           await gateway.deferNext("config.set");
-          await prefix.fill("retained draft");
-          await prefix.press("Tab");
+          await edit(prefix, "retained draft");
           await gateway.waitForRequest("config.set");
-          const message = `Config publication failed after removing ${configPath}: included config changed since last load. Restoration: ${rollbackStatus}. Inspect recovery backups at ${recoveryBackupPath}.`;
-          await gateway.rejectDeferred("config.set", {
-            code: "UNAVAILABLE",
-            message,
-            details: { publication: "partial", rollbackStatus, configPath, recoveryBackupPath },
-          });
+          await gateway.rejectDeferred("config.set", publicationError(rollbackStatus));
           const indicator = page.locator("openclaw-settings-save-indicator");
           await expect
             .poll(() => indicator.textContent())
@@ -81,15 +90,9 @@ suite.define(() => {
             await secondPage.goto(`${suite.server.baseUrl}settings/communications`);
             await secondGateway.waitForRequest("config.get");
             await secondGateway.resolveDeferred("config.get", {
-              ...snapshot,
-              exists: false,
-              raw: null,
-              config: {},
-              writeError: {
-                code: "UNAVAILABLE",
-                message,
-                details: { publication: "partial", rollbackStatus, configPath, recoveryBackupPath },
-              },
+              ...missing,
+              hash: snapshot.hash,
+              writeError: publicationError(rollbackStatus),
             });
             await expect
               .poll(() => secondPage.locator("openclaw-settings-save-indicator").textContent())
@@ -100,15 +103,8 @@ suite.define(() => {
             await expect.poll(() => secondPrefix.isDisabled()).toBe(true);
             expect(await secondGateway.getRequests("config.set")).toHaveLength(0);
             await secondPage.close();
-            await gateway.setMethodResponse("config.get", {
-              ...snapshot,
-              exists: false,
-              config: {},
-              raw: null,
-              hash: "missing",
-            });
-            await prefix.fill("later draft");
-            await prefix.press("Tab");
+            await gateway.setMethodResponse("config.get", missing);
+            await edit(prefix, "later draft");
             // Exceed the registered Settings autosave debounce before checking absence.
             await page.clock.runFor(1200);
             expect(await gateway.getRequests("config.set")).toHaveLength(1);
@@ -127,7 +123,7 @@ suite.define(() => {
               () => window.openclawControlUi?.snapshot().gatewayPhase === "connected",
             );
             for (const candidate of [
-              { ...snapshot, exists: false, config: {}, raw: null, hash: "missing" },
+              missing,
               { ...snapshot, valid: false, raw: "{", hash: "invalid" },
             ]) {
               const reads = (await gateway.getRequests("config.get")).length;
@@ -139,15 +135,13 @@ suite.define(() => {
               expect(await indicator.textContent()).toContain(recoveryBackupPath);
             }
             // A clean draft must retain a usable recovery action after file repair.
-            await prefix.fill("initial");
-            await prefix.press("Tab");
+            await edit(prefix, "initial");
             await expect.poll(() => prefix.inputValue()).toBe("initial");
             await gateway.setMethodResponse("config.get", { ...snapshot, hash: "recovered" });
             await recover.click();
             await expect.poll(() => indicator.textContent()).not.toContain("Your draft is kept");
             await gateway.deferNext("config.set");
-            await prefix.fill("saved after recovery");
-            await prefix.press("Tab");
+            await edit(prefix, "saved after recovery");
             const saved = await gateway.waitForRequest("config.set", { after: 1 });
             expect(saved.params).toMatchObject({ baseHash: "recovered" });
             const { raw } = saved.params as { raw: string };
