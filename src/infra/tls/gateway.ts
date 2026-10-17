@@ -18,11 +18,19 @@ const GATEWAY_TLS_CERT_GENERATION_TIMEOUT_MS = 30_000;
 // Leaf material may include a certificate chain; CA bundles retain their separate contract.
 const MAX_TLS_LEAF_FILE_BYTES = 64 * 1024;
 
-async function readTlsLeafFile(filePath: string): Promise<string> {
-  // Follow configured certificate/key symlinks, then bound reads on the opened descriptor.
-  const file = await fs.open(filePath, "r");
+async function readTlsFile(filePath: string, maxBytes?: number): Promise<string> {
+  // Follow configured symlinks, but let writerless FIFOs reach the descriptor check.
+  const flags =
+    process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
+  const file = await fs.open(filePath, flags);
   try {
-    return (await readFileDescriptorBounded(file.fd, MAX_TLS_LEAF_FILE_BYTES)).toString("utf8");
+    if (!(await file.stat()).isFile()) {
+      throw new Error("Gateway TLS material must be a regular file.");
+    }
+    // CA bundles retain their existing size contract; only leaf cert/key reads are capped.
+    return maxBytes === undefined
+      ? await file.readFile("utf8")
+      : (await readFileDescriptorBounded(file.fd, maxBytes)).toString("utf8");
   } finally {
     await file.close();
   }
@@ -192,7 +200,10 @@ export async function inspectGatewayTlsCertificate(
     return err("gateway tls is disabled");
   }
   try {
-    const cert = await readTlsLeafFile(resolveGatewayTlsCertPath(cfg.certPath));
+    const cert = await readTlsFile(
+      resolveGatewayTlsCertPath(cfg.certPath),
+      MAX_TLS_LEAF_FILE_BYTES,
+    );
     const fingerprintSha256 = normalizeTlsFingerprint(new X509Certificate(cert).fingerprint256);
     return fingerprintSha256
       ? ok({ cert, fingerprintSha256 })
@@ -248,9 +259,9 @@ export async function loadGatewayTlsServerRuntime(
   }
 
   try {
-    const cert = await readTlsLeafFile(certPath);
-    const key = await readTlsLeafFile(keyPath);
-    const ca = caPath ? await fs.readFile(caPath, "utf8") : undefined;
+    const cert = await readTlsFile(certPath, MAX_TLS_LEAF_FILE_BYTES);
+    const key = await readTlsFile(keyPath, MAX_TLS_LEAF_FILE_BYTES);
+    const ca = caPath ? await readTlsFile(caPath) : undefined;
     const x509 = new X509Certificate(cert);
     const fingerprintSha256 = normalizeTlsFingerprint(x509.fingerprint256 ?? "");
 

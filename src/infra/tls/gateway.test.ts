@@ -1,5 +1,6 @@
 // Covers gateway TLS loading, fingerprint reporting, generated certificate
 // paths, and error handling for missing or invalid material.
+import { execFileSync, spawnSync } from "node:child_process";
 import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -120,6 +121,53 @@ afterEach(async () => {
 });
 
 describe("loadGatewayTlsServerRuntime", () => {
+  it.skipIf(process.platform === "win32")(
+    "refuses FIFO material without blocking either TLS entry",
+    async () => {
+      const dir = await createTempDir();
+      const certPath = path.join(dir, "cert.pem");
+      const keyPath = path.join(dir, "key.pem");
+      const fifo = path.join(dir, "input.pipe");
+      await fs.writeFile(certPath, CERT_PEM);
+      await fs.writeFile(keyPath, KEY_PEM);
+      execFileSync("mkfifo", [fifo]);
+      // Keep a regressed blocking open in a killable process, outside the test worker.
+      const probe = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          new URL("../../../scripts/tsx.mjs", import.meta.url).href,
+          "--input-type=module",
+          "-e",
+          `
+        import { inspectGatewayTlsCertificate, loadGatewayTlsServerRuntime } from ${JSON.stringify(new URL("./gateway.ts", import.meta.url).href)};
+        const [certPath, keyPath, fifo] = process.argv.slice(1);
+        const errors = [];
+        for (const field of ["certPath", "keyPath", "caPath"]) {
+          const result = await loadGatewayTlsServerRuntime({ enabled: true, autoGenerate: false, certPath, keyPath, [field]: fifo });
+          if (result.enabled) throw new Error("non-file TLS material accepted");
+          errors.push(result.error);
+        }
+        const inspection = await inspectGatewayTlsCertificate({ enabled: true, certPath: fifo });
+        if (inspection.ok) throw new Error("non-file certificate accepted");
+        errors.push(inspection.error);
+        console.log(JSON.stringify(errors));
+      `,
+          certPath,
+          keyPath,
+          fifo,
+        ],
+        { encoding: "utf8", timeout: 5_000 },
+      );
+      expect(probe.error).toBeUndefined();
+      expect(probe.status).toBe(0);
+      expect(JSON.parse(probe.stdout)).toEqual(
+        Array(4).fill(expect.stringContaining("must be a regular file")),
+      );
+      expect((await fs.lstat(fifo)).isFIFO()).toBe(true);
+    },
+  );
+
   it("disables tls when config is absent or disabled", async () => {
     await expect(loadGatewayTlsServerRuntime(undefined)).resolves.toEqual({
       enabled: false,
