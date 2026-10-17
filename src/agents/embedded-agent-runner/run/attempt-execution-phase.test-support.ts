@@ -61,19 +61,36 @@ export async function createFixture(
   if (options.aborted) {
     attemptAbortController.abort(new Error("already aborted"));
   }
-  const runAbort = vi.fn();
-  const toolSearchCatalogExecutor = vi.fn();
-  const subscription = { isCompacting: vi.fn(() => false) };
-  const queueHandle = { kind: "embedded", runId: "run-1" };
-  const streamResult = {
-    subscription,
-    queueHandle,
-    toolSearchCatalogExecutor,
+  const fixture = {
+    admission,
+    order,
+    subscription: { isCompacting: vi.fn(() => false) },
+    runAbort: vi.fn(),
+    toolSearchCatalogExecutor: vi.fn(),
+    timeoutResult: {},
+    setContextReplacementHook: vi.fn(),
+    sessionManager: {},
+    abortActiveSession: vi.fn(async () => undefined),
+    trackPromptSettlePromise: vi.fn((promise: Promise<void>) => promise),
+    externalAbortController: {
+      setRunAbort: vi.fn(() => order.push("set-run-abort")),
+      setCompactionState: vi.fn(() => order.push("set-compaction-state")),
+    },
+    prepStages: { mark: vi.fn(() => order.push("stream-ready")) },
+    emitPrepStageSummary: vi.fn(),
+    setToolSearchCatalogExecutor: vi.fn(() => order.push("set-catalog")),
+    replaySafeTool: { name: "read" },
+    result: { messages: [] },
+    state: { terminal: { kind: "ok" as const } },
+    skillInstructionDeliveryCache: new Map([["skill", Promise.resolve(true)]]),
   };
-  const timeoutResult = {};
-  const setContextReplacementHook = vi.fn();
+  const streamResult = {
+    subscription: fixture.subscription,
+    queueHandle: { kind: "embedded", runId: "run-1" },
+    toolSearchCatalogExecutor: fixture.toolSearchCatalogExecutor,
+  };
   const activeSession = {
-    [agentSessionSetContextReplacementHook]: setContextReplacementHook,
+    [agentSessionSetContextReplacementHook]: fixture.setContextReplacementHook,
     agent: { streamFn: vi.fn() },
     dispose: vi.fn(),
     isCompacting: false,
@@ -81,32 +98,16 @@ export async function createFixture(
     prompt: vi.fn(async () => undefined),
     sessionId: "active-session",
   };
-  const sessionManager = {};
-  const abortActiveSession = vi.fn(async () => undefined);
-  const trackPromptSettlePromise = vi.fn((promise: Promise<void>) => promise);
-  const externalAbortController = {
-    setRunAbort: vi.fn(() => order.push("set-run-abort")),
-    setCompactionState: vi.fn(() => order.push("set-compaction-state")),
-  };
-  const prepStages = { mark: vi.fn(() => order.push("stream-ready")) };
-  const emitPrepStageSummary = vi.fn();
-  const setToolSearchCatalogExecutor = vi.fn(() => order.push("set-catalog"));
-  const replaySafeTool = { name: "read" };
-  const result = { messages: [] };
-  const state = {
-    terminal: { kind: "ok" as const },
-  };
-  const skillInstructionDeliveryCache = new Map([["skill", Promise.resolve(true)]]);
   const sessionRuntime = {
     agentSession: {
       activeSession,
-      replaySafeTools: new Set([replaySafeTool]),
+      replaySafeTools: new Set([fixture.replaySafeTool]),
       trustedLocalMediaToolNames: new Set(["read"]),
     },
     contextGuards: { checkMidTurnPrecheck: vi.fn(), recordCacheTouch: vi.fn() },
     isOpenAIResponsesApi: true,
-    sessionManager,
-    settleTracker: { abortActiveSession, trackPromptSettlePromise },
+    sessionManager: fixture.sessionManager,
+    settleTracker: fixture,
     state: { systemPromptText: "system prompt" },
     transcriptPolicy: { repairToolUseResultPairing: true },
     transport: { effectiveAgentTransport: "sse", providerTextTransforms: { input: [] } },
@@ -122,12 +123,12 @@ export async function createFixture(
       timeoutMs: 30_000,
     },
     runAbortController: new AbortController(),
-    externalAbortController,
+    externalAbortController: fixture.externalAbortController,
     prepared: {
       sessionRuntime,
       systemPrompt: { runtimeChannel: "telegram" },
       toolBase: {
-        skillInstructionDeliveryCache,
+        skillInstructionDeliveryCache: fixture.skillInstructionDeliveryCache,
         nestedToolActivityState: createAttemptNestedToolActivityState(),
       },
       toolCatalog: {
@@ -144,15 +145,15 @@ export async function createFixture(
       },
     },
     setup: {
-      emitPrepStageSummary,
-      prepStages,
+      emitPrepStageSummary: fixture.emitPrepStageSummary,
+      prepStages: fixture.prepStages,
       sessionAgentId: "main",
     },
     diagnostics: { diagnosticTrace: {} },
-    state,
+    state: fixture.state,
     lifecycle: {
       readYieldState: () => ({ yieldDetected: true }),
-      setToolSearchCatalogExecutor,
+      setToolSearchCatalogExecutor: fixture.setToolSearchCatalogExecutor,
     },
   } as unknown as ExecutionInput;
 
@@ -167,7 +168,7 @@ export async function createFixture(
   mocks.prepareHistory.mockImplementation(async () =>
     record("history", { contextEnginePromptAuthority: "assembled" }),
   );
-  mocks.createRunAbort.mockImplementation(() => record("abort", runAbort));
+  mocks.createRunAbort.mockImplementation(() => record("abort", fixture.runAbort));
   mocks.prepareStream.mockImplementation((streamInput) => {
     order.push("stream");
     if (options.exerciseTerminalMerges !== false) {
@@ -183,37 +184,15 @@ export async function createFixture(
       timeoutInput.markTimedOutDuringCompaction();
       timeoutInput.markTimedOutByRunBudget();
     }
-    return timeoutResult;
+    return fixture.timeoutResult;
   });
   mocks.runSettledPhase.mockImplementation(async (settledInput) => {
     order.push("settled-phase");
     expect(settledInput.getRepairedRejectedProviderReplay()).toBe(false);
     mocks.installStreamGuards.mock.calls[0]?.[1].onRejectedProviderReplayRepaired();
     expect(settledInput.getRepairedRejectedProviderReplay()).toBe(true);
-    return result;
+    return fixture.result;
   });
 
-  return {
-    admission,
-    abortActiveSession,
-    activeSession,
-    emitPrepStageSummary,
-    externalAbortController,
-    input,
-    order,
-    prepStages,
-    replaySafeTool,
-    result,
-    runAbort,
-    sessionManager,
-    setContextReplacementHook,
-    skillInstructionDeliveryCache,
-    setToolSearchCatalogExecutor,
-    state,
-    streamResult,
-    subscription,
-    timeoutResult,
-    toolSearchCatalogExecutor,
-    trackPromptSettlePromise,
-  };
+  return { ...fixture, activeSession, input, streamResult };
 }

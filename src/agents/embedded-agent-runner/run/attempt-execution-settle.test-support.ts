@@ -13,6 +13,7 @@ import { SessionManager } from "../../sessions/session-manager.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import type { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
+import { createSubscriptionMock } from "./attempt-spawn-workspace.subscription-mock.test-support.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 
 type SettledInput = Parameters<typeof runEmbeddedAttemptSettledPhase>[0];
@@ -28,43 +29,18 @@ export function createFixture(mocks: {
   const queueHandle = { kind: "embedded", runId: "run-1" };
   const unsubscribe = vi.fn(() => order.push("unsubscribe"));
   const subscription = {
-    assistantTexts: [],
-    didSendDeterministicApprovalPrompt: vi.fn(() => false),
-    didSendViaMessagingTool: vi.fn(() => false),
-    getAcceptedSessionSpawns: vi.fn(() => []),
+    ...createSubscriptionMock(),
+    // Do not supply lifecycle capabilities that this settlement fixture never had.
+    answerSegments: undefined,
+    runToolLifecycle: undefined,
+    flushPartialAssistantText: undefined,
+    isCompacting: undefined,
     getAssistantTurnCount: vi.fn(() => 1),
-    getCompactionCount: vi.fn(() => 0),
-    getCurrentAttemptAssistant: vi.fn(() => undefined),
-    getHeartbeatToolResponse: vi.fn(() => undefined),
-    getItemLifecycle: vi.fn(() => ({ startedCount: 0, completedCount: 0, activeCount: 0 })),
-    getLastAssistantTextMessageIndex: vi.fn(() => undefined),
-    getKeptAnswer: vi.fn(() => undefined),
-    getLastAssistantUsage: vi.fn(() => undefined),
-    getLastCompactionTokensAfter: vi.fn(() => undefined),
-    getLastToolError: vi.fn(() => undefined),
-    getLatestMcpAppChannelView: vi.fn(() => undefined),
-    getLatestMcpConnectAction: vi.fn(() => undefined),
-    getMessagingToolSentMediaUrls: vi.fn(() => []),
-    getMessagingToolSentTargets: vi.fn(() => []),
-    getMessagingToolSentTexts: vi.fn(() => []),
-    getMessagingToolSourceReplyPayloads: vi.fn(() => []),
-    getSourceReplyDelivered: vi.fn(() => undefined),
-    getSourceReplyDeliveryState: vi.fn(() => undefined),
-    endsWithSourceProgress: vi.fn(() => false),
     getPendingToolMediaReply: vi.fn(() => undefined),
-    getToolAutoDeliveryMediaUrls: vi.fn(() => []),
-    getReplayState: vi.fn(() => ({ replayInvalid: false, hadPotentialSideEffects: false })),
     getSuccessfulCronAdds: vi.fn(() => []),
     getUsageTotals: vi.fn(() => ({ input: 1, output: 2, total: 3 })),
-    getVisibleBlockReplyCount: vi.fn(() => 0),
-    hasToolMediaBlockReply: vi.fn(() => false),
-    hasSuccessfulModelResponse: vi.fn(() => false),
-    isCompactionInFlight: vi.fn(() => false),
-    setTerminalLifecycleMeta: vi.fn(),
     toolMetas: [{ toolName: "exec", isError: false }],
     unsubscribe,
-    waitForCompactionRetry: vi.fn(async () => undefined),
-    waitForPendingEvents: vi.fn(async () => undefined),
   };
   const detachBackend = vi.fn(() => order.push("detach-backend"));
   const clearTimers = vi.fn(() => order.push("clear-timers"));

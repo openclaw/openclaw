@@ -5,21 +5,12 @@ import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk/plugin-entry"
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  loadTranscriptEventsSync,
-  replaceSessionEntrySync,
-} from "../../../config/sessions/session-accessor.js";
+import * as sessions from "../../../config/sessions/session-accessor.js";
 import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
-import {
-  loadBundledPluginFacade,
-  resolveBundledPluginPublicModulePath,
-} from "../../../test-utils/bundled-plugin-public-surface.js";
+import * as bundled from "../../../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import {
-  createAutoCompactionSettings,
-  testModel,
-} from "../../sessions/agent-session-loop-correctness.test-support.js";
+import * as loop from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { prepareEmbeddedAttemptTransport } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
@@ -41,7 +32,7 @@ describe("embedded native provider authority", () => {
     "fences native Bedrock dispatch after payload preparation ($kind, rotate=$rotate)",
     async ({ key, rotate }) => {
       const artifact = { pluginId: "amazon-bedrock", artifactBasename: "index.ts" };
-      const { default: plugin } = await loadBundledPluginFacade<{
+      const { default: plugin } = await bundled.loadBundledPluginFacade<{
         default: OpenClawPluginDefinition;
       }>(artifact);
       if (!plugin.register) {
@@ -51,7 +42,7 @@ describe("embedded native provider authority", () => {
       const providerRuntimeHandle = { provider: "amazon-bedrock", plugin: provider };
       const model = attachModelProviderRuntimePluginHandle(
         {
-          ...testModel,
+          ...loop.testModel,
           api: "bedrock-converse-stream",
           provider: "amazon-bedrock",
           id: "amazon.nova-micro-v1:0",
@@ -62,10 +53,10 @@ describe("embedded native provider authority", () => {
       const sdk: {
         BedrockRuntimeClient: {
           prototype: {
-            send: (command: unknown, options: { abortSignal?: AbortSignal }) => Promise<unknown>;
+            send(command: unknown, options: { abortSignal?: AbortSignal }): Promise<unknown>;
           };
         };
-      } = createRequire(resolveBundledPluginPublicModulePath(artifact))(
+      } = createRequire(bundled.resolveBundledPluginPublicModulePath(artifact))(
         "@aws-sdk/client-bedrock-runtime",
       );
       const send = vi.spyOn(sdk.BedrockRuntimeClient.prototype, "send").mockResolvedValue({
@@ -85,12 +76,13 @@ describe("embedded native provider authority", () => {
           sessionId: "native-run-1",
           storePath: path.join(testState.agentDir(), "openclaw-agent.sqlite"),
         };
-        const original = {
-          sessionId: target.sessionId,
-          lifecycleRevision: "native-generation-1",
-          updatedAt: 1,
-        };
-        replaceSessionEntrySync(target, original);
+        const replaceGeneration = (generation: number) =>
+          sessions.replaceSessionEntrySync(target, {
+            sessionId: `native-run-${generation}`,
+            lifecycleRevision: `native-generation-${generation}`,
+            updatedAt: 1,
+          });
+        replaceGeneration(1);
         Object.assign(attempt, {
           ...target,
           config: {},
@@ -98,13 +90,9 @@ describe("embedded native provider authority", () => {
           modelId: model.id,
           provider: model.provider,
           resolvedApiKey: "synthetic-bedrock-key",
-          sessionTarget: target,
           sessionFile: target.sessionKey,
           workspaceDir: testState.workspaceDir,
-          runtimePlan: {
-            auth: {},
-            transport: { resolveExtraParams: () => ({}) },
-          },
+          runtimePlan: { auth: {}, transport: { resolveExtraParams: () => ({}) } },
         });
         const writer = await claimAgentSessionWriter({
           ...target,
@@ -127,7 +115,7 @@ describe("embedded native provider authority", () => {
           await prepareEmbeddedAttemptTransport({
             attempt,
             session,
-            settingsManager: createAutoCompactionSettings(),
+            settingsManager: loop.createAutoCompactionSettings(),
             providerThinkingLevel: undefined,
             sessionAgentId: target.agentId,
             workspaceDir: testState.workspaceDir,
@@ -162,11 +150,7 @@ describe("embedded native provider authority", () => {
           ]);
           expect(send).not.toHaveBeenCalled();
           if (rotate) {
-            replaceSessionEntrySync(target, {
-              ...original,
-              sessionId: "native-run-2",
-              lifecycleRevision: "native-generation-2",
-            });
+            replaceGeneration(2);
           }
           releasePayload.resolve();
           const result = await response.result();
@@ -178,14 +162,14 @@ describe("embedded native provider authority", () => {
             await expect(
               transcript.withOwnedTranscriptWrite(() => manager.appendMessage(result)),
             ).rejects.toThrow();
-            expect(loadTranscriptEventsSync(target)).toEqual([]);
+            expect(sessions.loadTranscriptEventsSync(target)).toEqual([]);
           } else {
             expect(result.stopReason).toBe("stop");
             expect(result.content).toEqual([{ type: "text", text: "NATIVE_OK" }]);
             expect(send).toHaveBeenCalledOnce();
             expect(send.mock.calls[0]?.[1].abortSignal?.aborted).toBe(false);
             await transcript.withOwnedTranscriptWrite(() => manager.appendMessage(result));
-            expect(loadTranscriptEventsSync(target)).toMatchObject([
+            expect(sessions.loadTranscriptEventsSync(target)).toMatchObject([
               { type: "session" },
               { type: "message", message: { role: "assistant", content: result.content } },
             ]);

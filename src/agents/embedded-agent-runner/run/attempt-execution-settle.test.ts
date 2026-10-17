@@ -20,10 +20,7 @@ import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as workerProbe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../../infra/sqlite-worker-store.js";
-import type {
-  SqliteWorkerOperations,
-  SqliteWorkerStore,
-} from "../../../infra/sqlite-worker-store.js";
+import type { SqliteWorkerOperations } from "../../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import {
@@ -121,6 +118,9 @@ function expectCleanup(fixture: ReturnType<typeof createFixture>) {
 
 type ImageFixture = Awaited<ReturnType<typeof createPersistedImageNoteFixture>>;
 type Storage = "file-backed" | "incognito";
+type WorkerOperationArgs<Operations extends SqliteWorkerOperations, T> = Parameters<
+  typeof workerStore.runSqliteWorkerStoreOperation<Operations, T>
+>;
 async function withImageNote(
   storage: Storage,
   run: (fixture: ImageFixture, testState: OpenClawTestState) => Promise<void>,
@@ -141,53 +141,6 @@ function expectOneAppend(before: unknown[], after: unknown[]) {
 }
 
 describe("runEmbeddedAttemptSettledPhase", () => {
-  it("runs prompt and finalization, cleans stream resources, then projects the result", async () => {
-    const fixture = createFixture(mocks);
-
-    const result = await runEmbeddedAttemptSettledPhase(fixture.input);
-
-    expect(result).toBe(fixture.result);
-    expect(fixture.order).toEqual([
-      "prompt",
-      "finalize",
-      "clear-timers",
-      "unsubscribe",
-      "detach-backend",
-      "clear-active-run",
-      "result",
-    ]);
-    expect(fixture.state).toMatchObject({
-      beforeAgentRunBlockedBy: "before_agent",
-      terminal: { kind: "ok" },
-      trajectoryEndRecorded: true,
-    });
-    expect(fixture.sessionRuntimeState).toMatchObject({
-      prePromptMessageCount: 4,
-      promptCache: { cacheRead: 1 },
-    });
-    expect(mocks.completeAfterTurn).toHaveBeenCalledWith(
-      fixture.input,
-      expect.objectContaining({ sessionIdUsed: "settled-session" }),
-      expect.objectContaining({ transcriptLeafId: "before-prompt" }),
-    );
-    expect(mocks.completeResult).toHaveBeenCalledWith(
-      fixture.input,
-      expect.objectContaining({ sessionIdUsed: "settled-session" }),
-      expect.objectContaining({
-        beforeAgentFinalizeRevisionReason: "revision",
-        sessionIdUsed: "settled-session",
-        sessionFileUsed: "/tmp/session.jsonl",
-      }),
-    );
-    expect(fixture.detachBackend).toHaveBeenCalledWith(fixture.queueHandle);
-    expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledWith(
-      "session-1",
-      fixture.queueHandle,
-      "agent:main",
-      "/tmp/session.jsonl",
-    );
-  });
-
   it("persists image failure notes after after-turn transcript reconciliation", async () => {
     const fixture = createFixture(mocks);
     fixture.sessionRuntimeState.currentTurnImageFailureCount = 1;
@@ -203,6 +156,9 @@ describe("runEmbeddedAttemptSettledPhase", () => {
       fixture.input,
       expect.any(Object),
       expect.objectContaining({
+        beforeAgentFinalizeRevisionReason: "revision",
+        sessionIdUsed: "settled-session",
+        sessionFileUsed: "/tmp/session.jsonl",
         messagesSnapshot: expect.arrayContaining([
           expect.objectContaining({ customType: "openclaw.system-note", display: true }),
         ]),
@@ -226,7 +182,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           run: vi.spyOn(StatementSync.prototype, "run"),
           iterate: vi.spyOn(StatementSync.prototype, "iterate"),
         };
-        const measured = await (async () => {
+        const result = await (async () => {
           try {
             database.db.exec("SELECT 1");
             database.db.prepare("SELECT 1");
@@ -242,13 +198,11 @@ describe("runEmbeddedAttemptSettledPhase", () => {
               probe.mockClear();
             }
 
-            const result = await runEmbeddedAttemptSettledPhase(fixture.input);
-            return {
-              result,
-              parentSql: Object.fromEntries(
-                Object.entries(probes).map(([name, probe]) => [name, probe.mock.calls.length]),
-              ),
-            };
+            const settled = await runEmbeddedAttemptSettledPhase(fixture.input);
+            for (const probe of Object.values(probes)) {
+              expect(probe).not.toHaveBeenCalled();
+            }
+            return settled;
           } finally {
             Object.values(probes).forEach((probe) => probe.mockRestore());
           }
@@ -276,16 +230,40 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         expect(appended.message).not.toHaveProperty("excludeFromContext");
         const expectedMessages = [...previousMessages, appended.message];
         expect(activeSession.messages).toEqual(expectedMessages);
-        expect(measured.result.messagesSnapshot).toEqual(expectedMessages);
-        expectCleanup(fixture);
-        expect(measured.parentSql).toEqual({
-          prepare: 0,
-          exec: 0,
-          get: 0,
-          all: 0,
-          run: 0,
-          iterate: 0,
+        expect(result.messagesSnapshot).toEqual(expectedMessages);
+        expect(fixture.order).toEqual([
+          "prompt",
+          "finalize",
+          "clear-timers",
+          "unsubscribe",
+          "detach-backend",
+          "clear-active-run",
+        ]);
+        expect(fixture).toMatchObject({
+          state: {
+            beforeAgentRunBlockedBy: "before_agent",
+            terminal: { kind: "ok" },
+            trajectoryEndRecorded: true,
+          },
+          sessionRuntimeState: { prePromptMessageCount: 4, promptCache: { cacheRead: 1 } },
         });
+        expect(result).toMatchObject({
+          sessionIdUsed: "settled-session",
+          sessionFileUsed: "/tmp/session.jsonl",
+        });
+        expect(mocks.completeAfterTurn).toHaveBeenCalledWith(
+          fixture.input,
+          expect.objectContaining({ sessionIdUsed: "settled-session" }),
+          expect.objectContaining({ transcriptLeafId: "before-prompt" }),
+        );
+        expect(fixture.detachBackend).toHaveBeenCalledWith(fixture.queueHandle);
+        expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledWith(
+          target.sessionId,
+          fixture.queueHandle,
+          target.sessionKey,
+          "/tmp/session.jsonl",
+        );
+        expectCleanup(fixture);
       },
     );
   });
@@ -344,13 +322,8 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           });
           expect(routes).toEqual(["fixture-provider", "fixture-next"]);
           expect(fallback.provider).toBe("fixture-next");
-          expect(onError).toHaveBeenCalledOnce();
-          expect(onError).toHaveBeenCalledWith(
-            expect.objectContaining({
-              error: cleanupFailure,
-              attempt: 1,
-              total: 2,
-            }),
+          expect(onError).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ error: cleanupFailure, attempt: 1, total: 2 }),
           );
           expect(attempts).toHaveLength(2);
           expect(joined).toEqual(attempts);
@@ -359,10 +332,13 @@ describe("runEmbeddedAttemptSettledPhase", () => {
           const stored = (await SessionManager.openAsync(target)).getLeafEntry();
           expect(stored).toMatchObject({
             type: "message",
-            message: { role: "custom", customType: "openclaw.system-note" },
+            message: {
+              role: "custom",
+              customType: "openclaw.system-note",
+              details: { runId: "run-1" },
+            },
           });
           assert(stored?.type === "message", "Expected a durable image failure message");
-          expect(stored.message).toMatchObject({ details: { runId: "run-1" } });
           const expected = [...previousMessages, stored.message];
           expect(fallback.result.messagesSnapshot).toEqual(expected);
           for (const attempt of attempts) {
@@ -422,20 +398,18 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     },
   );
 
-  it.each(
-    (["file-backed", "incognito"] as const).flatMap((storage) =>
-      (["none", "side", "side-dirty", "controls-dirty", "visible"] as const)
-        // Memory actors publish their projection atomically and have no dirty SQLite index.
-        .filter(
-          (intervening) =>
-            storage === "file-backed" ||
-            (intervening !== "side-dirty" && intervening !== "controls-dirty"),
-        )
-        .map((intervening) => ({ storage, intervening })),
-    ),
-  )(
-    "reconciles a committed note against the visible tail ($storage, $intervening)",
-    async ({ storage, intervening }) => {
+  it.each([
+    ["file-backed", "none"],
+    ["file-backed", "side"],
+    ["file-backed", "side-dirty"],
+    ["file-backed", "controls-dirty"],
+    ["file-backed", "visible"],
+    ["incognito", "none"],
+    ["incognito", "side"],
+    ["incognito", "visible"],
+  ] as const)(
+    "reconciles a committed note against the visible tail (%s, %s)",
+    async (storage, intervening) => {
       await withImageNote(storage, async (context) => {
         const { fixture, target, manager, activeSession, before, previousLeaf, previousMessages } =
           context;
@@ -620,13 +594,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
             .spyOn(workerStore, "runSqliteWorkerStoreOperation")
             .mockImplementation(
               <Operations extends SqliteWorkerOperations, T>(
-                store: SqliteWorkerStore<Operations>,
-                operation: (
-                  scope: Pick<SqliteWorkerStore<Operations>, "execute">,
-                ) => T | Promise<T>,
-                stateContext?: Parameters<typeof runOperation>[2],
-                assertCurrent?: Parameters<typeof runOperation>[3],
-                admission?: Parameters<typeof runOperation>[4],
+                ...[store, operation, ...operationOptions]: WorkerOperationArgs<Operations, T>
               ) =>
                 runOperation(
                   store,
@@ -661,9 +629,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
                         }
                       },
                     }),
-                  stateContext,
-                  assertCurrent,
-                  admission,
+                  ...operationOptions,
                 ),
             );
           const outcome = runEmbeddedAttemptSettledPhase(fixture.input).then(

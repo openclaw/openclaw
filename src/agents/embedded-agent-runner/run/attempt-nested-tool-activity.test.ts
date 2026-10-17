@@ -1,4 +1,5 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CliPluginInvocationResources } from "../../../cli/plugin-invocation-resources.js";
 import { resolveDefaultSessionStorePath } from "../../../config/sessions/paths.js";
@@ -76,6 +77,9 @@ function lookupCall(
     acceptResultBeforeProjection: async (result) => result,
   };
 }
+
+const textResult = (text: string) => ({ content: [{ type: "text" as const, text }] });
+const ordinaryMessage = { role: "assistant", content: "Final answer" };
 
 async function createStoredSession(sessionKey: string) {
   const target = {
@@ -230,7 +234,7 @@ describe("nested tool activity ownership", () => {
                 content: rewrite && malformed !== "none" ? "rewritten" : "",
                 details: {
                   ...activity.details,
-                  result: { content: [{ type: "text", text: "canonical hook result" }] },
+                  result: textResult("canonical hook result"),
                 },
               },
             };
@@ -292,15 +296,13 @@ describe("nested tool activity ownership", () => {
             (await prepared.readActivities()).map(({ details }) => details.toolCallId),
           ).toEqual(["accepted-sibling", "current-attempt", "accepted-tail"]);
           const messages = runBeforeAgentFinalize.mock.calls.at(-1)?.[0]?.messages;
-          expect(messages).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                details: expect.objectContaining({
-                  toolCallId: "current-attempt",
-                  result: { content: [{ type: "text", text: "canonical hook result" }] },
-                }),
-              }),
-            ]),
+          const current = messages
+            ?.map(asOptionalRecord)
+            .find(
+              (message) => asOptionalRecord(message?.details)?.toolCallId === "current-attempt",
+            );
+          expect(asOptionalRecord(current?.details)?.result).toEqual(
+            textResult("canonical hook result"),
           );
           expect(JSON.stringify(messages)).not.toContain("previous-attempt");
           expect(JSON.stringify(messages)).not.toContain("original tool output");
@@ -325,7 +327,7 @@ describe("nested tool activity ownership", () => {
       const prepared = prepareCatalogExecutor({ sessionManager: manager });
       let activities: NestedToolActivity[];
       const rawResult = {
-        content: [{ type: "text" as const, text: "tool output" }],
+        ...textResult("tool output"),
         details: { id: 42, status: kind === "canonical failure" ? "error" : "success" },
       };
       const failure = kind === "thrown" ? "transport disconnected" : "declared output mismatch";
@@ -355,7 +357,7 @@ describe("nested tool activity ownership", () => {
         await expect(execution).rejects.toThrow(failure);
         activities = await prepared.readActivities();
         expect(activities[0]?.details.result).toEqual({
-          content: [{ type: "text", text: failure }],
+          ...textResult(failure),
           details: { status: "error", error: failure },
         });
         expect(JSON.stringify(activities)).not.toContain("tool output");
@@ -365,13 +367,11 @@ describe("nested tool activity ownership", () => {
         rawResult.details.id = 99;
         expect(returned).not.toBe(rawResult);
         expect(returned.details).toMatchObject({ id: 42 });
-        expect(Object.isFrozen(returned)).toBe(true);
-        expect(Object.isFrozen(returned.details)).toBe(true);
+        expect([returned, returned.details].map(Object.isFrozen)).toEqual([true, true]);
         if (kind === "suppressed") {
           expect(activities).toEqual([]);
           expect(manager.getEntries()).toEqual([]);
           expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual(["lookup"]);
-          const ordinaryMessage = { role: "assistant", content: "Final answer" };
           expect(projectNestedToolActivityForHooks([ordinaryMessage], activities)).toEqual([
             ordinaryMessage,
           ]);
@@ -391,7 +391,6 @@ describe("nested tool activity ownership", () => {
       expect([...prepared.nestedToolActivityState.successfulToolNames]).toEqual(
         kind === "accepted" ? ["lookup"] : [],
       );
-      const ordinaryMessage = { role: "assistant", content: "Final answer" };
       const hookMessages = projectNestedToolActivityForHooks([ordinaryMessage], activities);
       expect(hookMessages).toEqual([
         ordinaryMessage,
