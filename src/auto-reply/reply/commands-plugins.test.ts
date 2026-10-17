@@ -1,5 +1,4 @@
 // Tests plugin command install, listing, and config behavior.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginCapabilityConsentReview } from "../../plugins/capability-summary.js";
@@ -11,6 +10,7 @@ import {
   createPluginRecord,
 } from "../../plugins/status.test-fixtures.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
 import { buildPluginsCommandParams, type ConfigSnapshotMock } from "./commands.test-harness.js";
 
@@ -158,6 +158,14 @@ function buildCfg(): OpenClawConfig {
   };
 }
 
+const pluginSummary = {
+  id: "superpowers",
+  name: "superpowers",
+  status: "disabled",
+  format: "openclaw",
+  bundleFormat: "claude",
+} as const;
+
 const WRITE_GATEWAY_SCOPES = ["operator.admin", "operator.write", "operator.pairing"];
 
 function buildPluginsParams(
@@ -176,41 +184,30 @@ function buildPluginsParams(
   return params;
 }
 
-type MockCalls = {
-  mock: { calls: unknown[][] };
-};
-
-const requireRecord = createRequireRecord("object", "expected-label");
-
-function getNestedRecord(record: Record<string, unknown>, key: string, label: string) {
-  return requireRecord(record[key], label);
-}
-
-function expectPluginEnabledInConfig(config: unknown, enabled: boolean) {
-  const configRecord = requireRecord(config, "config");
-  const plugins = getNestedRecord(configRecord, "plugins", "config.plugins");
-  const entries = getNestedRecord(plugins, "entries", "config.plugins.entries");
-  const superpowers = getNestedRecord(entries, "superpowers", "superpowers entry");
-  expect(superpowers.enabled).toBe(enabled);
-}
-
 function expectLastReplaceConfig(enabled: boolean) {
-  const calls = (replaceConfigFileMock as unknown as MockCalls).mock.calls;
-  const [payload] = calls.at(-1) ?? [];
-  const payloadRecord = requireRecord(payload, "replace config payload");
-  expect(Object.keys(payloadRecord).toSorted()).toEqual(["afterWrite", "nextConfig"]);
-  expect(payloadRecord.afterWrite).toEqual({ mode: "auto" });
-  expectPluginEnabledInConfig(payloadRecord.nextConfig, enabled);
+  expect(replaceConfigFileMock.mock.lastCall).toStrictEqual([
+    {
+      afterWrite: { mode: "auto" },
+      nextConfig: expect.objectContaining({
+        plugins: expect.objectContaining({
+          entries: expect.objectContaining({ superpowers: expect.objectContaining({ enabled }) }),
+        }),
+      }),
+    },
+  ]);
 }
 
 function expectLastRegistryRefresh() {
-  const calls = (refreshPluginRegistryAfterConfigMutationMock as unknown as MockCalls).mock.calls;
-  const [payload] = calls.at(-1) ?? [];
-  const payloadRecord = requireRecord(payload, "registry refresh payload");
-  expect(Object.keys(payloadRecord).toSorted()).toEqual(["logger", "reason"]);
-  expect(payloadRecord.reason).toBe("policy-changed");
-  const logger = getNestedRecord(payloadRecord, "logger", "registry refresh logger");
-  expect(logger.warn).toEqual(expect.any(Function));
+  expect(refreshPluginRegistryAfterConfigMutationMock.mock.lastCall).toStrictEqual([
+    {
+      reason: "policy-changed",
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
+    },
+  ]);
+}
+
+function runCommand(command: string, options?: Parameters<typeof buildPluginsParams>[2]) {
+  return handlePluginsCommand(buildPluginsParams(command, buildCfg(), options), true);
 }
 
 describe("handlePluginsCommand", () => {
@@ -235,15 +232,7 @@ describe("handlePluginsCommand", () => {
     });
     buildPluginRegistrySnapshotReportMock.mockReturnValue({
       workspaceDir: "/tmp/plugins-workspace",
-      plugins: [
-        {
-          id: "superpowers",
-          name: "superpowers",
-          status: "disabled",
-          format: "openclaw",
-          bundleFormat: "claude",
-        },
-      ],
+      plugins: [pluginSummary],
     });
     withPluginDiagnosticsReportForInspectionMock
       .mockReset()
@@ -252,15 +241,7 @@ describe("handlePluginsCommand", () => {
           ...createEmptyPluginRegistry(),
           workspaceScope: "selected",
           workspaceDir: "/tmp/plugins-workspace",
-          plugins: [
-            createPluginRecord({
-              id: "superpowers",
-              name: "superpowers",
-              status: "disabled",
-              format: "openclaw",
-              bundleFormat: "claude",
-            }),
-          ],
+          plugins: [createPluginRecord(pluginSummary)],
         }),
       );
     buildPluginInspectReportMock.mockReturnValue({
@@ -300,10 +281,7 @@ describe("handlePluginsCommand", () => {
         },
       );
       let returned = false;
-      const command = handlePluginsCommand(
-        buildPluginsParams(`/plugins ${action}`, buildCfg()),
-        true,
-      ).then((result) => {
+      const command = runCommand(`/plugins ${action}`).then((result) => {
         returned = true;
         return result;
       });
@@ -327,10 +305,7 @@ describe("handlePluginsCommand", () => {
   );
 
   it("lists discovered plugins", async () => {
-    const listResult = await handlePluginsCommand(
-      buildPluginsParams("/plugins list", buildCfg()),
-      true,
-    );
+    const listResult = await runCommand("/plugins list");
     expect(listResult?.reply?.text).toContain("Plugins");
     expect(listResult?.reply?.text).toContain("superpowers");
     expect(listResult?.reply?.text).toContain("[disabled]");
@@ -361,17 +336,11 @@ describe("handlePluginsCommand", () => {
     loadPluginMetadataSnapshotMock.mockReturnValue({ index });
     buildAllPluginInspectReportsMock.mockReturnValue([report]);
     buildPluginInspectReportMock.mockReturnValue(report);
-    const child = await handlePluginsCommand(
-      buildPluginsParams(`/plugins inspect ${report.plugin.id}`, buildCfg()),
-      true,
-    );
+    const child = await runCommand(`/plugins inspect ${report.plugin.id}`);
     expect(
       JSON.parse(child?.reply?.text?.split("```json\n")[1]?.split("\n```")[0] ?? "null"),
     ).toEqual({ ...report, compatibilityWarnings: [], install });
-    const all = await handlePluginsCommand(
-      buildPluginsParams("/plugin inspect all", buildCfg()),
-      true,
-    );
+    const all = await runCommand("/plugin inspect all");
     expect(
       JSON.parse(all?.reply?.text?.split("```json\n")[1]?.split("\n```")[0] ?? "null"),
     ).toEqual([{ inspect: report, compatibilityWarnings: [], install }]);
@@ -381,12 +350,9 @@ describe("handlePluginsCommand", () => {
 
   it("rejects invalid config before loading plugin state", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({ valid: false, path: "/tmp/openclaw.json" });
-    const result = await handlePluginsCommand(
-      buildPluginsParams("/plugins enable pack/one", buildCfg(), {
-        gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-      }),
-      true,
-    );
+    const result = await runCommand("/plugins enable pack/one", {
+      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
+    });
     expect(result?.reply?.text).toBe("⚠️ Config file is invalid; fix it before using /plugins.");
     expect(withPluginDiagnosticsReportForInspectionMock).not.toHaveBeenCalled();
     expect(buildPluginRegistrySnapshotReportMock).not.toHaveBeenCalled();
@@ -410,10 +376,7 @@ describe("handlePluginsCommand", () => {
     };
     loadPluginMetadataSnapshotMock.mockReturnValue({ index });
     buildPluginInspectReportMock.mockReturnValue(inspect);
-    const result = await handlePluginsCommand(
-      buildPluginsParams(`/plugins inspect ${inspect.plugin.id}`, buildCfg()),
-      true,
-    );
+    const result = await runCommand(`/plugins inspect ${inspect.plugin.id}`);
     const payload = JSON.parse(
       result?.reply?.text?.split("```json\n")[1]?.split("\n```")[0] ?? "null",
     );
@@ -517,12 +480,9 @@ describe("handlePluginsCommand", () => {
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(refreshPluginRegistryAfterConfigMutationMock).not.toHaveBeenCalled();
 
-    const accepted = await handlePluginsCommand(
-      buildPluginsParams("/plugins enable superpowers --accept-capabilities", buildCfg(), {
-        gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-      }),
-      true,
-    );
+    const accepted = await runCommand("/plugins enable superpowers --accept-capabilities", {
+      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
+    });
 
     expect(accepted?.reply?.text).toContain('Plugin "superpowers" enabled');
     expectLastReplaceConfig(true);
@@ -534,12 +494,9 @@ describe("handlePluginsCommand", () => {
     "--accept-capabilities superpowers",
     "superpowers --accept-capabilities --accept-capabilities",
   ])("rejects malformed enable consent flags: %s", async (argumentsText) => {
-    const result = await handlePluginsCommand(
-      buildPluginsParams(`/plugins enable ${argumentsText}`, buildCfg(), {
-        gatewayClientScopes: WRITE_GATEWAY_SCOPES,
-      }),
-      true,
-    );
+    const result = await runCommand(`/plugins enable ${argumentsText}`, {
+      gatewayClientScopes: WRITE_GATEWAY_SCOPES,
+    });
 
     expect(result?.reply?.text).toContain(
       "Usage: /plugins enable <plugin-id-or-name> [--accept-capabilities]",
@@ -549,9 +506,7 @@ describe("handlePluginsCommand", () => {
   });
 
   it("refuses plugin enablement in Nix mode before reading or replacing config", async () => {
-    const previousNixMode = process.env.OPENCLAW_NIX_MODE;
-    process.env.OPENCLAW_NIX_MODE = "1";
-    try {
+    await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
       const params = buildPluginsParams("/plugins enable superpowers", buildCfg(), {
         gatewayClientScopes: WRITE_GATEWAY_SCOPES,
       });
@@ -563,27 +518,13 @@ describe("handlePluginsCommand", () => {
       expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
       expect(replaceConfigFileMock).not.toHaveBeenCalled();
       expect(refreshPluginRegistryAfterConfigMutationMock).not.toHaveBeenCalled();
-    } finally {
-      if (previousNixMode === undefined) {
-        delete process.env.OPENCLAW_NIX_MODE;
-      } else {
-        process.env.OPENCLAW_NIX_MODE = previousNixMode;
-      }
-    }
+    });
   });
 
   it("resolves write targets by indexed plugin name without loading diagnostics", async () => {
     buildPluginRegistrySnapshotReportMock.mockReturnValue({
       workspaceDir: "/tmp/plugins-workspace",
-      plugins: [
-        {
-          id: "superpowers",
-          name: "Super Powers",
-          status: "disabled",
-          format: "openclaw",
-          bundleFormat: "claude",
-        },
-      ],
+      plugins: [{ ...pluginSummary, name: "Super Powers" }],
     });
     validateConfigObjectWithPluginsMock.mockImplementation((next) => ({ ok: true, config: next }));
 

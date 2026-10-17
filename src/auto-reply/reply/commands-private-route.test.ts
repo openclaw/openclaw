@@ -15,25 +15,21 @@ import {
 } from "./commands-private-route.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-function createApprovalChannelPlugin(params: {
-  id: "discord" | "telegram" | "whatsapp";
-  targets: Array<{ to: string; threadId?: string | number | null }>;
-  enabled?: boolean;
-}): ChannelPlugin {
+function createApprovalChannelPlugin(
+  id: "discord" | "telegram" | "whatsapp",
+  targets: Array<{ to: string; threadId?: string | number | null }>,
+): ChannelPlugin {
   return {
-    ...createChannelTestPluginBase({
-      id: params.id,
-      label: params.id,
-    }),
+    ...createChannelTestPluginBase({ id, label: id }),
     approvalCapability: {
       native: {
         describeDeliveryCapabilities: vi.fn(() => ({
-          enabled: params.enabled !== false,
+          enabled: true,
           preferredSurface: "approver-dm" as const,
           supportsOriginSurface: false,
           supportsApproverDmSurface: true,
         })),
-        resolveApproverDmTargets: vi.fn(() => params.targets),
+        resolveApproverDmTargets: vi.fn(() => targets),
       },
     },
   };
@@ -94,6 +90,11 @@ function registerApprovalChannelPlugins(plugins: ChannelPlugin[]) {
   );
 }
 
+const routeRequest = {
+  id: "diagnostics-private-route",
+  command: "openclaw gateway diagnostics export --json",
+};
+
 function buildCommandParams(cfg: OpenClawConfig): HandleCommandsParams {
   return {
     cfg,
@@ -141,7 +142,7 @@ describe("private command approval requests", () => {
     "preserves command identity and bounds private route expiry with %s",
     async (_label, createdAtMs, expiresAtMs) => {
       vi.spyOn(Date, "now").mockReturnValue(createdAtMs);
-      const plugin = createApprovalChannelPlugin({ id: "discord", targets: [] });
+      const plugin = createApprovalChannelPlugin("discord", []);
       registerApprovalChannelPlugins([plugin]);
       const commandParams = buildCommandParams({});
       commandParams.ctx.OriginatingTo = "origin-group";
@@ -207,17 +208,15 @@ describe("buildCommandExecApprovalDefaults", () => {
   });
 });
 
+function telegramTarget() {
+  return { channel: "telegram", to: "849985193", accountId: undefined, threadId: undefined };
+}
+
 describe("resolvePrivateCommandRouteTargets", () => {
   it("prefers a same-surface private owner route even when another owner route is listed first", async () => {
     registerApprovalChannelPlugins([
-      createApprovalChannelPlugin({
-        id: "telegram",
-        targets: [{ to: "849985193" }],
-      }),
-      createApprovalChannelPlugin({
-        id: "discord",
-        targets: [{ to: "493655423946194964" }],
-      }),
+      createApprovalChannelPlugin("telegram", [{ to: "849985193" }]),
+      createApprovalChannelPlugin("discord", [{ to: "493655423946194964" }]),
     ]);
 
     const targets = await resolvePrivateCommandRouteTargets({
@@ -226,8 +225,7 @@ describe("resolvePrivateCommandRouteTargets", () => {
           ownerAllowFrom: ["telegram:849985193", "discord:493655423946194964"],
         },
       } as OpenClawConfig),
-      id: "diagnostics-private-route",
-      command: "openclaw gateway diagnostics export --json",
+      ...routeRequest,
     });
 
     expect(targets[0]).toEqual({
@@ -236,28 +234,14 @@ describe("resolvePrivateCommandRouteTargets", () => {
       accountId: "discord-bot-account",
       threadId: undefined,
     });
-    expect(targets[1]).toEqual({
-      channel: "telegram",
-      to: "849985193",
-      accountId: undefined,
-      threadId: undefined,
-    });
+    expect(targets[1]).toEqual(telegramTarget());
   });
 
   it("falls back to the first configured owner route when the source surface has no private route", async () => {
     registerApprovalChannelPlugins([
-      createApprovalChannelPlugin({
-        id: "discord",
-        targets: [],
-      }),
-      createApprovalChannelPlugin({
-        id: "whatsapp",
-        targets: [{ to: "+15555550100" }],
-      }),
-      createApprovalChannelPlugin({
-        id: "telegram",
-        targets: [{ to: "849985193" }],
-      }),
+      createApprovalChannelPlugin("discord", []),
+      createApprovalChannelPlugin("whatsapp", [{ to: "+15555550100" }]),
+      createApprovalChannelPlugin("telegram", [{ to: "849985193" }]),
     ]);
 
     const targets = await resolvePrivateCommandRouteTargets({
@@ -270,8 +254,7 @@ describe("resolvePrivateCommandRouteTargets", () => {
           ],
         },
       } as OpenClawConfig),
-      id: "diagnostics-private-route",
-      command: "openclaw gateway diagnostics export --json",
+      ...routeRequest,
     });
 
     expect(targets[0]?.channel).toBe("telegram");
@@ -282,14 +265,8 @@ describe("resolvePrivateCommandRouteTargets", () => {
 
   it("does not select a same-surface exec approver unless it is also an owner route", async () => {
     registerApprovalChannelPlugins([
-      createApprovalChannelPlugin({
-        id: "discord",
-        targets: [{ to: "non-owner-approver" }],
-      }),
-      createApprovalChannelPlugin({
-        id: "telegram",
-        targets: [{ to: "849985193" }],
-      }),
+      createApprovalChannelPlugin("discord", [{ to: "non-owner-approver" }]),
+      createApprovalChannelPlugin("telegram", [{ to: "849985193" }]),
     ]);
 
     const targets = await resolvePrivateCommandRouteTargets({
@@ -298,26 +275,15 @@ describe("resolvePrivateCommandRouteTargets", () => {
           ownerAllowFrom: ["telegram:849985193"],
         },
       } as OpenClawConfig),
-      id: "diagnostics-private-route",
-      command: "openclaw gateway diagnostics export --json",
+      ...routeRequest,
     });
 
-    expect(targets).toEqual([
-      {
-        channel: "telegram",
-        to: "849985193",
-        accountId: undefined,
-        threadId: undefined,
-      },
-    ]);
+    expect(targets).toEqual([telegramTarget()]);
   });
 
   it("routes a Discord group command through Telegram's declared tg owner prefix", async () => {
     registerApprovalChannelPlugins([
-      createApprovalChannelPlugin({
-        id: "discord",
-        targets: [],
-      }),
+      createApprovalChannelPlugin("discord", []),
       createOwnerDerivedApprovalChannelPlugin({
         id: "telegram",
         ownerPrefixes: ["telegram", "tg"],
@@ -335,17 +301,9 @@ describe("resolvePrivateCommandRouteTargets", () => {
           },
         },
       } as OpenClawConfig),
-      id: "diagnostics-private-route",
-      command: "openclaw gateway diagnostics export --json",
+      ...routeRequest,
     });
 
-    expect(targets).toEqual([
-      {
-        channel: "telegram",
-        to: "849985193",
-        accountId: undefined,
-        threadId: undefined,
-      },
-    ]);
+    expect(targets).toEqual([telegramTarget()]);
   });
 });
