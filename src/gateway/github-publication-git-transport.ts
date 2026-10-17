@@ -147,31 +147,76 @@ export async function requireGitHubPublicationCommit(
   cwd: string,
   env: NodeJS.ProcessEnv,
   failure: string,
+  options: { contents?: boolean; commitPresent?: boolean } = {},
 ) {
-  const result = await run(
-    [
-      ...GITHUB_CREDENTIAL_ARGS,
-      "-c",
-      `core.hooksPath=${os.devNull}`,
-      "-c",
-      "core.fsmonitor=false",
-      "-c",
-      "maintenance.auto=false",
-      "-c",
-      "gc.auto=0",
-      "fetch",
-      "--no-auto-maintenance",
-      "--no-tags",
-      "--no-write-fetch-head",
-      "--recurse-submodules=no",
-      "--",
-      githubRepositoryUrl(repository, host),
-      sha,
-    ],
-    { cwd, env },
-  );
-  if (result.code !== 0) {
-    throw new Error(failure);
+  const fetch = async (missing?: string[]) => {
+    const result = await run(
+      [
+        ...GITHUB_CREDENTIAL_ARGS,
+        "-c",
+        `core.hooksPath=${os.devNull}`,
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "maintenance.auto=false",
+        "-c",
+        "gc.auto=0",
+        "fetch",
+        "--no-auto-maintenance",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--recurse-submodules=no",
+        ...(missing ? ["--refetch", "--stdin"] : []),
+        "--",
+        githubRepositoryUrl(repository, host),
+        ...(missing ? [] : [sha]),
+      ],
+      { cwd, env, ...(missing ? { input: `${missing.join("\n")}\n` } : {}) },
+    );
+    if (result.code !== 0) {
+      throw new Error(failure);
+    }
+  };
+  if (!options.commitPresent) {
+    await fetch();
+  }
+  if (!options.contents) {
+    return;
+  }
+  const missingObjects = async () => {
+    const result = await run(
+      [
+        "git",
+        "rev-list",
+        "--objects",
+        "--missing=print",
+        "--no-object-names",
+        "--max-count=1",
+        sha,
+      ],
+      {
+        cwd,
+        env: { ...env, GIT_NO_LAZY_FETCH: "1" },
+        maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES,
+      },
+    );
+    if (result.code !== 0) {
+      throw new Error(failure);
+    }
+    return result.stdout
+      .toString("utf8")
+      .split("\n")
+      .filter((line) => line.startsWith("?"))
+      .map((line) => line.slice(1));
+  };
+  const missing = await missingObjects();
+  if (missing.length) {
+    // A known partial-clone commit can still lack its tree contents after fetch.
+    // Hydrate through the selected authenticated URL before any offline snapshots.
+    await fetch(missing);
+    if ((await missingObjects()).length) {
+      throw new Error(failure);
+    }
   }
 }
 

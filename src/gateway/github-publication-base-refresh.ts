@@ -56,6 +56,7 @@ export async function refreshManagedWorkspaceBase(params: {
     excludeAccountId: identity.account.accountId,
   });
   const assertCurrent = () => {
+    params.signal?.throwIfAborted();
     owner.assertCurrent();
     params.assertCurrent();
     if (!attribution.isCurrent()) {
@@ -136,6 +137,7 @@ export async function refreshManagedWorkspaceBase(params: {
               "The pending base integration changed; call refresh_base again and resolve its returned baseCommit.",
             );
           }
+          const continuingIntegration = Boolean(baseCommit);
           if (!baseCommit) {
             if (params.baseCommit) {
               throw new Error(
@@ -151,19 +153,22 @@ export async function refreshManagedWorkspaceBase(params: {
               target.githubHost,
               identity.env,
             );
-            await requireGitHubPublicationCommit(
-              run,
-              target.repository,
-              baseCommit,
-              target.githubHost,
-              cwd,
-              {
-                ...identity.env,
-                GIT_CONFIG_GLOBAL: gitNullConfigPath(),
-                GIT_CONFIG_SYSTEM: gitNullConfigPath(),
-              },
-              "The selected repository base could not be fetched; retry refresh_base.",
-            );
+          }
+          await requireGitHubPublicationCommit(
+            run,
+            target.repository,
+            baseCommit,
+            target.githubHost,
+            cwd,
+            {
+              ...identity.env,
+              GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+              GIT_CONFIG_SYSTEM: gitNullConfigPath(),
+            },
+            "The selected repository base contents could not be fetched; retry refresh_base.",
+            { contents: true, commitPresent: continuingIntegration },
+          );
+          if (!continuingIntegration) {
             const ancestor = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
             if (ancestor.code === 0) {
               return {
