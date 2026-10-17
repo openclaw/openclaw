@@ -82,7 +82,7 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
   return await captureMonitorLogs(async () => {
     const now = Date.now();
     const clock = createGatewaySchedulerClock(now);
-    const stopGate = createDeferredCore<void>();
+    const stopGate = createDeferredCore();
     let keepDisconnected = false;
     const policy = {
       channelId: "qa-channel" as ChannelId,
