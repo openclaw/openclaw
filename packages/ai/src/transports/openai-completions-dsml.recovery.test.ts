@@ -38,7 +38,7 @@ describe("openai completions DSML", () => {
         },
       ),
     ).rejects.toThrow("Nested DeepSeek DSML recovery wrappers are not supported");
-    expect(events.filter((event) => event.type.startsWith("toolcall_"))).toEqual([]);
+    expect(events.filter((event) => event.type?.startsWith("toolcall_") === true)).toEqual([]);
     expect(output.content.some((part) => part.type === "toolCall")).toBe(false);
   });
 
@@ -114,7 +114,7 @@ describe("openai completions DSML", () => {
     );
 
     expect(output.stopReason).toBe("stop");
-    expect(events.filter((event) => event.type.startsWith("toolcall_"))).toEqual([]);
+    expect(events.filter((event) => event.type?.startsWith("toolcall_") === true)).toEqual([]);
     expect(output.content.some((part) => part.type === "toolCall")).toBe(false);
   });
 
