@@ -139,9 +139,9 @@ function applyObservedChatSessionRow(
   if (row.providerReview) {
     holdProviderReviewQueuedInputs(state, row.key, row.agentId ?? selectedAgentId);
     if (
-      state.realtimeTalkSession ||
-      state.realtimeTalkActive ||
-      state.realtimeTalkUseSystemDefault
+      state.realtimeTalk.snapshot.realtimeTalkSession ||
+      state.realtimeTalk.snapshot.realtimeTalkActive ||
+      state.realtimeTalk.snapshot.realtimeTalkUseSystemDefault
     ) {
       stopChatRealtimeTalk(state, { preserveConversation: true });
     }

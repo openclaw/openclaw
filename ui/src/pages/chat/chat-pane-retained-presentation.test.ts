@@ -453,8 +453,12 @@ describe("chat pane retained presentation lifecycle", () => {
         const state = pane.state;
         const stop = vi.fn();
         const release = vi.fn();
-        state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
-        state.realtimeTalkActive = true;
+        state.realtimeTalk.update({
+          realtimeTalkSession: {
+            stop,
+          } as unknown as ChatPageHost["realtimeTalk"]["snapshot"]["realtimeTalkSession"],
+        });
+        state.realtimeTalk.update({ realtimeTalkActive: true });
         state.sidebarContent = { kind: "markdown", content: "Review selection" };
         let pending: Promise<boolean> | undefined;
         if (overlay === "image") {

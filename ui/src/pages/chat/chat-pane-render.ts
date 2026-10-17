@@ -72,6 +72,10 @@ import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
   private readonly notify = () => this.invalidate();
 
+  get realtimeTalk() {
+    return this.state?.realtimeTalk;
+  }
+
   readProviderReviewState() {
     return this.state;
   }
@@ -466,17 +470,17 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       modelCatalog: state.chatModelCatalog,
       modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
       queue: state.chatQueue,
-      realtimeTalkActive: state.realtimeTalkActive,
-      realtimeTalkStatus: state.realtimeTalkStatus,
-      realtimeTalkDetail: state.realtimeTalkDetail,
-      realtimeTalkInputNotice: state.realtimeTalkInputNotice,
-      realtimeTalkInputLevel: state.realtimeTalkInputLevel,
-      realtimeTalkConversation: state.realtimeTalkConversationState.entries,
-      realtimeTalkVideoStream: state.realtimeTalkVideoStream,
-      realtimeTalkCameraDevices: state.realtimeTalkCameraDevices,
-      realtimeTalkVideoCapable: state.realtimeTalkVideoCapable,
-      realtimeTalkVideoPending: state.realtimeTalkVideoPending,
-      realtimeTalkCameraError: state.realtimeTalkCameraError,
+      realtimeTalkActive: state.realtimeTalk.snapshot.realtimeTalkActive,
+      realtimeTalkStatus: state.realtimeTalk.snapshot.realtimeTalkStatus,
+      realtimeTalkDetail: state.realtimeTalk.snapshot.realtimeTalkDetail,
+      realtimeTalkInputNotice: state.realtimeTalk.snapshot.realtimeTalkInputNotice,
+      realtimeTalkInputLevel: state.realtimeTalk.snapshot.realtimeTalkInputLevel,
+      realtimeTalkConversation: state.realtimeTalk.snapshot.realtimeTalkConversationState.entries,
+      realtimeTalkVideoStream: state.realtimeTalk.snapshot.realtimeTalkVideoStream,
+      realtimeTalkCameraDevices: state.realtimeTalk.snapshot.realtimeTalkCameraDevices,
+      realtimeTalkVideoCapable: state.realtimeTalk.snapshot.realtimeTalkVideoCapable,
+      realtimeTalkVideoPending: state.realtimeTalk.snapshot.realtimeTalkVideoPending,
+      realtimeTalkCameraError: state.realtimeTalk.snapshot.realtimeTalkCameraError,
       connected: state.connected,
       offline: gatewaySnapshot.offlineStable,
       gatewayClient: state.client,
@@ -592,7 +596,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         latestFailedRunId: () =>
           chatFailureRunId(state.chatRunError, selectedChatSessionRow(state)),
       }),
-      onUseSystemDefaultMicrophone: state.realtimeTalkUseSystemDefault ?? undefined,
+      onUseSystemDefaultMicrophone:
+        state.realtimeTalk.snapshot.realtimeTalkUseSystemDefault ?? undefined,
       onToggleRealtimeTalk: () => (providerPaused ? undefined : void state.toggleRealtimeTalk()),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),
       onSwitchRealtimeCamera: () => void state.switchRealtimeTalkCamera(),
@@ -602,11 +607,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       },
       onDismissRealtimeTalkError: () => {
         dismissRealtimeTalkError(state);
-        state.requestUpdate?.();
       },
       onDismissRealtimeTalkInputNotice: () => {
-        state.realtimeTalkInputNotice = null;
-        state.requestUpdate?.();
+        state.realtimeTalk.update({ realtimeTalkInputNotice: null });
       },
       ...sessionActionCallbacks,
       onQueueRemove: state.removeQueuedMessage,

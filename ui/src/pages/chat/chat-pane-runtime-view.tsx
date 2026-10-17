@@ -116,6 +116,14 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   function MountedPane() {
     const context = runtime.context;
     const gateway = projectGateway(context.gateway);
+    const realtimeOwner = createMemo(() => {
+      revision();
+      return runtime.realtimeTalk;
+    });
+    const realtime = createMemo(() => {
+      const owner = realtimeOwner();
+      return owner && projectOwner(owner, (source) => source.snapshot);
+    });
     const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
     const boardProvider = createMemo(() => {
       revision();
@@ -180,6 +188,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       read: () => {
         revision();
         progress.read();
+        realtime()?.read();
         projects.read();
         board().forEach((source) => source.read());
         i18nRevision();
