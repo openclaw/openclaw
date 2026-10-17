@@ -56,7 +56,6 @@ const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   projection: vi.fn(),
   policy: vi.fn(),
-  native: vi.fn(),
   registered: vi.fn(),
 }));
 vi.mock("node:dns/promises", () => ({ lookup: mocks.lookup }));
@@ -353,12 +352,11 @@ beforeEach(() => {
     sharingTarget: () => ({ agentId: "main", canonicalKey: sessionKey, entry }),
   });
   mocks.policy.mockReset();
-  mocks.native.mockImplementation(async () => ({ runtime, releaseLease: () => {} }));
   mocks.registered.mockReturnValue({
     ownerPluginId: "codex",
     harness: {
       loadMcpToolCatalog: async () => runtime.peekCatalog(),
-      acquireMcpAppRuntime: mocks.native,
+      acquireMcpAppRuntime: async () => ({ runtime, releaseLease: () => {} }),
     },
   });
   reviewer.socket.send.mockImplementation((frame: string) => {
