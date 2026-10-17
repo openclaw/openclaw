@@ -3,7 +3,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentsFilesGetResult, AgentsFilesListResult } from "../../api/types.ts";
+import type {
+  AgentsFilesGetResult,
+  AgentsFilesListResult,
+  AgentsFilesSetResult,
+  AgentsListResult,
+} from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
@@ -43,6 +48,44 @@ function fileGateway(request: GatewayRequestHandler) {
     ...gatewaySnapshot(client),
     hello: AGENT_FILE_GATEWAY_HELLO,
   });
+}
+
+function workspaceRequests(
+  list: AgentsFilesListResult,
+  content: string,
+  roster: AgentsListResult = agentsList,
+) {
+  const result = {
+    agentId: list.agentId,
+    workspace: list.workspace,
+    file: { ...list.files[0]!, content },
+  };
+  const lists = vi.fn(async () => list);
+  const get = vi.fn(async (): Promise<AgentsFilesGetResult> => result);
+  const set = vi.fn(async (): Promise<AgentsFilesSetResult> => {
+    throw new Error("Unexpected write");
+  });
+  const handlers: Record<string, () => Promise<unknown>> = {
+    "agents.list": async () => roster,
+    "agents.files.list": lists,
+    "agents.files.get": get,
+    "agents.files.set": set,
+  };
+  const request = vi.fn(async (method: string) => {
+    if (!Object.hasOwn(handlers, method)) {
+      throw new Error(`Unexpected request: ${method}`);
+    }
+    return handlers[method]!();
+  });
+  return { request, list: lists, get, set };
+}
+
+async function workspacePage(request: GatewayRequestHandler) {
+  const currentGateway = fileGateway(request);
+  const agents = createAgentCapability(currentGateway);
+  await agents.ensureFiles("main");
+  await agents.ensureList();
+  return { ...filePage(currentGateway, agents), agents };
 }
 
 function fileList(): AgentsFilesListResult {
@@ -86,61 +129,41 @@ describe("agent file lifecycle", () => {
     await loaded("# Instructions");
   });
 
-  it("refreshes the active file base without replacing a dirty draft", async () => {
+  it.each(["refresh", "rejected save"])("keeps a dirty draft visible after %s", async (action) => {
     const list = fileList();
-    let authoritativeContent = "server revision 1";
-    const request = vi.fn(async () => ({
-      file: {
-        ...list.files[0],
-        content: authoritativeContent,
-      },
-    }));
-    const refreshFiles = vi.fn(async () => list);
-    const currentGateway = fileGateway(request);
-    const { files, editor, loaded } = filePage(currentGateway, {
-      ...agentsCapability(async () => list),
-      refreshFiles,
-      recordFile: () => list,
-    });
-    await loaded("server revision 1");
-    files().onFileDraftChange("AGENTS.md", "local draft");
-    authoritativeContent = "server revision 2";
-
-    files().onLoadFiles("main");
-    await loaded("server revision 2");
-
-    expect(refreshFiles).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(editor()?.content).toBe("server revision 2");
-    expect(editor()?.draft).toBe("local draft");
-  });
-
-  it("keeps a rejected save visible without refreshing it away", async () => {
-    const list = fileList();
+    const failedSave = action === "rejected save";
+    let content = failedSave ? "original" : "server revision 1";
     const request = vi.fn(async (method: string) => {
       if (method === "agents.files.get") {
-        return { ...list, file: { ...list.files[0], content: "original" } };
+        return { ...list, file: { ...list.files[0], content } };
       }
       throw new Error("workspace write failed");
     });
     const refreshFiles = vi.fn(async () => list);
-    const currentGateway = fileGateway(request);
-    const { files, loaded } = filePage(currentGateway, {
+    const { files, editor, loaded } = filePage(fileGateway(request), {
       ...agentsCapability(async () => list),
       refreshFiles,
       recordFile: () => list,
     });
-    await loaded("original");
-    files().onFileDraftChange("AGENTS.md", "updated");
-    files().onFileSave("AGENTS.md");
-
-    await vi.waitFor(() =>
-      expect(request.mock.calls.filter(([method]) => method === "agents.files.set")).toHaveLength(
-        1,
-      ),
-    );
-    await vi.waitFor(() => expect(files().agentFilesError).toBe("workspace write failed"));
-    expect(refreshFiles).not.toHaveBeenCalled();
+    await loaded(content);
+    files().onFileDraftChange("AGENTS.md", failedSave ? "updated" : "local draft");
+    if (failedSave) {
+      files().onFileSave("AGENTS.md");
+      await vi.waitFor(() =>
+        expect(request.mock.calls.filter(([method]) => method === "agents.files.set")).toHaveLength(
+          1,
+        ),
+      );
+      await vi.waitFor(() => expect(files().agentFilesError).toBe("workspace write failed"));
+      expect(refreshFiles).not.toHaveBeenCalled();
+    } else {
+      content = "server revision 2";
+      files().onLoadFiles("main");
+      await loaded(content);
+      expect(refreshFiles).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(editor()).toMatchObject({ content: "server revision 2", draft: "local draft" });
+    }
   });
 
   it.each(["content read", "file list", "invalidated cache"] as const)(
@@ -153,49 +176,28 @@ describe("agent file lifecycle", () => {
       const savedResult = { agentId: "main", workspace: missingList.workspace, file: savedFile };
       const contentRead = createDeferred<AgentsFilesGetResult>();
       const listRead = createDeferred<AgentsFilesListResult>();
-      let listCalls = 0;
-      let contentCalls = 0;
-      const request = vi.fn(async (method: string) => {
-        if (method === "agents.files.list") {
-          listCalls += 1;
-          if (listCalls === 1) {
-            return missingList;
-          }
-          return pendingRequest === "file list" && listCalls === 2
-            ? await listRead.promise
-            : savedList;
-        }
-        if (method === "agents.files.get") {
-          contentCalls += 1;
-          if (contentCalls === 1) {
-            return {
-              agentId: "main",
-              workspace: missingList.workspace,
-              file: { ...missingFile, content: "" },
-            };
-          }
-          return pendingRequest !== "file list" && contentCalls === 2
-            ? await contentRead.promise
-            : savedResult;
-        }
-        if (method === "agents.files.set") {
-          return { ok: true, ...savedResult };
-        }
-        if (method === "agents.list") {
-          return { defaultId: "main", agents: [{ id: "main" }] };
-        }
-        throw new Error(`Unexpected request: ${method}`);
+      const io = workspaceRequests(missingList, "", {
+        defaultId: "main",
+        agents: [{ id: "main" }],
       });
-      const currentGateway = fileGateway(request);
-      const agents = createAgentCapability(currentGateway);
-      await agents.ensureFiles("main");
-      await agents.ensureList();
-      const { page, files, editor, loaded } = filePage(currentGateway, agents);
+      io.list.mockResolvedValue(savedList).mockResolvedValueOnce(missingList);
+      io.get.mockResolvedValue(savedResult).mockResolvedValueOnce({
+        agentId: "main",
+        workspace: missingList.workspace,
+        file: { ...missingFile, content: "" },
+      });
+      if (pendingRequest === "file list") {
+        io.list.mockReturnValueOnce(listRead.promise);
+      } else {
+        io.get.mockReturnValueOnce(contentRead.promise);
+      }
+      io.set.mockResolvedValue({ ok: true, ...savedResult });
+      const { page, files, editor, loaded, agents } = await workspacePage(io.request);
       await loaded("");
       files().onFileDraftChange(missingFile.name, savedFile.content);
       files().onLoadFiles("main");
       if (pendingRequest !== "file list") {
-        await vi.waitFor(() => expect(contentCalls).toBe(2));
+        await vi.waitFor(() => expect(io.get).toHaveBeenCalledTimes(2));
       }
 
       try {
@@ -225,8 +227,7 @@ describe("agent file lifecycle", () => {
         expect(files().agentFilesList?.files).toEqual([
           expect.objectContaining({ name: missingFile.name, missing: false, size: 13 }),
         ]);
-        expect(editor()?.content).toBe(savedFile.content);
-        expect(editor()?.draft).toBe(savedFile.content);
+        expect(editor()).toMatchObject({ content: savedFile.content, draft: savedFile.content });
         expect(files().agentFilesError).toBeNull();
       } finally {
         page.dispose();
@@ -245,38 +246,15 @@ describe("agent file lifecycle", () => {
       const rebuildError = "workspace metadata refresh failed";
       const writeError = "newer workspace write failed";
       const rebuild = createDeferred<AgentsFilesListResult>();
-      let listCalls = 0;
-      let writeCalls = 0;
-      const request = vi.fn(async (method: string) => {
-        if (method === "agents.files.list") {
-          listCalls += 1;
-          return listCalls === 1 ? list : await rebuild.promise;
-        }
-        if (method === "agents.files.set") {
-          writeCalls += 1;
-          if (writeCalls > 1) {
-            throw new Error(writeError);
-          }
-          return {
-            ok: true,
-            agentId: "main",
-            workspace: list.workspace,
-            file: { ...list.files[0], content: savedContent },
-          };
-        }
-        if (method === "agents.list") {
-          return agentsList;
-        }
-        if (method === "agents.files.get") {
-          return { ...list, file: { ...list.files[0], content: "original" } };
-        }
-        throw new Error(`Unexpected request: ${method}`);
+      const io = workspaceRequests(list, "original");
+      io.list.mockReturnValue(rebuild.promise).mockResolvedValueOnce(list);
+      io.set.mockRejectedValue(new Error(writeError)).mockResolvedValueOnce({
+        ok: true,
+        agentId: "main",
+        workspace: list.workspace,
+        file: { ...list.files[0]!, content: savedContent },
       });
-      const currentGateway = fileGateway(request);
-      const agents = createAgentCapability(currentGateway);
-      await agents.ensureFiles("main");
-      await agents.ensureList();
-      const { page, files, editor, loaded } = filePage(currentGateway, agents);
+      const { page, files, editor, loaded, agents } = await workspacePage(io.request);
       await loaded("original");
       files().onFileDraftChange("AGENTS.md", savedContent);
       const mounted = mountSolid(Agents, page.read());
@@ -296,7 +274,7 @@ describe("agent file lifecycle", () => {
         await vi.waitFor(() => {
           expect(files().agentFileSaving).toBe(false);
           expect(editor()?.content).toBe(savedContent);
-          expect(listCalls).toBe(2);
+          expect(io.list).toHaveBeenCalledTimes(2);
         });
         if (newerSaveFails) {
           files().onFileDraftChange("AGENTS.md", "newer draft");

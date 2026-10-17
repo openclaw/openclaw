@@ -6,7 +6,6 @@ import "../../styles/settings.css";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
-import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
 import { AgentFiles } from "./panels-files.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
@@ -35,68 +34,62 @@ afterEach(async () => {
   }
 });
 
-function afterOwnTransition(
-  dialog: HTMLElement,
-  eventName: "overlay-after-show" | "overlay-after-hide",
-): Promise<void> {
-  return new Promise((resolve) => {
-    const completed = (event: Event) => {
-      if (event.target !== dialog) {
-        return;
-      }
-      dialog.removeEventListener(eventName, completed);
-      // Dialog and adapter focus work completes before this observer's next task.
-      setTimeout(resolve, 0);
-    };
-    dialog.addEventListener(eventName, completed);
-  });
-}
-
-function requireButton(selector: string): HTMLButtonElement {
-  const button = container.querySelector<HTMLButtonElement>(selector);
-  if (!button) {
-    throw new Error(`Missing file-preview button: ${selector}`);
+async function previewHarness() {
+  const { userEvent } = await import("vitest/browser");
+  const { modal, dialog } = await getRenderedModalDialog(container);
+  const button = (selector: string) => container.querySelector<HTMLButtonElement>(selector)!;
+  const part = (name: string) =>
+    container.querySelector<HTMLElement>(`.md-preview-dialog__${name}`)!;
+  const preview = button(".agent-file-header .agent-file-actions button");
+  async function transition(show: boolean, effect: () => Promise<unknown>) {
+    const eventName = show ? "overlay-after-show" : "overlay-after-hide";
+    const completed = new Promise<void>((resolve) => {
+      const listener = (event: Event) => {
+        if (event.target !== modal) {
+          return;
+        }
+        modal.removeEventListener(eventName, listener);
+        // Dialog and adapter focus work completes before this observer's next task.
+        setTimeout(resolve, 0);
+      };
+      modal.addEventListener(eventName, listener);
+    });
+    await effect();
+    await completed;
   }
-  return button;
+  return { userEvent, modal, dialog, button, part, preview, transition };
 }
 
 function renderPreview(
   draft: string,
   onChange = (_name: string, _content: string) => {},
-  overrides: Partial<Parameters<typeof AgentFiles>[0]> = {},
+  options: { missing?: boolean; saved?: boolean; conflict?: string | null } = {},
 ) {
+  const { missing = false, saved = false, conflict = null } = options;
   const props: Parameters<typeof AgentFiles>[0] = {
     agentId: "main",
     agentFilesList: {
       agentId: "main",
       workspace: "/synthetic/workspace",
-      files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing: false }],
+      files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing }],
     },
     agentFilesLoading: false,
     agentFilesError: null,
     agentFileActive: "AGENTS.md",
-
     agentFileSaving: false,
-    agentFileConflict: null,
+    agentFileConflict: conflict,
     canWrite: true,
     onLoadFiles: () => undefined,
     onSelectFile: () => undefined,
     onFileDraftChange: (name, content) => {
       onChange(name, content);
-      renderPreview(content, onChange, overrides);
+      renderPreview(content, onChange, options);
     },
     onFileReset: () => undefined,
     onFileSave: () => undefined,
     onFileReload: () => undefined,
     onFileOverwrite: () => undefined,
-    ...overrides,
-    agentFileEditors: {
-      "AGENTS.md": {
-        content: "Saved instructions",
-        draft,
-        ...overrides.agentFileEditors?.["AGENTS.md"],
-      },
-    },
+    agentFileEditors: { "AGENTS.md": { content: saved ? draft : "Saved instructions", draft } },
   };
   if (mounted) {
     mounted.update(props);
@@ -114,67 +107,45 @@ describe.runIf(browserMode)("agent file preview", () => {
   ] as const)(
     "opens a sanitized document with current metadata (missing %s, conflict %s)",
     async (missing, conflict, status, updated) => {
-      const { userEvent } = await import("vitest/browser");
       const draft =
         "# User Profile\n\nHello world\n\n```ts\nconst answer = 42;\n```\n\n<script>alert(1)</script>\n\n![Remote](https://example.invalid/image.png)";
-      renderPreview(draft, undefined, {
-        agentFilesList: {
-          agentId: "main",
-          workspace: "/synthetic/workspace",
-          files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing }],
-        },
-        agentFileEditors: createAgentFileEditors({
-          content: { "AGENTS.md": draft },
-        }),
-        agentFileConflict: conflict,
-      });
-      const { modal } = await getRenderedModalDialog(container);
-      const shown = afterOwnTransition(modal, "overlay-after-show");
-      await userEvent.click(requireButton(".agent-file-header .agent-file-actions button"));
-      await shown;
-      expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
-        "AGENTS.md",
-      );
-      expect(container.querySelector(".md-preview-dialog__chip strong")?.textContent).toBe(status);
-      expect(container.querySelector(".md-preview-dialog__meta")?.textContent).toContain(updated);
-      expect(container.querySelector(".md-preview-dialog__eyebrow span")?.textContent?.trim()).toBe(
-        "Markdown Preview",
-      );
-      const reader = container.querySelector(".md-preview-dialog__reader")!;
+      renderPreview(draft, undefined, { missing, conflict, saved: true });
+      const { userEvent, preview, part, transition } = await previewHarness();
+      await transition(true, () => userEvent.click(preview));
+      expect([
+        part("path").textContent?.trim(),
+        part("chip strong").textContent,
+        part("eyebrow span").textContent?.trim(),
+      ]).toEqual(["AGENTS.md", status, "Markdown Preview"]);
+      expect(part("meta").textContent).toContain(updated);
+      const reader = part("reader");
       expect(reader.querySelector("img")?.getAttribute("src")).toBe(
         "https://example.invalid/image.png",
       );
       expect(reader.querySelector("pre code")?.textContent).toBe("const answer = 42;\n");
       expect(reader.querySelector(".code-block-copy, script")).toBeNull();
-      const actions = Array.from(
-        container.querySelectorAll<HTMLButtonElement>(".md-preview-dialog__actions button"),
-      );
-      expect(actions.map((button) => button.getAttribute("aria-label"))).toEqual([
-        "Expand preview",
-        "Close preview",
+      const actions = Array.from(part("actions").querySelectorAll("button"));
+      expect(
+        actions.map((button) => [button.getAttribute("aria-label"), button.textContent?.trim()]),
+      ).toEqual([
+        ["Expand preview", ""],
+        ["Close preview", ""],
       ]);
-      expect(actions.map((button) => button.textContent?.trim())).toEqual(["", ""]);
       const footer = container.querySelector("openclaw-modal-actions.md-preview-dialog__footer");
       expect(footer?.parentElement?.lastElementChild).toBe(footer);
       expect(footer?.querySelector("button")?.textContent?.trim()).toBe("Edit file");
-      const closed = afterOwnTransition(modal, "overlay-after-hide");
-      await userEvent.keyboard("{Escape}");
-      await closed;
+      await transition(false, () => userEvent.keyboard("{Escape}"));
     },
   );
   it.each(["edit", "close"] as const)(
     "returns focus to the intended owner after %s and retained reopen",
     async (action) => {
-      const { userEvent } = await import("vitest/browser");
       const changes: string[] = [];
       let expectedDraft = "Unsaved file preview draft\n\n".repeat(80);
       renderPreview(expectedDraft, (_name, content) => changes.push(content));
-      const textarea = container.querySelector<HTMLTextAreaElement>(".agent-file-textarea");
-      if (!textarea) {
-        throw new Error("Missing agent file editor");
-      }
-      const preview = requireButton(".agent-file-header .agent-file-actions button");
-      const { modal, dialog } = await getRenderedModalDialog(container);
+      const textarea = container.querySelector<HTMLTextAreaElement>(".agent-file-textarea")!;
+      const { userEvent, modal, dialog, preview, part, button, transition } =
+        await previewHarness();
       expect(dialog.open).toBe(false);
       expect(textarea.value).toBe(expectedDraft);
       let hiddenMutations = 0;
@@ -189,30 +160,23 @@ describe.runIf(browserMode)("agent file preview", () => {
         textarea.setSelectionRange(textarea.value.length, textarea.value.length);
         preview.focus();
         // Opening animations may start after dialog.open becomes true.
-        const shown = afterOwnTransition(modal, "overlay-after-show");
-        await userEvent.keyboard("{Enter}");
-        await shown;
+        await transition(true, () => userEvent.keyboard("{Enter}"));
         expect(dialog.open).toBe(true);
-        expect(
-          container
-            .querySelector(".md-preview-dialog__reader")
-            ?.textContent?.replace(/\s+/g, " ")
-            .trim(),
-        ).toBe(expectedDraft.replace(/\s+/g, " ").trim());
-        const panel = container.querySelector<HTMLElement>(".md-preview-dialog__panel")!;
-        const body = container.querySelector<HTMLElement>(".md-preview-dialog__body")!;
+        expect(part("reader").textContent?.replace(/\s+/g, " ").trim()).toBe(
+          expectedDraft.replace(/\s+/g, " ").trim(),
+        );
+        const panel = part("panel");
+        const body = part("body");
         const bounds = dialog.getBoundingClientRect();
         expect(panel.getBoundingClientRect().top).toBeGreaterThanOrEqual(bounds.top - 1);
         expect(panel.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom + 1);
         expect(body.clientHeight).toBeGreaterThan(0);
         expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
-        const closed = afterOwnTransition(modal, "overlay-after-hide");
-        await userEvent.click(
-          requireButton(
-            action === "edit" ? '[aria-label="Edit file"]' : '[aria-label="Close preview"]',
+        await transition(false, () =>
+          userEvent.click(
+            button(action === "edit" ? '[aria-label="Edit file"]' : '[aria-label="Close preview"]'),
           ),
         );
-        await closed;
         expect(dialog.open).toBe(false);
         expect(modal.isConnected).toBe(true);
 
@@ -240,35 +204,32 @@ describe.runIf(browserMode)("agent file preview", () => {
   ] as const)(
     "keeps actions aligned and shows metadata by priority in each preview mode at %ipx (%s)",
     async (width, locale) => {
-      const { page, userEvent } = await import("vitest/browser");
+      const { page } = await import("vitest/browser");
       await page.viewport(width, 900);
       await i18n.setLocale(locale);
       container.classList.add("shell--settings");
       renderPreview(
         "# Workspace operating instructions\n\n" + "Readable document content.\n\n".repeat(80),
       );
-      const preview = requireButton(".agent-file-header .agent-file-actions button");
-      const { modal, dialog } = await getRenderedModalDialog(container);
-      const shown = afterOwnTransition(modal, "overlay-after-show");
-      await userEvent.click(preview);
-      await shown;
+      const { userEvent, dialog, preview, part, button, transition } = await previewHarness();
+      await transition(true, () => userEvent.click(preview));
       expect(dialog.open).toBe(true);
-      const identity = container.querySelector<HTMLElement>(".md-preview-dialog__header-main")!;
-      const actions = container.querySelector<HTMLElement>(".md-preview-dialog__actions")!;
-      const meta = container.querySelector<HTMLElement>(".md-preview-dialog__meta")!;
+      const identity = part("header-main");
+      const actions = part("actions");
+      const meta = part("meta");
       const essentialChips = meta.querySelectorAll<HTMLDivElement>('[data-priority="essential"]');
       const secondaryMetadata = meta.querySelectorAll<HTMLElement>(
         '[data-priority="secondary"], .md-preview-dialog__chip > span',
       );
       expect(essentialChips).toHaveLength(3);
       expect(secondaryMetadata).toHaveLength(4);
-      const body = container.querySelector<HTMLElement>(".md-preview-dialog__body")!;
+      const body = part("body");
       const normalInset = getComputedStyle(body).paddingInlineStart;
-      const footer = container.querySelector<HTMLElement>(".md-preview-dialog__footer")!;
+      const footer = part("footer");
       const edit = footer.querySelector<HTMLButtonElement>("button")!;
       for (const mode of ["normal", "fullscreen", "return"]) {
         if (mode !== "normal") {
-          await userEvent.click(requireButton(".md-preview-expand-btn"));
+          await userEvent.click(button(".md-preview-expand-btn"));
         }
         await expect.poll(() => identity.getBoundingClientRect().width).toBeGreaterThan(1);
         const name = identity.getBoundingClientRect();
@@ -308,9 +269,7 @@ describe.runIf(browserMode)("agent file preview", () => {
           await expect.element(metadata).toBeVisible();
         }
       }
-      const closed = afterOwnTransition(modal, "overlay-after-hide");
-      await userEvent.keyboard("{Escape}");
-      await closed;
+      await transition(false, () => userEvent.keyboard("{Escape}"));
       expect(dialog.open).toBe(false);
       expect(document.activeElement).toBe(preview);
     },

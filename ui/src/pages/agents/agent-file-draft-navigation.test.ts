@@ -2,7 +2,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import {
@@ -17,6 +16,19 @@ import {
   emitGatewaySnapshot,
 } from "./agents-page.test-support.ts";
 import { Agents } from "./view.tsx";
+
+type FileRequest = {
+  agentId: string;
+  name: string;
+  content?: string;
+  expectedHash?: string;
+  expectedMissing?: true;
+};
+
+const writeParams = (
+  content: string,
+  version: { expectedHash: string } | { expectedMissing: true },
+) => ({ agentId: "main", name: "AGENTS.md", content, ...version });
 
 it.each([
   "file tabs",
@@ -44,72 +56,47 @@ it.each([
   let mainHash = "a".repeat(64);
   const draft = transition === "empty draft" ? "" : "unsaved local instructions";
   const pendingSave = createDeferred();
-  const request = vi.fn(
-    async (
-      method: string,
-      params: {
-        agentId: string;
-        name: string;
-        content?: string;
-        expectedHash?: string;
-        expectedMissing?: true;
-      },
-    ) => {
-      if (method === "agents.files.set") {
-        if (params.expectedMissing ? !mainMissing : params.expectedHash !== mainHash) {
-          throw new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: "File changed on disk",
-            details: { type: "agent_file_conflict" },
-          });
-        }
-        mainContent = params.content ?? "";
-        if (transition === "pending save") {
-          mainHash = "c".repeat(64);
-          await pendingSave.promise;
-        }
-      } else if (method !== "agents.files.get") {
-        throw new Error(`Unexpected method ${method}`);
+  const request = vi.fn(async (method: string, params: FileRequest) => {
+    const { agentId, name, content, expectedHash, expectedMissing } = params;
+    if (method === "agents.files.set") {
+      if (expectedMissing ? !mainMissing : expectedHash !== mainHash) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "File changed on disk",
+          details: { type: "agent_file_conflict" },
+        });
       }
-      return {
-        agentId: params.agentId,
-        workspace: `/tmp/${params.agentId}`,
-        file: {
-          name: params.name,
-          path: `/tmp/${params.agentId}/${params.name}`,
-          missing: params.agentId === "main" && params.name === "AGENTS.md" && mainMissing,
-          content:
-            params.agentId === "main" && params.name === "AGENTS.md"
-              ? mainContent
-              : `${params.agentId} ${params.name} saved`,
-          hash: params.agentId === "main" && mainMissing ? undefined : mainHash,
-        },
-      };
-    },
-  );
+      mainContent = content ?? "";
+      if (transition === "pending save") {
+        mainHash = "c".repeat(64);
+        await pendingSave.promise;
+      }
+    } else if (method !== "agents.files.get") {
+      throw new Error(`Unexpected method ${method}`);
+    }
+    return {
+      agentId,
+      workspace: `/tmp/${agentId}`,
+      file: {
+        name,
+        path: `/tmp/${agentId}/${name}`,
+        missing: agentId === "main" && name === "AGENTS.md" && mainMissing,
+        content:
+          agentId === "main" && name === "AGENTS.md" ? mainContent : `${agentId} ${name} saved`,
+        hash: agentId === "main" && mainMissing ? undefined : mainHash,
+      },
+    };
+  });
   const client = { request } as unknown as GatewayBrowserClient;
   const connected = { ...snapshot(client), hello: gatewayHelloForMethods(["agents.files.set"]) };
   const currentGateway = gateway(connected);
   const selection = settingsSelection(roster);
-  const baseAgents = agentsCapability(async () => fileList("main"));
-  const agents = {
-    ...baseAgents,
-    state: { ...baseAgents.state, agentsList: roster },
-    files: () => ({ list: null, loading: false, error: null }),
-    ensureFiles: vi.fn(async (agentId: string) => fileList(agentId)),
-    recordFile: vi.fn(),
-  };
-  const context = {
-    ...pageContext(currentGateway, agents),
-    basePath: "",
-    settingsAgentSelection: selection,
-    channels: { state: {}, subscribe: () => () => undefined },
-    runtimeConfig: {
-      state: { configForm: {}, configSnapshot: {} },
-      subscribe: () => () => undefined,
-    },
-    navigation: { snapshot: { pinnedAgentIds: [] }, subscribe: () => () => undefined },
-  } as unknown as ApplicationContext;
+  const agents = agentsCapability(async () => fileList("main"));
+  agents.state.agentsList = roster;
+  agents.ensureFiles = vi.fn(async (agentId: string) => fileList(agentId));
+  const context = pageContext(currentGateway, agents);
+  Object.assign(context, { settingsAgentSelection: selection });
+  Object.assign(context.runtimeConfig, { state: { configForm: {}, configSnapshot: {} } });
   const page = createAgentsPage(
     context,
     agentsRouteData(currentGateway, roster, "main", selection),
@@ -140,9 +127,8 @@ it.each([
   const save = () => element<HTMLButtonElement>(".agent-file-actions .primary");
   try {
     await settle();
-    expect(textarea().value).toBe(mainContent);
     const editor = textarea();
-    expect(editor.disabled).toBe(false);
+    expect(editor).toMatchObject({ value: mainContent, disabled: false });
     editor.value = draft;
     editor.dispatchEvent(new Event("input", { bubbles: true }));
     expect(textarea().value).toBe(draft);
@@ -151,17 +137,14 @@ it.each([
       await settle();
       expect(textarea().value).toBe("main SOUL.md saved");
       tab("AGENTS.md");
-      await settle();
     } else if (transition !== "reconnect") {
       if (transition === "pending save") {
         save().click();
         await vi.waitFor(() =>
-          expect(request).toHaveBeenCalledWith("agents.files.set", {
-            agentId: "main",
-            name: "AGENTS.md",
-            content: draft,
-            expectedHash: "a".repeat(64),
-          }),
+          expect(request).toHaveBeenCalledWith(
+            "agents.files.set",
+            writeParams(draft, { expectedHash: "a".repeat(64) }),
+          ),
         );
       }
       selection.set("research");
@@ -189,12 +172,11 @@ it.each([
         await settle();
       }
       selection.set("main");
-      await settle();
     } else {
       emitGatewaySnapshot(currentGateway, { ...connected, phase: "reconnecting" });
       emitGatewaySnapshot(currentGateway, connected);
-      await settle();
     }
+    await settle();
     expect(textarea().value).toBe(transition === "connection replacement" ? mainContent : draft);
     if (transition !== "pending save") {
       expect(request.mock.calls.every(([method]) => method === "agents.files.get")).toBe(true);
@@ -208,14 +190,15 @@ it.each([
         paint();
         expect(container.textContent).toContain("File changed on disk");
       });
-      expect(request).toHaveBeenLastCalledWith("agents.files.set", {
-        agentId: "main",
-        name: "AGENTS.md",
-        content: draft,
-        ...(transition === "missing file"
-          ? { expectedMissing: true }
-          : { expectedHash: "a".repeat(64) }),
-      });
+      expect(request).toHaveBeenLastCalledWith(
+        "agents.files.set",
+        writeParams(
+          draft,
+          transition === "missing file"
+            ? { expectedMissing: true }
+            : { expectedHash: "a".repeat(64) },
+        ),
+      );
       selection.set("research");
       await settle();
       selection.set("main");
@@ -230,17 +213,13 @@ it.each([
       save().click();
       await vi.waitFor(() => expect(editorState()?.content).toBe("next edit"));
       expect(save().disabled).toBe(true);
-      expect(request).toHaveBeenLastCalledWith("agents.files.set", {
-        agentId: "main",
-        name: "AGENTS.md",
-        content: "next edit",
-        expectedHash: "b".repeat(64),
-      });
+      expect(request).toHaveBeenLastCalledWith(
+        "agents.files.set",
+        writeParams("next edit", { expectedHash: "b".repeat(64) }),
+      );
     }
   } finally {
     pendingSave.resolve();
-    page.dispose();
     selection.dispose();
-    mounted.dispose();
   }
 });
