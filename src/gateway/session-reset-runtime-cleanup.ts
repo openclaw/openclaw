@@ -2,7 +2,6 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { clearFinishedSessionsForScopes } from "../agents/bash-process-registry.js";
-import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import {
   abortEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
@@ -116,7 +115,6 @@ export async function ensureSessionRuntimeCleanup(params: {
   });
   if (!params.sessionId) {
     assertCurrent();
-    clearBootstrapSnapshot(params.target.canonicalKey);
     await closeTrackedBrowserTabs();
     return undefined;
   }
@@ -195,7 +193,6 @@ export async function ensureSessionRuntimeCleanup(params: {
   // after a clean stop; otherwise keep the required marker armed for late work.
   await retireMcpRuntime(!ended);
   assertCurrent();
-  clearBootstrapSnapshot(params.target.canonicalKey);
   if (ended && !isEmbeddedAgentRunActive(sessionId)) {
     assertCurrent();
     mcpRunEndWatcherState.cancellations.get(sessionId)?.();

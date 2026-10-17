@@ -122,7 +122,7 @@ describe("chat pane warm reload", () => {
         "openclaw-chat-runtime-test",
         ChatPaneRuntime,
       ) as unknown as TestChatPane;
-      vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
+      vi.spyOn(pane, "invalidate").mockImplementation(() => undefined);
       const context = createInitializationContext(
         createGatewayBrowserClientFixture({
           offlineRecoveryScope: "test-recovery-scope",

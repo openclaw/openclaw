@@ -34,6 +34,7 @@ import {
 } from "./chat-history-events.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { projectChatOutboxQueue } from "./chat-outbox-projection.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
@@ -673,7 +674,7 @@ export function createPageState(
     invalidateImageLightbox(state);
     renderLifecycle.invalidate();
   };
-  return projectChatFields(projectChatErrors(state), [
+  return projectChatFields(projectChatErrors(projectChatOutboxQueue(state)), [
     "chatSending",
     "chatLoading",
     "chatHistoryPagination",

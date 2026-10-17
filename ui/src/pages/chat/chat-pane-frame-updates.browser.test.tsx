@@ -82,7 +82,7 @@ it("batches a projected history change with a legacy invalidation into one frame
   const { pane, updates } = await mountPane();
   await task(() => {
     pane.history.catalogCursor = "projected history";
-    pane.requestUpdate();
+    pane.invalidate();
   });
   await pane.updateComplete;
   expect(pane.textContent).toContain("projected history");
@@ -103,7 +103,7 @@ it.each([false, true])(
       await task(() => {
         pane.paneLabel = `hidden revision ${index}`;
         pane.paneId = `parked-pane-${index}`;
-        pane.requestUpdate();
+        pane.invalidate();
       });
     }
     let completed = false;
@@ -138,7 +138,7 @@ it.each(["request", "property", "state"] as const)(
       } else if (trigger === "state") {
         lifecycle.invalidate();
       } else {
-        pane.requestUpdate();
+        pane.invalidate();
       }
     });
     await pane.updateComplete;
@@ -153,7 +153,7 @@ it("keeps an unpresented pane parked when the document becomes visible", async (
   let visibility: DocumentVisibilityState = "hidden";
   vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
   const { pane, updates } = await mountPane(false);
-  pane.requestUpdate();
+  pane.invalidate();
   await task(() => {});
   visibility = "visible";
   document.dispatchEvent(new Event("visibilitychange"));
@@ -212,7 +212,7 @@ it("absorbs a queued stream frame into a property commit and accepts the next st
 
 it("releases a disconnected pane's parked update and renders after reconnect", async () => {
   const { pane, updates } = await mountPane(false);
-  pane.requestUpdate();
+  pane.invalidate();
   await task(() => {});
   Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   pane.disconnectedCallback();
@@ -221,7 +221,7 @@ it("releases a disconnected pane's parked update and renders after reconnect", a
   Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   pane.presented = true;
   connectPaneTestView(pane);
-  pane.requestUpdate();
+  pane.invalidate();
   await pane.updateComplete;
   expect(pane.textContent).toContain(pane.paneId);
   updates.mockClear();

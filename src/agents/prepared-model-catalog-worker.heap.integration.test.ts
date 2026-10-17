@@ -58,23 +58,36 @@ it("bounds catalog worker retention across repeated fleet preparations", async (
     `
 const v8 = require("node:v8");
 const state = globalThis[Symbol.for("openclaw.catalogHeapFixture")] ??= {
-  callbacks: [], calls: 0, control: new WeakRef({})
+  callbacks: 0, finalizedCallbacks: 0, calls: 0, controlCollected: false
 };
+if (!state.registry) {
+  state.registry = new FinalizationRegistry(kind => {
+    if (kind === "callback") state.finalizedCallbacks++;
+    else state.controlCollected = true;
+  });
+  state.registry.register({}, "control");
+}
 const iterations = Number(process.env.OPENCLAW_CATALOG_HEAP_ITERATIONS ?? 12);
 module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
-  const run = function catalogRetentionHook() {
+  const run = async function catalogRetentionHook() {
     state.calls++;
     if (state.calls % 100 === 0 || state.calls >= iterations) {
-      // Collection follows earlier worker requests, so WeakRef targets are no longer job-kept.
-      v8.queryObjects(WeakRef);
+      // JSC's promise stack can retain completed callbacks; collect from native immediates.
+      for (let pass = 0; pass < 8; pass++) {
+        await new Promise(resolve => setImmediate(() => {
+          v8.queryObjects(FinalizationRegistry);
+          resolve();
+        }));
+      }
       require("node:fs").writeFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, JSON.stringify({
-        callbacks: state.callbacks.filter(ref => ref.deref()).length,
-        controlCollected: state.control.deref() === undefined
+        callbacks: state.callbacks - state.finalizedCallbacks,
+        controlCollected: state.controlCollected
       }));
     }
     return { provider: { api: "openai-completions", baseUrl: "https://heap.invalid/v1", models: [{ id: "heap-model", name: "Heap model" }] } };
   };
-  state.callbacks.push(new WeakRef(run));
+  state.callbacks++;
+  state.registry.register(run, "callback");
   api.registerProvider({ id: ${JSON.stringify(PROVIDER_ID)}, label: "Heap fixture", auth: [], catalog: { run } });
 } };`,
   );

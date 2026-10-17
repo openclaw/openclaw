@@ -292,7 +292,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       },
       dashboard: !this.compact ? this.renderBoardPanel(board, sidebarLayout) : null,
       workspace: sessionWorkspace,
-      detail: { chat: chatProps, host: state, requestUpdate: state.requestUpdate! },
+      detail: { chat: chatProps, host: state },
       digest: observerDigest,
       activeRunId: observerRunId,
       pullRequests: this.sessionPullRequests,
@@ -372,7 +372,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       sideFocusOrigin: this.sideFocusOrigin,
       panelDefinitions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
-      requestUpdate: state.requestUpdate!,
     });
     return {
       region,
