@@ -158,6 +158,10 @@ async function dispatchSubagentGateway(
             ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
             ...(gatewayContextResolver ? { resolveGatewayContext: gatewayContextResolver } : {}),
             ...(forceSyntheticClient ? { forceSyntheticClient: true } : {}),
+            // Child admission preserves bounded authority unless the caller selects exact scopes.
+            ...(isChildRunLaunch
+              ? { syntheticScopeMode: scopes != null ? ("exact" as const) : ("minimum" as const) }
+              : {}),
             ...(typeof request.timeoutMs === "number" ? { timeoutMs: request.timeoutMs } : {}),
             ...(scopes != null ? { syntheticScopes: scopes } : {}),
           },

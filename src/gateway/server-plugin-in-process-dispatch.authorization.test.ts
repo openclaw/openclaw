@@ -18,7 +18,9 @@ import { readGlobalSingleton } from "../shared/global-singleton.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { OperatorScope } from "./method-scopes.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { resolveNodeInvokeRuntimeAuthorityError } from "./server-methods/nodes.invoke-authority.js";
 import type {
   GatewayRequestContext,
@@ -89,6 +91,85 @@ describe("typed in-process agent authorization", () => {
   beforeEach(() => {
     startTurn.mockReset();
     waitForTurn.mockReset();
+  });
+
+  it.each<{
+    name: string;
+    source: string[];
+    explicit?: OperatorScope[];
+    scoped?: string[];
+    expected?: string[];
+  }>([
+    {
+      name: "inherited approvals",
+      source: ["operator.write", "operator.approvals"],
+      expected: ["operator.write", "operator.approvals"],
+    },
+    { name: "write without approvals", source: ["operator.write"], expected: ["operator.write"] },
+    {
+      name: "unrelated source permissions",
+      source: [
+        "operator.write",
+        "operator.approvals",
+        "operator.pairing",
+        "operator.talk.secrets",
+        "operator.questions",
+      ],
+      expected: ["operator.write", "operator.approvals"],
+    },
+    {
+      name: "explicit request ceiling",
+      source: ["operator.write", "operator.approvals"],
+      explicit: ["operator.write"],
+      expected: ["operator.write"],
+    },
+    {
+      name: "current client ceiling",
+      source: ["operator.write", "operator.approvals"],
+      scoped: ["operator.write"],
+      expected: ["operator.write"],
+    },
+    { name: "approvals without launch permission", source: ["operator.approvals"] },
+  ])("preserves $name at delegated agent admission", async (testCase) => {
+    const context = createContext();
+    const source = createOperatorClient({
+      profileName: "delegated-approval-owner",
+      scopes: testCase.source,
+    });
+    const captured = await captureGatewayOperatorRunAuthority({ client: source, context });
+    expect(captured).toBeDefined();
+    const client = {
+      ...source,
+      connect: { ...source.connect, scopes: testCase.scoped ?? testCase.source },
+      internal: { operatorRunAuthority: captured!.authority },
+    };
+    const result = { runId: "delegated-approval-run", status: "accepted" };
+    // Observe admission through the real dispatcher and facade, before model execution.
+    startTurn.mockImplementation(async ({ principal, io }) => {
+      expect(principal.connect.scopes).toEqual(testCase.expected);
+      expect(principal.internal.operatorRunAuthority.scopes).toEqual(testCase.expected);
+      io.emitAcceptance([true, result, undefined]);
+    });
+    try {
+      const launch = withPluginRuntimeGatewayRequestScope(
+        { client, context, isWebchatConnect: () => false },
+        () =>
+          callAgentToolGatewayRequest({
+            method: "agent",
+            params: { message: "request delegated work", idempotencyKey: result.runId },
+            scopes: testCase.explicit,
+          }),
+      );
+      if (testCase.expected) {
+        await expect(launch).resolves.toEqual(result);
+        expect(startTurn).toHaveBeenCalledOnce();
+      } else {
+        await expect(launch).rejects.toThrow("missing scope: operator.write");
+        expect(startTurn).not.toHaveBeenCalled();
+      }
+    } finally {
+      captured?.release();
+    }
   });
 
   it("releases session fact observers after a typed child launch", async () => {
