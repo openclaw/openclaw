@@ -5418,7 +5418,6 @@
 ["src/commands/onboard-non-interactive/local.default-agent.test.ts","./local/auth-choice-inference.js","5a2497bebafd9b1099d555add52dbeb1f6e4cadf831b2aec0d6823323a50e827",1]
 ["src/commands/onboard-non-interactive/local.default-agent.test.ts","./local/auth-choice.js","b7053ba62039d1d7edb68d4bcf6be641e5e51a3903225923d2982e7c088aa69c",1]
 ["src/commands/onboard-non-interactive/local.default-agent.test.ts","./local/gateway-config.js","c81443cdd1a81b97f51e5dc1637ff6704d9942736169eceeec44148475e30312",1]
-["src/commands/onboard-non-interactive/local.default-agent.test.ts","./local/skills-config.js","a27026702112f4bdb186c33422f4e57095ffe441a99c3d6b189923fd98c3ecb2",1]
 ["src/commands/onboard-non-interactive/local.legacy-fleet.test.ts","../onboard-agent.js","07feaca03a55f9034f3d09ba71ea9d054df89b7d4f1e490b070f0dc23fdae495",1]
 ["src/commands/onboard-non-interactive/local.legacy-fleet.test.ts","./local/auth-choice.js","b7053ba62039d1d7edb68d4bcf6be641e5e51a3903225923d2982e7c088aa69c",1]
 ["src/commands/onboard-non-interactive/local/auth-choice-inference.test.ts","../../../plugins/provider-auth-choices.js","0d273dd45790bad10c04fe8d3bb1a4648446bb316653af68d397c6bd132107fa",1]
