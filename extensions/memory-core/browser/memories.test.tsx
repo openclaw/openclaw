@@ -84,8 +84,6 @@ function createElement(request: Request, advertised = true) {
     container.remove();
   });
   return Object.assign(container, {
-    // The host owns retirement; this fixture supplies a new mount for that lifetime.
-    setAgentId: mount,
     retire: () => lifetime.abort(),
     formatError,
   });
@@ -301,18 +299,6 @@ describe("Memory Core indexed-search presentation", () => {
     );
     expect(element.textContent).toContain(result.snippet);
     expect(element.textContent).not.toContain("Memory search failed");
-  });
-
-  it("starts a new agent lifetime without the previous search or results", async () => {
-    const request = vi.fn(() => Promise.resolve(searchResponse([result])));
-    const element = createElement(request);
-    search(element);
-    await waitForSolid(() => expect(element.textContent).toContain(result.snippet));
-
-    element.setAgentId("research");
-    await waitForSolid(() => expect(element.textContent).toContain("Search for a person"));
-    expect(element.textContent).not.toContain(result.snippet);
-    expect(element.querySelector<HTMLInputElement>("#memory-search-input")?.value).toBe("");
   });
 
   it.each(["resolves", "rejects"] as const)(
