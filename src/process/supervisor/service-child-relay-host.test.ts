@@ -54,12 +54,53 @@ async function createRelay(platform: "darwin" | "win32", retainLineage = false) 
   );
 }
 
+function mockWritableRelay() {
+  platformMock = mockProcessPlatform("darwin");
+  const stub = createWritableRelayChild();
+  mocks.spawn.mockReturnValue(stub.child);
+  return stub;
+}
+
+function startRelay(params: Partial<Parameters<typeof createServiceChildRelayAdapter>[0]> = {}) {
+  return createServiceChildRelayAdapter({
+    command: "synthetic-command",
+    args: [],
+    stdinMode: "pipe-closed",
+    oomScoreWrapperSelected: false,
+    ...params,
+  });
+}
+
+function relayPeer(stub: ReturnType<typeof createWritableRelayChild>) {
+  const start = firstMockArg(stub.sendMock, "service start");
+  if (!isRecord(start) || typeof start.generation !== "string") {
+    throw new Error("Expected an admitted service generation");
+  }
+  const generation = start.generation;
+  let sequence = 0;
+  return (payload: ServiceChildAnchorPayload) =>
+    stub.control.push(
+      Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence: ++sequence })),
+    );
+}
+
+function closeStub(stub: ReturnType<typeof createWritableRelayChild>) {
+  stub.control.destroy();
+  stub.lineage.destroy();
+  stub.disconnectMock();
+  stub.emitExit(0);
+}
+
+function observeSettlement(promise: Promise<unknown>) {
+  const settled = vi.fn();
+  void promise.then(settled, settled);
+  return settled;
+}
+
 it.each(["before", "after"] as const)(
   "checks launch policy %s relay start dispatch",
   async (timing) => {
-    platformMock = mockProcessPlatform("darwin");
-    const stub = createWritableRelayChild();
-    mocks.spawn.mockReturnValue(stub.child);
+    const stub = mockWritableRelay();
     let allowed = true;
     mocks.spawn.mockImplementation(() => {
       if (timing === "before") {
@@ -67,11 +108,7 @@ it.each(["before", "after"] as const)(
       }
       return stub.child;
     });
-    const starting = createServiceChildRelayAdapter({
-      command: "synthetic-command",
-      args: [],
-      stdinMode: "pipe-closed",
-      oomScoreWrapperSelected: false,
+    const starting = startRelay({
       beforeSpawn: () => {
         if (!allowed) {
           throw new Error("relay launch policy revoked");
@@ -83,20 +120,11 @@ it.each(["before", "after"] as const)(
         await expect(starting).rejects.toThrow("relay launch policy revoked");
         expect(stub.sendMock.mock.calls.length).toBe(0);
       } else {
-        const start = firstMockArg(stub.sendMock, "service start");
-        if (!isRecord(start) || typeof start.generation !== "string") {
-          throw new Error("Expected an admitted service generation");
-        }
-        const generation = start.generation;
+        const emit = relayPeer(stub);
         allowed = false;
-        const emit = (payload: ServiceChildAnchorPayload, sequence: number) => {
-          stub.control.push(
-            Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence })),
-          );
-        };
-        emit({ type: "ready", commandPid: 1234, anchorPid: 1235 }, 1);
+        emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
         const adapter = await starting;
-        emit({ type: "root-result", code: 0, signal: null }, 2);
+        emit({ type: "root-result", code: 0, signal: null });
         stub.child.stdout?.emit("end");
         stub.child.stderr?.emit("end");
         expect((await adapter.wait()).code).toBe(0);
@@ -113,18 +141,12 @@ it.each(["before", "after"] as const)(
 it.each(["current", "revoked"] as const)(
   "checks %s authority after remote preparation and retains custody until native readiness",
   async (authority) => {
-    platformMock = mockProcessPlatform("darwin");
-    const stub = createWritableRelayChild();
-    mocks.spawn.mockReturnValue(stub.child);
+    const stub = mockWritableRelay();
     const writes = vi.spyOn(stub.control, "write");
     const grantReached = createDeferredCore();
     let current = true;
     let released = false;
-    const starting = createServiceChildRelayAdapter({
-      command: "synthetic-command",
-      args: [],
-      stdinMode: "pipe-closed",
-      oomScoreWrapperSelected: false,
+    const starting = startRelay({
       initiateSpawn(launch, settlement) {
         grantReached.resolve();
         if (!current) {
@@ -136,19 +158,11 @@ it.each(["current", "revoked"] as const)(
         return launch();
       },
     });
-    const start = firstMockArg(stub.sendMock, "remote preparation");
-    if (!isRecord(start) || typeof start.generation !== "string") {
-      throw new Error("Expected remote preparation identity");
-    }
-    const generation = start.generation;
-    const emit = (payload: ServiceChildAnchorPayload, sequence: number) =>
-      stub.control.push(
-        Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence })),
-      );
+    const emit = relayPeer(stub);
     const rejected =
       authority === "current" ? undefined : expect(starting).rejects.toThrow("launch revoked");
     current = authority !== "revoked";
-    emit({ type: "prepared" }, 1);
+    emit({ type: "prepared" });
     await grantReached.promise;
     expect(released).toBe(false);
     try {
@@ -161,27 +175,22 @@ it.each(["current", "revoked"] as const)(
         expect(writes.mock.calls.some(([chunk]) => String(chunk).includes('"type":"launch"'))).toBe(
           true,
         );
-        emit({ type: "ready", commandPid: 1234, anchorPid: 1235 }, 2);
+        emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
         const adapter = await starting;
         expect(released).toBe(true);
-        emit({ type: "root-result", code: 0, signal: null }, 3);
+        emit({ type: "root-result", code: 0, signal: null });
         stub.stdout.emit("end");
         stub.stderr.emit("end");
         await adapter.wait();
       }
     } finally {
-      stub.control.destroy();
-      stub.lineage.destroy();
-      stub.disconnectMock();
-      stub.emitExit(0);
+      closeStub(stub);
     }
   },
 );
 
 it("checks input authority after readiness before writing private stdin", async () => {
-  platformMock = mockProcessPlatform("darwin");
-  const stub = createWritableRelayChild();
-  mocks.spawn.mockReturnValue(stub.child);
+  const stub = mockWritableRelay();
   const inputWrites = vi.spyOn(stub.child.stdin!, "write");
   const preparing = createDeferredCore();
   const releasePreparation = createDeferredCore();
@@ -194,35 +203,18 @@ it("checks input authority after readiness before writing private stdin", async 
       throw revoked;
     }
   });
-  const starting = createServiceChildRelayAdapter({
-    command: "synthetic-command",
-    args: [],
-    stdinMode: "pipe-closed",
+  const starting = startRelay({
     input: "private prompt",
     prepareInput,
-    oomScoreWrapperSelected: false,
   });
   const outcome = starting.then(
     () => undefined,
     (error: unknown) => error,
   );
   try {
-    const start = firstMockArg(stub.sendMock, "service start");
-    if (!isRecord(start) || typeof start.generation !== "string") {
-      throw new Error("Expected an admitted service generation");
-    }
+    const emit = relayPeer(stub);
     expect(prepareInput).not.toHaveBeenCalled();
-    stub.control.push(
-      Buffer.from(
-        encodeServiceChildMessage({
-          type: "ready",
-          commandPid: 1234,
-          anchorPid: 1235,
-          generation: start.generation,
-          sequence: 1,
-        }),
-      ),
-    );
+    emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
     await Promise.race([preparing.promise, outcome]);
     expect(prepareInput).toHaveBeenCalledOnce();
     expect(inputWrites).not.toHaveBeenCalled();
@@ -233,18 +225,13 @@ it("checks input authority after readiness before writing private stdin", async 
     expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
   } finally {
     releasePreparation.resolve();
-    stub.control.destroy();
-    stub.lineage.destroy();
-    stub.disconnectMock();
-    stub.emitExit(0);
+    closeStub(stub);
     await outcome;
   }
 });
 
 it("reports cleanup uncertainty when deferred start delivery fails after abort", async () => {
-  platformMock = mockProcessPlatform("darwin");
-  const stub = createWritableRelayChild();
-  mocks.spawn.mockReturnValue(stub.child);
+  const stub = mockWritableRelay();
   const startCallbacks: Array<(error: Error | null) => void> = [];
   stub.sendMock.mockImplementation((_message, ...args) => {
     const callback = args.findLast(
@@ -257,11 +244,7 @@ it("reports cleanup uncertainty when deferred start delivery fails after abort",
     return true;
   });
   const abort = new AbortController();
-  const starting = createServiceChildRelayAdapter({
-    command: "synthetic-command",
-    args: [],
-    stdinMode: "pipe-closed",
-    oomScoreWrapperSelected: false,
+  const starting = startRelay({
     abortSignal: abort.signal,
   });
   await nextTurn();
@@ -395,9 +378,8 @@ it("publishes root exit before drain, replays it, and acknowledges only the clos
   completeRoot();
   await adapter.wait();
   const closing = emit({ type: "closing", reason: "lineage-closed" });
-  const settled = vi.fn();
   const extinction = adapter.waitForExtinction();
-  void extinction.then(settled, settled);
+  const settled = observeSettlement(extinction);
   await nextTurn();
   expect(acknowledgements).toEqual([
     {
@@ -430,12 +412,10 @@ it("publishes confirmed cancellation when the root result is missing", async () 
 });
 
 it("keeps cleanup authority when a root-exit consumer ends already-closed stdin", async () => {
-  platformMock = mockProcessPlatform("darwin");
+  const stub = mockWritableRelay();
   vi.spyOn(process, "kill").mockImplementation(() => {
     throw Object.assign(new Error("synthetic missing process group"), { code: "ESRCH" });
   });
-  const stub = createWritableRelayChild();
-  mocks.spawn.mockReturnValue(stub.child);
   const write = stub.control.write.bind(stub.control);
   vi.spyOn(stub.control, "write").mockImplementation((chunk, encoding, callback) => {
     const message: unknown = JSON.parse(chunk.toString());
@@ -445,24 +425,11 @@ it("keeps cleanup authority when a root-exit consumer ends already-closed stdin"
     }
     return write(chunk, encoding, callback);
   });
-  const starting = createServiceChildRelayAdapter({
-    command: "synthetic-command",
-    args: [],
+  const starting = startRelay({
     stdinMode: "pipe-open",
     terminateOnHostLoss: true,
-    oomScoreWrapperSelected: false,
   });
-  const start = firstMockArg(stub.sendMock, "service start");
-  if (!isRecord(start) || typeof start.generation !== "string") {
-    throw new Error("Expected an admitted service generation");
-  }
-  const generation = start.generation;
-  let sequence = 0;
-  const emit = (payload: ServiceChildAnchorPayload) => {
-    stub.control.push(
-      Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence: ++sequence })),
-    );
-  };
+  const emit = relayPeer(stub);
   emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
   const adapter = await starting;
   adapter.onExit(() => adapter.stdin!.end());
@@ -482,10 +449,7 @@ it("keeps cleanup authority when a root-exit consumer ends already-closed stdin"
     await expect(extinction).resolves.toBeUndefined();
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
   } finally {
-    stub.control.destroy();
-    stub.lineage.destroy();
-    stub.disconnectMock();
-    stub.emitExit(0);
+    closeStub(stub);
     adapter.dispose();
   }
 });
@@ -496,8 +460,7 @@ it("keeps an observed Windows root result independent of failed extinction", asy
   emit({ type: "root-result", code: 23, signal: null });
   await nextTurn();
   const root = adapter.wait();
-  const settled = vi.fn();
-  void root.then(settled, settled);
+  const settled = observeSettlement(root);
   close();
   await expect(adapter.waitForExtinction()).rejects.toThrow("cleanup identity lost");
   expect(settled).not.toHaveBeenCalled();
@@ -512,8 +475,7 @@ it.each(["darwin", "win32"] as const)(
     completeRoot();
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
     const extinction = adapter.waitForExtinction();
-    const settled = vi.fn();
-    void extinction.then(settled, settled);
+    const settled = observeSettlement(extinction);
     adapter.kill();
     expect(cancellations).toHaveLength(1);
     emit({ type: "closing", reason: "lineage-closed" });
@@ -550,8 +512,7 @@ it.each(["EOF", "close"])("joins outside-group lineage with %s", async (ending) 
   emit({ type: "closing", reason: "cancel" });
   await nextTurn();
   const extinction = adapter.waitForExtinction();
-  const settled = vi.fn();
-  void extinction.then(settled, settled);
+  const settled = observeSettlement(extinction);
   close();
   await nextTurn();
   expect(settled).not.toHaveBeenCalled();
@@ -577,9 +538,8 @@ it("waits for relay reaping before confirming extinction", async () => {
   await nextTurn();
   emit({ type: "closing", reason: "lineage-closed" });
   await nextTurn();
-  const settled = vi.fn();
   const extinction = adapter.waitForExtinction();
-  void extinction.then(settled, settled);
+  const settled = observeSettlement(extinction);
   closeControl();
   await nextTurn();
   expect(settled).not.toHaveBeenCalled();
@@ -600,9 +560,8 @@ it.each(["before", "after"])(
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const now = vi.spyOn(performance, "now").mockReturnValue(10_000);
     const warn = vi.fn();
-    const settled = vi.fn();
     const extinction = adapter.waitForExtinction();
-    void extinction.then(settled, settled);
+    const settled = observeSettlement(extinction);
     if (order === "before") {
       runWithProcessCleanupBudget({ deadline: 20_000, warn }, () => adapter.kill("SIGTERM"));
     }
@@ -658,9 +617,8 @@ it("retires a queued ordinary expiry when shutdown adopts the pending cleanup", 
     await createRelay("darwin");
   const now = vi.spyOn(performance, "now").mockReturnValue(10_000);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setImmediate", "clearImmediate"] });
-  const settled = vi.fn();
   const extinction = adapter.waitForExtinction();
-  void extinction.then(settled, settled);
+  const settled = observeSettlement(extinction);
   completeRoot();
   emit({ type: "closing", reason: "cancel" });
   lineage.end();
@@ -721,9 +679,8 @@ it("retains extinction ownership after EPERM until ESRCH", async () => {
   });
   completeRoot();
   await adapter.wait();
-  const settled = vi.fn();
   const extinction = adapter.waitForExtinction();
-  void extinction.then(settled, settled);
+  const settled = observeSettlement(extinction);
   emit({ type: "closing", reason: "lineage-closed" });
   await nextTurn();
   expect(groupProbe).not.toHaveBeenCalled();

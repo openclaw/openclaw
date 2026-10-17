@@ -36,6 +36,18 @@ type PreparationFact = {
 type ControlPayload<Message = ServiceChildControlMessage> =
   Message extends ServiceChildControlMessage ? Omit<Message, "generation" | "sequence"> : never;
 
+function readLines(stream: Duplex, receive: (line: string) => void) {
+  let pending = "";
+  stream.setEncoding("utf8").on("data", (chunk: string) => {
+    pending += chunk;
+    for (let newline; (newline = pending.indexOf("\n")) >= 0;) {
+      const line = pending.slice(0, newline);
+      pending = pending.slice(newline + 1);
+      receive(line);
+    }
+  });
+}
+
 export function createHeldAnchorPreparation(
   root: string,
   options: { acknowledgeStartupError?: boolean } = {},
@@ -167,56 +179,38 @@ export function createHeldAnchorPreparation(
   child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
     stderr += chunk;
   });
-  let controlPending = "";
-  control.setEncoding("utf8").on("data", (chunk: string) => {
-    controlPending += chunk;
-    for (;;) {
-      const newline = controlPending.indexOf("\n");
-      if (newline < 0) {
-        return;
+  readLines(control, (line) => {
+    // The owned anchor is the sole writer on this fixture's private control pipe.
+    const message = JSON.parse(line) as ServiceChildAnchorMessage;
+    messages.push(message);
+    if (message.type === "ready") {
+      ready.resolve(message);
+    } else if (message.type === "root-result") {
+      rootResult.resolve(message);
+    } else if (message.type === "startup-error") {
+      startupError.resolve(message);
+      if (options.acknowledgeStartupError !== false) {
+        send({ type: "startup-error-ack" });
       }
-      // The owned anchor is the sole writer on this fixture's private control pipe.
-      const message = JSON.parse(controlPending.slice(0, newline)) as ServiceChildAnchorMessage;
-      controlPending = controlPending.slice(newline + 1);
-      messages.push(message);
-      if (message.type === "ready") {
-        ready.resolve(message);
-      } else if (message.type === "root-result") {
-        rootResult.resolve(message);
-      } else if (message.type === "startup-error") {
-        startupError.resolve(message);
-        if (options.acknowledgeStartupError !== false) {
-          send({ type: "startup-error-ack" });
-        }
-      } else if (message.type === "closing") {
-        send({ type: "closing-ack", closingSequence: message.sequence });
-      }
+    } else if (message.type === "closing") {
+      send({ type: "closing-ack", closingSequence: message.sequence });
     }
   });
-  let probePending = "";
-  probe.setEncoding("utf8").on("data", (chunk: string) => {
-    probePending += chunk;
-    for (;;) {
-      const newline = probePending.indexOf("\n");
-      if (newline < 0) {
-        return;
-      }
-      // The fixture preload observes real module evaluation and native child events.
-      const fact = JSON.parse(probePending.slice(0, newline)) as PreparationFact;
-      probePending = probePending.slice(newline + 1);
-      facts.push(fact);
-      if (fact.type === "lineage-loading" || fact.type === "spawn") {
-        firstFact.resolve(fact);
-      }
-      if (fact.type === "spawn") {
-        spawned.resolve(fact);
-      } else if (fact.type === "lineage-loading") {
-        loading.resolve(fact);
-      } else if (fact.type === "lineage-loaded") {
-        prepared.resolve(fact);
-      } else if (fact.type === "duplicate-start") {
-        duplicate.resolve(fact);
-      }
+  readLines(probe, (line) => {
+    // The fixture preload observes real module evaluation and native child events.
+    const fact = JSON.parse(line) as PreparationFact;
+    facts.push(fact);
+    if (fact.type === "lineage-loading" || fact.type === "spawn") {
+      firstFact.resolve(fact);
+    }
+    if (fact.type === "spawn") {
+      spawned.resolve(fact);
+    } else if (fact.type === "lineage-loading") {
+      loading.resolve(fact);
+    } else if (fact.type === "lineage-loaded") {
+      prepared.resolve(fact);
+    } else if (fact.type === "duplicate-start") {
+      duplicate.resolve(fact);
     }
   });
   lineage.once("end", () => send({ type: "lineage-closed" }));

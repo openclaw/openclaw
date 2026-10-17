@@ -51,6 +51,7 @@ async function createDescendantScope(
   const descendantPidPath = path.join(cwd, "descendant.pid");
   const releasePath = path.join(cwd, "descendant.release");
   const rootPath = path.join(cwd, "root.cjs");
+  const descendantArgs = JSON.stringify([descendantPath, releasePath, descendantPidPath]);
   await writeFile(
     descendantPath,
     `
@@ -68,33 +69,25 @@ async function createDescendantScope(
     `,
     "utf8",
   );
-  if (process.platform === "win32") {
-    const testSupportPath = createRequire(import.meta.url).resolve(
-      "@openclaw/proc-safe/test-support",
-    );
-    await writeFile(
-      rootPath,
-      `
+  const testSupportPath =
+    process.platform === "win32"
+      ? createRequire(import.meta.url).resolve("@openclaw/proc-safe/test-support")
+      : undefined;
+  await writeFile(
+    rootPath,
+    process.platform === "win32"
+      ? `
         const { spawnRawWithoutConsole } = require(${JSON.stringify(testSupportPath)});
         // Native creation avoids libuv's private Job and inherits no pipe handles.
         spawnRawWithoutConsole({
           executable: process.execPath,
-          args: [
-            ${JSON.stringify(descendantPath)},
-            ${JSON.stringify(releasePath)},
-            ${JSON.stringify(descendantPidPath)},
-          ],
+          args: ${descendantArgs},
         });
         ${fragmentedOutputFixture()}
-      `,
-      "utf8",
-    );
-  } else {
-    await writeFile(
-      rootPath,
       `
+      : `
         const { spawn } = require("node:child_process");
-        const child = spawn(process.execPath, [${JSON.stringify(descendantPath)}, ${JSON.stringify(releasePath)}, ${JSON.stringify(descendantPidPath)}], {
+        const child = spawn(process.execPath, ${descendantArgs}, {
           stdio: ${JSON.stringify(options.inheritLineage === false ? ["ignore", "ignore", "ignore", "ipc"] : ["ignore", "ignore", "ignore", 3, "ipc"])},
         });
         child.once("message", () => {
@@ -103,9 +96,8 @@ async function createDescendantScope(
           ${fragmentedOutputFixture()}
         });
       `,
-      "utf8",
-    );
-  }
+    "utf8",
+  );
   const supervisor = createProcessSupervisor();
   activeSupervisors.add(supervisor);
   const scopeKey = `anchored-shell:${cwd}`;

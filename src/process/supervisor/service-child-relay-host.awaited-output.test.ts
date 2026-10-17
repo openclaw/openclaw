@@ -1,9 +1,8 @@
-import { Duplex, PassThrough } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
-import { createStubChild, firstMockArg } from "./adapters/child.test-support.js";
+import { firstMockArg } from "./adapters/child.test-support.js";
 import {
   encodeServiceChildMessage,
   type ServiceChildAnchorPayload,
@@ -166,24 +165,6 @@ it.each([false, true])(
   },
 );
 
-function createSupervisedRelayChild() {
-  const stub = createStubChild();
-  const control = new Duplex({
-    autoDestroy: false,
-    read() {},
-    write(_chunk, _encoding, callback) {
-      callback();
-    },
-  });
-  const lineage = new PassThrough();
-  Object.defineProperty(stub.child, "stdio", {
-    value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control, lineage],
-    configurable: true,
-  });
-  mocks.spawn.mockReturnValue(stub.child);
-  return { ...stub, control, lineage };
-}
-
 // This path exercises the real supervisor -> child -> relay bridge. Only the
 // OS child and group-absence probe are controlled by the fixture.
 async function startSupervisedRelay(
@@ -196,7 +177,8 @@ async function startSupervisedRelay(
     }
     throw Object.assign(new Error("fixture group absent"), { code: "ESRCH" });
   });
-  const stub = createSupervisedRelayChild();
+  const stub = createWritableRelayChild();
+  mocks.spawn.mockReturnValue(stub.child);
   const supervisor = createProcessSupervisor();
   const closeScope = supervisor.acquireScopeCleanup("relay-output", {
     processTree: "required-all",
@@ -251,6 +233,14 @@ async function startSupervisedRelay(
     starting,
     emit,
     finish,
+    ready() {
+      emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
+      return starting;
+    },
+    endOutput() {
+      stub.child.stdout?.emit("end");
+      stub.child.stderr?.emit("end");
+    },
   };
 }
 
@@ -258,12 +248,10 @@ it("retains stderr construction errors through the actual caller", async () => {
   const f = await startSupervisedRelay();
   const cause = new Error("raw construction failure");
   f.child.stderr?.emit("error", cause);
-  f.emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
-  const run = await f.starting;
+  const run = await f.ready();
   const rejected = expect(run.wait()).rejects.toBe(cause);
   f.emit({ type: "root-result", code: 0, signal: null });
-  f.child.stdout?.emit("end");
-  f.child.stderr?.emit("end");
+  f.endOutput();
   f.finish();
   await rejected;
   await expect(run.waitForExtinction?.()).rejects.toBe(cause);
@@ -272,8 +260,7 @@ it("retains stderr construction errors through the actual caller", async () => {
 
 it("rejects premature stdout close after root exit through the actual caller", async () => {
   const f = await startSupervisedRelay();
-  f.emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
-  const run = await f.starting;
+  const run = await f.ready();
   const rejected = expect(run.wait()).rejects.toThrow("closed before EOF");
   f.emit({ type: "root-result", code: 0, signal: null });
   f.child.stdout?.emit("close");
@@ -285,12 +272,10 @@ it("rejects premature stdout close after root exit through the actual caller", a
 
 it("retains a late raw error during cleanup without rewriting the terminal result", async () => {
   const f = await startSupervisedRelay();
-  f.emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
-  const run = await f.starting;
+  const run = await f.ready();
   f.child.stdout?.emit("data", Buffer.from("final tail"));
   f.emit({ type: "root-result", code: 0, signal: null });
-  f.child.stdout?.emit("end");
-  f.child.stderr?.emit("end");
+  f.endOutput();
   const terminal = await run.wait();
   expect(terminal.stdout).toBe("final tail");
   const cause = new Error("raw failure during pending extinction");
@@ -303,8 +288,7 @@ it("retains a late raw error during cleanup without rewriting the terminal resul
 
 it("joins native cleanup with final output before reporting no-loss settlement", async () => {
   const f = await startSupervisedRelay();
-  f.emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
-  const run = await f.starting;
+  const run = await f.ready();
   const settled = vi.fn();
   const cleanup = run.waitForExtinction?.();
   void cleanup?.then(settled, settled);
@@ -313,8 +297,7 @@ it("joins native cleanup with final output before reporting no-loss settlement",
   await nextTurn();
   expect(settled).not.toHaveBeenCalled();
   f.child.stdout?.emit("data", Buffer.from("late final tail"));
-  f.child.stdout?.emit("end");
-  f.child.stderr?.emit("end");
+  f.endOutput();
   expect((await run.wait()).stdout).toBe("late final tail");
   await cleanup;
   await expect(f.closeScope()).resolves.toBeUndefined();
@@ -343,8 +326,7 @@ it("counts raw-only construction activity without renewing the original overall 
 it("reports native cleanup failure without waiting for output during shutdown", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   const f = await startSupervisedRelay({ timeoutMs: 10 });
-  f.emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
-  const run = await f.starting;
+  const run = await f.ready();
   f.child.stdout?.emit("data", Buffer.from("retained root output"));
   f.emit({ type: "root-result", code: 23, signal: null });
   // No closing receipt, and stdout/stderr intentionally never reach EOF until finally.
@@ -368,8 +350,7 @@ it("reports native cleanup failure without waiting for output during shutdown", 
     expect(String(observed)).toContain("cleanup identity lost");
     await expect(run.waitForExtinction?.()).rejects.toBe(observed);
   } finally {
-    f.child.stdout?.emit("end");
-    f.child.stderr?.emit("end");
+    f.endOutput();
     const result = await run.wait();
     expect(result.stdout).toBe("retained root output");
     expect(result.exitCode).toBe(23);
