@@ -1,8 +1,9 @@
 // Qa Lab Matrix tests cover harness behavior.
 import { readFile } from "node:fs/promises";
+import type { QaDockerRunCommand as RunCommand } from "openclaw/plugin-sdk/qa-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import type { FetchLike, RunCommand } from "../../../docker-runtime.js";
+import type { FetchLike } from "../../../docker-runtime.js";
 import {
   MATRIX_QA_CLEANUP_TIMEOUT_MS,
   isMatrixVersionsReachable as isMatrixVersionsReachableDefault,
