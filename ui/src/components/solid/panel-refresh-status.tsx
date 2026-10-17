@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { PanelRefreshStatus as RefreshStatus } from "../panel-refresh-status-state.ts";
@@ -5,7 +6,7 @@ import type { PanelRefreshStatus as RefreshStatus } from "../panel-refresh-statu
 export function PanelRefreshStatus(props: {
   status: RefreshStatus;
   errorMessage?: string;
-  className?: string;
+  className?: JSX.ClassValue;
 }) {
   const error = () => {
     const rawError = props.errorMessage ?? props.status.error;

@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { asPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { raceWithTimeout } from "@openclaw/retry";
+import { codeModeGcAttribution } from "../logging/code-mode-diagnostic.js";
 import { clampNumber } from "../utils.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { CodeModeHeadlessAbortError, CodeModeHeadlessTimeoutError } from "./code-mode-errors.js";
@@ -23,7 +25,6 @@ import {
   codeModeFailureCode,
   codeModeFailureMessage,
   createCodeModeApiFilesForRun,
-  readPositiveInteger,
   resolveCodeModeHeadlessConfig,
   toToolSearchConfig,
   type CodeModeFailureCode,
@@ -182,12 +183,12 @@ export async function runCodeModeScriptHeadless(params: {
 }): Promise<CodeModeHeadlessResult> {
   const config = resolveCodeModeHeadlessConfig(params.ctx, params.overrides);
   const wallClockMs = clampNumber(
-    readPositiveInteger(params.wallClockMs, DEFAULT_HEADLESS_WALL_CLOCK_MS),
+    asPositiveInteger(params.wallClockMs) ?? DEFAULT_HEADLESS_WALL_CLOCK_MS,
     1,
     MAX_HEADLESS_WALL_CLOCK_MS,
   );
   const maxToolCalls = clampNumber(
-    readPositiveInteger(params.maxToolCalls, DEFAULT_HEADLESS_TOOL_CALLS),
+    asPositiveInteger(params.maxToolCalls) ?? DEFAULT_HEADLESS_TOOL_CALLS,
     1,
     MAX_HEADLESS_TOOL_CALLS,
   );
@@ -263,6 +264,7 @@ export async function runCodeModeScriptHeadless(params: {
     };
     let boundaryFailure: Error | undefined;
     const inlineHost: CodeModeExecutorInlineHost = {
+      gcAttribution: codeModeGcAttribution(codeModeRunId, params.ctx.sessionKey),
       onNetworkContent: () => runtime.observeNetworkContent(parentToolCallId),
       onBoundary: async (boundary, context) => {
         output.append(boundary.output);

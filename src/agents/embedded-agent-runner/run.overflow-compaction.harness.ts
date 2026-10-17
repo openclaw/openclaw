@@ -431,7 +431,12 @@ function resetMockAgentHarness(): void {
       if (!assistant) {
         throw new Error("mocked settled-turn finalization returned no assistant message");
       }
-      return { assistant, ...(result.attemptUsage ? { usage: result.attemptUsage } : {}) };
+      return {
+        assistant,
+        assistantTranscriptOwned: result.assistantTranscriptOwned,
+        assistantTranscriptIdempotencyKey: result.assistantTranscriptIdempotencyKey,
+        ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
+      };
     },
   });
 }

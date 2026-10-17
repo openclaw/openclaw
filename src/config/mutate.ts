@@ -87,10 +87,7 @@ import {
 } from "./runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
-import {
-  composeConfigWriteAssertions,
-  createConfigWriteAuthorityGuard,
-} from "./write-authority.js";
+import { createConfigWriteAuthorityGuard, mergeConfigWriteOptions } from "./write-authority.js";
 import {
   captureConfigWriteLockGuard,
   markActiveConfigMutationPath,
@@ -225,17 +222,7 @@ function mergeConfigMutationWriteOptions(
   prepared: ConfigWriteOptions,
   caller?: ConfigWriteOptions,
 ): ConfigWriteOptions {
-  const merged = copyRuntimeConfigWriteApplication(caller, { ...prepared, ...caller });
-  const capturedGuard = prepared.assertConfigPathForWrite;
-  const callerGuard = caller?.assertConfigPathForWrite;
-  // Caller authority narrows the captured destination; it must never replace
-  // that ownership check through retries and post-write validation.
-  if (capturedGuard && callerGuard && capturedGuard !== callerGuard) {
-    merged.assertConfigPathForWrite = composeConfigWriteAssertions(capturedGuard, callerGuard);
-  } else if (capturedGuard) {
-    merged.assertConfigPathForWrite = capturedGuard;
-  }
-  return merged;
+  return copyRuntimeConfigWriteApplication(caller, mergeConfigWriteOptions(prepared, caller));
 }
 
 function createConfigMutationOwnership(
@@ -637,6 +624,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
             },
             assertOwnerForRollback: assertScopedOwner,
             beforeCommit: params.writeOptions?.beforeCommit,
+            assertBeforePublish: params.writeOptions?.assertBeforePublish,
             skipOutputLogs: params.writeOptions?.skipOutputLogs,
             preCommitRuntimePreflight: async () => {
               await callerPreCommit?.(runtimeConfigToWrite);

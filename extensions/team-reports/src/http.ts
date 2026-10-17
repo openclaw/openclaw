@@ -32,7 +32,7 @@ type TeamReportsHttpOptions = {
   workSessions: typeof listWorkSessions;
   /** The plugin's shipped `assets` directory; the dist bundle flattens `src/`, so callers resolve it from the plugin root. */
   assetsDir: string;
-  getStore: () => TeamReportsStore | undefined;
+  getStore: () => TeamReportsStore | undefined | Promise<TeamReportsStore | undefined>;
   status: () => Promise<unknown>;
   health: () => Promise<TeamReportsHealth>;
   orgs: () => string[];
@@ -179,7 +179,7 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
         },
       );
     }
-    const store = options.getStore();
+    const store = await options.getStore();
     if (!store) {
       return send(
         503,

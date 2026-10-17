@@ -11,7 +11,7 @@ import { createCodexTestHostCapabilities } from "./host-capability.test-support.
 import { listCodexAppServerModels } from "./models.js";
 import { CodexNativeProcessAuthority } from "./native-process-authority.js";
 import {
-  captureSharedCodexAppServerCatalogLifetime,
+  captureCodexAppServerClientLifetime,
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
@@ -19,7 +19,7 @@ import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 export function registerSharedClientIdleTests() {
-  it("retires an idle discovery client after the grace and reacquires on demand", async () => {
+  it("reuses discovery across minute polls, then retires after five idle minutes", async () => {
     vi.useFakeTimers();
     const start = vi.spyOn(CodexAppServerClient, "start");
     const first = createIdleLifecycleHarness();
@@ -27,16 +27,16 @@ export function registerSharedClientIdleTests() {
     start.mockResolvedValueOnce(first.client).mockResolvedValueOnce(second.client);
     const read = () => listCodexAppServerModels();
     expect((await read()).models).toMatchObject([{ id: "fixture-model" }]);
-    const current = captureSharedCodexAppServerCatalogLifetime(first.client);
-    await vi.advanceTimersByTimeAsync(29_999);
+    const assertCurrent = captureCodexAppServerClientLifetime(first.client, "connection");
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(first.client.getCloseError()).toBeUndefined();
     expect((await read()).models).toMatchObject([{ id: "fixture-model" }]);
     expect(start).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(current()).toBe(true);
+    await vi.advanceTimersByTimeAsync(299_999);
+    expect(assertCurrent).not.toThrow();
     await vi.advanceTimersByTimeAsync(1);
     expect(first.client.getCloseError()).toBeDefined();
-    expect(current()).toBe(false);
+    expect(assertCurrent).toThrow("connection changed");
     expect((await read()).models).toMatchObject([{ id: "fixture-model" }]);
     expect(start).toHaveBeenCalledTimes(2);
   });
@@ -86,10 +86,10 @@ export function registerSharedClientIdleTests() {
         }
         releaseLeasedSharedCodexAppServerClient(client);
       }
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(600_000);
       expect(client.getCloseError()).toBeUndefined();
       await finish();
-      await vi.advanceTimersByTimeAsync(29_999);
+      await vi.advanceTimersByTimeAsync(299_999);
       expect(client.getCloseError()).toBeUndefined();
       await vi.advanceTimersByTimeAsync(1);
       expect(client.getCloseError()).toBeDefined();
@@ -109,13 +109,13 @@ export function registerSharedClientIdleTests() {
     confirm(new Map([["item", "pid"]]));
     authority.release();
     releaseLeasedSharedCodexAppServerClient(client);
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(600_000);
     expect(client.getCloseError()).toBeUndefined();
     harness.send({
       method: "item/completed",
       params: { ...turn, item: { id: "item", type: "commandExecution", processId: "pid" } },
     });
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(300_000);
     expect(client.getCloseError()).toBeDefined();
     expect(failure).not.toHaveBeenCalled();
   });

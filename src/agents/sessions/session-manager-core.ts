@@ -50,6 +50,7 @@ import type {
   SessionManagerBoundedView,
   SessionManagerTranscriptCohort,
 } from "./session-manager-view-types.js";
+import { shareSessionSystemPrompt } from "./system-prompt-pool.js";
 
 /** @internal Fresh payload adoption and metadata consumption share one history admission. */
 export const sessionManagerReloadTranscriptCohort = Symbol.for(
@@ -110,7 +111,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
-  /** @deprecated Await setSessionTargetAsync. Supported through 2026-12-31. */
+  /** @deprecated Await setSessionTargetAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   setSessionTarget(target: SessionTranscriptRuntimeTarget): void {
     prepareSessionManagerSync("setSessionTarget", target, this);
     this.setSessionTargetSync(target);
@@ -280,7 +281,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
     this.persistenceHeaderPending = false;
     this.persistenceTarget = target ? captureSessionTranscriptTargetBinding(target) : undefined;
-    this.fileEntries = partitioned.fileEntries;
+    this.fileEntries = partitioned.fileEntries.map(shareSessionSystemPrompt);
     this.opaqueFileEntries = partitioned.opaqueEntries;
     this.sessionId = header?.id ?? target?.sessionId ?? createManagedSessionId();
     this.migrated = migrateToCurrentVersion(
@@ -357,7 +358,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     };
   }
 
-  /** @deprecated Await reloadPersistedTranscriptAsync. Supported through 2026-12-31. */
+  /** @deprecated Await reloadPersistedTranscriptAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   reloadPersistedTranscript(): void {
     prepareSessionManagerSync("reloadPersistedTranscript", this.persistenceTarget, this);
     this.reloadPersistedTranscriptSync();

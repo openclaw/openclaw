@@ -1,3 +1,4 @@
+import type { ModelCatalogRef as BundledStaticCatalogLookup } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import {
   findNormalizedProviderValue,
@@ -136,11 +137,6 @@ function resolveBundledStaticCatalogState(
   states.set(config, state);
   return state;
 }
-
-type BundledStaticCatalogLookup = {
-  provider: string;
-  modelId: string;
-};
 
 type BundledStaticCatalogContext = {
   contextWindow?: number;

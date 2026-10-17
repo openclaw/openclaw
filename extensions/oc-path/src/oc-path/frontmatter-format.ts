@@ -3,7 +3,7 @@ export function formatFrontmatterValue(value: string): string {
   if (value.length === 0) {
     return '""';
   }
-  if (/[:#&*?|<>=!%@`,[\]{}\r\n]/.test(value)) {
+  if (value.trim() !== value || /^["']/.test(value) || /[:#&*?|<>=!%@`,[\]{}\r\n]/.test(value)) {
     return JSON.stringify(value);
   }
   return value;

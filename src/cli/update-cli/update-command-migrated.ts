@@ -9,13 +9,15 @@ import {
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveUserPath } from "../../infra/home-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
-  readUpdateStateSchemaVersions,
   resolveUpdateStateContentVersion,
   updateStateSchemaVersionsMatch,
-} from "../../infra/update-candidate-state.js";
+} from "../../infra/update-candidate-state.versions.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import { createUpdateTimeoutHandoff } from "../../infra/update-timeout-provenance.js";
@@ -61,6 +63,14 @@ export async function inspectActivatedUpdateState(
   if (!schemaVersions) {
     return undefined;
   }
+  const agentPaths = new Set(
+    [env.OPENCLAW_AGENT_DIR, env.PI_CODING_AGENT_DIR].flatMap((directory) =>
+      directory?.trim()
+        ? [path.join(resolveUserPath(directory, env), "openclaw-agent.sqlite")]
+        : [],
+    ),
+  );
+  let blocked: FinishUpdateParams["rollbackBlockedReason"];
   try {
     const current = await readUpdateStateSchemaVersions({
       stateDir: resolveStateDir(env),
@@ -69,13 +79,25 @@ export async function inspectActivatedUpdateState(
       root: result.root ?? null,
       nodeRunner: params.packageUpdateNodeRunner,
       timeoutMs: params.timeoutMs,
+      includeRetainedAgentPaths: true,
+      onInventory: (files) => {
+        for (const database of files.values()) {
+          if (
+            database.owners?.some(({ role }) => role === "agent") ||
+            database.registeredPaths?.length
+          ) {
+            database.spellings.forEach((pathname) => agentPaths.add(pathname));
+          }
+        }
+      },
     });
     const shared = current.find((entry) => entry.path === resolveOpenClawStateSqlitePath(env));
     const sharedVersion = shared ? resolveUpdateStateContentVersion(shared) : undefined;
     const incompleteAgents = candidateSchemaVersions
       ? current.filter(
           (entry) =>
-            entry !== shared &&
+            agentPaths.has(entry.path) &&
+            !shared?.retainedAgentPaths?.includes(entry.path) &&
             entry.userVersion !== null &&
             entry.userVersion !== candidateSchemaVersions.agent,
         )
@@ -108,7 +130,7 @@ export async function inspectActivatedUpdateState(
         ].join("\n"),
       });
     }
-    return updateStateSchemaVersionsMatch(schemaVersions, current, {
+    blocked = updateStateSchemaVersionsMatch(schemaVersions, current, {
       sharedPath: resolveOpenClawStateSqlitePath(env),
       candidateSchemaVersions,
     })
@@ -125,8 +147,12 @@ export async function inspectActivatedUpdateState(
       exitCode: 1,
       stderrTail: formatErrorMessage(error),
     });
-    return "rollback-state-unverified";
+    blocked = "rollback-state-unverified";
   }
+  if (blocked && result.status === "error") {
+    result.recovery = unsafeUpdateRecovery(result.recovery, blocked);
+  }
+  return blocked;
 }
 
 /** After migration, only candidate code may reopen state or finish the run. */

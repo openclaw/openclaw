@@ -1,8 +1,13 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  loadExactSessionEntryReadOnly,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
@@ -103,6 +108,52 @@ it("reads lifecycle recovery in workers and retains tool/text order through clos
   });
 });
 
+it("reads queued recovery state once after the preceding event settles", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    setRuntimeConfigSnapshot(config);
+    const target = { agentId: "main", sessionKey, env };
+    replaceSessionEntrySync(target, { sessionId: "worker-lifecycle-session", updatedAt: 1 });
+    const entered = createDeferred();
+    const release = createDeferred();
+    const read = sessionReader.loadGatewaySessionEntryReadOnlyInWorker;
+    const held = vi
+      .spyOn(sessionReader, "loadGatewaySessionEntryReadOnlyInWorker")
+      .mockImplementationOnce(async (params) => {
+        const result = await read(params);
+        entered.resolve();
+        await release.promise;
+        return result;
+      });
+    const h = createAgentEventTestHarness();
+    h.nodeHasSessionSubscribers.mockReturnValue(false);
+    h.register("worker-lifecycle", sessionKey, "worker-lifecycle");
+    try {
+      const first = h.handler(event("start"));
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        Promise.resolve(first),
+        "recovery did not start",
+      );
+      const queued = h.handler({ ...event("start", 2), lifecycleGeneration: "pre-restart" });
+      await replaceSessionEntry(target, {
+        sessionId: "worker-lifecycle-session",
+        updatedAt: 2_000,
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "worker-lifecycle", lifecycleGeneration: "pre-restart" }],
+      });
+      release.resolve();
+      await Promise.all([first, queued]);
+      expect(h.agent().map(([, payload]) => payload.seq)).toEqual([1]);
+      expect(held).toHaveBeenCalledTimes(2);
+    } finally {
+      release.resolve();
+      await h.handler.dispose();
+      held.mockRestore();
+      h.chatRunState.clear();
+    }
+  });
+});
+
 it("rejects an event whose live claim retires during recovery preparation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     replaceSessionEntrySync(
@@ -129,6 +180,54 @@ it("rejects an event whose live claim retires during recovery preparation", asyn
     } finally {
       releaseAgentRunContext(start.runId, claimId);
       await h.handler.dispose();
+    }
+  });
+});
+
+it("delivers an incognito turn's lifecycle and reply with contiguous sequences", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const key = "agent:main:dashboard:incognito-lifecycle";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: key, env },
+      { sessionId: "worker-lifecycle-session", updatedAt: 1, incognito: true },
+    );
+    const h = createAgentEventTestHarness();
+    h.nodeHasSessionSubscribers.mockReturnValue(false);
+    h.register("worker-lifecycle", key, "worker-lifecycle");
+    try {
+      const outcomes = await Promise.allSettled([
+        h.handler({
+          ...event("start"),
+          sessionKey: key,
+          stream: "run_status",
+          data: { phase: "queued" },
+        }),
+        h.handler({ ...event("start", 2), sessionKey: key }),
+        h.handler({
+          ...event("start", 3),
+          sessionKey: key,
+          stream: "assistant",
+          data: { text: "Private reply" },
+        }),
+        h.handler({ ...event("end", 4), sessionKey: key }),
+      ]);
+      expect(outcomes.filter((outcome) => outcome.status === "rejected")).toEqual([]);
+      expect(
+        h.agent().map(([, payload]) => [payload.stream, payload.data.phase, payload.seq]),
+      ).toEqual([
+        ["run_status", "queued", 1],
+        ["lifecycle", "start", 2],
+        ["assistant", undefined, 3],
+        ["lifecycle", "end", 4],
+      ]);
+      expect(h.chat().at(-1)?.[1]).toMatchObject({
+        state: "final",
+        message: { content: [{ type: "text", text: "Private reply" }] },
+      });
+    } finally {
+      await h.handler.dispose();
+      h.chatRunState.clear();
+      memorySessionActorOwners.reset();
     }
   });
 });

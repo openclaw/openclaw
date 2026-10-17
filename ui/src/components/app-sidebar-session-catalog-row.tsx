@@ -123,13 +123,11 @@ export function renderCatalogSessionRow(
       mainKey: params.mainKey,
     }),
   );
-  const href = createMemo(() => target().href),
-    navigation = createMemo(() => target().options);
   const catalogMenu = createMemo<CatalogSessionMenuRequest>(() => ({
     key: catalogKey(),
     agentId: params.newSessionAgentId,
     routeId,
-    navigation: navigation(),
+    navigation: target().options,
     canOpenTerminal: readSession().canOpenTerminal === true,
     canDelete: readSession().canArchive && readCatalog().capabilities.archive,
     name: readSession().name ?? readSession().threadId,
@@ -151,13 +149,8 @@ export function renderCatalogSessionRow(
   });
   const color = createMemo(() => normalizeSessionColorValue(readSession().color ?? ""));
   const active = createMemo(() => key() === params.routeSessionKey);
-  const running = createMemo(
-    () => readSession().status === "active" || readSession().status === "running",
-  );
-  const canOpenTerminal = createMemo(
-    () => readSession().canOpenTerminal === true && params.terminalAvailable,
-  );
-  const openTerminal = () => params.onOpenTerminal(catalogKey(), params.newSessionAgentId);
+  const running = () => readSession().status === "active" || readSession().status === "running";
+  const canOpenTerminal = () => readSession().canOpenTerminal === true && params.terminalAvailable;
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
     params.onOpenMenu(catalogMenu(), x, y, trigger);
   const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (event) =>
@@ -174,16 +167,22 @@ export function renderCatalogSessionRow(
     </Show>
   );
   let element: HTMLDivElement | undefined;
-  createEffect(
-    () => rowRef(),
-    (callback) => untrack(() => callback?.(element)),
-  );
+  // Ref retargeting reads the current sidebar host outside a tracking scope.
+  createEffect(rowRef, (callback) => untrack(() => callback?.(element)));
   const row = (
     <div
       ref={(node) => {
         element = node;
       }}
-      class={`sidebar-recent-session session-row-host sidebar-recent-session--single-line ${color() ? "sidebar-recent-session--colored" : ""} ${active() ? "sidebar-recent-session--active" : ""} ${projectChild ? "sidebar-recent-session--catalog-project-child" : ""} ${running() ? "session-row-host--running" : ""}`}
+      class={[
+        "sidebar-recent-session session-row-host sidebar-recent-session--single-line",
+        {
+          "sidebar-recent-session--colored": Boolean(color()),
+          "sidebar-recent-session--active": active(),
+          "sidebar-recent-session--catalog-project-child": projectChild,
+          "session-row-host--running": running(),
+        },
+      ]}
       style={color() ? `--session-color: var(--session-color-${color()})` : undefined}
       data-session-key={key()}
       data-catalog-session-key={identityKey()}
@@ -193,7 +192,7 @@ export function renderCatalogSessionRow(
       onKeyDown={openMenuFromEvent}
     >
       <a
-        href={href()}
+        href={target().href}
         class="sidebar-recent-session__link"
         aria-current={active() ? "page" : undefined}
         onClick={(event: MouseEvent) => {
@@ -202,9 +201,9 @@ export function renderCatalogSessionRow(
           }
           event.preventDefault();
           if (params.catalogOpenTarget === "terminal" && canOpenTerminal()) {
-            openTerminal();
+            params.onOpenTerminal(catalogKey(), params.newSessionAgentId);
           } else {
-            params.onNavigate?.(routeId, navigation());
+            params.onNavigate?.(routeId, target().options);
           }
         }}
       >

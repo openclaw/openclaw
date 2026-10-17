@@ -1,6 +1,5 @@
 import AVFoundation
 import OpenClawKit
-import os
 import ReplayKit
 
 final class ScreenRecordService: @unchecked Sendable {
@@ -36,147 +35,6 @@ final class ScreenRecordService: @unchecked Sendable {
 
         func recordError(_ error: Error) {
             if self.handlerError == nil { self.handlerError = error }
-        }
-    }
-
-    /// Owns cancellation only until ReplayKit resolves startup. A cancelled
-    /// pending start keeps its caller's capture lease until both start and the
-    /// one matching stop resolve, so late capture cannot escape into a new owner.
-    private final class CaptureStartOperation: @unchecked Sendable {
-        private typealias Completion = (CheckedContinuation<Void, Error>, Result<Void, Error>)
-
-        private enum Phase {
-            case idle
-            case starting
-            case cancelling
-            case cancelled
-            case finished
-        }
-
-        private struct State {
-            var phase: Phase = .idle
-            var continuation: CheckedContinuation<Void, Error>?
-            var stopRequested = false
-        }
-
-        private let state = OSAllocatedUnfairLock(initialState: State())
-        private let startAction: @MainActor @Sendable (@escaping CaptureCompletion) -> Void
-        private let stopAction: StopCaptureAction
-
-        init(
-            startAction: @escaping @MainActor @Sendable (@escaping CaptureCompletion) -> Void,
-            stopAction: @escaping StopCaptureAction)
-        {
-            self.startAction = startAction
-            self.stopAction = stopAction
-        }
-
-        @MainActor
-        func run() async throws {
-            try Task.checkCancellation()
-            try await withTaskCancellationHandler(operation: {
-                try await withCheckedThrowingContinuation { continuation in
-                    self.begin(continuation)
-                }
-            }, onCancel: {
-                self.cancel()
-            })
-        }
-
-        private func cancel() {
-            self.state.withLock { state in
-                switch state.phase {
-                case .idle:
-                    state.phase = .cancelled
-                case .starting:
-                    state.phase = .cancelling
-                case .cancelling, .cancelled, .finished:
-                    break
-                }
-            }
-        }
-
-        @MainActor
-        private func begin(_ continuation: CheckedContinuation<Void, Error>) {
-            let shouldStart = self.state.withLock { state -> Bool in
-                switch state.phase {
-                case .idle:
-                    state.phase = .starting
-                    state.continuation = continuation
-                    return true
-                case .cancelled:
-                    state.phase = .finished
-                    return false
-                case .starting, .cancelling, .finished:
-                    preconditionFailure("ReplayKit capture start operation can only run once")
-                }
-            }
-            guard shouldStart else {
-                continuation.resume(throwing: CancellationError())
-                return
-            }
-
-            self.startAction { [weak self] error in
-                self?.captureDidStart(error: error)
-            }
-        }
-
-        private func captureDidStart(error: Error?) {
-            let result: Result<Void, Error> = error.map(Result.failure) ?? .success(())
-            let (completion, shouldStop) = self.state.withLock { state -> (Completion?, Bool) in
-                switch state.phase {
-                case .starting:
-                    state.phase = .finished
-                    guard let continuation = state.continuation else { return (nil, false) }
-                    state.continuation = nil
-                    return ((continuation, result), false)
-                case .cancelling:
-                    if case .failure = result {
-                        return (Self.takeCancellationCompletion(state: &state), false)
-                    }
-                    guard !state.stopRequested else { return (nil, false) }
-                    state.stopRequested = true
-                    return (nil, true)
-                case .idle, .cancelled, .finished:
-                    return (nil, false)
-                }
-            }
-            if shouldStop {
-                Task { @MainActor in self.requestStop() }
-            }
-            Self.resume(completion)
-        }
-
-        @MainActor
-        private func requestStop() {
-            self.stopAction { [weak self] _ in
-                self?.captureStopDidComplete()
-            }
-        }
-
-        private func captureStopDidComplete() {
-            let completion = self.state.withLock { state -> Completion? in
-                guard state.phase == .cancelling else { return nil }
-                return Self.takeCancellationCompletion(state: &state)
-            }
-            Self.resume(completion)
-        }
-
-        private static func takeCancellationCompletion(
-            state: inout State) -> Completion?
-        {
-            guard let continuation = state.continuation else { return nil }
-
-            state.phase = .finished
-            state.continuation = nil
-            return (continuation, .failure(CancellationError()))
-        }
-
-        private static func resume(
-            _ completion: Completion?)
-        {
-            guard let (continuation, result) = completion else { return }
-            continuation.resume(with: result)
         }
     }
 
@@ -271,15 +129,25 @@ final class ScreenRecordService: @unchecked Sendable {
         let handler = self.makeCaptureHandler(
             state: state,
             config: config)
-        let operation = CaptureStartOperation(
-            startAction: { completion in
+        try Task.checkCancellation()
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 self.startReplayKitCaptureAction(
                     config.includeAudio,
-                    handler,
-                    completion)
-            },
-            stopAction: self.stopReplayKitCaptureAction)
-        try await operation.run()
+                    handler)
+                { error in
+                    continuation.resume(with: error.map(Result.failure) ?? .success(()))
+                }
+            }
+        } catch {
+            try Task.checkCancellation()
+            throw error
+        }
+        if Task.isCancelled {
+            // Keep the capture lease until late startup and its matching stop both settle.
+            try? await self.stopCapture()
+            throw CancellationError()
+        }
     }
 
     private func makeCaptureHandler(

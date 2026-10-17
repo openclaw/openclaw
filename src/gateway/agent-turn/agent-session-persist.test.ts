@@ -82,7 +82,6 @@ describe("persistAgentSessionPhase", () => {
         touchInteraction: false,
         expectedSession: undefined,
         maintenanceConfig: undefined,
-        abortForLifecycleRotation: () => false,
         assertGatewayWorkAdmissionAllowed: vi.fn(),
         respondToGatewayAdmissionOutcome: () => false,
         setCronContinuationClaim: vi.fn(),
@@ -105,7 +104,7 @@ describe("persistAgentSessionPhase", () => {
   });
 
   it.each([false, true])(
-    "surfaces creation denial before lifecycle rotation (revoked during preparation: %s)",
+    "surfaces creation denial when role authority forbids the agent (revoked during preparation: %s)",
     async (revokeDuringPreparation) => {
       await withOpenClawTestState(profileState, async (state) => {
         const sessionKey = "agent:main:role-denied";
@@ -114,7 +113,6 @@ describe("persistAgentSessionPhase", () => {
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const allowedAgents = revokeDuringPreparation ? ["main"] : [];
         const respond = vi.fn<Parameters<typeof persistAgentSessionPhase>[0]["respond"]>();
-        const abortForLifecycleRotation = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
         const patchBuild: AgentSessionPatchBuild = {
           patch: { sessionId: runId, updatedAt: 1 },
           spawnedBy: undefined,
@@ -172,7 +170,6 @@ describe("persistAgentSessionPhase", () => {
             touchInteraction: false,
             expectedSession: undefined,
             maintenanceConfig: undefined,
-            abortForLifecycleRotation,
             assertGatewayWorkAdmissionAllowed: vi.fn(),
             respondToGatewayAdmissionOutcome: () => false,
             setCronContinuationClaim: vi.fn(),
@@ -189,7 +186,6 @@ describe("persistAgentSessionPhase", () => {
             message: expect.stringContaining('agent "main"'),
           }),
         );
-        expect(abortForLifecycleRotation).toHaveBeenCalledTimes(1);
       });
     },
   );

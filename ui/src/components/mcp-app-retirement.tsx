@@ -8,7 +8,7 @@ import {
   runWithOwner,
   untrack,
 } from "solid-js";
-import { McpAppUnmountGate } from "./mcp-app-unmount.ts";
+import { createMcpAppUnmountGate } from "./mcp-app-unmount.ts";
 
 /** Keep the old child tree connected until its Apps have acknowledged retirement. */
 export function McpAppRetirement(props: {
@@ -25,9 +25,7 @@ export function McpAppRetirement(props: {
     dispose?.();
   };
   onCleanup(disposeRendered);
-  const gate = new McpAppUnmountGate<JSX.Element>({
-    requestUpdate: () => setRevision((value) => value + 1),
-  });
+  const gate = createMcpAppUnmountGate<JSX.Element>(() => setRevision((value) => value + 1));
   const content = createMemo(() => {
     revision();
     const identity = props.identity;

@@ -16,11 +16,19 @@ import { createHookRunner, type HookRunner } from "./hooks.js";
  * instance stays stable so references captured mid-run keep seeing current hooks.
  */
 export function initializeGlobalHookRunner(registry: GlobalHookRunnerRegistry): void {
-  const log = createSubsystemLogger("plugins");
   state.registry = registry;
+  ensureGlobalHookRunner();
+}
+
+/**
+ * Create the global hook runner without claiming a registry. Its live facade reads
+ * the scoped registry of the current run, so a host that never activated a process
+ * root (a headless `agent exec` run) still dispatches that run's hooks.
+ */
+export function ensureGlobalHookRunner(): HookRunner {
   if (!state.hookRunner) {
     state.hookRunner = createHookRunner(createLiveHookRegistryFacade(state), {
-      logger: log,
+      logger: createSubsystemLogger("plugins"),
       catchErrors: true,
       failurePolicyByHook: {
         before_agent_run: "fail-closed",
@@ -29,11 +37,7 @@ export function initializeGlobalHookRunner(registry: GlobalHookRunnerRegistry): 
       },
     });
   }
-
-  const hookCount = registry.hooks.length;
-  if (hookCount > 0) {
-    log.debug(`hook runner initialized with ${hookCount} registered hooks`);
-  }
+  return state.hookRunner;
 }
 
 /**

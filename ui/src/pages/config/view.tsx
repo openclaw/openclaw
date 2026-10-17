@@ -524,7 +524,7 @@ export function Config(props: ConfigProps) {
               <div class="settings-row settings-row--stacked">
                 <div class="config-raw-actions">
                   {props.onOpenFile && props.openFileAllowed !== false ? (
-                    <button class="btn btn--sm" onClick={props.onOpenFile}>
+                    <button class="btn btn--sm" onClick={() => props.onOpenFile?.()}>
                       <Icon name="fileText" />
                       {t("configView.open")}
                     </button>
@@ -532,7 +532,7 @@ export function Config(props: ConfigProps) {
                   <button
                     class="btn btn--sm"
                     disabled={state().configBusy || !state().hasRawChanges}
-                    onClick={props.onRawDiscard}
+                    onClick={() => props.onRawDiscard()}
                   >
                     {t("configView.rawDiscard")}
                   </button>
@@ -545,7 +545,7 @@ export function Config(props: ConfigProps) {
                       !state().hasRawChanges
                     }
                     aria-busy={props.saving ? "true" : "false"}
-                    onClick={props.onSave}
+                    onClick={() => props.onSave()}
                   >
                     {props.saving ? (
                       <>

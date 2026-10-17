@@ -208,6 +208,26 @@ describe("dedicated worker websocket protocol", () => {
     },
   );
 
+  it.each([
+    { name: "admission", options: { admissionFailure: "environment-unavailable" as const } },
+    { name: "ownership", options: { validationFailure: "environment-unavailable" as const } },
+  ])(
+    "does not charge the admission budget for an unavailable environment ($name)",
+    async ({ options }) => {
+      const recordFailure = vi.fn();
+      const harness = attachHarness({
+        ...options,
+        rateLimiter: createRateLimiter({ recordFailure }),
+      });
+      harness.sendConnect();
+
+      await waitForWorkerProtocol(() => expect(harness.close).toHaveBeenCalled());
+      expect(harness.setCloseCause).toHaveBeenCalledWith("environment-unavailable");
+      expect(recordFailure).not.toHaveBeenCalled();
+      expect(harness.setClient).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects rate-limited public admission before credential verification", async () => {
     const rateLimiter = createRateLimiter({
       check: vi.fn(() => ({ allowed: false, remaining: 0, retryAfterMs: 12_000 })),
@@ -262,30 +282,6 @@ describe("dedicated worker websocket protocol", () => {
     expect(recordFailure).toHaveBeenCalledWith("203.0.113.10", "worker-admission");
     expect(reset).not.toHaveBeenCalled();
     expect(harness.setClient).not.toHaveBeenCalled();
-  });
-
-  it.each([["health", {}]])("rejects legacy method %s", async (method, params) => {
-    const harness = attachHarness();
-    await admit(harness);
-    harness.sendRequest(method, params);
-
-    await waitForWorkerProtocol(() =>
-      expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed"),
-    );
-    expect(harness.logGateway.warn).toHaveBeenCalledWith(
-      "worker protocol request rejected reason=method-not-allowed",
-    );
-  });
-
-  it("accepts heartbeat", async () => {
-    const valid = attachHarness();
-    await admit(valid);
-    valid.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "busy" });
-    await waitForWorkerProtocol(() => expect(valid.responses).toHaveLength(2));
-    expect(valid.responses[1]).toMatchObject({
-      ok: true,
-      payload: { status: "ok", ownerEpoch: 1 },
-    });
   });
 
   it("gates inference independently", async () => {

@@ -84,7 +84,20 @@ async function withCronGateway(
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ label: "cron-thinking", layout: "home" }, async (state) => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } }, cron: { enabled: false } };
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} }, defaults: { model: "openai/gpt-4.1" } },
+      cron: { enabled: false },
+    };
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "openai:thinking-fixture": {
+          type: "api_key",
+          provider: "openai",
+          key: "synthetic-thinking-inference-key",
+        },
+      },
+    });
     await state.writeConfig(cfg);
     const storePath = state.statePath("cron", "jobs.json");
     const execute = vi.fn((): never => {

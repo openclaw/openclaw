@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import {
   decodeWindowsOutputBuffer,
@@ -153,9 +154,7 @@ export class NodeWorkerWorkspaceProcesses {
     }
     let process = owner?.processes.get(operation.processId);
     if (operation.action === "start") {
-      const fingerprint = createHash("sha256")
-        .update(JSON.stringify([input.argv, input.input ?? null]))
-        .digest("hex");
+      const fingerprint = sha256Hex(JSON.stringify([input.argv, input.input ?? null]));
       if (process && process.fingerprint !== fingerprint) {
         throw new Error("INVALID_REQUEST: processId already belongs to a different command");
       }

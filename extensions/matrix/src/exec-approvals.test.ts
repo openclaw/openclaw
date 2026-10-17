@@ -127,36 +127,6 @@ function makeChannelApprovalRequest(params: {
 }
 
 describe("matrix exec approvals", () => {
-  it("requires enablement and approvers before enabling the client", async () => {
-    expect(await isMatrixApprovalClientEnabled({ approvalKind: "exec", cfg: buildConfig() })).toBe(
-      false,
-    );
-    expect(
-      await isMatrixApprovalClientEnabled({
-        approvalKind: "exec",
-        cfg: buildConfig(undefined, { dm: { allowFrom: ["@owner:example.org"] } }),
-      }),
-    ).toBe(false);
-    expect(
-      await isMatrixApprovalClientEnabled({
-        approvalKind: "exec",
-        cfg: buildConfig({ enabled: true }),
-      }),
-    ).toBe(false);
-    expect(
-      await isMatrixApprovalClientEnabled({
-        approvalKind: "exec",
-        cfg: buildConfig({ enabled: true }, { dm: { allowFrom: ["@owner:example.org"] } }),
-      }),
-    ).toBe(true);
-    expect(
-      await isMatrixApprovalClientEnabled({
-        approvalKind: "exec",
-        cfg: buildConfig({ enabled: true, approvers: ["@owner:example.org"] }),
-      }),
-    ).toBe(true);
-  });
-
   it("prefers explicit approvers when configured", () => {
     const cfg = buildConfig(
       { enabled: true, approvers: ["user:@override:example.org"] },

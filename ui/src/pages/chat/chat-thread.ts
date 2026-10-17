@@ -122,8 +122,24 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
 
 const CHAT_ITEM_FIELDS = {
   message: ["message", "duplicateCount"],
-  notice: ["text", "label", "handoffBoundary", "startsTurn", "boundaryId", "timestamp"],
-  divider: ["compaction", "compactionId", "label", "metric", "description", "timestamp"],
+  notice: [
+    "text",
+    "label",
+    "handoffBoundary",
+    "startsTurn",
+    "boundaryId",
+    "timestamp",
+    "systemEvent",
+  ],
+  divider: [
+    "compaction",
+    "compactionId",
+    "label",
+    "metric",
+    "description",
+    "timestamp",
+    "systemEvent",
+  ],
   question: ["questionId", "startedAt"],
   senderSession: ["sessionKey", "agentId", "label"],
 } as const;
@@ -320,6 +336,7 @@ function sameChatItemsStructuralInput(
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&
+    previous.runFinalizing === next.runFinalizing &&
     previous.runActive === next.runActive &&
     previous.subagentWait?.startedAt === next.subagentWait?.startedAt &&
     previous.subagentWait?.runId === next.subagentWait?.runId &&

@@ -23,7 +23,7 @@ import {
   hasSkillReferenceCandidate,
 } from "../../skills/discovery/chat-command-invocation.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
-import { isExplicitCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { isExplicitCommandTurn } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
@@ -225,7 +225,7 @@ export async function resolveReplyDirectives(params: {
   const configuredAliases = rawAliases.filter(
     (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
   );
-  const commandTurn = resolveCommandTurnContext(ctx);
+  const commandTurn = ctx.CommandTurn;
   const commandRegistry =
     command.isAuthorizedSender &&
     isExplicitCommandTurn(commandTurn) &&

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
@@ -324,6 +324,50 @@ describe("plugin-blob-store", () => {
         await expect(reopened.lookup("same")).resolves.toMatchObject({
           metadata: { owner: "diffs" },
           bytes: new Uint8Array([1]),
+        });
+      });
+    });
+
+    it("publishes persisted timestamps and refuses duplicate registration without replacing data", async () => {
+      await withOpenClawTestState({ label: "plugin-blob-receipt" }, async (state) => {
+        const store = createPluginBlobStore<{ version: number }>("diffs", options(state.env));
+        const startedAt = Date.now();
+        const receipt = await store.registerIfAbsentWithReceipt(
+          "stable",
+          new Uint8Array([1]),
+          { version: 1 },
+          { ttlMs: 60_000 },
+        );
+        assert.isDefined(receipt);
+        expect(receipt.createdAt).toBeGreaterThanOrEqual(startedAt);
+        expect(receipt.createdAt).toBeLessThanOrEqual(Date.now());
+        expect(receipt.expiresAt).toBe(receipt.createdAt + 60_000);
+        await expect(
+          store.registerIfAbsentWithReceipt("stable", new Uint8Array([2]), { version: 2 }),
+        ).resolves.toBeUndefined();
+        await expect(
+          store.registerIfAbsent("stable", new Uint8Array([3]), { version: 3 }),
+        ).resolves.toBe(false);
+        await expect(store.lookup("stable")).resolves.toEqual({
+          ...receipt,
+          key: "stable",
+          bytes: new Uint8Array([1]),
+          sizeBytes: 1,
+          metadata: { version: 1 },
+        });
+
+        await store.delete("stable");
+        const replacement = await store.registerIfAbsentWithReceipt("stable", new Uint8Array([4]), {
+          version: 4,
+        });
+        assert.isDefined(replacement);
+        expect(replacement).toEqual({ createdAt: expect.any(Number) });
+        await expect(store.lookup("stable")).resolves.toEqual({
+          ...replacement,
+          key: "stable",
+          bytes: new Uint8Array([4]),
+          sizeBytes: 1,
+          metadata: { version: 4 },
         });
       });
     });

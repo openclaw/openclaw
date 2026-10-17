@@ -4,7 +4,7 @@ import type { BoardGetParams, BoardWidget } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiViewContext } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventListener } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { acquireBoardProviderForSession, type BoardProviderLease } from "../lib/board/provider.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
@@ -393,6 +393,85 @@ describe("Plugin session dashboard", () => {
         .querySelector('[data-widget-name="main-status"]')
         ?.closest<HTMLElement>("openclaw-board-widget-cell")?.hidden,
     ).toBe(true);
+  });
+
+  it("retains local choices across refreshes and initializes each replacement after its snapshot", async () => {
+    const sessionKey = "agent:main:dashboard-local-choices";
+    const empty = (targetSessionKey: string) => ({
+      sessionKey: targetSessionKey,
+      revision: 1,
+      tabs: [],
+      widgets: [],
+    });
+    const pending = createDeferred<ReturnType<typeof empty>>();
+    const nextPending = createDeferred<ReturnType<typeof empty>>();
+    let snapshot = {
+      sessionKey,
+      revision: 1,
+      tabs: [
+        { tabId: "main", title: "Main", position: 0, chatDock: "right" },
+        { tabId: "research", title: "Research", position: 1, chatDock: "right" },
+      ],
+      widgets: [widget(), widget({ name: "research", tabId: "research" })],
+    };
+    let listener: GatewayEventListener | undefined;
+    const request = vi.fn(async (_method: string, target?: BoardGetParams) =>
+      target?.sessionKey === `${sessionKey}-pending`
+        ? pending.promise
+        : target?.sessionKey === `${sessionKey}-next`
+          ? nextPending.promise
+          : snapshot,
+    );
+    // SAFETY: This fixture implements the board transport methods exercised by the dashboard.
+    const client = {
+      request,
+      addEventListener(next: GatewayEventListener) {
+        listener = next;
+        return () => {
+          listener = undefined;
+        };
+      },
+    } as unknown as GatewayBrowserClient;
+    const element = await mountDashboard({ sessionKey }, client);
+    const toggle = () =>
+      element.querySelector<HTMLButtonElement>(".plugin-session-dashboard__toggle")!;
+    await vi.waitFor(() =>
+      expect(element.querySelector('[data-board-tab-id="research"]')).not.toBeNull(),
+    );
+    element.querySelector<HTMLButtonElement>('[data-board-tab-id="research"]')!.click();
+    toggle().click();
+    await element.updateComplete;
+
+    snapshot = { ...snapshot, revision: 2 };
+    listener?.({ type: "event", event: "board.changed", payload: { sessionKey, revision: 2 } });
+    await vi.waitFor(() =>
+      expect(element.querySelector("openclaw-board-view")?.snapshot?.revision).toBe(2),
+    );
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(
+      element.querySelector('[data-board-tab-id="research"]')?.getAttribute("aria-selected"),
+    ).toBe("true");
+
+    element.session = null;
+    await element.updateComplete;
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(element.querySelector(".plugin-session-dashboard__collapsed-empty")).toBeNull();
+    element.session = { sessionKey: `${sessionKey}-pending` };
+    await element.updateComplete;
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    toggle().click();
+    pending.resolve(empty(`${sessionKey}-pending`));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await element.updateComplete;
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    expect(element.querySelector("openclaw-board-view")).toBeNull();
+
+    element.session = { sessionKey: `${sessionKey}-next` };
+    await element.updateComplete;
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    nextPending.resolve(empty(`${sessionKey}-next`));
+    await vi.waitFor(() => expect(toggle().getAttribute("aria-expanded")).toBe("false"));
+    expect(element.querySelector(".plugin-session-dashboard__collapsed-empty")).not.toBeNull();
   });
 
   it("releases its provider through detached updates and reacquires only after reconnect", async () => {

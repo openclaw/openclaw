@@ -60,6 +60,30 @@ describe("onboarding agent target", () => {
     expect(config).toEqual(original);
   });
 
+  it.each(["defaults", "agent"] as const)(
+    "preserves a %s utility fallback chain when changing its primary",
+    (owner) => {
+      const utilityModel = { primary: "local/old", fallbacks: ["local/backup"] };
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: { utilityModel },
+          entries: { main: owner === "agent" ? { utilityModel } : {} },
+        },
+      };
+      const result = applyOnboardingUtilityModel(
+        config,
+        resolveOnboardingAgentTarget(config, "main"),
+        "local/new",
+      );
+      expect(
+        owner === "agent"
+          ? result.agents?.entries?.main?.utilityModel
+          : result.agents?.defaults?.utilityModel,
+      ).toEqual({ primary: "local/new", fallbacks: ["local/backup"] });
+      expect(utilityModel).toEqual({ primary: "local/old", fallbacks: ["local/backup"] });
+    },
+  );
+
   it.each([undefined])(
     "projects a provider utility mutation only onto the selected agent: %j",
     (utilityModel) => {

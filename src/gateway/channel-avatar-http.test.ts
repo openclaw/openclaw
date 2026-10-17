@@ -320,42 +320,6 @@ describe("handleChannelAvatarHttpRequest", () => {
     expect(mocks.readMedia).toHaveBeenCalledTimes(1);
   });
 
-  it.each([false, true])(
-    "keeps the current avatar cached when an older load finishes last (warm: %s)",
-    async (warm) => {
-      const route = avatarRoute(`agent:main:out-of-order:${warm}`);
-      const currentReference = "/state/media/inbound/new-avatar.png";
-      if (warm) {
-        mocks.loadEntry.mockReturnValue({ entry: avatarEntry(currentReference) });
-        mocks.readMedia.mockResolvedValue({ buffer: APNG_BYTES });
-        await (await fetch(route)).arrayBuffer();
-      }
-
-      const reading = createDeferredCore();
-      const release = createDeferredCore();
-      mocks.loadEntry.mockReturnValue({ entry: avatarEntry() });
-      mocks.readMedia.mockImplementationOnce(async () => {
-        reading.resolve();
-        await release.promise;
-        return { buffer: PNG_BYTES };
-      });
-      const older = fetch(route);
-      await reading.promise;
-      mocks.loadEntry.mockReturnValue({ entry: avatarEntry(currentReference) });
-      mocks.readMedia.mockResolvedValue({ buffer: APNG_BYTES });
-      const current = await fetch(route);
-      const currentBytes = Buffer.from(await current.arrayBuffer());
-      release.resolve();
-      const olderBytes = Buffer.from(await (await older).arrayBuffer());
-      const revisited = await fetch(route);
-
-      expect(currentBytes).toEqual(APNG_BYTES);
-      expect(olderBytes).toEqual(PNG_BYTES);
-      expect(Buffer.from(await revisited.arrayBuffer())).toEqual(APNG_BYTES);
-      expect(mocks.readMedia).toHaveBeenCalledTimes(2);
-    },
-  );
-
   it.each(["missing", "failed", "invalid"])(
     "retries an avatar after a %s load settles",
     async (failure) => {

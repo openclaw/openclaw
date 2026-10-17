@@ -4,13 +4,25 @@ import {
   shouldUseEnvHttpProxyForUrl,
   withTrustedEnvProxyGuardedFetchMode,
 } from "openclaw/plugin-sdk/fetch-runtime";
+import {
+  createProviderCredentialMatcher,
+  fetchWithProviderHttpGuard,
+  resolveProviderHttpRequestConfigWithOriginTrust,
+  resolveProviderTransportSsrFPolicy,
+  sanitizeConfiguredModelProviderRequest,
+} from "openclaw/plugin-sdk/provider-http";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { localBaseUrl } from "./config.js";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import {
+  localBaseUrl,
+  providerBaseUrl,
+  HOSTED_ORIGIN,
+  type ModelProviderConfig,
+} from "./config.js";
 import { EvaluationError } from "./errors.js";
 import { MAX_JSON_BYTES, type EvaluationInput } from "./schema.js";
 
-const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+const API_BASE_URL = `${HOSTED_ORIGIN}/v1`;
 
 function httpError(response: Response): EvaluationError {
   if (response.status === 401 || response.status === 403) {
@@ -86,13 +98,71 @@ export async function requestEvaluation(params: {
   body: EvaluationInput & { model: string };
   apiKey?: string;
   baseUrl?: string;
+  providerConfig?: ModelProviderConfig;
   timeoutMs: number;
   signal?: AbortSignal;
   deadlineMonotonicMs?: number;
   isAdmissible?: () => boolean;
 }): Promise<unknown> {
-  const baseUrl = localBaseUrl(params.baseUrl);
-  const endpoint = baseUrl ? `${baseUrl}/v1/systemone` : ENDPOINT;
+  const baseUrl = params.providerConfig
+    ? providerBaseUrl(params.providerConfig.baseUrl)
+    : localBaseUrl(params.baseUrl);
+  const apiBaseUrl = params.providerConfig ? baseUrl : baseUrl ? `${baseUrl}/v1` : API_BASE_URL;
+  let resolved: ReturnType<typeof resolveProviderHttpRequestConfigWithOriginTrust>;
+  let configuredRequest: ReturnType<typeof sanitizeConfiguredModelProviderRequest>;
+  try {
+    configuredRequest = sanitizeConfiguredModelProviderRequest(params.providerConfig?.request);
+    const headers: Record<string, string> = {};
+    for (const [name, value] of Object.entries(params.providerConfig?.headers ?? {})) {
+      const headerValue = normalizeResolvedSecretInputString({
+        value,
+        path: `models.providers.typesafe.headers.${name}`,
+      });
+      if (headerValue !== undefined) {
+        headers[name] = headerValue;
+      }
+    }
+    // Legacy loopback config never uses the hosted plugin key. Standard model
+    // provider config supplies only its own prepared credential and request policy.
+    const credential = !baseUrl || params.providerConfig ? params.apiKey : undefined;
+    resolved = resolveProviderHttpRequestConfigWithOriginTrust({
+      provider: "typesafe",
+      capability: "other",
+      transport: "http",
+      baseUrl: apiBaseUrl,
+      defaultBaseUrl: API_BASE_URL,
+      defaultHeaders: {
+        ...(credential && params.providerConfig?.authHeader !== false
+          ? { Authorization: `Bearer ${credential}` }
+          : {}),
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        ...headers,
+      },
+      request: configuredRequest,
+    });
+  } catch {
+    throw new EvaluationError(
+      "TypeSafe provider credentials or request settings are unavailable.",
+      "credentials-unavailable",
+    );
+  }
+  const reflectsCredential = createProviderCredentialMatcher({
+    headers: resolved.headers,
+    request: configuredRequest,
+    configuredHeaderNames: Object.keys(params.providerConfig?.headers ?? {}),
+    defaultAuthHeader: "Authorization",
+    defaultAuthPrefix: "Bearer ",
+  });
+  const endpoint = `${resolved.baseUrl}/systemone`;
+  const policy = baseUrl
+    ? resolveProviderTransportSsrFPolicy({
+        baseUrl: resolved.baseUrl,
+        url: endpoint,
+        allowPrivateNetwork: resolved.allowPrivateNetwork,
+        trustConfiguredBaseUrlOrigin: resolved.trustConfiguredBaseUrlOrigin,
+      })
+    : undefined;
   const body = JSON.stringify(params.body);
   if (Buffer.byteLength(body) > MAX_JSON_BYTES) {
     throw new EvaluationError("TypeSafe request exceeds its limit.", "unsupported-input");
@@ -127,8 +197,9 @@ export async function requestEvaluation(params: {
     const request = {
       url: endpoint,
       fetchImpl: globalThis.fetch,
-      requireHttps: !baseUrl,
-      ...(baseUrl ? { policy: { allowedOrigins: [baseUrl] } } : {}),
+      requireHttps: !baseUrl || new URL(baseUrl).protocol === "https:",
+      policy,
+      dispatcherPolicy: resolved.dispatcherPolicy,
       ...(baseUrl && new URL(baseUrl).hostname === "localhost"
         ? {
             // Keep localhost local even when system DNS or hosts entries override its meaning.
@@ -143,16 +214,12 @@ export async function requestEvaluation(params: {
       beforeRequest: assertActive,
       init: {
         method: "POST",
-        headers: {
-          ...(!baseUrl ? { Authorization: `Bearer ${params.apiKey}` } : {}),
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
+        headers: resolved.headers,
         body,
       },
     };
-    const guarded = await fetchWithSsrFGuard(
-      !baseUrl && shouldUseEnvHttpProxyForUrl(endpoint)
+    const guarded = await fetchWithProviderHttpGuard(
+      !baseUrl && !resolved.dispatcherPolicy && shouldUseEnvHttpProxyForUrl(endpoint)
         ? withTrustedEnvProxyGuardedFetchMode(request)
         : request,
     );
@@ -167,10 +234,21 @@ export async function requestEvaluation(params: {
         throw httpError(response);
       }
       const bytes = await readBody(response, signal);
+      let text: string;
       try {
-        payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+        text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        payload = JSON.parse(text);
       } catch {
         throw new EvaluationError("TypeSafe returned invalid JSON.", "invalid-response");
+      }
+      // JSON escapes can conceal a credential in raw text; check its decoded
+      // representation too. Custom header prefixes may be absent in reflections.
+      const decodedText = JSON.stringify(payload);
+      if (reflectsCredential(text) || (decodedText !== text && reflectsCredential(decodedText))) {
+        throw new EvaluationError(
+          "TypeSafe evaluation failed or returned an invalid response.",
+          "invalid-response",
+        );
       }
     } finally {
       await release();

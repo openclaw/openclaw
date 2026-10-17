@@ -1,4 +1,3 @@
-/** Baseten model-specific thinking controls. */
 import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
 import { usesBasetenChatTemplateThinking } from "./models.js";
 

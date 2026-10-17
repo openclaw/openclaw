@@ -30,7 +30,6 @@ import type { UserTranscriptContext } from "./attempt-history.js";
 import {
   installModelPromptProjection,
   installRuntimeContextMessageForPrompt,
-  normalizeMessagesForLlmBoundary,
 } from "./attempt-llm-boundary.js";
 import {
   isSessionsYieldAbortError,
@@ -92,20 +91,11 @@ export async function submitEmbeddedAttemptPrompt(input: {
   assertHostActive?: SessionSourceAssertion;
   getUserTranscriptContexts?: () => readonly UserTranscriptContext[] | undefined;
   withTranscriptWrite?: <T>(write: () => Promise<T>) => Promise<T>;
-  /** Returns work only when a stale optional restriction must be withdrawn. */
-  preparePrimaryModelRequest?: () =>
-    | Promise<
-        () => Pick<Parameters<StreamFn>[1], "tools" | "systemPrompt"> & {
-          promptUpdate?: { update?: RuntimeContextCustomMessage; commit: () => void };
-        }
-      >
-    | undefined;
-  /** Observes only the first admitted foreground dispatch, not preflight/compaction. */
-  onPrimaryModelRequest?: (tools: NonNullable<Parameters<StreamFn>[1]["tools"]>) => void;
   onModelRequest?: (
     model: Parameters<StreamFn>[0],
     context: Parameters<StreamFn>[1],
-  ) => MeasuredRequestContext | undefined;
+    signal?: AbortSignal,
+  ) => MeasuredRequestContext | undefined | Promise<MeasuredRequestContext | undefined>;
   onSteeringAcknowledged: () => void;
   persistToolResultProjections: () => Promise<void>;
   prependContext?: string;
@@ -141,7 +131,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
       ? (userTurnRecorder.getPersistedMessage?.() ?? userTurnRecorder.message)?.idempotencyKey
       : undefined;
 
-  let primaryRequestObserved = false;
   const installProviderPromptHistoryTransform = (): (() => void) => {
     const baseStreamFn = activeSession.agent.streamFn;
     const basePrepareNextTurn = activeSession.agent.prepareNextTurnWithContext;
@@ -201,50 +190,21 @@ export async function submitEmbeddedAttemptPrompt(input: {
           assertRequestCurrent();
           let requestContext = context;
           const foregroundRequest = captureCurrentPromptForModel && !activeSession.isCompacting;
-          const preparation = foregroundRequest ? input.preparePrimaryModelRequest?.() : undefined;
-          if (preparation) {
-            const readRestoredContext = await preparation;
-            assertRequestCurrent();
-            // Read the live permitted surface only after all awaited preparation.
-            // Do not reuse the tools snapshot captured before the restoration.
-            const projection = readRestoredContext().promptUpdate;
-            if (projection?.update) {
-              await activeSession[agentSessionQueuePromptContext](projection.update, {
-                delivery: "current-request",
-              });
-              lateUpdates.push(projection.update);
-              requestContext = {
-                ...context,
-                messages: [
-                  ...context.messages,
-                  ...normalizeMessagesForLlmBoundary([projection.update], {
-                    inHistorySystemUpdates: true,
-                    appendOnlyRuntimeContext: true,
-                    includeTimestamp: false,
-                  }).filter((message) => message.role === "user"),
-                ],
-              };
-            }
-            assertRequestCurrent();
-            if (projection) {
-              input.assertHostActive?.();
-              projection.commit();
-              await input.persistToolResultProjections();
-              assertRequestCurrent();
-            }
-            const { tools, systemPrompt } = readRestoredContext();
-            requestContext = { ...requestContext, tools, systemPrompt };
-          }
           // Observe before V2 decides: only this observation can anchor the request's
           // measured prefix. A checkpoint request is observed again as its own request.
           const requestAnchor = foregroundRequest
-            ? input.onModelRequest?.(model, requestContext)
+            ? await input.onModelRequest?.(model, requestContext, options?.signal)
             : undefined;
+          assertRequestCurrent();
           if (foregroundRequest && input.compactBeforeRequest) {
             const checkpoint = await input.compactBeforeRequest(
-              (compactionModel, compactionContext, compactionOptions) => {
-                input.assertHostActive?.();
-                input.onModelRequest?.(compactionModel, compactionContext);
+              async (compactionModel, compactionContext, compactionOptions) => {
+                await input.onModelRequest?.(
+                  compactionModel,
+                  compactionContext,
+                  compactionOptions?.signal,
+                );
+                assertRequestCurrent();
                 return baseStreamFn(compactionModel, compactionContext, compactionOptions);
               },
               model,
@@ -261,12 +221,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
                 ...requestContext,
                 messages: [...requestContext.messages, checkpoint],
               };
-              input.onModelRequest?.(model, requestContext);
+              await input.onModelRequest?.(model, requestContext, options?.signal);
             }
-          }
-          if (foregroundRequest && !primaryRequestObserved) {
-            primaryRequestObserved = true;
-            input.onPrimaryModelRequest?.(requestContext.tools ?? []);
           }
           assertRequestCurrent();
           input.assertHostActive?.();

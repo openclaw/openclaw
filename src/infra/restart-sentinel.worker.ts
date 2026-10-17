@@ -6,12 +6,14 @@ import type {
 import { gitCommitPrefixesMatch } from "./git-commit.js";
 import {
   deleteRestartSentinelRowSync,
+  recordManagedHandoffSentinelOutcomeRowSync,
   readRestartSentinelRowSync,
   readRestartSentinelSnapshotSync,
   writeRestartSentinelRowIfRevisionSync,
   writeRestartSentinelRowSync,
   writeUpdateInstallReceiptRowSync,
   type RestartSentinel,
+  type ManagedHandoffSentinelOutcome,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
 import type { EngineConnection } from "./sql-connection.js";
@@ -59,6 +61,11 @@ function receiptTransaction<Input, Output>(
 }
 
 export const restartSentinelOperations = {
+  "restartSentinel.managedHandoffOutcome": transaction(
+    "restart-sentinel.managed-handoff-outcome",
+    (db, input: ManagedHandoffSentinelOutcome) =>
+      recordManagedHandoffSentinelOutcomeRowSync(db, input),
+  ),
   "restartSentinel.reserve": receiptTransaction(
     "update-failure-report.reserve",
     (db, input: { attemptId: string; reservationId: string; previewDigest: string }) =>
@@ -164,7 +171,7 @@ export const restartSentinelOperations = {
     (db, input: { payload: RestartSentinelPayload; expectedRevision: number | null }) => {
       const current = readRestartSentinelSnapshotSync(db);
       return current.state.kind !== "invalid" && current.revision === input.expectedRevision
-        ? writeRestartSentinelRowSync(db, input.payload)
+        ? writeRestartSentinelRowSync(db, input.payload, current.revision)
         : null;
     },
   ),

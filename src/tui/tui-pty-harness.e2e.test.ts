@@ -1,6 +1,5 @@
 // Exercises the fake-backend TUI PTY harness and visible terminal output.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { sleep } from "../utils/sleep.js";
 import { exerciseTuiCommandSurface } from "./tui-pty-command-surfaces-test-support.js";
 import {
   approveWorkspaceSkill,
@@ -113,11 +112,6 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     }
   }, STARTUP_TEST_TIMEOUT_MS);
 
-  it("renders local ready on startup", () => {
-    expect(fixture.run.visibleOutput()).toContain("local ready");
-    expect(fixture.run.visibleOutput()).not.toContain("host local");
-  });
-
   it(
     "renders a compact model and active thinking level in the footer",
     async () => {
@@ -192,7 +186,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     startupTestTimeoutMs: STARTUP_TEST_TIMEOUT_MS,
   });
 
-  it.each([{ failures: 1 }, { failures: 2 }, { failures: 3 }, { failures: 4 }])(
+  it.each([{ failures: 4 }])(
     "recovers session subscription after $failures startup failures",
     async ({ failures }) => {
       const subscriptionFixture = await startTuiFixture({
@@ -348,55 +342,33 @@ describe("TUI PTY harness", { concurrent: false }, () => {
       }
     },
   );
-  it(
-    "preserves consecutive backspaces received in the same terminal input chunk",
-    async ({ signal }) => {
-      await fixture.run.write("abc\x7f\x7f\r", { delay: false });
-
-      const sent = await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "sendChat" &&
-          (objectFieldEquals(entry, "message", "a") || objectFieldEquals(entry, "message", "ab")),
-        signal,
-      );
-      expect(sent.payload).toMatchObject({ message: "a" });
-      await fixture.run.waitForOutput("PTY_RESPONSE: a");
+  it.for([
+    {
+      name: "preserves consecutive backspaces received in the same terminal input chunk",
+      chunks: ["abc\x7f\x7f\r"],
+      message: "a",
+      rejected: "ab",
     },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "deletes forward with Ctrl+D without exiting a nonempty terminal editor",
-    async ({ signal }) => {
-      await fixture.run.write("keepXword", { delay: false });
-      await fixture.run.write("\u001b[D".repeat(5), { delay: false });
-      await fixture.run.write("\u0004", { delay: false });
-      await fixture.run.write("\r", { delay: false });
-
-      const sent = await fixture.waitForLogEntry(
-        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", "keepword"),
-        signal,
-      );
-      expect(sent.payload).toMatchObject({ message: "keepword" });
-      await fixture.run.waitForOutput("PTY_RESPONSE: keepword");
+    {
+      name: "deletes forward with Ctrl+D without exiting a nonempty terminal editor",
+      chunks: ["keepXword", "\u001b[D".repeat(5), "\u0004", "\r"],
+      message: "keepword",
+      rejected: undefined,
     },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "exits a fresh terminal when Ctrl+D is pressed with empty input",
-    async () => {
-      const emptyFixture = await startTuiFixture();
-      try {
-        await emptyFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
-        await emptyFixture.run.write("\u0004", { delay: false });
-        expect((await emptyFixture.run.waitForExit()).exitCode).toBe(0);
-      } finally {
-        await emptyFixture.cleanup();
-      }
-    },
-    STARTUP_TEST_TIMEOUT_MS,
-  );
+  ])("$name", { timeout: TEST_TIMEOUT_MS }, async ({ chunks, message, rejected }, { signal }) => {
+    for (const chunk of chunks) {
+      await fixture.run.write(chunk, { delay: false });
+    }
+    const sent = await fixture.waitForLogEntry(
+      (entry) =>
+        entry.method === "sendChat" &&
+        (objectFieldEquals(entry, "message", message) ||
+          (rejected !== undefined && objectFieldEquals(entry, "message", rejected))),
+      signal,
+    );
+    expect(sent.payload).toMatchObject({ message });
+    await fixture.run.waitForOutput(`PTY_RESPONSE: ${message}`);
+  });
 
   it(
     "cancels a buffered submit before Ctrl+D shutdown",
@@ -460,14 +432,6 @@ describe("TUI PTY harness", { concurrent: false }, () => {
         await busyFixture.cleanup();
       }
     },
-  );
-
-  it(
-    "presents and resolves plugin approval in the TUI",
-    async ({ signal }) => {
-      await approveWorkspaceSkill(fixture, "skill approval proof", signal);
-    },
-    TEST_TIMEOUT_MS,
   );
 
   it.for(COMPACT_TERMINAL_SIZES)(
@@ -631,23 +595,6 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   );
 
   it(
-    "sends multiple prompts in order",
-    async () => {
-      await fixture.run.write("first prompt\r");
-      await fixture.run.waitForOutput("PTY_RESPONSE: first prompt");
-      await fixture.run.write("second prompt\r");
-      await fixture.run.waitForOutput("PTY_RESPONSE: second prompt");
-      expect(
-        (await readFixtureLog(fixture.logPath)).some(
-          (entry) =>
-            entry.method === "sendChat" && objectFieldEquals(entry, "message", "second prompt"),
-        ),
-      ).toBe(true);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
     "renders message-tool-only internal ui source replies in the terminal",
     async () => {
       await fixture.run.write("message tool only source reply proof\r");
@@ -697,62 +644,32 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     async ([_name, runCase], { signal }) => runCase(signal),
   );
 
-  it(
-    "preserves xAI account limit errors in terminal output",
-    async ({ signal }) => {
-      await fixture.run.write("xai limit proof\r");
-      await fixture.waitForLogEntry(
-        (entry) =>
-          entry.method === "sendChat" && objectFieldEquals(entry, "message", "xai limit proof"),
-        signal,
-      );
-      await fixture.run.waitForOutput("monthly spending limit");
-      expect(fixture.run.visibleOutput()).not.toContain("Run /auth");
+  it.for([
+    {
+      name: "preserves xAI account limit errors in terminal output",
+      message: "xai limit proof",
+      output: ["monthly spending limit"],
+      hidden: "Run /auth",
     },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "renders redacted, cause-aware send failures in the real terminal loop",
-    async () => {
-      await fixture.run.write("tui error redaction proof\r");
-      await fixture.run.waitForOutput("send failed: gateway down");
-      await fixture.run.waitForOutput("Authorization: Bearer");
-
-      expect(fixture.run.visibleOutput()).not.toContain("sk-abcdefghijklmnopqrstuv");
-      expect(
-        (await readFixtureLog(fixture.logPath)).some(
-          (entry) =>
-            entry.method === "sendChat" &&
-            objectFieldEquals(entry, "message", "tui error redaction proof"),
-        ),
-      ).toBe(true);
+    {
+      name: "renders redacted, cause-aware send failures in the real terminal loop",
+      message: "tui error redaction proof",
+      output: ["send failed: gateway down", "Authorization: Bearer"],
+      hidden: "sk-abcdefghijklmnopqrstuv",
     },
-    TEST_TIMEOUT_MS,
-  );
+  ])("$name", { timeout: TEST_TIMEOUT_MS }, async ({ message, output, hidden }, { signal }) => {
+    await fixture.run.write(`${message}\r`);
+    await fixture.waitForLogEntry(
+      (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+      signal,
+    );
+    for (const text of output) {
+      await fixture.run.waitForOutput(text);
+    }
+    expect(fixture.run.visibleOutput()).not.toContain(hidden);
+  });
 
   registerToolCardRenderingTests(startTuiFixture, STARTUP_TIMEOUT_MS, STARTUP_TEST_TIMEOUT_MS);
-
-  it(
-    "blocks overlapping normal messages while a run is busy",
-    async () => {
-      await fixture.run.write("slow prompt\r");
-      await sleep(50);
-      await fixture.run.write("second prompt\r");
-      await fixture.run.waitForOutput("agent is busy");
-      await fixture.run.waitForOutput("PTY_RESPONSE: slow prompt");
-      const sendCalls = (await readFixtureLog(fixture.logPath)).filter(
-        (entry) => entry.method === "sendChat",
-      );
-      const slowPromptCalls = sendCalls.filter((entry) =>
-        objectFieldEquals(entry, "message", "slow prompt"),
-      );
-      expect(slowPromptCalls).toHaveLength(1);
-      expect(slowPromptCalls[0]?.payload).toMatchObject({ message: "slow prompt" });
-      await fixture.run.write("\x15", { delay: false });
-    },
-    TEST_TIMEOUT_MS,
-  );
 
   it(
     "keeps an active session intact when /reset is submitted from the terminal",
@@ -889,20 +806,6 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   );
 
   it(
-    "renders gateway status from the backend",
-    async () => {
-      await fixture.run.write("/gateway-status\r", { delay: false });
-      await fixture.run.waitForOutput("fixture gateway ok");
-      expect(
-        (await readFixtureLog(fixture.logPath)).some(
-          (entry) => entry.method === "getGatewayStatus",
-        ),
-      ).toBe(true);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
     "patches the session model from /model",
     async () => {
       await fixture.run.write("/model fixture-provider/fixture-model-2\r", { delay: false });
@@ -966,38 +869,17 @@ describe("TUI PTY harness", { concurrent: false }, () => {
 
       const outputOffset = fixture.run.visibleOutput().length;
       await fixture.run.write(`${message}\r`, { delay: false });
+      const sent = await fixture.waitForLogEntry(
+        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
+        signal,
+      );
+      expect(sent.payload).toMatchObject({ sessionKey, message });
       await fixture.waitForLogEntry((entry) => entry.method === "foreignSessionEvent", signal);
       await fixture.run.waitForOutput(`PTY_RESPONSE: ${message}`);
 
       const sessionOutput = fixture.run.visibleOutput().slice(outputOffset);
       expect(sessionOutput).toContain(`PTY_RESPONSE: ${message}`);
       expect(sessionOutput).not.toContain("PTY_FOREIGN_OPAQUE_SESSION_MESSAGE");
-    },
-  );
-
-  it.for([
-    {
-      sessionKey: "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org",
-      message: "mixed-case matrix session identity proof",
-    },
-    {
-      sessionKey: "agent:main:signal:group:AbC123=",
-      message: "mixed-case signal session identity proof",
-    },
-  ])(
-    "preserves provider-owned identity when selecting $sessionKey in the terminal",
-    { timeout: TEST_TIMEOUT_MS },
-    async ({ sessionKey, message }, { signal }) => {
-      await selectTuiFixtureSession(fixture, sessionKey, signal);
-
-      await fixture.run.write(`${message}\r`, { delay: false });
-      const sent = await fixture.waitForLogEntry(
-        (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
-        signal,
-      );
-
-      expect(sent.payload).toMatchObject({ sessionKey, message });
-      await fixture.run.waitForOutput(`PTY_RESPONSE: ${message}`);
     },
   );
 

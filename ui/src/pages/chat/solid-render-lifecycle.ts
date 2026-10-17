@@ -8,7 +8,6 @@ import {
 
 export type SolidRenderLifecycle<T> = RenderLifecycle & {
   readonly snapshot: Accessor<T>;
-  readonly commitGeneration: number;
 };
 
 type CommitTask = {
@@ -27,7 +26,6 @@ export function createSolidRenderLifecycle<T>(options: {
   let disposed = false;
   let requestedGeneration = 0;
   let committedRequest = -1;
-  let commitGeneration = 0;
   const tasks = new Set<CommitTask>();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const frame = createParkedProjection(
@@ -41,6 +39,7 @@ export function createSolidRenderLifecycle<T>(options: {
     }
     requestedGeneration += 1;
     setRevision(requestedGeneration);
+    // Invalidation samples visibility without subscribing its synchronous domain caller.
     if (untrack(options.presented)) {
       notifyRenderLifecycleForTest(options.host, "invalidate");
     }
@@ -106,6 +105,7 @@ export function createSolidRenderLifecycle<T>(options: {
 
   const runTasks = () => {
     for (const task of Array.from(tasks)) {
+      // Recheck after each callback: one callback can park the pane before the next runs.
       if (disposed || !untrack(options.presented)) {
         break;
       }
@@ -120,6 +120,7 @@ export function createSolidRenderLifecycle<T>(options: {
       task.cancel();
     }
   });
+  // The committed DOM gates imperative layout work and its cancellation on parking.
   createEffect(
     () => ({ frame: frame(), presented: options.presented() }),
     (next) => {
@@ -133,7 +134,6 @@ export function createSolidRenderLifecycle<T>(options: {
         return;
       }
       committedRequest = next.frame.generation;
-      commitGeneration += 1;
       notifyRenderLifecycleForTest(options.host, "commit");
       runTasks();
     },
@@ -141,9 +141,6 @@ export function createSolidRenderLifecycle<T>(options: {
 
   return {
     snapshot: () => frame().value,
-    get commitGeneration() {
-      return commitGeneration;
-    },
     invalidate,
     afterCommit: enqueue,
   };

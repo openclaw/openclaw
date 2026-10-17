@@ -9,6 +9,7 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import type { SubagentRunRecordOverrides } from "../../subagent-test-fixtures.test-helpers.js";
 import { buildActiveSubagentRuntimeContext } from "./subagent-active-context.js";
 import {
@@ -52,7 +53,11 @@ describe("buildActiveSubagentRuntimeContext", () => {
         task: "original store task",
         expectsCompletionMessage: true,
         execution: { status: "terminal", endedAt: Date.now() },
-        completion: { required: true, resultText: "original store child result" },
+        completion: {
+          required: true,
+          resultText: "original store child result",
+          terminalReply: { disposition: "visible", text: "original store child result" },
+        },
         delivery: { status: "pending" },
       });
       const cfg =
@@ -291,7 +296,11 @@ describe("buildActiveSubagentRuntimeContext", () => {
         requesterSessionKey: "agent:main:main",
         task: "deliver the report",
         execution: { status: "terminal", endedAt },
-        completion: { required: true, resultText: "child result" },
+        completion: {
+          required: true,
+          resultText: "child result",
+          terminalReply: { disposition: "visible", text: "child result" },
+        },
         delivery: { status },
         cleanupCompletedAt: cleaned ? endedAt + 1_000 : undefined,
         requesterSettleWake: wake
@@ -309,6 +318,84 @@ describe("buildActiveSubagentRuntimeContext", () => {
         expect(prompt).toContain("child result");
       } else {
         expect(prompt).toBeUndefined();
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "dispatching after delivery",
+      delivery: "delivered",
+      wake: { status: "dispatching" },
+      outstanding: false,
+    },
+    {
+      name: "dispatching after a yielded batch",
+      delivery: "pending",
+      wake: { status: "dispatching" },
+      outstanding: false,
+    },
+    {
+      name: "awaiting transport replay",
+      delivery: "pending",
+      wake: { status: "dispatching", replayCount: 1, nextAttemptAt: 1_800_000_000_000 },
+      outstanding: true,
+    },
+    {
+      name: "awaiting retry",
+      delivery: "pending",
+      wake: { status: "pending", nextAttemptAt: 1_800_000_000_000 },
+      outstanding: true,
+    },
+  ] as const)(
+    "scopes settle result runtime facts while $name",
+    async ({ delivery, wake, outstanding }) => {
+      const endedAt = 1_700_000_000_000;
+      const continuationRunId =
+        "announce:requester-settle:main:agent:main:main:settle-batch-a,settle-batch-b:yield-1";
+      for (const child of ["a", "b"]) {
+        seedSubagentRunForReadTest({
+          runId: `settle-batch-${child}`,
+          childSessionKey: `agent:main:subagent:settle-batch-${child}`,
+          controllerSessionKey: "agent:main:main",
+          requesterSessionKey: "agent:main:main",
+          task: `batch task ${child}`,
+          execution: { status: "terminal", endedAt },
+          completion: { required: true, resultText: `batch result ${child}` },
+          delivery: { status: delivery },
+          requesterSettleWake: {
+            attemptCount: 1,
+            rearmGeneration: 1,
+            batchRunIds: ["settle-batch-a", "settle-batch-b"],
+            ...wake,
+          },
+        });
+      }
+
+      for (const runId of [
+        continuationRunId,
+        undefined,
+        "unrelated-user-turn",
+        "announce:requester-settle:main:agent:main:main:another-batch:yield-1",
+        `${continuationRunId}:retry-1`,
+      ]) {
+        const facts = await buildRuntimeFactsContext({
+          cfg: {},
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          runId,
+          capabilityToolNames: new Set<string>(),
+        });
+        const prompt = facts.map((fragment) => fragment.text).join("\n");
+        if (outstanding || runId !== continuationRunId) {
+          expect(prompt).toContain("## Child results awaiting delivery");
+          expect(prompt).toContain("batch result a");
+          expect(prompt).toContain("batch result b");
+        } else {
+          expect(prompt).not.toContain("## Child results awaiting delivery");
+          expect(prompt).not.toContain("batch result a");
+          expect(prompt).not.toContain("batch result b");
+        }
       }
     },
   );

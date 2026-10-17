@@ -80,6 +80,10 @@ that same queue. Messages missed while disconnected cannot be recovered, and
 pending DMs from an earlier connection are discarded because IRC nicknames can
 change owners.
 
+A dropped network path can leave the socket open with nothing arriving. When the
+server has sent nothing for two minutes, OpenClaw sends it a `PING`; after four
+minutes of silence it closes the connection and reconnects.
+
 ## Outbound text
 
 IRC sends Markdown as plain text, preserving code contents and link destinations.

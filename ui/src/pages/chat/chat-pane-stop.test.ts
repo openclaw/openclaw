@@ -84,6 +84,40 @@ function createStopFixture(scopes = ["operator.write"], useSessionOwner = false)
   return { pane, state, session, client, request, callbacks, disconnect, reconnect, onDenied };
 }
 
+describe("chat pane compact intent", () => {
+  it("dispatches through the existing command owner only with current admin access", async () => {
+    const fixture = createStopFixture(["operator.admin"]);
+    const send = vi.fn(async () => {});
+    fixture.state.handleSendChat = send;
+    const compact = fixture.callbacks().onCompact;
+    expect(compact).toBeTypeOf("function");
+    await compact?.();
+    expect(send).toHaveBeenCalledExactlyOnceWith("/compact");
+    send.mockClear();
+    fixture.reconnect(["operator.read"]);
+    await compact?.();
+    expect(send).not.toHaveBeenCalled();
+    expect(fixture.onDenied).toHaveBeenCalledOnce();
+    expect(fixture.callbacks().onCompact).toBeUndefined();
+  });
+
+  it.each(["session", "run", "connection"])("rejects a stale %s target", async (change) => {
+    const fixture = createStopFixture(["operator.admin"]);
+    const send = vi.fn(async () => {});
+    fixture.state.handleSendChat = send;
+    const compact = fixture.callbacks().onCompact;
+    if (change === "session") {
+      fixture.session.sessionId = "replacement-session";
+    } else if (change === "run") {
+      fixture.state.chatRunId = "replacement-run";
+    } else {
+      fixture.disconnect();
+    }
+    await compact?.();
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
 describe("chat pane Stop intent", () => {
   it.each([
     { scope: "operator.write", method: "chat.abort", renderBeforeDisconnect: true },

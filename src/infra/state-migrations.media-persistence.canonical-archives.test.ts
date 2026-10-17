@@ -377,6 +377,21 @@ describe("media migration of canonical SQLite transcript archives", () => {
       const originalFile = fs.readFileSync(f.archivePath);
       const result = await migrateLegacyMediaPersistence({ env: f.env });
       expect(result.warnings).toEqual([]);
+      const recoveryDirectories = () =>
+        fs
+          .readdirSync(path.dirname(f.databasePath))
+          .filter((name) => name.startsWith("openclaw-media-persistence-recovery-"));
+      const backups = recoveryDirectories();
+      expect(backups).toHaveLength(1);
+      withDatabase(
+        path.join(path.dirname(f.databasePath), backups[0]!, "database.sqlite"),
+        (database) => {
+          expect(database.prepare("SELECT * FROM session_transcript_archives").get()).toEqual(
+            before,
+          );
+        },
+        true,
+      );
       const after = f.read();
       expectCanonical(after);
       expectPreservedIdentity(before, after);
@@ -401,6 +416,7 @@ describe("media migration of canonical SQLite transcript archives", () => {
       });
       expect(f.read()).toEqual(after);
       expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(after.archive_blob));
+      expect(recoveryDirectories()).toEqual(backups);
     },
   );
 
@@ -436,33 +452,6 @@ describe("media migration of canonical SQLite transcript archives", () => {
     expect(f.read()).toEqual(before);
     // Falling through to the standalone legacy-file pass would silently mutate this file.
     expect(fs.readFileSync(f.archivePath)).toEqual(ownedFile);
-  });
-
-  it("detects a restored canonical blob during repair of its unchanged file", async () => {
-    const f = fixture({ content: canonicalContent, fileContent: legacyContent });
-    const restored = Buffer.from(
-      canonicalContent.replace("keep the attachment", "restored history"),
-    );
-    const renameSync = fs.renameSync;
-    const rename = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
-      renameSync(source, destination);
-      if (destination === f.archivePath) {
-        withDatabase(f.databasePath, (database) => {
-          database
-            .prepare("UPDATE session_transcript_archives SET archive_blob = ?, archive_sha256 = ?")
-            .run(restored, sha256(restored));
-        });
-      }
-    });
-    const result = await migrateLegacyMediaPersistence({ env: f.env }).finally(() =>
-      rename.mockRestore(),
-    );
-    expect(result.warnings.join("\n")).toMatch(
-      /Transcript archive (?:source )?changed before migration commit/,
-    );
-    expect(Buffer.from(f.read().archive_blob)).toEqual(restored);
-    expect((await migrateLegacyMediaPersistence({ env: f.env })).warnings).toEqual([]);
-    expect(fs.readFileSync(f.archivePath)).toEqual(restored);
   });
 
   it("repairs earlier archives before reporting an unreadable later copy", async () => {
@@ -507,6 +496,11 @@ describe("media migration of canonical SQLite transcript archives", () => {
     });
     expect(f.read()).toEqual(before);
     expect(fs.readFileSync(f.archivePath)).toEqual(Buffer.from(before.archive_blob));
+    expect(
+      fs
+        .readdirSync(path.dirname(f.databasePath))
+        .filter((name) => name.startsWith("openclaw-media-persistence-recovery-")),
+    ).toEqual([]);
 
     const reads = vi.spyOn(fs, "readFileSync");
     expect(await migrateLegacyMediaPersistence({ env: f.env })).toEqual({

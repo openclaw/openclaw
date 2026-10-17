@@ -2,6 +2,7 @@ import {
   captureSqliteWorkerClosePolicy,
   ensureSqliteLibrarySelected,
 } from "../../infra/bun-sqlite-library.js";
+import { getDatabaseEngineSelection } from "../../infra/database-engine/context.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import {
@@ -9,11 +10,22 @@ import {
   type UsageCostWorkerInput,
   type UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
 import {
   resolveWorkerPoolSize,
   SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
 } from "../../infra/worker-pool-sizing.js";
-import { createOwnedWorkerTaskPool, WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import {
+  createOwnedWorkerTaskPool,
+  WorkerTaskError,
+  WorkerTaskPool,
+} from "../../infra/worker-task-pool.js";
+import type { WorkerTaskOptions } from "../../infra/worker-task-pool.types.js";
+import { registerOpenClawAgentDatabaseReadCandidateResource } from "../../state/openclaw-agent-db-resources.js";
+import { observeOpenClawDatabaseMaintenanceResource } from "../../state/openclaw-state-db-async-lifecycle.js";
+import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
+import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import type {
   SessionHistoryWorkerInput,
   SessionTranscriptWorkerInput,
@@ -21,22 +33,124 @@ import type {
 } from "./session-transcript-worker.types.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
+// V8's default young generation lets each idle reader keep ~60 MiB of nursery.
+const SESSION_TRANSCRIPT_WORKER_LIMITS = {
+  maxOldGenerationSizeMb: 512,
+  maxYoungGenerationSizeMb: 32,
+};
+
+type RetainedStore = {
+  revoked: boolean;
+  releases: (() => void)[];
+  close(this: void): Promise<void>;
+};
 
 export function createSessionTranscriptReadPool<Input extends SessionTranscriptWorkerInput>(
   maxWorkers: number,
   sharedCompute = false,
 ) {
-  return new WorkerTaskPool<Input, SessionTranscriptWorkerReply<Input["kind"]>>({
+  const pool = new WorkerTaskPool<Input, SessionTranscriptWorkerReply<Input["kind"]>>({
     workerUrl,
     prepareWorker: () => {
       // Bun loads one SQLite library per process; workers inherit the parent's selection.
       ensureSqliteLibrarySelected();
-      return { options: {} };
+      return { options: { workerData: { databaseEngineSelection: getDatabaseEngineSelection() } } };
     },
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+    workerOptions: { resourceLimits: SESSION_TRANSCRIPT_WORKER_LIMITS },
     maxWorkers,
     sharedCompute,
   });
+  const stores = new Map<string, RetainedStore>();
+  function retainStore(storePath: string) {
+    let retained = stores.get(storePath);
+    if (!retained) {
+      const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
+      const candidate = captureSessionStoreReadCandidate(
+        target.path,
+        target.agentId || target.shared ? undefined : "sibling-family",
+      );
+      const owned: RetainedStore = {
+        revoked: false,
+        releases: [],
+        async close(this: void) {
+          // Replies leave cached native readers alive; join worker exit before deleting a store.
+          await pool.rotate();
+          for (const release of owned.releases) {
+            release();
+          }
+          if (stores.get(storePath) === owned) {
+            stores.delete(storePath);
+          }
+        },
+      };
+      try {
+        for (const pathname of new Set([candidate.path, candidate.physicalPath])) {
+          owned.releases.push(
+            registerOpenClawAgentDatabaseReadCandidateResource({
+              path: pathname,
+              scope: candidate.scope,
+              revoke: () => {
+                owned.revoked = true;
+              },
+              close: owned.close,
+            }),
+          );
+        }
+      } catch (error) {
+        for (const release of owned.releases) {
+          release();
+        }
+        throw error;
+      }
+      stores.set(storePath, owned);
+      retained = owned;
+    }
+    for (const release of retained.releases) {
+      observeOpenClawDatabaseMaintenanceResource(release);
+    }
+    return retained;
+  }
+  registerOpenClawStateDatabaseAsyncResource({
+    phase: "after-resources",
+    async close(identity) {
+      if (identity) {
+        return;
+      }
+      const closing = [...stores.values()];
+      for (const store of closing) {
+        store.revoked = true;
+      }
+      await Promise.all(closing.map((store) => store.close()));
+    },
+  });
+  return {
+    async run(
+      input: Input,
+      options: WorkerTaskOptions<Input>,
+      databases: {
+        storePaths: readonly string[];
+        admissionPaths: readonly string[];
+        families?: readonly string[];
+      },
+    ) {
+      // Register before admission yields; cleanup also owns reads waiting to dispatch.
+      const retained = databases.storePaths.map(retainStore);
+      return runWithSqliteDatabaseAdmissionTurn(
+        databases.admissionPaths,
+        () =>
+          pool.run(() => {
+            if (retained.some((store) => store.revoked)) {
+              throw new WorkerTaskError(
+                "Session transcript database read was revoked",
+                "unavailable",
+              );
+            }
+            return input;
+          }, options),
+        databases.families,
+      );
+    },
+  };
 }
 
 export function createSessionTranscriptHistoryPool(
@@ -49,7 +163,7 @@ export function createSessionTranscriptHistoryPool(
   >(
     {
       workerUrl,
-      workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+      workerOptions: { resourceLimits: SESSION_TRANSCRIPT_WORKER_LIMITS },
       maxWorkers,
       idleTimeoutMs: 0,
       burstIdleTimeoutMs: 30_000,
@@ -58,7 +172,9 @@ export function createSessionTranscriptHistoryPool(
         // Early workers stay conservative if native-close qualification was still pending.
         canCloseNativeResources =
           captureSqliteWorkerClosePolicy() && (canCloseNativeResources ?? true);
-        return { options: {} };
+        return {
+          options: { workerData: { databaseEngineSelection: getDatabaseEngineSelection() } },
+        };
       },
     },
     { databaseAccess: "read-only" },
@@ -76,14 +192,14 @@ export function createSessionTranscriptHistoryPool(
 function createUsageCostPool(kind: "read" | "refresh") {
   return new WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>({
     workerUrl,
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+    workerOptions: { resourceLimits: SESSION_TRANSCRIPT_WORKER_LIMITS },
     // A retired task releases lane-wide database custody, which requires one native worker.
     workerClass: kind === "refresh" ? "writer" : "singleton",
     // Host writes can wait for a writer-held shared-compute reader; neither usage lane may hold its permit.
     idleTimeoutMs: 0,
     prepareWorker: () => {
       ensureSqliteLibrarySelected();
-      return { options: {} };
+      return { options: { workerData: { databaseEngineSelection: getDatabaseEngineSelection() } } };
     },
     validateResult(reply) {
       if (!reply.ok) {

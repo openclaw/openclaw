@@ -6,7 +6,7 @@ import { getContextEngineRegistration } from "../context-engine/registry.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
-  getRegisteredEventKeys,
+  hasInternalHookListeners,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
@@ -316,7 +316,7 @@ describe("loadOpenClawPlugins", () => {
       { level: "warn", message: "reload registration missing prefixes" },
       { level: "error", message: "plugin failed during register: Error: boom" },
     ]);
-    expect(getRegisteredEventKeys()).toStrictEqual([]);
+    expect(hasInternalHookListeners("gateway", "startup")).toBe(false);
     expect(getPluginCommandSpecs()).toStrictEqual([]);
     expect(registry.reloads).toStrictEqual([]);
     expect(registry.nodeHostCommands).toStrictEqual([]);
@@ -432,7 +432,7 @@ describe("loadOpenClawPlugins", () => {
     expect(record?.failurePhase).toBe("register");
     expect(record?.error).toContain("hook registration missing name");
     expect(registry.hooks).toStrictEqual([]);
-    expect(getRegisteredEventKeys()).toStrictEqual([]);
+    expect(hasInternalHookListeners("gateway", "startup")).toBe(false);
     expectDiagnosticContaining({
       registry,
       level: "error",

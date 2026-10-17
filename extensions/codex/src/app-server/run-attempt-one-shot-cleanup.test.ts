@@ -13,10 +13,18 @@ import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
-import { isJsonObject } from "./protocol.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import {
+  flattenCodexDynamicToolFunctions,
+  isJsonObject,
+  type CodexDynamicToolSpec,
+} from "./protocol.js";
+import {
+  createCodexRuntimePlanFixture,
   createNativeRunParams as createParams,
+  createRuntimeDynamicTool,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
@@ -86,6 +94,105 @@ describe("Codex one-shot cleanup receipts", () => {
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
     clearRuntimeConfigSnapshot();
+  });
+
+  it("reuses the shared process across background turns that release their MCP resources", async () => {
+    const responses: Record<string, unknown> = {
+      initialize: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+      "thread/start": threadStartResult(),
+      "turn/start": turnStartResult(),
+    };
+    const harness = createInferenceReadyClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line) as { id?: number; method: string };
+        if (request.id !== undefined) {
+          send({ id: request.id, result: responses[request.method] ?? {} });
+        }
+      },
+    });
+    const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    for (let index = 0; index < 2; index++) {
+      const params = createParams(
+        path.join(tempDir, `background-${index}.jsonl`),
+        path.join(tempDir, "workspace"),
+      );
+      params.cleanupBundleMcpOnRunEnd = true;
+      setRuntimeConfigSnapshot(params.config ?? {});
+      const run = runCodexAppServerAttempt(params, {
+        bindingStore: testCodexAppServerBindingStore,
+      });
+      try {
+        await run.waitForTurnAccepted();
+        harness.send({
+          method: "turn/completed",
+          params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
+        });
+        expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+        expect(harness.client.getCloseError()).toBeUndefined();
+      } finally {
+        await run.catch(() => undefined);
+      }
+    }
+    expect(start).toHaveBeenCalledOnce();
+    expect(
+      harness.writes.filter((line) => JSON.parse(line).method === "thread/unsubscribe"),
+    ).toHaveLength(2);
+  });
+
+  it("uses host-owned tools for strict one-shot Codex runs", async () => {
+    const responses: Record<string, unknown> = {
+      initialize: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+      "config/read": { config: {}, layers: [] },
+      "configRequirements/read": { requirements: null },
+      "thread/start": threadStartResult(),
+      "turn/start": turnStartResult(),
+      "thread/backgroundTerminals/list": { data: [], nextCursor: null },
+    };
+    const harness = createInferenceReadyClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line) as { id?: number; method: string };
+        if (request.id !== undefined) {
+          send({ id: request.id, result: responses[request.method] ?? {} });
+        }
+      },
+    });
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.oneShotCliRun = true;
+    params.cleanupBundleMcpOnRunEnd = true;
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    setCodexTestToolFactory(params, () => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    setRuntimeConfigSnapshot({});
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
+    const run = runCodexAppServerAttempt(params, { bindingStore: testCodexAppServerBindingStore });
+    try {
+      await run.waitForTurnAccepted();
+      const start = await waitForHarnessRequest(harness, "thread/start");
+      expect(start.params).toMatchObject({ config: { "features.code_mode": false } });
+      const { dynamicTools } = start.params as { dynamicTools: CodexDynamicToolSpec[] };
+      expect(
+        flattenCodexDynamicToolFunctions(dynamicTools)
+          .map((tool) => tool.name)
+          .toSorted(),
+      ).toEqual(["exec", "message", "process"]);
+      await waitForHarnessRequest(harness, "turn/start");
+      harness.send({
+        method: "turn/completed",
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
+      });
+      expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+    } finally {
+      harness.client.close();
+      await run.catch(() => undefined);
+    }
   });
 
   it.each(["completed", "cancelled"] as const)(

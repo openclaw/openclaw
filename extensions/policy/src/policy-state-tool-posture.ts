@@ -12,7 +12,7 @@ import {
 } from "./policy-state-helpers.js";
 import type { PolicyToolPostureEvidence } from "./policy-state-types.js";
 
-type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
+type ExecMode = ReturnType<typeof resolveExecModePolicy>["mode"];
 
 export function scanPolicyToolPosture(
   cfg: Record<string, unknown>,

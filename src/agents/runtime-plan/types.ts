@@ -1,3 +1,4 @@
+import type { ModelThinkingLevel } from "@openclaw/llm-core/types";
 import type { TSchema } from "typebox";
 import type {
   ModelApi,
@@ -15,15 +16,7 @@ import type { TranscriptPolicy } from "../transcript-policy.types.js";
 
 export type AgentRuntimeTransport = "sse" | "websocket" | "websocket-cached" | "auto";
 
-type AgentRuntimeThinkLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max";
+type AgentRuntimeThinkLevel = ModelThinkingLevel | "adaptive";
 
 type AgentRuntimePromptMode = "full" | "minimal" | "none";
 
@@ -192,12 +185,6 @@ type AgentRuntimeToolPlan = {
 };
 
 export type AgentRuntimeDeliveryPlan = {
-  isSilentPayload(
-    payload: Pick<
-      AgentRuntimeReplyPayload,
-      "text" | "mediaUrl" | "mediaUrls" | "presentation" | "interactive" | "channelData"
-    >,
-  ): boolean;
   resolveFollowupRoute(params: {
     payload: AgentRuntimeReplyPayload;
     originatingChannel?: string;
@@ -250,6 +237,8 @@ export type BuildAgentRuntimeDeliveryPlanParams = {
 };
 
 export type BuildAgentRuntimePlanParams = BuildAgentRuntimeDeliveryPlanParams & {
+  /** Current transport/auth config; prompt and tool policy retain the admitted config. */
+  transportConfig?: unknown;
   model?: AgentRuntimeModel;
   modelApi?: string | null;
   harnessId?: string;

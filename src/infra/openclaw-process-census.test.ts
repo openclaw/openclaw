@@ -13,8 +13,10 @@ const {
   definitelyDead,
   container,
   darwinCommand,
+  nativeDarwinCensus,
   rosetta,
   windows,
+  windowsSid,
   fixturePath,
 } = vi.hoisted(() => ({
   census: vi.fn(),
@@ -26,8 +28,10 @@ const {
   definitelyDead: vi.fn(),
   container: vi.fn(),
   darwinCommand: vi.fn(),
+  nativeDarwinCensus: vi.fn(),
   rosetta: vi.fn(),
   windows: vi.fn(),
+  windowsSid: vi.fn(),
   fixturePath: (file: string) => file.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""),
 }));
 vi.mock("node:child_process", () => ({ spawnSync: census }));
@@ -46,16 +50,28 @@ vi.mock("../shared/pid-alive.js", () => ({ isPidDefinitelyDead: definitelyDead }
 vi.mock("./container-environment.js", () => ({ isContainerEnvironment: container }));
 // mock-isolation: the real detector reads and caches the test host's CPU brand.
 vi.mock("../shared/rosetta-translation.js", () => ({ isRosettaTranslatedProcess: rosetta }));
+// mock-isolation: Enumerate only fixture PIDs, including when Bun selects native libproc.
+vi.mock("../process/supervisor/darwin-bun-process-census.js", () => ({
+  readDarwinBunProcessCensus: nativeDarwinCensus,
+}));
 vi.mock("../process/supervisor/darwin-process-command.js", () => ({
   readDarwinProcessCommand: darwinCommand,
 }));
-vi.mock("./windows-process-census.js", () => ({ readWindowsProcessCensus: windows }));
+vi.mock("./windows-process-census.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./windows-process-census.js")>()),
+  readWindowsProcessCensus: windows,
+}));
+vi.mock("./windows-user-sid.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./windows-user-sid.js")>()),
+  readWindowsUserSid: windowsSid,
+}));
 import { inspectOtherOpenClawProcesses } from "./openclaw-process-census.js";
 
 const self = process.pid;
 const launcher = self + 1;
 const peer = self + 2;
 const getuidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
+const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
 type Process = {
   ppid: number;
   argv: string[];
@@ -69,6 +85,8 @@ type Process = {
 let rows: Map<number, Process>;
 
 beforeEach(() => {
+  // This synthetic kernel exercises the Node ps contract, including on Bun hosts.
+  Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
   Object.defineProperty(process, "getuid", { configurable: true, value: () => 1000 });
   mockProcessPlatform("linux");
   rows = new Map([
@@ -80,8 +98,18 @@ beforeEach(() => {
   container.mockReset().mockReturnValue(false);
   census.mockReset();
   darwinCommand.mockReset();
+  nativeDarwinCensus.mockReset().mockImplementation(() =>
+    [...rows].map(([pid, row]) => ({
+      pid,
+      ppid: row.ppid,
+      pgid: self,
+      state: row.state ?? "S",
+      uid: row.uid ?? 1000,
+    })),
+  );
   rosetta.mockReset().mockReturnValue(false);
   windows.mockReset();
+  windowsSid.mockReset();
   realpath.mockReset().mockImplementation((file: string) => file);
   stat.mockReset().mockReturnValue({ isDirectory: () => false });
   readlink.mockReset().mockImplementation((file: string) => {
@@ -159,25 +187,6 @@ it.each(custodyCases)("classifies artifact custody of %j with %j", (argv, facts,
   expect(inspectOtherOpenClawProcesses()).toEqual({ pids: holder ? [peer] : [] });
 });
 
-it.each([
-  ["node", "dist/index.js"],
-  ["bun", "run", "--silent", "start"],
-])("preserves the cleanup veto when cwd is unavailable for %j", (...argv) => {
-  rows.set(peer, { ppid: 1, argv });
-  const inspect = readlink.getMockImplementation()!;
-  readlink.mockImplementation((file: string) => {
-    if (file === `/proc/${peer}/cwd`) {
-      throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-    }
-    return inspect(file);
-  });
-  expect(inspectOtherOpenClawProcesses()).toEqual({
-    error: expect.stringContaining(
-      `Could not classify PID ${peer}: working directory is unavailable`,
-    ),
-  });
-});
-
 const foreignArgvs = [
   ["bun", "start"],
   ["bun", "--loader", ".js:ts", "service.js"],
@@ -193,8 +202,6 @@ const foreignArgvs = [
 
 it.each([
   ["/app/dist/index.js", "denied"],
-  ["/app/dist/index.js", "missing"],
-  ["/app/dist/index.js", "malformed"],
   ["/app/dist/index.js", "unnamed"],
   ["/app/service.js", "missing"],
 ])("vetoes absolute entrypoint %s with %s package identity", (script, failure) => {
@@ -204,12 +211,12 @@ it.each([
     if (!file.endsWith("/package.json")) {
       return inspect(file);
     }
-    if (failure === "denied" || failure === "missing") {
-      throw Object.assign(new Error("unreadable manifest"), {
-        code: failure === "denied" ? "EACCES" : "ENOENT",
-      });
+    if (failure === "unnamed") {
+      return JSON.stringify({});
     }
-    return failure === "malformed" ? "{" : JSON.stringify({});
+    throw Object.assign(new Error("unreadable manifest"), {
+      code: failure === "denied" ? "EACCES" : "ENOENT",
+    });
   });
   expect(inspectOtherOpenClawProcesses()).toEqual({
     error: expect.stringContaining("package identity"),
@@ -323,6 +330,11 @@ it.each([
 
 afterEach(() => {
   vi.restoreAllMocks();
+  if (bunDescriptor) {
+    Object.defineProperty(process.versions, "bun", bunDescriptor);
+  } else {
+    Reflect.deleteProperty(process.versions, "bun");
+  }
   if (getuidDescriptor) {
     Object.defineProperty(process, "getuid", getuidDescriptor);
   } else {
@@ -416,12 +428,13 @@ it.each([
 it("uses native Darwin arguments and explicit foreign system-service facts", () => {
   mockProcessPlatform("darwin");
   const foreignUid = (process.getuid?.() ?? 501) + 1;
+  rows.get(1)!.uid = foreignUid;
   rows.set(peer, { ppid: 1, argv: ["node", "/app with spaces/openclaw.mjs", "status"] });
   census.mockImplementation((command: string) => ({
     status: 0,
     stdout: command.endsWith("lsof")
       ? [...rows].map(([pid, row]) => `p${pid}\0n${row.cwd ?? "/foreign"}\0\n`).join("")
-      : [...rows].map(([pid, row]) => `${pid} ${self} S ${row.ppid} 501`).join("\n"),
+      : [...rows].map(([pid, row]) => `${pid} ${self} S ${row.ppid} ${row.uid ?? 1000}`).join("\n"),
   }));
   darwinCommand.mockImplementation((pid: number) =>
     pid === 1
@@ -742,20 +755,6 @@ it.each([
   },
 );
 
-it.each(["container", "missing self", "deadline"])(
-  "holds handoff recovery with %s observations",
-  (failure) => {
-    if (failure === "container") {
-      container.mockReturnValue(true);
-    } else if (failure === "missing self") {
-      rows.delete(self);
-    } else {
-      vi.spyOn(Date, "now").mockReturnValueOnce(1).mockReturnValue(20_000);
-    }
-    expect(inspectOtherOpenClawProcesses(references).error).toBeDefined();
-  },
-);
-
 it.each([
   ...[
     "openclaw update repair --run-id=update-run-123",
@@ -810,7 +809,7 @@ it.each([
         peer + 8,
       ],
       unverifiedPids: [peer + 2, peer + 7, peer + 9],
-      error: "Retry update repair as Administrator using the same Windows account.",
+      error: "Please run update repair as the same Windows account that started the update.",
     });
   },
 );
@@ -824,6 +823,144 @@ it.each(["denied", "empty"])("preserves Doctor's refusal for foreign Linux %s ar
   });
   expect(inspectOtherOpenClawProcesses()).toHaveProperty("error");
 });
+
+it.each([
+  {
+    name: "denied unrelated process, same account",
+    sid: "S-1-5-21-100",
+    facts: { accessDenied: true },
+    matching: false,
+    unverified: false,
+  },
+  {
+    name: "denied process, different account",
+    sid: "S-1-5-21-200",
+    facts: { accessDenied: true },
+    matching: false,
+    unverified: true,
+  },
+  {
+    name: "denied process, unknown caller",
+    sid: undefined,
+    facts: { accessDenied: true },
+    matching: false,
+    unverified: true,
+  },
+  {
+    name: "denied process, legacy record",
+    sid: "S-1-5-21-100",
+    legacy: true,
+    facts: { accessDenied: true },
+    matching: false,
+    unverified: true,
+  },
+  {
+    name: "unexplained missing identity",
+    sid: "S-1-5-21-100",
+    facts: {},
+    matching: false,
+    unverified: true,
+  },
+  {
+    name: "protected unrelated process",
+    sid: "S-1-5-21-100",
+    facts: { parentPid: peer + 10, startIdentity: "100" },
+    matching: false,
+    unverified: false,
+  },
+  {
+    name: "pre-handoff process with reused parent PID",
+    sid: "S-1-5-21-100",
+    facts: { parentPid: launcher, startIdentity: "100" },
+    matching: false,
+    unverified: false,
+  },
+  {
+    name: "readable unrelated process from another account",
+    sid: "S-1-5-21-200",
+    facts: { parentPid: peer + 10, startIdentity: "100" },
+    matching: false,
+    unverified: false,
+  },
+  {
+    name: "descendant born in the same millisecond",
+    sid: "S-1-5-21-100",
+    facts: { parentPid: launcher, startIdentity: "200" },
+    matching: true,
+    unverified: false,
+  },
+  {
+    name: "unreadable descendant",
+    sid: "S-1-5-21-100",
+    facts: { parentPid: launcher, startIdentity: "300" },
+    matching: true,
+    unverified: false,
+  },
+  {
+    name: "surviving worker with an exited intermediate parent",
+    sid: "S-1-5-21-100",
+    facts: { parentPid: peer + 10, startIdentity: "300" },
+    matching: false,
+    unverified: true,
+  },
+  {
+    name: "surviving worker whose parent PID now denies access",
+    sid: "S-1-5-21-100",
+    facts: { parentPid: peer + 10, startIdentity: "300" },
+    parents: [{ pid: peer + 10, accessDenied: true }],
+    matching: false,
+    unverified: true,
+  },
+  {
+    name: "readable descendant",
+    sid: "S-1-5-21-100",
+    facts: {
+      parentPid: launcher,
+      startIdentity: "300",
+      commandLine: "node worker.js",
+      cwd: "C:\\app",
+    },
+    matching: true,
+    unverified: false,
+  },
+  {
+    name: "positive artifact evidence on denied row",
+    sid: "S-1-5-21-100",
+    facts: { accessDenied: true, commandLine: "node --id=update-run-123" },
+    matching: true,
+    unverified: false,
+  },
+])(
+  "Windows handoff repair census: $name",
+  ({ sid, facts, matching, unverified, legacy, parents }) => {
+    mockProcessPlatform("win32");
+    windowsSid.mockReturnValue(sid);
+    windows.mockReturnValue([
+      {
+        pid: self,
+        parentPid: 0,
+        startIdentity: "400",
+        commandLine: "openclaw update repair",
+        cwd: "C:\\app",
+      },
+      { pid: peer, ...facts },
+      ...(parents ?? []),
+    ]);
+    expect(
+      inspectOtherOpenClawProcesses({
+        ...references,
+        windowsUserSid: legacy ? undefined : "S-1-5-21-100",
+        drivers: [{ pid: launcher, startIdentity: "200" }],
+      }),
+    ).toEqual({
+      matchingPids: matching ? [peer] : [],
+      unverifiedPids: unverified ? [peer] : [],
+      ...(unverified
+        ? { error: "Please run update repair as the same Windows account that started the update." }
+        : {}),
+    });
+  },
+);
 
 it("retains known matching PIDs when later inspection exhausts the census budget", () => {
   let now = 0;

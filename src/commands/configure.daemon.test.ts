@@ -4,11 +4,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 
+const runtime = vi.hoisted(() => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() }));
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: { ...actual.defaultRuntime, ...runtime },
+  };
+});
+
 const progressSetLabel = vi.hoisted(() => vi.fn());
 const loadConfig = vi.hoisted(() => vi.fn());
 const resolveGatewayInstallToken = vi.hoisted(() => vi.fn());
-const readDaemonRuntimePinForInstall = vi.hoisted(() => vi.fn());
-vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall }));
+const readDaemonRuntimePinForInstall = vi.hoisted(() =>
+  vi.fn<typeof import("../daemon/runtime-pin-state.js").readDaemonRuntimePinForInstall>(),
+);
+// mock-isolation: Service-planning fixtures replace pin admission without opening stores or native locks.
+vi.mock("../daemon/runtime-pin-state.js", () => ({
+  readDaemonRuntimePinForInstall,
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T): Promise<T> =>
+    read(),
+}));
 const runExec = vi.hoisted(() => vi.fn());
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
@@ -74,7 +90,6 @@ vi.mock("./systemd-linger.js", () => ({
 
 function runInstall(daemonRuntime?: Parameters<typeof maybeInstallDaemon>[0]["daemonRuntime"]) {
   return maybeInstallDaemon({
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     port: 18789,
     daemonRuntime,
   });
@@ -83,11 +98,12 @@ function runInstall(daemonRuntime?: Parameters<typeof maybeInstallDaemon>[0]["da
 describe("maybeInstallDaemon", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    runtime.exit.mockReset();
     readDaemonRuntimePinForInstall.mockReturnValue({ revision: "empty", stored: false });
     runExec.mockReset().mockResolvedValue({
       stdout: JSON.stringify({
         nodeVersion: "26.8.1",
-        bunVersion: "1.4.2",
+        bunVersion: "1.4.3",
         sqliteVersion: "3.53.4",
         sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       }),
@@ -141,15 +157,11 @@ describe("maybeInstallDaemon", () => {
       output: new PassThrough(),
     });
     select.mockResolvedValueOnce("reinstall").mockResolvedValueOnce(cancelled);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("setup cancelled");
-      }),
-    };
+    runtime.exit.mockImplementationOnce(() => {
+      throw new Error("setup cancelled");
+    });
 
-    await expect(maybeInstallDaemon({ runtime, port: 18789 })).rejects.toThrow("setup cancelled");
+    await expect(maybeInstallDaemon({ port: 18789 })).rejects.toThrow("setup cancelled");
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(serviceUninstall).not.toHaveBeenCalled();
@@ -162,13 +174,13 @@ describe("maybeInstallDaemon", () => {
       typeof import("./daemon-install-helpers.js")
     >("./daemon-install-helpers.js");
     const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
     const discoverNode = vi
       .spyOn(runtimePaths, "resolvePreferredNodePath")
       .mockResolvedValue(undefined);
     const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
       status: "supported",
-      version: "1.4.2",
+      version: "1.4.3",
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       nodeSharedSqlite: false,
@@ -251,7 +263,7 @@ describe("maybeInstallDaemon", () => {
   it.each([undefined, "node"] as const)(
     "carries installed pin intent through setup (explicit=%s)",
     async (daemonRuntime) => {
-      const pin = { runtime: "bun", path: "/opt/pinned/bun" };
+      const pin = { runtime: "bun", path: "/opt/pinned/bun" } as const;
       const expected = { revision: "installed-pin", stored: true, pin };
       const existingCommand = {
         programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],

@@ -242,7 +242,7 @@ describe("ingress retry policy", () => {
     });
   });
 
-  it("bounds a wrapped session-start conflict at the configured attempt budget", () => {
+  it("keeps wrapped session-start conflicts under both retry and age gates", () => {
     const maxAttempts = 3;
     const message = 'Session "agent:main:telegram:direct:1" changed while starting work. Retry.';
     const conflict = Object.assign(new Error(message), {
@@ -295,10 +295,18 @@ describe("ingress retry policy", () => {
       now: 2_000,
     });
     expect(atLimit).toEqual({
-      kind: "fail",
-      reason: "session-start-conflict-retry-limit",
+      kind: "release",
       message: wrapped.message,
       attempt: maxAttempts,
     });
+    expect(
+      resolveIngressFailureDisposition({
+        err: wrapped,
+        event: { receivedAt: 1_000, attempts: maxAttempts - 1 },
+        formatError: coerceErrorMessage,
+        config: { maxAttempts },
+        now: 1_000 + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+      }),
+    ).toMatchObject({ kind: "fail", reason: "retry-limit-exceeded", attempt: maxAttempts });
   });
 });

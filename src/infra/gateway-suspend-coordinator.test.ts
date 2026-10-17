@@ -13,7 +13,6 @@ import {
   getGatewaySuspendAdmissionPhase,
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
-  onGatewaySuspendAdmissionChange,
   resetGatewayWorkAdmission,
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
@@ -27,6 +26,7 @@ import {
 import { inspectors } from "./gateway-suspend-coordinator.test-support.js";
 
 const SUSPEND_TTL_MS = 2 * 60_000;
+const DRAIN_BUDGET_MS = 45_000;
 const SUSPEND_BUSY_RETRY_AFTER_MS = 20_000;
 
 beforeEach(() => {
@@ -115,7 +115,7 @@ describe("gateway suspend coordinator", () => {
     ).toEqual({
       status: "draining",
       suspensionId: "suspension-preserve-drain",
-      expiresAtMs: 1_000 + SUSPEND_TTL_MS,
+      expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
       retryAfterMs: 5_000,
       activeCount: 3,
       writeCustody: [{ phase: "terminal-persistence", count: 1 }],
@@ -139,7 +139,7 @@ describe("gateway suspend coordinator", () => {
     terminalSessions = 0;
     expect(getGatewaySuspendStatus("suspension-preserve-drain")).toEqual({
       status: "draining",
-      expiresAtMs: 1_000 + SUSPEND_TTL_MS,
+      expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
       retryAfterMs: 5_000,
       activeCount: 1,
       blockers: [{ kind: "reply", count: 1, message: "1 pending reply delivery operation(s)" }],
@@ -150,7 +150,7 @@ describe("gateway suspend coordinator", () => {
     pendingReplies = 0;
     expect(getGatewaySuspendStatus("suspension-preserve-drain")).toEqual({
       status: "ready",
-      expiresAtMs: 1_000 + SUSPEND_TTL_MS,
+      expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
       writeCustody: [],
     });
     expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
@@ -166,7 +166,7 @@ describe("gateway suspend coordinator", () => {
   });
 
   it.each(["preserve", "terminate"] as const)(
-    "renews the same %s drain and rejects conflicting request, policy, or drain modes",
+    "retains the absolute deadline of the same %s drain and rejects conflicting request, policy, or drain modes",
     (terminalPolicy) => {
       let queued = 2;
       let nowMs = 1_000;
@@ -189,7 +189,7 @@ describe("gateway suspend coordinator", () => {
       expect(prepareGatewaySuspend(params)).toMatchObject({
         status: "draining",
         suspensionId: "suspension-drain-renewal",
-        expiresAtMs: 1_000 + SUSPEND_TTL_MS,
+        expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
         activeCount: 2,
       });
 
@@ -198,7 +198,7 @@ describe("gateway suspend coordinator", () => {
       expect(prepareGatewaySuspend(params)).toMatchObject({
         status: "draining",
         suspensionId: "suspension-drain-renewal",
-        expiresAtMs: 2_000 + SUSPEND_TTL_MS,
+        expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
         activeCount: 1,
       });
       const otherTerminalPolicy = terminalPolicy === "preserve" ? "terminate" : "preserve";
@@ -209,7 +209,7 @@ describe("gateway suspend coordinator", () => {
       ] satisfies Partial<typeof params>[]) {
         expect(prepareGatewaySuspend({ ...params, ...conflict })).toEqual({
           status: "conflict",
-          expiresAtMs: 2_000 + SUSPEND_TTL_MS,
+          expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
         });
       }
       expect(pauseScheduling).toHaveBeenCalledOnce();
@@ -219,7 +219,7 @@ describe("gateway suspend coordinator", () => {
       expect(prepareGatewaySuspend(params)).toEqual({
         status: "ready",
         suspensionId: "suspension-drain-renewal",
-        expiresAtMs: 3_000 + SUSPEND_TTL_MS,
+        expiresAtMs: 1_000 + DRAIN_BUDGET_MS,
         activeCount: 0,
         blockers: [],
         writeCustody: [],
@@ -299,103 +299,10 @@ describe("gateway suspend coordinator", () => {
     ).toMatchObject({ status: "ready", activeCount: 0, blockers: [] });
   });
 
-  it("keeps admission closed until a failed busy rollback resumes scheduling", () => {
-    vi.useFakeTimers();
-    try {
-      const resumeScheduling = vi
-        .fn()
-        .mockImplementationOnce(() => {
-          throw new Error("timer unavailable");
-        })
-        .mockImplementationOnce(() => {});
-      const first = prepareGatewaySuspend({
-        requestId: "request-busy-resume-retry",
-        pauseScheduling: vi.fn(),
-        resumeScheduling,
-        inspect: inspectors({ getQueueSize: () => 1 }),
-      });
-
-      expect(first).toEqual({
-        status: "recovering",
-        reason: "scheduler-resume-failed",
-        retryAfterMs: 1_000,
-      });
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-      expect(getGatewaySuspendStatus("stale-id")).toEqual(first);
-      expect(resumeGatewaySuspend("stale-id")).toEqual({
-        ok: false,
-        reason: "scheduler-resume-failed",
-        retryAfterMs: 1_000,
-      });
-      expect(
-        prepareGatewaySuspend({
-          requestId: "request-before-scheduler-resume",
-          pauseScheduling: vi.fn(),
-          resumeScheduling,
-          inspect: inspectors(),
-        }),
-      ).toEqual(first);
-
-      vi.advanceTimersByTime(1_000);
-      expect(resumeScheduling).toHaveBeenCalledTimes(2);
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-      expect(getGatewaySuspendStatus("stale-id")).toEqual({ status: "running" });
-
-      expect(
-        prepareGatewaySuspend({
-          requestId: "request-after-scheduler-resume",
-          pauseScheduling: vi.fn(),
-          resumeScheduling,
-          inspect: inspectors(),
-          createSuspensionId: () => "suspension-after-scheduler-resume",
-        }),
-      ).toMatchObject({
-        status: "ready",
-        suspensionId: "suspension-after-scheduler-resume",
-      });
-      vi.advanceTimersByTime(1_000);
-      expect(resumeScheduling).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("cancels scheduler recovery when restart supersedes suspension", () => {
-    vi.useFakeTimers();
-    try {
-      const resumeScheduling = vi.fn(() => {
-        throw new Error("timer unavailable");
-      });
-      expect(
-        prepareGatewaySuspend({
-          requestId: "request-recovery-restart",
-          pauseScheduling: vi.fn(),
-          resumeScheduling,
-          inspect: inspectors({ getQueueSize: () => 1 }),
-        }),
-      ).toMatchObject({ status: "recovering" });
-
-      markGatewayRestartDraining();
-      vi.advanceTimersByTime(1_000);
-
-      expect(resumeScheduling).toHaveBeenCalledOnce();
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-      expect(getGatewaySuspendStatus("stale-id")).toEqual({ status: "running" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("owns recovery when inspection fails before admission commits", () => {
-    vi.useFakeTimers();
-    try {
-      const resumeScheduling = vi
-        .fn()
-        .mockImplementationOnce(() => {
-          throw new Error("timer unavailable");
-        })
-        .mockImplementationOnce(() => {});
-      const result = prepareGatewaySuspend({
+  it("reopens admission when inspection fails before admission commits", () => {
+    const resumeScheduling = vi.fn();
+    expect(() =>
+      prepareGatewaySuspend({
         requestId: "request-inspection-failure",
         pauseScheduling: vi.fn(),
         resumeScheduling,
@@ -404,16 +311,10 @@ describe("gateway suspend coordinator", () => {
             throw new Error("inspection failed");
           },
         }),
-      });
-
-      expect(result).toMatchObject({ status: "recovering" });
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-      vi.advanceTimersByTime(1_000);
-      expect(resumeScheduling).toHaveBeenCalledTimes(2);
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
+      }),
+    ).toThrow("inspection failed");
+    expect(resumeScheduling).toHaveBeenCalledOnce();
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
   });
 
   it("renews one ready lease and resumes only with the matching id", () => {
@@ -468,60 +369,9 @@ describe("gateway suspend coordinator", () => {
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
   });
 
-  it.each([false, true])(
-    "exposes scheduler recovery after a held lease cannot resume (drain: %s)",
-    (drain) => {
-      vi.useFakeTimers();
-      try {
-        const resumeScheduling = vi
-          .fn()
-          .mockImplementationOnce(() => {
-            throw new Error("timer unavailable");
-          })
-          .mockImplementationOnce(() => {});
-        prepareGatewaySuspend({
-          requestId: "request-resume-retry",
-          drain,
-          pauseScheduling: vi.fn(),
-          resumeScheduling,
-          inspect: inspectors({ getQueueSize: () => Number(drain) }),
-          createSuspensionId: () => "suspension-resume-retry",
-        });
-
-        expect(resumeGatewaySuspend("suspension-resume-retry")).toMatchObject({
-          ok: false,
-          reason: "scheduler-resume-failed",
-        });
-        expect(isGatewayWorkAdmissionClosed()).toBe(true);
-        expect(getGatewaySuspendStatus("suspension-resume-retry")).toMatchObject({
-          status: "recovering",
-        });
-        expect(
-          prepareGatewaySuspend({
-            requestId: "request-resume-retry",
-            pauseScheduling: vi.fn(),
-            resumeScheduling,
-            inspect: inspectors(),
-          }),
-        ).toMatchObject({ status: "recovering" });
-        expect(resumeGatewaySuspend("suspension-resume-retry")).toMatchObject({
-          ok: false,
-          reason: "scheduler-resume-failed",
-        });
-
-        vi.advanceTimersByTime(1_000);
-        expect(resumeScheduling).toHaveBeenCalledTimes(2);
-        expect(getGatewaySuspendStatus("suspension-resume-retry")).toEqual({ status: "running" });
-        expect(isGatewayWorkAdmissionClosed()).toBe(false);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
-
   it.each(
     [false, true].flatMap((drain) =>
-      [0, SUSPEND_TTL_MS / 2].flatMap((preparationMs) =>
+      [0, (drain ? DRAIN_BUDGET_MS : SUSPEND_TTL_MS) / 2].flatMap((preparationMs) =>
         [false, true].map((rollbackClock) => ({ drain, preparationMs, rollbackClock })),
       ),
     ),
@@ -531,7 +381,8 @@ describe("gateway suspend coordinator", () => {
       vi.useFakeTimers();
       try {
         const resumeScheduling = vi.fn();
-        const expiresAtMs = Date.now() + SUSPEND_TTL_MS;
+        const ttlMs = drain ? DRAIN_BUDGET_MS : SUSPEND_TTL_MS;
+        const expiresAtMs = Date.now() + ttlMs;
         expect(
           prepareGatewaySuspend({
             requestId: "request-expiry",
@@ -551,7 +402,7 @@ describe("gateway suspend coordinator", () => {
           }),
         ).toMatchObject({ status: drain ? "draining" : "ready", expiresAtMs });
 
-        vi.advanceTimersByTime(SUSPEND_TTL_MS - preparationMs - 1);
+        vi.advanceTimersByTime(ttlMs - preparationMs - 1);
         expect(resumeScheduling).not.toHaveBeenCalled();
         vi.advanceTimersByTime(1);
         expect(resumeScheduling).toHaveBeenCalledOnce();
@@ -648,89 +499,4 @@ describe("gateway suspend coordinator", () => {
       }
     },
   );
-
-  it("ignores an already-queued expiry callback after the same drain lease is renewed", () => {
-    vi.useFakeTimers();
-    try {
-      let nowMs = 1_000;
-      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-      const resumeScheduling = vi.fn();
-      const params = {
-        requestId: "request-stale-drain-expiry",
-        drain: true,
-        pauseScheduling: vi.fn(),
-        resumeScheduling,
-        inspect: inspectors({ getTerminalSessions: () => 1 }),
-        nowMs: () => nowMs,
-        createSuspensionId: () => "suspension-stale-drain-expiry",
-      };
-
-      expect(prepareGatewaySuspend(params)).toMatchObject({ status: "draining" });
-      const staleExpiry = timeoutSpy.mock.calls[0]?.[0];
-      expect(typeof staleExpiry).toBe("function");
-
-      nowMs = 2_000;
-      expect(prepareGatewaySuspend(params)).toMatchObject({
-        status: "draining",
-        expiresAtMs: 2_000 + SUSPEND_TTL_MS,
-      });
-      if (typeof staleExpiry !== "function") {
-        throw new Error("missing initial suspension expiry callback");
-      }
-      staleExpiry();
-
-      expect(resumeScheduling).not.toHaveBeenCalled();
-      expect(getGatewaySuspendAdmissionPhase()).toBe("draining");
-      expect(getGatewaySuspendStatus("suspension-stale-drain-expiry")).toMatchObject({
-        status: "draining",
-        expiresAtMs: 2_000 + SUSPEND_TTL_MS,
-      });
-
-      vi.advanceTimersByTime(SUSPEND_TTL_MS);
-      expect(resumeScheduling).toHaveBeenCalledOnce();
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    } finally {
-      vi.restoreAllMocks();
-      vi.useRealTimers();
-    }
-  });
-
-  it("enters recovery when lease expiry cannot resume the scheduler", () => {
-    vi.useFakeTimers();
-    const phases: string[] = [];
-    const unsubscribe = onGatewaySuspendAdmissionChange((phase) => phases.push(phase));
-    try {
-      const resumeScheduling = vi
-        .fn()
-        .mockImplementationOnce(() => {
-          throw new Error("timer unavailable");
-        })
-        .mockImplementationOnce(() => {});
-      prepareGatewaySuspend({
-        requestId: "request-expiry-recovery",
-        pauseScheduling: vi.fn(),
-        resumeScheduling,
-        inspect: inspectors(),
-        createSuspensionId: () => "suspension-expiry-recovery",
-      });
-
-      vi.advanceTimersByTime(SUSPEND_TTL_MS);
-      expect(getGatewaySuspendStatus("suspension-expiry-recovery")).toMatchObject({
-        status: "recovering",
-      });
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-      expect(phases).toEqual(["preparing", "prepared"]);
-
-      vi.advanceTimersByTime(1_000);
-      expect(resumeScheduling).toHaveBeenCalledTimes(2);
-      expect(getGatewaySuspendStatus("suspension-expiry-recovery")).toEqual({
-        status: "running",
-      });
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-      expect(phases).toEqual(["preparing", "prepared", "accepting"]);
-    } finally {
-      unsubscribe();
-      vi.useRealTimers();
-    }
-  });
 });

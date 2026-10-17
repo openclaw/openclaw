@@ -15,6 +15,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { expectObjectFields as expectRecordFields } from "../test-utils/mock-call-assertions.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
@@ -63,17 +64,6 @@ function createPluginCandidate(stateDir: string, pluginId: string): PluginCandid
     },
     pluginId,
   );
-}
-
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
 }
 
 afterEach(async () => {

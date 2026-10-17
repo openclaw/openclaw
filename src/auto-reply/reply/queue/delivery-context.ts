@@ -19,14 +19,12 @@ import {
   FollowupRunDeferredError,
   isFollowupRunAborted,
   type FollowupRun,
+  type InternalFollowupRun,
   type QueuedFollowupReplyBatch,
 } from "./types.js";
 
-export function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
-  return (
-    // SAFETY: queue producers attach this private marker; only literal true selects prepared input.
-    (run as FollowupRun & { currentTurnImagesPrepared?: true }).currentTurnImagesPrepared === true
-  );
+export function hasPreparedCurrentTurnImages(run: InternalFollowupRun): boolean {
+  return run.currentTurnImagesPrepared === true;
 }
 
 const QUEUED_ADMISSION_OWNER_STATE_KEY = Symbol.for("openclaw.queuedAdmissionOwnerState");
@@ -91,6 +89,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
     stableStringify(execution.conversationToolPolicy ?? null),
     execution.senderE164 ?? "",
     execution.senderIsOwner === true,
+    Boolean(run.createChannelCronAuthority),
     execution.execOverrides?.host ?? "",
     execution.execOverrides?.security ?? "",
     execution.execOverrides?.ask ?? "",
@@ -162,6 +161,8 @@ export function resolveFollowupDeliveryStorageKey(run: FollowupRun): string {
       run.toolsAllow ? (readToolAllowlistIntersection(run.toolsAllow) ?? null) : null,
     ),
     run.disableTools === true,
+    run.forceRestartSafeTools === true,
+    run.forceCodeModeTools === true,
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
@@ -270,6 +271,7 @@ export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined
 type FollowupRuntimeMetadata = Pick<
   FollowupRun,
   | "sourceTurnId"
+  | "createChannelCronAuthority"
   | "operatorAuthority"
   | "personalBootstrapEligible"
   | "currentInboundEventKind"
@@ -280,6 +282,8 @@ type FollowupRuntimeMetadata = Pick<
   | "gatewayLocalUserIngress"
   | "toolsAllow"
   | "disableTools"
+  | "forceRestartSafeTools"
+  | "forceCodeModeTools"
   | "abortSignal"
   | "queueAbortSignal"
   | "deliveryCorrelations"
@@ -389,6 +393,7 @@ export function collectRuntimeMetadata(
   ];
   return {
     sourceTurnId: authoritySource?.sourceTurnId,
+    createChannelCronAuthority: authoritySource?.createChannelCronAuthority,
     operatorAuthority: authoritySource?.operatorAuthority,
     ...(items.length > 0 && items.every((item) => item.personalBootstrapEligible === true)
       ? { personalBootstrapEligible: true }
@@ -406,6 +411,8 @@ export function collectRuntimeMetadata(
     ),
     toolsAllow: authoritySource?.toolsAllow,
     disableTools: authoritySource?.disableTools,
+    forceRestartSafeTools: authoritySource?.forceRestartSafeTools,
+    forceCodeModeTools: authoritySource?.forceCodeModeTools,
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
@@ -460,6 +467,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
   return {
     prompt: source.prompt,
     sourceTurnId: source.sourceTurnId,
+    createChannelCronAuthority: source.createChannelCronAuthority,
     admissionSessionId: source.admissionSessionId,
     operatorAuthority: source.operatorAuthority,
     personalBootstrapEligible: source.personalBootstrapEligible,
@@ -469,6 +477,8 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     explicitSkillSelections: source.explicitSkillSelections,
     toolsAllow: source.toolsAllow,
     disableTools: source.disableTools,
+    forceRestartSafeTools: source.forceRestartSafeTools,
+    forceCodeModeTools: source.forceCodeModeTools,
     images: source.images,
     imageOrder: source.imageOrder,
     media: source.media,
@@ -479,6 +489,8 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     enqueuedAt: source.enqueuedAt,
     ...getFollowupOriginRouting(source),
     abortSignal: source.abortSignal,
+    deliveryCorrelations: source.deliveryCorrelations,
+    onQueueDisposition: source.onQueueDisposition,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
     replyOperationRunStates: source.replyOperationRunStates,
     queuedFollowupReplyDisposition: source.queuedFollowupReplyDisposition,

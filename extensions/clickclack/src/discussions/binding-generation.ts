@@ -164,6 +164,18 @@ export function recordPendingDiscussionOpen(params: {
   });
 }
 
+export function getPendingDiscussionOpen(
+  runtime: PluginRuntime,
+  sessionKey: string,
+): Promise<PendingDiscussionOpen | undefined> {
+  return withGenerationStore(runtime, async ({ store }) => {
+    const entry = await store.lookup(sessionKey);
+    return entry?.pending
+      ? { sessionKey, generation: entry.generation, ...entry.pending }
+      : undefined;
+  });
+}
+
 export function listPendingDiscussionOpens(
   runtime: PluginRuntime,
 ): Promise<PendingDiscussionOpen[]> {

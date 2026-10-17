@@ -9,8 +9,8 @@ const mocks = vi.hoisted(() => ({
   }),
   runtime: { error: vi.fn(), writeJson: vi.fn(), exit: vi.fn() },
 }));
-vi.mock("../../state/openclaw-state-ownership.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/openclaw-state-ownership.js")>()),
+vi.mock("../../state/openclaw-state-ownership-preflight.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-state-ownership-preflight.js")>()),
   assertOpenClawStateWriteAllowedAtPath: mocks.stateAdmission,
 }));
 vi.mock("../../runtime.js", async (importOriginal) => ({

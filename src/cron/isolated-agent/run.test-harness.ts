@@ -85,8 +85,8 @@ const replaceSessionEntryMock = vi.fn();
 export const patchSessionEntryMock = vi.fn();
 export const resolveCronSessionMock = vi.fn();
 export const logWarnMock = vi.fn();
-export const readDescendantExecutionStateMock =
-  vi.fn<typeof import("./run-subagent-registry.runtime.js").readDescendantExecutionState>();
+export const listDescendantRunsForRequesterMock =
+  vi.fn<typeof import("./run-subagent-registry.runtime.js").listDescendantRunsForRequester>();
 export const pickLastNonEmptyTextFromPayloadsMock = vi.fn();
 export const resolveCronPayloadOutcomeMock = vi.fn();
 export const resolveCronDeliveryPlanMock = vi.fn();
@@ -331,8 +331,9 @@ vi.mock("./run-embedded.runtime.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
 
+// mock-isolation: Supply fixed descendant snapshots without opening the process-wide registry database.
 vi.mock("./run-subagent-registry.runtime.js", () => ({
-  readDescendantExecutionState: readDescendantExecutionStateMock,
+  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
 }));
 
 vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
@@ -365,6 +366,31 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
     ...actual,
     replaceSessionEntry: replaceSessionEntryMock,
     patchSessionEntryCore: patchSessionEntryMock,
+  };
+});
+
+vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../config/sessions/session-accessor.sqlite-entry.js")>();
+  const { projectSessionEntryPatch } =
+    await import("../../config/sessions/session-entry-patch-operation.js");
+  return {
+    ...actual,
+    applySessionEntryOperation: async (
+      ...[scope, operation, options]: Parameters<typeof actual.applySessionEntryOperation>
+    ) =>
+      patchSessionEntryMock(
+        scope,
+        (writeBase: SessionEntry, context: { existingEntry: SessionEntry | undefined }) =>
+          projectSessionEntryPatch({
+            existing: context.existingEntry,
+            writeBase,
+            sessionKey: scope.sessionKey,
+            operation,
+            replaceEntry: options?.replaceEntry,
+          }) ?? null,
+        options,
+      ),
   };
 });
 
@@ -607,10 +633,7 @@ function resetRunExecutionMocks(): void {
   runEmbeddedAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
   runCliAgentMock.mockReset();
   getCliSessionBindingMock.mockReturnValue(undefined);
-  readDescendantExecutionStateMock.mockReset().mockResolvedValue({
-    hasFreshDescendants: false,
-    hasActiveDescendants: false,
-  });
+  listDescendantRunsForRequesterMock.mockReset().mockResolvedValue([]);
 }
 
 function resetRunOutcomeMocks(): void {

@@ -10,7 +10,7 @@ import { getContextEngineRegistration } from "../context-engine/registry.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
-  getRegisteredEventKeys,
+  hasInternalHookListeners,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import { withEnv } from "../test-utils/env.js";
@@ -90,6 +90,8 @@ describe("loadOpenClawPlugins", () => {
     });
 
     const metrics = collectStartupTraceMetrics(details, "plugins.gateway-load.plugin.trace-plugin");
+    expect(metrics.configValidationMs).toEqual(expect.any(Number));
+    expect(metrics.artifactPreparationMs).toEqual(expect.any(Number));
     expect(metrics.loadMs).toEqual(expect.any(Number));
     expect(metrics.loadFailedCount).toBe(0);
     expect(metrics.registerMs).toEqual(expect.any(Number));
@@ -1348,7 +1350,6 @@ describe("loadOpenClawPlugins", () => {
         expect(reenter.mock.results[0]).toMatchObject({
           type: "throw",
           value: {
-            name: "PluginLoadReentryError",
             message: `plugin load reentry detected for cache key: ${cacheKey}`,
           },
         });
@@ -1824,7 +1825,7 @@ describe("loadOpenClawPlugins", () => {
       "loaded",
     );
     expect(scoped.hooks.map((entry) => entry.entry.hook.name)).toEqual(["snapshot-hook"]);
-    expect(getRegisteredEventKeys()).toStrictEqual([]);
+    expect(hasInternalHookListeners("gateway", "startup")).toBe(false);
 
     clearInternalHooks();
   });

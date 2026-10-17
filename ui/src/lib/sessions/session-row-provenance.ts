@@ -16,21 +16,35 @@ const enrichmentFields = ["derivedTitle", "lastMessagePreview", "activitySummary
 
 /** Row identity and one read revision; individual fields do not carry custody records. */
 export function createSessionRowProvenance() {
-  type Observation = { revision: number; agentId: string | null; cleared?: ReadonlySet<string> };
+  type Observation = {
+    revision: number;
+    agentId: string | null;
+    identity?: string | null;
+    cleared?: ReadonlySet<string>;
+  };
   let observations = new WeakMap<GatewaySessionRow, Observation>();
   const owner = (row: GatewaySessionRow, agentId?: string | null) => {
     const resolved =
+      observations.get(row)?.agentId ??
       parseAgentSessionKey(row.key)?.agentId ??
       row.agentId?.trim() ??
-      observations.get(row)?.agentId ??
       agentId?.trim();
     return resolved ? normalizeAgentId(resolved) : null;
   };
   const identity = (row: GatewaySessionRow, agentId?: string | null) => {
+    const observation = observations.get(row);
+    if (observation?.agentId && observation.identity !== undefined) {
+      return observation.identity;
+    }
     const resolved = owner(row, agentId);
-    return !row.sessionId?.trim() || (isUiGlobalSessionKey(row.key) && !resolved)
-      ? null
-      : JSON.stringify([normalizeDefaultMainSessionAliasForUi(row.key), resolved, row.sessionId]);
+    const key =
+      !row.sessionId?.trim() || (isUiGlobalSessionKey(row.key) && !resolved)
+        ? null
+        : JSON.stringify([normalizeDefaultMainSessionAliasForUi(row.key), resolved, row.sessionId]);
+    if (observation?.agentId) {
+      observation.identity = key;
+    }
+    return key;
   };
   const rowRevision = (row: GatewaySessionRow) => observations.get(row)?.revision ?? 0;
   const observeReadRow = (row: GatewaySessionRow, revision: number, agentId?: string | null) => {

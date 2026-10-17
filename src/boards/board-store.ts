@@ -115,29 +115,8 @@ export type BoardWidgetNameIdentityMarker =
   | BoardWidgetGeneratedIdentityMarker
   | { kind: "invalid" };
 
-export function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
-  return {
-    sessionKey: snapshot.sessionKey,
-    revision: snapshot.revision,
-    tabs: snapshot.tabs.map((tab) => ({ ...tab })),
-    widgets: snapshot.widgets.map((widget) => ({
-      ...widget,
-      ...(widget.props !== undefined ? { props: structuredClone(widget.props) } : {}),
-      ...(widget.declaredSummary !== undefined
-        ? { declaredSummary: [...widget.declaredSummary] }
-        : {}),
-      ...(widget.declared !== undefined
-        ? {
-            declared: {
-              ...(widget.declared.netOrigins
-                ? { netOrigins: [...widget.declared.netOrigins] }
-                : {}),
-              ...(widget.declared.tools ? { tools: [...widget.declared.tools] } : {}),
-            },
-          }
-        : {}),
-    })),
-  };
+function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
+  return structuredClone(snapshot);
 }
 
 export function createBoardDeclaredSummary(
@@ -354,7 +333,7 @@ export function createBoardWidgetPutSnapshot(
         ? {
             pluginKind: params.content.pluginKind,
             ...(params.content.kind === "plugin" && params.content.props !== undefined
-              ? { props: structuredClone(params.content.props) }
+              ? { props: params.content.props }
               : {}),
           }
         : {}),

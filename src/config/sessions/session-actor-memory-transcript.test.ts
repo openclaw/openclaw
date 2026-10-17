@@ -164,7 +164,7 @@ describe("memory actor transcript", () => {
             message: original,
             eventId: "prepared-1",
             preparationVersion: before,
-            preparedMessage: { prepared: true, expected: undefined, message: accepted },
+            preparedMessage: { prepared: true, message: accepted },
           },
         ]),
       ),
@@ -177,7 +177,6 @@ describe("memory actor transcript", () => {
             preparationVersion: before,
             preparedMessage: {
               prepared: true,
-              expected: { messageId: "prepared-1", message: accepted },
               message: { ...original, content: "Must not replace the accepted message" },
             },
           },
@@ -197,7 +196,7 @@ describe("memory actor transcript", () => {
           {
             message: { ...original, idempotencyKey: "suppressed" },
             preparationVersion: before,
-            preparedMessage: { prepared: true, expected: undefined, message: undefined },
+            preparedMessage: { prepared: true, message: undefined },
             expectedTranscript: before,
           },
         ]),
@@ -205,20 +204,6 @@ describe("memory actor transcript", () => {
     );
     expect(skipped.receipt.transcript.appendedMessages).toEqual([]);
     expect(skipped.receipt.transcript.after).toEqual(replay.receipt.transcript.after);
-    const snapshot = actor.snapshot(authority);
-    const stale = await append(
-      turn([
-        {
-          message: original,
-          preparedMessage: { prepared: true, expected: undefined, message: accepted },
-        },
-      ]),
-    );
-    expect(stale).toMatchObject({
-      kind: "rolled-back",
-      error: { message: "Transcript idempotency changed while preparing the turn" },
-    });
-    expect(actor.snapshot(authority)).toEqual(snapshot);
   });
 
   it("promotes accepted pending bytes, consumes custody once, and rejects a mismatched owner", async () => {
@@ -281,7 +266,6 @@ describe("memory actor transcript", () => {
           message: { ...message, content: "New host candidate" },
           preparedMessage: {
             prepared: false,
-            expected: undefined,
             message: { ...message, content: "New prepared candidate" },
           },
         },

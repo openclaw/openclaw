@@ -89,6 +89,10 @@ async function createRebuildingFixture() {
     beforeSession,
     markRebuilding,
     assertNoDispatch,
+    async [Symbol.asyncDispose]() {
+      await waitForSessionTranscriptIndexReconcile(databaseOptions);
+      await fixture.cleanup();
+    },
   };
 }
 
@@ -105,72 +109,62 @@ function expectRebuildingResponse(respond: ReturnType<typeof vi.fn<RespondFn>>) 
 
 describe("registered chat.send during SQLite projection rebuild", () => {
   it("rejects without mutation, then admits the same safe retry exactly once after reconciliation", async () => {
-    const fixture = await createRebuildingFixture();
-    try {
-      fixture.markRebuilding();
-      const rejected = await fixture.send();
-      expectRebuildingResponse(rejected);
-      await fixture.assertNoDispatch();
-      expect(loadSessionEntry(fixture.scope)).toEqual(fixture.beforeSession);
-      await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
-      const accepted = await fixture.send();
-      expect(accepted.mock.calls[0]?.[0]).toBe(true);
-      expect(accepted.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-      await fixture.finishDispatch();
-      const after = loadTranscriptEventsSync(fixture.scope);
-      expect(
-        after.filter(
-          (event) =>
-            isRecord(event) &&
-            event.type === "message" &&
-            isRecord(event.message) &&
-            event.message.role === "user",
-        ),
-      ).toHaveLength(2);
-      const replay = await fixture.send();
-      expect(replay.mock.calls[0]?.[0]).toBe(true);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(after);
-    } finally {
-      await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
-      await fixture.cleanup();
-    }
+    await using fixture = await createRebuildingFixture();
+    fixture.markRebuilding();
+    const rejected = await fixture.send();
+    expectRebuildingResponse(rejected);
+    await fixture.assertNoDispatch();
+    expect(loadSessionEntry(fixture.scope)).toEqual(fixture.beforeSession);
+    await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
+    const accepted = await fixture.send();
+    expect(accepted.mock.calls[0]?.[0]).toBe(true);
+    expect(accepted.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+    await fixture.finishDispatch();
+    const after = loadTranscriptEventsSync(fixture.scope);
+    expect(
+      after.filter(
+        (event) =>
+          isRecord(event) &&
+          event.type === "message" &&
+          isRecord(event.message) &&
+          event.message.role === "user",
+      ),
+    ).toHaveLength(2);
+    const replay = await fixture.send();
+    expect(replay.mock.calls[0]?.[0]).toBe(true);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+    expect(loadTranscriptEventsSync(fixture.scope)).toEqual(after);
   });
 
   it.each(["active leaf", "settings"] as const)(
     "still rejects changed %s on the retry",
     async (change) => {
-      const fixture = await createRebuildingFixture();
-      try {
-        fixture.params.expectedPermissionMode = null;
-        fixture.markRebuilding();
-        expectRebuildingResponse(await fixture.send());
-        await fixture.assertNoDispatch();
-        await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
-        if (change === "active leaf") {
-          fixture.params.expectedLeafEntryId = "obsolete-leaf";
-        } else {
-          await patchSessionEntryCore(fixture.scope, () => ({ permissionMode: "full" }));
-        }
-        const response = await fixture.send();
-        expect(response.mock.calls[0]?.[2]).toMatchObject({
-          code: "INVALID_REQUEST",
-          details: {
-            reason: change === "active leaf" ? "active-leaf-changed" : "session-settings-changed",
-          },
-        });
-        await fixture.assertNoDispatch();
-      } finally {
-        await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
-        await fixture.cleanup();
+      await using fixture = await createRebuildingFixture();
+      fixture.params.expectedPermissionMode = null;
+      fixture.markRebuilding();
+      expectRebuildingResponse(await fixture.send());
+      await fixture.assertNoDispatch();
+      await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
+      if (change === "active leaf") {
+        fixture.params.expectedLeafEntryId = "obsolete-leaf";
+      } else {
+        await patchSessionEntryCore(fixture.scope, () => ({ permissionMode: "full" }));
       }
+      const response = await fixture.send();
+      expect(response.mock.calls[0]?.[2]).toMatchObject({
+        code: "INVALID_REQUEST",
+        details: {
+          reason: change === "active leaf" ? "active-leaf-changed" : "session-settings-changed",
+        },
+      });
+      await fixture.assertNoDispatch();
     },
   );
 
   it.for(["expired", "removed", "lifecycle rotation", "chat abort"] as const)(
     "never revives a %s reservation while projection is rebuilding",
     async (change, { signal }) => {
-      const fixture = await createRebuildingFixture();
+      await using fixture = await createRebuildingFixture();
       const entered = createDeferred();
       const release = createDeferred();
       const writer = runExclusiveSessionStoreWrite(fixture.scope.storePath, async () => {
@@ -272,8 +266,6 @@ describe("registered chat.send during SQLite projection rebuild", () => {
         release.resolve();
         await writer;
         await request;
-        await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
-        await fixture.cleanup();
       }
     },
   );

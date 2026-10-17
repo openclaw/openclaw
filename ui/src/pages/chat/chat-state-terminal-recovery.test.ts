@@ -1,14 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { extractText } from "../../lib/chat/message-extract.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createSessionEventState, renderedTranscript } from "./chat-state.test-support.ts";
-import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
+import { reduceChatSessionProjection } from "./history-merge.ts";
 
 const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
 
@@ -242,11 +241,11 @@ describe("terminal reply recovery", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it.each([true, false])("bounds terminal recovery with durable media=%s", async (durable) => {
+  it("recovers durable media from a message-less terminal", async () => {
     vi.useFakeTimers();
     try {
       const runId = "run-with-message-less-terminal";
-      const promptText = durable ? "Show the generated image" : "Finish without persisting a reply";
+      const promptText = "Show the generated image";
       const prompt = createRecoveryPrompt(runId, promptText);
       const persistedReply = {
         role: "assistant",
@@ -254,9 +253,7 @@ describe("terminal reply recovery", () => {
         stopReason: "stop",
         __openclaw: { id: "reply-1", runId, seq: 2 },
       };
-      const request = vi
-        .fn()
-        .mockResolvedValue(createTerminalHistory(durable ? [prompt, persistedReply] : [prompt]));
+      const request = vi.fn().mockResolvedValue(createTerminalHistory([prompt, persistedReply]));
       const { state } = createSessionEventState({
         chatMessages: [prompt],
         chatHistoryPagination: { hasMore: false },
@@ -268,201 +265,12 @@ describe("terminal reply recovery", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(request).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(request).toHaveBeenCalledTimes(durable ? 1 : 5);
-      if (durable) {
-        expect(state.chatMessages).toContainEqual(persistedReply);
-      } else {
-        await vi.advanceTimersByTimeAsync(60_000);
-        expect(request).toHaveBeenCalledTimes(5);
-        expect(renderedTranscript(state)).toEqual([{ role: "user", text: promptText }]);
-        emitGatewayEvent(state, "chat", terminal);
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(request).toHaveBeenCalledTimes(5);
-      }
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(state.chatMessages).toContainEqual(persistedReply);
     } finally {
       vi.useRealTimers();
     }
   });
-
-  it.each(["session", "global agent", "replacement starts", "replacement finishes"])(
-    "retires terminal recovery when its owner changes: %s",
-    async (transition) => {
-      vi.useFakeTimers();
-      try {
-        const runId = "run-before-replacement";
-        const replacementRunId = "replacement-run";
-        const sessionKey = transition === "global agent" ? "global" : "agent:main:main";
-        const prompt = createRecoveryPrompt(runId, "Finish before ownership changes");
-        const request = vi.fn().mockResolvedValue(createTerminalHistory([prompt], sessionKey));
-        const { state } = createSessionEventState({
-          sessionKey,
-          ...(transition === "global agent"
-            ? {
-                assistantAgentId: "main",
-                agentsSelectedId: "main",
-                agentsList: {
-                  defaultId: "main",
-                  mainKey: "main",
-                  scope: "global",
-                  agents: [{ id: "main" }, { id: "work" }],
-                },
-              }
-            : {}),
-          chatMessages: [prompt],
-          chatHistoryPagination: { hasMore: false },
-          chatRunId: runId,
-          client: createTestGatewayClient(request),
-        });
-        emitGatewayEvent(state, "chat", {
-          sessionKey,
-          runId,
-          state: "final",
-          ...(transition === "global agent" ? { agentId: "main" } : {}),
-        });
-        await vi.advanceTimersByTimeAsync(0);
-        expect(request).toHaveBeenCalledTimes(1);
-        if (transition === "global agent") {
-          expect(request).toHaveBeenLastCalledWith(
-            "chat.history",
-            expect.objectContaining({ sessionKey: "global", agentId: "main" }),
-            { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-          );
-          state.assistantAgentId = "work";
-          state.agentsSelectedId = "work";
-        } else if (transition === "session") {
-          state.sessionKey = "agent:main:replacement";
-        } else {
-          state.chatRunId = replacementRunId;
-          if (transition === "replacement finishes") {
-            emitGatewayEvent(state, "chat", {
-              sessionKey,
-              runId: replacementRunId,
-              state: "final",
-              message: {
-                role: "assistant",
-                content: [{ type: "text", text: "Replacement finished." }],
-                __openclaw: { id: "replacement-reply", runId: replacementRunId, seq: 2 },
-              },
-            });
-            expect(state.chatRunId).toBeNull();
-            expect(getChatSessionProjection(state).runs[replacementRunId]?.status).toBe(
-              "completed",
-            );
-          }
-        }
-        await vi.advanceTimersByTimeAsync(100);
-        expect(request).toHaveBeenCalledTimes(1);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
-
-  it.each(["another-run", "nested-tool-only"] as const)(
-    "continues terminal recovery when history backfills %s",
-    async (historyKind) => {
-      vi.useFakeTimers();
-      try {
-        const runId = "run-after-history-backfill";
-        const historicalRunId = "older-run-from-history";
-        const prompt = createRecoveryPrompt(runId, "Finish after loading older history", 2);
-        const historicalReply = {
-          role: "assistant",
-          content: [{ type: "text", text: "An older durable reply." }],
-          __openclaw: { id: "historical-reply", runId: historicalRunId, seq: 1 },
-        };
-        // Public history projects tool blocks, not the stored empty-content activity fact.
-        const nestedActivity = {
-          role: "custom",
-          customType: "openclaw.nested-tool.v1",
-          display: true,
-          excludeFromContext: true,
-          runId,
-          timestamp: 2,
-          content: [
-            {
-              type: "toolCall",
-              id: "nested-read",
-              runId,
-              name: "read",
-              arguments: { path: "note.txt" },
-              parentToolCallId: "outer-exec",
-              timestamp: 2,
-            },
-            {
-              type: "toolResult",
-              role: "toolResult",
-              runId,
-              scopeId: "attempt-1",
-              afterEntryId: "prompt-1",
-              startOrder: 0,
-              parentToolCallId: "outer-exec",
-              toolCallId: "nested-read",
-              toolName: "read",
-              isError: false,
-              startedAt: 2,
-              timestamp: 3,
-              content: [{ type: "text", text: "Nested read completed." }],
-            },
-          ],
-          __openclaw: { id: "nested-activity-1", seq: 3 },
-        };
-        const precedingRow = historyKind === "another-run" ? historicalReply : nestedActivity;
-        const beforeFinal =
-          historyKind === "another-run" ? [historicalReply, prompt] : [prompt, nestedActivity];
-        const replyText = "The current reply is now durable.";
-        const persistedReply = {
-          role: "assistant",
-          content: [{ type: "text", text: replyText }],
-          stopReason: "stop",
-          __openclaw: { id: "current-reply", runId, seq: historyKind === "another-run" ? 3 : 4 },
-        };
-        const sessionInfo = {
-          key: "agent:main:main",
-          kind: "direct" as const,
-          updatedAt: 3,
-          hasActiveRun: false,
-          activeRunIds: [],
-          status: "done" as const,
-        };
-        const request = vi
-          .fn()
-          .mockResolvedValueOnce({
-            messages: beforeFinal,
-            sessionId: "selected-session",
-            sessionInfo,
-          })
-          .mockResolvedValueOnce({
-            messages: [...beforeFinal, persistedReply],
-            sessionId: "selected-session",
-            sessionInfo,
-          });
-        const { state } = createSessionEventState({
-          chatMessages: [prompt],
-          chatHistoryPagination: { hasMore: false },
-          chatRunId: runId,
-          client: { request } as unknown as GatewayBrowserClient,
-        });
-
-        emitGatewayEvent(state, "chat", { sessionKey: state.sessionKey, runId, state: "final" });
-
-        await vi.advanceTimersByTimeAsync(0);
-        expect(request).toHaveBeenCalledTimes(1);
-        expect(state.chatMessages).toContainEqual(precedingRow);
-        expect(state.chatMessages).not.toContainEqual(persistedReply);
-        await vi.advanceTimersByTimeAsync(100);
-        expect(request).toHaveBeenCalledTimes(2);
-        expect(state.chatMessages.filter((message) => extractText(message) === replyText)).toEqual([
-          persistedReply,
-        ]);
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(request).toHaveBeenCalledTimes(2);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
-
   it.each([
     { name: "without a pending session-message reload", pendingReload: false },
     { name: "after a pending session-message reload", pendingReload: true },

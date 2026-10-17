@@ -16,6 +16,7 @@ import {
 import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
+import { configuredModelSupportsNativeVideo } from "../agents/model-input.js";
 import {
   buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
@@ -152,9 +153,6 @@ function resolveCatalogImageModelId(params: {
       normalizeMediaProviderId(entry.provider) === normalizeMediaProviderId(params.providerId) &&
       params.modelSupportsVision(entry),
   );
-  if (matches.length === 0) {
-    return undefined;
-  }
   const autoEntry = matches.find((entry) => normalizeLowercaseStringOrEmpty(entry.id) === "auto");
   return normalizeOptionalString((autoEntry ?? matches[0])?.id);
 }
@@ -248,35 +246,6 @@ async function resolveAutoImageModelId(
     catalog,
     modelSupportsVision,
   });
-}
-
-async function resolveKeyEntry(
-  params: AutoModelSelectionParams,
-): Promise<MediaUnderstandingModelConfig | null> {
-  const { cfg, providerRegistry, capability } = params;
-  const activeProvider = params.activeModel?.provider?.trim();
-  if (activeProvider) {
-    const model = params.activeModel?.model;
-    const activeEntry = await resolveAutoProviderModelEntry(params, activeProvider, () => model);
-    if (activeEntry) {
-      return activeEntry;
-    }
-  }
-  for (const providerId of resolveConfiguredKeyProviderOrder({
-    cfg,
-    providerRegistry,
-    capability,
-    fallbackProviders: resolveAutoMediaKeyProvidersFromRegistry({
-      capability,
-      providerRegistry,
-    }),
-  })) {
-    const entry = await resolveAutoProviderModelEntry(params, providerId, () => undefined);
-    if (entry) {
-      return entry;
-    }
-  }
-  return null;
 }
 
 function resolveImageModelFromAgentDefaults(params: {
@@ -388,7 +357,7 @@ async function* resolveAutoAudioEntries(
   // Advance lazily: unused providers must not refresh credentials, and an upload
   // failure must not silently disclose the same recording to another provider.
   for (const providerId of providers) {
-    const entry = await resolveAutoProviderModelEntry(params, providerId, () => undefined);
+    const entry = await resolveAutoProviderModelEntry(params, providerId);
     if (entry) {
       yield { entry };
     }
@@ -421,15 +390,20 @@ async function resolveAutoEntries(
     const activeEntry = await resolveAutoProviderModelEntry(
       prepared,
       activeProvider,
-      () => prepared.activeModel?.model,
+      prepared.activeModel?.model,
     );
     if (activeEntry) {
       return [{ entry: activeEntry }];
     }
   }
-  const keys = await resolveKeyEntry(prepared);
-  if (keys) {
-    return [{ entry: keys }];
+  for (const providerId of resolveConfiguredKeyProviderOrder({
+    ...prepared,
+    fallbackProviders: resolveAutoMediaKeyProvidersFromRegistry(prepared),
+  })) {
+    const entry = await resolveAutoProviderModelEntry(prepared, providerId);
+    if (entry) {
+      return [{ entry }];
+    }
   }
   return [];
 }
@@ -462,7 +436,7 @@ export async function resolveAutoImageModel(params: {
 async function resolveAutoProviderModelEntry(
   params: AutoModelSelectionParams,
   providerId: string,
-  readModel: () => string | undefined,
+  selectedModel?: string,
 ): Promise<MediaUnderstandingModelConfig | null> {
   const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
   if (!providerSupportsCapability(provider, params.capability)) {
@@ -477,14 +451,14 @@ async function resolveAutoProviderModelEntry(
   ) {
     return null;
   }
-  // Active selection reads its model after auth; key selection captures it before auth.
-  // Audio uses its provider default instead of the active chat model in either path.
+  // Keep the selected model for this attempt; later selections pick up configuration changes.
+  // Audio always uses its provider default rather than the active chat model.
   let model: string | undefined;
   if (params.capability === "image") {
     model = await resolveAutoImageModelId({
       ...params,
       providerId,
-      explicitModel: readModel(),
+      explicitModel: selectedModel,
     });
   } else if (params.capability === "audio") {
     model = resolveDefaultMediaModelFromRegistry({
@@ -493,7 +467,7 @@ async function resolveAutoProviderModelEntry(
     });
   } else {
     model =
-      readModel() ??
+      selectedModel ??
       resolveDefaultMediaModelFromRegistry({
         ...params,
         providerId,
@@ -684,11 +658,12 @@ export async function runCapability(params: {
     Object.values(dispositions).some(
       (d) => d.kind !== "handled" && d.kind !== "handed-to-native-vision",
     );
-  const buildDecision = async (
+  const buildResult = async (
     outcome: MediaUnderstandingDecision["outcome"],
     attachments: MediaUnderstandingDecision["attachments"],
     attachmentDispositions: Record<number, MediaAttachmentDisposition>,
-  ): Promise<MediaUnderstandingDecision> => {
+    outputs: MediaUnderstandingOutput[] = [],
+  ): Promise<RunCapabilityResult> => {
     // Record the fact whenever it is known (probe already ran) or needed
     // (a marker could render); never fire the probe for marker-free decisions.
     const nativeVisionActive =
@@ -697,64 +672,21 @@ export async function runCapability(params: {
         ? await resolveNativeVisionFlag()
         : undefined;
     return {
-      capability,
-      outcome,
-      attachments,
-      attachmentDispositions,
-      attachmentProcessing,
-      ...(nativeVisionActive !== undefined ? { nativeVisionActive } : {}),
+      outputs,
+      decision: {
+        capability,
+        outcome,
+        attachments,
+        attachmentDispositions,
+        attachmentProcessing,
+        ...(nativeVisionActive !== undefined ? { nativeVisionActive } : {}),
+      },
     };
   };
-  if (config?.enabled === false) {
-    return {
-      outputs: [],
-      decision: await buildDecision(
-        "disabled",
-        [],
-        buildDispositions({ kind: "capability-disabled" }),
-      ),
-    };
-  }
-
-  if (selection.selected.length === 0) {
-    return {
-      outputs: [],
-      decision: await buildDecision("no-attachment", [], {}),
-    };
-  }
-
-  const scopeDecision = resolveScopeDecision({ scope: config?.scope, ctx });
-  if (scopeDecision === "deny") {
-    if (shouldLogVerbose()) {
-      logVerbose(`${capability} understanding disabled by scope policy.`);
-    }
-    return {
-      outputs: [],
-      decision: await buildDecision(
-        "scope-deny",
-        selection.selected.map((item) => ({
-          attachmentIndex: item.index,
-          attempts: [],
-        })),
-        buildDispositions({ kind: "scope-denied" }),
-      ),
-    };
-  }
-
-  // Skip image understanding when the primary model supports vision natively.
-  // The image will be injected directly into the model context instead.
-  if (
-    capability === "image" &&
-    activeProvider &&
-    !hasExplicitImageUnderstandingConfig({ cfg, providerRegistry: params.providerRegistry }) &&
-    (await resolveNativeVisionFlag()) === true
-  ) {
-    if (shouldLogVerbose()) {
-      logVerbose("Skipping image understanding: primary model supports vision natively");
-    }
+  const handOffToNativeModel = async (provider: string): Promise<RunCapabilityResult> => {
     const attempt = {
       type: "provider" as const,
-      provider: activeProvider,
+      provider,
       model: params.activeModel?.model?.trim() || undefined,
       outcome: "skipped" as const,
       reason: "primary model supports vision natively",
@@ -767,28 +699,57 @@ export async function runCapability(params: {
       (Boolean(item.url) && classifyMediaReferenceSource(item.url ?? "").isMediaStoreUrl);
     const attachmentDispositions = buildDispositions(
       { kind: "handed-to-native-vision" },
-      { kind: "not-selected" },
+      capability === "video" ? { kind: "handed-to-native-vision" } : { kind: "not-selected" },
     );
     for (const item of params.media) {
       if (attachmentDispositions[item.index] && !nativeDeliverable(item)) {
         attachmentDispositions[item.index] = {
           kind: "failed",
-          reason: "remote-url image is not natively deliverable",
+          reason: `remote-url ${capability} is not natively deliverable`,
         };
       }
     }
-    return {
-      outputs: [],
-      decision: await buildDecision(
-        "skipped",
-        selection.selected.map((item) =>
-          nativeDeliverable(item)
-            ? { attachmentIndex: item.index, attempts: [attempt], chosen: attempt }
-            : { attachmentIndex: item.index, attempts: [] },
-        ),
-        attachmentDispositions,
+    return await buildResult(
+      "skipped",
+      selection.selected.map((item) =>
+        nativeDeliverable(item)
+          ? { attachmentIndex: item.index, attempts: [attempt], chosen: attempt }
+          : { attachmentIndex: item.index, attempts: [] },
       ),
-    };
+      attachmentDispositions,
+    );
+  };
+  if (config?.enabled === false) {
+    return await buildResult("disabled", [], buildDispositions({ kind: "capability-disabled" }));
+  }
+
+  if (selection.selected.length === 0) {
+    return await buildResult("no-attachment", [], {});
+  }
+
+  if (resolveScopeDecision({ scope: config?.scope, ctx }) === "deny") {
+    if (shouldLogVerbose()) {
+      logVerbose(`${capability} understanding disabled by scope policy.`);
+    }
+    return await buildResult(
+      "scope-deny",
+      selection.selected.map((item) => ({
+        attachmentIndex: item.index,
+        attempts: [],
+      })),
+      buildDispositions({ kind: "scope-denied" }),
+    );
+  }
+
+  // Skip image understanding when the primary model supports vision natively.
+  // The image will be injected directly into the model context instead.
+  if (
+    capability === "image" &&
+    activeProvider &&
+    !hasExplicitImageUnderstandingConfig({ cfg, providerRegistry: params.providerRegistry }) &&
+    (await resolveNativeVisionFlag()) === true
+  ) {
+    return await handOffToNativeModel(activeProvider);
   }
 
   // Every path past the native-vision skip branch reads the registry: resolve
@@ -811,17 +772,26 @@ export async function runCapability(params: {
     });
   }
   if (!automaticAudio && resolvedEntries.length === 0) {
-    return {
-      outputs: [],
-      decision: await buildDecision(
-        "skipped",
-        selection.selected.map((item) => ({
-          attachmentIndex: item.index,
-          attempts: [],
-        })),
-        buildDispositions({ kind: "no-model" }, { kind: "not-selected" }),
-      ),
-    };
+    if (
+      capability === "video" &&
+      activeProvider &&
+      configuredModelSupportsNativeVideo({
+        cfg,
+        provider: activeProvider,
+        modelId: params.activeModel?.model ?? "",
+        api: params.activeModel?.api,
+      })
+    ) {
+      return await handOffToNativeModel(activeProvider);
+    }
+    return await buildResult(
+      "skipped",
+      selection.selected.map((item) => ({
+        attachmentIndex: item.index,
+        attempts: [],
+      })),
+      buildDispositions({ kind: "no-model" }, { kind: "not-selected" }),
+    );
   }
 
   const outputs: MediaUnderstandingOutput[] = [];
@@ -859,7 +829,7 @@ export async function runCapability(params: {
       chosen: attempts.find((attempt) => attempt.outcome === "success"),
     });
   }
-  const decision = await buildDecision(
+  const result = await buildResult(
     outputs.length > 0
       ? "success"
       : hasFailedMediaAttempt(attachmentDecisions)
@@ -867,15 +837,12 @@ export async function runCapability(params: {
         : "skipped",
     attachmentDecisions,
     attachmentDispositions,
+    outputs,
   );
+  const { decision } = result;
   if (decision.outcome === "failed") {
     logWarn(`media-understanding: ${formatDecisionSummary(decision)}`);
-  } else if (shouldLogVerbose()) {
-    logVerbose(`Media understanding ${formatDecisionSummary(decision)}`);
   }
-  return {
-    outputs,
-    decision,
-  };
+  return result;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

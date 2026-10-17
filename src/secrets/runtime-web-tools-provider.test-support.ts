@@ -1,3 +1,4 @@
+import { ensureRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
   PluginWebFetchProviderEntry,
@@ -5,6 +6,17 @@ import type {
 } from "../plugins/types.js";
 
 export type ProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "duckduckgo";
+
+export function createWebCredentialEntry(
+  surface: "webSearch" | "webFetch",
+  apiKey: unknown,
+  options: { enabled?: boolean } = {},
+) {
+  return {
+    ...options,
+    config: { [surface]: { apiKey } },
+  };
+}
 
 export function providerPluginId(provider: ProviderUnderTest): string {
   switch (provider) {
@@ -21,18 +33,7 @@ export function providerPluginId(provider: ProviderUnderTest): string {
   }
 }
 
-export function ensureRecord(
-  target: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> {
-  const current = target[key];
-  if (typeof current === "object" && current !== null && !Array.isArray(current)) {
-    return current as Record<string, unknown>;
-  }
-  const next: Record<string, unknown> = {};
-  target[key] = next;
-  return next;
-}
+export { ensureRecord };
 
 function setConfiguredProviderKey(
   configTarget: OpenClawConfig,

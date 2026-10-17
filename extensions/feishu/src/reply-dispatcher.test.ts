@@ -81,21 +81,10 @@ vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
 }));
-vi.mock("./streaming-card.js", async () => {
-  const { mergeStreamingText } = await import("./card-test-helpers.js");
-  class FeishuStreamingFinalizationError extends Error {
-    result: { visibleReplySent: boolean; content?: string; messageId?: string };
-    constructor(
-      cause: unknown,
-      result: { visibleReplySent: boolean; content?: string; messageId?: string },
-    ) {
-      super(cause instanceof Error ? cause.message : String(cause), { cause });
-      this.result = result;
-    }
-  }
+vi.mock("./streaming-card.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./streaming-card.js")>();
   return {
-    mergeStreamingText,
-    FeishuStreamingFinalizationError,
+    ...actual,
     FeishuStreamingSession: class {
       active = false;
       credentials: unknown;
@@ -105,11 +94,11 @@ vi.mock("./streaming-card.js", async () => {
       update = vi.fn(async () => {});
       closeWithResult = vi.fn<FeishuStreamingSession["closeWithResult"]>(async (text, _options) => {
         this.active = false;
-        return {
+        return streamingCloseResult({
           visibleReplySent: Boolean(text?.trim()),
           ...(text?.trim() ? { content: text } : {}),
           messageId: "om_stream",
-        };
+        });
       });
       discard = vi.fn<FeishuStreamingSession["discard"]>(async () => {
         this.active = false;
@@ -124,12 +113,37 @@ vi.mock("./streaming-card.js", async () => {
   };
 });
 import { buildFeishuPostMessageContent } from "./markdown.js";
+import {
+  createFeishuPartialReplyDeliveryError,
+  createFeishuReplyDeliveryResult,
+} from "./reply-delivery-result.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
-import { FeishuStreamingFinalizationError, type FeishuStreamingSession } from "./streaming-card.js";
+import type { FeishuStreamingSession } from "./streaming-card.js";
 import type { FeishuConfig } from "./types.js";
 type StreamingCloseResult = Awaited<ReturnType<FeishuStreamingSession["closeWithResult"]>>;
 const imageUrl = "https://example.com/image.png";
+
+function streamingCloseResult(source: {
+  visibleReplySent: boolean;
+  content?: string;
+  messageId?: string;
+  finalTextAccepted?: boolean;
+}): StreamingCloseResult {
+  return {
+    ...createFeishuReplyDeliveryResult({
+      results: [source],
+      visibleReplySent: source.visibleReplySent,
+      content: source.content,
+      kind: "card",
+    }),
+    ...(source.finalTextAccepted === false ? { finalTextAccepted: false } : {}),
+  };
+}
+
+function streamingFailure(cause: Error, source: Parameters<typeof streamingCloseResult>[0]): Error {
+  return createFeishuPartialReplyDeliveryError(cause, streamingCloseResult(source));
+}
 
 afterAll(() => {
   vi.doUnmock("./accounts.js");
@@ -221,6 +235,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
   it("keeps card attribution on the selected-model prefix context", async () => {
     const { result, options } = createDispatcherHarness();
+    expect(result.replyOptions.onReasoningStream).toBeUndefined();
+    expect(result.replyOptions.onReasoningEnd).toBeUndefined();
     result.replyOptions.onModelSelected?.({
       provider: "openai",
       model: "gpt-5.6-luna",
@@ -439,18 +455,26 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     },
   );
 
-  it("splits raw final text at the serialized post byte envelope", async () => {
-    useNonStreamingAutoAccount();
-    const runtime = getFeishuRuntimeMock();
-    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(25_000);
-    const text = Array.from({ length: 6_150 }, () => "a").join("\n");
+  it.each([
+    { name: "serialized byte envelope", renderMode: "auto", oversized: true },
+    { name: "six-table card fallback", renderMode: "card", oversized: false },
+  ] as const)("sends posts for $name", async ({ renderMode, oversized }) => {
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount(renderMode, "off", "feishu"));
+    if (oversized) {
+      getFeishuRuntimeMock().channel.text.resolveTextChunkLimit.mockReturnValue(25_000);
+    }
+    const text = oversized ? Array.from({ length: 6_150 }, () => "a").join("\n") : makeTableText(6);
     const { options } = createDispatcherHarness();
     await options.deliver({ text }, { kind: "final" });
     await options.onIdle?.();
-    expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
-    for (const [params] of sendMessageFeishuMock.mock.calls) {
-      const content = buildFeishuPostMessageContent({ messageText: params.text });
-      expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(30 * 1024);
+    expect(sendMessageFeishuMock).toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    if (oversized) {
+      expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
+      for (const [params] of sendMessageFeishuMock.mock.calls) {
+        const content = buildFeishuPostMessageContent({ messageText: params.text });
+        expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(30 * 1024);
+      }
     }
   });
 
@@ -863,7 +887,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       const instance = stream(0);
       instance.discard.mockImplementationOnce(async () => {
         instance.active = false;
-        throw new FeishuStreamingFinalizationError(new Error("preview clear rejected"), {
+        throw streamingFailure(new Error("preview clear rejected"), {
           visibleReplySent: true,
           content: obsoleteText,
           messageId: "om-original-preview",
@@ -899,11 +923,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
   it("keeps an idle-owned close receipt when a later controls card arrives", async () => {
     const text = "```text\naccepted block\n```";
-    const closedResult = {
+    const closedResult = streamingCloseResult({
       visibleReplySent: true,
       content: text,
       messageId: "om-closed-before-controls",
-    };
+    });
     const close = gate<StreamingCloseResult>();
     const card = gate<{ messageId: string }>();
     sendCardFeishuMock.mockImplementationOnce(card.wait);
@@ -955,7 +979,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
   it("retains an idle-owned receipt when matching media registers its completion after close", async () => {
     const text = "```text\naccepted text with later media\n```";
-    const closedResult = { visibleReplySent: true, content: text, messageId: "om-closed-stream" };
+    const closedResult = streamingCloseResult({
+      visibleReplySent: true,
+      content: text,
+      messageId: "om-closed-stream",
+    });
     const close = gate<StreamingCloseResult>();
     const media = gate<{ messageId: string }>();
     sendMediaFeishuMock.mockImplementation(media.wait);
@@ -1089,14 +1117,25 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     },
   );
 
-  it("does not create an empty card when assistant message start has no deliverable final", async () => {
-    const { result, options } = createDispatcherHarness();
-    await options.onReplyStart?.();
-    result.replyOptions.onAssistantMessageStart?.();
-    await options.onIdle?.();
-    expect(streamingInstances).toHaveLength(0);
-    expectNoStaticReply();
-  });
+  it.each(["auto", "card"] as const)(
+    "settles an empty %s reply without static content",
+    async (mode) => {
+      resolveFeishuAccountMock.mockReturnValue(createReplyAccount(mode, "partial", "feishu"));
+      const { result, options } = createDispatcherHarness();
+      await options.onReplyStart?.();
+      if (mode === "auto") {
+        result.replyOptions.onAssistantMessageStart?.();
+      }
+      await options.onIdle?.();
+      expectNoStaticReply();
+      expect(streamingInstances).toHaveLength(mode === "card" ? 1 : 0);
+      if (mode === "card") {
+        expectClosed("");
+        await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(true);
+        expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
 
   it.each([
     { name: "delta blocks", partials: ["hello"], block: "lo world", expected: "hellolo world" },
@@ -1298,7 +1337,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
         stream(0).closeWithResult.mockResolvedValueOnce({
           visibleReplySent: false,
-          messageId: "om-empty-stream",
         });
         media.reject(new Error("media failed"));
         await expect(error).resolves.toMatchObject(partialDelivery("first", ["om-first-static"]));
@@ -1306,7 +1344,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         const delivered = await delivery;
         stream(0).closeWithResult.mockResolvedValueOnce({
           visibleReplySent: false,
-          messageId: "om-empty-stream",
         });
         await options.onIdle?.();
         await expect(delivered?.finalization).rejects.toMatchObject(
@@ -1350,7 +1387,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     result.replyOptions.onPartialReply?.({ text: "accepted preview" });
     const rejectedDelivery = await options.deliver({ text: "final answer" }, { kind: "final" });
     stream(0).closeWithResult.mockRejectedValueOnce(
-      new FeishuStreamingFinalizationError(new Error("final update failed"), {
+      streamingFailure(new Error("final update failed"), {
         visibleReplySent: true,
         content: "accepted preview",
         messageId: "om-preview",
@@ -1369,92 +1406,55 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expectClosed("final answer", 1);
   });
 
-  it("falls back to a static card when the streaming card rejected the final text after a visible preview", async () => {
-    sendStructuredCardFeishuMock.mockResolvedValueOnce({ messageId: "om-static" });
-    const { options } = createDispatcherHarness();
-    const delivery = await options.deliver({ text: "completed final answer" }, { kind: "final" });
-    const duplicate = await options.deliver({ text: "completed final answer" }, { kind: "final" });
-    // CardKit closed streaming mode (for example after its ~10 minute stream lifetime);
-    // the card still shows the earlier accepted preview but refused the completed answer.
-    stream(0).closeWithResult.mockRejectedValueOnce(
-      new FeishuStreamingFinalizationError(
-        new Error("Update card content failed: streaming mode is closed (code=300309)"),
-        {
-          visibleReplySent: true,
-          content: "stale preview",
-          messageId: "om-stale-card",
-          finalTextAccepted: false,
-        },
-      ),
-    );
-
-    await expect(options.onIdle?.()).rejects.toThrow("streaming mode is closed");
-    for (const pending of [delivery, duplicate]) {
-      await expect(pending?.finalization).rejects.toMatchObject({
-        code: "CHANNEL_PARTIAL_DELIVERY",
-        deliveryResult: {
-          content: "completed final answer",
-          messageIds: ["om-static"],
-          visibleReplySent: true,
-        },
-      });
+  it.each([
+    { name: "rejected final after visible preview", mode: "card", visible: true, rejected: true },
+    { name: "accepted final before close failure", mode: "card", visible: true, rejected: false },
+    { name: "empty card recovery", mode: "card", visible: false, rejected: false },
+    { name: "empty post recovery", mode: "post", visible: false, rejected: false },
+  ] as const)("settles streaming close failure with $name", async ({ mode, visible, rejected }) => {
+    const text = mode === "card" ? "accepted final" : makeTableText(6);
+    const send = mode === "card" ? sendStructuredCardFeishuMock : sendMessageFeishuMock;
+    const recover = !visible || rejected;
+    const messageId = recover ? (mode === "card" ? "om-static" : "om-post") : "om-stream";
+    const error = rejected
+      ? "Update card content failed: streaming mode is closed (code=300309)"
+      : visible
+        ? "close failed"
+        : "final update failed";
+    if (recover) {
+      send.mockResolvedValueOnce({ messageId });
     }
-    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "completed final answer" }),
-    );
-
-    await options.deliver({ text: "completed final answer" }, { kind: "final" });
-    await options.onIdle?.();
-    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps a visible streaming card when the final text was accepted before close failed", async () => {
     const { options } = createDispatcherHarness();
-    const delivery = await options.deliver({ text: "accepted final" }, { kind: "final" });
+    const delivery = await options.deliver({ text }, { kind: "final" });
+    const duplicate = rejected ? await options.deliver({ text }, { kind: "final" }) : undefined;
     stream(0).closeWithResult.mockRejectedValueOnce(
-      new FeishuStreamingFinalizationError(new Error("close failed"), {
-        visibleReplySent: true,
-        content: "accepted final",
-        messageId: "om-stream",
+      streamingFailure(new Error(error), {
+        visibleReplySent: visible,
+        messageId: visible ? "om-stream" : "om-empty-stream",
+        ...(visible ? { content: rejected ? "stale preview" : text } : {}),
+        ...(rejected ? { finalTextAccepted: false } : {}),
       }),
     );
-
-    await expect(options.onIdle?.()).rejects.toThrow("close failed");
-    await expect(delivery?.finalization).rejects.toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: { content: "accepted final", visibleReplySent: true },
-    });
-    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-  });
-  it.each(["card", "post"] as const)(
-    "recovers unaccepted streaming content through a %s",
-    async (mode) => {
-      const text = mode === "card" ? "accepted final" : makeTableText(6);
-      const send = mode === "card" ? sendStructuredCardFeishuMock : sendMessageFeishuMock;
-      const messageId = mode === "card" ? "om-static" : "om-post";
-      send.mockResolvedValueOnce({ messageId });
-      const { options } = createDispatcherHarness();
-      const delivery = await options.deliver({ text }, { kind: "final" });
-      stream(0).closeWithResult.mockRejectedValueOnce(
-        new FeishuStreamingFinalizationError(new Error("final update failed"), {
-          visibleReplySent: false,
-          messageId: "om-empty-stream",
-        }),
-      );
-      await expect(options.onIdle?.()).rejects.toThrow("final update failed");
-      await expect(delivery?.finalization).rejects.toMatchObject(
+    await expect(options.onIdle?.()).rejects.toThrow(error);
+    await expect(delivery?.finalization).rejects.toMatchObject(partialDelivery(text, [messageId]));
+    if (rejected) {
+      await expect(duplicate?.finalization).rejects.toMatchObject(
         partialDelivery(text, [messageId]),
       );
+    }
+    if (recover) {
       expect(send).toHaveBeenCalledWith(expect.objectContaining({ text }));
-      if (mode === "post") {
-        expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-      }
       await options.deliver({ text }, { kind: "final" });
       await options.onIdle?.();
       expect(send).toHaveBeenCalledTimes(1);
-    },
-  );
+    } else {
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    }
+    if (mode === "post") {
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    }
+  });
 
   it("retains a failed visible close for media-delayed finalization registration", async () => {
     const media = gate<{ messageId: string }>();
@@ -1468,7 +1468,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
     const instance = stream(0);
     instance.closeWithResult.mockRejectedValueOnce(
-      new FeishuStreamingFinalizationError(new Error("close failed"), {
+      streamingFailure(new Error("close failed"), {
         visibleReplySent: true,
         content: "accepted card",
         messageId: "om-stream",
@@ -1502,12 +1502,78 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await Promise.resolve();
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
     instance.active = false;
-    close.resolve({ visibleReplySent: true, content: "accepted card", messageId: "om-card" });
+    close.resolve(
+      streamingCloseResult({
+        visibleReplySent: true,
+        content: "accepted card",
+        messageId: "om-card",
+      }),
+    );
     await idle;
     await expect(deliveryErrorPromise).resolves.toMatchObject(
       partialDelivery("accepted card", ["om-card"]),
     );
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    "retains the native close error and its cause after media failure with visible=%s",
+    async (visible) => {
+      const media = gate<{ messageId: string }>();
+      sendMediaFeishuMock.mockImplementationOnce(media.wait);
+      sendStructuredCardFeishuMock.mockResolvedValueOnce({ messageId: "om-static" });
+      const { options } = createDispatcherHarness();
+      const mediaError = new Error("media failed");
+      const transportCause = new Error("socket closed");
+      const closeError = new TypeError("fetch failed", { cause: transportCause });
+      const rejected = options
+        .deliver({ text: "accepted answer", mediaUrl: imageUrl }, { kind: "final" })
+        .catch((error: unknown) => error);
+      await media.started;
+      stream(0).closeWithResult.mockRejectedValueOnce(
+        streamingFailure(closeError, {
+          visibleReplySent: visible,
+          ...(visible ? { content: "accepted answer", messageId: "om-stream" } : {}),
+        }),
+      );
+      media.reject(mediaError);
+      const error = await rejected;
+      expect(error).toMatchObject(
+        partialDelivery("accepted answer", [visible ? "om-stream" : "om-static"]),
+      );
+      expect(error).toMatchObject({
+        cause: expect.objectContaining({
+          message: "Feishu reply delivery and streaming finalization failed",
+          errors: [
+            mediaError,
+            expect.objectContaining({ message: "fetch failed", cause: transportCause }),
+          ],
+        }),
+      });
+      expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(visible ? 0 : 1);
+    },
+  );
+
+  it("preserves fallback-only nested-error precedence after media failure", async () => {
+    const media = gate<{ messageId: string }>();
+    sendMediaFeishuMock.mockImplementationOnce(media.wait);
+    const transportCause = new Error("socket closed");
+    sendStructuredCardFeishuMock.mockRejectedValueOnce(
+      new TypeError("fetch failed", { cause: transportCause }),
+    );
+    const { options } = createDispatcherHarness();
+    const mediaError = new Error("media failed");
+    const rejected = options
+      .deliver({ text: "final answer", mediaUrl: imageUrl }, { kind: "final" })
+      .catch((error: unknown) => error);
+    await media.started;
+    stream(0).closeWithResult.mockResolvedValueOnce({ visibleReplySent: false });
+    media.reject(mediaError);
+    await expect(rejected).resolves.toMatchObject({
+      message: "Feishu reply delivery and streaming finalization failed",
+      errors: [mediaError, transportCause],
+    });
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledOnce();
   });
 
   it("assigns an idle-closed card to its later matching final before media", async () => {
@@ -1543,11 +1609,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     await secondMedia.started;
     expect(sendMediaFeishuMock).toHaveBeenCalledTimes(2);
-    stream(0).closeWithResult.mockResolvedValueOnce({
-      visibleReplySent: true,
-      content: "second",
-      messageId: "om-shared",
-    });
+    stream(0).closeWithResult.mockResolvedValueOnce(
+      streamingCloseResult({
+        visibleReplySent: true,
+        content: "second",
+        messageId: "om-shared",
+      }),
+    );
     await options.onIdle?.();
     firstMedia.resolve({ messageId: "om-media-first" });
     const firstDelivery = await firstDeliveryPromise;
@@ -1581,7 +1649,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     await secondMedia.started;
     stream(0).closeWithResult.mockRejectedValueOnce(
-      new FeishuStreamingFinalizationError(new Error("final update rejected"), {
+      streamingFailure(new Error("final update rejected"), {
         visibleReplySent: true,
         content: "preview",
         messageId: "om-preview",
@@ -1720,12 +1788,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     },
   );
 
-  it("omits reasoning callbacks unless reasoning previews are allowed", () => {
-    const { result } = createDispatcherHarness();
-    expect(result.replyOptions.onReasoningStream).toBeUndefined();
-    expect(result.replyOptions.onReasoningEnd).toBeUndefined();
-  });
-
   it("uses streaming cards for thread replies and keeps topic metadata", async () => {
     const { options } = createDispatcherHarness({
       replyToMessageId: "om_msg",
@@ -1766,7 +1828,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
       const { result, options } = createDispatcherHarness();
       await options.onReplyStart?.();
-      result.replyOptions.onItemEvent?.(projectAgentToolActivity(event));
+      await result.replyOptions.onItemEvent?.(projectAgentToolActivity(event));
       result.replyOptions.onPartialReply?.({ text: "final answer" });
       await options.onIdle?.();
       const updates = streamingUpdateTexts().join("\n");
@@ -1891,22 +1953,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(session.closeWithResult).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     session.active = false;
-    close.resolve({ visibleReplySent: true, content: text, messageId: "om_stream" });
+    close.resolve(
+      streamingCloseResult({ visibleReplySent: true, content: text, messageId: "om_stream" }),
+    );
     await idle;
     await expect(fallback).resolves.toBe(false);
     expect(session.closeWithResult).toHaveBeenCalledWith(text, { note: "Agent: agent" });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("sends no-visible-reply fallback after an empty card streaming close", async () => {
-    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
-    const { result, options } = createDispatcherHarness();
-    await options.onReplyStart?.();
-    await options.onIdle?.();
-    await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(true);
-    expect(streamingInstances).toHaveLength(1);
-    expectClosed("");
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps visible reply state across repeated reply-start keepalives", async () => {
@@ -1973,14 +2026,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       streamingInstances.push = origPush;
       nowSpy.mockRestore();
     }
-  });
-
-  it("falls back to post mode for 6 tables with explicit renderMode=card", async () => {
-    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "off", "feishu"));
-    const { options } = createDispatcherHarness();
-    await options.deliver({ text: makeTableText(6) }, { kind: "final" });
-    expect(sendMessageFeishuMock).toHaveBeenCalled();
-    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

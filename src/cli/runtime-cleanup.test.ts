@@ -6,7 +6,12 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { closeCliResources, getPendingCliDisposers } from "./runtime-cleanup.js";
+import {
+  closeCliResources,
+  getPendingCliDisposers,
+  runCliDisposer,
+  waitForPendingCliDisposers,
+} from "./runtime-cleanup.js";
 
 const memoryClosed = vi.hoisted(() => vi.fn(async () => {}));
 const databasesClosed = vi.hoisted(() => vi.fn(async () => {}));
@@ -44,6 +49,34 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
+
+it.each([false, true])(
+  "reports a failed disposer without preventing later cleanup (after deadline: %s)",
+  async (afterDeadline) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const pending = createDeferredCore();
+    const events: string[] = [];
+    const cleanup = runCliDisposer("failed-resource", async () => {
+      await pending.promise;
+      throw new Error("resource close failed");
+    });
+    if (afterDeadline) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(cleanup).resolves.toBeUndefined();
+    }
+    pending.resolve();
+    await cleanup;
+    await waitForPendingCliDisposers();
+    await runCliDisposer("next-resource", async () => {
+      events.push("next-resource");
+    });
+    expect(console.error).toHaveBeenCalledWith(
+      "CLI cleanup failed: failed-resource: resource close failed",
+    );
+    expect(console.error).toHaveBeenCalledTimes(afterDeadline ? 2 : 1);
+    expect(events).toEqual(["next-resource"]);
+  },
+);
 
 it("continues later cleanup when a harness disposer never settles", async () => {
   const gate = createDeferredCore();

@@ -185,41 +185,51 @@ describe("channel ingress monitor", () => {
       await monitor.stop();
     });
   });
-  it("rechecks identity against a derived lane for legacy rows", async () => {
-    await withQueue(async (queue) => {
-      await queue.enqueue("event-derived", {
-        version: 1,
-        rawEvent: JSON.stringify({ id: "event-derived", lane: "a", text: "hello" }),
-      });
-      const deliver = vi.fn();
-      const monitor = createChannelIngressMonitor<RawEvent, string, StoredEvent>({
-        queue,
-        inspect: (raw) => ({ eventId: raw.id, laneKey: `lane:${raw.lane}` }),
-        payload: {
-          storage: "raw-event",
-          version: 1,
-          serialize: (raw) => JSON.stringify(raw),
-          deserialize: (body) => JSON.parse(body) as RawEvent,
-          createClaimError: (kind) => new PermanentIngressError(kind),
-        },
-        deliver,
-        pollIntervalMs: 10,
-        retention: { pruneIntervalMs: 60_000 },
-        drain: {
-          deriveLaneKey: () => "lane:a",
-          resolveNonRetryableFailure: (error) =>
-            error instanceof PermanentIngressError
-              ? { reason: "invalid-event", message: error.message }
-              : null,
-        },
-      });
-      monitor.start();
-      await monitor.waitForIdle();
+  it.each([
+    { kind: "legacy", storedLaneKey: undefined, schedulingLaneKey: "lane:a" },
+    { kind: "per-event", storedLaneKey: "lane:a", schedulingLaneKey: "lane:a:event-derived" },
+  ])(
+    "preserves transport identity with a $kind scheduling lane",
+    async ({ storedLaneKey, schedulingLaneKey }) => {
+      await withQueue(async (queue) => {
+        await queue.enqueue(
+          "event-derived",
+          {
+            version: 1,
+            rawEvent: JSON.stringify({ id: "event-derived", lane: "a", text: "hello" }),
+          },
+          { laneKey: storedLaneKey },
+        );
+        const deliver = vi.fn();
+        const monitor = createChannelIngressMonitor<RawEvent, string, StoredEvent>({
+          queue,
+          inspect: (raw) => ({ eventId: raw.id, laneKey: `lane:${raw.lane}` }),
+          payload: {
+            storage: "raw-event",
+            version: 1,
+            serialize: (raw) => JSON.stringify(raw),
+            deserialize: (body) => JSON.parse(body) as RawEvent,
+            createClaimError: (kind) => new PermanentIngressError(kind),
+          },
+          deliver,
+          pollIntervalMs: 10,
+          retention: { pruneIntervalMs: 60_000 },
+          drain: {
+            deriveLaneKey: () => schedulingLaneKey,
+            resolveNonRetryableFailure: (error) =>
+              error instanceof PermanentIngressError
+                ? { reason: "invalid-event", message: error.message }
+                : null,
+          },
+        });
+        monitor.start();
+        await monitor.waitForIdle();
 
-      expect(deliver).toHaveBeenCalledOnce();
-      await monitor.stop();
-    });
-  });
+        expect(deliver).toHaveBeenCalledOnce();
+        await monitor.stop();
+      });
+    },
+  );
 
   it("drains the next same-lane event after adoption while delivery remains active", async () => {
     await withQueue(async (queue) => {

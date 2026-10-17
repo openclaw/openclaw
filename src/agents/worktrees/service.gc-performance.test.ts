@@ -15,7 +15,6 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import * as checkoutInspection from "./checkout-inspection.js";
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
 import { requireGit, runGit } from "./git.js";
@@ -368,6 +367,7 @@ describe("worktree Git maintenance", () => {
       .mockImplementation(async (cwd, args, options) => {
         if (args[0] === "multi-pack-index") {
           repairRoots.push(cwd);
+          expect(options?.timeoutMs).toBe(30 * 60_000);
           if (failPackRepair && cwd === repo) {
             throw new Error("pack index unavailable");
           }
@@ -375,7 +375,6 @@ describe("worktree Git maintenance", () => {
         if (args[0] !== "maintenance") {
           return await execute(cwd, args, options);
         }
-        expect(repairRoots.at(-1)).toBe(cwd);
         taskOrders.push(args.filter((arg) => arg.startsWith("--task=")));
         expect(options).toMatchObject({
           killProcessTree: true,
@@ -951,7 +950,7 @@ describe("worktree GC inventories", () => {
     }
     await hasTemplatesAsync(env);
     const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
-    const reads = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
+    const reads = vi.spyOn(registryReads, "readRegistryWorktrees");
     const cleanupReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     const inspections = vi.spyOn(checkoutInspection, "inspectManagedWorktreeCheckout");
     // Warm the retained reader before measuring steady-state cleanup.
@@ -969,9 +968,7 @@ describe("worktree GC inventories", () => {
       registryReads: cleanupReads.mock.calls.filter(
         ([, command]) => command.type === "worktrees.cleanupState",
       ).length,
-      maintenanceInventoryReads: reads.mock.calls.filter(
-        ([, command]) => command.type === "worktrees.list",
-      ).length,
+      maintenanceInventoryReads: reads.mock.calls.length,
       checkoutInspections: inspections.mock.calls.length,
       elapsedMs: performance.now() - started,
       rssBytes: process.memoryUsage().rss,
@@ -1003,7 +1000,7 @@ describe("worktree GC inventories", () => {
       id: "removed-history",
       removedAt: 0,
     });
-    const reads = vi.spyOn(stateWorker, "executeOpenClawStateWorker");
+    const reads = vi.spyOn(registryReads, "readRegistryWorktrees");
     const inspections = vi.spyOn(checkoutInspection, "inspectManagedWorktreeCheckout");
     const readCleanupState = registryReads.readWorktreeCleanupState;
     let publishedLateLease = false;
@@ -1025,11 +1022,7 @@ describe("worktree GC inventories", () => {
     expect(result.protectionReasons).toEqual({ "live-refused": 3 });
     expect(result.limitsSatisfied).toBe(false);
     expect(inspections).not.toHaveBeenCalled();
-    const batches = await Promise.all(
-      reads.mock.calls.flatMap(([, command], index) =>
-        command.type === "worktrees.list" ? [reads.mock.results[index]?.value] : [],
-      ),
-    );
+    const batches = await Promise.all(reads.mock.results.map((readResult) => readResult.value));
     // Only the final repository-maintenance pass needs retained snapshot repositories.
     expect(batches.length).toBeGreaterThan(1);
     for (const batch of batches.slice(0, -1)) {

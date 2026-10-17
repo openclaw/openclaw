@@ -12,6 +12,7 @@ export const {
   resolvePersistedAuthProfileOwnerAgentDirAsync,
   loadAuthProfileStoreForSecretsRuntimeAsync,
   loadAuthProfileStoreWithoutExternalProfilesAsync,
+  loadAuthProfileStoreForCatalogAsync,
   ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
   ensureAuthProfileStoreForLocalUpdateAsync,

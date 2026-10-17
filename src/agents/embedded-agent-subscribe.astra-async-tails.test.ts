@@ -19,7 +19,6 @@ import { runAgentLoop } from "../plugin-sdk/agent-core.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import { matchesTranscriptEvent } from "../sessions/transcript-visible-record.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
-import { buildAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./embedded-agent-runner/run/attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./embedded-agent-runner/run/context-recovery-state.js";
 import { resolveFinalAssistantVisibleText } from "./embedded-agent-runner/run/helpers.js";
@@ -187,7 +186,7 @@ describe("Astra async response tails", () => {
       ],
       transcript: ["stop:text+text"],
       delivered: ["First part.", "Second part."],
-      reply: { disposition: "visible", text: "First part.\nSecond part." },
+      reply: { disposition: "visible", text: "First part.Second part." },
     },
     {
       name: "a repeated answer is delivered once",
@@ -205,7 +204,7 @@ describe("Astra async response tails", () => {
       delivered: ["/tmp/openclaw/tts-a/voice-a.opus"],
     },
     {
-      name: "a NO_REPLY after a superseding silent attachment does not restore the earlier answer",
+      name: "a NO_REPLY after a superseding attachment-only answer does not restore earlier text",
       delivery: "deferred",
       requests: [
         answered,
@@ -217,10 +216,11 @@ describe("Astra async response tails", () => {
       ],
       transcript: ["toolUse:toolCall", "stop:text", "toolUse:toolCall", "stop:text", "stop:text"],
       delivered: ["/tmp/openclaw/tts-a/voice-a.opus"],
-      reply: { disposition: "silent" },
+      // The kept attachment answer owns the result; its parsed text is empty, not NO_REPLY.
+      reply: { disposition: "empty" },
     },
     {
-      name: "a later voice NO_REPLY that persistence normalized first supersedes the completed answer",
+      name: "a voice reply normalized to exact NO_REPLY before subscription stays silent",
       delivery: "deferred",
       requests: [answered, "NO_REPLY [[audio_as_voice]]"],
       transcript: answeredTail,
@@ -466,7 +466,6 @@ describe("Astra async response tails", () => {
     const { replyPayloads } = await buildReplyPayloads({
       payloads: prepared.payloads,
       isHeartbeat: heartbeat,
-      didLogHeartbeatStrip: false,
       blockStreamingEnabled,
       blockReplyPipeline: pipeline,
       replyToMode: "off",
@@ -474,12 +473,7 @@ describe("Astra async response tails", () => {
     expect([...sent, ...replyPayloads.map(show)]).toEqual(delivered);
     if ("reply" in row) {
       // Sub-agent completion and A2A forwarding read the terminal reply, not the payloads.
-      expect(
-        buildAgentRunTerminalReplySnapshot({
-          visibleText: prepared.finalAssistantVisibleText,
-          rawText: prepared.finalAssistantRawText,
-        }),
-      ).toEqual(row.reply);
+      expect(prepared.preparedTerminalReply.terminalReply).toEqual(row.reply);
     }
     if ("announce" in row) {
       // A parent's sub-agent announcement hydrates the answer from the persisted rows.
@@ -508,10 +502,7 @@ describe("Astra async response tails", () => {
         },
         completion: {
           required: true,
-          terminalReply: buildAgentRunTerminalReplySnapshot({
-            visibleText: prepared.finalAssistantVisibleText,
-            rawText: prepared.finalAssistantRawText,
-          }),
+          terminalReply: prepared.preparedTerminalReply.terminalReply,
         },
       };
       const unexpected = () => {

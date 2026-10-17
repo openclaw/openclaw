@@ -406,30 +406,8 @@ export async function bindProductionHarnessHostCapabilitiesForTest(
   return close;
 }
 
-export {
-  setCodexTestModelSupportsTools,
-  createCodexRuntimePlanFixture,
-} from "./thread-lifecycle.test-fixtures.js";
-
-export function assistantMessage(text: string, timestamp: number) {
-  return {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "openai-chatgpt-responses",
-    provider: "openai",
-    model: "gpt-5.4-codex",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop" as const,
-    timestamp,
-  };
-}
+export { assistantMessage, createCodexRuntimePlanFixture } from "./test-support.js";
+export { setCodexTestModelSupportsTools } from "./thread-lifecycle.test-fixtures.js";
 
 export function userMessage(text: string, timestamp: number) {
   return {

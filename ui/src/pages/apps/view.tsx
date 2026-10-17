@@ -7,7 +7,7 @@ import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import "../../styles/apps.css";
-import "../../components/native-chrome-setup.ts";
+import "../../components/native-chrome-setup.tsx";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { appsBrandIcons } from "./brand-icons.tsx";
 
@@ -228,7 +228,7 @@ function AppCardView(props: { card: AppCard; options: AppsProps }) {
         <For each={["light", "dark"]}>
           {(theme) => (
             <img
-              class={`apps-card__art-img apps-card__art-img--${theme}`}
+              class={["apps-card__art-img", `apps-card__art-img--${theme}`]}
               src={inferControlUiPublicAssetPath(
                 `app-art/${props.card.id}${theme === "dark" ? "-dark" : ""}.webp`,
               )}

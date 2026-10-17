@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, type Mock } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -64,8 +65,9 @@ describe("composer app context", () => {
     expect.soft(strip.textContent?.trim()).toBe("");
     expect(strip.querySelector('[role="alert"]')).toBeNull();
   });
-  it("clears an already-consumed item after an idempotent removal response", async () => {
-    const request = vi.fn(async () => ({ state: null }));
+  it("releases a failed removal for retry and clears an idempotent response", async () => {
+    const removal = createDeferred<{ state: null }>();
+    const request = vi.fn().mockReturnValueOnce(removal.promise).mockResolvedValue({ state: null });
     const client = { request } as unknown as NonNullable<ApplicationGateway["snapshot"]["client"]>;
     publishMcpAppContext(client, {
       sessionKey: "agent:main:one",
@@ -93,7 +95,17 @@ describe("composer app context", () => {
     );
     flush();
     expect(strip.textContent).toContain("Hex bolt");
-    strip.querySelector<HTMLButtonElement>("button")!.click();
+    const remove = strip.querySelector<HTMLButtonElement>("button")!;
+    remove.click();
+    flush();
+    expect(remove.disabled).toBe(true);
+    removal.reject(new Error("Removal unavailable"));
+    await waitForSolid(() =>
+      expect(strip.querySelector('[role="alert"]')?.textContent).toContain("Removal unavailable"),
+    );
+    expect(remove.disabled).toBe(false);
+    expect(strip.textContent).toContain("Hex bolt");
+    remove.click();
     await waitForSolid(() => expect(strip.textContent?.trim()).toBe(""));
     expect(request).toHaveBeenCalledWith("mcp.app.removeModelContext", {
       sessionKey: "agent:main:one",

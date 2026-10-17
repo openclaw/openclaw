@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -32,6 +31,7 @@ import {
   readAgentDatabaseLeaseProvenance,
   agentDatabaseLeaseProcessDeathRefusal,
 } from "./openclaw-agent-db-lease-provenance.js";
+import { agentDatabaseMaintenanceAuthority as maintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
 import {
   invalidateOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
@@ -71,17 +71,15 @@ export const AGENT_DATABASE_MAINTENANCE_LEASE = {
 } as const;
 
 export class OpenClawAgentDatabaseLeaseActiveError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** Live owner PIDs observed by a read-only check; diagnostic evidence, never authority. */
+    readonly ownerPids: readonly number[] = [],
+  ) {
     super(message);
     this.name = "OpenClawAgentDatabaseLeaseActiveError";
   }
 }
-
-const maintenanceAuthority = new AsyncLocalStorage<{
-  authority: OpenClawStateLeaseContext;
-  databasePath: string;
-  assertScopeCurrent?: () => void;
-}>();
 
 /** Ordinary agent worker routing cannot borrow native maintenance authority. */
 export function hasAgentDatabaseMaintenanceAuthority(): boolean {
@@ -102,20 +100,6 @@ export function runWithAgentDatabaseMaintenanceAuthority<T>(
     },
     run,
   );
-}
-
-/** Revalidate the held lease, including immediately before committing a versioned rebuild. */
-export function assertAgentDatabaseMaintenanceAuthority(
-  expected?: OpenClawStateLeaseContext,
-): void {
-  const authority = maintenanceAuthority.getStore()?.authority;
-  if (!authority || (expected && authority !== expected)) {
-    throw new Error(
-      "Agent identity migration requires stopped-writer maintenance; stop active agents and run openclaw doctor --fix.",
-    );
-  }
-  authority.assertOwned();
-  maintenanceAuthority.getStore()?.assertScopeCurrent?.();
 }
 
 /** Revalidate a maintenance owner when present, without requiring ordinary opens to hold one. */
@@ -208,11 +192,11 @@ function claimAgentDatabaseLeaseInDatabase(
   }
   assertAgentDeletionPathFence(database, deletionFence);
   let invalidated = false;
+  let hasOtherOwner = false;
   let processDeathRefusal: string | undefined;
   for (const held of readAgentDatabaseLeases(database.db)) {
-    const staleReason = mayShareAgentDatabaseFile(held.path, owner.path)
-      ? agentDatabaseLeaseStaleReason(held)
-      : undefined;
+    const sharesFile = mayShareAgentDatabaseFile(held.path, owner.path);
+    const staleReason = sharesFile ? agentDatabaseLeaseStaleReason(held) : undefined;
     if (staleReason) {
       const because = agentDatabaseLeaseProcessDeathRefusal(held, owner.path, staleReason);
       processDeathRefusal ??= because;
@@ -231,9 +215,17 @@ function claimAgentDatabaseLeaseInDatabase(
         database.db,
         db.deleteFrom("agent_database_leases").where("lease_id", "=", held.lease_id),
       );
+    } else if (
+      sharesFile &&
+      held.lease_id !== owner.leaseId &&
+      (owner.ownerStartTime === null ||
+        held.owner_pid !== owner.ownerPid ||
+        held.owner_start_time === null ||
+        held.owner_start_time !== owner.ownerStartTime)
+    ) {
+      hasOtherOwner = true;
     }
   }
-  const hasOtherOwner = hasAgentDatabasePathLease(database.db, owner.path, owner);
   onVerification?.(
     !hasOtherOwner,
     invalidated,
@@ -321,38 +313,16 @@ export function releaseOpenClawAgentDatabaseLease(
   );
 }
 
-type AgentDatabaseLeaseOwner = Pick<
-  OpenClawAgentDatabaseWorkerLeaseReceipt,
-  "leaseId" | "ownerPid" | "ownerStartTime"
->;
-
-function agentDatabaseLeasePaths(
-  database: EngineConnection,
-  excludedOwner?: AgentDatabaseLeaseOwner,
-): string[] {
+function agentDatabaseLeasePaths(database: EngineConnection): string[] {
   const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
-  let query = db.selectFrom("agent_database_leases").select("path").distinct();
-  if (excludedOwner) {
-    query = query.where("lease_id", "!=", excludedOwner.leaseId);
-    if (excludedOwner.ownerStartTime !== null) {
-      query = query.where((eb) =>
-        eb.or([
-          eb("owner_pid", "!=", excludedOwner.ownerPid),
-          eb("owner_start_time", "is", null),
-          eb("owner_start_time", "!=", excludedOwner.ownerStartTime),
-        ]),
-      );
-    }
-  }
-  return executeSqliteQuerySync(database, query).rows.map((row) => row.path);
+  return executeSqliteQuerySync(
+    database,
+    db.selectFrom("agent_database_leases").select("path").distinct(),
+  ).rows.map((row) => row.path);
 }
 
-function hasAgentDatabasePathLease(
-  database: EngineConnection,
-  pathname: string,
-  excludedOwner?: AgentDatabaseLeaseOwner,
-): boolean {
-  return agentDatabaseLeasePaths(database, excludedOwner).some((held) =>
+function hasAgentDatabasePathLease(database: EngineConnection, pathname: string): boolean {
+  return agentDatabaseLeasePaths(database).some((held) =>
     mayShareAgentDatabaseFile(held, pathname),
   );
 }
@@ -364,15 +334,20 @@ export function recordOpenClawAgentDatabaseAdmission(
 ): void {
   runOpenClawStateWriteTransaction(
     (database) => {
-      assertOpenClawAgentDatabaseLease(leaseId, params);
       ensureOpenClawQuarantineStore(params.env ?? process.env);
-      executeSqliteQuerySync(
+      const completed = executeSqliteQuerySync(
         database.db,
         getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db)
           .updateTable("agent_database_leases")
           .set({ opened_at: Date.now() })
-          .where("lease_id", "=", leaseId),
+          .where("lease_id", "=", leaseId)
+          .where("agent_id", "=", params.agentId)
+          .where("path", "=", params.path)
+          .where("owner_pid", "=", process.pid),
       );
+      if (completed.numAffectedRows !== 1n) {
+        throw new Error(`Agent database open lost its runtime lease: ${params.path}`);
+      }
     },
     { env: params.env },
   );
@@ -595,13 +570,15 @@ export function assertNoOpenClawAgentDatabaseLeasesReadOnly(
   options: OpenClawStateDatabaseOptions = {},
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): void {
-  const [owner] = readActiveOpenClawAgentDatabaseLeasesReadOnly(
+  const owners = readActiveOpenClawAgentDatabaseLeasesReadOnly(
     options,
     openStateSchemaReadAdmission,
   );
+  const [owner] = owners;
   if (owner) {
     throw new OpenClawAgentDatabaseLeaseActiveError(
       `Agent ${owner.agent_id} database is still open in process ${owner.owner_pid}; stop that process before Doctor repair.`,
+      [...new Set(owners.map((row) => row.owner_pid))],
     );
   }
 }

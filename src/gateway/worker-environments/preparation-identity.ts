@@ -2,9 +2,8 @@ import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../../infra/node-commands.js";
 import type { WorkerProfile } from "../../plugins/types.js";
-import { EnvironmentRecipeSchema, type EnvironmentRecipe } from "./environment-recipe.js";
+import type { EnvironmentRecipe } from "./environment-recipe.js";
 import {
-  WorkerPreparationArtifactsSchema,
   WorkerPreparationTargetSchema,
   type WorkerPreparationArtifacts,
   type WorkerProjectPreparationIdentity,
@@ -29,14 +28,16 @@ export function createWorkerPreparationIdentity(params: {
   runSetupScript?: boolean;
   recipe?: EnvironmentRecipe;
 }): WorkerProjectPreparationIdentity {
-  const artifacts = WorkerPreparationArtifactsSchema.parse(params.artifacts);
-  artifacts.enabledPluginIds = [...new Set(artifacts.enabledPluginIds)].toSorted();
-  artifacts.protocolFeatures = [...new Set(artifacts.protocolFeatures)].toSorted();
+  const artifacts = {
+    ...params.artifacts,
+    enabledPluginIds: [...new Set(params.artifacts.enabledPluginIds)].toSorted(),
+    protocolFeatures: [...new Set(params.artifacts.protocolFeatures)].toSorted(),
+  };
   // Skipping an executable recipe owns a separate cache; absent recipes do no setup.
   const facts = {
     contractVersion: 2 as const,
     ...(params.setupRecipe ? { setupRecipe: params.setupRecipe } : {}),
-    ...(params.recipe ? { recipe: EnvironmentRecipeSchema.parse(params.recipe) } : {}),
+    ...(params.recipe ? { recipe: params.recipe } : {}),
     ...(params.setupRecipe && params.runSetupScript === false
       ? { runSetupScript: false as const }
       : {}),

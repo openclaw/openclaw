@@ -1,6 +1,8 @@
 import type {
   ChannelsStatusResult,
+  EnvironmentsListResult,
   UserProfile,
+  ProjectsCheckoutOptionsResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type {
   PluginsCatalogBrowseResult,
@@ -97,6 +99,14 @@ export function createControlUiDefaultResponses(scenario: {
     current: { id: "claw", mode: "system", scope: "gateway", overrides: {} },
   };
   return {
+    "environments.list": {
+      environments: [],
+      profiles: [],
+    } satisfies EnvironmentsListResult,
+    "projects.checkoutOptions": {
+      current: true,
+      worktree: true,
+    } satisfies ProjectsCheckoutOptionsResult,
     "doctor.memory.status": {
       agentId: "main",
       provider: "none",

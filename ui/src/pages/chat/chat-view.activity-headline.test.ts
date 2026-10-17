@@ -1,16 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { createTestTranscript, renderChatInto } from "./chat-view.test-helpers.ts";
+import { createTestTranscript, disposeChatView, renderChatInto } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
+import { saveChatSessionScrollPosition } from "./scroll.ts";
 
 let container: ReturnType<typeof createComposerContainer>;
 let transcript: ReturnType<typeof createTestTranscript>;
@@ -22,8 +22,8 @@ beforeEach(() => {
   transcript = createTestTranscript();
 });
 afterEach(() => {
-  render(nothing, container);
-  transcript.hostDisconnected();
+  disposeChatView(container);
+  transcript.dispose();
   resetChatViewState();
   resetTranscriptTestDom();
   vi.useRealTimers();
@@ -142,6 +142,11 @@ it("retains live running activity when history contains an unfinished call", () 
 });
 
 it("limits live copy to the newest activity group in the active run, not history or another run", () => {
+  transcript = createTestTranscript("activity-headline-history");
+  saveChatSessionScrollPosition("activity-headline-history", "main", {
+    scrollTop: 0,
+    anchorToEnd: false,
+  });
   draw(
     [
       tool("history", "Historical file", "completed", "old-run", 0),

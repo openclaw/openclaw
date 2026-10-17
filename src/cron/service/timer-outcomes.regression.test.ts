@@ -13,7 +13,8 @@ import { createCronServiceStateWithJobs } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronJob } from "../types.js";
-import type { DeferredCronNotifications } from "./state.js";
+import { needsCronTimerMaintenance } from "./jobs-scheduling.js";
+import type { CronServiceDeps, DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import { applyJobResult } from "./timer-outcomes.js";
 import { onTimer, runMissedJobs } from "./timer.test-support.js";
@@ -47,6 +48,70 @@ function outcomeFixture(
 }
 
 describe("cron timer outcome and failure policy regressions", () => {
+  it.each([false, true])("never invents an event retry slot during outcome replay=%s", (replay) => {
+    const startedAt = Date.parse("2026-10-05T00:00:00.000Z");
+    const { state, job } = outcomeFixture(startedAt, {
+      schedule: { kind: "event", source: "mcp-events", options: {} },
+      state: { sourceIdentity: "source-generation" },
+    });
+    applyJobResult(
+      state,
+      job,
+      {
+        status: "error",
+        error: "rate limit",
+        startedAt,
+        endedAt: startedAt + 1,
+      },
+      {
+        deferredNotifications: [],
+        ...(replay ? { replay: true, replaySchedule: { nextRunAtMs: startedAt + 60_000 } } : {}),
+      },
+    );
+    expect(job.enabled).toBe(true);
+    expect(job.state.lastRunStatus).toBe("error");
+    expect(job.state.consecutiveErrors).toBe(1);
+    expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(job.state.sourceIdentity).toBe("source-generation");
+  });
+
+  it.each([0, 9, 10])(
+    "keeps %i failures unchanged after a cancelled recurring run",
+    (priorErrors) => {
+      const startedAt = Date.parse("2026-10-05T00:00:00.000Z");
+      const { state, job } = outcomeFixture(startedAt, {
+        state: { consecutiveErrors: priorErrors },
+        failureAlert: { after: 1, cooldownMs: 0 },
+      });
+      const deferredNotifications: DeferredCronNotifications = [];
+      applyJobResult(
+        state,
+        job,
+        {
+          status: "error",
+          error: "Gateway restarting.",
+          errorClassification: { kind: "aborted" },
+          startedAt,
+          endedAt: startedAt + 1,
+        },
+        { deferredNotifications },
+      );
+
+      expect(job.enabled).toBe(true);
+      expect(job.state.lastError).toBe("Gateway restarting.");
+      expect(job.state.lastRunStatus).toBe("error");
+      expect(job.state.consecutiveErrors).toBe(priorErrors);
+      expect(job.state.autoDisabled).toBeUndefined();
+      expect(job.state.failureAlertIncident).toBeUndefined();
+      // Interrupted runs retain error scheduling, including its minimum backoff.
+      const nextRunAtMs = startedAt + (priorErrors === 0 ? 60_000 : 3_600_001);
+      expect(job.state.nextRunAtMs).toBe(nextRunAtMs);
+      expect(needsCronTimerMaintenance(job, startedAt + 60_000)).toBe(false);
+      expect(needsCronTimerMaintenance(job, nextRunAtMs)).toBe(false);
+      expect(deferredNotifications).toEqual([]);
+    },
+  );
+
   it("preserves every cadence after a transient recurring retry succeeds", () => {
     const scheduledAt = Date.parse("2026-05-29T02:28:00.000Z");
     const everyTwelveHoursMs = 12 * 60 * 60 * 1_000;
@@ -144,7 +209,9 @@ describe("cron timer outcome and failure policy regressions", () => {
     const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
     const deferredNotifications: DeferredCronNotifications = [];
     const enqueueSystemEvent = vi.fn();
-    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
+      async () => undefined,
+    );
     const log = { ...noopLogger, warn: vi.fn() };
     const diagnostics = {
       summary: "exec stderr tail",
@@ -218,9 +285,107 @@ describe("cron timer outcome and failure policy regressions", () => {
     });
     expect(deferredNotifications).toHaveLength(1);
     await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
-    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
-    expect(sendCronFailureAlert).not.toHaveBeenCalled();
+    // The configured failure route carries the auto-disable notice; no model turn is needed.
+    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+    expect(sendCronFailureAlert.mock.calls[0]?.[0]).toMatchObject({
+      payload: {
+        text: expect.stringContaining(
+          'Automation "outcome" was auto-disabled after 10 consecutive run failures.',
+        ),
+      },
+    });
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { name: "alerts disabled for the job", overrides: { failureAlert: false } },
+    { name: "no failure route", overrides: { delivery: { mode: "none" } } },
+  ] as const)(
+    "keeps the owning-agent auto-disable notice when the job has $name",
+    async ({ overrides }) => {
+      const startedAt = Date.parse("2026-08-01T13:00:00.000Z");
+      const deferredNotifications: DeferredCronNotifications = [];
+      const enqueueSystemEvent = vi.fn();
+      const sendCronFailureAlert = vi.fn(async () => undefined);
+      const { state, job } = outcomeFixture(
+        startedAt,
+        { ...overrides, state: { consecutiveErrors: 9 } } as Partial<CronJob>,
+        { enqueueSystemEvent, sendCronFailureAlert, defaultAgentId: "main" },
+      );
+
+      applyJobResult(
+        state,
+        job,
+        { status: "error", error: "tenth failure", startedAt, endedAt: startedAt + 10 },
+        { deferredNotifications },
+      );
+      expect(job.state.autoDisabled?.reason).toBe("consecutive-failures");
+      expect(deferredNotifications.map((notification) => notification.kind)).toEqual([
+        "auto-disabled",
+      ]);
+      await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+      expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("was auto-disabled after 10 consecutive run failures"),
+        expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
+      );
+      expect(sendCronFailureAlert).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      name: "webhook route, no earlier alert",
+      failureAlert: { after: 20, mode: "webhook", to: "https://alerts.example.com/hook" },
+      repairPending: false,
+    },
+    { name: "announce route, no earlier alert", failureAlert: { after: 20 }, repairPending: false },
+    {
+      name: "announce route, repair still pending",
+      failureAlert: { after: 2 },
+      repairPending: true,
+    },
+  ] as const)(
+    "sends an owned job's auto-disable notice through its route, not a repair turn ($name)",
+    ({ failureAlert, repairPending }) => {
+      const startedAt = Date.parse("2026-08-01T13:30:00.000Z");
+      const deferredNotifications: DeferredCronNotifications = [];
+      const { state, job } = outcomeFixture(startedAt, {
+        owner: { agentId: "main", sessionKey: "agent:main:main" },
+        failureAlert: { ...failureAlert },
+        state: {
+          consecutiveErrors: 9,
+          ...(repairPending
+            ? {
+                failureAlertIncident: {
+                  scope: "run",
+                  repair: { atMs: startedAt - 60_000, deadlineAtMs: startedAt + 60_000 },
+                },
+              }
+            : {}),
+        },
+      } as Partial<CronJob>);
+
+      applyJobResult(
+        state,
+        job,
+        { status: "error", error: "tenth failure", startedAt, endedAt: startedAt + 10 },
+        { deferredNotifications },
+      );
+
+      expect(job.enabled).toBe(false);
+      // A repair turn would need the same failing model; the route gets the notice directly.
+      expect(deferredNotifications.map((notification) => notification.kind)).toEqual([
+        "failure-alert",
+      ]);
+      const [notification] = deferredNotifications;
+      expect(notification?.kind === "failure-alert" && notification.payload.text).toContain(
+        "was auto-disabled after 10 consecutive run failures",
+      );
+      if (repairPending) {
+        expect(job.state.failureAlertIncident?.repair?.alerted).toBe(true);
+      }
+    },
+  );
 
   it.each([
     { name: "stale", options: { scheduleOwnership: "stale" } },

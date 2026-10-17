@@ -11,11 +11,10 @@ import {
   normalizeSingleOrTrimmedStringList,
   normalizeTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
-import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 import type { ReplyDeliveryState } from "../reply-completion.js";
 import { collectMediaUrlsFromRecord, hasVisibleAgentPayload } from "./message-visibility.js";
-export { hasExplicitlyVisibleAgentPayload, hasVisibleAgentPayload } from "./message-visibility.js";
+export { hasVisibleAgentPayload } from "./message-visibility.js";
 
 // Preserve delivery and side-effect evidence so fallback cannot repeat messages,
 // media, cron entries, or accepted child sessions.
@@ -183,107 +182,6 @@ function getPayloadDeliveryOutcomes(
 ): unknown[] | undefined {
   const outcomes = asOptionalObjectRecord(result.deliveryStatus)?.payloadOutcomes;
   return Array.isArray(outcomes) ? outcomes : undefined;
-}
-
-function collectPayloadOutcomeMediaUrls(
-  result: Pick<AgentDeliveryEvidence, "deliveryStatus" | "payloads">,
-  statuses: (outcome: Record<string, unknown>) => boolean,
-): string[] {
-  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
-  const outcomes = getPayloadDeliveryOutcomes(result) ?? [];
-  const urls = new Set<string>();
-  for (const outcome of outcomes) {
-    const record = asOptionalRecord(outcome);
-    if (!record || !statuses(record)) {
-      continue;
-    }
-    const index =
-      typeof record.index === "number" && Number.isInteger(record.index) ? record.index : undefined;
-    const payload = asOptionalRecord(index === undefined ? undefined : payloads[index]);
-    if (payload && hasDeliverableAgentPayload(payload)) {
-      collectMediaUrlsFromRecord(payload, urls);
-    }
-  }
-  return Array.from(urls);
-}
-
-function hasDeliverableAgentPayload(payload: unknown): boolean {
-  if (asOptionalRecord(payload)?.visible === false) {
-    return false;
-  }
-  return hasVisibleAgentPayload(
-    { payloads: [payload] },
-    { includeErrorPayloads: false, includeReasoningPayloads: false },
-  );
-}
-
-/** Collect automatic-delivery media proven sent by aggregate or per-payload evidence. */
-export function collectAutomaticDeliveredMediaUrls(
-  result: Pick<AgentDeliveryEvidence, "deliveryStatus" | "payloads">,
-): string[] {
-  if (getPayloadDeliveryOutcomes(result)) {
-    return collectPayloadOutcomeMediaUrls(
-      result,
-      (outcome) =>
-        normalizeEvidenceStatus(outcome.status) === "sent" ||
-        normalizeEvidenceStatus(outcome.status) === "suppressed",
-    );
-  }
-  const status = normalizeEvidenceStatus(result.deliveryStatus?.status);
-  return status === "sent" || status === "suppressed"
-    ? collectPayloadMediaUrls(result.payloads, hasDeliverableAgentPayload)
-    : [];
-}
-
-/** Collect media whose send may have committed before a per-payload failure. */
-export function collectAmbiguousAutomaticMediaUrls(
-  result: Pick<AgentDeliveryEvidence, "deliveryStatus" | "payloads">,
-): string[] {
-  return collectPayloadOutcomeMediaUrls(
-    result,
-    (outcome) =>
-      normalizeEvidenceStatus(outcome.status) === "failed" && outcome.sentBeforeError === true,
-  );
-}
-
-/** Check that a partial automatic send classifies every expected-media payload. */
-export function hasCompleteAutomaticMediaDeliveryOutcomeEvidence(
-  result: Pick<AgentDeliveryEvidence, "deliveryStatus" | "payloads" | "payloadsTruncated">,
-  expectedMediaUrls: readonly string[],
-): boolean {
-  if (result.payloadsTruncated === true) {
-    return false;
-  }
-  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
-  const outcomes = Array.isArray(result.deliveryStatus?.payloadOutcomes)
-    ? result.deliveryStatus.payloadOutcomes
-    : [];
-  if (payloads.length === 0 || outcomes.length === 0) {
-    return false;
-  }
-  const classifiedIndexes = new Set(
-    outcomes.flatMap((outcome) => {
-      const record = asOptionalRecord(outcome);
-      const index = record?.index;
-      const status = normalizeEvidenceStatus(record?.status);
-      return typeof index === "number" &&
-        Number.isInteger(index) &&
-        index >= 0 &&
-        index < payloads.length &&
-        (status === "sent" ||
-          status === "suppressed" ||
-          (status === "failed" && typeof record?.sentBeforeError === "boolean"))
-        ? [index]
-        : [];
-    }),
-  );
-  const expected = new Set(expectedMediaUrls.map(normalizeMediaReferenceForComparison));
-  return payloads.every((payload, index) => {
-    const containsExpectedMedia = collectPayloadMediaUrls([payload]).some((url) =>
-      expected.has(normalizeMediaReferenceForComparison(url)),
-    );
-    return !containsExpectedMedia || classifiedIndexes.has(index);
-  });
 }
 
 /** Preserve batch send evidence and policy reasons hidden by the first suppressed payload. */

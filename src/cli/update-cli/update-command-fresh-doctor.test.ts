@@ -46,6 +46,7 @@ const mocks = vi.hoisted(() => ({
   readConfig: vi.fn(),
   resolveEntrypoint: vi.fn(),
   command: vi.fn(),
+  cliHelp: vi.fn(),
   runUtf8: vi.fn<typeof import("../../process/exec.js").runUtf8CommandWithTimeout>(),
   pendingMigrations: vi.fn<typeof readDeferredPluginMigrationsAsync>(),
 }));
@@ -69,9 +70,11 @@ vi.mock("../../process/exec.js", async (importOriginal) => {
   return {
     ...actual,
     runExec: (...args: Parameters<typeof actual.runExec>) =>
-      args[1].includes("config") && args[1].includes("validate")
-        ? mocks.command(...args)
-        : actual.runExec(...args),
+      args[1].includes("doctor") && args[1].includes("--help")
+        ? mocks.cliHelp(...args)
+        : args[1].includes("config") && args[1].includes("validate")
+          ? mocks.command(...args)
+          : actual.runExec(...args),
     runUtf8CommandWithTimeout: async (
       ...args: Parameters<typeof actual.runUtf8CommandWithTimeout>
     ) => {
@@ -143,6 +146,7 @@ const readinessExit = {
   outputLimitExceeded: undefined,
   stderr: "",
 } as const;
+const signaledReadiness = { termination: "signal", signal: "SIGTERM", killed: true } as const;
 
 afterEach(() => {
   restoreTempRoot();
@@ -159,6 +163,7 @@ describe("post-plugin update readiness", () => {
     mocks.readConfig.mockReset().mockResolvedValue(validConfigSnapshot);
     mocks.resolveEntrypoint.mockReset().mockResolvedValue("/opt/openclaw/dist/index.js");
     mocks.command.mockReset().mockResolvedValue({ stdout: "", stderr: "" });
+    mocks.cliHelp.mockReset();
     mocks.pendingMigrations.mockReset().mockResolvedValue([]);
     mocks.runUtf8.mockReset().mockResolvedValue({
       ...readinessExit,
@@ -245,10 +250,10 @@ describe("post-plugin update readiness", () => {
   );
 
   it.each([
-    { phase: "pre-plugin", operatorPolicy: "external", timeout: undefined, expected: undefined },
+    { phase: "pre-plugin", operatorPolicy: "external", timeout: undefined, expected: 5_000 },
     { phase: "post-plugin", operatorPolicy: "external", timeout: "3", expected: 3_000 },
     { phase: "pre-plugin", operatorPolicy: undefined, timeout: "3", expected: 3_000 },
-    { phase: "post-plugin", operatorPolicy: undefined, timeout: undefined, expected: undefined },
+    { phase: "post-plugin", operatorPolicy: undefined, timeout: undefined, expected: 5_000 },
   ] as const)(
     "keeps parent service authority and the operator deadline in $phase Doctor ($operatorPolicy, $timeout)",
     async ({ phase, operatorPolicy, timeout, expected }) => {
@@ -380,12 +385,21 @@ describe("post-plugin update readiness", () => {
     },
   );
 
-  it.each([undefined, 5_000])(
-    "bounds post-plugin checks separately from Doctor (%s)",
-    async (timeoutMs) => {
+  it.each([
+    { timeoutMs: undefined, fullIntegrityCheck: false, supported: false },
+    { timeoutMs: 5_000, fullIntegrityCheck: true, supported: true },
+    { timeoutMs: 5_000, fullIntegrityCheck: true, supported: false },
+  ])(
+    "bounds post-plugin checks separately from Doctor ($timeoutMs, full=$fullIntegrityCheck supported=$supported)",
+    async ({ timeoutMs, fullIntegrityCheck, supported }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("post-plugin-empty-budget-"));
+      mocks.cliHelp.mockResolvedValue({
+        stdout: supported ? "  --full-integrity-check  Check all indexes\n" : "  --fix  Repair\n",
+        stderr: "",
+      });
       await completePostCorePluginUpdate({
         ...updateOptions,
+        opts: { ...updateOptions.opts, fullIntegrityCheck },
         timeoutMs,
       });
 
@@ -397,9 +411,11 @@ describe("post-plugin update readiness", () => {
           "--non-interactive",
           "--no-workspace-suggestions",
           "--yes",
+          ...(fullIntegrityCheck && supported ? ["--full-integrity-check"] : []),
         ],
         ["/opt/openclaw/dist/index.js", "config", "validate", "--json"],
       ]);
+      expect(mocks.cliHelp).toHaveBeenCalledTimes(fullIntegrityCheck ? 1 : 0);
       expect(mocks.runUtf8).toHaveBeenCalledExactlyOnceWith(
         [
           "/usr/bin/node",
@@ -828,22 +844,14 @@ describe("post-plugin update readiness", () => {
   });
 
   it.each([
-    {
-      exists: true,
+    ...[true, false].map((exists) => ({
+      exists,
       source: "memory-core",
       checkId: "memory-core/managed-local-embedding-setup",
       message: "Managed local embeddings are unavailable.",
       fixHint: "Run `openclaw models --agent main auth login --provider llama-cpp --method local`.",
-      severity: "error",
-    },
-    {
-      exists: false,
-      source: "memory-core",
-      checkId: "memory-core/managed-local-embedding-setup",
-      message: "Managed local embeddings are unavailable.",
-      fixHint: "Run `openclaw models --agent main auth login --provider llama-cpp --method local`.",
-      severity: "error",
-    },
+      severity: "error" as const,
+    })),
     {
       exists: true,
       source: undefined,
@@ -906,78 +914,64 @@ describe("post-plugin update readiness", () => {
     { label: "launch failure", stdout: "", code: 0, launch: true },
     { label: "failed empty output", stdout: "", code: 2, launch: false },
     { label: "failed partial output", stdout: "{unfinished", code: 2, launch: false },
-  ])("fails closed and retains diagnostics for $label", async ({ stdout, code, launch }) => {
-    if (launch) {
-      mocks.runUtf8.mockRejectedValue(new Error("Readiness executable unavailable"));
-    } else {
-      mocks.runUtf8.mockResolvedValue({
-        ...readinessExit,
-        code,
-        stdout,
-        stderr:
-          code === 2
-            ? "Earlier diagnostic line\n".repeat(100) +
-              "Could not load readiness plugin https://example.test/diagnostic?token=fixture-secret"
-            : "",
-      });
-    }
-    const { pluginUpdate: result } = await completePostCorePluginUpdate(updateOptions);
-    expect(result).toMatchObject({
-      status: "error",
-      reason: "post-plugin-update-readiness-execution-failed",
-    });
-    if (launch) {
+  ])(
+    "defers unfinished lint and retains diagnostics for $label",
+    async ({ stdout, code, launch }) => {
+      if (launch) {
+        mocks.runUtf8.mockRejectedValue(new Error("Readiness executable unavailable"));
+      } else {
+        mocks.runUtf8.mockResolvedValue({
+          ...readinessExit,
+          code,
+          stdout,
+          stderr:
+            code === 2
+              ? "Earlier diagnostic line\n".repeat(100) +
+                "Could not load readiness plugin https://example.test/diagnostic?token=fixture-secret"
+              : "",
+        });
+      }
+      const { pluginUpdate: result } = await completePostCorePluginUpdate(updateOptions);
       expect(result).toMatchObject({
-        doctorLint: { exitCode: null },
-        warnings: [expect.objectContaining({ reason: "Error: Readiness executable unavailable" })],
+        status: "warning",
+        reason: "post-plugin-update-readiness-execution-failed",
+        doctorLint: { advisory: { kind: "recoverable-maintenance" } },
       });
-    } else if (code === 0) {
-      expect(result.warnings).toEqual([
-        expect.objectContaining({
-          message: "Updated plugin readiness checks could not be completed before restart.",
-        }),
-      ]);
-    } else {
-      const reason = result.warnings?.[0]?.reason;
-      expect(reason).toContain("code=2");
-      expect(reason).toContain("stderr:");
-      expect(reason).toContain("Could not load readiness plugin");
-      expect(reason).toContain("token=<redacted>");
-      expect(reason).not.toContain("fixture-secret");
-      expect(reason).not.toContain("/opt/openclaw/dist/index.js");
-      expect(reason?.length).toBeLessThan(600);
-      expect(result.doctorLint?.stderrTail).toContain("token=<redacted>");
-      expect(result.doctorLint?.stderrTail).not.toContain("fixture-secret");
-    }
-  });
+      if (launch) {
+        expect(result.doctorLint?.exitCode).toBeNull();
+        expect(result.warnings?.[0]?.message).toContain("Readiness executable unavailable");
+      } else if (code === 0) {
+        expect(result.warnings).toEqual([
+          expect.objectContaining({
+            message: expect.stringContaining(
+              "Updated plugin readiness checks could not be completed before restart.",
+            ),
+          }),
+        ]);
+      } else {
+        const reason = result.warnings?.[0]?.message;
+        expect(reason).toContain("code=2");
+        expect(reason).toContain("stderr:");
+        expect(reason).toContain("Could not load readiness plugin");
+        expect(reason).toContain("token=<redacted>");
+        expect(reason).not.toContain("fixture-secret");
+        expect(reason).not.toContain("/opt/openclaw/dist/index.js");
+        expect(reason?.length).toBeLessThan(700);
+        expect(result.doctorLint?.stderrTail).toContain("token=<redacted>");
+        expect(result.doctorLint?.stderrTail).not.toContain("fixture-secret");
+      }
+    },
+  );
 
   it.each([
-    { name: "policy exit", physical: { code: 1 }, accepted: true },
-    { name: "other exit", physical: { code: 2 }, accepted: false },
-    {
-      name: "signal",
-      physical: { code: null, termination: "signal", signal: "SIGTERM", killed: true },
-      accepted: false,
-    },
-    {
-      name: "timeout",
-      physical: { code: 124, termination: "timeout", signal: "SIGTERM", killed: true },
-      accepted: false,
-    },
-    {
-      name: "overflow",
-      physical: {
-        code: 1,
-        termination: "signal",
-        signal: "SIGTERM",
-        killed: true,
-        outputLimitExceeded: true,
-      },
-      accepted: false,
-    },
+    { name: "policy exit", physical: { code: 1 } },
+    { name: "other exit", physical: { code: 2 } },
+    { name: "signal", physical: { ...signaledReadiness, code: null } },
+    { name: "timeout", physical: { ...signaledReadiness, code: 124, termination: "timeout" } },
+    { name: "overflow", physical: { ...signaledReadiness, code: 1, outputLimitExceeded: true } },
   ] as const)(
     "retains physical $name facts without accepting interrupted policy output",
-    async ({ physical, accepted }) => {
+    async ({ physical }) => {
       const finding = {
         checkId: "core/doctor/security",
         severity: "error",
@@ -993,7 +987,7 @@ describe("post-plugin update readiness", () => {
 
       const { pluginUpdate: result } = await completePostCorePluginUpdate(updateOptions);
 
-      expect(result.status).toBe(accepted ? "warning" : "error");
+      expect(result.status).toBe("warning");
       expect(result.doctorLint).toMatchObject({
         exitCode: execution.code,
         termination: execution.termination,
@@ -1003,9 +997,7 @@ describe("post-plugin update readiness", () => {
         stderrTail: execution.stderr,
         doctorLintFindings: [{ ...finding, severity: "warning" }],
       });
-      expect(result.doctorLint?.advisory?.kind).toBe(
-        accepted ? "recoverable-maintenance" : undefined,
-      );
+      expect(result.doctorLint?.advisory?.kind).toBe("recoverable-maintenance");
     },
   );
 

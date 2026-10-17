@@ -1,6 +1,7 @@
 import type { TalkCatalogResult, TalkConfigResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import {
   discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
@@ -12,7 +13,7 @@ export type ComposerTalkCapabilityStatus = "checking" | "ready" | "unavailable" 
 
 // Each composer owns discovery and the devicechange subscription; delayed results
 // cannot overwrite newer discovery, and only an open picker watches devices.
-export class ComposerMicrophonePicker {
+export class ComposerMicrophoneOwner extends EventTarget {
   devices: RealtimeTalkInputDevice[] = [];
   loading = false;
   open = false;
@@ -26,9 +27,11 @@ export class ComposerMicrophonePicker {
   realtimeStatus: ComposerTalkCapabilityStatus = "unknown";
   dictationStatus: ComposerTalkCapabilityStatus = "unknown";
   // Terminal login changes credentials without replacing the Gateway connection.
-  private readonly refreshOnFocus = (): void => this.loadCatalog();
+  private readonly refreshOnFocus = (): void => void this.loadCatalog();
 
-  constructor(private readonly requestUpdate: () => void) {}
+  subscribe(listener: () => void) {
+    return listen(this, "change", listener);
+  }
 
   syncCatalog(client: GatewayBrowserClient | null, connected: boolean, sessionKey?: string): void {
     const canRead = hasOperatorReadAccess(client?.auth ?? null);
@@ -51,7 +54,7 @@ export class ComposerMicrophonePicker {
       return;
     }
     window.addEventListener("focus", this.refreshOnFocus);
-    this.loadCatalog(false);
+    void this.loadCatalog();
   }
 
   readonly handleOpen = (): void => {
@@ -59,9 +62,9 @@ export class ComposerMicrophonePicker {
       return;
     }
     this.open = true;
-    this.deviceWatch ??= observeRealtimeTalkDevices(this.discover);
-    this.discover();
-    this.loadCatalog();
+    this.deviceWatch ??= observeRealtimeTalkDevices(() => void this.discover());
+    void this.discover();
+    void this.loadCatalog();
   };
 
   readonly handleClose = (): void => {
@@ -70,7 +73,7 @@ export class ComposerMicrophonePicker {
     }
     this.release();
     this.open = false;
-    this.requestUpdate();
+    this.dispatchEvent(new Event("change"));
   };
 
   /** Drops the devicechange subscription so a closed picker stops refreshing. */
@@ -88,34 +91,22 @@ export class ComposerMicrophonePicker {
     this.loading = false;
   }
 
-  private readonly discover = (): void => {
+  private readonly discover = async (): Promise<void> => {
     this.loading = true;
     this.issue = null;
     const request = ++this.discoveryRequest;
-    this.requestUpdate();
+    this.dispatchEvent(new Event("change"));
     // A closed or replaced picker cannot turn delayed discovery into a prompt.
-    void discoverRealtimeTalkInputs(() => this.open && request === this.discoveryRequest)
-      .then((result) => {
-        if (request !== this.discoveryRequest) {
-          return;
-        }
-        this.devices = result.devices;
-        this.issue = result.issue;
-      })
-      .catch(() => {
-        if (request !== this.discoveryRequest) {
-          return;
-        }
-        this.devices = [];
-        this.issue = "failed";
-      })
-      .finally(() => {
-        if (request !== this.discoveryRequest) {
-          return;
-        }
-        this.loading = false;
-        this.requestUpdate();
-      });
+    const result = await discoverRealtimeTalkInputs(
+      () => this.open && request === this.discoveryRequest,
+    ).catch(() => ({ devices: [], issue: "failed" as const }));
+    if (request !== this.discoveryRequest) {
+      return;
+    }
+    this.devices = result.devices;
+    this.issue = result.issue;
+    this.loading = false;
+    this.dispatchEvent(new Event("change"));
   };
 
   private setCatalogChecking(checking: boolean): void {
@@ -126,64 +117,59 @@ export class ComposerMicrophonePicker {
     }
   }
 
-  private loadCatalog(notify = true): void {
+  private async loadCatalog(): Promise<void> {
     const client = this.catalogClient;
     if (!client || !this.catalogConnected || !hasOperatorReadAccess(client.auth)) {
       return;
     }
     const request = ++this.catalogRequest;
     this.setCatalogChecking(true);
-    if (notify) {
-      this.requestUpdate();
-    }
-    void Promise.all([
-      client.request<TalkCatalogResult>(
-        "talk.catalog",
-        this.catalogSessionKey === undefined ? {} : { sessionKey: this.catalogSessionKey },
-      ),
-      client.request<TalkConfigResult>("talk.config", {}),
-    ])
-      .then(async ([catalog, config]) => {
-        if (request !== this.catalogRequest) {
-          return;
-        }
-        this.dictationStatus = catalog.transcription?.ready === true ? "ready" : "unavailable";
-        const talk = config.config?.talk;
-        if (talk?.realtime?.mode !== "stt-tts") {
-          this.realtimeStatus = catalog.realtime?.ready === true ? "ready" : "unavailable";
-          return;
-        }
-        let speechReady: boolean;
-        if (talk.provider || talk.resolved?.provider) {
-          speechReady = catalog.speech.providers.some(
-            (provider) => provider.id === catalog.speech.activeProvider && provider.configured,
-          );
-        } else {
-          const status = await client.request<{
-            provider: string;
-            providerStates: Array<{ id: string; configured: boolean }>;
-            fallbackProviders: string[];
-          }>("tts.status", {});
-          speechReady =
-            status.providerStates.some(
-              (provider) => provider.id === status.provider && provider.configured,
-            ) || status.fallbackProviders.length > 0;
-        }
-        if (request === this.catalogRequest) {
-          this.realtimeStatus =
-            this.dictationStatus === "ready" && speechReady ? "ready" : "unavailable";
-        }
-      })
-      .catch(() => {
-        if (request !== this.catalogRequest) {
-          return;
-        }
+    this.dispatchEvent(new Event("change"));
+    try {
+      const [catalog, config] = await Promise.all([
+        client.request<TalkCatalogResult>(
+          "talk.catalog",
+          this.catalogSessionKey === undefined ? {} : { sessionKey: this.catalogSessionKey },
+        ),
+        client.request<TalkConfigResult>("talk.config", {}),
+      ]);
+      if (request !== this.catalogRequest) {
+        return;
+      }
+      this.dictationStatus = catalog.transcription?.ready === true ? "ready" : "unavailable";
+      const talk = config.config?.talk;
+      if (talk?.realtime?.mode !== "stt-tts") {
+        this.realtimeStatus = catalog.realtime?.ready === true ? "ready" : "unavailable";
+        return;
+      }
+      let speechReady: boolean;
+      if (talk.provider || talk.resolved?.provider) {
+        speechReady = catalog.speech.providers.some(
+          (provider) => provider.id === catalog.speech.activeProvider && provider.configured,
+        );
+      } else {
+        const status = await client.request<{
+          provider: string;
+          providerStates: Array<{ id: string; configured: boolean }>;
+          fallbackProviders: string[];
+        }>("tts.status", {});
+        speechReady =
+          status.providerStates.some(
+            (provider) => provider.id === status.provider && provider.configured,
+          ) || status.fallbackProviders.length > 0;
+      }
+      if (request === this.catalogRequest) {
+        this.realtimeStatus =
+          this.dictationStatus === "ready" && speechReady ? "ready" : "unavailable";
+      }
+    } catch {
+      if (request === this.catalogRequest) {
         this.setCatalogChecking(false);
-      })
-      .finally(() => {
-        if (request === this.catalogRequest) {
-          this.requestUpdate();
-        }
-      });
+      }
+    } finally {
+      if (request === this.catalogRequest) {
+        this.dispatchEvent(new Event("change"));
+      }
+    }
   }
 }

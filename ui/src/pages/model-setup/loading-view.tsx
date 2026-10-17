@@ -9,7 +9,7 @@ function renderLoadingSection(
   params: { rows?: number; intro?: string; className?: string; status?: string } = {},
 ) {
   return (
-    <section class={`settings-section ${params.className ?? ""}`.trim()}>
+    <section class={["settings-section", params.className]}>
       <div class="settings-section__header">
         <h2>{title}</h2>
       </div>

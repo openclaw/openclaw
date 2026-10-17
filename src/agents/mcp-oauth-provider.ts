@@ -89,6 +89,7 @@ export async function createMcpOAuthClientProvider(params: {
   config?: McpOAuthConfig;
   allowAuthorizationRedirect?: boolean;
   suppressStoredTokens?: boolean;
+  replaceAuthorization?: boolean;
   lease: OpenClawStateAsyncLeaseContext;
   login?: McpOAuthLoginLifecycle;
   storeContext: OpenClawStateWorkerContext;
@@ -98,28 +99,13 @@ export async function createMcpOAuthClientProvider(params: {
   const storeContext = params.storeContext;
   let preparedVerifier: string | undefined;
   let prepared: { redirectUrl?: string } | { error: unknown } = {};
-  let preparation = 0;
-  let nextWrite = 0;
-  let lastSettledWrite = 0;
-  const settleWrite = (write: number, value: typeof prepared) => {
-    if (write < lastSettledWrite) {
-      return;
-    }
-    lastSettledWrite = write;
-    // Reads dispatched before settlement may still carry the pre-write snapshot.
-    preparation++;
-    prepared = value;
-  };
   const readStore = async () => {
     params.login?.assertCurrent();
-    const currentPreparation = ++preparation;
     const store = await readMcpOAuthStore(storeKey, storeContext);
     params.login?.assertCurrent();
     await params.lease.assertOwned();
     params.login?.assertCurrent();
-    if (currentPreparation === preparation) {
-      prepared = { redirectUrl: store.redirectUrl };
-    }
+    prepared = { redirectUrl: store.redirectUrl };
     return store;
   };
   await readStore();
@@ -129,8 +115,6 @@ export async function createMcpOAuthClientProvider(params: {
     options: { beforeCommit?: () => void; onAcknowledged?: () => void } = {},
   ) => {
     params.login?.assertCurrent();
-    preparation++;
-    const write = ++nextWrite;
     const authority = params.login
       ? { assertCurrent: params.login.assertCurrent, beforeCommit: options.beforeCommit }
       : undefined;
@@ -143,11 +127,11 @@ export async function createMcpOAuthClientProvider(params: {
       // Record acknowledged persistence before a later authority loss can reject publication.
       options.onAcknowledged?.();
       params.login?.assertCurrent();
-      settleWrite(write, { redirectUrl: store.redirectUrl });
+      prepared = { redirectUrl: store.redirectUrl };
       return store;
     } catch (error) {
-      // A possible commit invalidates earlier reads until a new read is acknowledged.
-      settleWrite(write, { error });
+      // Failed writes leave metadata unavailable until a new read is acknowledged.
+      prepared = { error };
       throw error;
     }
   };
@@ -243,7 +227,12 @@ export async function createMcpOAuthClientProvider(params: {
     },
     async saveTokens(tokens) {
       await updateStore(
-        { kind: "tokens", tokens, tokenExpiresAt: resolveTokenExpiresAt(tokens) },
+        {
+          kind: "tokens",
+          tokens,
+          tokenExpiresAt: resolveTokenExpiresAt(tokens),
+          ...(params.replaceAuthorization ? { replaceAuthorization: true } : {}),
+        },
         {
           beforeCommit: params.login?.beforeTokensSaved,
           onAcknowledged: params.login?.onTokensSaved,

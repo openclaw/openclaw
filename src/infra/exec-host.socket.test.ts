@@ -3,9 +3,11 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import crypto from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import timers from "node:timers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { requestExecHostViaSocket, type ExecHostRequest } from "./exec-host.js";
@@ -120,6 +122,54 @@ async function withExecPeer(
 }
 
 describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(timers, "setTimeout").mockImplementation(setTimeout);
+    vi.spyOn(timers, "clearTimeout").mockImplementation(clearTimeout);
+    syncBuiltinESMExports();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    syncBuiltinESMExports();
+  });
+
+  it.each([
+    [30_000, 45_000],
+    [1_000, 20_000],
+  ])(
+    "receives a late reply within command budget %s plus approval and grace",
+    async (timeoutMs, elapsed) => {
+      await withExecPeer(async ({ socketPath, onRequest }) => {
+        const received = createDeferred<net.Socket>();
+        onRequest(async (socket) => {
+          received.resolve(socket);
+        });
+        const controller = new AbortController();
+        const completed = vi.fn();
+        const pending = requestExecHostViaSocket({
+          socketPath,
+          token,
+          request: { command: ["/bin/echo", "done"], timeoutMs },
+          signal: controller.signal,
+        }).then(completed);
+        try {
+          const socket = await received.promise;
+          await vi.advanceTimersByTimeAsync(elapsed);
+          expect(completed).not.toHaveBeenCalled();
+          socket.end(`${JSON.stringify({ type: "exec-res", ...success })}\n`);
+          await pending;
+          expect(completed).toHaveBeenCalledExactlyOnceWith(success);
+          expect(vi.getTimerCount()).toBe(0);
+        } finally {
+          controller.abort();
+          await pending;
+        }
+      });
+    },
+  );
+
   it("characterizes a missing socket before any request can execute", async () => {
     await withTestDir({ prefix: "oc-exec-", parentDir: "/tmp" }, async (dir) => {
       const marker = path.join(dir, "never-started");
@@ -162,7 +212,7 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
   );
 
   it.each(["close", "malformed matching response", "timeout"] as const)(
-    "characterizes null after a signed request starts a child and then %s",
+    "characterizes the outcome after a signed request starts a child and then %s",
     async (fault) => {
       await withExecPeer(async ({ dir, socketPath, markers, order, children, onRequest }) => {
         const command = [
@@ -174,6 +224,7 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
         ];
         const request = { command, cwd: dir, timeoutMs: 5_000, needsScreenRecording: false };
         const release = createDeferred();
+        const faultReady = createDeferred();
         const childCloses: Promise<unknown>[] = [];
         onRequest(async (socket, received, id) => {
           expect(received).toEqual(request);
@@ -204,6 +255,7 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
               order.push("malformed-response");
               socket.write(`${JSON.stringify({ type: "exec-res", id, ok: true })}\n`);
             }
+            faultReady.resolve();
             await release.promise;
           } finally {
             child.stdin.end("finish\n");
@@ -212,11 +264,39 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
           order.push("child-completed");
         });
         try {
-          // Characterization only: null currently conflates no delivery with lost outcome.
-          await expect(
-            requestExecHostViaSocket({ socketPath, token, request, timeoutMs: 1_000 }),
-          ).resolves.toBeNull();
-          order.push("client-null");
+          const pending = requestExecHostViaSocket({
+            socketPath,
+            token,
+            request,
+            timeoutMs: 1_000,
+          });
+          await faultReady.promise;
+          if (fault !== "close") {
+            await vi.advanceTimersByTimeAsync(1_000);
+          }
+          const result = await pending;
+          if (fault === "close") {
+            expect(result).toEqual({
+              ok: false,
+              error: {
+                code: "UNKNOWN",
+                reason: "response-lost",
+                message:
+                  "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
+              },
+            });
+          } else {
+            expect(result).toEqual({
+              ok: false,
+              error: {
+                code: "TIMEOUT",
+                reason: "timeout",
+                message:
+                  "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
+              },
+            });
+          }
+          order.push("client-outcome-unknown");
           expect(await fs.readFile(markers, "utf8")).toBe("START\n");
         } finally {
           release.resolve();
@@ -229,7 +309,7 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
           ...(fault === "timeout"
             ? []
             : [fault === "close" ? "response-dropped" : "malformed-response"]),
-          "client-null",
+          "client-outcome-unknown",
           "child-completed",
         ]);
       });

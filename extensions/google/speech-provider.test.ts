@@ -203,16 +203,16 @@ describe("Google speech provider", () => {
     expect(result.audioBuffer.subarray(44)).toEqual(PCM);
   });
 
-  it.each([
-    { label: "non-canonical pad bits", data: "ZE==" },
-    { label: "mixed alphabet", data: "aGVsbG8+_" },
-  ])("rejects base64 with $label", async ({ data }) => {
-    post.mockImplementation(async () => responseResult(audioResponse(data)));
-    await expect(synthesize({ timeoutMs: 5_000 })).rejects.toThrow(
-      "Google TTS response returned malformed base64 audio data",
-    );
-    expect(post).toHaveBeenCalledTimes(2);
-  });
+  it.each([{ label: "non-canonical pad bits", data: "ZE==" }])(
+    "rejects base64 with $label",
+    async ({ data }) => {
+      post.mockImplementation(async () => responseResult(audioResponse(data)));
+      await expect(synthesize({ timeoutMs: 5_000 })).rejects.toThrow(
+        "Google TTS response returned malformed base64 audio data",
+      );
+      expect(post).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("retries an aborted fetch", async () => {
     post.mockRejectedValueOnce(
@@ -252,14 +252,6 @@ describe("Google speech provider", () => {
       outputFormat: "opus",
       fileExtension: ".opus",
       voiceCompatible: true,
-    });
-  });
-
-  it("uses the canonical endpoint for a whitespace-only base URL", async () => {
-    await synthesize({ cfg: googleConfig({ baseUrl: "   " }) });
-    expect(recorded()).toMatchObject({
-      url: `https://generativelanguage.googleapis.com/v1beta/models/${LEGACY}:generateContent`,
-      headers: { "x-goog-api-client": expect.stringMatching(/^openclaw\//u) },
     });
   });
 

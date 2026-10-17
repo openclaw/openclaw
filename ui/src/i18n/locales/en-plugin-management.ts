@@ -18,6 +18,12 @@ const enPluginManagement = {
     pluginHelpValue: "Current value: {value}",
   },
   pluginsPage: {
+    compatibilityDeprecatedDated:
+      "Uses OpenClaw APIs that retire on {date}. It keeps working until then; check for a plugin update.",
+    compatibilityDeprecatedUndated:
+      "Uses older OpenClaw APIs. It keeps working for now; check for a plugin update.",
+    compatibilityDetails: "Details",
+    compatibilityApis: "APIs to update",
     installProgress: {
       title: "Installation progress",
       stopped: "Installation stopped",
@@ -341,7 +347,7 @@ const enPluginManagement = {
       advanced: "Advanced",
     },
     installCount: "{count} installs",
-    installed: "Installed",
+    installed: en.pluginsPage.installed,
     installedDisabled: "Installed · Disabled",
     pluginSettings: "Plugin settings",
     setupRequired: "Setup required",
@@ -393,13 +399,13 @@ const enPluginManagement = {
     global: "Global",
     workspace: "Workspace",
     config: "Config",
-    official: "Official",
+    official: en.pluginsPage.official,
     community: "Community",
     verifiedSource: "Verified source",
     codePlugin: "Code plugin",
     bundlePlugin: "Bundle plugin",
     unavailable: "Unavailable",
-    install: "Install",
+    install: en.pluginsPage.install,
     retryInstall: "Retry install",
     retryInstallNamed: "Retry install of {name}",
     viewInstallStatusNamed: "View status of {name} installation",

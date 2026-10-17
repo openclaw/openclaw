@@ -10,6 +10,10 @@ import {
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../infra/sql-connection.js";
+import {
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "../infra/sqlite-database-admission.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import {
   getSqliteReadOperationRevision,
@@ -21,6 +25,10 @@ import type {
 } from "../plugins/session-catalog-upstream.types.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
+import {
+  sessionUpstreamPresenceKey,
+  sessionUpstreamPresencePublication,
+} from "./session-upstream-links-publication.js";
 
 type SessionUpstreamLinkRow = Selectable<OpenClawStateKyselyDatabase["session_upstream_links"]>;
 
@@ -72,6 +80,13 @@ export const sessionUpstreamReadOperations = {
   }),
 } satisfies WorkerOperationHandlers<EngineConnection>;
 
+export const emptyWatchedSessionUpstreamLinksAdmission: SqliteDatabaseAdmissionKey<
+  true | undefined
+> = {
+  name: "state.empty-watched-session-upstream-links",
+  read: (value) => (value === true ? true : undefined),
+};
+
 export function listWatchedSessionUpstreamLinksInDatabase(
   db: EngineConnection,
 ): SessionUpstreamLink[] {
@@ -96,6 +111,11 @@ export function listWatchedSessionUpstreamLinksInDatabase(
       .orderBy("links.catalog_id", "asc")
       .orderBy("links.session_key", "asc"),
   ).rows;
+  publishSqliteDatabaseAdmission(
+    db,
+    emptyWatchedSessionUpstreamLinksAdmission,
+    rows.length === 0 ? true : undefined,
+  );
   return rows.map(rowToSessionUpstreamLink);
 }
 
@@ -158,7 +178,7 @@ export function upsertSessionUpstreamLinkInDatabase(
   now: number,
   ifAbsent?: true,
 ): boolean {
-  return (
+  const changed =
     executeSqliteQuerySync(
       db,
       getSessionUpstreamKysely(db)
@@ -221,8 +241,14 @@ export function upsertSessionUpstreamLinkInDatabase(
                 };
               }),
         ),
-    ).numAffectedRows === 1n
-  );
+    ).numAffectedRows === 1n;
+  if (changed) {
+    publishSqliteDatabaseAdmission(db, emptyWatchedSessionUpstreamLinksAdmission, undefined);
+    sessionUpstreamPresencePublication.stagePostimages(db, [
+      [sessionUpstreamPresenceKey(input.sessionKey, input.agentId), true],
+    ]);
+  }
+  return changed;
 }
 
 export function deleteSessionUpstreamLinkInDatabase(
@@ -247,6 +273,9 @@ export function deleteSessionUpstreamLinkInDatabase(
       .where("session_key", "=", sessionKey)
       .where("agent_id", "=", agentId),
   );
+  sessionUpstreamPresencePublication.stageDeletions(db, [
+    sessionUpstreamPresenceKey(sessionKey, agentId),
+  ]);
   return "deleted";
 }
 

@@ -20,6 +20,7 @@ import {
   getRenderedModalDialog,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
+import { selectMenuValue, settleSessionMenu } from "../../test-helpers/session-menu.ts";
 import {
   createContext,
   createGateway,
@@ -231,14 +232,11 @@ describe("sessions page agent-scope retirement", () => {
       page.openSessionMenu(row, { x: 10, y: 20 }, document.createElement("button"));
       await page.updateComplete;
       const menu =
-        page.querySelector<HTMLElementTagNameMap["openclaw-session-menu"]>("openclaw-session-menu");
-      await menu?.updateComplete;
-      menu!.querySelector("wa-dropdown")!.dispatchEvent(
-        new CustomEvent("wa-select", {
-          detail: { item: { value: "move-session" } },
-          bubbles: true,
-        }),
-      );
+        page.querySelector<HTMLElementTagNameMap["openclaw-session-menu"]>(
+          "openclaw-session-menu",
+        )!;
+      await settleSessionMenu(menu);
+      await selectMenuValue(menu, "move-session");
       await vi.waitFor(() =>
         expect(clientRequest).toHaveBeenCalledWith("sessions.move", {
           key: "global",
@@ -366,7 +364,6 @@ describe("sessions page agent-scope retirement", () => {
     let newRequest: Promise<void> | undefined;
     try {
       await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledTimes(1));
-      expect(page.sessionMutationPending).toBe(true);
       changeScope("main");
       await page.updateComplete;
       await vi.waitFor(() => expect(page.loading).toBe(false));
@@ -382,7 +379,6 @@ describe("sessions page agent-scope retirement", () => {
       expect(deleteMany.mock.calls[1]?.[0]).toEqual([
         { key: newRow.key, agentId: undefined, archivedOnly: true },
       ]);
-      expect(page.sessionMutationPending).toBe(true);
 
       oldDelete.resolve({
         deleted: [],
@@ -391,14 +387,12 @@ describe("sessions page agent-scope retirement", () => {
       });
       await oldRequest;
       expect(page.error).toBeNull();
-      expect(page.sessionMutationPending).toBe(true);
       changeScope("main");
       await page.deleteSessionFromMenu(newRow);
       expect(deleteMany).toHaveBeenCalledTimes(2);
 
       newDelete.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
       await newRequest;
-      expect(page.sessionMutationPending).toBe(false);
       await page.deleteSessionFromMenu(newRow);
       expect(deleteMany).toHaveBeenCalledTimes(3);
     } finally {

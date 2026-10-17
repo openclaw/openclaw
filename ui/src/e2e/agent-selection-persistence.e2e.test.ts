@@ -188,6 +188,13 @@ suite.define(() => {
         .poll(() => reopenedPage.getByRole("heading", { name: "OpenClaw" }).isVisible())
         .toBe(true);
       await screenshot(reopenedPage, "04-verified-reopened-agent.png");
+      await reopenedPage.getByRole("link", { name: "New conversation", exact: true }).click();
+      await waitForControlUiRoute(reopenedPage, {
+        routeId: "new-session",
+        search: "?agent=openclaw",
+      });
+      await reopenedPage.locator(".new-session-page__message").waitFor();
+      expect(await reopened.gateway.getRequests("sessions.create")).toHaveLength(0);
     } finally {
       await suite.closeBrowserContext(context);
     }

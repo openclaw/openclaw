@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
 import {
-  createTimeZoneDayKeyFormatter,
   formatUtcTimestamp,
   formatZonedTimestamp,
   resolveTimeZoneDayStartMs,
@@ -135,47 +134,15 @@ describe("format-duration", () => {
 
 describe("format-datetime", () => {
   describe("resolveTimezone", () => {
-    it("returns undefined on format failure and resolves again after restoration", () => {
+    it("validates IANA zones before retaining the most recent result", () => {
       expect(resolveTimezone("UTC")).toBe("UTC");
-      const failure = new Error("test timezone validation unavailable");
-      const prototype = Intl.DateTimeFormat.prototype;
-      const descriptor = Object.getOwnPropertyDescriptor(prototype, "format");
-      if (!descriptor) {
-        throw new Error("Intl.DateTimeFormat.format descriptor is missing");
-      }
-      Object.defineProperty(prototype, "format", {
-        ...descriptor,
-        get: () => () => {
-          throw failure;
-        },
-      });
-      try {
-        expect(resolveTimezone("UTC")).toBeUndefined();
-        expect(resolveTimezone("Europe/London")).toBeUndefined();
-      } finally {
-        Object.defineProperty(prototype, "format", descriptor);
-      }
+      expect(resolveTimezone("Invalid/Timezone")).toBeUndefined();
       expect(resolveTimezone("Europe/London")).toBe("Europe/London");
       expect(resolveTimezone("UTC")).toBe("UTC");
     });
   });
 
   describe("calendar days", () => {
-    it("honors constructor failures and formats again after restoration", () => {
-      const date = new Date("2024-01-01T00:30:00.000Z");
-      expect(createTimeZoneDayKeyFormatter("UTC")(date)).toBe("2024-01-01");
-      const failure = new Error("test formatter unavailable");
-      const constructor = vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function () {
-        throw failure;
-      });
-      try {
-        expect(() => createTimeZoneDayKeyFormatter("UTC")).toThrow(failure);
-      } finally {
-        constructor.mockRestore();
-      }
-      expect(createTimeZoneDayKeyFormatter("UTC")(date)).toBe("2024-01-01");
-    });
-
     it("resolves calendar boundaries across a DST-short day", () => {
       const start = resolveTimeZoneDayStartMs("2026-03-29", "Europe/Vienna");
       const next = resolveTimeZoneDayStartMs("2026-03-30", "Europe/Vienna");

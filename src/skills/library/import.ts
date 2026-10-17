@@ -5,7 +5,6 @@ import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import {
   SKILL_LIBRARY_MAX_BUNDLE_BYTES,
   SKILL_LIBRARY_MAX_FILE_BYTES,
-  validateSkillsLibraryUploadParams,
   type SkillsLibraryUploadParams,
   type SkillsLibraryUploadResult,
   type SkillsLibraryImportParams,
@@ -87,9 +86,6 @@ export async function uploadSkillLibrary(
   params: SkillsLibraryUploadParams,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<SkillsLibraryUploadResult> {
-  if (!validateSkillsLibraryUploadParams(params)) {
-    throw new SkillLibraryError("INVALID_BUNDLE", "Invalid library upload parameters.");
-  }
   const access = captureSkillLibraryAccess(authority, options);
   if (params.action !== "commit") {
     return access.write("skillLibrary.upload", { params });

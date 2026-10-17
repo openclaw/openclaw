@@ -205,6 +205,11 @@ prefix separately, and consume the marker before sending any payload.
 Use `stripSystemPromptCacheBoundary` when caching is disabled. By default,
 OpenClaw strips the marker before invoking a custom transport.
 
+Google-family transports can use `buildGoogleSimpleThinking` and
+`buildGoogleGenerationConfig` from the same runtime entrypoint. They share the
+Gemini/Vertex thinking policy, including the output-token reservation; pass the
+caller's original `maxTokens` once, before serializing the request.
+
 For custom `createStreamFn` transports that accumulate JSON tool arguments,
 use `createToolArgumentPreviewSchedule()` from `openclaw/plugin-sdk/llm`.
 Create one schedule per tool call and pass the accumulated raw string's

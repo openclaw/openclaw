@@ -1,5 +1,6 @@
 /** Behavior tests for live node-host MCP catalog and connection recovery. */
 
+import "./mcp-manager.test-support.js";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +10,8 @@ import {
   OpenClawSSEClientTransport,
   OpenClawStreamableHTTPClientTransport,
 } from "../agents/mcp-http-transport.js";
-import { startNodeHostMcpManager } from "./mcp.js";
+
+const { startNodeHostMcpManager } = await import("./mcp-manager.test-support.js");
 
 function tool(name: string, inputSchema: Tool["inputSchema"] = { type: "object" }): Tool {
   return { name, inputSchema };
@@ -630,8 +632,17 @@ describe("node host MCP live lifecycle", () => {
     expect(attempts).toBe(attemptsAtClose);
   });
 
-  it("bounds reconnect fan-out and retires admission-queued attempts on close", async () => {
+  it("bounds reconnect fan-out and retires admission-queued attempts on close", async ({
+    onTestFinished,
+  }) => {
     vi.useFakeTimers();
+    // Native AbortSignal deadlines otherwise advance independently of the retry clock.
+    const deadline = vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), timeoutMs);
+      return controller.signal;
+    });
+    onTestFinished(() => deadline.mockRestore());
     let active = 0;
     let maxActive = 0;
     const attemptsByServer = new Map<string, number>();

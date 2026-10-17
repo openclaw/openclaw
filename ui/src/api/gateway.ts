@@ -5,6 +5,7 @@ import {
   formatConnectErrorMessage,
   GatewayProtocolClient,
   GatewayProtocolRequestError,
+  isGatewayProtocolResponseError,
   type GatewayConnectAuthSelection,
   type GatewayProtocolCloseContext,
   type GatewayProtocolRequestOptions,
@@ -24,6 +25,7 @@ import type {
   ScopeUpgradeBinding,
 } from "@openclaw/gateway-client/scope-upgrade";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import { NativeGatewayAuthUnavailableError } from "../app/native-gateway-auth.ts";
 import { isRemoteControlUiIngress } from "../app/remote-ingress.ts";
@@ -87,7 +89,7 @@ export type GatewayControlUiPluginWidgetKind = NonNullable<HelloOk["controlUiWid
 export type GatewayHelloOk = Omit<HelloOk, "server" | "features" | "snapshot" | "policy"> & {
   server?: Partial<HelloOk["server"]>;
   features?: Partial<HelloOk["features"]>;
-  snapshot?: unknown;
+  snapshot?: Partial<HelloOk["snapshot"]>;
   policy?: Partial<HelloOk["policy"]>;
 };
 
@@ -140,7 +142,6 @@ export class GatewayBrowserClient {
   private maxPayloadBytes: number | undefined;
   private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
   private connectionHello: GatewayHelloOk | null = null;
-  inboundActivitySeq = 0;
   private lastInboundActivityAtMs: number | null = null;
   private maxInboundSilenceMs: number | null = null;
   private pendingDeviceTokenRetry = false;
@@ -154,6 +155,7 @@ export class GatewayBrowserClient {
   private reachabilityProbe: AbortController | null = null;
   private pendingPairing: { requestId: string; deviceId: string } | null = null;
   private pairingFailure: GatewayRequestError | null = null;
+  private catalogRetryAbort = new AbortController();
 
   constructor(private opts: GatewayBrowserClientOptions) {
     if (this.remoteIngress) {
@@ -169,6 +171,8 @@ export class GatewayBrowserClient {
     }
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => {
+        this.catalogRetryAbort.abort();
+        this.catalogRetryAbort = new AbortController();
         this.connectionHello = null;
         this.pendingPairing = null;
         this.pairingFailure = null;
@@ -213,6 +217,7 @@ export class GatewayBrowserClient {
       onConnectFailure: (error, context) => this.handleConnectFailure(error, context.plan),
       resolveClose: (context) => this.resolveClose(context),
       onClose: (context, decision) => {
+        this.catalogRetryAbort.abort();
         this.connectionHello = null;
         this.nativeAuthAbort?.abort();
         this.chatEvents.clear();
@@ -228,10 +233,12 @@ export class GatewayBrowserClient {
             error: error instanceof GatewayRequestError ? toGatewayErrorInfo(error) : undefined,
             willRetry: decision.retry,
           };
+          // Known failures must reach the UI before a retry can retire the liveness probe.
           if (
             decision.retry &&
             !context.socketOpened &&
             context.code === BROWSER_WEBSOCKET_CLOSE_CODE &&
+            !context.reason &&
             !info.error
           ) {
             const probe = new AbortController();
@@ -268,7 +275,6 @@ export class GatewayBrowserClient {
       },
       onGap: (info) => this.opts.onGap?.(info),
       onActivity: () => {
-        this.inboundActivitySeq += 1;
         this.lastInboundActivityAtMs = Date.now();
       },
       onRequestTiming: (timing) => this.opts.onRequestTiming?.(timing),
@@ -295,6 +301,7 @@ export class GatewayBrowserClient {
   }
 
   stop() {
+    this.catalogRetryAbort.abort();
     this.connectionHello = null;
     this.nativeAuthAbort?.abort();
     this.reachabilityProbe?.abort();
@@ -322,7 +329,8 @@ export class GatewayBrowserClient {
   }
 
   get needsWakeReconnect() {
-    if (this.pendingPairing || this.pairingFailure) {
+    // Replacing an in-flight upgrade drops it before a busy Gateway can answer.
+    if (this.pendingPairing || this.pairingFailure || this.client.opening) {
       return false;
     }
     return (
@@ -612,7 +620,50 @@ export class GatewayBrowserClient {
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
+    if (method === "talk.catalog") {
+      return this.requestTalkCatalog<T>(params, options);
+    }
     return this.chatEvents.request<T>(this.client, method, params, options);
+  }
+
+  private async requestTalkCatalog<T>(
+    params: unknown,
+    options?: GatewayProtocolRequestOptions,
+  ): Promise<T> {
+    const timeoutMs = Math.min(
+      resolveSafeTimeoutDelayMs(options?.timeoutMs ?? 10_000, { minMs: 0 }),
+      10_000,
+    );
+    const deadline = Date.now() + timeoutMs;
+    const signal = options?.signal
+      ? AbortSignal.any([options.signal, this.catalogRetryAbort.signal])
+      : this.catalogRetryAbort.signal;
+    let requestOpts = { ...options, signal, timeoutMs };
+    for (;;) {
+      try {
+        return await this.chatEvents.request<T>(this.client, "talk.catalog", params, requestOpts);
+      } catch (error) {
+        if (
+          !isGatewayProtocolResponseError(error) ||
+          error.gatewayCode !== "UNAVAILABLE" ||
+          !error.retryable ||
+          !isRecord(error.details) ||
+          error.details.reason !== "talk-catalog-warming"
+        ) {
+          throw error;
+        }
+        const delay = resolveSafeTimeoutDelayMs(error.retryAfterMs ?? 250, { minMs: 250 });
+        if (Date.now() + delay >= deadline) {
+          throw error;
+        }
+        await sleepWithAbort(delay, signal);
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          throw error;
+        }
+        requestOpts = { ...options, signal, timeoutMs: remaining };
+      }
+    }
   }
 
   async requestScopeUpgrade(options: { onPending?: (requestId: string) => void } = {}) {

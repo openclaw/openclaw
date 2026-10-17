@@ -21,7 +21,6 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
 import {
   buildCloudWorkerDeletePatch,
@@ -39,7 +38,7 @@ const CLOUD_WORKERS_DOCS_URL = "https://docs.openclaw.ai/gateway/cloud-workers";
 type ProfileSummary = NonNullable<EnvironmentsListResult["profiles"]>[number];
 type EditorState = { kind: "add" } | { kind: "edit"; profileId: string } | null;
 
-function CloudWorkersContent() {
+export function CloudWorkersPage() {
   const context = useApplication();
   const [view, setView] = createStore<{ editor: EditorState; draft: CloudWorkerProfileDraft }>({
     editor: null,
@@ -63,16 +62,16 @@ function CloudWorkersContent() {
   });
   void context.runtimeConfig.ensureLoaded();
   const catalogKey = createMemo(
-    () => {
-      return [
+    () =>
+      [
         gateway.snapshot?.client,
         gateway.snapshot?.phase,
         gateway.epoch,
         configProjection.read().state.configSnapshot?.appliedConfigHash,
-      ] as const;
-    },
+      ] as const,
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
+  // Refresh the Gateway profile catalog for the current connection and config receipt.
   createEffect(catalogKey, (key) => {
     const appliedHash = key[3];
     const controller = new AbortController();
@@ -122,9 +121,7 @@ function CloudWorkersContent() {
     return resolveEditableSnapshotConfig(configProjection.read().state.configSnapshot);
   }
 
-  function profiles(): ConfiguredCloudWorkerProfile[] {
-    return readCloudWorkerProfiles(editableConfig());
-  }
+  const profiles = createMemo(() => readCloudWorkerProfiles(editableConfig()));
 
   function hasManageAccess(): boolean {
     return canCallGatewayMethod(gateway.snapshot, "config.patch", "operator.admin");
@@ -181,7 +178,9 @@ function CloudWorkersContent() {
     if (!scope || !view.editor || !config || !canManage()) {
       return;
     }
-    const currentProfiles = Object.fromEntries(profiles().map((profile) => [profile.id, true]));
+    const currentProfiles = Object.fromEntries(
+      readCloudWorkerProfiles(config).map((profile) => [profile.id, true]),
+    );
     const validationError = validateCloudWorkerDraft(draft, currentProfiles, editingId);
     if (validationError) {
       configSave.update({ error: t(`cloudWorkersPage.errors.${validationError}`) });
@@ -520,7 +519,7 @@ function CloudWorkersContent() {
   }
 
   return (
-    <>
+    <openclaw-cloud-workers-page>
       <SettingsPageHeader title={t("tabs.cloudWorkers")} />
       <SettingsWorkspace>
         <CloudWorkerEnvironments
@@ -571,12 +570,6 @@ function CloudWorkersContent() {
           )}
         />
       </SettingsWorkspace>
-    </>
+    </openclaw-cloud-workers-page>
   );
 }
-
-export const CloudWorkersPage = defineSolidBridge(
-  "openclaw-cloud-workers-page",
-  CloudWorkersContent,
-  { properties: {} },
-);

@@ -2,8 +2,9 @@ import { ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
 import { constants as osConstants } from "node:os";
 import process from "node:process";
-import { setImmediate as nextTurn, setTimeout as waitForProcessTick } from "node:timers/promises";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForDead } from "../../test/helpers/process-wait.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -16,24 +17,34 @@ import {
 import { createCommandTerminationController } from "./exec-termination.js";
 import * as adoptedChildren from "./scoped-child-reaper.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  if (vi.isFakeTimers()) {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+  vi.restoreAllMocks();
+});
+
+function terminationOwner(
+  child: ChildProcess,
+  overrides: Partial<Parameters<typeof createCommandTerminationController>[0]> = {},
+) {
+  return createCommandTerminationController({
+    child,
+    cancelController: new AbortController(),
+    processTree: { mode: "graceful" },
+    killGraceMs: 300,
+    isChildExited: () => child.exitCode !== null || child.signalCode !== null,
+    isCommandSettled: () => false,
+    ...overrides,
+  });
+}
 
 function mockTerminatingChild(exitCode: number | null = null) {
   const child = Object.assign(new ChildProcess(), { pid: 4242, exitCode });
   const kill = vi.spyOn(child, "kill").mockReturnValue(true);
   vi.spyOn(adoptedChildren, "scheduleAdoptedChildZombieReapAfterExit").mockImplementation(() => {});
   return { child, kill };
-}
-
-// The root's close event does not join its orphaned descendant's exit.
-async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (processIdentity.isPidAlive(pid)) {
-      await waitForProcessTick(25, undefined, { signal });
-    }
-  } catch (error) {
-    throw new Error(`Timed out waiting for descendant ${pid} to exit`, { cause: error });
-  }
 }
 
 async function withOwnedTree(
@@ -85,74 +96,53 @@ async function withOwnedTree(
     killPidIfAlive(descendantPid);
     await closed;
     if (descendantPid) {
-      await waitForDescendantExit(descendantPid, signal);
+      // The root's close event does not join its orphaned descendant's exit.
+      await waitForDead(descendantPid, signal);
       expect(processIdentity.isPidAlive(descendantPid)).toBe(false);
     }
   }
 }
 
 describe.skipIf(process.platform === "win32")("command process-group settlement", () => {
-  it.each([{ name: "a permission-denied group", probeError: "EPERM", needsGrace: true }])(
-    "settles $name after a failed root without losing cleanup ownership",
-    async ({ probeError, needsGrace }) => {
-      vi.useFakeTimers();
-      vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(123);
-      const kill = vi.spyOn(process, "kill").mockImplementation(() => {
-        if (probeError) {
-          throw Object.assign(new Error(probeError), { code: probeError });
-        }
-        return true;
-      });
-      const { child, kill: killChild } = mockTerminatingChild(7);
-      const cancelController = new AbortController();
-      const controller = createCommandTerminationController({
-        child,
-        cancelController,
-        processTree: { mode: "graceful" },
-        killGraceMs: 300,
-        isChildExited: () => true,
-        isCommandSettled: () => true,
-      });
-      try {
-        expect(controller.terminate()).toBe(needsGrace);
-        let settled = false;
-        const completion = controller.settle().then((cleanup) => {
-          settled = true;
-          return cleanup;
-        });
-        await vi.advanceTimersByTimeAsync(0);
-        expect(settled).toBe(!needsGrace);
-        expect(controller.terminate()).toBe(needsGrace);
-        if (needsGrace) {
-          expect(kill).toHaveBeenCalledWith(-4242, "SIGTERM");
-        } else {
-          expect(kill).not.toHaveBeenCalledWith(-4242, "SIGTERM");
-        }
-        expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
-        await vi.advanceTimersByTimeAsync(299);
-        expect(settled).toBe(!needsGrace);
-        expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
-        await vi.advanceTimersByTimeAsync(1);
-        expect(settled).toBe(!needsGrace);
-        if (needsGrace) {
-          expect(kill).toHaveBeenCalledWith(-4242, "SIGKILL");
-        } else {
-          expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
-        }
-        // Neither live nor EPERM probes prove extinction after the force-send receipt.
-        await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS - 1);
-        expect(settled).toBe(!needsGrace);
-        await vi.advanceTimersByTimeAsync(1);
-        await expect(completion).resolves.toBe(needsGrace ? "uncertain" : "normal");
-        expect(kill.mock.calls.every(([pid]) => pid === -4242)).toBe(true);
-        expect(killChild).not.toHaveBeenCalled();
-        expect(cancelController.signal.aborted).toBe(false);
-      } finally {
-        vi.clearAllTimers();
-        vi.useRealTimers();
-      }
-    },
-  );
+  it("retains cleanup ownership when group probes are denied", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(123);
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+    });
+    const { child, kill: killChild } = mockTerminatingChild(7);
+    const cancelController = new AbortController();
+    const controller = terminationOwner(child, {
+      cancelController,
+      isChildExited: () => true,
+      isCommandSettled: () => true,
+    });
+    expect(controller.terminate()).toBe(true);
+    let settled = false;
+    const completion = controller.settle().then((cleanup) => {
+      settled = true;
+      return cleanup;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+    expect(controller.terminate()).toBe(true);
+    expect(kill).toHaveBeenCalledWith(-4242, "SIGTERM");
+    expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
+    await vi.advanceTimersByTimeAsync(299);
+    expect(settled).toBe(false);
+    expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(false);
+    expect(kill).toHaveBeenCalledWith(-4242, "SIGKILL");
+    // Neither live nor EPERM probes prove extinction after the force-send receipt.
+    await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(completion).resolves.toBe("uncertain");
+    expect(kill.mock.calls.every(([pid]) => pid === -4242)).toBe(true);
+    expect(killChild).not.toHaveBeenCalled();
+    expect(cancelController.signal.aborted).toBe(false);
+  });
 
   it("accepts confirmed group exit after a denied graceful signal", async () => {
     vi.useFakeTimers();
@@ -164,33 +154,21 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
       });
     });
     const { child } = mockTerminatingChild();
-    const owner = createCommandTerminationController({
-      child,
-      cancelController: new AbortController(),
-      processTree: { mode: "graceful" },
-      killGraceMs: 300,
-      isChildExited: () => child.exitCode !== null,
-      isCommandSettled: () => false,
+    const owner = terminationOwner(child, { isChildExited: () => child.exitCode !== null });
+    expect(owner.terminate()).toBe(true);
+    let settled = false;
+    const completion = owner.settle().then((result) => {
+      settled = true;
+      return result;
     });
-    try {
-      expect(owner.terminate()).toBe(true);
-      let settled = false;
-      const completion = owner.settle().then((result) => {
-        settled = true;
-        return result;
-      });
-      await vi.advanceTimersByTimeAsync(24);
-      expect(settled).toBe(false);
-      child.exitCode = 1;
-      gone = true;
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(completion).resolves.toBe("cooperative");
-      expect(kill).toHaveBeenCalledWith(-4242, "SIGTERM");
-      expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
+    await vi.advanceTimersByTimeAsync(24);
+    expect(settled).toBe(false);
+    child.exitCode = 1;
+    gone = true;
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(completion).resolves.toBe("cooperative");
+    expect(kill).toHaveBeenCalledWith(-4242, "SIGTERM");
+    expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
   });
 
   it.for(["graceful", "force"] as const)(
@@ -224,13 +202,9 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
             throw error;
           }
         });
-        const owner = createCommandTerminationController({
-          child: parent,
-          cancelController: new AbortController(),
+        const owner = terminationOwner(parent, {
           processTree: { mode },
           killGraceMs: 0,
-          isChildExited: () => parent.exitCode !== null || parent.signalCode !== null,
-          isCommandSettled: () => false,
         });
         owner.terminate();
         await forced.promise;
@@ -285,70 +259,50 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
         return true;
       });
       const { child } = mockTerminatingChild();
-      const owner = createCommandTerminationController({
-        child,
-        cancelController: new AbortController(),
+      const owner = terminationOwner(child, {
         processTree: { mode: "force" },
         killGraceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
         isChildExited: () => false,
-        isCommandSettled: () => false,
       });
-      try {
-        owner.terminate();
-        await expect(owner.settle()).resolves.toBe(expected);
-        expect(signals.mock.calls.filter(([, signal]) => signal === "SIGKILL")).toEqual([
-          [-child.pid, "SIGKILL"],
-        ]);
-        expect(signals.mock.calls.every(([pid]) => pid === -child.pid)).toBe(true);
-      } finally {
-        vi.clearAllTimers();
-        vi.useRealTimers();
-      }
+      owner.terminate();
+      await expect(owner.settle()).resolves.toBe(expected);
+      expect(signals.mock.calls.filter(([, signal]) => signal === "SIGKILL")).toEqual([
+        [-child.pid, "SIGKILL"],
+      ]);
+      expect(signals.mock.calls.every(([pid]) => pid === -child.pid)).toBe(true);
     },
   );
 
-  it.each([{ mode: "graceful", killSignal: undefined }] as const)(
-    "preserves normal cleanup for a retired group (mode=$mode signal=$killSignal)",
-    async ({ mode, killSignal }) => {
-      const parent = spawn(
-        process.execPath,
-        ["-e", "process.on('message',()=>process.exit(0));process.send('ready');"],
-        {
-          detached: true,
-          stdio: ["ignore", "ignore", "ignore", "ipc"],
-        },
-      );
-      const closed = once(parent, "close");
-      try {
-        await once(parent, "message", { signal: AbortSignal.timeout(2_000) });
-        const owner = createCommandTerminationController({
-          child: parent,
-          cancelController: new AbortController(),
-          processTree: { mode },
-          killSignal,
-          killGraceMs: 0,
-          isChildExited: () => parent.exitCode !== null || parent.signalCode !== null,
-          isCommandSettled: () => false,
-        });
-        parent.send("finish");
-        await closed;
-        const signals = vi.spyOn(process, "kill");
-        owner.terminate();
-        expect(await owner.settle()).toBe("normal");
-        expect(signals.mock.calls.every(([, signal]) => signal === 0)).toBe(true);
-      } finally {
-        killPidIfAlive(parent.pid);
-        await closed;
-      }
-    },
-  );
+  it("preserves normal cleanup for a retired group", async () => {
+    const parent = spawn(
+      process.execPath,
+      ["-e", "process.on('message',()=>process.exit(0));process.send('ready');"],
+      {
+        detached: true,
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
+      },
+    );
+    const closed = once(parent, "close");
+    try {
+      await once(parent, "message", { signal: AbortSignal.timeout(2_000) });
+      const owner = terminationOwner(parent, {
+        killGraceMs: 0,
+      });
+      parent.send("finish");
+      await closed;
+      const signals = vi.spyOn(process, "kill");
+      owner.terminate();
+      expect(await owner.settle()).toBe("normal");
+      expect(signals.mock.calls.every(([, signal]) => signal === 0)).toBe(true);
+    } finally {
+      killPidIfAlive(parent.pid);
+      await closed;
+    }
+  });
 
-  it.for([
-    { observation: "live", killSignal: undefined },
-    { observation: "reused", killSignal: undefined },
-  ] as const)(
-    "reports uncertain when the original group remains $observation after force (initial signal=$killSignal)",
-    async ({ observation, killSignal }, { signal: testSignal }) => {
+  it.for([{ observation: "live" }, { observation: "reused" }] as const)(
+    "reports uncertainty when the group remains $observation after force",
+    async ({ observation }, { signal: testSignal }) => {
       await withOwnedTree(testSignal, async ({ parent, descendantPid }) => {
         const kill = process.kill.bind(process);
         const readStart = processIdentity.getFileLockProcessStartTime;
@@ -371,14 +325,8 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
               ? originalStart! + 1
               : readStart(pid, ...args),
         );
-        const owner = createCommandTerminationController({
-          child: parent,
-          cancelController: new AbortController(),
-          processTree: { mode: "graceful" },
-          killSignal,
+        const owner = terminationOwner(parent, {
           killGraceMs: 0,
-          isChildExited: () => parent.exitCode !== null || parent.signalCode !== null,
-          isCommandSettled: () => false,
         });
         vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
         try {

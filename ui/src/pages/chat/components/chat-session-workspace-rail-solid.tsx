@@ -10,6 +10,8 @@ import { formatByteSize } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
+import { nativeListener } from "../../../lib/solid-native-listener.ts";
+import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type {
   SessionWorkspaceFilter,
   SessionWorkspaceProps,
@@ -45,6 +47,7 @@ function RailRow(props: {
   directory?: boolean;
   path?: string;
   hideActions?: boolean;
+  download?: JSX.Element;
 }) {
   return (
     <div
@@ -96,22 +99,17 @@ function RailRow(props: {
               class="chat-workspace-rail__row-action"
               type="button"
               aria-label={t("chat.workspaceFiles.preview")}
-              ref={(button) =>
-                button.addEventListener("click", (event) => {
-                  event.stopPropagation();
-                  props.onOpen();
-                })
-              }
+              ref={nativeListener("click", (event) => {
+                event.stopPropagation();
+                props.onOpen();
+              })}
             >
               <Icon name="eye" />
             </button>
           </openclaw-tooltip>
+          {props.download}
           <Show when={props.path !== undefined}>
-            <span
-              ref={(element) =>
-                element.addEventListener("click", (event) => event.stopPropagation())
-              }
-            >
+            <span ref={nativeListener("click", (event) => event.stopPropagation())}>
               <CopyButton text={props.path ?? ""} idleLabel={t("chat.workspaceFiles.copyPath")} />
             </span>
           </Show>
@@ -245,6 +243,22 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
             badge={file().missing ? t("chat.workspaceFiles.missing") : undefined}
             onOpen={() => props.workspace.onOpenFile(file().path, "session")}
             path={file().path}
+            download={
+              <Show when={props.workspace.onDownloadFile}>
+                {(download) => (
+                  <FileDownloadButton
+                    scopeKey={[
+                      props.workspace.sessionKey,
+                      file().path,
+                      props.workspace.connectionEpoch,
+                    ].join("\0")}
+                    download={(signal) => download()(file().path, "session", signal)}
+                    disabled={file().missing}
+                    class="chat-workspace-rail__row-action"
+                  />
+                )}
+              </Show>
+            }
           />
         )}
       </For>
@@ -309,25 +323,20 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
           }
         >
           <div class="chat-workspace-rail__scroll">
-            <Show when={visible("changed") && data().changed.length > 0}>
-              <WorkspaceGroup
-                title={t("chat.workspaceFiles.changed")}
-                count={data().changed.length}
-                defaultOpen
-                forcedOpen={data().forcedOpen}
-              >
-                <FileRows rows={data().changed} />
-              </WorkspaceGroup>
-            </Show>
-            <Show when={visible("read") && data().read.length > 0}>
-              <WorkspaceGroup
-                title={t("chat.workspaceFiles.read")}
-                count={data().read.length}
-                forcedOpen={data().forcedOpen}
-              >
-                <FileRows rows={data().read} />
-              </WorkspaceGroup>
-            </Show>
+            <For each={["changed", "read"] as const}>
+              {(kind) => (
+                <Show when={visible(kind) && data()[kind].length > 0}>
+                  <WorkspaceGroup
+                    title={t(`chat.workspaceFiles.${kind}`)}
+                    count={data()[kind].length}
+                    defaultOpen={kind === "changed"}
+                    forcedOpen={data().forcedOpen}
+                  >
+                    <FileRows rows={data()[kind]} />
+                  </WorkspaceGroup>
+                </Show>
+              )}
+            </For>
             <Show when={visible("artifacts") && data().artifacts.length > 0}>
               <WorkspaceGroup
                 title={t("chat.workspaceFiles.artifacts")}
@@ -418,6 +427,23 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
                           onOpen={onOpen}
                           path={entry().path}
                           hideActions={directory()}
+                          download={
+                            <Show when={!directory() && props.workspace.onDownloadFile}>
+                              {(download) => (
+                                <FileDownloadButton
+                                  scopeKey={[
+                                    props.workspace.sessionKey,
+                                    entry().path,
+                                    props.workspace.connectionEpoch,
+                                  ].join("\0")}
+                                  download={(signal) =>
+                                    download()(entry().path, "workspace", signal)
+                                  }
+                                  class="chat-workspace-rail__row-action"
+                                />
+                              )}
+                            </Show>
+                          }
                         />
                       );
                     }}

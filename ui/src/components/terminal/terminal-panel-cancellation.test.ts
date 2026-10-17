@@ -101,8 +101,9 @@ describe("terminal panel pending cancellation", () => {
       panel.routeTarget = kind === "attach" ? { sessionId: "pending-session" } : null;
       panels.push(panel);
       document.body.append(panel);
+      await panel.updateComplete;
+      await vi.dynamicImportSettled();
       if (!page) {
-        await panel.updateComplete;
         window.dispatchEvent(
           new CustomEvent("openclaw:terminal-toggle", {
             detail: {

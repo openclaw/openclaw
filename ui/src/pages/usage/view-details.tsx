@@ -350,7 +350,7 @@ function LoadedContextPanel(props: {
         <For each={state().categories}>
           {({ className, labelKey, tokens }) => (
             <div
-              class={`context-segment ${className}`}
+              class={["context-segment", className]}
               style={{ width: `${pct(tokens, state().totalContextTokens).toFixed(1)}%` }}
               title={`${t(labelKey)}: ~${formatUsageTokens(tokens)}`}
             />
@@ -361,7 +361,7 @@ function LoadedContextPanel(props: {
         <For each={state().categories}>
           {({ className, labelKey, tokens }) => (
             <span class="legend-item">
-              <span class={`legend-dot ${className}`} />
+              <span class={["legend-dot", className]} />
               {t(className === "system" ? "usage.details.systemShort" : labelKey)} ~
               {formatUsageTokens(tokens)}
             </span>
@@ -602,7 +602,6 @@ function SessionLogs(props: {
             <For each={state().filteredEntries}>
               {(entry) => {
                 const { log, toolInfo, cleanContent } = entry;
-                const roleClass = log.role === "user" ? "user" : "assistant";
                 const roleLabel = () =>
                   log.role === "user"
                     ? t("usage.details.you")
@@ -610,7 +609,7 @@ function SessionLogs(props: {
                       ? t("usage.overview.assistant")
                       : t("usage.details.tool");
                 return (
-                  <div class={`session-log-entry ${roleClass}`}>
+                  <div class={["session-log-entry", log.role === "user" ? "user" : "assistant"]}>
                     <div class="session-log-meta">
                       <span class="session-log-role">{roleLabel()}</span>
                       <span>{state().formatLogTimestamp(log.timestamp)}</span>

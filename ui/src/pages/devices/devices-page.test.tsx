@@ -132,6 +132,7 @@ function mountPage(
     ...routeOverride,
   };
   const [currentGateway, setGateway] = createSignal(fixture.source);
+  const [presentation, setPresentation] = createSignal({ routeData });
   const context = {
     get gateway() {
       return currentGateway();
@@ -147,7 +148,7 @@ function mountPage(
   const mounted = mountSolid(
     () => (
       <ApplicationProvider value={context}>
-        <DevicesPage routeData={routeData} />
+        <DevicesPage routeData={presentation().routeData} />
       </ApplicationProvider>
     ),
     { container },
@@ -167,6 +168,10 @@ function mountPage(
   return {
     container,
     dispose,
+    refreshPresentation() {
+      setPresentation({ routeData });
+      flush();
+    },
     replaceGateway(next: ReturnType<typeof gatewayFixture>) {
       setGateway(next.source);
       flush();
@@ -346,6 +351,9 @@ describe("DevicesPage gateway lifecycle", () => {
       expect(page.container.textContent).toContain("Earlier operator action failed");
       nodes.resolve({ nodes: [{ nodeId: "node-1", displayName: "Current Mac", connected: true }] });
       await vi.waitFor(() => expect(page.container.textContent).toContain("Current Mac"));
+      page.refreshPresentation();
+      expect(page.container.textContent).toContain("Current Mac");
+      expect(page.container.textContent).not.toContain("Office Mac");
     },
   );
 

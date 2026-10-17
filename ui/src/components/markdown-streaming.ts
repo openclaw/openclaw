@@ -113,7 +113,7 @@ type StreamingMarkdownCacheEntry = {
 type StreamingMarkdownState = {
   input?: { source: string; normalized: string };
   split?: StreamingMarkdownCacheEntry;
-  rendered?: { options: string; markdown: string; html: string };
+  rendered?: { options: string; markdown: string; html: string; hasHtml: boolean };
 };
 const streamingCache = new Map<string, StreamingMarkdownState>();
 
@@ -126,6 +126,25 @@ export function streamingMarkdownState(streamKey?: string): StreamingMarkdownSta
   streamingCache.set(streamKey, state);
   pruneMapToMaxSize(streamingCache, STREAMING_CACHE_LIMIT);
   return state;
+}
+
+export function hasStreamingMarkdownHtml(markdown: string): boolean {
+  let index = markdown.indexOf("<");
+  if (index === -1) {
+    return false;
+  }
+  for (const [start, end] of findMarkdownCodeSpans(markdown)) {
+    if (index < start) {
+      return true;
+    }
+    if (index < end) {
+      index = markdown.indexOf("<", end);
+    }
+    if (index === -1) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function findStreamingCodeSpans(markdown: string, start: number): Array<[number, number]> {

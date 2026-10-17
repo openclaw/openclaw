@@ -29,8 +29,6 @@
   const urlTargetId = urlParams.get("targetId");
   const leafId = urlLeafId || defaultLeafId;
 
-  const byId = new Map(entries.map((entry) => [entry.id, entry]));
-
   const toolCallMap = new Map();
   for (const entry of entries) {
     if (entry.type === "message" && entry.message.role === "assistant") {
@@ -85,18 +83,18 @@
 
   function getPath(targetId) {
     const path = [];
-    let current = byId.get(targetId);
+    let current = treeNodeMap.get(targetId)?.entry;
     while (current) {
       path.push(current);
       if (!current.parentId || current.parentId === current.id) {
         break;
       }
-      current = byId.get(current.parentId);
+      current = treeNodeMap.get(current.parentId)?.entry;
     }
     return path.reverse();
   }
 
-  let treeNodeMap = null;
+  const { roots: tree, nodeMap: treeNodeMap } = buildTree();
 
   /**
    * Find the newest leaf node reachable from a given node.
@@ -104,10 +102,6 @@
    * Children are sorted by timestamp, so the newest is always last.
    */
   function findNewestLeaf(nodeId) {
-    if (!treeNodeMap) {
-      treeNodeMap = buildTree().nodeMap;
-    }
-
     const node = treeNodeMap.get(nodeId);
     if (!node) {
       return nodeId;
@@ -227,16 +221,6 @@
       : entry.type === "custom_message" && !entry.display;
   }
 
-  function hasTextContent(content) {
-    if (typeof content === "string") {
-      return content.trim().length > 0;
-    }
-    return (
-      Array.isArray(content) &&
-      content.some((c) => c.type === "text" && c.text && c.text.trim().length > 0)
-    );
-  }
-
   function extractContent(content) {
     if (typeof content === "string") {
       return content;
@@ -326,10 +310,9 @@
       // Hide assistant messages with only tool calls (no text) unless error/aborted
       if (entry.type === "message" && entry.message.role === "assistant") {
         const msg = entry.message;
-        const hasText = hasTextContent(msg.content);
         const isErrorOrAborted =
           msg.stopReason && msg.stopReason !== "stop" && msg.stopReason !== "toolUse";
-        if (!hasText && !isErrorOrAborted) {
+        if (!messageText(msg.content).trim() && !isErrorOrAborted) {
           return false;
         }
       }
@@ -632,7 +615,6 @@
   let treeRendered = false;
 
   function renderTree() {
-    const { roots: tree } = buildTree();
     const activePathIds = new Set(getPath(currentLeafId).map((entry) => entry.id));
     const flatNodes = flattenTree(tree, activePathIds);
     const filtered = filterNodes(flatNodes, currentLeafId);
@@ -813,7 +795,7 @@
 
   function formatOutputLines(lines, lang) {
     if (lang) {
-      return highlightCode(lines.join("\n"), lang);
+      return `<pre><code class="hljs">${highlightCode(lines.join("\n"), lang)}</code></pre>`;
     }
     return lines.map((line) => `<div>${escapeHtml(line)}</div>`).join("");
   }
@@ -824,34 +806,14 @@
     const displayLines = lines.slice(0, maxLines);
     const remaining = lines.length - maxLines;
 
-    if (lang) {
-      const highlighted = formatOutputLines(lines, lang);
-
-      if (remaining > 0) {
-        const previewHighlighted = formatOutputLines(displayLines, lang);
-
-        return `<div class="tool-output expandable" onclick="this.classList.toggle('expanded')">
-              <div class="output-preview"><pre><code class="hljs">${previewHighlighted}</code></pre>
-              <div class="expand-hint">... (${remaining} more lines)</div></div>
-              <div class="output-full"><pre><code class="hljs">${highlighted}</code></pre></div></div>`;
-      }
-
-      return `<div class="tool-output"><pre><code class="hljs">${highlighted}</code></pre></div>`;
-    }
-
     if (remaining > 0) {
-      let out =
-        '<div class="tool-output expandable" onclick="this.classList.toggle(\'expanded\')">';
-      out += '<div class="output-preview">';
-      out += formatOutputLines(displayLines);
-      out += `<div class="expand-hint">... (${remaining} more lines)</div></div>`;
-      out += '<div class="output-full">';
-      out += formatOutputLines(lines);
-      out += "</div></div>";
-      return out;
+      return `<div class="tool-output expandable" onclick="this.classList.toggle('expanded')">
+              <div class="output-preview">${formatOutputLines(displayLines, lang)}
+              <div class="expand-hint">... (${remaining} more lines)</div></div>
+              <div class="output-full">${formatOutputLines(lines, lang)}</div></div>`;
     }
 
-    return `<div class="tool-output">${formatOutputLines(displayLines)}</div>`;
+    return `<div class="tool-output">${formatOutputLines(displayLines, lang)}</div>`;
   }
 
   function renderContentImages(content, containerClass, imageClass) {
@@ -1603,7 +1565,7 @@
   });
 
   if (leafId) {
-    if (urlTargetId && byId.has(urlTargetId)) {
+    if (urlTargetId && treeNodeMap.has(urlTargetId)) {
       navigateTo(leafId, "target", urlTargetId);
     } else {
       navigateTo(leafId, "none");

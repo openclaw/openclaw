@@ -3,6 +3,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMatrixCli } from "./cli.js";
+import { expectRecordFields, mockCallArg } from "./cli.test-support.js";
 import type { CoreConfig } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -69,26 +70,6 @@ function mockRecoveryKeyStdin(...values: string[]): void {
   );
 }
 
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
-function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const resolvedIndex = callIndex < 0 ? mock.mock.calls.length + callIndex : callIndex;
-  const call = mock.mock.calls[resolvedIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
 function stdoutWriteArg(callIndex = -1) {
   return mockCallArg(mocks.stdout, callIndex);
 }
@@ -135,12 +116,17 @@ vi.mock("./matrix/client.js", () => ({
   resolveMatrixAuthContext: mocks.authContext,
 }));
 
-vi.mock("./setup-core.js", () => ({
-  matrixSetupAdapter: {
-    applyAccountConfig: mocks.applyAccountConfig,
-    validateInput: mocks.validateInput,
-  },
-}));
+vi.mock("./setup-core.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./setup-core.js")>();
+  return {
+    ...actual,
+    matrixSetupAdapter: {
+      ...actual.matrixSetupAdapter,
+      applyAccountConfig: mocks.applyAccountConfig,
+      validateInput: mocks.validateInput,
+    },
+  };
+});
 
 vi.mock("./runtime.js", () => ({
   getMatrixRuntime: () => ({

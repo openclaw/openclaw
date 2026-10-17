@@ -16,6 +16,7 @@ import type { SqliteWorkerRequestCustodyDescriptor } from "./sqlite-worker-reque
 
 export type SqliteWorkerOperationContext = {
   port: MessagePort;
+  databaseAdmissionDeadlineAtMs?: number;
   /** Present for broker-owned work; standalone admission owners keep their own lifetime. */
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
   executionAuthority?: SqliteWorkerExecutionAuthority;
@@ -100,11 +101,8 @@ export function deferSqliteWorkerNativeCommitReceipt(
   }
   const captured = structuredClone(facts);
   const anchor = sqlPublicationAnchor(database);
-  const counts = owner.sourceReservations ? (owner.pendingReceipts ??= new Map()) : undefined;
+  const counts = (owner.pendingReceipts ??= new Map());
   const pending = (delta: number) => {
-    if (!counts) {
-      return;
-    }
     const count = (counts.get(anchor) ?? 0) + delta;
     if (count === 0) {
       counts.delete(anchor);

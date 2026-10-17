@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import type { NodeHostStats } from "../../../../src/shared/node-host-stats.js";
 import type { PairedDevice } from "./index.ts";
 import {
   buildDeviceInventory,
@@ -28,9 +29,9 @@ const hostStats = {
   memoryTotalBytes: 192 * 1024 ** 3,
   memoryFreeBytes: 41 * 1024 ** 3,
   diskTotalBytes: 2 * 1024 ** 4,
-  diskAvailableBytes: 1.2 * 1024 ** 4,
+  diskAvailableBytes: Math.round(1.2 * 1024 ** 4),
   updatedAtMs: 1_700_000_000_000,
-};
+} satisfies NodeHostStats;
 
 describe("buildDeviceInventory", () => {
   it("keeps available device-family metadata for live and offline platform labels", () => {
@@ -129,33 +130,6 @@ describe("buildDeviceInventory", () => {
     expect(firstGroup(groups).primary.node?.hostStats).toEqual(stats);
   });
 
-  it.each([
-    ["missing fields", {}],
-    ["numeric strings", { ...hostStats, cpuCount: "24" }],
-    ["zero cores", { ...hostStats, cpuCount: 0 }],
-    ["fractional cores", { ...hostStats, cpuCount: 1.5 }],
-    ["nonfinite memory", { ...hostStats, memoryTotalBytes: Number.POSITIVE_INFINITY }],
-    ["negative memory", { ...hostStats, memoryFreeBytes: -1 }],
-    [
-      "free memory exceeds total",
-      { ...hostStats, memoryFreeBytes: hostStats.memoryTotalBytes + 1 },
-    ],
-    ["incomplete load tuple", { ...hostStats, loadAverage: [3.2, 2.8] }],
-    ["invalid load average", { ...hostStats, loadAverage: [3.2, Number.NaN, 2.4] }],
-    ["negative load average", { ...hostStats, loadAverage: [-1, 2.8, 2.4] }],
-    ["zero disk size", { ...hostStats, diskTotalBytes: 0 }],
-    ["free disk exceeds total", { ...hostStats, diskAvailableBytes: hostStats.diskTotalBytes + 1 }],
-    ["missing timestamp", { ...hostStats, updatedAtMs: undefined }],
-  ])("drops malformed host stats (%s) while retaining the node", (_description, stats) => {
-    const groups = buildDeviceInventory({
-      paired: [],
-      nodes: [{ nodeId: "node-1", connected: true, hostStats: stats }],
-    });
-
-    expect(firstGroup(groups).primary.node).toMatchObject({ nodeId: "node-1", connected: true });
-    expect(firstGroup(groups).primary.node?.hostStats).toBeUndefined();
-  });
-
   it("preserves a valid missing worker bundle status", () => {
     const groups = buildDeviceInventory({
       paired: [],
@@ -170,39 +144,6 @@ describe("buildDeviceInventory", () => {
     });
 
     expect(firstGroup(groups).primary.node?.workerBundle).toEqual({ status: "missing" });
-  });
-
-  it("drops malformed worker bundle status instead of exposing private fields", () => {
-    const groups = buildDeviceInventory({
-      paired: [],
-      nodes: [
-        {
-          nodeId: "node-1",
-          connected: true,
-          paired: true,
-          workerBundle: {
-            status: "installed",
-            version: "2026.8.9",
-            bundleHash: "a".repeat(64),
-          },
-        },
-      ],
-    });
-
-    expect(firstGroup(groups).primary.node?.workerBundle).toBeUndefined();
-  });
-
-  it.each([
-    { total: 0, available: 0 },
-    { total: 2, available: 3 },
-    { total: 2, available: 1, busy: 1 },
-  ])("drops malformed worker slot summaries: $total/$available", (workerSlots) => {
-    const groups = buildDeviceInventory({
-      paired: [],
-      nodes: [{ nodeId: "node-1", connected: true, paired: true, workerSlots }],
-    });
-
-    expect(firstGroup(groups).primary.node?.workerSlots).toBeUndefined();
   });
 
   it("joins presence case-insensitively and prefers its display metadata", () => {

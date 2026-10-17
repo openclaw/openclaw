@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -18,6 +18,7 @@ export type ExistingAgentSchemaMeta = {
 export const agentSchemaMetadataKey: SqliteDatabaseAdmissionKey<ExistingAgentSchemaMeta> = {
   // Fixed ownership is reusable until tracked DDL can remove or rebuild its storage.
   name: "agent.schema-metadata",
+  lifetime: "process",
   schemaDependent: true,
   read(value) {
     if (
@@ -44,7 +45,7 @@ function schemaMetadataKey(
 
 /** The metadata writer publishes its committed format facts without a readback. */
 export function publishAgentSchemaMetadata(
-  db: DatabaseSync,
+  db: EngineConnection,
   metadata: ExistingAgentSchemaMeta,
 ): void {
   publishSqliteDatabaseAdmission(db, agentSchemaMetadataKey, metadata);
@@ -58,12 +59,12 @@ type AgentSchemaMetaWithAppVersion = ExistingAgentSchemaMeta & { appVersion: str
 
 /** Read ownership metadata without loading runtime schema or migration owners. */
 export function readExistingAgentSchemaMeta(
-  db: DatabaseSync,
+  db: EngineConnection,
   options: { includeAppVersion: true },
 ): AgentSchemaMetaWithAppVersion | null;
-export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSchemaMeta | null;
+export function readExistingAgentSchemaMeta(db: EngineConnection): ExistingAgentSchemaMeta | null;
 export function readExistingAgentSchemaMeta(
-  db: DatabaseSync,
+  db: EngineConnection,
   options?: { includeAppVersion: true },
 ): ExistingAgentSchemaMeta | AgentSchemaMetaWithAppVersion | null {
   const schema = getAdmittedSqliteSchemaFacts(db);
@@ -115,9 +116,10 @@ export function readExistingAgentSchemaMeta(
     schemaVersion: typeof row.schema_version === "number" ? row.schema_version : null,
   };
   if (
-    schema &&
-    getAdmittedSqliteSchemaFacts(db) === schema &&
-    getSqliteDatabaseAdmission(db, schemaAdmission)?.admissionId === schema.admissionId
+    isPostgresSqlConnection(db) ||
+    (schema &&
+      getAdmittedSqliteSchemaFacts(db) === schema &&
+      getSqliteDatabaseAdmission(db, schemaAdmission)?.admissionId === schema.admissionId)
   ) {
     publishAgentSchemaMetadata(db, metadata);
   }

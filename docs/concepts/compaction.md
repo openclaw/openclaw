@@ -20,6 +20,11 @@ Built-in compaction summarizes the older history in one model request, whatever 
 
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
+OpenAI Responses native compaction and checkpoint replay follow
+[context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership),
+including legacy defaults, explicit opt-in, and handling of preexisting checkpoints
+when switching engines.
+
 For direct OpenAI API-key sessions, the `/responses/compact` endpoint can return
 a canonical window of retained messages followed by an encrypted checkpoint.
 OpenClaw preserves that entire window, including retained assistant messages,
@@ -148,6 +153,10 @@ Automatic session title generation runs in the background and does not block man
 
 Client-side manual compaction uses `agents.defaults.compaction.keepRecentTokens` (default: 20,000) as its cut-point budget and keeps that recent tail in rebuilt context.
 
+The session's per-model `contextTokens` cap does not shrink the summarization
+model's native `contextWindow`. A small active-input budget still applies to
+normal turns, while the summarizer uses its own window to read older history.
+
 When the built-in OpenClaw runtime has prepared the foreground request,
 client-side automatic compaction also accounts for its system prompt, tool
 schemas, pending input, and output reserve when choosing the retained tail.
@@ -160,6 +169,13 @@ strictly reduce history; unchanged or larger results are rejected. Otherwise,
 automatic compaction requires the complete replacement to fit the estimated target.
 Early required preflight runs before those request facts are available and still
 uses history-based sizing; it does not guarantee this preferred headroom.
+
+If fixed instructions and tools alone exceed the model window,
+or no further history can be compacted while the prepared request is still too
+large, OpenClaw reports the estimated budget components instead of treating the
+result as a harmless skip. Use `/context detail` to identify large contributors,
+shorten the request, or choose a larger-context model. `/new` clears conversation
+history but keeps fixed instructions and tools.
 
 ## Configuration
 
@@ -226,6 +242,11 @@ rewrite saved messages or count a failed attempt as successful compaction.
 It shows a notice even with compaction notifications disabled; resend any
 essential details from omitted history. The bound applies to selected history,
 not the fixed instructions, tool definitions, or current request.
+
+Manual compaction also reports `transcript_bytes` pressure to the context engine
+when the configured positive threshold is reached and automatic compaction is
+enabled. This lets an owning engine apply the same byte-pressure policy during
+manual recovery as during preflight.
 
 Suppressed byte-compaction retries still use a bounded view on subsequent turns.
 Native compaction that leaves the host transcript unchanged preserves retry

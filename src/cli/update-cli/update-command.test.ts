@@ -400,7 +400,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
           env,
           supervisorKeepsAlive: true,
           requirePluginHealth: false,
-          settle: { probes: 12 },
+          requireChannelHealth: false,
         });
       } else {
         expect(waitForHealthy).not.toHaveBeenCalled();

@@ -98,6 +98,7 @@ describe("CI changed Node test plan", () => {
     // change dist bytes; repo scripts, workflows, and qa scenarios cannot.
     expect(hasBuildArtifactAffectingChange(["scripts/build-all.mts"])).toBe(true);
     for (const changedPath of [
+      "cli-invocation.mjs",
       "tsdown.config.ts",
       "tsdown.ai.config.ts",
       "scripts/tsdown-build.mts",

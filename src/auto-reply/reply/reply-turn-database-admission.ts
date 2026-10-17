@@ -64,9 +64,6 @@ export function bindReplyOperationDatabaseAdmission(
     },
     acquireSessionActor() {
       assertReaderOperation();
-      if (handoff) {
-        throw new SessionWorkStartChangedError("Session actor admission is changing");
-      }
       const claim = operationAdmission.databaseClaim;
       if (!claim || !("kind" in claim)) {
         throw new Error("Reply operation has no session actor admission");
@@ -79,18 +76,9 @@ export function bindReplyOperationDatabaseAdmission(
             claim.assertCurrent();
           },
         })
-        .then(async (actor) => {
-          try {
-            assertReaderOperation();
-            if (claim !== operationAdmission.databaseClaim) {
-              throw new SessionWorkStartChangedError("Session actor admission changed");
-            }
-            operationAdmission.sessionActor = actor;
-            return actor;
-          } catch (error) {
-            await actor?.release();
-            throw error;
-          }
+        .then((actor) => {
+          operationAdmission.sessionActor = actor;
+          return actor;
         });
       return sessionActor;
     },

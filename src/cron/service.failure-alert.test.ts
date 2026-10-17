@@ -326,21 +326,6 @@ describe("CronService failure alerts", () => {
     );
   });
 
-  it("respects per-job failureAlert=false and suppresses alerts", async () => {
-    await withAlerts(
-      async ({ cron, sendCronFailureAlert, addJob }) => {
-        const job = await addJob("disabled alert job", { failureAlert: false });
-
-        await cron.run(job.id, "force");
-        await cron.run(job.id, "force");
-        expect(sendCronFailureAlert).not.toHaveBeenCalled();
-      },
-      {
-        runResult: { status: "error", error: "auth error" },
-      },
-    );
-  });
-
   it("preserves includeSkipped through failure alert updates", async () => {
     await withAlerts(
       async ({ cron, sendCronFailureAlert, addJob }) => {

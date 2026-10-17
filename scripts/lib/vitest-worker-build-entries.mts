@@ -50,6 +50,7 @@ import { serviceProcessEnvEntrypoints } from "../../src/daemon/service-process-e
 import { sessionChildCacheRetentionEntrypoint } from "../../src/gateway/session-child-cache-retention-entrypoint.test-support.ts";
 import { sessionTitleRetentionEntrypoints } from "../../src/gateway/session-title-retention.test-support.ts";
 import { workspaceProcessTestEntrypoints } from "../../src/gateway/worker-environments/workspace-process-runtime.test-support.ts";
+import { updatePreflightTeamReportsEntrypoint } from "../../src/infra/database-engine/update-preflight.runtime.test-support.ts";
 import { nativeBoundaryTestEntrypoints } from "../../src/infra/native-boundary-runtime.test-support.ts";
 import { nativeProcessTestEntrypoints } from "../../src/infra/native-process-runtime.test-support.ts";
 import { externalProxyTestEntrypoints } from "../../src/infra/net/proxy/external-proxy-runtime.test-support.ts";
@@ -89,7 +90,6 @@ import { gitBackupCommandRuntimeEntrypoint } from "../../src/snapshot/git-backup
 import { stateNativeProcessEntrypoints } from "../../src/state/native-process-runtime.test-support.ts";
 import { agentDatabaseModuleIdentityEntrypoints } from "../../src/state/openclaw-agent-db-module-identity-runtime.test-support.ts";
 import { agentWorkerStoreFixtureEntrypoint } from "../../src/state/openclaw-agent-worker-store.runtime.test-support.ts";
-import { databaseVerifyHostRuntimeEntrypoint } from "../../src/state/openclaw-database-verify-runtime.test-support.ts";
 import {
   agentDatabaseHeldRuntimeEntrypoint,
   stateLeaseProcessExitRuntimeEntrypoint,
@@ -113,6 +113,8 @@ import { nativeSchtasksIntegrationEnabled } from "./vitest-worker-declarations.m
 
 // These fixture hooks require physical module boundaries and complete namespaces.
 export const preservedModuleBuildSources = [
+  "scripts/update-gateway-build.mts",
+  "scripts/stage-bundled-plugin-runtime.mts",
   "extensions/acpx/src/runtime.admission-retention.test-support.ts",
   "scripts/lib/tsdown-declaration-boundary.mts",
   "scripts/lib/sqlite-reliability-writer.ts",
@@ -121,6 +123,7 @@ export const preservedModuleBuildSources = [
   "scripts/check-plugin-gateway-gauntlet.mts",
   "scripts/lib/managed-child-process.mts",
   "scripts/e2e/kitchen-sink-rpc-walk.mts",
+  "scripts/code-mode-model-matrix.ts",
   "scripts/control-ui-i18n.ts",
   "scripts/test-docker-all.mts",
   "scripts/run-tsgo-core-test-shards.mts",
@@ -380,12 +383,12 @@ export const vitestWorkerBuildEntries = {
     qaGatewayCleanupRuntimeEntrypoint,
     logbookSqliteBackendEntrypoint,
     teamReportsSqliteBackendEntrypoint,
+    updatePreflightTeamReportsEntrypoint,
     workboardSqliteBackendEntrypoint,
     ...Object.values(agentDatabaseModuleIdentityEntrypoints),
     stateLeaseProcessExitRuntimeEntrypoint,
     stateLeaseRetentionRuntimeEntrypoint,
     agentDatabaseHeldRuntimeEntrypoint,
-    databaseVerifyHostRuntimeEntrypoint,
     transcriptLibraryTimezoneEntrypoint,
   ]),
   // The real ulimit fixture must import its parent before imposing a file-size limit.

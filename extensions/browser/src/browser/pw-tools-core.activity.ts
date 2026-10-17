@@ -89,7 +89,7 @@ export async function getNetworkRequestsViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
   const raw = [...state.requests.values()];
-  const filter = typeof opts.filter === "string" ? opts.filter.trim() : "";
+  const filter = opts.filter?.trim();
   const requests = filter
     ? raw.filter((r) => r.url.includes(filter) || r.resourceType?.includes(filter))
     : raw;

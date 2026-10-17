@@ -1,10 +1,12 @@
 // Source-blind browser proof for bundled plugin lazy-view recovery.
 import path from "node:path";
-import type { Route } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import {
+  controlUiE2eBuiltModuleRequest,
+  failControlUiModuleForDocuments,
+} from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -57,20 +59,6 @@ suite.define(() => {
         path: path.join(artifactDir, "before.png"),
       });
 
-      let failedRequests = 0;
-      let assetRequests = 0;
-      let failingChunkPath: string | null = null;
-      const failBundledChunkTwice = async (route: Route) => {
-        assetRequests += 1;
-        const requestPath = new URL(route.request().url()).pathname;
-        failingChunkPath ??= requestPath;
-        if (requestPath === failingChunkPath && failedRequests < 2) {
-          failedRequests += 1;
-          await route.abort("internetdisconnected");
-          return;
-        }
-        await route.continue();
-      };
       let markDocumentReachable!: () => void;
       const documentReachable = new Promise<void>((resolve) => {
         markDocumentReachable = resolve;
@@ -85,9 +73,10 @@ suite.define(() => {
         await documentReachable;
         await route.fulfill({ status: 200 });
       });
-      await page.route(
+      const failure = await failControlUiModuleForDocuments(
+        page,
         controlUiE2eBuiltModuleRequest("ui/src/pages/plugin/logbook-view.tsx"),
-        failBundledChunkTwice,
+        2,
       );
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar
@@ -98,7 +87,7 @@ suite.define(() => {
         .locator(".sidebar-pages")
         .getByRole("link", { name: "Logbook", exact: true })
         .click();
-      await expect.poll(() => failedRequests).toBe(1);
+      await expect.poll(failure.documentCount).toBe(1);
 
       const alert = page.getByRole("alert");
       await alert.waitFor();
@@ -119,7 +108,7 @@ suite.define(() => {
       });
       markDocumentReachable();
 
-      await expect.poll(() => failedRequests).toBe(2);
+      await expect.poll(failure.documentCount).toBe(2);
       await alert.waitFor();
       expect(documentProbes).toBe(1);
       expect(await alert.count()).toBe(1);
@@ -128,7 +117,7 @@ suite.define(() => {
       await alert.getByRole("button", { name: "Reload" }).click();
       await page.locator(".logbook").waitFor();
       expect(await alert.count()).toBe(0);
-      expect(assetRequests).toBeGreaterThan(2);
+      expect(failure.documentCount()).toBe(3);
       expect(documentRequestCount).toBe(2);
       expect(documentProbes).toBe(2);
       await gateway.waitForRequest("logbook.status");

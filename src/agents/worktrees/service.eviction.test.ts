@@ -4,6 +4,7 @@ import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -22,18 +23,23 @@ import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.t
 import { withWorktreeAllocationLease } from "./allocation.js";
 import * as checkout from "./checkout-materialize.js";
 import * as eviction from "./eviction.js";
+import * as cleanupLimits from "./gc-limits.js";
 import { requireGit } from "./git.js";
+import * as registryReads from "./registry-read.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
+import { resolveRepository } from "./repository-paths.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
 import * as runLease from "./run-lease.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
+  materializeManagedWorktreeFixture,
   materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 import * as snapshotHost from "./snapshot-host.js";
+import { interceptWorktreeWorkerOperation } from "./worker-operation.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -50,20 +56,41 @@ describe("managed worktree cap eviction", () => {
   let repoRoot: string;
   let env: NodeJS.ProcessEnv;
   let service: ManagedWorktreeService;
+  let repository: Awaited<ReturnType<typeof resolveRepository>> | undefined;
   const config = { worktreeMaxCount: 1, worktreeAcceleration: false };
 
   beforeEach(async () => {
     config.worktreeMaxCount = 1;
+    repository = undefined;
     root = tempDirs.make("openclaw-worktree-eviction-");
     repoRoot = await initializeRepository(root);
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
     service = new ManagedWorktreeService({ env, getConfig: () => config });
   });
 
+  async function createFixture(
+    name: string,
+    options: Pick<
+      Parameters<typeof materializeManagedWorktreeFixture>[0],
+      "ownerKind" | "ownerId"
+    > = {},
+  ) {
+    repository ??= await resolveRepository(repoRoot);
+    return materializeManagedWorktreeFixture({
+      env,
+      repoRoot,
+      repoFingerprint: repository.fingerprint,
+      stateDir: env.OPENCLAW_STATE_DIR!,
+      name,
+      now: Date.now(),
+      ...options,
+    });
+  }
+
   it.each(["claim", "snapshot"] as const)(
     "retains uncertain %s custody after caller cancellation",
     async (stage) => {
-      const record = await service.create({ repoRoot, name: "uncertain", baseRef: "HEAD" });
+      const record = await createFixture("uncertain");
       const primary = new SqliteWorkerError(
         "synthetic unknown operation settlement",
         "outcome-unknown",
@@ -126,11 +153,7 @@ describe("managed worktree cap eviction", () => {
   );
 
   it("settles an admitted purge before releasing custody after caller cancellation", async () => {
-    const record = await service.create({
-      repoRoot,
-      name: "cancel-after-admission",
-      baseRef: "HEAD",
-    });
+    const record = await createFixture("cancel-after-admission");
     const cancellation = new AbortController();
     const execute = gitWorker.runGitWorkerOperation;
     const dispatch = vi
@@ -246,12 +269,13 @@ describe("managed worktree cap eviction", () => {
   });
 
   it("ranks shared heads once per repository when creating at the fleet cap", async () => {
-    config.worktreeMaxCount = 17;
+    // Six records make even one Git command per worktree exceed the five-command bound.
+    config.worktreeMaxCount = 6;
     const records = await materializeManagedWorktreeFixtures({
       env,
       repoRoot,
       stateDir: env.OPENCLAW_STATE_DIR!,
-      names: Array.from({ length: 17 }, (_, index) => `rank-${String(index).padStart(2, "0")}`),
+      names: ["rank-00", "rank-01", "rank-02", "rank-03", "rank-04", "rank-05"],
       now: 1,
     });
     await requireGit(repoRoot, [
@@ -319,7 +343,7 @@ describe("managed worktree cap eviction", () => {
   });
 
   it("uses the current runtime cap when no configuration getter is injected", async () => {
-    const first = await service.create({ repoRoot, name: "first", baseRef: "HEAD" });
+    const first = await createFixture("first");
     const runtimeService = new ManagedWorktreeService({ env });
     try {
       setRuntimeConfigSnapshot({ worktreeMaxCount: 1 });
@@ -384,13 +408,68 @@ describe("managed worktree cap eviction", () => {
     expect(getRegistryWorktree(env, outer.id)).toEqual(original);
   });
 
-  it("holds one global cap across concurrent creates from different repositories and service instances", async () => {
+  it("holds one global cap when a pending create publishes during eviction planning", async ({
+    signal,
+  }) => {
     const otherRepo = await initializeRepository(path.join(root, "other"));
     const otherService = new ManagedWorktreeService({ env, getConfig: () => config });
-    const created = await Promise.all([
-      service.create({ repoRoot, name: "first", baseRef: "HEAD" }),
-      otherService.create({ repoRoot: otherRepo, name: "second", baseRef: "HEAD" }),
-    ]);
+    const publishing = createDeferred();
+    const published = createDeferred();
+    const release = createDeferred();
+    let held = false;
+    const transport = interceptWorktreeWorkerOperation((execute) => async (command, options) => {
+      if (command.type === "worktrees.insert" && !held) {
+        held = true;
+        publishing.resolve();
+        await release.promise;
+        const result = await execute(command, options);
+        published.resolve();
+        return result;
+      }
+      return execute(command, options);
+    });
+    const first = service.create({ repoRoot, name: "first", baseRef: "HEAD", signal });
+    const creations = [first];
+    let planning = false;
+    const enforce = cleanupLimits.enforceWorktreeCleanupLimits;
+    const limits = vi
+      .spyOn(cleanupLimits, "enforceWorktreeCleanupLimits")
+      .mockImplementation(async (params) => {
+        planning = true;
+        try {
+          return await enforce(params);
+        } finally {
+          planning = false;
+        }
+      });
+    const read = registryReads.readRegistryWorktrees;
+    let publishedDuringPlanning = false;
+    const inventory = vi
+      .spyOn(registryReads, "readRegistryWorktrees")
+      .mockImplementation(async (...args) => {
+        const records = await read(...args);
+        if (planning && args[1]?.liveOnly && records.length === 0 && !publishedDuringPlanning) {
+          publishedDuringPlanning = true;
+          release.resolve();
+          await published.promise;
+        }
+        return records;
+      });
+    let created: Awaited<typeof first>[];
+    try {
+      await withinTest(publishing.promise, signal);
+      creations.push(
+        otherService.create({ repoRoot: otherRepo, name: "second", baseRef: "HEAD", signal }),
+      );
+      created = await Promise.all(creations);
+      expect(publishedDuringPlanning).toBe(true);
+    } finally {
+      release.resolve();
+      await Promise.allSettled(creations);
+      inventory.mockRestore();
+      limits.mockRestore();
+      transport.mockRestore();
+    }
     const records = await service.listRegistryRecords();
     const active = records.filter((record) => record.removedAt === undefined);
     expect(active).toHaveLength(1);
@@ -404,7 +483,7 @@ describe("managed worktree cap eviction", () => {
   });
 
   it("snapshots dirty data before purging and restores it while preserving the cap", async () => {
-    const dirty = await service.create({ repoRoot, name: "dirty", baseRef: "HEAD" });
+    const dirty = await createFixture("dirty");
     await fs.writeFile(path.join(dirty.path, "README.md"), "unsaved tracked edit\n");
     await fs.writeFile(path.join(dirty.path, "untracked.txt"), "unsaved new file\n");
     const reads = observeMainThreadReads();
@@ -492,7 +571,7 @@ describe("managed worktree cap eviction", () => {
   });
 
   it("refuses an advanced retained branch before evicting unrelated data", async () => {
-    const archived = await service.create({ repoRoot, name: "retained", baseRef: "HEAD" });
+    const archived = await createFixture("retained");
     const live = await service.create({ repoRoot, name: "live", baseRef: "HEAD" });
     await fs.writeFile(path.join(live.path, "README.md"), "unrelated unsaved data\n");
     const liveBefore = getRegistryWorktree(env, live.id);
@@ -520,7 +599,7 @@ describe("managed worktree cap eviction", () => {
     ["occupied destination", "restore"],
     ["missing snapshot", "same-name create"],
   ] as const)("preserves the full fleet when %s prevents %s", async (failure, entrypoint) => {
-    const archived = await service.create({ repoRoot, name: "archived", baseRef: "HEAD" });
+    const archived = await createFixture("archived");
     const removed = await service.remove({ id: archived.id, reason: "fixture" });
     const live = await service.create({ repoRoot, name: "live", baseRef: "HEAD" });
     await fs.writeFile(path.join(live.path, "README.md"), "unrelated unsaved data\n");
@@ -558,7 +637,7 @@ describe("managed worktree cap eviction", () => {
   it.each(["retained", "fallback"] as const)(
     "admits a validated exact-state %s restore once",
     async (kind) => {
-      const archived = await service.create({ repoRoot, name: "exact", baseRef: "HEAD" });
+      const archived = await createFixture("exact");
       const head = await requireGit(archived.path, ["rev-parse", "HEAD"]);
       await requireGit(archived.path, ["checkout", "--detach", "HEAD"]);
       const indexPath = path.resolve(
@@ -608,10 +687,7 @@ describe("managed worktree cap eviction", () => {
   );
 
   it("refuses a create at the cap when the remaining checkout has a live owner", async () => {
-    const active = await service.create({
-      repoRoot,
-      name: "active",
-      baseRef: "HEAD",
+    const active = await createFixture("active", {
       ownerKind: "session",
       ownerId: "agent:main:active",
     });

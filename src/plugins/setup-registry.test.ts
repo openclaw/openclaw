@@ -63,8 +63,16 @@ function registration(register: (api: SetupRegistryApi, source: string) => unkno
 function contributions(api: SetupRegistryApi, label: string) {
   api.registerProvider({ id: "shared-provider", label, auth: [] });
   api.registerProvider({ id: "SHARED-PROVIDER", label: `${label} duplicate`, auth: [] });
-  api.registerCliBackend({ id: "shared-cli", config: { command: label } });
-  api.registerCliBackend({ id: "SHARED-CLI", config: { command: `${label}-duplicate` } });
+  api.registerCliBackend({
+    id: "shared-cli",
+    modelProvider: "shared-provider",
+    config: { command: label },
+  });
+  api.registerCliBackend({
+    id: "SHARED-CLI",
+    modelProvider: "shared-provider",
+    config: { command: `${label}-duplicate` },
+  });
   api.registerConfigMigration((config) => ({ config, changes: [label] }));
   api.registerAutoEnableProbe(() => label);
 }
@@ -93,6 +101,40 @@ beforeEach(() => {
 });
 
 describe("setup registry", () => {
+  it("warns for setup-only CLI backends without modelProvider while retaining valid registrations", () => {
+    manifests(
+      fixture({
+        id: "acme-plugin",
+        setup: { cliBackends: ["standalone-cli", "bound-cli"], requiresRuntime: true },
+      }),
+    );
+    registration((api) => {
+      expect(api.registrationMode).toBe("setup-only");
+      api.registerCliBackend({ id: "standalone-cli", config: { command: "standalone" } });
+      api.registerCliBackend({
+        id: "bound-cli",
+        modelProvider: "acme",
+        config: { command: "bound" },
+      });
+    });
+
+    const registry = resolvePluginSetupRegistry({ env: {} });
+
+    expect(registry.diagnostics).toEqual([
+      {
+        pluginId: "acme-plugin",
+        code: "setup-cli-backend-missing-model-provider",
+        runtimeId: "standalone-cli",
+        message:
+          'cli backend "standalone-cli" is missing modelProvider; provider-to-runtime binding will be skipped. Set modelProvider to the canonical model provider id to enable this binding.',
+      },
+    ]);
+    expect(registry.cliBackends.map(({ backend }) => backend.id)).toEqual([
+      "standalone-cli",
+      "bound-cli",
+    ]);
+  });
+
   it("ignores setup entries without a registration callback", () => {
     manifests(fixture({ id: "empty" }));
     expect(resolvePluginSetupRegistry({ pluginIds: ["empty"], env: {} })).toEqual({
@@ -165,7 +207,11 @@ describe("setup registry", () => {
     );
     registration((api) => {
       api.registerProvider({ id: "anthropic", label: "Anthropic", auth: [] });
-      api.registerCliBackend({ id: "claude-cli", config: { command: "claude" } });
+      api.registerCliBackend({
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        config: { command: "claude" },
+      });
     });
     const registry = resolvePluginSetupRegistry({ env: {} });
     expect(registry.providers.map((entry) => entry.provider.id)).toEqual(["anthropic"]);
@@ -267,11 +313,12 @@ describe("setup registry", () => {
     ]);
   });
 
-  it("publishes each plugin setup registration atomically on synchronous success", () => {
+  it("publishes each plugin setup registration atomically without leaked warnings", () => {
     const setup = { providers: [{ id: "shared-provider" }], cliBackends: ["shared-cli"] };
     const throwing = fixture({ id: "shared-plugin", setup });
     manifests(throwing, fixture({ id: "shared-plugin", setup }));
     const throwingRegister = vi.fn((api: SetupRegistryApi) => {
+      api.registerCliBackend({ id: "shared-cli", config: { command: "throwing" } });
       contributions(api, "throwing");
       throw new Error("setup registration failed");
     });
@@ -288,7 +335,11 @@ describe("setup registry", () => {
       expect(registry.cliBackends).toEqual([
         {
           pluginId: "shared-plugin",
-          backend: { id: "shared-cli", config: { command: "healthy" } },
+          backend: {
+            id: "shared-cli",
+            modelProvider: "shared-provider",
+            config: { command: "healthy" },
+          },
         },
       ]);
       expect(registry.configMigrations).toHaveLength(1);
@@ -299,7 +350,6 @@ describe("setup registry", () => {
         { pluginId: "shared-plugin", code: "setup-registration-failed" },
       ]);
     }
-    expect(second).not.toBe(first);
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
     expect(throwingRegister).toHaveBeenCalledTimes(1);
     expect(healthyRegister).toHaveBeenCalledTimes(1);

@@ -334,7 +334,8 @@ it("creates the lazy shared schema and publishes lifecycle authority before its 
     }),
   );
   const reply = holdNextReply("githubPublications.insert", () => {
-    expect(lifecycle.readCurrent).toThrow("lifecycle authority is unavailable");
+    // An uncommitted insert cannot authorize publication from a missing binding.
+    expect(lifecycle.readCurrent()).toBeUndefined();
   });
   const inserting = insertGitHubPublicationRequestAsync(
     {
@@ -403,21 +404,6 @@ it("creates the lazy shared schema and publishes lifecycle authority before its 
   await expect(
     readGitHubPublicationRequestAsync({ requestId: inserted.request_id }),
   ).resolves.toEqual(inserted);
-});
-
-it("inserts a repository request through its retained session source", async () => {
-  const { facts } = observeAuthority();
-  const { row, source } = await sourceFixture("source-insert");
-  try {
-    await expect(insertRepositoryGitHubPublicationAsync(row, source)).resolves.toEqual(row);
-    expect(facts.get(JSON.stringify(["repository", row.request_id]))).toMatchObject({
-      kind: "postimage",
-      value: { request_id: row.request_id, status: "requested" },
-    });
-    expect(read(row)).toMatchObject({ ok: true, rows: [row] });
-  } finally {
-    await source.release();
-  }
 });
 
 it("does not cancel a newer personal GitHub authorization", async () => {

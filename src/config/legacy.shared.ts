@@ -1,9 +1,7 @@
-import {
-  asNullableRecord as getRecord,
-  isRecord,
-} from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord as getRecord } from "@openclaw/normalization-core/record-coerce";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 
+export { ensureRecord } from "@openclaw/normalization-core/record-coerce";
 export { getRecord };
 export type LegacyConfigRule = {
   path: string[];
@@ -41,19 +39,6 @@ export type LegacyConfigMigrationSpec = {
     changes: string[],
     context?: LegacyConfigMigrationContext,
   ) => void;
-};
-
-export const ensureRecord = (
-  root: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> => {
-  const existing = root[key];
-  if (isRecord(existing)) {
-    return existing;
-  }
-  const next: Record<string, unknown> = {};
-  root[key] = next;
-  return next;
 };
 
 export const mapLegacyAudioTranscription = (value: unknown): Record<string, unknown> | null => {

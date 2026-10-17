@@ -2,29 +2,14 @@ import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { nativePanelTabStripCss as tabStyles } from "../panel-tab-strip-styles.ts";
 import { definePanelBridge } from "../solid-panel-bridge.tsx";
 import { TerminalPanel } from "./terminal-panel-component.tsx";
-import { CATALOG_TERMINAL_READY_TIMEOUT_MS, TerminalPanelController } from "./terminal-panel.ts";
+import {
+  CATALOG_TERMINAL_READY_TIMEOUT_MS,
+  TerminalPanelController,
+  type TerminalInputs,
+} from "./terminal-panel.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 import dockStyles from "../dock-panel-solid.css?inline";
 import terminalStyles from "./terminal-panel.css?inline";
-
-export type TerminalInputs = Pick<
-  TerminalPanelController,
-  | "client"
-  | "agentId"
-  | "sessionKey"
-  | "available"
-  | "suppressed"
-  | "themeMode"
-  | "basePath"
-  | "fullscreen"
-  | "embedded"
-  | "onClose"
-  | "tabsInHeader"
-  | "page"
-  | "routeTarget"
-  | "createTerminalController"
-  | "catalogReadyTimeoutMs"
->;
 
 export function defineTerminalPanelElement(
   tag = "openclaw-terminal-panel",
@@ -44,7 +29,7 @@ export function defineTerminalPanelElement(
     | "selectHostedTab"
     | "closeHostedTab"
     | "handleToggleRequest"
-    | "requestUpdate"
+    | "invalidate"
   >(
     tag,
     createController,
@@ -93,7 +78,7 @@ export function defineTerminalPanelElement(
         "selectHostedTab",
         "closeHostedTab",
         "handleToggleRequest",
-        "requestUpdate",
+        "invalidate",
       ],
       getters: [
         "renderRoot",

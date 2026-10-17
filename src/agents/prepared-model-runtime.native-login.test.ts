@@ -53,7 +53,7 @@ afterEach(() => {
 
 async function fixture(
   run: (state: {
-    recheck: () => void;
+    recheck: (options?: { force?: boolean }) => void | Promise<void>;
     readAuth: () => PreparedModelCatalogAuth;
     publish: ReturnType<typeof vi.fn<(auth: PreparedModelCatalogAuth) => void>>;
     refreshAuth: ReturnType<typeof vi.fn>;
@@ -146,15 +146,15 @@ async function fixture(
   }
 }
 
-async function tick(recheck: () => void) {
+async function tick(recheck: () => void | Promise<void>) {
   await vi.advanceTimersByTimeAsync(60_000);
-  recheck();
+  void recheck();
   await vi.advanceTimersByTimeAsync(0);
 }
 
-it("publishes native login changes while unchanged reads reuse paired auth without worker discovery", async () => {
+it("publishes native login recovery on forced admission recheck without waiting for the TTL", async () => {
   await fixture(async ({ recheck, readAuth, publish, refreshAuth }) => {
-    recheck();
+    void recheck();
     expect(native.probe).not.toHaveBeenCalled();
     await tick(recheck);
     expect(refreshAuth).not.toHaveBeenCalled();
@@ -162,7 +162,7 @@ it("publishes native login changes while unchanged reads reuse paired auth witho
     expect(publish).not.toHaveBeenCalled();
 
     native.probe.mockResolvedValue(nativeLogin);
-    await tick(recheck);
+    await recheck({ force: true });
     expect(publish).toHaveBeenCalledOnce();
     expect(readAuth().authModes).toEqual({
       shared: "api_key",

@@ -84,7 +84,7 @@ function toZalouserMessageSendResult(result: ZaloSendResult): ChannelMessageSend
 function resolveZalouserGroupPolicyScope(params: ChannelGroupContext) {
   const account = resolveZalouserAccountSync({
     cfg: params.cfg,
-    accountId: params.accountId ?? undefined,
+    accountId: params.accountId,
   });
   return resolveZalouserGroupScope(
     account.config.groups,

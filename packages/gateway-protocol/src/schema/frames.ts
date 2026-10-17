@@ -1,6 +1,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { ErrorShapeSchema } from "./error-shape.js";
 import {
   ControlUiLinkReaderDescriptorSchema,
   ControlUiPluginTabSchema,
@@ -14,9 +15,11 @@ import {
 } from "./primitives.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 import { WorkerAdmissionHandshakeSchema } from "./worker-admission.js";
 
 export { GATEWAY_SERVER_CAPS } from "../server-capabilities.js";
+export { ErrorShapeSchema, type ErrorShape } from "./error-shape.js";
 
 export const TickEventSchema = closedObject({
   ts: Type.Integer({ minimum: 0 }),
@@ -98,9 +101,7 @@ export const HelloOkSchema = closedObject({
     version: NonEmptyString,
     buildId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
     bootId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
-    controlUiBuildSource: Type.Optional(
-      Type.Union([Type.Literal("bundled"), Type.Literal("configured")]),
-    ),
+    controlUiBuildSource: Type.Optional(stringLiteralUnion(["bundled", "configured"])),
     connId: NonEmptyString,
   }),
   features: closedObject({
@@ -119,14 +120,14 @@ export const HelloOkSchema = closedObject({
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
   auth: closedObject({
     method: Type.Optional(
-      Type.Union([
-        Type.Literal("none"),
-        Type.Literal("token"),
-        Type.Literal("password"),
-        Type.Literal("tailscale"),
-        Type.Literal("device-token"),
-        Type.Literal("bootstrap-token"),
-        Type.Literal("trusted-proxy"),
+      stringLiteralUnion([
+        "none",
+        "token",
+        "password",
+        "tailscale",
+        "device-token",
+        "bootstrap-token",
+        "trusted-proxy",
       ]),
     ),
     deviceToken: Type.Optional(NonEmptyString),
@@ -134,14 +135,7 @@ export const HelloOkSchema = closedObject({
     recoveryScope: Type.Optional(NonEmptyString),
     role: NonEmptyString,
     scopes: Type.Array(NonEmptyString),
-    sessionCap: Type.Optional(
-      Type.Union([
-        Type.Literal("write"),
-        Type.Literal("suggest"),
-        Type.Literal("view"),
-        Type.Literal("none"),
-      ]),
-    ),
+    sessionCap: Type.Optional(stringLiteralUnion(["write", "suggest", "view", "none"])),
     issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     deviceTokens: Type.Optional(
       Type.Array(
@@ -172,15 +166,6 @@ export const HelloOkSchema = closedObject({
     allowedSessionVisibilities: Type.Optional(Type.Array(SessionVisibilitySchema)),
     hasMultipleSessionSharingIdentities: Type.Optional(Type.Boolean()),
   }),
-});
-
-/** Standard structured error shape used in response frames and connect failures. */
-export const ErrorShapeSchema = closedObject({
-  code: NonEmptyString,
-  message: NonEmptyString,
-  details: Type.Optional(Type.Unknown()),
-  retryable: Type.Optional(Type.Boolean()),
-  retryAfterMs: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 /** Client request frame envelope; `method` selects the payload validator. */
@@ -223,7 +208,6 @@ export const GatewayFrameSchema = Type.Union(
 // Keeping them off the aggregate registry avoids retaining every RPC schema.
 export type ConnectParams = Static<typeof ConnectParamsSchema>;
 export type HelloOk = Static<typeof HelloOkSchema>;
-export type ErrorShape = Static<typeof ErrorShapeSchema>;
 export type RequestFrame = Static<typeof RequestFrameSchema>;
 export type ResponseFrame = Static<typeof ResponseFrameSchema>;
 export type EventFrame = Static<typeof EventFrameSchema>;

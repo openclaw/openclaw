@@ -27,6 +27,7 @@ export type ModelCatalogInvalidation = "clear" | "refresh";
 
 export function modelCatalogEventInvalidation(
   event: Pick<GatewayEventFrame, "event" | "payload">,
+  scope?: ModelCatalogReadScope,
 ): ModelCatalogInvalidation | undefined {
   if (event.event === "config.changed") {
     return "refresh";
@@ -35,7 +36,10 @@ export function modelCatalogEventInvalidation(
     const payload = asNullableRecord(event.payload);
     return payload?.modelSelectionChanged === true
       ? "clear"
-      : payload?.modelCatalogChanged === false
+      : payload?.modelCatalogChanged === false ||
+          (scope?.agentId !== undefined &&
+            typeof payload?.agentId === "string" &&
+            scope.agentId.trim() !== payload.agentId.trim())
         ? undefined
         : "refresh";
   }
@@ -43,7 +47,10 @@ export function modelCatalogEventInvalidation(
 }
 
 export type ModelCatalogRequest = {
+  scope: ModelsListParams;
   refresh: boolean;
+  /** Sent before an invalidation: its reply settles its readers but is never published. */
+  retired?: boolean;
   controller: AbortController;
   promise: Promise<ModelCatalogResult>;
   transportSettled: Promise<void>;
@@ -56,6 +63,8 @@ type ModelCatalogCache = {
   entries: Map<string, ModelCatalogEntry>;
   requiresSnapshot?: boolean;
   requests: Map<string, Map<GatewayProtocolRequestOptions["timeoutMs"], ModelCatalogRequest>>;
+  /** Invalidated requests stay owned by the connection until their transport settles. */
+  retiredRequests: Set<ModelCatalogRequest>;
 };
 
 export type ModelCatalogRead = {
@@ -81,7 +90,7 @@ export const modelCatalogObservers = new WeakMap<
 export function getModelCatalogCache(client: ModelCatalogClient): ModelCatalogCache {
   let cache = modelCatalogCache.get(client);
   if (!cache) {
-    cache = { entries: new Map(), requests: new Map() };
+    cache = { entries: new Map(), requests: new Map(), retiredRequests: new Set() };
     modelCatalogCache.set(client, cache);
   }
   return cache;
@@ -91,6 +100,22 @@ function notifyModelCatalogCache(
   client: ModelCatalogClient,
   update: ModelCatalogCacheUpdate,
 ): void {
+  const cache = modelCatalogCache.get(client);
+  if (cache && update.type === "invalidated") {
+    // A read admitted after this invalidation must not join a request sent before it.
+    for (const [key, budgets] of cache.requests) {
+      for (const [timeoutMs, pending] of budgets) {
+        if (update.matches(pending.scope, key)) {
+          pending.retired = true;
+          budgets.delete(timeoutMs);
+          cache.retiredRequests.add(pending);
+        }
+      }
+      if (budgets.size === 0) {
+        cache.requests.delete(key);
+      }
+    }
+  }
   for (const listener of Array.from(modelCatalogObservers.get(client) ?? [])) {
     listener(update);
   }
@@ -221,12 +246,16 @@ export function clearModelCatalogCache(
     options?.requireSnapshot === true ||
     cache?.requiresSnapshot === true ||
     (cache?.entries.size ?? 0) > 0;
+  const pendingRequests = new Set(cache?.retiredRequests);
   for (const budgets of cache?.requests.values() ?? []) {
     for (const pending of budgets.values()) {
-      const error = new DOMException("Model catalog connection retired", "AbortError");
-      pending.controller.abort(error);
-      pending.reject(error);
+      pendingRequests.add(pending);
     }
+  }
+  for (const pending of pendingRequests) {
+    const error = new DOMException("Model catalog connection retired", "AbortError");
+    pending.controller.abort(error);
+    pending.reject(error);
   }
   notifyModelCatalogCache(client, { type: "invalidated", matches: () => true });
 }

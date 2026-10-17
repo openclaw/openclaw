@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemorySearchResult } from "../memory-host-sdk/host/types.js";
 import type { MemorySearchHit } from "../plugins/memory-provider-types.js";
 import {
-  buildProjectMemoryWriteInstruction,
   filterProjectScopedCuratedContextFiles,
   prepareProjectMemoryBootstrap,
 } from "./project-memory-bootstrap.js";
@@ -165,7 +164,6 @@ describe("project memory bootstrap", () => {
   it("keeps sessions without an active repository unchanged", async () => {
     await expect(prepareEntries(entries, [])).resolves.toEqual([]);
     expect(runtimeMocks.getManager).not.toHaveBeenCalled();
-    expect(buildProjectMemoryWriteInstruction(undefined)).toBe("");
   });
 
   it("filters tagged raw entries fail-closed with the all-keys rule", () => {
@@ -241,13 +239,6 @@ describe("project memory bootstrap", () => {
       activeProjectKeys: ["github.com/OpenClaw/OpenClaw"],
       limit: 48,
     });
-  });
-
-  it("builds scoped write guidance without capturing global memory", () => {
-    const instruction = buildProjectMemoryWriteInstruction("github.com/OpenClaw/OpenClaw");
-    expect(instruction).toContain("<!-- project: github.com/OpenClaw/OpenClaw -->");
-    expect(instruction).toContain("Do not project-scope user-level preferences");
-    expect(buildProjectMemoryWriteInstruction("path:/tmp/unsafe-->note")).toBe("");
   });
 
   it("cites legacy chunks by start line from the already-loaded runtime", async () => {

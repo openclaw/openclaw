@@ -146,7 +146,7 @@ export async function prepareSkillLibraryNodeProcess(
         throw error;
       }
     };
-    return { nodeId, stateDir: node.stateDir, logFile, start, stop };
+    return { nodeId, homeDir: node.homeDir, stateDir: node.stateDir, logFile, start, stop };
   } catch (error) {
     try {
       await stop();

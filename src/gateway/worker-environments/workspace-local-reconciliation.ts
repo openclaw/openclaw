@@ -4,11 +4,9 @@ import type {
   WorkerWorkspaceReconcileResult,
 } from "./tunnel-contract.js";
 import {
-  measureLocalWorkspaceReconciliation,
   pruneWorkspaceHashMemo,
   withWorkspaceHashMemo,
   type WorkspaceHashMemo,
-  type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
 import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import {
@@ -22,9 +20,8 @@ import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
 export async function prepareLocalWorkspaceReconciliation(params: {
   request: WorkerLocalWorkspaceReconcileRequest;
   hashMemo: WorkspaceHashMemo;
-  metrics: WorkspaceReconcileMetrics;
 }) {
-  const { request, hashMemo, metrics } = params;
+  const { request, hashMemo } = params;
   const pending = await request.journal.load();
   if (pending) {
     await recoverWorkerWorkspaceReconciliation({
@@ -37,9 +34,7 @@ export async function prepareLocalWorkspaceReconciliation(params: {
   }
   pruneWorkspaceHashMemo(hashMemo);
   const runLocal = <T>(operation: () => Promise<T>): Promise<T> =>
-    measureLocalWorkspaceReconciliation(metrics, () =>
-      withWorkspaceHashMemo(hashMemo, operation, metrics.gateway),
-    );
+    withWorkspaceHashMemo(hashMemo, operation);
 
   return async (snapshot: {
     stagingRoot: string;

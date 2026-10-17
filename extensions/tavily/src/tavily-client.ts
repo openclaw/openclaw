@@ -20,7 +20,6 @@ import {
 } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  DEFAULT_TAVILY_BASE_URL,
   TAVILY_API_KEY_CONFIG_PATH,
   resolveTavilyApiKey,
   resolveTavilyBaseUrl,
@@ -109,19 +108,10 @@ function normalizeTavilyPublishedDate(value: unknown): string | undefined {
 }
 
 function resolveEndpoint(baseUrl: string, pathname: string): string {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return `${DEFAULT_TAVILY_BASE_URL}${pathname}`;
-  }
-  try {
-    const url = new URL(trimmed);
-    // Always append the endpoint pathname to the base URL path,
-    // supporting both bare hosts and reverse-proxy path prefixes.
-    url.pathname = url.pathname.replace(/\/$/, "") + pathname;
-    return url.toString();
-  } catch {
-    return `${DEFAULT_TAVILY_BASE_URL}${pathname}`;
-  }
+  const url = new URL(baseUrl);
+  // Append to reverse-proxy path prefixes as well as bare hosts.
+  url.pathname = url.pathname.replace(/\/$/, "") + pathname;
+  return url.toString();
 }
 
 async function postTavilyJson(params: {

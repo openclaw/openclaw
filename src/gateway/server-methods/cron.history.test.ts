@@ -17,6 +17,7 @@ import { cronRunLogEntryToDetail } from "../../cron/run-history-detail.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
 import { cronStoreKey } from "../../cron/store/key.js";
+import * as cronReadOnly from "../../cron/store/read-only.js";
 import {
   applyCronRunHistoryMaintenanceInDatabase,
   planCronRunHistoryMaintenance,
@@ -416,6 +417,129 @@ it("preserves shared custom-session conversation history across recorded runs", 
   });
 });
 
+it("does not disclose hidden session keys in cron.history errors", async () => {
+  await withCronTranscript(async ({ cron, storePath, baseKey, alias, job, query }) => {
+    await patchSessionEntryCore({ agentId: "main", sessionKey: baseKey }, () => ({
+      visibility: "draft",
+    }));
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "limited",
+          definitions: {
+            limited: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+          },
+        },
+      },
+    };
+    const context = await createHistoryReadContext({
+      cron,
+      cronStorePath: storePath,
+      getRuntimeConfig: () => cfg,
+    });
+    const otherProfile = ensureProfileForEmail("cron-other-reader@example.test");
+    const client = sharingPolicyClient({ scopes: ["operator.read"], user: otherProfile.id });
+    prepareGatewayRecipientProfile(client);
+    expect(operatorSessionCap(client, cfg)).toBe("none");
+    for (const selector of [
+      { runId: "public-old-run" },
+      { runAtMs: 10 },
+      { runId: "missing-run" },
+      { runId: "public-old-run", cursor: "invalid" },
+    ]) {
+      const { respond } = await query({ id: job.id, ...selector }, { client }, context);
+      expect(respond.mock.calls).toEqual([
+        [
+          false,
+          undefined,
+          {
+            code: "UNAVAILABLE",
+            message: "The recorded cron transcript is unavailable. Refresh the run and try again.",
+          },
+        ],
+      ]);
+      expect(JSON.stringify(respond.mock.calls)).not.toContain(baseKey);
+      expect(JSON.stringify(respond.mock.calls)).not.toContain(alias);
+    }
+  });
+});
+
+it("removes runs and totals when detail hydration reveals a hidden session", async () => {
+  await withCronTranscript(async ({ cron, storePath, baseKey, job, record, profile }) => {
+    const hiddenKey = "agent:main:hidden-cron-run";
+    const hiddenProfile = ensureProfileForEmail("hidden-cron-owner@example.test");
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: hiddenKey },
+      {
+        sessionId: "hidden-cron-session",
+        updatedAt: 3,
+        visibility: "draft",
+        createdActor: { type: "human", source: "profile", id: hiddenProfile.id },
+      },
+    );
+    const detail = expectDefined(record.detail, "record detail");
+    if (typeof detail !== "object" || Array.isArray(detail)) {
+      throw new Error("Expected detail object");
+    }
+    persistHistory([
+      { ...record, sessionKey: baseKey, detail: { ...detail, sessionKey: baseKey } },
+    ]);
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "limited",
+          definitions: {
+            limited: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+          },
+        },
+      },
+    };
+    const context = await createHistoryReadContext({
+      cron,
+      cronStorePath: storePath,
+      getRuntimeConfig: () => cfg,
+    });
+    const client = sharingPolicyClient({ scopes: ["operator.read"], user: profile.id });
+    prepareGatewayRecipientProfile(client);
+    expect(operatorSessionCap(client, cfg)).toBe("none");
+    const queryRuns = async () => {
+      const params = { id: job.id };
+      const respond = vi.fn<RespondFn>();
+      await expectDefined(
+        cronHandlers["cron.runs"],
+        "registered cron.runs",
+      )({
+        req: { type: "req", id: "runs", method: "cron.runs", params },
+        params,
+        client,
+        context,
+        respond,
+        isWebchatConnect: () => false,
+      });
+      return respond.mock.calls;
+    };
+    expect(await queryRuns()).toMatchObject([
+      [true, { entries: [{ runId: "public-old-run", sessionKey: baseKey }], total: 1 }, undefined],
+    ]);
+    const readDetails = cronReadOnly.readCronRunHistoryRecords;
+    const detailRead = vi
+      .spyOn(cronReadOnly, "readCronRunHistoryRecords")
+      .mockImplementationOnce(async (...args) => {
+        persistHistory([
+          { ...record, sessionKey: hiddenKey, detail: { ...detail, sessionKey: hiddenKey } },
+        ]);
+        return readDetails(...args);
+      });
+    try {
+      const response = await queryRuns();
+      expect(response).toMatchObject([[true, { entries: [], total: 0 }, undefined]]);
+      expect(JSON.stringify(response)).not.toContain(hiddenKey);
+    } finally {
+      detailRead.mockRestore();
+    }
+  });
+});
+
 it("refuses ambiguous timestamps and cursors moved to another recorded run", async () => {
   await withCronTranscript(async ({ job, record, query }) => {
     const first = await query({ id: job.id, runId: "public-old-run", limit: 1 });
@@ -525,6 +649,8 @@ it.each(["sharing", "binding", "retention", "transcript owner"] as const)(
         expect(result.respond.mock.calls).toHaveLength(1);
         expect(result.respond.mock.calls[0]?.[0]).toBe(false);
         expect(result.payload?.messages).toBeUndefined();
+        expect(JSON.stringify(result.respond.mock.calls)).not.toContain(baseKey);
+        expect(JSON.stringify(result.respond.mock.calls)).not.toContain(unrelatedKey);
       },
     );
   },

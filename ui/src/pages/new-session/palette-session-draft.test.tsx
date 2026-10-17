@@ -509,10 +509,12 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
       fixture.host.querySelector<HTMLButtonElement>('[role="switch"]'),
       "palette worktree switch",
     );
-  // Cold preference imports can outlive vi.waitFor's one-second polling deadline.
+  // Wait out cold preference imports, then flush their queued presentation updates.
   await fixture.host.settingsReady.promise;
-  expect(remember().disabled).toBe(false);
-  expect(worktree().disabled).toBe(false);
+  await waitForSolid(() => {
+    expect(remember().disabled).toBe(false);
+    expect(worktree().disabled).toBe(false);
+  });
   return {
     ...fixture,
     entries,
@@ -866,6 +868,7 @@ describe("palette-only remembered settings", () => {
     "leaves workspace-search composition keys untouched: %j",
     async (composition) => {
       const { host } = await mountPreferences();
+      host.querySelector<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
       expectDefined(
         host.querySelector<HTMLButtonElement>(".palette-session-settings__workspace"),
         "workspace picker",

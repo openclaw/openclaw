@@ -9,7 +9,7 @@ import { createIdleImport } from "../lib/idle-import.ts";
 import { projectGateway, projectSidebarAttention } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import "../styles/sidebar-attention-floating.css";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { sidebarInboxTabCounts, type SidebarAttentionItem } from "./sidebar-attention-entries.ts";
@@ -93,7 +93,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     if (disposed || !host.isConnected || generation !== panelGeneration) {
       return;
     }
-    context.scopeUpgrade.activate(runtime.ScopeUpgradeController);
+    context.scopeUpgrade.activate(runtime.ScopeUpgradeOwner);
     const rect = trigger.getBoundingClientRect();
     const width = Math.min(390, globalThis.innerWidth - 16);
     const preferredLeft = rect.left + rect.width / 2 - width / 2;

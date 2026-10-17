@@ -112,7 +112,7 @@ function parseCanonical(html: string, prefix: string, incremental: boolean): Can
       fragment.append(node.data.slice(offset));
       node.replaceWith(fragment);
     }
-    // Media cards are blocks, including inside lists and blockquotes.
+    // Within this parsed Markdown island, media cards are blocks even inside lists and quotes.
     for (const slot of slots.keys()) {
       const paragraph = slot.parentElement?.closest("p");
       if (!paragraph) {
@@ -336,6 +336,8 @@ export class MarkdownDomReconciler {
       if (fragment.prefix !== canonical) {
         fragment.canonical = parseCanonical(fragment.html, prefix, fragment.incremental);
         fragment.prefix = canonical;
+      } else if (!media) {
+        continue;
       }
       fragment.children = this.reconcile(fragment, fragment.children, fragment.canonical, media);
     }

@@ -515,36 +515,6 @@ describe("dynamic tool execution helpers", () => {
     );
   });
 
-  it("contains hostile abort reasons while notifying the private observer", async () => {
-    const hostileReason = Object.defineProperty({}, "name", {
-      get() {
-        throw new Error("name getter escaped");
-      },
-    });
-    const controller = new AbortController();
-    controller.abort(hostileReason);
-    const onAgentToolResult = vi.fn();
-
-    const result = await handleDynamicToolCallWithTimeout({
-      call: {
-        ...dynamicCallContext,
-        callId: "call-hostile-abort",
-        tool: "memory_search",
-        arguments: {},
-      },
-      toolBridge: { handleToolCall: vi.fn() },
-      signal: controller.signal,
-      timeoutMs: 1_000,
-      onAgentToolResult,
-    });
-
-    expect(result).toMatchObject({
-      success: false,
-      diagnosticTerminalReason: "cancelled",
-    });
-    expect(onAgentToolResult).toHaveBeenCalledOnce();
-  });
-
   it("keeps async-start metadata on internal dynamic tool progress only", () => {
     const mcpAppPreview = { resourceUri: "ui://fixture/preview", title: "Preview" };
     const response: CodexDynamicToolRuntimeResponse = {

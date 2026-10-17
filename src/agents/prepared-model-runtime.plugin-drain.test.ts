@@ -6,10 +6,13 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { scopePreparedModelRuntimeLease } from "./prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   beginPreparedModelRuntimePluginDrain,
   loadPublishedGatewayReplyDispatchRuntime,
+  markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
   type PreparedModelRuntimeInput,
@@ -22,6 +25,65 @@ async function publishConfigured(config: PreparedModelRuntimeInput["config"]) {
   fixture.mocks.configuredAgentIds = ["default"];
   await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
 }
+
+it.each(["draining", "replacing"] as const)(
+  "keeps an admitted turn on its own generation while plugins are %s",
+  async (phase) => {
+    const config = {};
+    const { registry } = createTestPluginRegistry();
+    const record = createPluginRecord({ id: "retained-model", status: "loaded" });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    fixture.mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+    await publishConfigured(config);
+    const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    const input = {
+      ...fixture.agentInput("default", config),
+      workspaceDir: published.workspaceDir,
+    };
+    await using parent = scopePreparedModelRuntimeLease(
+      await acquireAgentRunPreparedModelRuntime(input),
+    );
+    const start = createDeferred();
+    const pending = instance.run(() =>
+      parent.run(async () => {
+        await start.promise;
+        await using nested = await acquireAgentRunPreparedModelRuntime(input, {
+          pluginGeneration: parent.pluginGeneration,
+          deriveRuntimePluginSelections: () => [],
+        });
+        expect(nested.snapshot).toBe(parent.snapshot);
+        expect(nested.pluginGeneration).toBe(parent.pluginGeneration);
+        expect(instance.run(() => "reply completed")).toBe("reply completed");
+        await expect(
+          acquireAgentRunPreparedModelRuntime(
+            { ...input, config: { agents: { defaults: { model: "other/model" } } } },
+            { pluginGeneration: parent.pluginGeneration },
+          ),
+        ).rejects.toMatchObject({ admissionBlocked: true });
+        await parent[Symbol.asyncDispose]();
+        await expect(
+          acquireAgentRunPreparedModelRuntime(input, {
+            pluginGeneration: parent.pluginGeneration,
+          }),
+        ).rejects.toMatchObject({ admissionBlocked: true });
+      }),
+    );
+    const release = instance.reserveReplacement();
+    const drain = beginPreparedModelRuntimePluginDrain();
+    try {
+      if (phase === "replacing") {
+        markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });
+      }
+      start.resolve();
+      await pending;
+    } finally {
+      drain.release();
+      release();
+      await instance.dispose();
+    }
+  },
+);
 
 it.each(["call", "consumer"] as const)(
   "refuses a model wait from the %s an external reload is draining",

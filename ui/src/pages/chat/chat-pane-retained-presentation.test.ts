@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-retained.test/"} */
 
-import { html } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -9,7 +8,6 @@ import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { emptyLegacyContent } from "../../lit/solid-content.tsx";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
@@ -35,6 +33,7 @@ import {
   createTestChatPane,
   createPaneTestHost,
   connectPaneTestView,
+  getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -125,8 +124,9 @@ describe("chat pane retained presentation lifecycle", () => {
       state.handleChatDraftChange = vi.fn();
       state.loadAssistantIdentity = vi.fn(async () => undefined);
       mounted.render = () => ({
-        layout: html`${emptyLegacyContent}`,
+        layout: null,
         capabilityDialogs: undefined,
+        providerReviewSource: undefined,
       });
       mounted.active = true;
       const composer = document.createElement("div");
@@ -376,27 +376,25 @@ describe("chat pane retained presentation lifecycle", () => {
       sessions: {} as SessionCapability,
     });
     pane.active = true;
-    const requestUpdate = vi.spyOn(
-      pane as unknown as { requestUpdate(name: PropertyKey, previous: unknown): void },
-      "requestUpdate",
-    );
+    const updates: Array<[boolean, boolean]> = [];
+    vi.spyOn(getPaneTestRuntime(pane), "invalidate").mockImplementation(() => {
+      updates.push([pane.presented, pane.active]);
+    });
 
     pane.presented = false;
     pane.active = false;
     pane.presented = true;
     pane.active = true;
 
-    expect(
-      requestUpdate.mock.calls.filter(([name]) => name === "presented" || name === "active"),
-    ).toEqual([
-      ["presented", true],
-      ["active", true],
-      ["presented", false],
-      ["active", false],
+    expect(updates).toEqual([
+      [false, true],
+      [false, false],
+      [true, false],
+      [true, true],
     ]);
   });
 
-  it("ignores an open dropdown in an inactive retained pane", () => {
+  it("ignores an open shortcut menu in an inactive retained pane", () => {
     const app = document.body.appendChild(document.createElement("openclaw-app"));
     const activePane = app.appendChild(document.createElement("section"));
     const composer = document.createElement("div");
@@ -410,14 +408,16 @@ describe("chat pane retained presentation lifecycle", () => {
     );
     const retainedPane = app.appendChild(document.createElement("div"));
     retainedPane.setAttribute("inert", "");
-    const retainedDropdown = retainedPane.appendChild(
-      document.createElement("wa-dropdown"),
-    ) as HTMLElement & { open: boolean };
-    retainedDropdown.open = true;
+    const retainedMenu = retainedPane.appendChild(document.createElement("div"));
+    retainedMenu.setAttribute("role", "menu");
+    retainedMenu.setAttribute("popover", "manual");
+    const shortcut = retainedMenu.appendChild(document.createElement("button"));
+    shortcut.dataset.shortcut = "4";
+    retainedMenu.showPopover();
 
     try {
       target.dispatchEvent(
-        new KeyboardEvent("keydown", { key: " ", bubbles: true, composed: true }),
+        new KeyboardEvent("keydown", { key: "4", bubbles: true, composed: true }),
       );
 
       expect(focus).toHaveBeenCalledWith({ preventScroll: true });
@@ -466,6 +466,7 @@ describe("chat pane retained presentation lifecycle", () => {
         }
         await pane.updateComplete;
         const lightbox = pane.querySelector("openclaw-image-lightbox");
+        await vi.dynamicImportSettled();
         await lightbox?.updateComplete;
         const modal =
           lightbox?.shadowRoot?.querySelector("openclaw-modal-dialog") ??

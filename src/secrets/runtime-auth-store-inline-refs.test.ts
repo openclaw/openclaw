@@ -10,143 +10,132 @@ import {
 
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
+const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+const defaultAgentDir = "/tmp/openclaw-agent-main";
+function prepareProfiles(
+  profiles: Parameters<typeof loadAuthStoreWithProfiles>[0],
+  options: Partial<Parameters<typeof prepareSecretsRuntimeSnapshot>[0]> = {},
+) {
+  return prepareSecretsRuntimeSnapshot({
+    config: asConfig({ models: {}, secrets: {} }),
+    env: {},
+    agentDirs: [defaultAgentDir],
+    allowUnavailableSecretOwners: true,
+    loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    loadAuthStore: () => loadAuthStoreWithProfiles(profiles),
+    ...options,
+  });
+}
+async function expectInlineRef(field: "key" | "token") {
+  const ref = envRef(field === "key" ? "MY_KEY" : "MY_TOKEN");
+  const value = `resolved-${field}-value`;
+  const profileId = `custom:inline-${field}`;
+  const profile =
+    field === "key"
+      ? { type: "api_key" as const, provider: "custom", key: ref as unknown as string }
+      : { type: "token" as const, provider: "custom", token: ref as unknown as string };
+  const snapshot = await prepareProfiles(
+    { [profileId]: profile },
+    {
+      env: { [ref.id]: value },
+      allowUnavailableSecretOwners: false,
+    },
+  );
+  const resolved = snapshot.authStores[0]?.store.profiles[profileId] as Record<string, unknown>;
+  expect(resolved[`${field}Ref`]).toEqual(ref);
+  activateSecretsRuntimeSnapshot(snapshot);
+  expect(resolved[field]).toBe(value);
+}
+function expectWarning(
+  warnings: unknown,
+  code: string,
+  profileId: string,
+  field = "key",
+  dir = defaultAgentDir,
+) {
+  expect(warnings).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ code, path: `${dir}.auth-profiles.${profileId}.${field}` }),
+    ]),
+  );
+}
+function expectRefOnly(profile: unknown, provider: string, ref: unknown, field = "key") {
+  expect(profile).toMatchObject({
+    type: field === "key" ? "api_key" : "token",
+    provider,
+    [`${field}Ref`]: ref,
+  });
+  expect(profile).not.toHaveProperty(field);
+}
+const keyProfile = (provider: string, id: string) => ({
+  type: "api_key" as const,
+  provider,
+  keyRef: envRef(id),
+});
 
 describe("secrets runtime snapshot inline auth-store refs", () => {
   it("normalizes inline SecretRef object on token to tokenRef", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({ models: {}, secrets: {} }),
-      env: { MY_TOKEN: "resolved-token-value" },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      loadAuthStore: () =>
-        loadAuthStoreWithProfiles({
-          "custom:inline-token": {
-            type: "token",
-            provider: "custom",
-            token: { source: "env", provider: "default", id: "MY_TOKEN" } as unknown as string,
-          },
-        }),
-    });
-
-    const profile = snapshot.authStores[0]?.store.profiles["custom:inline-token"] as Record<
-      string,
-      unknown
-    >;
-    expect(profile.tokenRef).toEqual({ source: "env", provider: "default", id: "MY_TOKEN" });
-    activateSecretsRuntimeSnapshot(snapshot);
-    expect(profile.token).toBe("resolved-token-value");
+    await expectInlineRef("token");
   });
 
   it("normalizes inline SecretRef object on key to keyRef", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({ models: {}, secrets: {} }),
-      env: { MY_KEY: "resolved-key-value" },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      loadAuthStore: () =>
-        loadAuthStoreWithProfiles({
-          "custom:inline-key": {
-            type: "api_key",
-            provider: "custom",
-            key: { source: "env", provider: "default", id: "MY_KEY" } as unknown as string,
-          },
-        }),
-    });
-
-    const profile = snapshot.authStores[0]?.store.profiles["custom:inline-key"] as Record<
-      string,
-      unknown
-    >;
-    expect(profile.keyRef).toEqual({ source: "env", provider: "default", id: "MY_KEY" });
-    activateSecretsRuntimeSnapshot(snapshot);
-    expect(profile.key).toBe("resolved-key-value");
+    await expectInlineRef("key");
   });
 
   it("skips refs on auth profiles that are not eligible for their configured provider", async () => {
     const profileId = "openai:mismatched";
     const tokenProfileId = "github-copilot:mismatched";
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        auth: {
-          profiles: {
-            [profileId]: { provider: "anthropic", mode: "api_key" },
-            [tokenProfileId]: { provider: "anthropic", mode: "token" },
-          },
+    const snapshot = await prepareProfiles(
+      {
+        [profileId]: { ...keyProfile("openai", "MISSING_MISMATCHED_KEY"), key: "unused" },
+        [tokenProfileId]: {
+          type: "token",
+          provider: "github-copilot",
+          token: "unused",
+          tokenRef: envRef("MISSING_MISMATCHED_TOKEN"),
         },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      loadAuthStore: () =>
-        loadAuthStoreWithProfiles({
-          [profileId]: {
-            type: "api_key",
-            provider: "openai",
-            key: "unused",
-            keyRef: { source: "env", provider: "default", id: "MISSING_MISMATCHED_KEY" },
-          },
-          [tokenProfileId]: {
-            type: "token",
-            provider: "github-copilot",
-            token: "unused",
-            tokenRef: { source: "env", provider: "default", id: "MISSING_MISMATCHED_TOKEN" },
+      },
+      {
+        config: asConfig({
+          auth: {
+            profiles: {
+              [profileId]: { provider: "anthropic", mode: "api_key" },
+              [tokenProfileId]: { provider: "anthropic", mode: "token" },
+            },
           },
         }),
-    });
+      },
+    );
 
     expect(snapshot.degradedOwners).toEqual([]);
-    expect(snapshot.warnings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: `/tmp/openclaw-agent-main.auth-profiles.${profileId}.key`,
-        }),
-        expect.objectContaining({
-          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-          path: `/tmp/openclaw-agent-main.auth-profiles.${tokenProfileId}.token`,
-        }),
-      ]),
-    );
+    const code = "SECRETS_REF_IGNORED_INACTIVE_SURFACE";
+    expectWarning(snapshot.warnings, code, profileId);
+    expectWarning(snapshot.warnings, code, tokenProfileId, "token");
     const profiles = snapshot.authStores[0]?.store.profiles;
-    expect(profiles?.[profileId]).toMatchObject({
-      type: "api_key",
-      provider: "openai",
-      keyRef: { source: "env", provider: "default", id: "MISSING_MISMATCHED_KEY" },
-    });
-    expect(profiles?.[profileId]).not.toHaveProperty("key");
-    expect(profiles?.[tokenProfileId]).toMatchObject({
-      type: "token",
-      provider: "github-copilot",
-      tokenRef: { source: "env", provider: "default", id: "MISSING_MISMATCHED_TOKEN" },
-    });
-    expect(profiles?.[tokenProfileId]).not.toHaveProperty("token");
+    expectRefOnly(profiles?.[profileId], "openai", envRef("MISSING_MISMATCHED_KEY"));
+    expectRefOnly(
+      profiles?.[tokenProfileId],
+      "github-copilot",
+      envRef("MISSING_MISMATCHED_TOKEN"),
+      "token",
+    );
   });
 
   it("isolates a failed profile ref while materializing an eligible sibling profile", async () => {
     const agentDir = "/tmp/openclaw-agent-profile-isolation";
     const coldProfileId = "openai:cold";
     const healthyProfileId = "anthropic:healthy";
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({}),
-      env: { ANTHROPIC_PROFILE_KEY: "anthropic-runtime-key" },
-      agentDirs: [agentDir],
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      loadAuthStore: () =>
-        loadAuthStoreWithProfiles({
-          [coldProfileId]: {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source: "env", provider: "default", id: "MISSING_OPENAI_PROFILE_KEY" },
-          },
-          [healthyProfileId]: {
-            type: "api_key",
-            provider: "anthropic",
-            keyRef: { source: "env", provider: "default", id: "ANTHROPIC_PROFILE_KEY" },
-          },
-        }),
-    });
+    const snapshot = await prepareProfiles(
+      {
+        [coldProfileId]: keyProfile("openai", "MISSING_OPENAI_PROFILE_KEY"),
+        [healthyProfileId]: keyProfile("anthropic", "ANTHROPIC_PROFILE_KEY"),
+      },
+      {
+        config: asConfig({}),
+        env: { ANTHROPIC_PROFILE_KEY: "anthropic-runtime-key" },
+        agentDirs: [agentDir],
+      },
+    );
 
     expect(snapshot.degradedOwners).toMatchObject([
       {
@@ -157,35 +146,25 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
       },
     ]);
     const profiles = snapshot.authStores[0]?.store.profiles;
-    expect(profiles?.[coldProfileId]).toMatchObject({
-      type: "api_key",
-      provider: "openai",
-      keyRef: { source: "env", provider: "default", id: "MISSING_OPENAI_PROFILE_KEY" },
-    });
-    expect(profiles?.[coldProfileId]).not.toHaveProperty("key");
+    expectRefOnly(profiles?.[coldProfileId], "openai", envRef("MISSING_OPENAI_PROFILE_KEY"));
     expect(profiles?.[healthyProfileId]).toMatchObject({ key: "anthropic-runtime-key" });
   });
 
   it("isolates an auth profile whose SecretRef provider is absent from copied config", async () => {
     const agentDir = "/tmp/openclaw-agent-copied-auth-store";
     const profileId = "openai:copied";
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        auth: { order: { openai: [profileId] } },
-      }),
-      env: {},
-      agentDirs: [agentDir],
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      loadAuthStore: () =>
-        loadAuthStoreWithProfiles({
-          [profileId]: {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source: "file", provider: "clawrouter_key", id: "value" },
-          },
+    const keyRef = { source: "file" as const, provider: "clawrouter_key", id: "value" };
+    const snapshot = await prepareProfiles(
+      {
+        [profileId]: { type: "api_key", provider: "openai", keyRef },
+      },
+      {
+        config: asConfig({
+          auth: { order: { openai: [profileId] } },
         }),
-    });
+        agentDirs: [agentDir],
+      },
+    );
 
     expect(snapshot.degradedOwners).toMatchObject([
       {
@@ -195,19 +174,7 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
         reason: "secret provider is not configured",
       },
     ]);
-    expect(snapshot.warnings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "SECRETS_OWNER_UNAVAILABLE",
-          path: `${agentDir}.auth-profiles.${profileId}.key`,
-        }),
-      ]),
-    );
-    expect(snapshot.authStores[0]?.store.profiles[profileId]).toMatchObject({
-      type: "api_key",
-      provider: "openai",
-      keyRef: { source: "file", provider: "clawrouter_key", id: "value" },
-    });
-    expect(snapshot.authStores[0]?.store.profiles[profileId]).not.toHaveProperty("key");
+    expectWarning(snapshot.warnings, "SECRETS_OWNER_UNAVAILABLE", profileId, "key", agentDir);
+    expectRefOnly(snapshot.authStores[0]?.store.profiles[profileId], "openai", keyRef);
   });
 });

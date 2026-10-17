@@ -40,6 +40,7 @@ export function createDoctorOriginalCaptureHook(
         const guarded = await guardUpdateDoctorSchemaUpgrade({
           runtime: params.runtime,
           json: params.json,
+          preserveSourceArtifacts: params.writeAuthority?.databaseGenerations ? true : undefined,
         });
         scope.assertOwnerCurrent();
         if (guarded?.updateSchemaRehearsal) {

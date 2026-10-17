@@ -30,6 +30,7 @@ import { readPrivateNativeHostFile } from "./extension-native-host-file.js";
 import {
   BROWSER_NATIVE_HOST_DESCRIPTION as NATIVE_HOST_DESCRIPTION,
   BROWSER_NATIVE_HOST_NAME,
+  NATIVE_HOST_MANIFEST_KEYS,
 } from "./extension-native-host.constants.js";
 import { isValidProfileName } from "./profiles.js";
 
@@ -260,7 +261,7 @@ export async function inspectRegistration(
       ? expectedOriginsForExtensionIds(expectedPathExtensionIds)
       : null;
     if (
-      !hasExactKeys(manifest, ["name", "description", "path", "type", "allowed_origins"]) ||
+      !hasExactKeys(manifest, NATIVE_HOST_MANIFEST_KEYS) ||
       manifest.description !== NATIVE_HOST_DESCRIPTION ||
       manifest.type !== "stdio" ||
       !validOrigins ||

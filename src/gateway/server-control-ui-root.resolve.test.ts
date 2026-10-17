@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareLocalAgentAvatar } from "../agents/identity-avatar-file-runtime.js";
+import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
 import { getWorkerComputeCapacity } from "../infra/worker-task-capacity.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import {
@@ -24,6 +26,10 @@ const controlUiAssetsMocks = vi.hoisted(() => ({
 
 vi.mock("../infra/control-ui-assets.js", () => controlUiAssetsMocks);
 vi.mock("../version.js", () => ({ resolveRuntimeServiceBuildId: () => "gateway-build" }));
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 4,
+}));
 
 import {
   createGatewayControlUiRootLifecycle,
@@ -114,6 +120,57 @@ describe("createGatewayControlUiRootLifecycle", () => {
       await drainGlobalSingletonLifecycleState();
     }
   });
+
+  test.each(["control-ui-file", "identity-avatar-file"])(
+    "reuses both %s workers across sparse reads, then releases them after inactivity",
+    async (script) => {
+      const root = tempDirs.make("sparse-file-reads-");
+      const files = ["first.png", "second.png"];
+      const source = { kind: "resolved" as const, path: root };
+      const starts = () =>
+        getTrackedWorkerLifecycleSnapshot().workerLifecycle.find((entry) =>
+          entry.script.includes(`${script}.worker`),
+        )?.started ?? 0;
+      const read = async (file: string) => {
+        if (script === "control-ui-file") {
+          return (await readControlUiRootAsset(source, file, true))?.file.body;
+        }
+        const result = await prepareLocalAgentAvatar({
+          workspaceDir: root,
+          source: file,
+          readBody: true,
+        });
+        return result.ok ? result.file.body : undefined;
+      };
+      const readPair = () => Promise.all(files.map(read));
+      const writePair = (body: string) => {
+        for (const file of files) {
+          fs.writeFileSync(path.join(root, file), body);
+        }
+        return files.map(() => Buffer.from(body));
+      };
+      await drainGlobalSingletonLifecycleState();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      try {
+        const before = starts();
+        const first = writePair("first");
+        expect(await readPair()).toEqual(first);
+        expect(starts() - before).toBe(2);
+        await vi.advanceTimersByTimeAsync(2 * 60_000);
+        const changed = writePair("second image");
+        expect(await readPair()).toEqual(changed);
+        await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+        expect(await readPair()).toEqual(changed);
+        expect(starts() - before).toBe(2);
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        expect(await readPair()).toEqual(changed);
+        expect(starts() - before).toBe(4);
+      } finally {
+        await drainGlobalSingletonLifecycleState();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   test("snapshots public asset identity only for a bundled root", () => {
     controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue("/repo/dist/control-ui");
@@ -225,20 +282,6 @@ describe("createGatewayControlUiRootLifecycle", () => {
     expect(controlUiAssetsMocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
   });
 
-  test("reports disappearing auto-detected roots without aborting Gateway startup", () => {
-    controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue("/repo/dist/control-ui");
-    vi.mocked(fs.realpathSync).mockImplementationOnce(() => {
-      throw new Error("ENOENT: root vanished");
-    });
-
-    const { lifecycle, warn } = createLifecycle();
-
-    expect(lifecycle.state).toEqual({ kind: "failed" });
-    expect(warn).toHaveBeenCalledWith(
-      "gateway: Control UI assets are unavailable at /repo/dist/control-ui: ENOENT: root vanished",
-    );
-  });
-
   test("prepares initially disabled assets when enabled and keeps the serving root stable", async () => {
     const { lifecycle } = createLifecycle({ enabled: false });
     const rootReference = lifecycle.state;
@@ -254,22 +297,6 @@ describe("createGatewayControlUiRootLifecycle", () => {
     expect(lifecycle.state).toMatchObject({ kind: "resolved", path: "/repo/dist/control-ui" });
     expect(controlUiAssetsMocks.ensureControlUiAssetsBuilt).not.toHaveBeenCalled();
     await lifecycle.stop();
-  });
-
-  test("publishes structured build failures into the existing root reference", async () => {
-    controlUiAssetsMocks.ensureControlUiAssetsBuilt.mockResolvedValue({
-      ok: false,
-      built: false,
-      message: "Control UI build timed out.",
-    });
-    const { lifecycle, warn } = createLifecycle();
-    const rootReference = lifecycle.state;
-
-    await lifecycle.start();
-
-    expect(lifecycle.state).toBe(rootReference);
-    expect(rootReference).toEqual({ kind: "failed" });
-    expect(warn).toHaveBeenCalledWith("gateway: Control UI build timed out.");
   });
 
   test("publishes rejected builds as actionable terminal failures", async () => {

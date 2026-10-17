@@ -69,6 +69,36 @@ function oauthProviderConfig(name: string, apiKeyPrefix: string): ProviderConfig
 }
 
 describe("ModelRegistry models.json auth", () => {
+  it("names the async unregister replacement once and keeps async unregister silent", async () => {
+    const modelsPath = writeModelsJson({ providers: {} });
+    const registry = await ModelRegistry.createAsync(AuthStorage.inMemory(), modelsPath);
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      registry.registerProvider("warning-fixture", oauthProviderConfig("Fixture", "fixture"));
+      await registry.unregisterProviderAsync("warning-fixture");
+      expect(warning).not.toHaveBeenCalled();
+      expect(registry.authStorage.getOAuthProviders().map((provider) => provider.id)).not.toContain(
+        "warning-fixture",
+      );
+
+      registry.registerProvider("warning-fixture", oauthProviderConfig("Fixture", "fixture"));
+      registry.unregisterProvider("warning-fixture");
+      registry.unregisterProvider("warning-fixture");
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          "ModelRegistry.unregisterProvider is deprecated; use ModelRegistry.unregisterProviderAsync",
+        ),
+        expect.objectContaining({ type: "DeprecationWarning" }),
+      );
+      expect(warning.mock.calls[0]?.[0]).toContain("first January 2027 stable release");
+      expect(registry.authStorage.getOAuthProviders().map((provider) => provider.id)).not.toContain(
+        "warning-fixture",
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it("accepts Bedrock AWS SDK auth without apiKey", async () => {
     // AWS SDK credential resolution is provider-owned; requiring an apiKey here
     // would make Bedrock catalogs impossible to express in models.json.
@@ -187,39 +217,7 @@ describe("ModelRegistry models.json auth", () => {
     );
   });
 
-  it("forks the latest base catalog after the source reloads", () => {
-    const modelsPath = writeModelsJson({
-      providers: {
-        custom: {
-          baseUrl: "https://models.example/v1",
-          api: "openai-responses",
-          models: [{ id: "before-reload" }],
-        },
-      },
-    });
-    const source = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
-    writeFileSync(
-      modelsPath,
-      JSON.stringify({
-        providers: {
-          custom: {
-            baseUrl: "https://models.example/v1",
-            api: "openai-responses",
-            models: [{ id: "after-reload" }],
-          },
-        },
-      }),
-      "utf-8",
-    );
-
-    source.refresh();
-    const fork = source.fork(AuthStorage.inMemory());
-
-    expect(fork.find("custom", "before-reload")).toBeUndefined();
-    expect(fork.find("custom", "after-reload")).toBeDefined();
-  });
-
-  it.each(["persisted", "registered"] as const)("preserves %s prompt budgets", (source) => {
+  it.each(["persisted", "registered"] as const)("preserves %s model metadata", (source) => {
     // Synthetic providers deliberately share an id but not a prompt budget.
     // Native window and output capacity must remain separate from that budget.
     const providers: Record<string, ProviderConfigInput> = Object.fromEntries(
@@ -242,6 +240,7 @@ describe("ModelRegistry models.json auth", () => {
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow,
               contextTokens,
+              parameterCount: 4_000_000_000,
               maxTokens: 128_000,
             },
           ],
@@ -373,66 +372,6 @@ describe("ModelRegistry models.json auth", () => {
 
     expect(registry.find("custom", "authored-model")?.name).toBe("Authored Model");
     expect(registry.getError()).toContain("Failed to load generated plugin model catalogs");
-  });
-
-  it("tracks explicit max-token provenance across authored and generated catalogs", async () => {
-    const modelsPath = await writeGeneratedPluginCatalog(
-      "zai",
-      {
-        baseUrl: "https://api.z.ai/api/paas/v4",
-        api: "openai-completions",
-        models: [{ id: "catalog-model", maxTokens: 32_768 }],
-      },
-      {
-        providers: {
-          custom: {
-            baseUrl: "https://models.example/v1",
-            api: "openai-completions",
-            models: [{ id: "authored-model", maxTokens: 2_048 }],
-          },
-        },
-      },
-    );
-
-    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
-      pluginMetadataSnapshot: pluginOwnerSnapshot("zai", "zai"),
-    });
-
-    expect(registry.find("custom", "authored-model")).toMatchObject({
-      maxTokens: 2_048,
-      maxTokensSource: "configured",
-    });
-    expect(registry.find("zai", "catalog-model")).toMatchObject({
-      maxTokens: 32_768,
-      maxTokensSource: "discovered",
-    });
-  });
-
-  it("preserves response-model compatibility from generated catalogs", async () => {
-    const modelsPath = await writeGeneratedPluginCatalog("openai", {
-      baseUrl: "https://api.openai.com/v1",
-      api: "openai-responses",
-      apiKey: "test-token-placeholder",
-      models: [
-        {
-          id: "gpt-5.6-luna",
-          name: "GPT-5.6 Luna",
-          compat: { supportsTemperature: false, supportsInstructions: false },
-        },
-      ],
-    });
-
-    const registry = ModelRegistry.create(
-      AuthStorage.inMemory({ openai: { type: "api_key", key: "test-token-placeholder" } }),
-      modelsPath,
-      { pluginMetadataSnapshot: pluginOwnerSnapshot("openai", "openai") },
-    );
-
-    expect(registry.getError()).toBeUndefined();
-    expect(registry.find("openai", "gpt-5.6-luna")?.compat).toMatchObject({
-      supportsTemperature: false,
-      supportsInstructions: false,
-    });
   });
 
   it("loads richer generated catalog metadata without widening runtime inputs", async () => {

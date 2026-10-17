@@ -55,7 +55,8 @@ const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
   vi.fn<(port?: number, options?: CleanStaleGatewayProcessesOptions) => number[]>(() => []),
 );
 const nativeServiceMembership = vi.hoisted(() => vi.fn<() => "inside" | "outside" | "unknown">());
-vi.mock("./service-process-membership.js", () => ({
+vi.mock("./service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: nativeServiceMembership,
 }));
 const getSelfAndAncestorPidsSync = vi.hoisted(() => vi.fn<() => Set<number>>());

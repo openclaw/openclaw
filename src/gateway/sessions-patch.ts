@@ -14,6 +14,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 import {
   requiresAgentHarnessPluginSelection,
   resolveAgentHarnessOwnerPluginIds,
@@ -144,18 +145,27 @@ export async function prepareSessionsPatchEntry(
     "model" in params.patch ||
     "agentRuntime" in params.patch ||
     "contextWindow" in params.patch;
+  const sessionAgentId = normalizeAgentId(
+    params.agentId ??
+      parseAgentSessionKey(params.storeKey)?.agentId ??
+      resolveDefaultAgentId(params.cfg),
+  );
   const acpMeta = needsRuntimeMetadata
     ? await readAcpSessionMetaForEntryAsync({
         sessionKey: params.storeKey,
-        agentId: normalizeAgentId(
-          params.agentId ??
-            parseAgentSessionKey(params.storeKey)?.agentId ??
-            resolveDefaultAgentId(params.cfg),
-        ),
+        agentId: sessionAgentId,
         entry: params.existingEntry,
       })
     : undefined;
-  const projection = projectSessionPatchSteps(params, acpMeta);
+  const pinnedProfile =
+    "model" in params.patch && params.existingEntry?.authProfileOverride?.trim();
+  const recordedProvider = pinnedProfile
+    ? await prepareAuthProfileProvider({
+        agentDir: resolveAgentDir(params.cfg, sessionAgentId),
+        profileId: pinnedProfile,
+      })
+    : undefined;
+  const projection = projectSessionPatchSteps(params, acpMeta, recordedProvider);
   const first = projection.next();
   if (first.done) {
     return { kind: "complete", result: first.value };
@@ -191,6 +201,7 @@ export async function projectSessionsPatchEntry(
 function* projectSessionPatchSteps(
   params: SessionPatchProjectionParams,
   acpMeta: SessionAcpMeta | undefined,
+  recordedProvider: { provider: string | undefined } | undefined,
 ): Generator<void, SessionPatchProjectionResult, ModelCatalogSnapshot | undefined> {
   const { cfg, storeKey, patch, creation } = params;
   const now = Date.now();
@@ -633,6 +644,7 @@ function* projectSessionPatchSteps(
         selection,
         explicitDefaultSelection: selection.isDefault,
         profileOverride: selection.profile,
+        recordedProvider,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
           : {}),

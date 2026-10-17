@@ -110,6 +110,8 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
+  /** Host-owned, read-only diagnostics before startup recovery can dispatch loaded jobs. */
+  describeJobLoadWarning?: (job: CronStoredJob) => string | undefined;
   /** List enabled, configured channel ids without exposing channel machinery to cron core. */
   listConfiguredChannels?: () => readonly string[] | Promise<readonly string[]>;
   evaluateCronTrigger?: (params: {
@@ -432,6 +434,7 @@ export type CronListResult = CronJob[];
 export type CronAddInput = CronJobCreate;
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
+  inferenceBinding?: CronStoredJob["inferenceBinding"];
   sourceConversation?: CronStoredJob["sourceConversation"];
   /** Selected revisions captured from a validated caller session, never public input. */
   skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
@@ -456,7 +459,11 @@ export type CronUpdateInput = CronJobPatch;
 /** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
 export type CronUpdateOptions = Pick<
   CronAddOptions,
-  "toolsAllowProvenance" | "toolsAllowExecTarget" | "commitGuard" | "captureRuntimeAuthority"
+  | "toolsAllowProvenance"
+  | "toolsAllowExecTarget"
+  | "commitGuard"
+  | "captureRuntimeAuthority"
+  | "inferenceBinding"
 > & {
   /** Null forbids policy adoption; undefined retains in-process operator defaults. */
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
@@ -465,6 +472,11 @@ export type CronUpdateOptions = Pick<
 export type CronCommitGuardOptions = {
   /** Synchronous Gateway-owned liveness check repeated at mutation admission and commit. */
   commitGuard?: () => void;
+};
+export type CronRemoveOptions = CronCommitGuardOptions & {
+  systemOwned?: boolean;
+  /** The reviewed definition must still match at the store lock and durable commit. */
+  expectedConfigRevision?: string;
 };
 /** Cron-store-locked guard evaluated against the current job before an update applies. */
 export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;

@@ -27,10 +27,7 @@ import {
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
-import {
-  getAgentRunContext,
-  readAgentRunDelegatedAuthorityFailure,
-} from "../infra/agent-run-registry.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
@@ -128,7 +125,7 @@ async function recoveryFixture(name: string) {
       owner.persist({
         sessionKey,
         agentId: "main",
-        assertCommitAllowed: writeContext.assertCurrent,
+        assertCommitAllowed: source,
         event: {
           runId,
           sessionId,
@@ -185,39 +182,23 @@ it("settles a recovered source's start and terminal lifecycle without caller-thr
   }
 });
 
-it("refuses a changed same-store recovery source before lifecycle commit with the live owner's error", async () => {
+it("settles terminal bookkeeping after its recovery receipt no longer admits work", async () => {
   const fixture = await recoveryFixture("changed");
   try {
-    const prepareSource = expectDefined(
-      fixture.source.prepareSessionSource,
-      "Recovery has worker source preparation",
-    );
-    const replacement = { ...fixture.entry, restartRecoveryHarnessCompletion: undefined };
-    fixture.source.prepareSessionSource = async () => {
-      const prepared = await prepareSource();
-      try {
-        // The foreign writer changes the receipt after its read, before dispatch or any grant.
-        replaceSessionEntrySync(fixture.target, replacement);
-        return prepared;
-      } catch (error) {
-        await prepared.release?.();
-        throw error;
-      }
+    // A yielded checkpoint needs a resume write; an already-running start is a no-op.
+    const replacement = {
+      ...fixture.entry,
+      endedAt: 1_500,
+      restartRecoveryHarnessCompletion: undefined,
     };
-
-    await expect(fixture.finish()).rejects.toMatchObject({
-      name: "Error",
-      message: "Terminal write owner changed before commit",
-    });
-    expect(readAgentRunDelegatedAuthorityFailure(fixture.authority)?.cause).toBeInstanceOf(
-      SessionWorkStartChangedError,
-    );
+    replaceSessionEntrySync(fixture.target, replacement);
+    await expect(fixture.start()).rejects.toBeInstanceOf(SessionWorkStartChangedError);
+    await fixture.finish();
     expect(loadSessionEntry(fixture.target)).toMatchObject({
-      startedAt: 1_000,
-      updatedAt: 1_000,
+      status: "done",
+      startedAt: 2_000,
+      endedAt: 3_000,
     });
-    expect(loadSessionEntry(fixture.target)?.status).toBeUndefined();
-    expect(loadSessionEntry(fixture.target)?.endedAt).toBeUndefined();
   } finally {
     await fixture.close();
   }

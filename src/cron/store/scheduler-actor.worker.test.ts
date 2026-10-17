@@ -25,7 +25,6 @@ import { runCronSchedulerInWorker, stopCronSchedulerInWorker } from "./scheduler
 const now = Date.parse("2026-10-11T12:00:00.000Z");
 const minute = 60_000;
 const snapshot: CronSchedulerSnapshot = {
-  version: 1,
   config: { cronEnabled: true, defaultAgentId: "main" },
 };
 let fixture: OpenClawTestState;
@@ -419,6 +418,15 @@ it.each([false, true])("bounds forward clock catch-up with intervening refresh=%
     Array.from({ length: 7 }, (_, index) => job(`jump-${index}`, now + (index + 1) * minute)),
   );
   expect(scheduler.start().accepted).toEqual([]);
+  const edited = scheduler.read();
+  edited[5]!.name = "edited before catch-up";
+  edited[5]!.state.lastError = "retained failure detail";
+  withinWorker(() =>
+    runOpenClawStateWriteTransaction(
+      () => saveCronStoreInDatabase(database, scheduler.storeKey, { version: 1, jobs: edited }),
+      { database, path: database.path, env: fixture.env },
+    ),
+  );
   const jumpedAtMs = now + 24 * 60 * minute;
   if (refresh) {
     expect(scheduler.refresh({ nowMs: jumpedAtMs, monotonicMs: 1_000 }).accepted).toEqual([]);
@@ -437,6 +445,11 @@ it.each([false, true])("bounds forward clock catch-up with intervening refresh=%
       .slice(5)
       .map(({ state }) => state.nextRunAtMs),
   ).toEqual([jumpedAtMs + 5_000, jumpedAtMs + 10_000]);
+  expect(jumped.jobs.find(({ id }) => id === "jump-5")).toMatchObject({
+    name: "edited before catch-up",
+    state: { nextRunAtMs: jumpedAtMs + 5_000, lastError: "retained failure detail" },
+  });
+  expect(scheduler.read()[5]).toEqual(jumped.jobs.find(({ id }) => id === "jump-5"));
   expect(scheduler.tick(jumpedAtMs + 1, 1_001).accepted).toEqual([]);
   expect(scheduler.receipts()).toHaveLength(5);
 });
@@ -469,26 +482,19 @@ it("keeps an overdue active occurrence on a bounded future wake", () => {
   expect(scheduler.receipts()).toEqual([]);
 });
 
-it("uses the latest pushed owner and enablement configuration and ignores older snapshots", () => {
+it("uses pushed owner and enablement configuration", () => {
   const scheduler = storedScheduler("snapshot-order", [
     job("default-owner", now + minute, { agentId: undefined }),
   ]);
   scheduler.start();
-  const current = { version: 3, config: { cronEnabled: false, defaultAgentId: "current" } };
+  const current = { config: { cronEnabled: false, defaultAgentId: "current" } };
   scheduler.refresh({ snapshot: current });
   expect(scheduler.tick(now + minute, minute).accepted).toEqual([]);
 
   scheduler.refresh({
     nowMs: now + minute,
     monotonicMs: minute,
-    snapshot: { version: 2, config: { cronEnabled: true, defaultAgentId: "retired" } },
-  });
-  expect(scheduler.tick(now + minute, minute).accepted).toEqual([]);
-
-  scheduler.refresh({
-    nowMs: now + minute,
-    monotonicMs: minute,
-    snapshot: { version: 4, config: { ...current.config, cronEnabled: true } },
+    snapshot: { config: { ...current.config, cronEnabled: true } },
   });
   const requested = scheduler.tick(now + minute, minute).accepted;
   expect(requested).toHaveLength(1);
@@ -533,7 +539,7 @@ it("parks empty and disabled actors until an explicit row/config refresh", async
         { database, path: database.path, env: fixture.env },
       ),
     );
-    const disabled = { version: 2, config: { ...snapshot.config, cronEnabled: false } };
+    const disabled = { config: { ...snapshot.config, cronEnabled: false } };
     expect(
       scheduler.refresh({ snapshot: disabled, nowMs: now + 2 * minute }).nextWakeAtMs,
     ).toBeUndefined();
@@ -541,7 +547,7 @@ it("parks empty and disabled actors until an explicit row/config refresh", async
     expect(posted).not.toHaveBeenCalled();
     scheduler.refresh({
       nowMs: now + 3 * minute,
-      snapshot: { version: 3, config: snapshot.config },
+      snapshot: { config: snapshot.config },
     });
     const notification = once(receiver, "message");
     await vi.advanceTimersByTimeAsync(2_000);

@@ -18,6 +18,7 @@ const {
   installDaemonServiceAndEmitMock,
   isGatewayDaemonRuntimeMock,
   pinSnapshotMock,
+  pinMigrationMock,
   readConfigFileSnapshotMock,
   readFirstInstallPlanArg,
   readFirstNodeStartupTlsEnvironmentArg,
@@ -34,6 +35,19 @@ const {
 describe("runDaemonInstall", () => {
   setupInstallTests();
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("runs pin admission before planning and preserves the service on refusal", async () => {
+    pinMigrationMock.mockRejectedValueOnce(
+      new Error("Runtime pin migration conflict; run openclaw doctor."),
+    );
+
+    await runDaemonInstall({ json: true, force: true });
+
+    expect(actionState.failed[0]?.message).toContain("Runtime pin migration conflict");
+    expect(pinSnapshotMock).not.toHaveBeenCalled();
+    expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+  });
 
   it.each([true, false])(
     "attests pre-write service holds only from native refusal facts (%s)",
@@ -161,7 +175,7 @@ describe("runDaemonInstall", () => {
           const probe = nodeProbeOutput("26.8.1");
           runExecMock.mockResolvedValue({
             ...probe,
-            stdout: JSON.stringify({ ...JSON.parse(probe.stdout), bunVersion: "1.4.0" }),
+            stdout: JSON.stringify({ ...JSON.parse(probe.stdout), bunVersion: "1.4.3" }),
           });
         }
         installDaemonServiceAndEmitMock.mockImplementationOnce(async (params) => {

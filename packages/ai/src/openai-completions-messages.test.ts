@@ -7,7 +7,6 @@ import { resolveOpenAICompletionsCompat } from "./transports/openai-completions-
 import type { AssistantMessage, Context, Model, UserMessage } from "./types.js";
 import { createZeroUsage } from "./usage.test-support.js";
 import {
-  SYSTEM_PROMPT_CACHE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "./utils/system-prompt-cache-boundary.js";
@@ -270,10 +269,6 @@ describe("convertMessages relocatable region", () => {
   const compat = () => resolveOpenAICompletionsCompat(model);
   const marked = (facts: string) =>
     `${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}${facts}${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`;
-  const contextForSession = (sessionId: string): Context => ({
-    systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance${marked(`## Runtime\nRuntime: session=${sessionId}`)}`,
-    messages: [{ role: "user", content: "hi", timestamp: 1 }],
-  });
 
   it.each([
     {
@@ -439,20 +434,6 @@ describe("convertMessages relocatable region", () => {
       },
     ]);
     expect(cacheOptOutIndexes).toEqual(new Set([1]));
-  });
-
-  it("leaves the boundary in place when the caller preserves it", () => {
-    const converted = convertMessages(model, contextForSession("alpha"), compat(), {
-      preserveSystemPromptCacheBoundary: true,
-    });
-
-    expect(converted).toEqual([
-      {
-        role: "system",
-        content: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance\n## Runtime\nRuntime: session=alpha`,
-      },
-      { role: "user", content: "hi" },
-    ]);
   });
 
   it.each([

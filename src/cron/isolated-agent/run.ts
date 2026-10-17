@@ -231,7 +231,7 @@ async function runCronIsolatedAgentTurnInTrace(
             await usageSettlement;
             return usage;
           };
-          // The execution owner spans fallback and interim-ack retries. Individual
+          // The execution owner spans model fallback retries. Individual
           // attempts must not retire the shared run before that execution settles.
           const lifecycle = createAgentLifecycleTerminalBackstop({
             runId,
@@ -265,6 +265,7 @@ async function runCronIsolatedAgentTurnInTrace(
               runId,
               cfg: params.cfg,
               job: params.job,
+              trigger: params.trigger,
               deliveryAttemptFence: params.deliveryAttemptFence,
               lane: params.lane,
               agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,

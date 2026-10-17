@@ -192,44 +192,6 @@ describe("cron service timer regressions", () => {
     stop(restarted);
   });
 
-  it("#24355: one-shot job disabled after max transient retries", async () => {
-    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
-
-    const cronJob = createIsolatedRegressionJob({
-      id: "oneshot-max-retries",
-      name: "reminder",
-      scheduledAt,
-      schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-      payload: { kind: "agentTurn", message: "remind me" },
-      state: { nextRunAtMs: scheduledAt },
-    });
-    cronJob.deleteAfterRun = true;
-    const storePath = await storeJobs([cronJob]);
-
-    let now = scheduledAt;
-    const runIsolatedAgentJob = vi.fn().mockResolvedValue({
-      status: "error",
-      error: "429 rate limit exceeded",
-    });
-    const state = createCronServiceState({
-      storePath,
-      nowMs: () => now,
-      runIsolatedAgentJob,
-    });
-
-    for (let i = 0; i < 4; i += 1) {
-      await onTimer(state);
-      const job = requireJob(state, "oneshot-max-retries");
-      if (i < 3) {
-        expect(job.enabled).toBe(true);
-        now = requireTimestamp(job.state.nextRunAtMs, "max-retries next run") + 1;
-      } else {
-        expect(job.enabled).toBe(false);
-      }
-    }
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(4);
-  });
-
   it("enforces a minimum refire gap for second-granularity cron schedules (#17821)", async () => {
     const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
 

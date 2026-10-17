@@ -9,6 +9,7 @@ import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 import { directoryIdentity } from "./update-immutable-layout.js";
+import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 import { runStep } from "./update-runner-command.js";
 import type { CommandRunner } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -157,7 +158,7 @@ export async function runImmutableBuild(params: {
     "TemporaryFileSystem=/run:ro",
     `BindReadOnlyPaths=-/run/systemd/resolve ${resolver}`,
     `ReadWritePaths=${stage}`,
-    `RuntimeMaxSec=${Math.ceil((timeoutMs * 12) / 1000)}`,
+    `RuntimeMaxSec=${Math.ceil((timeoutMs * 12 + UPDATE_NETWORK_TIMEOUT_MS * 2) / 1000)}`,
     `InaccessiblePaths=-/root ${descriptor.service.stateDir} ${descriptor.service.configPath}`,
     `MemoryMax=${build.resources.memoryMaxBytes}`,
     `TasksMax=${build.resources.tasksMax}`,
@@ -208,6 +209,8 @@ export async function runImmutableBuild(params: {
         sha,
         String(timeoutMs),
         String(params.workTimeoutMs ?? 0),
+        descriptor.current.path,
+        descriptor.current.sha,
       ],
       cwd: stage,
       runCommand: run,

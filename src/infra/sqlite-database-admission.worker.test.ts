@@ -17,6 +17,7 @@ import {
   readSqliteDatabaseScopedWriteToken,
   retireSqliteDatabaseWriteScopes,
   publishSqliteDatabaseAdmission,
+  getSqliteDatabaseAdmission,
 } from "./sqlite-database-admission.js";
 import type {
   AdmissionTaskInput,
@@ -28,22 +29,63 @@ import {
 } from "./sqlite-database-admission.worker.test-support.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
+import type { SqliteWorkerReply } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const moduleUrl = new URL("./sqlite-database-admission.worker.test-support.ts", import.meta.url);
 
-it.each([undefined, 42])(
-  "bootstraps complete host facts before any exchange, value=%s",
-  async (value) => {
-    const location = path.join(tempDirs.make("sqlite-bootstrap-host-facts-"), "shared.sqlite");
-    const database = openNodeSqliteDatabase(location);
-    if (value !== undefined) {
-      publishSqliteDatabaseAdmission(database, hostFactKey, value);
+it("settles worker facts through admission without echoing snapshots in ordinary replies", async () => {
+  const location = path.join(tempDirs.make("sqlite-admission-reply-"), "shared.sqlite");
+  const database = openNodeSqliteDatabase(location);
+  const broker = new SqliteWorkerBroker();
+  const replies: SqliteWorkerReply[] = [];
+  const workerFact = { ...hostFactKey, name: "admission-test-worker-value" };
+  let factAtReply: number | undefined;
+  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the emitting worker.
+  const originalEmit = Worker.prototype.emit;
+  const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
+    this: Worker,
+    event: string | symbol,
+    reply: SqliteWorkerReply,
+  ) {
+    if (event === "message" && reply.ok) {
+      replies.push(reply);
+      factAtReply = getSqliteDatabaseAdmission(database, workerFact);
     }
-    const worker = new Worker(
-      `
+    return Reflect.apply(originalEmit, this, [event, reply]);
+  });
+  try {
+    const store = await broker.open<AdmissionOperations>({
+      moduleUrl,
+      databasePath: location,
+      input: undefined,
+    });
+    for (const value of [1, 2]) {
+      publishSqliteDatabaseAdmission(database, hostFactKey, value);
+      await store!.execute({ type: "admitted", input: { measureHostAbsence: true } });
+      // The host receives the new worker fact before the broker sees the ordinary reply.
+      expect(factAtReply).toBe(1);
+    }
+    await store!.close();
+    expect(replies).toHaveLength(4);
+    for (const reply of replies) {
+      expect(reply).not.toHaveProperty("databaseAdmissions");
+    }
+  } finally {
+    messages.mockRestore();
+    await broker.close();
+    database.close();
+  }
+});
+
+it("bootstraps complete host facts before any exchange", async () => {
+  const location = path.join(tempDirs.make("sqlite-bootstrap-host-facts-"), "shared.sqlite");
+  const database = openNodeSqliteDatabase(location);
+  publishSqliteDatabaseAdmission(database, hostFactKey, 42);
+  const worker = new Worker(
+    `
     const { parentPort, workerData } = require("node:worker_threads");
     (async () => {
       const { register } = await import(workerData.loader);
@@ -67,28 +109,27 @@ it.each([undefined, 42])(
       parentPort.close();
     })().catch((error) => { throw error; });
   `,
-      {
-        eval: true,
-        execArgv: [],
-        workerData: {
-          location,
-          key: hostFactKey.name,
-          loader: import.meta.resolve("tsx/esm/api"),
-          native: new URL("./node-sqlite.ts", import.meta.url).href,
-          admission: new URL("./sqlite-database-admission.ts", import.meta.url).href,
-        },
+    {
+      eval: true,
+      execArgv: [],
+      workerData: {
+        location,
+        key: hostFactKey.name,
+        loader: import.meta.resolve("tsx/esm/api"),
+        native: new URL("./node-sqlite.ts", import.meta.url).href,
+        admission: new URL("./sqlite-database-admission.ts", import.meta.url).href,
       },
-    );
-    try {
-      const [[facts], [code]] = await Promise.all([once(worker, "message"), once(worker, "exit")]);
-      expect(code).toBe(0);
-      expect(facts).toEqual({ absent: undefined, value, exchanges: 0 });
-    } finally {
-      await worker.terminate();
-      database.close();
-    }
-  },
-);
+    },
+  );
+  try {
+    const [[facts], [code]] = await Promise.all([once(worker, "message"), once(worker, "exit")]);
+    expect(code).toBe(0);
+    expect(facts).toEqual({ absent: undefined, value: 42, exchanges: 0 });
+  } finally {
+    await worker.terminate();
+    database.close();
+  }
+});
 
 it("joins host admission created after a worker's operation context before its first DDL", async () => {
   const root = tempDirs.make("sqlite-late-host-admission-");
@@ -146,8 +187,28 @@ it("settles scoped writes without host metadata round trips after peer registrat
       databasePath: location,
       input: undefined,
     });
+    const predecessor = store!.execute({ type: "admitted", input: undefined });
     let first = readSqliteDatabaseScopedWriteToken(database, "first");
     const second = readSqliteDatabaseScopedWriteToken(database, "second");
+    let current = true;
+    const refused = new Error("Queued scope lost authority");
+    const rejected = broker.runOperation(
+      store!,
+      (scope) =>
+        scope.execute({ type: "writeRows", input: { sql: "INSERT INTO original VALUES (-1)" } }),
+      undefined,
+      () => {
+        if (!current) {
+          throw refused;
+        }
+      },
+    );
+    current = false;
+    const outcomes = await Promise.allSettled([predecessor, rejected]);
+    expect(outcomes[0]!.status).toBe("fulfilled");
+    expect(outcomes[1]).toEqual({ status: "rejected", reason: refused });
+    // A new publication must not acknowledge scopes captured by a refused dispatch.
+    readSqliteDatabaseScopedWriteToken(database, "after-rejection");
     await store!.execute({
       type: "writeRows",
       input: { sql: "INSERT INTO original VALUES (2)", sessionKeys: ["second"] },
@@ -520,7 +581,7 @@ it("shares admission published after dispatch with existing isolates and revalid
     expect(replacement.sql.length).toBeGreaterThan(0);
     const sharedReplacement = await first!.execute({ type: "read", input: { path: location } });
     expect(sharedReplacement.values).toEqual([43]);
-    expect(sharedReplacement.sql).toEqual(replacement.sql);
+    expect(sharedReplacement.sql).toEqual([]);
 
     const holder = openNodeSqliteDatabase(location);
     admitSqliteSchema(holder);
@@ -620,8 +681,7 @@ it("shares facts with retained task workers across awaited host exchanges", asyn
     );
     const [firstAdmission, reused] = await Promise.all([family, exact]);
     expect(firstAdmission.sql.some((sql) => sql.includes("sqlite_schema"))).toBe(true);
-    // The first task may close its final handle before the second opens.
-    expect([[], firstAdmission.sql]).toContainEqual(reused.sql);
+    expect(reused.sql).toEqual([]);
 
     const nestedLocation = path.join(root, "nested.sqlite");
     createDatabase(nestedLocation, 3);
@@ -633,7 +693,7 @@ it("shares facts with retained task workers across awaited host exchanges", asyn
     expect(nested.sql.some((sql) => sql.includes("sqlite_schema"))).toBe(true);
     expect(nested.hostLookupMessages).toBe(0);
     const afterNested = await pools[1]!.run({ path: nestedLocation }, {});
-    expect(afterNested.sql).toEqual(nested.sql);
+    expect(afterNested.sql).toEqual([]);
 
     const missing = path.join(root, "unadmitted.sqlite");
     await expect(pools[0]!.run({ path: missing }, {})).rejects.toThrow(/host authority/);
@@ -644,7 +704,7 @@ it("shares facts with retained task workers across awaited host exchanges", asyn
     expect(existsSync(nestedCreated)).toBe(true);
     expect(created.sql.some((sql) => sql.includes("sqlite_schema"))).toBe(true);
     const afterCreation = await pools[1]!.run({ path: nestedCreated }, {});
-    expect(afterCreation.sql).toEqual(created.sql);
+    expect(afterCreation.sql).toEqual([]);
 
     const captured = path.join(root, "captured.sqlite");
     const uncaptured = path.join(root, "uncaptured.sqlite");

@@ -26,10 +26,10 @@ import type {
   SidebarSessionSortMode,
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 
 export type SidebarProjectionHost = {
-  readonly sessionData: SessionDataController;
+  readonly sessionData: SessionDataOwner;
   readonly sessionDataContext: ApplicationContext | undefined;
   readonly sessionProjection: SidebarSessionProjection;
   readonly sidebarAgentsMode: "chip" | "roster";
@@ -64,7 +64,7 @@ export type SidebarProjectionHost = {
   selectedAgentMainSessionKey(agentId: string): string;
   knownSessionGroups(): string[];
   knownSectionOrder(): string[];
-  visibleSessionCatalogs(): SessionDataController["sessionCatalogs"];
+  visibleSessionCatalogs(): SessionDataOwner["sessionCatalogs"];
 };
 
 /** Slot identities belong to the publishing owners; projection never compares row contents. */
@@ -93,6 +93,7 @@ export function sidebarNavigationInputs(
 ) {
   const data = host.sessionData;
   const context = host.sessionDataContext;
+  const pending = context?.chatSubmissions?.readCreate();
   return [
     context,
     result,
@@ -104,6 +105,9 @@ export function sidebarNavigationInputs(
     data.childSessionRowsByParent,
     data.loadingChildSessionKeys,
     host.getRouteSessionKey(),
+    pending?.creation,
+    pending?.creation.admitted,
+    context?.gateway.snapshot.sessionKey,
     isSessionRouteId(host.activeRouteId),
     context?.agentSelection.state.selectedId,
     context?.gateway.snapshot.assistantAgentId,
@@ -181,6 +185,7 @@ export function memoizedSidebarSections(
             ? (context.gateway.snapshot.client ?? null)
             : null,
         listSource: context?.sessions ?? null,
+        listLoaded: (roster ? roster.result : host.sessionData.sessionsResult) !== null,
         subtitle: {
           sidebarLiveActivity: host.sidebarLiveActivity,
           showPreview: host.sessionsShowPreview,
@@ -200,17 +205,23 @@ export function projectSidebarNavigation(
 ) {
   const roster = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
   const routeSessionKey = host.getRouteSessionKey();
+  const context = host.sessionDataContext;
+  const pending = context?.chatSubmissions?.readCreate();
+  const creating =
+    pending?.creation.admitted === false && pending.creation.sessionKey === routeSessionKey;
+  // The provisional row is rendered separately, without synthesizing an actionable session.
+  const admittedKey = creating ? (context?.gateway.snapshot.sessionKey ?? "") : routeSessionKey;
   const navigation = buildSidebarSessionNavigationState({
     context: host.sessionDataContext,
-    routeSessionKey,
+    routeSessionKey: admittedKey,
     sessionsResult: roster?.result ?? host.sessionData.sessionsResult,
-    activeSession: findActiveSidebarLineageRow(host.sessionData, routeSessionKey),
+    activeSession: findActiveSidebarLineageRow(host.sessionData, admittedKey),
     sessionsAgentId: host.sessionData.sessionsAgentId,
     showCron: host.sessionsShowCron,
     showSystem: host.sessionsShowSystem,
     statusFilter: host.sessionsStatusFilter,
     compareSessions,
-    highlightCurrentSession: isSessionRouteId(host.activeRouteId),
+    highlightCurrentSession: isSessionRouteId(host.activeRouteId) && !creating,
     runtimeSampledAtByRow,
     loadingChildSessionKeys: host.sessionData.loadingChildSessionKeys,
     outboxAttentionCountForSessionKey: (key) =>

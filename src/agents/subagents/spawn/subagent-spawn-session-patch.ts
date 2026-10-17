@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   acquireSessionActorStorage,
@@ -10,12 +9,15 @@ import {
   buildSessionCreationStamp,
   inheritSessionGitContributorProfileIds,
 } from "../../../config/sessions/session-entry-provenance.js";
-import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
 import {
   sessionEntryCommitGuardOptions,
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
+import {
+  preparePhysicalSessionStorePath,
+  resolveSessionStorePathForScope,
+} from "../../../config/sessions/session-store-path.js";
 import type { InternalSessionEntry, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { buildDashboardSessionTitleSource } from "../../../gateway/dashboard-session-title.js";
@@ -45,11 +47,7 @@ import { captureSpawnParentLineage } from "./spawn-parent-lineage.js";
 import { withSubagentSessionSource } from "./subagent-session-source.js";
 import type { SpawnSubagentParams } from "./subagent-spawn-contract.js";
 import type { resolveSubagentModelAndThinkingPlan } from "./subagent-spawn-plan.js";
-import {
-  emitSessionLifecycleEvent,
-  resolveGatewaySessionStoreTargetInWorker,
-  upsertSessionEntryCore,
-} from "./subagent-spawn.runtime.js";
+import { emitSessionLifecycleEvent, upsertSessionEntryCore } from "./subagent-spawn.runtime.js";
 
 export async function createInitialSubagentSession(input: {
   cfg: OpenClawConfig;
@@ -140,7 +138,6 @@ export async function createInitialSubagentSession(input: {
         let childMemory: SessionActorStorageBinding | undefined;
         try {
           const parentTarget = params.parentTarget;
-          const parentStorePath = parentTarget.readSource?.path ?? parentTarget.storePath;
           // Request preparation joined participant writes and captured this complete row.
           const parentEntry = parentTarget.store[parentTarget.canonicalKey];
           if (params.firstAdmission) {
@@ -194,22 +191,17 @@ export async function createInitialSubagentSession(input: {
             sessionId: randomUUID(),
             lifecycleRevision: randomUUID(),
           };
-          const target: Omit<GatewaySessionStoreTargetWithStore, "store"> = params.incognito
-            ? {
-                agentId: params.targetAgentId,
-                canonicalKey: params.childSessionKey,
-                storeKeys: [params.childSessionKey],
-                storePath:
-                  childMemory?.path ??
-                  resolveIncognitoOpenClawAgentSqlitePath({
-                    agentId: params.targetAgentId,
-                  }),
-              }
-            : await resolveGatewaySessionStoreTargetInWorker({
-                cfg: params.cfg,
-                key: params.childSessionKey,
-                assertActive: params.assertActive,
-              });
+          // The child key is newly minted: select its configured store without searching history.
+          const childScope = {
+            agentId: params.targetAgentId,
+            sessionKey: params.childSessionKey,
+          };
+          const storePath = params.incognito
+            ? (childMemory?.path ?? resolveIncognitoOpenClawAgentSqlitePath(childScope))
+            : resolveSessionStorePathForScope(childScope, params.cfg);
+          const physicalStorePath = params.incognito
+            ? storePath
+            : await preparePhysicalSessionStorePath(childScope, params.cfg);
           params.assertActive?.();
           let preparedWorktree: PreparedGatewaySessionLifecycle | undefined;
           if (params.worktree) {
@@ -227,9 +219,9 @@ export async function createInitialSubagentSession(input: {
             const prepared = await prepareSessionWorktreeCreation({
               cfg: params.cfg,
               target: {
-                agentId: target.agentId,
-                key: target.canonicalKey,
-                storePath: target.readSource?.path ?? target.storePath,
+                agentId: params.targetAgentId,
+                key: params.childSessionKey,
+                storePath: physicalStorePath,
                 projectId,
                 sandboxRequired: params.creationPolicy.sandbox === "required",
               },
@@ -247,7 +239,7 @@ export async function createInitialSubagentSession(input: {
               runSetupScript: false,
               commitGuard: composeSessionSourceAssertion([params.assertActive]),
               onTitleError: (error) => console.warn("subagent worktree title failed", error),
-              onTitlePersisted: () =>
+              onTitleStateChanged: () =>
                 emitSessionLifecycleEvent({
                   sessionKey: params.childSessionKey,
                   reason: "title",
@@ -261,55 +253,11 @@ export async function createInitialSubagentSession(input: {
             initialChildSessionPatch.pendingWorktree = preparedWorktree.pendingWorktree;
           }
           const commit = async (assertSourceCurrent?: SessionSourceAssertion) => {
-            const fields = ["sessionId", "lifecycleRevision", "skillLibrarySelections"] as const;
-            const expected =
-              parentEntry && (parentMemory || parentEntry.skillLibrarySelections)
-                ? {
-                    sessionId: parentEntry.sessionId,
-                    lifecycleRevision: parentEntry.lifecycleRevision,
-                    skillLibrarySelections: parentEntry.skillLibrarySelections,
-                  }
-                : undefined;
-            const refuse = (): never => {
-              throw new Error(
-                "Parent skill selection changed before spawn; retry from the current turn.",
-              );
-            };
-            const assertParentSkills = () => {
-              if (!parentMemory) {
-                return;
-              }
-              const latest = parentMemory
-                ? parentMemory.actor.snapshot(parentMemory.authority)?.entry
-                : undefined;
-              if (
-                (latest === undefined) !== (expected === undefined) ||
-                fields.some((field) => !isDeepStrictEqual(latest?.[field], expected?.[field]))
-              ) {
-                refuse();
-              }
-            };
-            const source: SessionSourceAssertion | undefined = parentMemory
-              ? assertParentSkills
-              : expected
-                ? captureSessionEntrySourceAssertion({
-                    scope: {
-                      agentId: parentTarget.agentId,
-                      storePath: parentStorePath,
-                      sessionKey: parentTarget.canonicalKey,
-                    },
-                    readSource: parentTarget.capturedReadSource,
-                    expected,
-                    fields,
-                    assertCurrent: assertParentSkills,
-                    refuse,
-                  })
-                : undefined;
             const write = () =>
               upsertSessionEntryCore(
                 {
-                  storePath: target.readSource?.path ?? target.storePath,
-                  sessionKey: target.canonicalKey,
+                  storePath: physicalStorePath,
+                  sessionKey: params.childSessionKey,
                 },
                 {
                   ...initialChildSessionPatch,
@@ -335,11 +283,8 @@ export async function createInitialSubagentSession(input: {
                   ...parentLineage,
                   ...(parentEntry?.skillLibrarySelections
                     ? {
-                        skillLibrarySelections: parentEntry.skillLibrarySelections.map(
-                          (selection) => ({
-                            ...selection,
-                          }),
-                        ),
+                        // Committed pins belong to the admitted turn, even if the parent refreshes.
+                        skillLibrarySelections: parentEntry.skillLibrarySelections,
                       }
                     : {}),
                   ...buildSessionCreationStamp({
@@ -354,7 +299,7 @@ export async function createInitialSubagentSession(input: {
                   }),
                 },
                 sessionEntryCommitGuardOptions(
-                  composeSessionSourceAssertion([params.assertActive, source, assertSourceCurrent]),
+                  composeSessionSourceAssertion([params.assertActive, assertSourceCurrent]),
                 ),
               );
             return childMemory
@@ -370,9 +315,9 @@ export async function createInitialSubagentSession(input: {
             ...(params.firstAdmission && entry
               ? {
                   freshChild: {
-                    agentId: target.agentId,
+                    agentId: params.targetAgentId,
                     // Lifecycle admission uses the store selector, not the physical database path.
-                    storePath: target.storePath,
+                    storePath,
                     entry,
                   },
                 }

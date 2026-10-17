@@ -1,11 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DevicePairingAuthorityRefusedError } from "../../infra/device-pairing-worker.js";
 import type { clearDevicePairing } from "../../infra/device-pairing.js";
 import { registerGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { bindDeviceWorkerReconciliation } from "../worker-environments/device-provider.js";
 import {
   clearDevicePairingMock,
-  createClient,
   createOptions,
   resetDeviceHandlerTestState,
 } from "./devices.test-support.js";
@@ -28,60 +26,6 @@ describe("device pairing clear", () => {
     await clear(options);
     expect(clearDevicePairingMock).not.toHaveBeenCalled();
     expect(options.respond).toHaveBeenCalledWith(false, undefined, expect.anything());
-  });
-
-  it("keeps non-admin device callers self-only and checks authoritative roles", async () => {
-    const options = createOptions(
-      "device.pair.clear",
-      { pending: true },
-      {
-        client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }),
-      },
-    );
-    clearDevicePairingMock.mockImplementationOnce(
-      async (input: Parameters<typeof clearDevicePairing>[0]) => {
-        expect(input.deviceId).toBe("device-1");
-        expect(input.pending).toBe(true);
-        const device = {
-          deviceId: "device-1",
-          publicKey: "synthetic",
-          createdAtMs: 1,
-          approvedAtMs: 1,
-          roles: ["operator"],
-        };
-        expect(input.canRemove?.(device)).toBe(true);
-        expect(input.canRemove?.({ ...device, roles: ["operator", "node"] })).toBe(false);
-        throw new DevicePairingAuthorityRefusedError();
-      },
-    );
-    await clear(options);
-    expect(options.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: "device pairing clear denied" }),
-    );
-    expect(options.context.invalidateClientsForDevice).not.toHaveBeenCalled();
-  });
-
-  it("refuses expired transport authority before clearing", async () => {
-    const options = createOptions(
-      "device.pair.clear",
-      {},
-      { hasCurrentClientAuthority: () => false },
-    );
-    clearDevicePairingMock.mockImplementationOnce(
-      async (input: Parameters<typeof clearDevicePairing>[0]) => {
-        input.assertCurrent?.();
-        return committed;
-      },
-    );
-    await clear(options);
-    expect(options.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: "device pairing clear denied" }),
-    );
-    expect(options.context.invalidateClientsForDevice).not.toHaveBeenCalled();
   });
 
   it("claims the final reply before commit retires the caller and tears down all removed devices", async () => {

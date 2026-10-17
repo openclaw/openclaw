@@ -1,5 +1,8 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeTranscriptionSessionCreateRequest } from "openclaw/plugin-sdk/realtime-transcription-session";
+import { vi } from "vitest";
 import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
+import type { createTranscriptionMockWebSocket } from "./realtime-transcription-socket.test-support.js";
 
 type EventSocket = { emit(event: string, ...args: unknown[]): void };
 
@@ -50,4 +53,57 @@ export function createTranscriptionSession(
     providerConfig: { apiKey: "sk-test" },
     ...options,
   });
+}
+
+export function createTranscriptionSocketHarness(
+  FakeWebSocket: ReturnType<typeof createTranscriptionMockWebSocket>,
+) {
+  type Socket = InstanceType<typeof FakeWebSocket>;
+  const sessions = new Set<{ close(): void }>();
+
+  async function waitForFakeSocket(session: { close(): void }, index = 0): Promise<Socket> {
+    sessions.add(session);
+    await vi.dynamicImportSettled();
+    const existing = FakeWebSocket.instances[index];
+    if (existing) {
+      return existing;
+    }
+    const created = createDeferred<Socket>();
+    FakeWebSocket.onCreated = (socket) => {
+      if (FakeWebSocket.instances[index] === socket) {
+        created.resolve(socket);
+      }
+    };
+    try {
+      return await vi.waitFor(() => created.promise);
+    } finally {
+      FakeWebSocket.onCreated = undefined;
+    }
+  }
+
+  return {
+    waitForFakeSocket,
+    connectFakeSession: async (
+      session: { connect(): Promise<void>; close(): void },
+      index = 0,
+    ): Promise<Socket> => {
+      const connecting = session.connect();
+      const socket = await waitForFakeSocket(session, index);
+      socket.readyState = FakeWebSocket.OPEN;
+      socket.emit("open");
+      emitJson(socket, { type: "session.updated" });
+      await connecting;
+      return socket;
+    },
+    close() {
+      // Close session ownership before its fake peers so cleanup cannot start a reconnect.
+      for (const session of sessions) {
+        session.close();
+      }
+      for (const socket of FakeWebSocket.instances) {
+        socket.close();
+      }
+      sessions.clear();
+    },
+  };
 }

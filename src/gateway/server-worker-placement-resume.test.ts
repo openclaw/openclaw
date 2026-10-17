@@ -13,7 +13,7 @@ import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js"
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabases } from "../state/openclaw-agent-db-lifecycle.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import { resolveGatewaySessionStoreTargetWithStoreAsync } from "./session-utils-store-lookup.js";
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
@@ -155,7 +155,16 @@ describe("worker automatic resume", () => {
           environmentId: replacement.ready.environmentId,
           turnClaim: { owner: "local", runId },
         });
-        return { payloads: [{ text: "The resumed workspace is ready." }], meta: { durationMs: 1 } };
+        return {
+          payloads: [{ text: "The resumed workspace is ready." }],
+          meta: {
+            durationMs: 1,
+            terminalReply: {
+              disposition: "visible" as const,
+              text: "The resumed workspace is ready.",
+            },
+          },
+        };
       });
       const pending = admission
         .run(() =>
@@ -228,7 +237,7 @@ describe("worker automatic resume", () => {
         releaseSetup.resolve();
         await pending;
         admission.release();
-        closeOpenClawAgentDatabases(root);
+        await closeOpenClawAgentDatabasesAsync(root);
       }
     },
   );

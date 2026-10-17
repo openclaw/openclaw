@@ -25,6 +25,7 @@ const scriptEntries = productionConfig.workspaces["."].entry.filter(
 const repositoryToolEntries = [
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/workflows/labeler.yml!",
+  ".github/workflows/openclaw-release-publish.yml!",
   ".github/workflows/plugin-prerelease.yml!",
   "apps/android/scripts/build-release-artifacts.ts!",
   "security/opengrep/check-rule-metadata.mjs!",
@@ -68,8 +69,6 @@ const config = {
     ],
     // Oxlint consumes this required default export through a JSON config path.
     "scripts/oxlint-boundary-guards.mjs": ["exports"],
-    // Boundary lint requires this sole default export; remove with that config entry.
-    "scripts/oxlint-solid-migration.mjs": ["exports"],
     // Oxlint consumes this required default export through a JSON config path.
     "tools/solid-lint/index.mjs": ["exports"],
     // Vitest consumes this required default export through the reporter CLI path.

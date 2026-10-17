@@ -67,7 +67,7 @@ describe("controlUi.githubPreview", () => {
       expect(respond).toHaveBeenCalledWith(false, undefined, {
         code: "UNAVAILABLE",
         message: "GitHub request is no longer active. Try again.",
-        retryable: true,
+        retryable: false,
       });
     },
   );
@@ -382,7 +382,7 @@ describe("controlUi.githubPreview", () => {
       expect(respond).toHaveBeenCalledWith(false, undefined, {
         code: "UNAVAILABLE",
         message: new githubIdentity.GitHubIdentityError("changed").message,
-        retryable: true,
+        retryable: false,
       });
     },
   );
@@ -411,7 +411,13 @@ describe("controlUi.githubPreview", () => {
       "preview handler",
     )(requestOptions({ ...target, ...(refresh !== undefined ? { refresh } : {}) }, respond));
     if (valid) {
-      expect(loadPreview).toHaveBeenCalledExactlyOnceWith(target, undefined, undefined, true);
+      expect(loadPreview).toHaveBeenCalledExactlyOnceWith(
+        target,
+        undefined,
+        undefined,
+        true,
+        undefined,
+      );
       expect(respond).toHaveBeenCalledWith(true, preview, undefined);
     } else {
       expect(loadPreview).not.toHaveBeenCalled();
@@ -431,6 +437,13 @@ describe("controlUi.githubPreview", () => {
         "The selected GitHub credential is unavailable; reconnect the agent's GitHub identity in Settings.",
       retryable: false,
     },
+    ...(["unverified", "rate_limited"] as const).map((reason) => ({
+      failure: "managed identity " + reason,
+      managed: true,
+      error: new githubIdentity.GitHubIdentityError(reason),
+      message: new githubIdentity.GitHubIdentityError(reason).message,
+      retryable: false,
+    })),
     {
       failure: "GitHub quota",
       managed: false,
@@ -698,6 +711,42 @@ describe("controlUi.sessionPullRequests.checks", () => {
       );
     });
   });
+
+  it.each(["before", "during"] as const)(
+    "denies missing-client reads when roles are enabled %s GitHub loading",
+    async (when) => {
+      await withOpenClawTestState({ label: "ci-details-missing-client-roles" }, async () => {
+        let cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+        const enableRoles = () => {
+          cfg = { ...cfg, gateway: { roles: { definitions: {} } } };
+          setRuntimeConfigSnapshot(cfg);
+        };
+        setRuntimeConfigSnapshot(cfg);
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: params.sessionKey },
+          { sessionId: "role-bound-ci", updatedAt: 1, spawnedCwd: "/synthetic/ci" },
+        );
+        if (when === "before") {
+          enableRoles();
+        }
+        const load = vi.fn(async () => {
+          enableRoles();
+          return result;
+        });
+        const respond = vi.fn<RespondFn>();
+        await expectDefined(
+          createControlUiHandlers(undefined, load)["controlUi.sessionPullRequests.checks"],
+          "CI checks handler",
+        )(requestOptions(params, respond, { context: { getRuntimeConfig: () => cfg } }));
+        expect(load).toHaveBeenCalledTimes(when === "before" ? 0 : 1);
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+      });
+    },
+  );
 
   it.each([{ incognito: true as const }, { visibility: "draft" as const }])(
     "does not expose a hidden session to another profile: %j",

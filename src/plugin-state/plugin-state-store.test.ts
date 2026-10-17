@@ -6,18 +6,21 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { ok } from "@openclaw/normalization-core/result";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { clearOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
 import {
-  clearOpenClawDatabaseQuarantine,
-  recordOpenClawDatabaseQuarantine,
-} from "../state/openclaw-quarantine-store.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+  closeOpenClawStateDatabaseByPath,
+  openClawStateDatabaseCache,
+  recordOpenClawStateDatabaseOpenFailure,
+} from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { admitStateSchemaFacts } from "../state/openclaw-state-db-schema-version.js";
 import {
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
   clearOpenClawStateDatabaseOpenFailure,
-  recordOpenClawStateDatabaseOpenFailure,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
@@ -791,18 +794,28 @@ describe("plugin-state-store.errors", () => {
       await rejects(() => store.lookup("k"), expected);
       await rejects(() => store.count(), { ...expected, operation: "count" });
       clearOpenClawStateDatabaseOpenFailure(path);
-      expect(
-        recordOpenClawDatabaseQuarantine({
-          env: testState.env,
-          kind: "state",
-          path,
-          reason: "persisted failure",
-        }),
-      ).toBe(true);
+      seedOpenClawDatabaseQuarantine({
+        env: testState.env,
+        kind: "state",
+        path,
+        reason: "persisted failure",
+      });
+      const inspected = openNodeSqliteDatabase(path, { readOnly: true });
       try {
+        // Acquisition can inspect a valid schema before discovering its quarantine.
+        // That refused acquisition must not leave facts usable by the keyed-store cache.
+        admitStateSchemaFacts(inspected, path);
+        expect(() =>
+          openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+            path,
+            testState.env,
+          ),
+        ).toThrow(/is quarantined/);
         for (const read of [
           () => store.lookup("k"),
           () => store.lookupMany(["k"]),
+          () => store.entries(),
+          () => store.count(),
           () => store.register("k", true),
         ]) {
           await rejects(read, {
@@ -811,6 +824,7 @@ describe("plugin-state-store.errors", () => {
           });
         }
       } finally {
+        inspected.close();
         clearOpenClawStateDatabaseOpenFailure(path);
         expect(clearOpenClawDatabaseQuarantine(path, { env: testState.env })).toBe(true);
       }

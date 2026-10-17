@@ -1,6 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { render, type ReactiveController, type ReactiveControllerHost } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createComponent } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -30,12 +30,13 @@ import {
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatPageStateContext } from "./chat-page.test-support.ts";
 import { removeQueuedMessage, keepVolatileQueuedMessage } from "./chat-queue.ts";
-import { ChatStateController } from "./chat-state-controller.ts";
+import { createChatState } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
@@ -49,7 +50,7 @@ import {
 } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { createSessionEventState, renderedTranscript } from "./chat-state.test-support.ts";
-import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
+import { AssistantAttachments } from "./components/chat-message-attachments-solid.tsx";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
@@ -1724,35 +1725,6 @@ describe("canonical session message recovery", () => {
     expect(state.chatStream).toBe("Checking external sessions...");
   });
 
-  it("leaves the active run assistant message on the terminal stream path", () => {
-    const currentUser = {
-      role: "user",
-      content: [{ type: "text", text: "Current prompt" }],
-      __openclaw: { id: "current-user", idempotencyKey: "current-run:user", seq: 1 },
-    };
-    const { state } = createSessionEventState({
-      chatMessages: [currentUser],
-      chatRunId: "current-run",
-      chatStream: "Current partial reply",
-    });
-
-    emitGatewayEvent(state, "session.message", {
-      sessionKey: state.sessionKey,
-      clientRunId: "current-run",
-      hasActiveRun: true,
-      messageId: "current-final",
-      messageSeq: 2,
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Current final reply" }],
-        __openclaw: { id: "current-final", seq: 2 },
-      },
-    });
-
-    expect(state.chatMessages).toEqual([currentUser]);
-    expect(state.chatStream).toBe("Current partial reply");
-  });
-
   it("coalesces live peers into one frame and one fresh read after stale history", async () => {
     let renderFrame: FrameRequestCallback | undefined;
     vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
@@ -2058,7 +2030,7 @@ describe("canonical session message recovery", () => {
   });
 });
 
-describe("ChatStateController render lifecycle", () => {
+describe("chat state render lifecycle", () => {
   function createObserverState(overrides: Partial<Record<keyof ChatPageHost, unknown>> = {}) {
     const requestUpdate = (overrides.requestUpdate ?? vi.fn()) as ReturnType<typeof vi.fn>;
     return {
@@ -2074,14 +2046,16 @@ describe("ChatStateController render lifecycle", () => {
     } as unknown as ChatPageHost;
   }
 
-  function createControllerHost(overrides: Partial<ReactiveControllerHost> = {}) {
-    return {
-      addController: () => undefined,
-      removeController: () => undefined,
-      requestUpdate: () => undefined,
-      updateComplete: Promise.resolve(true),
-      ...overrides,
-    } satisfies ReactiveControllerHost;
+  function createRenderer(
+    overrides: Partial<Parameters<typeof createChatState<ChatPageHost>>[0]> = {},
+  ) {
+    return { invalidate: () => undefined, updateComplete: Promise.resolve(true), ...overrides };
+  }
+
+  function createOwner(renderer: Parameters<typeof createChatState<ChatPageHost>>[0]) {
+    const controller = createChatState<ChatPageHost>(renderer);
+    onTestFinished(controller.dispose);
+    return { controller, dispose: controller.dispose };
   }
 
   function createInputHistoryKey(selectionStart: number, selectionEnd: number) {
@@ -2569,20 +2543,16 @@ describe("ChatStateController render lifecycle", () => {
     async (disconnect) => {
       const { promise: nextCommit, resolve: resolveCommit } = createDeferred<boolean>();
       let completion = Promise.resolve(true);
-      const controllers: ReactiveController[] = [];
       const requestUpdate = vi.fn(() => {
         completion = nextCommit;
       });
       const host = {
-        addController: (controller: ReactiveController) => controllers.push(controller),
-        removeController: () => undefined,
-        requestUpdate,
+        invalidate: requestUpdate,
         get updateComplete() {
           return completion;
         },
-      } satisfies ReactiveControllerHost;
-      const controller = new ChatStateController<ChatPageHost>(host);
-      controller.hostConnected();
+      } satisfies Parameters<typeof createChatState<ChatPageHost>>[0];
+      const { controller, dispose } = createOwner(host);
       const renderLifecycle = controller.createRenderLifecycle();
       const effect = vi.fn();
       renderLifecycle.afterCommit(effect);
@@ -2590,7 +2560,7 @@ describe("ChatStateController render lifecycle", () => {
       expect(requestUpdate).toHaveBeenCalledOnce();
       expect(effect).not.toHaveBeenCalled();
       if (disconnect) {
-        controller.hostDisconnected();
+        dispose();
       }
       resolveCommit(true);
       await nextCommit;
@@ -2599,14 +2569,12 @@ describe("ChatStateController render lifecycle", () => {
       } else {
         expect(effect).toHaveBeenCalledOnce();
       }
-      expect(controllers).toContain(controller);
     },
   );
 
   it("fully tears down realtime Talk when its state owner disconnects", () => {
-    const host = createControllerHost();
-    const controller = new ChatStateController<ChatPageHost>(host);
-    controller.hostConnected();
+    const host = createRenderer();
+    const { controller, dispose } = createOwner(host);
     const renderLifecycle = controller.createRenderLifecycle();
     const state = createPageState(createChatPageStateContext(), renderLifecycle, {
       dispatchEvent: () => true,
@@ -2630,7 +2598,7 @@ describe("ChatStateController render lifecycle", () => {
     state.realtimeTalkCameraError = true;
     controller.attach(state);
 
-    controller.hostDisconnected();
+    dispose();
 
     expect(stop).toHaveBeenCalledOnce();
     expect(state.realtimeTalkActive).toBe(false);
@@ -2646,12 +2614,12 @@ describe("ChatStateController render lifecycle", () => {
   });
 
   it("aborts attachment reads when a chat pane disconnects", () => {
-    const host = createControllerHost();
-    const controller = new ChatStateController<ChatPageHost>(host);
+    const host = createRenderer();
+    const { controller, dispose } = createOwner(host);
     const previousSignal = controller.attachmentReads.readSignal;
 
     controller.attachmentReads.updatePending(previousSignal, 1);
-    controller.hostDisconnected();
+    dispose();
 
     expect(previousSignal.aborted).toBe(true);
     expect(controller.attachmentReads.pendingReads).toBe(0);
@@ -2662,9 +2630,8 @@ describe("ChatStateController render lifecycle", () => {
 
   it("rejects lifecycle work from detached and replaced state epochs", async () => {
     const requestUpdate = vi.fn();
-    const host = createControllerHost({ requestUpdate });
-    const controller = new ChatStateController<ChatPageHost>(host);
-    controller.hostConnected();
+    const host = createRenderer({ invalidate: requestUpdate });
+    const { controller, dispose } = createOwner(host);
     const first = controller.createRenderLifecycle();
     const replacement = controller.createRenderLifecycle();
     const staleEffect = vi.fn();
@@ -2677,7 +2644,7 @@ describe("ChatStateController render lifecycle", () => {
     expect(staleEffect).not.toHaveBeenCalled();
     expect(staleCancel).toHaveBeenCalledOnce();
 
-    controller.hostDisconnected();
+    dispose();
     replacement.invalidate();
     replacement.afterCommit(staleEffect, staleCancel);
 
@@ -2685,8 +2652,8 @@ describe("ChatStateController render lifecycle", () => {
     expect(staleEffect).not.toHaveBeenCalled();
     expect(staleCancel).toHaveBeenCalledTimes(2);
 
-    controller.hostConnected();
-    const current = controller.createRenderLifecycle();
+    const renewed = createOwner(host);
+    const current = renewed.controller.createRenderLifecycle();
     const currentEffect = vi.fn();
     current.afterCommit(currentEffect);
     await Promise.resolve();
@@ -2708,11 +2675,10 @@ describe("ChatStateController render lifecycle", () => {
       .mockImplementation((id) => {
         frames.delete(id);
       });
-    const host = createControllerHost({
-      requestUpdate: vi.fn(),
+    const host = createRenderer({
+      invalidate: vi.fn(),
     });
-    const controller = new ChatStateController<ChatPageHost>(host);
-    controller.hostConnected();
+    const { controller, dispose } = createOwner(host);
     const renderLifecycle = controller.createRenderLifecycle();
     const painted = vi.fn();
 
@@ -2726,7 +2692,7 @@ describe("ChatStateController render lifecycle", () => {
     const secondFrame = frames.get(2);
     expect(secondFrame).toBeDefined();
 
-    controller.hostDisconnected();
+    dispose();
     secondFrame?.(0);
 
     expect(cancelAnimationFrame).toHaveBeenCalledWith(2);
@@ -2737,39 +2703,38 @@ describe("ChatStateController render lifecycle", () => {
     { handled: true, selection: 0 },
     { handled: false, selection: 5 },
   ] as const)(
-    "invalidates input history only when recall is handled: $handled",
+    "publishes the recalled draft only when history handles the key: $handled",
     ({ handled, selection }) => {
-      const requestUpdate = vi.fn();
-      const controller = new ChatStateController<ChatPageHost>(
-        createControllerHost({ requestUpdate }),
-      );
-      controller.hostConnected();
+      const { controller, dispose } = createOwner(createRenderer());
       const renderLifecycle = controller.createRenderLifecycle();
-      const navigateHistory = vi.fn().mockReturnValue({
-        handled,
-        preventDefault: handled,
-        restoreCaret: handled ? "up" : null,
-      });
       const state = createPageState(createChatPageStateContext(), renderLifecycle, {
         sessionKey: "agent:main:current",
         dispatchEvent: () => true,
         querySelector: () => null,
       });
+      const navigateHistory = vi.fn(() => {
+        if (handled) {
+          state.chatMessage = "recalled draft";
+        }
+        return { handled, preventDefault: handled, restoreCaret: handled ? "up" : null } as const;
+      });
       state.handleChatInputHistoryKey = navigateHistory;
+      const publishedDrafts: string[] = [];
+      let unsubscribe = () => {};
       try {
         controller.attach(state);
+        unsubscribe = controller.composerDraft.subscribe(() => {
+          publishedDrafts.push(controller.composerDraft.read().draft);
+        });
         const input = createInputHistoryKey(selection, selection);
         const result = state.handleChatInputHistoryKey!(input);
 
         expect(result.handled).toBe(handled);
         expect(navigateHistory).toHaveBeenCalledWith(input);
-        if (handled) {
-          expect(requestUpdate).toHaveBeenCalled();
-        } else {
-          expect(requestUpdate).not.toHaveBeenCalled();
-        }
+        expect(publishedDrafts).toEqual(handled ? ["recalled draft"] : []);
       } finally {
-        controller.hostDisconnected();
+        unsubscribe();
+        dispose();
       }
     },
   );
@@ -2862,19 +2827,18 @@ describe("image lightbox lifecycle", () => {
     );
 
     const source = "data:video/mp4;base64,AAAA";
-    const container = document.body.appendChild(document.createElement("div"));
-    render(
-      renderAssistantAttachments(
-        [
+    const mounted = mountSolid(() =>
+      createComponent(AssistantAttachments, {
+        attachments: [
           {
             type: "attachment",
             attachment: { kind: "video", label: "Clip", mimeType: "video/mp4", url: source },
           },
         ],
-        { onOpenImage: state.handleOpenImage },
-      ),
-      container,
+        options: { onOpenImage: state.handleOpenImage },
+      }),
     );
+    const { container } = mounted;
     const player = container.querySelector("openclaw-chat-video-player") as HTMLElement & {
       onExpand: (src: string) => void;
     };
@@ -2883,7 +2847,7 @@ describe("image lightbox lifecycle", () => {
 
     state.handleOpenImage({ kind: "video", src: "data:audio/mp3;base64,AAAA", title: "Audio" });
     expect(state.imageLightbox).toBeNull();
-    container.remove();
+    mounted.unmount();
   });
 
   it("invalidates immediately when beginning a deferred image open", () => {

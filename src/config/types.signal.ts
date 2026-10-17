@@ -1,3 +1,4 @@
+import type { ReactionLevel } from "../utils/reaction-level.js";
 import type { ReplyToMode } from "./types.base.js";
 import type {
   ChannelReactionConfig,
@@ -7,7 +8,7 @@ import type {
 } from "./types.channel-messaging-common.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
-export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
+export type SignalReactionLevel = ReactionLevel;
 export type SignalTransportConfig =
   | {
       kind: "managed-native";

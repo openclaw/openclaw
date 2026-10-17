@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseByPathAsync,
@@ -62,6 +63,30 @@ function fixture() {
 }
 
 describe("resident profile display and reference catalog", () => {
+  it("does not join hydration from before a committed profile change", async () => {
+    const options = fixture();
+    const profile = ensureProfileForEmail("changing@example.test", options);
+    const fetched = createDeferredCore();
+    const resume = createDeferredCore();
+    const execute = stateReads.executeExistingOpenClawStateRead;
+    vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementationOnce(
+      async (...args) => {
+        const reply = await execute(...args);
+        fetched.resolve();
+        await resume.promise;
+        return reply;
+      },
+    );
+    const before = prepareUserProfileCatalog(options);
+    await fetched.promise;
+    setUserProfileRole(profile.id, "reader", options);
+    const after = prepareUserProfileCatalog(options);
+    resume.resolve();
+    const current = await after;
+    releases.push(current.release, (await before).release);
+    expect(current.readCurrentIdentity(profile.id)?.role).toBe("reader");
+  });
+
   it("never opens native storage from an unprepared runtime read", async () => {
     const options = fixture();
     const profile = ensureProfileForEmail("cold@example.test", options);
@@ -89,10 +114,10 @@ describe("resident profile display and reference catalog", () => {
     const options = fixture();
     const absent = await prepareUserProfileCatalog(options);
     releases.push(absent.release);
-    expect(isUserProfileCatalogReady(options)).toBe(true);
+    expect(isUserProfileCatalogReady(options.path)).toBe(true);
     expect(fs.existsSync(options.path)).toBe(false);
     const profile = ensureProfileForEmail("appeared@example.test", options);
-    expect(isUserProfileCatalogReady(options)).toBe(false);
+    expect(isUserProfileCatalogReady(options.path)).toBe(false);
     const database = openOpenClawStateDatabase(options);
     await database.walMaintenance.stop();
     const native = vi.spyOn(database.db, "prepare");
@@ -100,8 +125,12 @@ describe("resident profile display and reference catalog", () => {
     releases.push(current.release);
     expect(current.readCurrentIdentity(profile.id)?.profileId).toBe(profile.id);
     expect(getUserProfileDisplay(profile.id, options).displayName).toBe("appeared");
-    expect(isUserProfileCatalogReady(options)).toBe(true);
+    expect(isUserProfileCatalogReady(options.path)).toBe(true);
     expect(native).not.toHaveBeenCalled();
+    absent.release();
+    expect(isUserProfileCatalogReady(options.path)).toBe(true);
+    current.release();
+    expect(isUserProfileCatalogReady(options.path)).toBe(false);
   });
 
   it("reads current batch identities through merges and refuses unsettled authority without host SQL", async () => {
@@ -284,7 +313,7 @@ describe("resident profile display and reference catalog", () => {
       fs.renameSync(replacement.path, options.path);
       expect(() => prepared.readCurrentFacts()).toThrow();
       expect(() => prepared.readCurrentProfile()).toThrow();
-      const seen = vi.fn(() => isUserProfileCatalogReady(options));
+      const seen = vi.fn(() => isUserProfileCatalogReady(options.path));
       releases.push(onUserProfilesChanged(seen));
       if (admission === "native") {
         openOpenClawStateDatabase(options);
@@ -492,7 +521,7 @@ describe("resident profile display and reference catalog", () => {
     }
   });
 
-  it("shares committed profile facts and one hydration across symlink and canonical locators", async () => {
+  it("shares one hydration per database across concurrent symlink and canonical readers", async () => {
     const canonical = fixture();
     const source = ensureProfileForEmail("alias-source@example.test", canonical);
     const target = ensureProfileForEmail("alias-target@example.test", canonical);
@@ -501,16 +530,32 @@ describe("resident profile display and reference catalog", () => {
     const alias = { path: path.join(roots.make("resident-profile-alias-"), "alias.sqlite") };
     paths.push(alias.path);
     fs.symlinkSync(canonical.path, alias.path);
+    const other = fixture();
+    const privateProfile = ensureProfileForEmail("private@example.test", other);
     const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    releases.push(
-      (await prepareUserProfileCatalog(alias)).release,
-      (await prepareUserProfileCatalog(canonical)).release,
+    const readers = await Promise.all(
+      Array.from({ length: 50 }, (_, index) => [
+        prepareUserProfileCatalog(index % 2 ? alias : canonical),
+        prepareUserProfileCatalog(other),
+      ]).flat(),
     );
+    releases.push(...readers.map((reader) => reader.release));
+    for (const [index, reader] of readers.entries()) {
+      expect(reader.readCurrentIdentity(source.id)?.profileId).toBe(
+        index % 2 ? undefined : source.id,
+      );
+      expect(reader.readCurrentIdentity(privateProfile.id)?.profileId).toBe(
+        index % 2 ? privateProfile.id : undefined,
+      );
+    }
     const release = (await prepareUserProfileCatalog(canonical)).release;
     releases.push(release);
     release();
     release();
-    expect(reads.mock.calls.map(([, command]) => command.type)).toEqual(["userProfiles.catalog"]);
+    expect(reads.mock.calls.map(([, command]) => command.type)).toEqual([
+      "userProfiles.catalog",
+      "userProfiles.catalog",
+    ]);
     reads.mockClear();
     const { db } = openOpenClawStateDatabase(canonical);
     expect(reads).not.toHaveBeenCalled();

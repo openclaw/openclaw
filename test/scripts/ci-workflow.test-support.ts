@@ -3,6 +3,8 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect } from "vitest";
 import { parse } from "yaml";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
@@ -10,11 +12,11 @@ import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 export const CHECKOUT_V6 = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 export const CACHE_V5 = "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
 export const CACHE_SAVE_V5 = "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
-export const SETUP_GO_V6 = "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e";
+export const SETUP_GO_V6 = "actions/setup-go@90ad2b35f69faf97585ad74d28fa006d2739b7af";
 export const UPLOAD_ARTIFACT_V7 =
-  "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+  "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9";
 export const DOWNLOAD_ARTIFACT_V8 =
-  "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
+  "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333";
 export const MANTIS_GITHUB_APP_CLIENT_ID = "Iv23liPJCozR0uHm6P7G";
 const SETUP_ANDROID_TOOLCHAIN_ACTION = ".github/actions/setup-android-toolchain/action.yml";
 export const MATURITY_SCORECARD_WORKFLOW = ".github/workflows/maturity-scorecard.yml";
@@ -22,6 +24,30 @@ export const AMBIGUOUS_MAIN_PUSH_DIAGNOSTIC =
   "::error title=ambiguous main push::github.event.before is zero; refusing to infer a diff base for a created or recreated main branch.";
 export const testNodeExecPath = resolveTestNodeExecPath();
 export const TSX_IMPORT = import.meta.resolve("tsx");
+
+export function expectIncludes(actual: unknown, values: readonly unknown[], message?: string) {
+  for (const value of values) {
+    expect(actual, message).toContain(value);
+  }
+}
+
+export function expectExcludes(actual: unknown, values: readonly unknown[], message?: string) {
+  for (const value of values) {
+    expect(actual, message).not.toContain(value);
+  }
+}
+
+export function evaluateWorkflow(
+  expression: unknown,
+  context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
+) {
+  return evaluateWorkflowExpression(expression, {
+    eventName: "pull_request",
+    repository: "openclaw/openclaw",
+    runAttempt: 1,
+    ...context,
+  });
+}
 
 export type WorkflowStep = {
   "continue-on-error"?: boolean;
@@ -36,6 +62,17 @@ export type WorkflowStep = {
 };
 
 export const readCiWorkflow = () => readWorkflow(".github/workflows/ci.yml");
+
+export function requiredWorkflowStep<T extends readonly { name?: string }[]>(
+  steps: T,
+  name: string,
+): T[number];
+export function requiredWorkflowStep(steps: readonly { name?: string }[], name: string) {
+  return expectDefined(
+    steps.find((step) => step.name === name),
+    name,
+  );
+}
 
 export function evaluateWorkflowExpression(
   expression: unknown,
@@ -112,6 +149,7 @@ export function evaluateWorkflowExpression(
     >;
     targetContextRef?: string;
     targetRef?: string;
+    testRuntimePolicy?: string;
     useGithubHostedRunners?: boolean;
     workflow?: string;
     workflowSha?: string;
@@ -202,6 +240,7 @@ export function evaluateWorkflowExpression(
       validation_tier: context.validationTier ?? "full",
       target_context_ref: context.targetContextRef ?? "",
       target_ref: context.targetRef ?? "",
+      test_runtime_policy: context.testRuntimePolicy ?? "",
       use_github_hosted_runners: context.useGithubHostedRunners ?? false,
       run_windows_ci: context.runWindowsCi ?? false,
       skip_defender_exclusions: context.skipDefenderExclusions ?? false,

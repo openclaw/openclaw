@@ -55,6 +55,8 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   resolveReplyDeliveryFacts?: ReplyDeliveryFactsObserver;
   /** Reset deferred terminal facts when the host admits a new attempt, before preparation. */
   onAttemptStart?: () => void;
+  /** Retire superseded terminal facts only after the host accepts isolated recovery. */
+  onAttemptTerminalReplaced?: () => void;
   /** Keep a bounded auxiliary tool set directly visible after runtime admission. */
   disableToolSearch?: true;
   /** Restrict history/search to an explicitly observed session, not this run's store key. */
@@ -101,6 +103,8 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
     compactionCountOwner?: "subscription" | "caller";
     /** Current-run committed plan facts; retained across attempts, never loaded from history. */
     completionCheck?: EmbeddedRunCompletionCheck;
+    /** Host-private receiver for the native owner's admitted Gateway-local settings cwd. */
+    prepareContinuationRetryCount?: (workspace: { cwd: string }) => void;
   };
 
 export type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {

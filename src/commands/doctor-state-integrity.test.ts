@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type * as BundledIds from "../channels/plugins/bundled-ids.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -45,9 +46,9 @@ import {
   formatWindowsCloudSyncedStateDirWarning,
 } from "./doctor-state-storage-platform.js";
 
-vi.mock("../channels/plugins/bundled-ids.js", () => ({
+vi.mock("../channels/plugins/bundled-ids.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof BundledIds>()),
   listBundledChannelIds: () => ["matrix", "whatsapp"],
-  listBundledChannelPluginIds: () => ["matrix", "whatsapp"],
 }));
 
 vi.mock("../channels/plugins/persisted-auth-state.js", () => ({

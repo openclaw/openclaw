@@ -1,6 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { createMemo, Match, Show, Switch } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { EventStream } from "../../lib/board/provider-signals.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
@@ -9,6 +10,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { WidgetRenderTimeoutError } from "../../lib/widget-sandbox-host.ts";
 import { postWidgetTheme } from "../../lib/widget-theme.ts";
@@ -57,18 +59,16 @@ function resolveBoardFrameFailureMessage(
 
 type FrameRefresh = (name: string) => Promise<void>;
 
-type BoardWidgetFrameLifecycleHost = {
+type BoardWidgetFrameOwnerHost = {
   active: () => boolean;
   loadingCovered?: () => boolean;
   bridgeEnabled?: () => boolean;
   connected: () => boolean;
   context: () => ApplicationContext | undefined;
   refreshFrame: () => FrameRefresh | undefined;
-  requestUpdate: () => void;
   reportContentHeight: (name: string, height: number) => void;
   scrollBy: (deltaY: number) => void;
   resolveFrameUrl: () => BoardWidgetFrameUrl | undefined;
-  root: () => ParentNode;
   widget: () => BoardWidget | undefined;
 };
 
@@ -143,8 +143,10 @@ class BoardWidgetTicketRefresh {
   }
 }
 
-export class BoardWidgetFrameLifecycle {
+export class BoardWidgetFrameOwner {
+  readonly changes = new EventStream<void>();
   error = "";
+  private frame?: HTMLIFrameElement;
   private waiting = false;
   private renderStalled = false;
 
@@ -158,13 +160,13 @@ export class BoardWidgetFrameLifecycle {
   private sandboxHost: BoardWidgetSandboxHost | null = null;
   private contentVisible = false;
   private revealFrame = 0;
-  private readonly confirmation = new McpAppConfirm(() => this.host.requestUpdate());
+  private readonly confirmation = new McpAppConfirm(() => this.changes.emit());
   private readonly ticketRefresh = new BoardWidgetTicketRefresh(
     () => this.host.widget()?.viewTicket,
     () => this.host.active() && !documentHidden() && this.gatewayAvailable(),
   );
 
-  constructor(private readonly host: BoardWidgetFrameLifecycleHost) {}
+  constructor(private readonly host: BoardWidgetFrameOwnerHost) {}
 
   get presentationReady(): boolean {
     return this.contentVisible || this.waiting || this.renderStalled || Boolean(this.error);
@@ -207,8 +209,8 @@ export class BoardWidgetFrameLifecycle {
       this.connect();
       this.sandboxHost?.setActive(this.gatewayAvailable());
       // The inner document may have finished loading while this tab was hidden.
-      const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
-      if (frame) {
+      const frame = this.frame;
+      if (frame?.isConnected) {
         this.postBoardHostState(frame);
       }
     } else {
@@ -245,13 +247,10 @@ export class BoardWidgetFrameLifecycle {
     this.updateSandboxHost();
   }
 
-  render(
-    widget: BoardWidget | (() => BoardWidget),
-    revision: () => number = () => 0,
-  ): SolidJSX.Element {
-    const current = () => (typeof widget === "function" ? widget() : widget);
+  render(current: () => BoardWidget): SolidJSX.Element {
+    const changes = projectOwner(this.changes, () => this);
     const view = createMemo(() => {
-      revision();
+      changes.revision();
       const value = current();
       const resolveFrameUrl = this.host.resolveFrameUrl();
       if (!resolveFrameUrl) {
@@ -277,6 +276,7 @@ export class BoardWidgetFrameLifecycle {
         when={Boolean(view().sandboxSrc)}
         fallback={
           <iframe
+            ref={(frame) => (this.frame = frame)}
             class="board-widget__frame"
             allow="fullscreen"
             sandbox="allow-scripts"
@@ -286,44 +286,42 @@ export class BoardWidgetFrameLifecycle {
             src={view().src}
             onError={() => this.refreshFailedFrame(current())}
             onLoad={(event) => {
-              this.notifyBoardHost(event);
+              this.postBoardHostState(event.currentTarget);
               this.verifyAuthorization(event, current());
             }}
           />
         }
       >
         <div class="board-widget__frame-pane">
-          <McpAppConfirmation confirmation={this.confirmation} revision={revision()} />
+          <McpAppConfirmation confirmation={this.confirmation} revision={changes.revision()} />
           <Show when={!view().visible && !view().covered}>
-            <Show
-              when={view().stalled}
+            <Switch
               fallback={
-                <Show
-                  when={view().waiting}
-                  fallback={
-                    <PanelLoadingSkeleton
-                      variant="discussion"
-                      label={t("common.loading")}
-                      compact={false}
-                      overlay
-                    />
-                  }
-                >
-                  <div class="board-widget__notice" role="status">
-                    {t("board.widget.waitingForConnection")}
-                  </div>
-                </Show>
+                <PanelLoadingSkeleton
+                  variant="discussion"
+                  label={t("common.loading")}
+                  compact={false}
+                  overlay
+                />
               }
             >
-              <div class="board-widget__notice" role="status">
-                {t("board.widget.resourceUnavailable")}
-                <button class="btn btn--small" onClick={() => this.retryContent()}>
-                  {t("common.retry")}
-                </button>
-              </div>
-            </Show>
+              <Match when={view().stalled}>
+                <div class="board-widget__notice" role="status">
+                  {t("board.widget.resourceUnavailable")}
+                  <button class="btn btn--small" onClick={() => this.retryContent()}>
+                    {t("common.retry")}
+                  </button>
+                </div>
+              </Match>
+              <Match when={view().waiting}>
+                <div class="board-widget__notice" role="status">
+                  {t("board.widget.waitingForConnection")}
+                </div>
+              </Match>
+            </Switch>
           </Show>
           <iframe
+            ref={(frame) => (this.frame = frame)}
             class="board-widget__frame"
             allow="fullscreen"
             style={{ opacity: view().visible ? undefined : 0 }}
@@ -352,7 +350,7 @@ export class BoardWidgetFrameLifecycle {
                 ? this.sandboxHost.handleFrameError()
                 : this.refreshFailedFrame(current())
             }
-            onLoad={(event) => this.notifyBoardHost(event)}
+            onLoad={(event) => this.postBoardHostState(event.currentTarget)}
           />
         </div>
       </Show>
@@ -365,7 +363,7 @@ export class BoardWidgetFrameLifecycle {
     }
     this.error = error;
     if (notify) {
-      this.host.requestUpdate();
+      this.changes.emit();
     }
   }
 
@@ -397,7 +395,7 @@ export class BoardWidgetFrameLifecycle {
       this.revealFrame = window.requestAnimationFrame(() => {
         this.revealFrame = 0;
         this.contentVisible = true;
-        this.host.requestUpdate();
+        this.changes.emit();
       });
     });
   }
@@ -473,13 +471,6 @@ export class BoardWidgetFrameLifecycle {
           this.refreshFailedFrame(widget);
         }
       });
-  }
-
-  private notifyBoardHost(event: Event): void {
-    const frame = event.currentTarget;
-    if (frame instanceof HTMLIFrameElement) {
-      this.postBoardHostState(frame);
-    }
   }
 
   private postBoardHostState(frame: HTMLIFrameElement): void {
@@ -559,7 +550,8 @@ export class BoardWidgetFrameLifecycle {
               this.host.active() &&
               this.host.connected() &&
               this.gatewayAvailable() &&
-              frame === this.host.root().querySelector(".board-widget__frame") &&
+              frame === this.frame &&
+              frame.isConnected &&
               current?.name === widget.name &&
               current.revision === widget.revision &&
               current.viewGeneration === widget.viewGeneration &&
@@ -582,7 +574,7 @@ export class BoardWidgetFrameLifecycle {
         this.frameFailureKey = "";
         this.frameRefreshAttempts = 0;
         this.setError("", false);
-        this.host.requestUpdate();
+        this.changes.emit();
       },
       onRendered: () => {
         // The proxy replaces its inner document after the outer load event.
@@ -597,7 +589,7 @@ export class BoardWidgetFrameLifecycle {
       onError: (error) => {
         if (error instanceof WidgetRenderTimeoutError) {
           this.renderStalled = true;
-          this.host.requestUpdate();
+          this.changes.emit();
           return;
         }
         this.setError(formatUiError(error));
@@ -609,16 +601,16 @@ export class BoardWidgetFrameLifecycle {
     this.renderStalled = false;
     this.waiting = false;
     this.sandboxHost?.reset();
-    this.host.requestUpdate();
+    this.changes.emit();
   }
 
   private waitForConnection(): void {
     this.waiting = true;
-    this.host.requestUpdate();
+    this.changes.emit();
   }
 
   private updateSandboxHost(): void {
-    const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
+    const frame = this.frame;
     const widget = this.host.widget();
     if (
       !frame?.isConnected ||
@@ -646,8 +638,8 @@ export class BoardWidgetFrameLifecycle {
     if (!this.host.connected()) {
       return;
     }
-    const frame = this.host.root().querySelector<HTMLIFrameElement>(".board-widget__frame");
-    if (!frame || event.source !== frame.contentWindow) {
+    const frame = this.frame;
+    if (!frame?.isConnected || event.source !== frame.contentWindow) {
       return;
     }
     const widget = this.host.widget();

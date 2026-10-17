@@ -1,4 +1,5 @@
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   GatewayErrorDetailCodes,
@@ -260,11 +261,8 @@ async function createSuggestedTaskSession(
   if (!sessionResponse.ok) {
     return await fail(sessionKey, sessionResponse.error);
   }
-  const { payload } = sessionResponse;
-  const key =
-    payload && typeof payload === "object" && typeof (payload as { key?: unknown }).key === "string"
-      ? (payload as { key: string }).key
-      : undefined;
+  const payload = asOptionalRecord(sessionResponse.payload);
+  const key = typeof payload?.key === "string" ? payload.key : undefined;
   if (!key) {
     return await fail(
       sessionKey,
@@ -289,17 +287,11 @@ async function createSuggestedTaskSession(
     if (sendError) {
       return await fail(key, sendError);
     }
-  } else {
-    const result = payload as { runError?: unknown; runStarted?: unknown };
-    if (result.runStarted !== true) {
-      const runMessage =
-        result.runError &&
-        typeof result.runError === "object" &&
-        typeof (result.runError as { message?: unknown }).message === "string"
-          ? (result.runError as { message: string }).message
-          : "initial task did not start";
-      return await fail(key, errorShape(ErrorCodes.UNAVAILABLE, runMessage));
-    }
+  } else if (payload?.runStarted !== true) {
+    const runError = asOptionalRecord(payload?.runError);
+    const runMessage =
+      typeof runError?.message === "string" ? runError.message : "initial task did not start";
+    return await fail(key, errorShape(ErrorCodes.UNAVAILABLE, runMessage));
   }
   return finishSuggestedTaskAcceptance({ ...params, sessionKey: key });
 }

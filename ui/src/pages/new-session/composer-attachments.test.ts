@@ -6,7 +6,7 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
-import { NewSessionComposerTextareaController } from "./composer-controller.ts";
+import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
 import { NewSessionComposer, type NewSessionComposerOptions } from "./composer.tsx";
 import { NewSessionModelControl } from "./model-control.ts";
 
@@ -33,7 +33,7 @@ it.each(["owner", "tile"] as const)(
       () => redraw(),
       () => {},
     );
-    const textareaController = new NewSessionComposerTextareaController();
+    const composerTextarea = createNewSessionComposerTextarea();
     const modelControl = new NewSessionModelControl(() => {});
     const currentOptions = (): NewSessionComposerOptions => ({
       agentId: "main",
@@ -45,9 +45,9 @@ it.each(["owner", "tile"] as const)(
       message: "Keep this draft",
       modelControl,
       requiresModifier: false,
-      requestUpdate: redraw,
+      onChange: redraw,
       submitting: false,
-      textareaController,
+      composerTextarea,
       onInput: () => {},
       onSubmit: () => {},
     });
@@ -70,7 +70,7 @@ it.each(["owner", "tile"] as const)(
     );
     onTestFinished(() => {
       attachmentDraft.reset();
-      textareaController.disconnect();
+      composerTextarea.disconnect();
       mounted.unmount();
     });
     const composer = expectDefined(

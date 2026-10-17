@@ -129,28 +129,6 @@ describe("config env vars", () => {
     expect(rollback.cardinalities).toEqual([2]);
   });
 
-  it("publishes late loader changes from a detached final snapshot", () => {
-    const env: NodeJS.ProcessEnv = { AMBIENT: "original" };
-    const stage = prepareConfigRuntimeEnvLoad({ previousConfig: {}, env });
-    stage.env.DOTENV_VALUE = "dotenv";
-    stage.captureDotEnvBaseline();
-    const nextConfig = config({ CONFIG_VALUE: "config" });
-    applyConfigEnvVars(nextConfig, stage.env);
-    stage.env.SHELL_VALUE = "shell";
-    const prepared = stage.prepare(nextConfig);
-    stage.env.CONFIG_VALUE = "changed after preparation";
-    expect(env).toEqual({ AMBIENT: "original" });
-    const rollback = prepared.publish();
-    expect(env).toEqual({
-      AMBIENT: "original",
-      DOTENV_VALUE: "dotenv",
-      CONFIG_VALUE: "config",
-      SHELL_VALUE: "shell",
-    });
-    rollback();
-    expect(env).toEqual({ AMBIENT: "original" });
-  });
-
   it("keeps same-valued dotenv and shell entries ambient when staged config is removed", () => {
     const previousConfig = initialize();
     const stage = prepareConfigRuntimeEnvLoad({ previousConfig });

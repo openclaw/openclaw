@@ -21,7 +21,10 @@ import {
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIStringContentWrapper,
 } from "../../llm/providers/stream-wrappers/openai.js";
-import { createOpenRouterSystemCacheWrapper } from "../../llm/providers/stream-wrappers/proxy.js";
+import {
+  createOpenRouterSystemCacheWrapper,
+  OPENROUTER_RESPONSE_CACHE_TTL_KEYS,
+} from "../../llm/providers/stream-wrappers/proxy.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { SimpleStreamOptions } from "../../llm/types.js";
 import {
@@ -83,6 +86,8 @@ export function resolveExtraParams(params: {
     });
   const sources = [defaultParams, modelParams, agentModelParams, agentParams];
   const merged = Object.assign({}, ...sources);
+  canonicalizeExtraParamAlias(merged, sources, ["serviceTier", "service_tier"]);
+  canonicalizeExtraParamAlias(merged, sources, ["fastMode", "fast_mode"]);
   canonicalizeExtraParamAlias(merged, sources, ["parallel_tool_calls", "parallelToolCalls"]);
   canonicalizeExtraParamAlias(
     merged,
@@ -125,6 +130,7 @@ function resolveSupportedTransport(value: unknown): AgentRuntimeTransport | unde
 
 export function resolvePreparedExtraParams(params: {
   cfg: OpenClawConfig | undefined;
+  transportConfig?: OpenClawConfig;
   provider: string;
   modelId: string;
   agentDir?: string;
@@ -146,6 +152,12 @@ export function resolvePreparedExtraParams(params: {
     ...sanitizeExtraParamsRecord(resolvedExtraParams),
     ...override,
   };
+  canonicalizeExtraParamAlias(
+    merged,
+    [resolvedExtraParams, override],
+    ["serviceTier", "service_tier"],
+  );
+  canonicalizeExtraParamAlias(merged, [resolvedExtraParams, override], ["fastMode", "fast_mode"]);
   canonicalizeMaxTokensParam({
     merged,
     sources: [resolvedExtraParams, override],
@@ -164,13 +176,13 @@ export function resolvePreparedExtraParams(params: {
   const { plugin } = ensureProviderRuntimePluginHandle({
     provider: params.provider,
     modelId: params.modelId,
-    config: params.cfg,
+    config: params.transportConfig ?? params.cfg,
     workspaceDir: params.workspaceDir,
     runtimeHandle:
       params.providerRuntimeHandle ?? getModelProviderRuntimePluginHandle(params.model),
   });
   const context = {
-    config: params.cfg,
+    config: params.transportConfig ?? params.cfg,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     provider: params.provider,
@@ -269,7 +281,6 @@ function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
   provider: string,
-  model?: ProviderRuntimeModel,
 ): StreamFn | undefined {
   if (!extraParams || Object.keys(extraParams).length === 0) {
     return undefined;
@@ -353,14 +364,6 @@ function createStreamFnWithExtraParams(
       candidate?.baseUrl,
     );
 
-  if (log.isEnabled("debug")) {
-    const initialCacheRetention = resolveModelCacheRetention(model);
-    if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
-      const debugParams = { ...streamParams, cacheRetention: initialCacheRetention };
-      log.debug(`creating streamFn wrapper with params: ${JSON.stringify(debugParams)}`);
-    }
-  }
-
   const underlying = requireBaseStreamFn(baseStreamFn);
   return (callModel, context, options) => {
     const cacheRetention = resolveModelCacheRetention(callModel);
@@ -392,12 +395,7 @@ function canonicalizeExtraParamAlias(
 
 const OPENROUTER_RESPONSE_CACHE_PARAM_ALIASES = [
   ["responseCache", "response_cache"],
-  [
-    "responseCacheTtlSeconds",
-    "response_cache_ttl_seconds",
-    "responseCacheTtl",
-    "response_cache_ttl",
-  ],
+  OPENROUTER_RESPONSE_CACHE_TTL_KEYS,
   ["responseCacheClear", "response_cache_clear"],
 ] as const;
 
@@ -426,9 +424,6 @@ function createParallelToolCallsWrapper(
     if (!GPT_PARALLEL_TOOL_CALLS_APIS.has(model.api)) {
       return underlying(model, context, options);
     }
-    log.debug(
-      `applying parallel_tool_calls=${enabled} for ${model.provider ?? "unknown"}/${model.id ?? "unknown"} api=${model.api}`,
-    );
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
       payloadObj.parallel_tool_calls = enabled;
     });
@@ -437,14 +432,11 @@ function createParallelToolCallsWrapper(
 
 const DEEPSEEK_V4_MODEL_IDS = new Set(["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"]);
 
-function normalizeCompatibleModelId(modelId: unknown): string | undefined {
-  if (typeof modelId !== "string") {
-    return undefined;
-  }
+function normalizeCompatibleModelId(modelId: string): string {
   const normalized = modelId.trim().toLowerCase();
   const suffixIndex = normalized.indexOf(":");
   const withoutSuffix = suffixIndex === -1 ? normalized : normalized.slice(0, suffixIndex);
-  return withoutSuffix.split("/").pop();
+  return withoutSuffix.slice(withoutSuffix.lastIndexOf("/") + 1);
 }
 
 function isOpenAICompletionsModel(
@@ -452,17 +444,10 @@ function isOpenAICompletionsModel(
   modelIds: ReadonlySet<string>,
 ): boolean {
   const normalizedModelId = normalizeCompatibleModelId(model.id);
-  return (
-    model.api === "openai-completions" &&
-    normalizedModelId !== undefined &&
-    modelIds.has(normalizedModelId)
-  );
+  return model.api === "openai-completions" && modelIds.has(normalizedModelId);
 }
 
-function isMicrosoftFoundryProviderId(provider: unknown): boolean {
-  if (typeof provider !== "string") {
-    return false;
-  }
+function isMicrosoftFoundryProviderId(provider: string): boolean {
   const normalizedProvider = provider.trim().toLowerCase();
   return (
     normalizedProvider === "microsoft-foundry" ||
@@ -536,6 +521,7 @@ export function applyExtraParamsToAgent(
   resolvedTransport?: AgentRuntimeTransport,
   options?: {
     preparedExtraParams?: Record<string, unknown>;
+    transportConfig?: OpenClawConfig;
     modelCallUrgency?: ModelCallUrgency;
     auth?: ProviderPrepareExtraParamsContext["auth"];
     nativeWebSearchPolicyContext?: NativeWebSearchToolPolicyParams;
@@ -544,7 +530,7 @@ export function applyExtraParamsToAgent(
   const selectedModel = { provider, modelId };
   const providerRuntimeHandle = ensureProviderRuntimePluginHandle({
     ...selectedModel,
-    config: cfg,
+    config: options?.transportConfig ?? cfg,
     workspaceDir,
     runtimeHandle: getModelProviderRuntimePluginHandle(model),
   });
@@ -553,6 +539,7 @@ export function applyExtraParamsToAgent(
     options?.preparedExtraParams ??
     resolvePreparedExtraParams({
       cfg,
+      transportConfig: options?.transportConfig,
       ...selectedModel,
       extraParamsOverride,
       thinkingLevel,
@@ -582,7 +569,7 @@ export function applyExtraParamsToAgent(
   });
   const pluginWrappedStreamFn =
     providerRuntimeHandle.plugin?.wrapStreamFn?.({
-      config: cfg,
+      config: options?.transportConfig ?? cfg,
       agentDir,
       workspaceDir,
       agentId,
@@ -604,15 +591,9 @@ export function applyExtraParamsToAgent(
       ? stripRequestScopedExtraParams(effectiveExtraParams)
       : effectiveExtraParams;
   const streamParams = override ? { ...baseExtraParams, ...override } : baseExtraParams;
-  const wrappedStreamFn = createStreamFnWithExtraParams(
-    agent.streamFn,
-    streamParams,
-    provider,
-    model,
-  );
+  const wrappedStreamFn = createStreamFnWithExtraParams(agent.streamFn, streamParams, provider);
 
   if (wrappedStreamFn) {
-    log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
     agent.streamFn = wrappedStreamFn;
   }
 
@@ -622,9 +603,6 @@ export function applyExtraParamsToAgent(
       thinkingLevel,
     })
   ) {
-    log.debug(
-      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
-    );
     agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
   const providerWrapperHandled =
@@ -695,9 +673,7 @@ export function applyExtraParamsToAgent(
   );
   if (typeof rawParallelToolCalls === "boolean") {
     agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, rawParallelToolCalls);
-  } else if (rawParallelToolCalls === null) {
-    log.debug("parallel_tool_calls suppressed by null override, skipping injection");
-  } else if (rawParallelToolCalls !== undefined) {
+  } else if (rawParallelToolCalls != null) {
     const summary =
       typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
     log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);

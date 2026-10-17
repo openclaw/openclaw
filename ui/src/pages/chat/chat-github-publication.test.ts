@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+import { createComponent, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-controller.ts";
+import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-owner.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   account,
   confirmation,
@@ -15,7 +16,7 @@ import {
   settled,
   shared,
 } from "./chat-github-publication.test-support.ts";
-import { renderGitHubPublicationAction } from "./components/chat-github-publication.ts";
+import { GitHubPublicationAction } from "./components/chat-github-publication.tsx";
 
 describe("explicit GitHub publication", () => {
   it("does not present an accepted publication status read as a new write", async () => {
@@ -34,8 +35,13 @@ describe("explicit GitHub publication", () => {
     request.mockImplementationOnce(() => status.promise);
     pending.onRefresh();
     const container = document.createElement("div");
+    let unmount: (() => void) | undefined;
     try {
-      render(renderGitHubPublicationAction(controller.view()!), container);
+      unmount = mountSolid(
+        () => createComponent(GitHubPublicationAction, { publication: controller.view()! }),
+        { container },
+      ).unmount;
+      flush();
       expect(container.textContent).not.toContain("Publishing");
       expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.disabled).toBe(true);
       expect(request).toHaveBeenLastCalledWith("sessions.github.status", {
@@ -49,7 +55,7 @@ describe("explicit GitHub publication", () => {
     } finally {
       status.resolve({ result: accepted, confirmation: null });
       await settled(controller);
-      render(null, container);
+      unmount?.();
     }
   });
 
@@ -303,13 +309,21 @@ describe("explicit GitHub publication", () => {
     const personalOnly = setup({ ...options, shared: null });
     expect((await settled(personalOnly.controller)).selection).toBeNull();
     const container = document.createElement("div");
+    let unmount: (() => void) | undefined;
     personalOnly.request.mockResolvedValueOnce({
       requestId,
       status: "requested",
       message: "Accepted.",
     });
     try {
-      render(renderGitHubPublicationAction(personalOnly.controller.view()!), container);
+      unmount = mountSolid(
+        () =>
+          createComponent(GitHubPublicationAction, {
+            publication: personalOnly.controller.view()!,
+          }),
+        { container },
+      ).unmount;
+      flush();
       expect(container.querySelector('[aria-label="Publication account"]')).toBeNull();
       const button = container.querySelector<HTMLButtonElement>(".chat-pr__create");
       expect(button?.textContent?.trim()).toBe("Publish as @alice-tools");
@@ -323,7 +337,7 @@ describe("explicit GitHub publication", () => {
         selection: { source: "personal", account, generation },
       });
     } finally {
-      render(null, container);
+      unmount?.();
     }
   });
 
