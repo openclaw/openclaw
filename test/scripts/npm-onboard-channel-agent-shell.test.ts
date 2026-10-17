@@ -30,42 +30,51 @@ function sha256(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
+function writeFixture(file: string, content: string | Record<string, unknown>, executable = false) {
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, typeof content === "string" ? content : JSON.stringify(content), {
+    mode: executable ? 0o755 : undefined,
+  });
+}
+
+function installArgs(id: string, source: boolean) {
+  return [
+    "plugins",
+    "install",
+    ...(source ? [`npm:@openclaw/${id}@${version}`, "--pin"] : [id]),
+    "--accept-capabilities",
+  ];
+}
+
 function registryFixture(root: string, scenario: Scenario): NodeJS.ProcessEnv {
   const artifactDir = join(root, "registry-artifact");
   const staging = join(root, "staging");
-  mkdirSync(join(staging, "package"), { recursive: true });
   mkdirSync(artifactDir);
   // Extra verified companions must not select source mode on their own.
   const packages = ["codex", "discord", "slack"]
     .filter((id) => scenario.companion !== "missing" || id !== scenario.channel)
     .map((id) => {
       const name = `@openclaw/${id}`;
-      writeFileSync(
-        join(staging, "package/package.json"),
-        JSON.stringify({
-          name:
-            scenario.companion === "wrong-identity" && id === scenario.channel
-              ? "@openclaw/other"
-              : name,
-          version,
-        }),
-      );
+      writeFixture(join(staging, "package/package.json"), {
+        name:
+          scenario.companion === "wrong-identity" && id === scenario.channel
+            ? "@openclaw/other"
+            : name,
+        version,
+      });
       const tarball = `${id}.tgz`;
       const tarballPath = join(artifactDir, tarball);
       execFileSync("tar", ["-czf", tarballPath, "-C", staging, "package"]);
       return { name, version, tarball, sha256: sha256(tarballPath) };
     });
   const manifest = join(artifactDir, "prepublish-plugin-registry.json");
-  writeFileSync(
-    manifest,
-    JSON.stringify({
-      schema: "openclaw.prepublish-plugin-registry/v1",
-      schemaVersion: 1,
-      candidateVersion: version,
-      sourceSha,
-      packages,
-    }),
-  );
+  writeFixture(manifest, {
+    schema: "openclaw.prepublish-plugin-registry/v1",
+    schemaVersion: 1,
+    candidateVersion: version,
+    sourceSha,
+    packages,
+  });
   return {
     OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: artifactDir,
     OPENCLAW_DOCKER_E2E_SELECTED_SHA: sourceSha,
@@ -83,15 +92,13 @@ function runScenario(scenario: Scenario = {}) {
   const redactorPath = join(root, "redactor.mjs");
   const channel = scenario.channel ?? "telegram";
   const bundled = scenario.bundled ?? channel === "telegram";
-  mkdirSync(bin);
-  mkdirSync(home);
-  mkdirSync(join(home, ".openclaw"));
+  mkdirSync(join(home, ".openclaw"), { recursive: true });
   if (scenario.dirtyState) {
-    writeFileSync(join(home, ".openclaw", "existing-state"), "unrelated fixture state");
+    writeFixture(join(home, ".openclaw", "existing-state"), "unrelated fixture state");
   }
   mkdirSync(packageRoot);
-  writeFileSync(eventsPath, "");
-  writeFileSync(
+  writeFixture(eventsPath, "");
+  writeFixture(
     redactorPath,
     'export const redactSensitiveText = (text) => text.replaceAll("synthetic-private-doctor", "[redacted]");\n',
   );
@@ -99,7 +106,7 @@ function runScenario(scenario: Scenario = {}) {
     mkdirSync(join(packageRoot, "dist/extensions", channel), { recursive: true });
   }
   const cli = join(bin, "openclaw");
-  writeFileSync(
+  writeFixture(
     cli,
     `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -151,9 +158,9 @@ function installChannelDependency() {
   fs.writeFileSync(file, "{}");
 }
 `,
-    { mode: 0o755 },
+    true,
   );
-  writeFileSync(
+  writeFixture(
     join(bin, "node"),
     `#!/bin/bash
 if [ "$1" = scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs ]; then
@@ -168,7 +175,7 @@ if [ "$1" = scripts/e2e/lib/npm-onboard-channel-agent/execution-identity.mjs ]; 
 fi
 exec "$REAL_NODE" "$@"
 `,
-    { mode: 0o755 },
+    true,
   );
 
   // Execute the actual container program. Only container /tmp paths are mapped
@@ -243,8 +250,9 @@ openclaw_e2e_stop_process() {
     .map((file) => join(root, file))
     .map((file) => readFileSync(file, "utf8"))
     .join("\n");
-  expect(result.error, `${result.stdout}\n${result.stderr}\n${logs}`).toBeUndefined();
-  return { result, events, installs, detail: `${result.stdout}\n${result.stderr}\n${logs}` };
+  const detail = `${result.stdout}\n${result.stderr}\n${logs}`;
+  expect(result.error, detail).toBeUndefined();
+  return { result, events, installs, detail };
 }
 
 describe("npm onboarding fixture consent", () => {
@@ -260,8 +268,8 @@ describe("npm onboarding fixture consent", () => {
     const root = tempDirs.make("openclaw-onboard-empty-log-");
     const logPath = join(root, "onboard.json");
     const redactorPath = join(root, "redactor.mjs");
-    writeFileSync(logPath, "");
-    writeFileSync(redactorPath, 'throw new Error("empty logs must not load redaction");\n');
+    writeFixture(logPath, "");
+    writeFixture(redactorPath, 'throw new Error("empty logs must not load redaction");\n');
     const result = spawnSync(
       "/bin/bash",
       [
@@ -273,9 +281,7 @@ describe("npm onboarding fixture consent", () => {
       ],
       { encoding: "utf8", env: { ...process.env, OPENCLAW_E2E_REDACTOR_MODULE: redactorPath } },
     );
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toBe(`--- ${logPath} ---\n`);
+    expect(result).toMatchObject({ status: 0, stderr: "", stdout: `--- ${logPath} ---\n` });
   });
 
   it.each([false, true])(
@@ -283,17 +289,7 @@ describe("npm onboarding fixture consent", () => {
     (registry) => {
       const { result, events, installs, detail } = runScenario({ registry });
       expect(result.status, detail).toBe(0);
-      expect(installs).toEqual([
-        registry
-          ? [
-              "plugins",
-              "install",
-              `npm:@openclaw/codex@${version}`,
-              "--pin",
-              "--accept-capabilities",
-            ]
-          : ["plugins", "install", "codex", "--accept-capabilities"],
-      ]);
+      expect(installs).toEqual([installArgs("codex", registry)]);
       const onboard = events.find((args) => args[0] === "onboard");
       expect(onboard).toEqual(
         (
@@ -357,18 +353,7 @@ describe("npm onboarding fixture consent", () => {
     const { result, installs, detail } = runScenario({ ...scenario, registry: true });
     expect(result.status, detail).toBe(0);
     expect(installs.slice(1)).toEqual(
-      scenario.bundled
-        ? []
-        : [
-            [
-              "plugins",
-              "install",
-              ...(scenario.sourcePlugin
-                ? [`npm:@openclaw/${scenario.channel}@${version}`, "--pin"]
-                : [scenario.channel]),
-              "--accept-capabilities",
-            ],
-          ],
+      scenario.bundled ? [] : [installArgs(scenario.channel, scenario.sourcePlugin ?? false)],
     );
   });
 

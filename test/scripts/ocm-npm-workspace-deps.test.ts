@@ -27,6 +27,9 @@ const packageDocsMapPath = fileURLToPath(
 );
 const postpackPath = fileURLToPath(new URL("../../scripts/openclaw-postpack.mjs", import.meta.url));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const runtimeProfile = { OPENCLAW_OCM_RUNTIME_BUILD_PROFILE: "sourcePerformance" };
+const buildDate = () => new Date("2026-07-11T12:34:56.000Z");
+const installFlags = ["--omit=dev", "--no-save", "--package-lock=false"];
 const sourceChangelog = `# Changelog
 
 ## 2026.8.1
@@ -38,7 +41,21 @@ const sourceChangelog = `# Changelog
 
 function packageFixture(root: string, fields: Record<string, unknown>) {
   mkdirSync(root, { recursive: true });
-  writeFileSync(join(root, "package.json"), `${JSON.stringify(fields)}\n`);
+  writeFileSync(join(root, "package.json"), `${JSON.stringify({ version: "1.0.0", ...fields })}\n`);
+}
+
+function workspaceFixture(
+  root: string,
+  name: string,
+  exported: string,
+  dependencies?: Record<string, string>,
+) {
+  packageFixture(root, { name, main: "index.js", dependencies });
+  writeFileSync(join(root, "index.js"), `export const ${exported} = true;\n`);
+}
+
+function runNode(root: string, file: string, ...args: string[]) {
+  return execFileSync(process.execPath, [file, ...args], { cwd: root, stdio: "pipe" });
 }
 
 function changelogFixture(prefix: string) {
@@ -61,9 +78,7 @@ describe("OCM npm workspace dependency adapter", () => {
 
   it("uses a prepared runtime-only pack for the diagnostic build profile", () => {
     expect(
-      resolveRuntimePackPlan(["pack", "--pack-destination", "/tmp/out"], {
-        OPENCLAW_OCM_RUNTIME_BUILD_PROFILE: "sourcePerformance",
-      }),
+      resolveRuntimePackPlan(["pack", "--pack-destination", "/tmp/out"], runtimeProfile),
     ).toEqual({
       profile: "sourcePerformance",
       packArgs: ["pack", "--pack-destination", "/tmp/out", "--ignore-scripts"],
@@ -72,11 +87,7 @@ describe("OCM npm workspace dependency adapter", () => {
 
   it("keeps normal package builds on the full prepack path", () => {
     expect(resolveRuntimePackPlan(["pack"], {})).toBeNull();
-    expect(
-      resolveRuntimePackPlan(["install"], {
-        OPENCLAW_OCM_RUNTIME_BUILD_PROFILE: "sourcePerformance",
-      }),
-    ).toBeNull();
+    expect(resolveRuntimePackPlan(["install"], runtimeProfile)).toBeNull();
   });
 
   it("rejects unsupported runtime build profiles", () => {
@@ -88,13 +99,13 @@ describe("OCM npm workspace dependency adapter", () => {
   });
 
   it("pins one timestamp and commit across the prepared runtime pack", () => {
-    const env = resolveRuntimePackEnvironment(
-      { KEEP: "value" },
-      () => new Date("2026-07-11T12:34:56.000Z"),
-      () => "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
-    );
-
-    expect(env).toMatchObject({
+    expect(
+      resolveRuntimePackEnvironment(
+        { KEEP: "value" },
+        buildDate,
+        () => "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+      ),
+    ).toMatchObject({
       KEEP: "value",
       GIT_COMMIT: "abcdef0123456789abcdef0123456789abcdef01",
       OPENCLAW_BUILD_TIMESTAMP: "2026-07-11T12:34:56.000Z",
@@ -103,28 +114,21 @@ describe("OCM npm workspace dependency adapter", () => {
 
   it("rejects ambiguous runtime pack commits", () => {
     expect(() =>
-      resolveRuntimePackEnvironment(
-        { GITHUB_SHA: "abc123" },
-        () => new Date("2026-07-11T12:34:56.000Z"),
-        () => null,
-      ),
+      resolveRuntimePackEnvironment({ GITHUB_SHA: "abc123" }, buildDate, () => null),
     ).toThrow("runtime pack commit must be a full 40-character hexadecimal SHA");
   });
 
   it("does not let a failed concurrent owner restore the active pack lifecycle", async () => {
     const root = changelogFixture("openclaw-ocm-pack-owner-");
-    const docsDir = join(root, "docs");
-    const mapPath = join(docsDir, "docs_map.md");
+    const mapPath = join(root, "docs", "docs_map.md");
     const receiptPath = join(root, ".artifacts", "package-docs-map", "receipt.json");
     const changelogBackupPath = join(
       root,
-      ".artifacts",
-      "package-changelog",
-      "CHANGELOG.md.prepack-backup",
+      ".artifacts/package-changelog/CHANGELOG.md.prepack-backup",
     );
     const sourceMap = "# Docs map source\n";
-    mkdirSync(docsDir, { recursive: true });
-    writeFileSync(join(docsDir, "page.md"), "# Package docs\n");
+    mkdirSync(join(root, "docs"), { recursive: true });
+    writeFileSync(join(root, "docs", "page.md"), "# Package docs\n");
     writeFileSync(mapPath, sourceMap);
     await preparePackageDocsMap(root);
     await preparePackageChangelog(root);
@@ -134,24 +138,22 @@ describe("OCM npm workspace dependency adapter", () => {
 
     expect(() =>
       runPreparedRuntimePack(
-        () =>
-          execFileSync(process.execPath, [packageDocsMapPath, "prepare"], {
-            cwd: root,
-            stdio: "pipe",
-          }),
+        () => runNode(root, packageDocsMapPath, "prepare"),
         () => {
           packCalled = true;
           return 0;
         },
-        () => execFileSync(process.execPath, [postpackPath], { cwd: root, stdio: "pipe" }),
+        () => runNode(root, postpackPath),
       ),
     ).toThrow();
 
-    expect(packCalled).toBe(false);
-    expect(existsSync(receiptPath)).toBe(true);
-    expect(existsSync(changelogBackupPath)).toBe(true);
-    expect(readFileSync(mapPath, "utf8")).toBe(activeMap);
-    expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toBe(activeChangelog);
+    expect([
+      packCalled,
+      existsSync(receiptPath),
+      existsSync(changelogBackupPath),
+      readFileSync(mapPath, "utf8"),
+      readFileSync(join(root, "CHANGELOG.md"), "utf8"),
+    ]).toEqual([false, true, true, activeMap, activeChangelog]);
 
     await restorePrepackArtifacts(root);
     expect(readFileSync(mapPath, "utf8")).toBe(sourceMap);
@@ -161,7 +163,6 @@ describe("OCM npm workspace dependency adapter", () => {
   it("restores a prepared legacy source fixture through its changelog owner", () => {
     const root = changelogFixture("openclaw-ocm-historical-pack-");
     const scriptsDir = join(root, "scripts");
-    mkdirSync(scriptsDir, { recursive: true });
     mkdirSync(join(scriptsDir, "lib"), { recursive: true });
     for (const file of [
       "package-changelog.mjs",
@@ -174,10 +175,7 @@ describe("OCM npm workspace dependency adapter", () => {
         readFileSync(new URL(`../../scripts/${file}`, import.meta.url)),
       );
     }
-    execFileSync(process.execPath, ["scripts/package-changelog.mjs", "prepare"], {
-      cwd: root,
-      stdio: "pipe",
-    });
+    runNode(root, "scripts/package-changelog.mjs", "prepare");
     expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).not.toBe(sourceChangelog);
     expect(existsSync(join(root, "scripts", "openclaw-postpack.mjs"))).toBe(false);
 
@@ -196,9 +194,7 @@ describe("OCM npm workspace dependency adapter", () => {
   });
 
   it("replaces the root archive argument with a prepared install manifest", () => {
-    const installArgs = "install --prefix runtime --omit=dev --no-save --package-lock=false".split(
-      " ",
-    );
+    const installArgs = ["install", "--prefix", "runtime", ...installFlags];
     expect(
       resolveWorkspaceInstallPlan([...installArgs, "openclaw.tgz"], ["/repo/packages/ai"], "/repo"),
     ).toEqual({
@@ -259,36 +255,17 @@ describe("OCM npm workspace dependency adapter", () => {
     const rootArchive = join(root, "openclaw.tgz");
     packageFixture(packagedRoot, {
       name: "openclaw",
-      version: "1.0.0",
       dependencies: { "@openclaw/ai": "workspace:*" },
     });
-    packageFixture(workspaceDir, {
-      name: "@openclaw/ai",
-      version: "1.0.0",
-      main: "index.js",
-      dependencies: { "@openclaw/normalization-core": "workspace:*" },
+    workspaceFixture(workspaceDir, "@openclaw/ai", "ready", {
+      "@openclaw/normalization-core": "workspace:*",
     });
-    writeFileSync(join(workspaceDir, "index.js"), "export const ready = true;\n");
-    packageFixture(transitiveWorkspaceDir, {
-      name: "@openclaw/normalization-core",
-      version: "1.0.0",
-      main: "index.js",
-    });
-    writeFileSync(join(transitiveWorkspaceDir, "index.js"), "export const normalized = true;\n");
+    workspaceFixture(transitiveWorkspaceDir, "@openclaw/normalization-core", "normalized");
     execFileSync("tar", ["-czf", rootArchive, "-C", archiveRoot, "package"]);
 
     execFileSync(
       process.execPath,
-      [
-        adapterPath,
-        "install",
-        "--prefix",
-        installDir,
-        "--omit=dev",
-        "--no-save",
-        "--package-lock=false",
-        rootArchive,
-      ],
+      [adapterPath, "install", "--prefix", installDir, ...installFlags, rootArchive],
       {
         env: {
           ...process.env,

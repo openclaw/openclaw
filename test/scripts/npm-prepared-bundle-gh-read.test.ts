@@ -71,7 +71,19 @@ syncBuiltinESMExports();`,
 });
 
 type Failure = { status: number; headers?: Record<string, string>; message?: string };
-function runProof(failures: Failure[], job: Record<string, unknown> = {}) {
+const throttle = (headers: Record<string, string> = {}, status = 403): Failure => ({
+  status,
+  headers,
+});
+const resetHeaders = (seconds: number) => ({
+  "X-RateLimit-Remaining": "0",
+  "X-RateLimit-Reset": String(epoch / 1000 + seconds),
+});
+const retryAfter = (value: string, status = 403, message?: string): Failure => ({
+  ...throttle({ "Retry-After": value }, status),
+  message,
+});
+function runProof(failures: readonly Failure[], job: Record<string, unknown> = {}) {
   const output = join(tempDirs.make("npm-proof-output-"), "output");
   const log = output + ".requests";
   const result = spawnSync(
@@ -128,46 +140,19 @@ function runProof(failures: Failure[], job: Record<string, unknown> = {}) {
   };
 }
 
-function expectFailure(proof: ReturnType<typeof runProof>, waits: number[], requests?: number) {
-  expect(proof.result.status).toBe(1);
-  expect(proof.waits).toEqual(waits);
-  if (requests !== undefined) {
-    expect(proof.requests).toHaveLength(requests);
-  }
-  expect(existsSync(proof.output)).toBe(false);
-}
-
 describe("npm current-producer metadata recovery", () => {
   it.each([
-    ["installation quota without headers", { status: 403 }, [60_000]],
-    [
-      "primary quota reset",
-      {
-        status: 403,
-        headers: { "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": String(epoch / 1000 + 3600) },
-      },
-      [3_600_000],
-    ],
-    [
-      "429 retry-after",
-      { status: 429, headers: { "Retry-After": "2" }, message: "Too many requests" },
-      [2000],
-    ],
-    [
-      "HTTP-date retry-after",
-      { status: 403, headers: { "Retry-After": new Date(epoch + 3000).toUTCString() } },
-      [3000],
-    ],
+    ["installation quota without headers", throttle(), [60_000]],
+    ["primary quota reset", throttle(resetHeaders(3600)), [3_600_000]],
+    ["429 retry-after", retryAfter("2", 429, "Too many requests"), [2000]],
+    ["HTTP-date retry-after", retryAfter(new Date(epoch + 3000).toUTCString()), [3000]],
     [
       "later reset wins",
-      {
-        status: 403,
-        headers: {
-          "retry-after": "1",
-          "x-ratelimit-remaining": "0",
-          "x-ratelimit-reset": String(epoch / 1000 + 5),
-        },
-      },
+      throttle({
+        "retry-after": "1",
+        "x-ratelimit-remaining": "0",
+        "x-ratelimit-reset": String(epoch / 1000 + 5),
+      }),
       [5000],
     ],
   ] as const)("recovers %s before describing exact evidence", (_name, failure, waits) => {
@@ -175,44 +160,39 @@ describe("npm current-producer metadata recovery", () => {
     expect(proof.result.status, proof.result.stderr).toBe(0);
     expect(proof.waits).toEqual(waits);
     expect(proof.requests).toHaveLength(2);
-    const result = JSON.parse(proof.result.stdout);
-    expect(result.source.sha).toBe(sourceSha);
-    expect(result.producer).toMatchObject({
-      jobId: "45",
-      runId: "12",
-      runAttempt: "2",
-      workflowSha: sha,
+    expect(JSON.parse(proof.result.stdout)).toMatchObject({
+      source: { sha: sourceSha },
+      producer: { jobId: "45", runId: "12", runAttempt: "2", workflowSha: sha },
+      artifact: { id: "78", digest: "b".repeat(64) },
     });
-    expect(result.artifact).toMatchObject({ id: "78", digest: "b".repeat(64) });
     expect(readFileSync(proof.output, "utf8")).toContain("proof_json=");
   });
 
   it.each([
-    { status: 401, message: "Bad credentials" },
-    { status: 403, message: "Resource not accessible by integration" },
-    { status: 404, message: "Not Found" },
-    { status: 500, message: "Internal Server Error" },
-  ])("does not retry HTTP $status permission/non-throttle failures", (failure) => {
-    const proof = runProof([failure]);
-    expectFailure(proof, [], 1);
-  });
-
-  it("bounds repeated throttle recovery and never emits evidence on exhaustion", () => {
-    const proof = runProof(Array.from({ length: 4 }, () => ({ status: 403 })));
-    expectFailure(proof, [60_000, 120_000, 240_000], 4);
-  });
-
-  it("refuses a server delay outside the recovery budget without retrying early", () => {
-    const proof = runProof([{ status: 429, headers: { "retry-after": "3900" } }]);
-    expectFailure(proof, [], 1);
-  });
-
-  it.each([{ run_attempt: 3 }, { head_sha: "c".repeat(40) }, { status: "completed" }])(
-    "rejects changed producer identity after waiting: %j",
-    (job) => {
-      const proof = runProof([{ status: 403 }], job);
-      expectFailure(proof, [60_000]);
+    ...[
+      { status: 401, message: "Bad credentials" },
+      { status: 403, message: "Resource not accessible by integration" },
+      { status: 404, message: "Not Found" },
+      { status: 500, message: "Internal Server Error" },
+    ].map((failure) => [failure.message, [failure], [], 1, {}] as const),
+    [
+      "exhausted retries",
+      Array.from({ length: 4 }, () => throttle()),
+      [60_000, 120_000, 240_000],
+      4,
+      {},
+    ],
+    ["server delay exceeds budget", [throttle({ "retry-after": "3900" }, 429)], [], 1, {}],
+    ...[{ run_attempt: 3 }, { head_sha: "c".repeat(40) }, { status: "completed" }].map(
+      (job) => [JSON.stringify(job), [throttle()], [60_000], 2, job] as const,
+    ),
+  ] as const)("rejects %s without emitting evidence", (_name, failures, waits, requests, job) => {
+    const proof = runProof(failures, job);
+    expect(proof).toMatchObject({ result: { status: 1 }, waits });
+    expect(proof.requests).toHaveLength(requests);
+    expect(existsSync(proof.output)).toBe(false);
+    if (Object.keys(job).length) {
       expect(proof.result.stderr).toContain("Current npm producer job identity mismatch");
-    },
-  );
+    }
+  });
 });
