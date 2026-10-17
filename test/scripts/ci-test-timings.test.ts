@@ -409,89 +409,100 @@ describe("runtime placement observations", () => {
     );
     return vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(costs);
   }
-  it("retains recorded runtime work when its current group gains a file", () => {
-    const corpusFile = "src/config/state-startup-corpus.test.ts";
-    const handoffFile = "src/infra/update-managed-service-handoff-lifecycle.test.ts";
-    selectRuntimeConsumers([corpusFile, handoffFile]);
-    const compactSpy = mockRuntimePlacementCosts();
-    const readRuntimeTimings = testTimings.readRuntimePlacementTimings;
-    const runtimeSpy = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
-    onTestFinished(() => {
-      compactSpy.mockRestore();
-      runtimeSpy.mockRestore();
-    });
-    const options = {
-      compactMode: "push" as const,
-      runnerBackend: "hybrid",
-      includeReleaseOnlyPluginShards: false,
-    };
-    const before = createNodeTestShardBundles(options);
-    const groups = before.flatMap((job) => job.groups);
-    const corpus = groups.find((group) => group.includePatterns?.includes(corpusFile))!;
-    const handoff = groups.find((group) => group.includePatterns?.includes(handoffFile))!;
-    expect(corpus.includePatterns!.length).toBeGreaterThan(1);
-    expect(corpus.pretestBuildMode).toBe("runtime");
-    expect(handoff.pretestBuildMode).toBe("runtime");
-    expect(before.find((job) => job.groups.includes(corpus))).toBe(
-      before.find((job) => job.groups.includes(handoff)),
-    );
-    runtimeSpy.mockImplementation(readRuntimeTimings);
-    const observations = [
-      { ...corpus, includePatterns: [corpusFile], seconds: 200 },
-      { ...handoff, seconds: 300 },
-    ];
-    const runs = [1, 2].map((id) =>
-      timingRun(
-        id,
-        observations.map(({ seconds, ...group }, index) => {
-          const descriptor = {
-            ...group,
-            shard_name: `recorded-runtime-${index}`,
-            timing_key: undefined,
-          };
-          const [begin, end] = compactLog(seconds, descriptor.shard_name).split("\n");
-          return {
-            kind: "compact" as const,
-            labels: ["blacksmith-4vcpu-ubuntu-2404"],
-            text: [
-              `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor])}`,
-              begin,
-              `2026-08-27T23:00:01Z [shard:${descriptor.shard_name}] [test] preparing runtime runtime before Vitest workers`,
-              end,
-            ].join("\n"),
-          };
-        }),
-      ),
-    );
-    const data = refitTestTimings(runs).timings;
-    const original = fs.readFileSync;
-    const timingPath = fileURLToPath(new URL("../../config/ci-test-timings.json", import.meta.url));
-    const read = vi
-      .spyOn(fs, "readFileSync")
-      .mockImplementation((file, readOptions) =>
-        (file instanceof URL ? fileURLToPath(file) : file) === timingPath
-          ? JSON.stringify(data)
-          : original(file, readOptions),
+  it.each(["node", "bun-all"])(
+    "retains recorded %s runtime work when its current group gains a file",
+    (runtimePolicy) => {
+      vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", runtimePolicy);
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
+      const corpusFile = "src/config/state-startup-corpus.test.ts";
+      const handoffFile = "src/infra/update-managed-service-handoff-lifecycle.test.ts";
+      selectRuntimeConsumers([corpusFile, handoffFile]);
+      const compactSpy = mockRuntimePlacementCosts();
+      const readRuntimeTimings = testTimings.readRuntimePlacementTimings;
+      const runtimeSpy = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
+      onTestFinished(() => {
+        compactSpy.mockRestore();
+        runtimeSpy.mockRestore();
+      });
+      const options = {
+        compactMode: "push" as const,
+        runnerBackend: "hybrid",
+        includeReleaseOnlyPluginShards: false,
+      };
+      const before = createNodeTestShardBundles(options);
+      const groups = before.flatMap((job) => job.groups);
+      const corpus = groups.find((group) => group.includePatterns?.includes(corpusFile))!;
+      const handoff = groups.find((group) => group.includePatterns?.includes(handoffFile))!;
+      expect(corpus.includePatterns!.length).toBeGreaterThan(1);
+      expect(corpus.pretestBuildMode).toBe("runtime");
+      expect(handoff.pretestBuildMode).toBe("runtime");
+      expect(before.find((job) => job.groups.includes(corpus))).toBe(
+        before.find((job) => job.groups.includes(handoff)),
       );
-    syncBuiltinESMExports();
-    try {
-      const plan = createNodeTestShardBundles(options);
-      const corpusJob = plan.find((job) =>
-        job.groups.some((group) => group.includePatterns?.includes(corpusFile)),
+      runtimeSpy.mockImplementation(readRuntimeTimings);
+      const observations = [
+        { ...corpus, includePatterns: [corpusFile], seconds: 200 },
+        { ...handoff, seconds: 300 },
+      ];
+      const runs = [1, 2].map((id) =>
+        timingRun(
+          id,
+          observations.map(({ seconds, ...group }, index) => {
+            const descriptor = {
+              ...group,
+              shard_name: `recorded-runtime-${index}`,
+              timing_key: undefined,
+            };
+            const runtimeShard = `${runtimePolicy === "bun-all" ? "bun:" : ""}${descriptor.shard_name}`;
+            const [begin, end] = compactLog(seconds, runtimeShard).split("\n");
+            return {
+              kind: "compact" as const,
+              labels: ["blacksmith-4vcpu-ubuntu-2404"],
+              text: [
+                `2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: ${runtimePolicy}`,
+                `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor])}`,
+                begin,
+                `2026-08-27T23:00:01Z [shard:${runtimeShard}] [test] preparing runtime runtime before Vitest workers`,
+                end,
+              ].join("\n"),
+            };
+          }),
+        ),
       );
-      const handoffJob = plan.find((job) =>
-        job.groups.some((group) => group.includePatterns?.includes(handoffFile)),
+      const data = refitTestTimings(runs).timings;
+      const original = fs.readFileSync;
+      const timingPath = fileURLToPath(
+        new URL("../../config/ci-test-timings.json", import.meta.url),
       );
-      expect(corpusJob).toBeDefined();
-      expect(handoffJob).toBeDefined();
-      // These recorded workloads exceed the shared 360s budget, including
-      // preparation. Added files must not make the known reader appear cheap.
-      expect(corpusJob).not.toBe(handoffJob);
-    } finally {
-      read.mockRestore();
+      const read = vi
+        .spyOn(fs, "readFileSync")
+        .mockImplementation((file, readOptions) =>
+          (file instanceof URL ? fileURLToPath(file) : file) === timingPath
+            ? JSON.stringify(data)
+            : original(file, readOptions),
+        );
       syncBuiltinESMExports();
-    }
-  });
+      try {
+        const plan = createNodeTestShardBundles(options);
+        const corpusJob = plan.find((job) =>
+          job.groups.some((group) => group.includePatterns?.includes(corpusFile)),
+        );
+        const handoffJob = plan.find((job) =>
+          job.groups.some((group) => group.includePatterns?.includes(handoffFile)),
+        );
+        expect(corpusJob).toBeDefined();
+        expect(handoffJob).toBeDefined();
+        // These recorded workloads exceed the shared 360s budget, including
+        // preparation. Added files must not make the known reader appear cheap.
+        expect(corpusJob).not.toBe(handoffJob);
+      } finally {
+        read.mockRestore();
+        syncBuiltinESMExports();
+      }
+    },
+  );
 
   const reader = {
     configs: ["test/vitest/reader.config.ts"],
