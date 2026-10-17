@@ -309,18 +309,18 @@ describe("registry race safety", () => {
   });
 
   it("captures a Podman target and preserves immutable fields across usage updates", async () => {
-    const target = {
-      key: "machine:target-a",
-      globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
-    };
-    const entry = containerEntry({
+    const captured = containerEntry({
       backendId: "podman",
-      backendTarget: target,
+      backendTarget: {
+        key: "machine:target-a",
+        globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
+      },
       createdAtMs: 11,
       workspaceDir: "/original/workspace",
     });
+    const entry = structuredClone(captured);
     const initialWrite = updateRegistry(entry);
-    target.globalArgs[1] = "ssh://changed-after-dispatch/run/podman/podman.sock";
+    entry.backendTarget!.globalArgs[1] = "ssh://changed-after-dispatch/run/podman/podman.sock";
     entry.createdAtMs = 99;
     entry.image = "changed-after-dispatch";
     entry.workspaceDir = "/changed-after-dispatch";
@@ -334,15 +334,8 @@ describe("registry race safety", () => {
     );
 
     await expectEntry("container-a").toMatchObject({
-      backendId: "podman",
-      backendTarget: {
-        key: "machine:target-a",
-        globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
-      },
+      ...captured,
       lastUsedAtMs: 2,
-      createdAtMs: 11,
-      image: "openclaw-sandbox:test",
-      workspaceDir: "/original/workspace",
     });
   });
 
@@ -366,11 +359,10 @@ describe("registry race safety", () => {
       image: "ignored-ready",
     });
     await expectEntry(entry.containerName).toMatchObject({
+      ...entry,
       runtimeState: "ready",
-      createdAtMs: 1,
       lastUsedAtMs: 4,
       image: "initialized-image",
-      workspaceDir: "/original/workspace",
     });
     await completeSandboxRegistryReservation(entry, true);
     await expectEntry(entry.containerName).toBeNull();

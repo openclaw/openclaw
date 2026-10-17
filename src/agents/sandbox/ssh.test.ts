@@ -20,8 +20,11 @@ import {
 const sessions: SshSandboxSession[] = [];
 const tempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
+const runScript = (script: string, ...args: string[]) =>
+  execFileAsync("/bin/sh", ["-c", script, ...args]);
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(sessions.splice(0).map(disposeSshSandboxSession));
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -39,16 +42,10 @@ async function createSession(settings: Partial<SshSandboxSettings>) {
 }
 
 const validateWorkdir = (workdir: string, root: string) =>
-  execFileAsync("/bin/sh", ["-c", buildRemoteWorkdirValidationCommand({ workdir, root })]);
+  runScript(buildRemoteWorkdirValidationCommand({ workdir, root }));
 const validatedCommand = (command: string) => buildValidatedExecRemoteCommand({ command, env: {} });
 const ensureDirectory = (target: string, root: string, script = "exit 0") =>
-  execFileAsync("/bin/sh", [
-    "-c",
-    `${ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT}\n${script}`,
-    "openclaw-remote-dir",
-    target,
-    root,
-  ]);
+  runScript(`${ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT}\n${script}`, "remote-dir", target, root);
 
 async function workspaceTree() {
   const root = makeTempDir(tempDirs, "openclaw-ssh-workdir-");
@@ -60,10 +57,9 @@ async function workspaceTree() {
 describe("sandbox ssh helpers", () => {
   it("materializes inline SSH auth data into a temp config", async () => {
     const session = await createSession({
-      identityData:
-        "-----BEGIN OPENSSH PRIVATE KEY-----\r\nline-1\\nline-2\\r\\n-----END OPENSSH PRIVATE KEY-----",
+      identityData: "a\r\nb\\nc\\r\\nd",
       certificateData: "SSH CERT",
-      knownHostsData: "example.com ssh-ed25519 AAAATEST",
+      knownHostsData: "host key",
     });
 
     const config = await fs.readFile(session.configPath, "utf8");
@@ -74,45 +70,28 @@ describe("sandbox ssh helpers", () => {
     expect(config).toContain("StrictHostKeyChecking yes");
     expect(config).toContain("UpdateHostKeys no");
 
-    const configDir = session.configPath.slice(0, session.configPath.lastIndexOf("/"));
-    expect(await fs.readFile(`${configDir}/identity`, "utf8")).toBe(
-      "-----BEGIN OPENSSH PRIVATE KEY-----\nline-1\nline-2\n-----END OPENSSH PRIVATE KEY-----\n",
-    );
+    const configDir = path.dirname(session.configPath);
+    expect(await fs.readFile(`${configDir}/identity`, "utf8")).toBe("a\nb\nc\nd\n");
     expect(await fs.readFile(`${configDir}/certificate.pub`, "utf8")).toBe("SSH CERT\n");
-    expect(await fs.readFile(`${configDir}/known_hosts`, "utf8")).toBe(
-      "example.com ssh-ed25519 AAAATEST\n",
-    );
+    expect(await fs.readFile(`${configDir}/known_hosts`, "utf8")).toBe("host key\n");
   });
 
   it("removes the temp config directory when chmod fails", async () => {
     const injectedError = new Error("injected chmod failure");
-    const realMkdtemp = fs.mkdtemp.bind(fs);
-    let configDir: string | undefined;
-    vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
-      configDir = await realMkdtemp(prefix, options);
-      tempDirs.push(configDir);
-      return configDir;
-    });
-    vi.spyOn(fs, "chmod").mockRejectedValueOnce(injectedError);
-
-    try {
-      const rejection = createSshSandboxSessionFromConfigText({
-        configText: "Host openclaw-test\n",
-      });
-      await expect(rejection).rejects.toBe(injectedError);
-      expect(configDir).toBeDefined();
-      await expect(fs.access(configDir as string)).rejects.toThrow();
-    } finally {
-      vi.restoreAllMocks();
-    }
+    const chmod = vi.spyOn(fs, "chmod").mockRejectedValueOnce(injectedError);
+    await expect(createSshSandboxSessionFromConfigText({ configText: "Host test\n" })).rejects.toBe(
+      injectedError,
+    );
+    expect(chmod).toHaveBeenCalledOnce();
+    const configDir = path.dirname(String(chmod.mock.calls[0]?.[0]));
+    tempDirs.push(configDir);
+    await expect(fs.access(configDir)).rejects.toThrow();
   });
 
   it("rejects paths that inject ssh config directives", async () => {
-    await expect(
-      createSession({
-        knownHostsFile: "/tmp/key\n  UserKnownHostsFile /tmp/injected",
-      }),
-    ).rejects.toThrow("SSH sandbox knownHostsFile must not contain line breaks or double quotes.");
+    await expect(createSession({ knownHostsFile: "/key\nUser injected" })).rejects.toThrow(
+      "SSH sandbox knownHostsFile must not contain line breaks or double quotes.",
+    );
   });
 
   it("quotes path directives containing whitespace", async () => {
@@ -127,12 +106,11 @@ describe("sandbox ssh helpers", () => {
   });
 
   it("rejects configured environment values in the validated remote command builder", () => {
-    const sentinel = "synthetic-ssh-command-value";
     expect(() =>
       buildValidatedExecRemoteCommand({
         command: "pwd && printenv SYNTHETIC_VALUE",
         workdir: "/sandbox/project",
-        env: { SYNTHETIC_VALUE: sentinel },
+        env: { SYNTHETIC_VALUE: "synthetic-ssh-command-value" },
       }),
     ).toThrow(/environment.*secure|secure.*environment/i);
   });
@@ -163,47 +141,44 @@ describe("sandbox ssh helpers", () => {
   });
 
   it("allows shell features and quoted placeholder-looking text", () => {
-    expect(() =>
-      validatedCommand(
-        [
-          "cat < input.txt > output.txt",
-          "cat <in>out",
-          "cat <input> output",
-          "cat = <input-file> output.txt",
-          'cat <input-file> "output file"',
-          "cat <<'EOF' > literal.txt",
-          "<workflow-id>",
-          '"unterminated quote text is data here',
-          "`unterminated backtick text is data here",
-          "EOF",
-          ": <<EOF $(printf '%s' hi\n)\nbody\nEOF",
-          "echo $(cat <<EOF\ninside\nEOF\n)",
-          "cat <<EOF\r\nwindows line endings\r\nEOF\r\n",
-          'cat <<E"OF"\nmixed delimiter quotes\nEOF',
-          "cat <<\\EOF\nescaped delimiter\nEOF",
-          "echo $(printf '%s' ok)",
-          "echo \"$(printf '%s' ok)\"",
-          "echo `date`",
-          'echo "`date`"',
-          "diff <(sort left.txt) <(sort right.txt)",
-          "echo $((1 << 2))",
-          'echo "$((1 << 2))"',
-          'printf "%s\\n" "<name>"',
-          "# workflow run <workflow-id>",
-        ].join("\n"),
-      ),
-    ).not.toThrow();
+    const command = [
+      "cat < input.txt > output.txt",
+      "cat <in>out",
+      "cat <input> output",
+      "cat = <input-file> output.txt",
+      'cat <input-file> "output file"',
+      "cat <<'EOF' > literal.txt",
+      "<workflow-id>",
+      '"unterminated quote text is data here',
+      "`unterminated backtick text is data here",
+      "EOF",
+      ": <<EOF $(printf '%s' hi\n)\nbody\nEOF",
+      "echo $(cat <<EOF\ninside\nEOF\n)",
+      "cat <<EOF\r\nwindows line endings\r\nEOF\r\n",
+      'cat <<E"OF"\nmixed delimiter quotes\nEOF',
+      "cat <<\\EOF\nescaped delimiter\nEOF",
+      "echo $(printf '%s' ok)",
+      "echo \"$(printf '%s' ok)\"",
+      "echo `date`",
+      'echo "`date`"',
+      "diff <(sort left.txt) <(sort right.txt)",
+      "echo $((1 << 2))",
+      'echo "$((1 << 2))"',
+      'printf "%s\\n" "<name>"',
+      "# workflow run <workflow-id>",
+    ].join("\n");
+    expect(() => validatedCommand(command)).not.toThrow();
   });
 
-  it.runIf(process.platform !== "win32")(
-    "preserves positional args after remote directory validation",
-    async () => {
+  describe.runIf(process.platform !== "win32")("filesystem", () => {
+    it("preserves args after directory validation", async () => {
       const realParent = makeTempDir(tempDirs, "openclaw-ssh-real-");
       const linkParent = `${realParent}-link`;
       tempDirs.push(linkParent);
       await fs.symlink(realParent, linkParent);
       const root = path.join(linkParent, "runtime");
-      const target = path.join(root, "workspace", ".openclaw", "sandbox-skills");
+      const relativeTarget = path.join("runtime", "workspace", ".openclaw", "sandbox-skills");
+      const target = path.join(linkParent, relativeTarget);
 
       const { stdout } = await ensureDirectory(
         target,
@@ -216,17 +191,12 @@ describe("sandbox ssh helpers", () => {
       );
 
       expect(stdout.trim().split("\n")).toEqual([target, root, path.join(target, "proof")]);
-      await expect(
-        fs.stat(
-          path.join(realParent, "runtime", "workspace", ".openclaw", "sandbox-skills", "proof"),
-        ),
-      ).resolves.toMatchObject({ dev: expect.any(Number) });
-    },
-  );
+      await expect(fs.stat(path.join(realParent, relativeTarget, "proof"))).resolves.toMatchObject({
+        dev: expect.any(Number),
+      });
+    });
 
-  it.runIf(process.platform !== "win32")(
-    "validates workdirs without creating missing directories",
-    async () => {
+    it("validates workdirs without creating missing directories", async () => {
       const { workspace } = await workspaceTree();
       const project = path.join(workspace, "project one");
       await fs.mkdir(project, { recursive: true });
@@ -239,41 +209,34 @@ describe("sandbox ssh helpers", () => {
         /remote directory not found/,
       );
       await expect(fs.stat(path.join(workspace, "missing"))).rejects.toThrow();
-    },
-  );
+    });
 
-  it.runIf(process.platform !== "win32").each([
-    ["exec workdir", validateWorkdir, ""],
-    ["created directory", ensureDirectory, "sandbox-skills"],
-  ] as const)("rejects symlinked %s inside the trusted root", async (_, run, suffix) => {
-    const { root, workspace } = await workspaceTree();
-    const link = path.join(workspace, "escape");
-    await fs.symlink(root, link);
-    if (suffix) {
-      expect(ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT.split("\n")[0]).toBe("set -e");
-    }
-    await expect(run(path.join(link, suffix), workspace)).rejects.toThrow(
-      /unsafe remote directory symlink/,
-    );
-  });
+    it.each([
+      ["exec workdir", validateWorkdir, ""],
+      ["created directory", ensureDirectory, "sandbox-skills"],
+    ] as const)("rejects symlinked %s inside the trusted root", async (_, run, suffix) => {
+      const { root, workspace } = await workspaceTree();
+      const link = path.join(workspace, "escape");
+      await fs.symlink(root, link);
+      if (suffix) {
+        expect(ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT.split("\n")[0]).toBe("set -e");
+      }
+      await expect(run(path.join(link, suffix), workspace)).rejects.toThrow(
+        /unsafe remote directory symlink/,
+      );
+    });
 
-  it.runIf(process.platform !== "win32")(
-    "rejects upload symlinks escaping the workspace",
-    async () => {
+    it("rejects upload symlinks escaping the workspace", async () => {
       const localDir = makeTempDir(tempDirs, "openclaw-ssh-upload-");
       await fs.symlink("/etc", path.join(localDir, "escape"));
 
       await expect(
         uploadDirectoryToSshTarget({
-          session: {
-            command: "ssh",
-            configPath: "/tmp/openclaw-test-ssh-config",
-            host: "openclaw-sandbox",
-          },
+          session: await createSession({}),
           localDir,
           remoteDir: "/remote/workspace",
         }),
       ).rejects.toThrow(/refuses symlink escaping the workspace: escape/i);
-    },
-  );
+    });
+  });
 });

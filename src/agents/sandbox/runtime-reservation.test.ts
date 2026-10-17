@@ -122,6 +122,14 @@ function resolve() {
   return resolveSandboxContext({ config, sessionKey: "agent:test:reservation", workspaceDir });
 }
 
+async function resolveBackend() {
+  const backend = (await resolve())?.backend;
+  if (!backend) {
+    throw new Error("Expected the resolved sandbox backend.");
+  }
+  return backend;
+}
+
 function observeRemovalIntent() {
   const accepted = createDeferred();
   probe.command(stateWorker, async (command, executeOptions, scope) => {
@@ -242,11 +250,7 @@ describe("durable sandbox runtime generations", () => {
       }),
       finalizeExec,
     }));
-    const context = await resolve();
-    const backend = context?.backend;
-    if (!backend) {
-      throw new Error("Expected the registered sandbox backend.");
-    }
+    const backend = await resolveBackend();
     const supervisor = getProcessSupervisor();
     const realSpawn = supervisor.spawn.bind(supervisor);
     vi.spyOn(supervisor, "spawn").mockImplementationOnce(async (input) => {
@@ -481,15 +485,11 @@ describe("durable sandbox runtime generations", () => {
 
   it("revokes retained handles and preserves failed cleanup across restart", async () => {
     const remove = install();
-    const context = await resolve();
+    const backend = await resolveBackend();
     remove.mockRejectedValueOnce(new Error("cleanup response lost"));
     await expect(removeSandboxContainer("reserved-1")).rejects.toThrow("cleanup response lost");
     await closeStateDatabaseForTest();
     await expect(resolve()).rejects.toThrow("removed or is being removed");
-    const backend = context?.backend;
-    if (!backend) {
-      throw new Error("Expected the resolved context to provide a sandbox backend.");
-    }
     await expect(
       backend.buildExecSpec({ command: "true", env: {}, usePty: false }),
     ).rejects.toThrow("removed or is being removed");

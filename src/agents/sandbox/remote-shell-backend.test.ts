@@ -99,16 +99,10 @@ describe("remote shell command cancellation", () => {
       const controller = new AbortController();
       const work = barrier();
       const disposal = barrier();
-      let cancellationObserved = false;
-      let completed = false;
+      const onAbort = vi.fn();
+      const onComplete = vi.fn();
       const hold = async (signal?: AbortSignal) => {
-        signal?.addEventListener(
-          "abort",
-          () => {
-            cancellationObserved = true;
-          },
-          { once: true },
-        );
+        signal?.addEventListener("abort", onAbort, { once: true });
         await work.wait();
         signal?.throwIfAborted();
       };
@@ -126,24 +120,19 @@ describe("remote shell command cancellation", () => {
         session.uploadDirectory.mockImplementationOnce(({ signal }) => hold(signal));
       }
       session.dispose.mockImplementationOnce(disposal.wait);
-      const command = backend.runShellCommand({
-        script: "touch sentinel",
-        signal: controller.signal,
-      });
-      const result = command
+      const result = backend
+        .runShellCommand({ script: "touch sentinel", signal: controller.signal })
         .catch((error: unknown) => error)
-        .finally(() => {
-          completed = true;
-        });
+        .finally(onComplete);
       try {
         await work.entered;
         controller.abort(new Error("interrupt deadline"));
-        expect(cancellationObserved).toBe(phase !== "acquire");
+        expect(onAbort).toHaveBeenCalledTimes(phase === "acquire" ? 0 : 1);
         expect(session.dispose).not.toHaveBeenCalled();
-        expect(completed).toBe(false);
+        expect(onComplete).not.toHaveBeenCalled();
         work.release();
         await disposal.entered;
-        expect(completed).toBe(false);
+        expect(onComplete).not.toHaveBeenCalled();
         disposal.release();
         expect(await result).toMatchObject({ message: "interrupt deadline" });
         expect(session.runCommand).toHaveBeenCalledTimes(phase === "acquire" ? 0 : 1);
@@ -246,12 +235,10 @@ async function createFixture() {
 describe.runIf(process.platform === "linux" || process.platform === "darwin")(
   "remote workspace initialization",
   () => {
-    it.each([
-      { interrupted: "workspace", readOnly: false },
-      { interrupted: "agent", readOnly: true },
-    ])(
-      "retries incomplete $interrupted uploads without publishing a partial workspace (readonly=$readOnly)",
-      async ({ interrupted, readOnly }) => {
+    it.each(["workspace", "agent"])(
+      "retries incomplete %s uploads without publishing a partial workspace",
+      async (interrupted) => {
+        const readOnly = interrupted === "agent";
         const fixture = await createFixture();
         let failed = false;
         const backend = await fixture.createBackend("source", async (params, upload) => {
@@ -284,12 +271,10 @@ describe.runIf(process.platform === "linux" || process.platform === "darwin")(
       },
     );
 
-    it.each([
-      { winner: "emptied", readOnlyLoser: false },
-      { winner: "edited", readOnlyLoser: true },
-    ])(
-      "keeps a concurrently published $winner workspace (readonly loser=$readOnlyLoser)",
-      async ({ winner, readOnlyLoser }) => {
+    it.each(["emptied", "edited"])(
+      "keeps a concurrently published %s workspace",
+      async (winner) => {
+        const readOnlyLoser = winner === "edited";
         const fixture = await createFixture();
         const firstGate = barrier();
         const secondGate = barrier();

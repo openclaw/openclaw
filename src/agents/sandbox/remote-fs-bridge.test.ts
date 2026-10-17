@@ -70,9 +70,8 @@ function createWorkspaceBridge(
   });
 }
 
-async function expectText(file: string, text: string) {
-  await expect(fs.readFile(file, "utf8")).resolves.toBe(text);
-}
+const expectText = (file: string, text: string) =>
+  expect(fs.readFile(file, "utf8")).resolves.toBe(text);
 
 async function expectMissing(file: string) {
   await expect(fs.lstat(file)).rejects.toMatchObject({ code: "ENOENT" });
@@ -122,7 +121,7 @@ describe("remote pinned read sources", () => {
   it.runIf(process.platform !== "win32").each(["alias", "canonical-parent"] as const)(
     "keeps read provenance bound to the bytes when the %s is swapped",
     async (swap) => {
-      const workspaceDir = await fs.realpath(tempDirs.make("openclaw-remote-read-source-"));
+      const { workspaceDir, runtime, bridge } = await createFixture();
       const original = path.join(workspaceDir, "original");
       const replacement = path.join(workspaceDir, "replacement");
       const alias = path.join(workspaceDir, "alias");
@@ -130,26 +129,22 @@ describe("remote pinned read sources", () => {
       await fs.writeFile(path.join(original, "MEMORY.md"), "original bytes");
       await fs.writeFile(path.join(replacement, "MEMORY.md"), "replacement bytes");
       await fs.symlink(original, alias, "dir");
-      const runRemoteShellScript = createLocalRemoteShellScriptRunner();
+      const runRemoteShellScript = runtime.runRemoteShellScript;
       let swapped = false;
-      const bridge = createWorkspaceBridge(workspaceDir, {
-        remoteWorkspaceDir: workspaceDir,
-        remoteAgentWorkspaceDir: workspaceDir,
-        async runRemoteShellScript(command) {
-          // Canonicalization has finished; the unmodified guest reader runs next.
-          if (command.args?.[0] === "read" && !swapped) {
-            swapped = true;
-            if (swap === "alias") {
-              await fs.unlink(alias);
-              await fs.symlink(replacement, alias, "dir");
-            } else {
-              await fs.rename(original, path.join(workspaceDir, "moved-original"));
-              await fs.symlink(replacement, original, "dir");
-            }
+      runtime.runRemoteShellScript = async (command) => {
+        // Canonicalization has finished; the unmodified guest reader runs next.
+        if (command.args?.[0] === "read" && !swapped) {
+          swapped = true;
+          if (swap === "alias") {
+            await fs.unlink(alias);
+            await fs.symlink(replacement, alias, "dir");
+          } else {
+            await fs.rename(original, path.join(workspaceDir, "moved-original"));
+            await fs.symlink(replacement, original, "dir");
           }
-          return runRemoteShellScript(command);
-        },
-      });
+        }
+        return runRemoteShellScript(command);
+      };
       const read = bridge.readFileWithSource!({ filePath: "alias/MEMORY.md", maxBytes: 100 });
       if (swap === "alias") {
         await expect(read).resolves.toEqual({
@@ -269,6 +264,7 @@ describe("remote sandbox fs bridge", () => {
       });
       const filePath = "quoted ' \" $() `literal`.bin";
       const payload = Buffer.from([0, 255, 128, 10, 13, 39, 34, 36, 96]);
+      const empty = Buffer.alloc(0);
       const createFileExclusive = bridge.createFileExclusive!.bind(bridge);
       await expect(bridge.readDirectory!({ filePath: "." })).resolves.toEqual([]);
       await expect(bridge.readDirectory!({ filePath: "../" })).rejects.toThrow();
@@ -288,13 +284,9 @@ describe("remote sandbox fs bridge", () => {
       );
       await expect(fs.readFile(path.join(remoteWorkspaceDir, filePath))).resolves.toEqual(payload);
 
-      await bridge.writeFile({ filePath: "empty.txt", data: Buffer.alloc(0) });
-      await expect(fs.readFile(path.join(remoteWorkspaceDir, "empty.txt"))).resolves.toEqual(
-        Buffer.alloc(0),
-      );
-      await expect(bridge.readFile({ filePath: "empty.txt", maxBytes: 0 })).resolves.toEqual(
-        Buffer.alloc(0),
-      );
+      await bridge.writeFile({ filePath: "empty.txt", data: empty });
+      await expect(fs.readFile(path.join(remoteWorkspaceDir, "empty.txt"))).resolves.toEqual(empty);
+      await expect(bridge.readFile({ filePath: "empty.txt", maxBytes: 0 })).resolves.toEqual(empty);
       await expect(fs.readdir(workspaceDir)).resolves.toEqual([]);
       const skillRelativePath =
         mutation === "write" ? "skills/demo/SKILL.md" : ".agents/skills/demo/SKILL.md";
@@ -363,20 +355,15 @@ describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shel
     const { workspaceDir, remoteWorkspaceDir, runtime, bridge } = await createFixture(true);
     const remotePath = path.join(remoteWorkspaceDir, "race-target.txt");
     const hostPath = path.join(workspaceDir, "race-target.txt");
-    const aliasIdentity = await resolveSandboxFileMutationQueueKey({
-      bridge,
-      root: workspaceDir,
-      filePath: remotePath,
-      cwd: workspaceDir,
-    });
-    await expect(
+    const identity = (filePath: string) =>
       resolveSandboxFileMutationQueueKey({
         bridge,
         root: workspaceDir,
-        filePath: hostPath,
+        filePath,
         cwd: workspaceDir,
-      }),
-    ).resolves.toBe(aliasIdentity);
+      });
+    const aliasIdentity = await identity(remotePath);
+    await expect(identity(hostPath)).resolves.toBe(aliasIdentity);
 
     const writeIdentityStarted = createDeferred();
     const releaseWriteIdentity = createDeferred();
@@ -426,9 +413,7 @@ describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shel
 
   it("creates files exclusively and preserves existing entries", async () => {
     const { bridge, file } = await createFixture();
-    const createFileExclusive = bridge.createFileExclusive?.bind(bridge);
-    expect(createFileExclusive).toBeTypeOf("function");
-
+    const createFileExclusive = bridge.createFileExclusive!.bind(bridge);
     await expect(
       createFileExclusive!({ filePath: "nested/note.txt", data: "first" }),
     ).resolves.toBe("created");
@@ -449,9 +434,7 @@ describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shel
     const { bridge, file } = await createFixture();
     await fs.writeFile(file("target.txt"), "keep", "utf8");
     await fs.symlink("target.txt", file("link.txt"));
-    const createFileExclusive = bridge.createFileExclusive?.bind(bridge);
-    expect(createFileExclusive).toBeTypeOf("function");
-
+    const createFileExclusive = bridge.createFileExclusive!.bind(bridge);
     await expect(
       createFileExclusive!({ filePath: "link.txt", data: Buffer.alloc(1_048_576) }),
     ).resolves.toBe("exists");
@@ -460,25 +443,18 @@ describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shel
 
   it("forwards and enforces bounded pinned file reads", async () => {
     const { workspaceDir, calls, bridge, file } = await createFixture();
-    await fs.writeFile(file("..note.txt"), "hello", "utf8");
-    expect(bridge.resolvePath({ filePath: "..note.txt" })).toMatchObject({
-      relativePath: "..note.txt",
-      containerPath: `${workspaceDir}/..note.txt`,
+    const filePath = "..note.txt";
+    const data = Buffer.from("hello");
+    await fs.writeFile(file(filePath), data);
+    expect(bridge.resolvePath({ filePath })).toMatchObject({
+      relativePath: filePath,
+      containerPath: `${workspaceDir}/${filePath}`,
     });
-    await expect(bridge.readFile({ filePath: "..note.txt", maxBytes: 5 })).resolves.toEqual(
-      Buffer.from("hello"),
-    );
-    expect(calls.find((call) => call.args?.[0] === "read")?.args).toEqual([
-      "read",
-      workspaceDir,
-      "",
-      "..note.txt",
-      "5",
-    ]);
-    await expect(bridge.readFile({ filePath: "..note.txt", maxBytes: 4 })).rejects.toThrow(
-      /bounded read limit/i,
-    );
-    await expect(bridge.readFile({ filePath: "..note.txt", maxBytes: -1 })).rejects.toThrow(
+    await expect(bridge.readFile({ filePath, maxBytes: 5 })).resolves.toEqual(data);
+    const readCall = calls.find((call) => call.args?.[0] === "read");
+    expect(readCall?.args).toEqual(["read", workspaceDir, "", filePath, "5"]);
+    await expect(bridge.readFile({ filePath, maxBytes: 4 })).rejects.toThrow(/bounded read limit/i);
+    await expect(bridge.readFile({ filePath, maxBytes: -1 })).rejects.toThrow(
       /non-negative safe integer/i,
     );
     expect(calls).toHaveLength(4);
@@ -487,8 +463,7 @@ describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shel
   it("streams file copies with the pinned mutation helper", async () => {
     const { calls, bridge, file } = await createFixture();
     await fs.writeFile(file("source.txt"), "streamed", "utf8");
-    const copyFile = bridge.copyFile?.bind(bridge);
-    expect(copyFile).toBeTypeOf("function");
+    const copyFile = bridge.copyFile!.bind(bridge);
     await copyFile!({
       sourcePath: "source.txt",
       destinationPath: "nested/copy.txt",
@@ -538,7 +513,6 @@ describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shel
       const decoyDir = physical("decoy");
       await makeDirectories(realDir, decoyDir);
       await fs.symlink(realDir, logical("alias"));
-      await fs.writeFile(logical("source.txt"), "copy-source");
 
       const writePin = await pin("note.txt", "write", logical("note.txt"), physical("note.txt"));
       await bridge.writeFile({
@@ -599,49 +573,44 @@ describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shel
 it.runIf(process.platform === "linux").each(["remove", "rename"] as const)(
   "%s resolves the parent alias without changing sibling files or following the final symlink",
   async (operation) => {
-    const stateDir = await fs.realpath(tempDirs.make("remote-parent-alias-"));
-    const workspaceDir = path.join(stateDir, "workspace");
-    const realDir = path.join(workspaceDir, "real");
-    const outsideDir = path.join(stateDir, "outside");
-    await fs.mkdir(realDir, { recursive: true });
-    await fs.mkdir(outsideDir);
-    await fs.symlink(realDir, path.join(workspaceDir, "alias"), "dir");
-    await fs.symlink(outsideDir, path.join(workspaceDir, "escape"), "dir");
-    const bridge = createWorkspaceBridge(workspaceDir);
+    const { root, bridge, file } = await createFixture();
+    const realDir = file("real");
+    const outsideDir = path.join(root, "outside");
+    await makeDirectories(realDir, outsideDir);
+    await fs.symlink(realDir, file("alias"), "dir");
+    await fs.symlink(outsideDir, file("escape"), "dir");
     const mutate = (from: string, to: string) =>
       operation === "remove"
         ? bridge.remove({ filePath: from, force: false })
         : bridge.rename({ from, to });
 
-    await fs.writeFile(path.join(workspaceDir, "note.txt"), "root sentinel");
+    await fs.writeFile(file("note.txt"), "root sentinel");
     await fs.writeFile(path.join(realDir, "note.txt"), "requested bytes");
     await mutate("alias/note.txt", "moved.txt");
-    await expectText(path.join(workspaceDir, "note.txt"), "root sentinel");
+    await expectText(file("note.txt"), "root sentinel");
     await expectMissing(path.join(realDir, "note.txt"));
     if (operation === "rename") {
-      await expectText(path.join(workspaceDir, "moved.txt"), "requested bytes");
+      await expectText(file("moved.txt"), "requested bytes");
     }
 
     const linkTarget = path.join(outsideDir, "target.txt");
     await fs.writeFile(linkTarget, "outside target");
-    await fs.writeFile(path.join(workspaceDir, "link.txt"), "root link sentinel");
+    await fs.writeFile(file("link.txt"), "root link sentinel");
     await fs.symlink(linkTarget, path.join(realDir, "link.txt"));
     await mutate("alias/link.txt", "moved-link.txt");
-    await expectText(path.join(workspaceDir, "link.txt"), "root link sentinel");
+    await expectText(file("link.txt"), "root link sentinel");
     await expectMissing(path.join(realDir, "link.txt"));
     await expectText(linkTarget, "outside target");
     if (operation === "rename") {
-      await expect(fs.readlink(path.join(workspaceDir, "moved-link.txt"))).resolves.toBe(
-        linkTarget,
-      );
+      await expect(fs.readlink(file("moved-link.txt"))).resolves.toBe(linkTarget);
     }
 
-    await fs.writeFile(path.join(workspaceDir, "escape-target.txt"), "root escape sentinel");
+    await fs.writeFile(file("escape-target.txt"), "root escape sentinel");
     await fs.writeFile(path.join(outsideDir, "escape-target.txt"), "outside sentinel");
     await expect(mutate("escape/escape-target.txt", "escaped.txt")).rejects.toThrow(
       "escapes allowed mounts",
     );
-    await expectText(path.join(workspaceDir, "escape-target.txt"), "root escape sentinel");
+    await expectText(file("escape-target.txt"), "root escape sentinel");
     await expectText(path.join(outsideDir, "escape-target.txt"), "outside sentinel");
   },
 );
