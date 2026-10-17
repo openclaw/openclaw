@@ -88,7 +88,7 @@ export function readPersonalPublicationFixtureStatus(
 }
 
 export function personalPublicationRequest(
-  { generation }: Pick<PersonalFixture, "generation">,
+  { generation }: { generation: string },
   idempotencyKey: string,
 ) {
   return {
@@ -104,7 +104,7 @@ export async function expectPersonalPublicationReplay(
     coordinator,
     action,
   }: Pick<PersonalFixture, "coordinator"> & {
-    generation: PersonalFixture["generation"];
+    generation: string;
     action: PersonalGitHubSessionActionV2;
   },
   capture: (requestId: string) => unknown,

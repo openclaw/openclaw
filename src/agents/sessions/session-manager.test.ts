@@ -6,7 +6,10 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import * as configEnv from "../../config/config-env-vars.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
@@ -42,6 +45,14 @@ function createScope(sessionId: string) {
 
 function sessionHeader(id: string, cwd: string, version = CURRENT_SESSION_VERSION) {
   return { type: "session" as const, version, id, timestamp: "2026-01-01T00:00:00.000Z", cwd };
+}
+
+function openMarker(marker: string, sessionKey: string, cwd: string): SessionManager {
+  const target = parseSqliteSessionFileMarker(marker);
+  if (!target) {
+    throw new Error("expected SQLite transcript marker fixture");
+  }
+  return SessionManager.open({ ...target, sessionKey }, cwd);
 }
 
 function appendState(manager: SessionManager) {
@@ -238,15 +249,15 @@ describe("SessionManager.open", () => {
       throw new Error("expected initial raw cursor page");
     }
 
-    const staleManager = SessionManager.open(scope, dir);
-    const resetManager = SessionManager.open(scope, dir);
+    const staleManager = openMarker(marker, scope.sessionKey, dir);
+    const resetManager = openMarker(marker, scope.sessionKey, dir);
     resetManager.appendResetBoundary("reset");
     expect(() => staleManager.appendMessage(rebaseAssistant("late append"))).not.toThrow();
 
     expect(readTranscriptRawDelta(scope, { cursor: cursor.cursor }).kind).toBe("page");
     const events = await loadTranscriptEvents(scope);
     expect(events.map((event) => (event as { type?: unknown }).type)).toContain("reset");
-    const context = JSON.stringify(SessionManager.open(scope, dir).buildSessionContext());
+    const context = JSON.stringify(openMarker(marker, scope.sessionKey, dir).buildSessionContext());
     expect(context).not.toContain("before reset");
     expect(context).toContain("late append");
 
@@ -277,7 +288,7 @@ describe("SessionManager.open", () => {
       message: rebaseAssistant("answer"),
       parentId: user.messageId,
     });
-    const sessionManager = SessionManager.open(scope, dir);
+    const sessionManager = openMarker(marker, sessionKey, dir);
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId: replacement, updatedAt: 20 },
