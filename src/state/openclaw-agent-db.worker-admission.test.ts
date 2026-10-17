@@ -577,8 +577,8 @@ it.each([
   },
 );
 
-it.each(["once", "always", "source-revoked", "after-entry"] as const)(
-  "recovers schema publication before execution without replaying admitted work: %s",
+it.each(["before-entry", "source-revoked", "after-entry"] as const)(
+  "reports schema publication refusal without replaying work: %s",
   async (failure) => {
     const options = makeOptions("agent-schema-publication-");
     const database = openAgent(options);
@@ -594,7 +594,7 @@ it.each(["once", "always", "source-revoked", "after-entry"] as const)(
     let publications = 0;
     observePublications((pathname, publish) => {
       publications += 1;
-      if (failure !== "after-entry" && (failure === "always" || publications === 1)) {
+      if (failure !== "after-entry") {
         // Revoke actual captured proof at the worker-to-host publication boundary.
         invalidateValidation(pathname);
         if (failure === "source-revoked") {
@@ -611,19 +611,13 @@ it.each(["once", "always", "source-revoked", "after-entry"] as const)(
     });
     try {
       const result = execution.runExisting(source, operation);
-      if (failure === "once") {
-        await expect(result).resolves.toBe("executed");
-      } else {
-        await expect(result).rejects.toThrow(
-          failure === "source-revoked"
-            ? "Fixture request authority revoked"
-            : "Agent schema admission changed before publication",
-        );
-      }
-      expect(operation).toHaveBeenCalledTimes(
-        failure === "once" || failure === "after-entry" ? 1 : 0,
+      await expect(result).rejects.toThrow(
+        failure === "source-revoked"
+          ? "Fixture request authority revoked"
+          : "Agent schema admission changed before publication",
       );
-      expect(publications).toBe(failure === "once" || failure === "always" ? 2 : 1);
+      expect(operation).toHaveBeenCalledTimes(failure === "after-entry" ? 1 : 0);
+      expect(publications).toBe(1);
       expect(`file:${execution.fileIdentity?.physicalIdentity}`).toBe(expectedIdentity.key);
     } finally {
       await execution.release();
