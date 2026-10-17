@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMatrixDraftStream } from "./draft-stream.js";
+import type { MatrixClient } from "./sdk.js";
 
 const sendModuleMocks = vi.hoisted(() => {
   type PreviewOptions = {
@@ -87,11 +88,6 @@ vi.mock("./send.js", () => ({
 }));
 const sendMessageMock = vi.fn();
 
-function createMockClient() {
-  sendMessageMock.mockReset().mockResolvedValue("$evt1");
-  return { sendMessage: sendMessageMock } as unknown as import("./sdk.js").MatrixClient;
-}
-
 function sentContentAt(callIndex: number): Record<string, unknown> {
   const content = sendMessageMock.mock.calls[callIndex]?.[1];
   if (!content || typeof content !== "object") {
@@ -110,7 +106,7 @@ async function update(stream: ReturnType<typeof createMatrixDraftStream>, text: 
 }
 
 describe("createMatrixDraftStream", () => {
-  let client: ReturnType<typeof createMockClient>;
+  let client: MatrixClient;
 
   function createStream(options: Partial<Parameters<typeof createMatrixDraftStream>[0]> = {}) {
     return createMatrixDraftStream({ roomId: "!room:test", client, cfg: {}, ...options });
@@ -118,7 +114,8 @@ describe("createMatrixDraftStream", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
-    client = createMockClient();
+    sendMessageMock.mockReset().mockResolvedValue("$evt1");
+    client = { sendMessage: sendMessageMock } as unknown as MatrixClient;
     resolveTextChunkLimitMock.mockReset().mockReturnValue(4000);
     convertMarkdownTablesMock.mockReset().mockImplementation((text: string) => text);
     sendModuleMocks.editMessageMatrix.mockClear();
@@ -162,10 +159,8 @@ describe("createMatrixDraftStream", () => {
 
     // The first send is immediate; the remaining updates coalesce into one edit.
     expect(sendMessageMock).toHaveBeenCalledTimes(2);
-    expect(sentContentAt(0).body).toBe("A");
-    expect(sentContentAt(1).body).toBe("* ABC");
-    expect(sentContentAt(0).msgtype).toBe("m.notice");
-    expect(sentContentAt(1).msgtype).toBe("m.notice");
+    expect(sentContentAt(0)).toMatchObject({ body: "A", msgtype: "m.notice" });
+    expect(sentContentAt(1)).toMatchObject({ body: "* ABC", msgtype: "m.notice" });
     expect(sentContentAt(1)["m.new_content"]).toEqual({ msgtype: "m.notice", body: "ABC" });
   });
 

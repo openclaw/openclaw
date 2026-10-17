@@ -13,13 +13,6 @@ const mocks = vi.hoisted(() => ({
   listBindingsForAccountMock: vi.fn((): ReturnType<typeof makeBinding>[] => []),
   removeBindingsMock: vi.fn(async () => []),
 }));
-const {
-  unbindMock,
-  getManagerMock,
-  listAllBindingsMock,
-  listBindingsForAccountMock,
-  removeBindingsMock,
-} = mocks;
 
 vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", () => ({
   getSessionBindingService: () => ({ unbind: mocks.unbindMock }),
@@ -30,12 +23,12 @@ vi.mock("./thread-bindings-shared.js", () => ({
   getMatrixThreadBindingManager: mocks.getManagerMock,
   listAllBindings: mocks.listAllBindingsMock,
   listBindingsForAccount: mocks.listBindingsForAccountMock,
-  resolveBindingKey: (params: {
-    accountId: string;
-    conversationId: string;
-    parentConversationId?: string;
-  }) =>
-    `${params.accountId}:${params.parentConversationId?.trim() || "-"}:${params.conversationId}`,
+  resolveBindingKey: (
+    params: Pick<
+      MatrixThreadBindingRecord,
+      "accountId" | "conversationId" | "parentConversationId"
+    >,
+  ) => `${params.accountId}:${params.parentConversationId?.trim() || "-"}:${params.conversationId}`,
 }));
 
 import { handleMatrixSubagentDeliveryTarget, handleMatrixSubagentEnded } from "./subagent-hooks.js";
@@ -51,8 +44,6 @@ function makeBinding(overrides: Partial<MatrixThreadBindingRecord> = {}) {
     accountId: "ops",
     conversationId: "$thread",
     parentConversationId: ROOM_ID,
-    boundAt: 0,
-    lastActivityAt: 0,
     ...overrides,
   };
 }
@@ -69,18 +60,23 @@ beforeEach(() => {
 });
 
 function makeDeliveryEvent(
-  overrides: Partial<Parameters<typeof handleMatrixSubagentDeliveryTarget>[0]> = {},
+  requesterOrigin: Parameters<typeof handleMatrixSubagentDeliveryTarget>[0]["requesterOrigin"] = {
+    channel: "matrix",
+    accountId: "ops",
+  },
+  expectsCompletionMessage = true,
 ) {
   return {
     childSessionKey: CHILD_SESSION_KEY,
-    requesterOrigin: { channel: "matrix", accountId: "ops" },
-    expectsCompletionMessage: true,
-    ...overrides,
+    requesterOrigin,
+    expectsCompletionMessage,
   };
 }
+const deliver = (...args: Parameters<typeof makeDeliveryEvent>) =>
+  handleMatrixSubagentDeliveryTarget(makeDeliveryEvent(...args));
 
 it("matrix subagent hook registration: resolves delivery targets through the lazy registration barrel", async () => {
-  listBindingsForAccountMock.mockReturnValue([makeBinding()]);
+  mocks.listBindingsForAccountMock.mockReturnValue([makeBinding()]);
   const handlers = registerHookHandlersForTest<MatrixEntryPluginApi>({
     config: {},
     register: registerMatrixSubagentHooks,
@@ -92,91 +88,69 @@ it("matrix subagent hook registration: resolves delivery targets through the laz
 
 describe("handleMatrixSubagentDeliveryTarget", () => {
   it("returns undefined when completion delivery is not requested", () => {
-    expect(
-      handleMatrixSubagentDeliveryTarget(makeDeliveryEvent({ expectsCompletionMessage: false })),
-    ).toBeUndefined();
+    expect(deliver(undefined, false)).toBeUndefined();
   });
 
   it("returns undefined for another channel or a missing binding", () => {
-    expect(
-      handleMatrixSubagentDeliveryTarget(
-        makeDeliveryEvent({ requesterOrigin: { channel: "discord", accountId: "ops" } }),
-      ),
-    ).toBeUndefined();
-    expect(handleMatrixSubagentDeliveryTarget(makeDeliveryEvent())).toBeUndefined();
+    expect(deliver({ channel: "discord", accountId: "ops" })).toBeUndefined();
+    expect(deliver()).toBeUndefined();
   });
 
   it("omits threadId for a top-level room binding", () => {
-    listBindingsForAccountMock.mockReturnValue([
+    mocks.listBindingsForAccountMock.mockReturnValue([
       makeBinding({ conversationId: ROOM_ID, parentConversationId: ROOM_ID }),
     ]);
 
-    expect(handleMatrixSubagentDeliveryTarget(makeDeliveryEvent())).toEqual(deliveryTarget());
+    expect(deliver()).toEqual(deliveryTarget());
   });
 
   it("fails closed when multiple bindings do not match the requester thread", () => {
-    listBindingsForAccountMock.mockReturnValue([
+    mocks.listBindingsForAccountMock.mockReturnValue([
       makeBinding({ conversationId: "$thread-1" }),
       makeBinding({ conversationId: "$thread-2" }),
     ]);
 
-    expect(
-      handleMatrixSubagentDeliveryTarget(
-        makeDeliveryEvent({
-          requesterOrigin: { channel: "matrix", accountId: "ops", threadId: "$other" },
-        }),
-      ),
-    ).toBeUndefined();
+    expect(deliver({ channel: "matrix", accountId: "ops", threadId: "$other" })).toBeUndefined();
   });
 
   it("scans all bindings when requester accountId is absent", () => {
-    listAllBindingsMock.mockReturnValue([makeBinding()]);
+    mocks.listAllBindingsMock.mockReturnValue([makeBinding()]);
 
-    expect(
-      handleMatrixSubagentDeliveryTarget(
-        makeDeliveryEvent({ requesterOrigin: { channel: "matrix" } }),
-      ),
-    ).toEqual(deliveryTarget("$thread"));
-    expect(listAllBindingsMock).toHaveBeenCalledTimes(1);
-    expect(listBindingsForAccountMock).not.toHaveBeenCalled();
+    expect(deliver({ channel: "matrix" })).toEqual(deliveryTarget("$thread"));
+    expect(mocks.listAllBindingsMock).toHaveBeenCalledTimes(1);
+    expect(mocks.listBindingsForAccountMock).not.toHaveBeenCalled();
   });
 });
 
 describe("handleMatrixSubagentEnded", () => {
   it("removes matching bindings and persists each affected account once", async () => {
-    listBindingsForAccountMock.mockReturnValue([
+    mocks.listBindingsForAccountMock.mockReturnValue([
       makeBinding(),
       makeBinding({ targetSessionKey: "agent:ops:subagent:other" }),
     ]);
-    getManagerMock.mockReturnValue({ removeBindingsAsync: removeBindingsMock });
+    mocks.getManagerMock.mockReturnValue({ removeBindingsAsync: mocks.removeBindingsMock });
 
-    await handleMatrixSubagentEnded({
-      targetSessionKey: CHILD_SESSION_KEY,
-      targetKind: "subagent",
-      accountId: "ops",
-    });
+    await handleMatrixSubagentEnded(makeBinding());
 
-    expect(removeBindingsMock).toHaveBeenCalledExactlyOnceWith([makeBinding()]);
+    expect(mocks.removeBindingsMock).toHaveBeenCalledExactlyOnceWith([makeBinding()]);
   });
 
   it("uses the binding service for requested farewell cleanup", async () => {
     const binding = makeBinding();
-    listBindingsForAccountMock.mockReturnValue([binding]);
-    unbindMock.mockResolvedValue([{ ...binding, bindingId: "ops:!room:example:$thread" }]);
+    mocks.listBindingsForAccountMock.mockReturnValue([binding]);
+    mocks.unbindMock.mockResolvedValue([{ ...binding, bindingId: "ops:!room:example:$thread" }]);
 
     await handleMatrixSubagentEnded({
-      targetSessionKey: CHILD_SESSION_KEY,
-      targetKind: "subagent",
-      accountId: "ops",
+      ...binding,
       reason: "subagent-complete",
       sendFarewell: true,
     });
 
-    expect(unbindMock).toHaveBeenCalledWith({
+    expect(mocks.unbindMock).toHaveBeenCalledWith({
       bindingId: "ops:!room:example:$thread",
       reason: "subagent-complete",
       scope: { channel: "matrix", accountId: "ops" },
     });
-    expect(removeBindingsMock).not.toHaveBeenCalled();
+    expect(mocks.removeBindingsMock).not.toHaveBeenCalled();
   });
 });

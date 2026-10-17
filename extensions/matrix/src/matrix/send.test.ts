@@ -19,7 +19,8 @@ import {
 } from "./delivery-plan.js";
 import { createMatrixDraftStream } from "./draft-stream.js";
 import { markdownToMatrixBody, markdownToMatrixHtml } from "./format.js";
-import { createBundledReplacementEvent } from "./monitor/test-events.js";
+import { createBundledReplacementEvent, createPollStartEvent } from "./monitor/test-events.js";
+import type { MatrixRawEvent } from "./sdk.js";
 import { matrixEventToRaw } from "./sdk/event-helpers.js";
 import {
   chunkMatrixText,
@@ -79,9 +80,7 @@ vi.mock("./client-bootstrap.js", () => ({
 }));
 
 const runtimeStub = {
-  config: {
-    current: () => loadConfigMock(),
-  },
+  config: { current: () => loadConfigMock() },
   media: {
     mediaKindFromMime: mediaKindFromMimeMock,
     isVoiceCompatibleAudio: isVoiceCompatibleAudioMock,
@@ -102,8 +101,8 @@ const runtimeStub = {
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
-function originalEvent() {
-  const original = createBundledReplacementEvent("$original");
+function originalEvent(options: Parameters<typeof createBundledReplacementEvent>[1] = {}) {
+  const original = createBundledReplacementEvent("$original", options);
   delete original.unsigned;
   return original;
 }
@@ -144,24 +143,34 @@ function createMatrixTestDecryptionFailure(event: MatrixEvent) {
   return failed;
 }
 
-function mockCallArg(
-  mock: { mock: { calls: Array<Array<unknown>> } },
-  label: string,
-  argIndex: number,
-) {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call[argIndex];
-}
-
 function sentContent(index = 0) {
   return requireRecord(sendMessage.mock.calls[index]?.[1], `sent content ${index}`);
 }
 
 function newContent(content: Record<string, unknown>) {
   return requireRecord(content["m.new_content"], "new content");
+}
+
+function encryptedEvent(event: Partial<MatrixRawEvent>, failed = true) {
+  const encrypted = new MatrixEvent({ ...event, type: "m.room.encrypted" });
+  return failed ? createMatrixTestDecryptionFailure(encrypted) : encrypted;
+}
+
+function relation(rel_type = "m.replace", event_id = "$original") {
+  return { rel_type, event_id };
+}
+
+const reply = { "m.in_reply_to": { event_id: "$reply" } };
+
+function mockChunks() {
+  resolveTextChunkLimitMock.mockReturnValue(6);
+  chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+}
+
+function expectFields(content: Record<string, unknown>, expected: Record<string, unknown>) {
+  expect(Object.fromEntries(Object.keys(expected).map((key) => [key, content[key]]))).toEqual(
+    expected,
+  );
 }
 
 function splitTextAtLimit(text: string, limit = text.length): string[] {
@@ -236,24 +245,23 @@ function chunksFor(text: string, limit: number) {
 }
 
 describe("Matrix formatted chunk boundaries", () => {
-  it("closes and reopens spoilers without exposing chunked secret text", () => {
+  it.each([false, true])("keeps chunked secrets hidden (unmatched prefix=%s)", (unmatched) => {
     const secret = "secret ".repeat(8).trim();
-    const chunks = chunksFor(`before ||${secret}|| after`, 20);
-
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
+    const text = unmatched ? `first ||\n\nsecond ||${secret}||` : `before ||${secret}|| after`;
+    const chunks = chunksFor(text, 20);
+    if (!unmatched) {
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
+    }
     for (const chunk of chunks) {
       expect(markdownToMatrixBody(chunk)).not.toContain("secret");
-      expect(markdownToMatrixHtml(chunk)).not.toContain("||");
+      if (!unmatched) {
+        expect(markdownToMatrixHtml(chunk)).not.toContain("||");
+      }
     }
-  });
-
-  it("does not pair an unmatched paragraph delimiter with a later spoiler", () => {
-    const secret = "secret ".repeat(8).trim();
-    const chunks = chunksFor(`first ||\n\nsecond ||${secret}||`, 20);
-
-    expect(chunks.join("")).toContain("[Spoiler]");
-    expect(chunks.every((chunk) => !markdownToMatrixBody(chunk).includes("secret"))).toBe(true);
+    if (unmatched) {
+      expect(chunks.join("")).toContain("[Spoiler]");
+    }
   });
 
   it("keeps underline-looking tags in code and link metadata literal", () => {
@@ -367,8 +375,7 @@ describe("sendMessageMatrix durable delivery", () => {
   });
 
   it("recovers actual media reply relations after losing the overflow response", async () => {
-    resolveTextChunkLimitMock.mockReturnValue(6);
-    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+    mockChunks();
     const acceptedTransactions = new Map<string, string>();
     mockDurableSend((transactionId) => {
       const existingId = acceptedTransactions.get(transactionId);
@@ -398,7 +405,7 @@ describe("sendMessageMatrix durable delivery", () => {
     expect(
       onDeliveryResult.mock.calls.map(([result]) => [result.messageId, result.content]),
     ).toEqual([["$image", "first"]]);
-    expect(sentContent(0)["m.relates_to"]).toEqual({ "m.in_reply_to": { event_id: "$reply" } });
+    expect(sentContent(0)["m.relates_to"]).toEqual(reply);
     expect(sentContent(1)).not.toHaveProperty("m.relates_to");
     withResolvedRuntimeMatrixClientMock.mockImplementationOnce(
       async (_opts: unknown, run: (resolved: typeof client) => Promise<unknown>) =>
@@ -475,65 +482,65 @@ describe("sendMessageMatrix media", () => {
     }
   });
 
-  it.each([false, true])(
-    "uses the correct image and thumbnail payload (encrypted=%s)",
-    async (encrypted) => {
-      if (encrypted) {
-        ({ client, sendMessage, uploadContent } = makeEncryptedMediaClient());
-      }
-      mockImageThumbnail();
-      resizeToJpegMock.mockResolvedValueOnce(Buffer.from("thumb"));
-      uploadContent
-        .mockResolvedValueOnce("mxc://example/main")
-        .mockResolvedValueOnce("mxc://example/thumb");
-      const mediaAccess = { localRoots: ["/tmp/openclaw"], workspaceDir: "/tmp/openclaw" };
-      await send("    caption @room", {
-        cfg: { channels: { matrix: { mediaMaxMb: 0 } } },
-        mediaUrl: "chart.png",
-        mediaAccess,
-        mediaLocalRoots: mediaAccess.localRoots,
+  it.each([false, true])("sends image and thumbnail payloads (encrypted=%s)", async (encrypted) => {
+    if (encrypted) {
+      ({ client, sendMessage, uploadContent } = makeEncryptedMediaClient());
+    }
+    mockImageThumbnail();
+    resizeToJpegMock.mockResolvedValueOnce(Buffer.from("thumb"));
+    uploadContent
+      .mockResolvedValueOnce("mxc://example/main")
+      .mockResolvedValueOnce("mxc://example/thumb");
+    const mediaAccess = { localRoots: ["/tmp/openclaw"], workspaceDir: "/tmp/openclaw" };
+    await send("    caption @room", {
+      cfg: { channels: { matrix: { mediaMaxMb: 0 } } },
+      mediaUrl: "chart.png",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+    });
+    expect(loadOutboundMediaFromUrlMock).toHaveBeenCalledWith(
+      "chart.png",
+      expect.objectContaining({ mediaAccess, mediaLocalRoots: mediaAccess.localRoots }),
+    );
+    const content = sentContent();
+    const info = requireRecord(content.info, "image info");
+    expectFields(content, {
+      msgtype: "m.image",
+      filename: "photo.png",
+      format: "org.matrix.custom.html",
+      body: "    caption @room",
+      formatted_body: "<pre><code>caption @room\n</code></pre>",
+      "m.mentions": {},
+    });
+    expect(info.mimetype).toBe("image/png");
+    expect(info.thumbnail_info).toEqual({ w: 800, h: 600, mimetype: "image/jpeg", size: 5 });
+    expect(loadOutboundMediaFromUrlMock.mock.calls[0]?.[1].maxBytes).toBeUndefined();
+    if (encrypted) {
+      expect(client.crypto?.encryptMedia).toHaveBeenCalledTimes(2);
+      expect(uploadContent.mock.calls).toEqual([
+        [Buffer.from("encrypted"), "application/octet-stream"],
+        [Buffer.from("encrypted"), "application/octet-stream"],
+      ]);
+      expectFields(content, {
+        url: undefined,
+        file: expect.objectContaining({ url: "mxc://example/main" }),
       });
-      expect(loadOutboundMediaFromUrlMock).toHaveBeenCalledWith(
-        "chart.png",
-        expect.objectContaining({ mediaAccess, mediaLocalRoots: mediaAccess.localRoots }),
-      );
-      const content = sentContent();
-      const info = requireRecord(content.info, "image info");
-      expect(content).toMatchObject({
-        msgtype: "m.image",
-        filename: "photo.png",
-        format: "org.matrix.custom.html",
-        body: "    caption @room",
-        formatted_body: "<pre><code>caption @room\n</code></pre>",
+      expectFields(info, {
+        thumbnail_url: undefined,
+        thumbnail_file: expect.objectContaining({ url: "mxc://example/thumb" }),
       });
-      expect(content["m.mentions"]).toEqual({});
-      expect(loadOutboundMediaFromUrlMock.mock.calls[0]?.[1].maxBytes).toBeUndefined();
-      expect(info.mimetype).toBe("image/png");
-      expect(info.thumbnail_info).toEqual({ w: 800, h: 600, mimetype: "image/jpeg", size: 5 });
-      if (encrypted) {
-        expect(client.crypto?.encryptMedia).toHaveBeenCalledTimes(2);
-        expect(uploadContent.mock.calls).toEqual([
-          [Buffer.from("encrypted"), "application/octet-stream"],
-          [Buffer.from("encrypted"), "application/octet-stream"],
-        ]);
-        expect(content.url).toBeUndefined();
-        expect(content.file).toMatchObject({ url: "mxc://example/main" });
-        expect(info.thumbnail_url).toBeUndefined();
-        expect(info.thumbnail_file).toMatchObject({ url: "mxc://example/thumb" });
-      } else {
-        expect(uploadContent.mock.calls).toEqual([
-          [Buffer.from("media"), "image/png", "photo.png"],
-          [Buffer.from("thumb"), "image/jpeg", "thumbnail.jpg"],
-        ]);
-        expect(content.url).toBe("mxc://example/main");
-        expect(info.thumbnail_url).toBe("mxc://example/thumb");
-        expect(info.thumbnail_file).toBeUndefined();
-      }
-    },
-  );
+    } else {
+      expect(uploadContent.mock.calls).toEqual([
+        [Buffer.from("media"), "image/png", "photo.png"],
+        [Buffer.from("thumb"), "image/jpeg", "thumbnail.jpg"],
+      ]);
+      expect(content.url).toBe("mxc://example/main");
+      expectFields(info, { thumbnail_url: "mxc://example/thumb", thumbnail_file: undefined });
+    }
+  });
 
   it.each([false, true])(
-    "preserves audio delivery and voice transcript relations (compatible=%s)",
+    "sends audio and voice transcript replies (compatible=%s)",
     async (compatible) => {
       mediaKindFromMimeMock.mockReturnValue("audio");
       isVoiceCompatibleAudioMock.mockReturnValue(compatible);
@@ -551,8 +558,7 @@ describe("sendMessageMatrix media", () => {
         replyToId: compatible ? "$reply" : undefined,
       });
       if (compatible) {
-        expect(sentContent(1).body).toBe("voice caption");
-        expect(sentContent(1)["m.relates_to"]).toEqual({ "m.in_reply_to": { event_id: "$reply" } });
+        expectFields(sentContent(1), { body: "voice caption", "m.relates_to": reply });
         expect(result.receipt.parts).toMatchObject([
           { platformMessageId: "$voice", kind: "voice", index: 0, replyToId: "$reply" },
           { platformMessageId: "$transcript", kind: "text", index: 1, replyToId: "$reply" },
@@ -602,15 +608,12 @@ describe("sendMessageMatrix media", () => {
     });
 
     expect(loadConfigMock).not.toHaveBeenCalled();
-    expect(mockCallArg(loadOutboundMediaFromUrlMock, "loadOutboundMediaFromUrl", 0)).toBe(
-      "file:///tmp/photo.png",
-    );
+    expect(loadOutboundMediaFromUrlMock.mock.calls[0]?.[0]).toBe("file:///tmp/photo.png");
     const mediaOptions = requireRecord(
-      mockCallArg(loadOutboundMediaFromUrlMock, "loadOutboundMediaFromUrl", 1),
+      loadOutboundMediaFromUrlMock.mock.calls[0]?.[1],
       "media options",
     );
-    expect(mediaOptions.maxBytes).toBe(1024 * 1024);
-    expect(mediaOptions.mediaLocalRoots).toBeUndefined();
+    expectFields(mediaOptions, { maxBytes: 1024 * 1024, mediaLocalRoots: undefined });
     expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(explicitCfg, "matrix", "ops");
   });
 });
@@ -620,21 +623,16 @@ it("sendMessageMatrix mentions: does not emit mentions from fallback filenames w
 
   await send("", { mediaUrl: "file:///tmp/room.png" });
 
-  expect(sentContent().body).toBe("@room.png");
-  expect(sentContent()["m.mentions"]).toEqual({});
-  expect(sentContent().formatted_body).toBeUndefined();
+  expectFields(sentContent(), { body: "@room.png", "m.mentions": {}, formatted_body: undefined });
 });
 
 describe("sendMessageMatrix threads", () => {
   it("preserves an explicit reply target inside its thread", async () => {
     await send("hello thread", { threadId: "$thread", replyToId: "$reply" });
 
-    const content = sentContent();
-
-    expect(content["m.relates_to"]).toEqual({
-      rel_type: "m.thread",
-      event_id: "$thread",
-      "m.in_reply_to": { event_id: "$reply" },
+    expect(sentContent()["m.relates_to"]).toEqual({
+      ...relation("m.thread", "$thread"),
+      ...reply,
     });
   });
 
@@ -644,8 +642,7 @@ describe("sendMessageMatrix threads", () => {
       .mockResolvedValueOnce("$m1")
       .mockResolvedValueOnce("$m2")
       .mockResolvedValueOnce("$m3");
-    resolveTextChunkLimitMock.mockReturnValue(6);
-    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+    mockChunks();
 
     const result = await send("first|second|third", {
       extraContent: { "com.openclaw.approval": { id: "req-1" } },
@@ -722,14 +719,16 @@ describe("sendSingleTextMessageMatrix", () => {
       await stream.flush();
 
       const content = sentContent();
-      expect(content.msgtype).toBe("m.text");
+      expectFields(content, {
+        msgtype: "m.text",
+        "org.matrix.msc4357.live": {},
+        "m.relates_to": expect.objectContaining(relation("m.thread", "$thread")),
+      });
       expect(content).not.toHaveProperty("m.mentions");
-      expect(content["org.matrix.msc4357.live"]).toEqual({});
       expect(content.formatted_body).toContain(
         "<code>read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed</code>",
       );
       expect(content.formatted_body).not.toContain("matrix.to");
-      expect(content["m.relates_to"]).toMatchObject({ rel_type: "m.thread", event_id: "$thread" });
 
       const editedText = "Still working in the retained account";
       stream.update(editedText);
@@ -739,7 +738,7 @@ describe("sendSingleTextMessageMatrix", () => {
         "!room:example",
       ]);
       expect(newContent(sentContent(1)).body).toBe(editedText);
-      expect(sentContent(1)["m.relates_to"]).toEqual({ rel_type: "m.replace", event_id: "evt1" });
+      expect(sentContent(1)["m.relates_to"]).toEqual(relation("m.replace", "evt1"));
       expect(newContent(sentContent(1))).not.toHaveProperty("m.relates_to");
 
       stream.update("x".repeat(257));
@@ -759,10 +758,9 @@ describe("sendSingleTextMessageMatrix", () => {
 
 describe("editMessageMatrix mentions", () => {
   it("notifies only new mentions across successive edits", async () => {
-    const original = createBundledReplacementEvent("$original", {
+    const original = originalEvent({
       content: { body: "Hello @alice:example.org", "m.mentions": {} },
     });
-    delete original.unsigned;
     getEvent.mockImplementation(async () => ({ ...original, unsigned: undefined }));
     getRelations.mockImplementation(async () => ({
       events: original.unsigned?.["m.relations"]?.["m.replace"]
@@ -773,26 +771,22 @@ describe("editMessageMatrix mentions", () => {
     const alice = { user_ids: ["@alice:example.org"] };
     const everyone = { room: true, user_ids: ["@alice:example.org", "@bob:example.org"] };
     const revisions = [
-      { text: "Hello @alice:example.org", mentions: alice, notify: alice },
-      { text: "Hello again @alice:example.org", mentions: alice, notify: {} },
-      {
-        text: "@room Hello @alice:example.org and @bob:example.org",
-        mentions: everyone,
-        notify: { room: true, user_ids: ["@bob:example.org"] },
-      },
-      {
-        text: "@room Hello again @alice:example.org and @bob:example.org",
-        mentions: everyone,
-        notify: {},
-      },
-      { text: "Hello", mentions: {}, notify: {} },
-      { text: "Hello @alice:example.org", mentions: alice, notify: alice },
-    ];
-    for (const [index, revision] of revisions.entries()) {
-      await edit(revision.text);
+      ["Hello @alice:example.org", alice, alice],
+      ["Hello again @alice:example.org", alice, {}],
+      [
+        "@room Hello @alice:example.org and @bob:example.org",
+        everyone,
+        { room: true, user_ids: ["@bob:example.org"] },
+      ],
+      ["@room Hello again @alice:example.org and @bob:example.org", everyone, {}],
+      ["Hello", {}, {}],
+      ["Hello @alice:example.org", alice, alice],
+    ] as const;
+    for (const [index, [text, mentions, notify]] of revisions.entries()) {
+      await edit(text);
       const content = sentContent(index);
-      expect(content["m.mentions"], `revision ${index} notifications`).toEqual(revision.notify);
-      expect(newContent(content)["m.mentions"]).toEqual(revision.mentions);
+      expect(content["m.mentions"], `revision ${index} notifications`).toEqual(notify);
+      expect(newContent(content)["m.mentions"]).toEqual(mentions);
       original.unsigned = {
         "m.relations": {
           "m.replace": { ...original, unsigned: undefined, event_id: `$edit-${index}`, content },
@@ -810,24 +804,17 @@ describe("editMessageMatrix mentions", () => {
       origin_server_ts: timestamp,
       content: {
         "m.new_content": { body: "edited", "m.mentions": { user_ids: userIds } },
-        "m.relates_to": { rel_type: "m.replace", event_id: original.event_id },
+        "m.relates_to": relation(),
       },
     });
-    const unreadable = (
-      eventId: string,
-      timestamp: number,
-      relation = { rel_type: "m.replace", event_id: original.event_id },
-    ) =>
+    const unreadable = (eventId: string, timestamp: number, eventRelation = relation()) =>
       matrixEventToRaw(
-        createMatrixTestDecryptionFailure(
-          new MatrixEvent({
-            sender: original.sender,
-            event_id: eventId,
-            origin_server_ts: timestamp,
-            type: "m.room.encrypted",
-            content: { "m.relates_to": relation },
-          }),
-        ),
+        encryptedEvent({
+          sender: original.sender,
+          event_id: eventId,
+          origin_server_ts: timestamp,
+          content: { "m.relates_to": eventRelation },
+        }),
       );
     getRelations
       .mockResolvedValueOnce({
@@ -838,8 +825,8 @@ describe("editMessageMatrix mentions", () => {
       .mockResolvedValueOnce({
         events: [
           unreadable("$older", 200),
-          unreadable("$wrong-target", 500, { rel_type: "m.replace", event_id: "$other" }),
-          unreadable("$wrong-relation", 500, { rel_type: "m.thread", event_id: "$original" }),
+          unreadable("$wrong-target", 500, relation("m.replace", "$other")),
+          unreadable("$wrong-relation", 500, relation("m.thread")),
           {
             ...replacement("$redacted", 500, ["@bob:example.org"]),
             unsigned: { redacted_because: {} },
@@ -855,38 +842,29 @@ describe("editMessageMatrix mentions", () => {
     expect(getRelations).toHaveBeenCalledTimes(3);
   });
 
-  it.each([false, true])("rejects the latest unreadable edit (pending=%s)", async (pending) => {
+  it.each([
+    ["original", false],
+    ["original", true],
+    ["latest edit", false],
+    ["latest edit", true],
+  ] as const)("rejects unreadable %s (pending=%s)", async (target, pending) => {
     const original = originalEvent();
-    getEvent.mockResolvedValue(original);
-    let encrypted = new MatrixEvent({
-      event_id: "$unreadable",
-      sender: original.sender,
-      origin_server_ts: 300,
-      type: "m.room.encrypted",
-      content: { "m.relates_to": { rel_type: "m.replace", event_id: original.event_id } },
+    const event =
+      target === "original"
+        ? original
+        : {
+            ...original,
+            event_id: "$unreadable",
+            origin_server_ts: 300,
+            content: { "m.relates_to": relation() },
+          };
+    const unreadable = matrixEventToRaw(encryptedEvent(event, !pending));
+    getEvent.mockResolvedValue(target === "original" ? unreadable : original);
+    getRelations.mockResolvedValue({
+      events: target === "latest edit" ? [unreadable] : [],
+      nextBatch: null,
     });
-    if (!pending) {
-      encrypted = createMatrixTestDecryptionFailure(encrypted);
-    }
-    getRelations.mockResolvedValue({ events: [matrixEventToRaw(encrypted)], nextBatch: null });
     await expect(edit("Hello @alice:example.org")).rejects.toThrow("not fully decrypted");
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
-
-  it.each(["failed", "pending"])("does not mutate a %s original", async (mode) => {
-    const original = originalEvent();
-    let encrypted = new MatrixEvent({
-      event_id: original.event_id,
-      sender: original.sender,
-      origin_server_ts: original.origin_server_ts,
-      content: original.content,
-      type: "m.room.encrypted",
-    });
-    if (mode === "failed") {
-      encrypted = createMatrixTestDecryptionFailure(encrypted);
-    }
-    getEvent.mockResolvedValue(matrixEventToRaw(encrypted));
-    await expect(edit("Hello")).rejects.toThrow("not fully decrypted");
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -912,15 +890,12 @@ describe("editMessageMatrix mentions", () => {
       origin_server_ts: 1,
       content: { body: "Hello @alice:example.org" },
     });
-    const overlay = createMatrixTestDecryptionFailure(
-      new MatrixEvent({
-        event_id: "$overlay",
-        sender: "@bot:example.org",
-        type: "m.room.encrypted",
-        origin_server_ts: 2,
-        content: { "m.relates_to": { rel_type: "m.replace", event_id: "$original" } },
-      }),
-    );
+    const overlay = encryptedEvent({
+      event_id: "$overlay",
+      sender: "@bot:example.org",
+      origin_server_ts: 2,
+      content: { "m.relates_to": relation() },
+    });
     original.makeReplaced(overlay);
     expect(original.isDecryptionFailure()).toBe(false);
     expect(original.getContent()).toEqual({});
@@ -932,9 +907,7 @@ describe("editMessageMatrix mentions", () => {
   it.each(["repeated", "unbounded"])(
     "does not send when relation pagination is %s",
     async (mode) => {
-      const original = createBundledReplacementEvent("$original");
-      delete original.unsigned;
-      getEvent.mockResolvedValue(original);
+      getEvent.mockResolvedValue(originalEvent());
       let page = 0;
       getRelations.mockImplementation(async () => ({
         events: [],
@@ -997,26 +970,13 @@ it("sendPollMatrix mentions: adds m.mentions for poll fallback text", async () =
     { client, cfg: {} },
   );
 
-  expect(mockCallArg(sendEvent, "sendEvent", 0)).toBe("!room:example");
-  expect(mockCallArg(sendEvent, "sendEvent", 1)).toBe("m.poll.start");
-  const content = requireRecord(mockCallArg(sendEvent, "sendEvent", 2), "poll start content");
+  expect(sendEvent.mock.calls[0]?.slice(0, 2)).toEqual(["!room:example", "m.poll.start"]);
+  const content = requireRecord(sendEvent.mock.calls[0]?.[2], "poll start content");
   expect(content["m.mentions"]).toEqual({ room: true, user_ids: ["@alice:example.org"] });
 });
 
 it("voteMatrixPoll: maps 1-based option indexes to Matrix poll answer ids", async () => {
-  getEvent.mockResolvedValue({
-    type: "m.poll.start",
-    content: {
-      "m.poll.start": {
-        question: { "m.text": "Lunch?" },
-        max_selections: 1,
-        answers: [
-          { id: "a1", "m.text": "Pizza" },
-          { id: "a2", "m.text": "Sushi" },
-        ],
-      },
-    },
-  });
+  getEvent.mockResolvedValue(createPollStartEvent("$poll"));
 
   const result = await voteMatrixPoll("room:!room:example", "$poll", {
     client,
@@ -1029,11 +989,13 @@ it("voteMatrixPoll: maps 1-based option indexes to Matrix poll answer ids", asyn
     "org.matrix.msc3381.poll.response": { answers: ["a2"] },
     "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
   });
-  expect(result.eventId).toBe("evt-poll-vote");
-  expect(result.roomId).toBe("!room:example");
-  expect(result.pollId).toBe("$poll");
-  expect(result.answerIds).toEqual(["a2"]);
-  expect(result.labels).toEqual(["Sushi"]);
+  expect(result).toMatchObject({
+    eventId: "evt-poll-vote",
+    roomId: "!room:example",
+    pollId: "$poll",
+    answerIds: ["a2"],
+    labels: ["Sushi"],
+  });
 });
 
 it("sendTypingMatrix: passes account config through when resolving the typing client", async () => {
@@ -1046,9 +1008,7 @@ it("sendTypingMatrix: passes account config through when resolving the typing cl
       run: (resolved: import("./sdk.js").MatrixClient) => Promise<void>,
     ) => {
       expect(opts.cfg).toBe(cfg);
-      expect(opts.accountId).toBe("work");
-      expect(opts.timeoutMs).toBe(12_345);
-      expect(opts.readiness).toBe("none");
+      expect(opts).toMatchObject({ accountId: "work", timeoutMs: 12_345, readiness: "none" });
       return await run(typingClient);
     },
   );

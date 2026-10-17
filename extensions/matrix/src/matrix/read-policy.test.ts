@@ -10,13 +10,22 @@ vi.mock("openclaw/plugin-sdk/plugin-state-store-runtime", () => ({
   },
 }));
 
-function createClient(
-  members: string[],
-  directFlag: boolean | null = null,
-  aliases: { canonicalAlias?: string; altAliases?: string[] } = {},
-  roomName?: string,
-  overrides: Partial<MatrixClient> = {},
-): MatrixClient {
+const GROUP_MEMBERS = ["@bot:example.org", "@alice:example.org", "@bob:example.org"];
+const DM_MEMBERS = GROUP_MEMBERS.slice(0, 2);
+type MatrixPolicy = NonNullable<CoreConfig["channels"]>["matrix"];
+
+function createClient({
+  members = GROUP_MEMBERS,
+  directFlag = null,
+  aliases = {},
+  roomName,
+  ...overrides
+}: {
+  members?: string[];
+  directFlag?: boolean | null;
+  aliases?: { canonicalAlias?: string; altAliases?: string[] };
+  roomName?: string;
+} & Partial<MatrixClient> = {}): MatrixClient {
   return {
     dms: {
       update: vi.fn(async () => false),
@@ -38,19 +47,15 @@ function createClient(
   } as unknown as MatrixClient;
 }
 
-function matrixConfig(matrix: NonNullable<CoreConfig["channels"]>["matrix"]): CoreConfig {
-  return { channels: { matrix } };
-}
-
 type ReadParams = Parameters<typeof withAuthorizedMatrixReadTarget<string>>[0];
 function readTarget(
   client: MatrixClient,
-  cfg: CoreConfig,
+  cfg: MatrixPolicy,
   roomId: string,
   params: Partial<Pick<ReadParams, "run" | "context" | "accountId">> = {},
 ) {
   return withAuthorizedMatrixReadTarget({
-    cfg,
+    cfg: { channels: { matrix: cfg } },
     roomId,
     run: async () => "ok",
     ...params,
@@ -64,8 +69,8 @@ describe("Matrix read policy", () => {
   });
 
   it("allows configured rooms and rejects other rooms before the read", async () => {
-    const client = createClient(["@bot:example.org", "@alice:example.org", "@bob:example.org"]);
-    const cfg = matrixConfig({ groupPolicy: "allowlist", groups: { "!allowed:example.org": {} } });
+    const client = createClient({ members: GROUP_MEMBERS });
+    const cfg: MatrixPolicy = { groupPolicy: "allowlist", groups: { "!allowed:example.org": {} } };
     const read = vi.fn(async () => "ok");
 
     await expect(readTarget(client, cfg, "!allowed:example.org", { run: read })).resolves.toBe(
@@ -105,17 +110,13 @@ describe("Matrix read policy", () => {
     const setAccountData = vi.fn(async (_eventType: string, content: Record<string, unknown>) => {
       directMapping = content;
     });
-    const client = createClient(
-      ["@bot:example.org", scenario.userId],
-      scenario.directFlag,
-      {},
-      undefined,
-      {
-        getAccountData: vi.fn(async () => directMapping),
-        getJoinedRooms: vi.fn(async () => [roomId]),
-        setAccountData,
-      },
-    );
+    const client = createClient({
+      members: ["@bot:example.org", scenario.userId],
+      directFlag: scenario.directFlag,
+      getAccountData: vi.fn(async () => directMapping),
+      getJoinedRooms: vi.fn(async () => [roomId]),
+      setAccountData,
+    });
     // The production client refreshes its DM cache after an account-data write.
     vi.mocked(client.dms.isDm).mockImplementation((candidate) =>
       Object.values(directMapping).some(
@@ -125,11 +126,11 @@ describe("Matrix read policy", () => {
     const read = vi.fn(async () => "ok");
     const result = readTarget(
       client,
-      matrixConfig({
+      {
         groupPolicy: scenario.groupPolicy,
         groups: { "!allowed:example.org": {} },
         dm: { policy: "allowlist", allowFrom: ["@alice:example.org"] },
-      }),
+      },
       `user:${scenario.userId}`,
       {
         accountId: "default",
@@ -155,13 +156,13 @@ describe("Matrix read policy", () => {
   });
 
   it("keeps a restrictive DM allowlist effective under open policy", async () => {
-    const client = createClient(["@bot:example.org", "@alice:example.org"], true);
+    const client = createClient({ members: DM_MEMBERS, directFlag: true });
     const read = vi.fn(async () => "ok");
 
     await expect(
       readTarget(
         client,
-        matrixConfig({ dm: { policy: "open", allowFrom: ["@bob:example.org"] } }),
+        { dm: { policy: "open", allowFrom: ["@bob:example.org"] } },
         "!dm:example.org",
         { run: read },
       ),
@@ -170,14 +171,10 @@ describe("Matrix read policy", () => {
   });
 
   it("allows wildcard DM reads under any non-disabled policy", async () => {
-    const client = createClient(["@bot:example.org", "@alice:example.org"], true);
+    const client = createClient({ members: DM_MEMBERS, directFlag: true });
 
     await expect(
-      readTarget(
-        client,
-        matrixConfig({ dm: { policy: "pairing", allowFrom: ["matrix:*"] } }),
-        "!dm:example.org",
-      ),
+      readTarget(client, { dm: { policy: "pairing", allowFrom: ["matrix:*"] } }, "!dm:example.org"),
     ).resolves.toBe("ok");
   });
 
@@ -199,19 +196,13 @@ describe("Matrix read policy", () => {
       },
     },
   ])("fails closed when $name", async ({ overrides }) => {
-    const client = createClient(
-      ["@bot:example.org", "@alice:example.org"],
-      true,
-      {},
-      undefined,
-      overrides,
-    );
+    const client = createClient({ members: DM_MEMBERS, directFlag: true, ...overrides });
     const read = vi.fn(async () => "ok");
 
     await expect(
       readTarget(
         client,
-        matrixConfig({ groupPolicy: "open", dm: { policy: "disabled" } }),
+        { groupPolicy: "open", dm: { policy: "disabled" } },
         "!unknown:example.org",
         { run: read },
       ),
@@ -220,9 +211,9 @@ describe("Matrix read policy", () => {
   });
 
   it("allows the trusted current room without broadening other targets", async () => {
-    const client = createClient(["@bot:example.org", "@alice:example.org", "@bob:example.org"]);
+    const client = createClient({ members: GROUP_MEMBERS });
     const read = vi.fn(async () => "ok");
-    const cfg = matrixConfig({ groupPolicy: "allowlist", groups: {} });
+    const cfg: MatrixPolicy = { groupPolicy: "allowlist", groups: {} };
 
     await expect(
       readTarget(client, cfg, "!current:example.org", {
@@ -248,13 +239,13 @@ describe("Matrix read policy", () => {
 
   it("preserves the trusted direct type for the current room", async () => {
     const getJoinedRoomMembers = vi.fn(async () => ["@bot:example.org", "@alice:example.org"]);
-    const client = createClient([], null, {}, undefined, { getJoinedRoomMembers });
+    const client = createClient({ members: [], getJoinedRoomMembers });
     const read = vi.fn(async () => "ok");
 
     await expect(
       readTarget(
         client,
-        matrixConfig({ groupPolicy: "disabled", dm: { policy: "pairing", allowFrom: [] } }),
+        { groupPolicy: "disabled", dm: { policy: "pairing", allowFrom: [] } },
         "!current-dm:example.org",
         {
           context: {
@@ -271,12 +262,12 @@ describe("Matrix read policy", () => {
   });
 
   it("allows unmatched group rooms under an open group policy", async () => {
-    const client = createClient(["@bot:example.org", "@alice:example.org", "@bob:example.org"]);
+    const client = createClient({ members: GROUP_MEMBERS });
 
     await expect(
       readTarget(
         client,
-        matrixConfig({ groupPolicy: "open", groups: { "!other:example.org": {} } }),
+        { groupPolicy: "open", groups: { "!other:example.org": {} } },
         "!unmatched:example.org",
       ),
     ).resolves.toBe("ok");
@@ -284,21 +275,19 @@ describe("Matrix read policy", () => {
 
   it("resolves aliases before applying a disabled wildcard room policy", async () => {
     const resolveRoom = vi.fn(async () => "!ops:example.org");
-    const client = createClient(
-      ["@bot:example.org", "@alice:example.org", "@bob:example.org"],
-      null,
-      { canonicalAlias: "#ops:example.org" },
-      undefined,
-      { resolveRoom },
-    );
+    const client = createClient({
+      members: GROUP_MEMBERS,
+      aliases: { canonicalAlias: "#ops:example.org" },
+      resolveRoom,
+    });
 
     await expect(
       readTarget(
         client,
-        matrixConfig({
+        {
           groupPolicy: "allowlist",
           groups: { "!ops:example.org": {}, "*": { enabled: false } },
-        }),
+        },
         "#ops:example.org",
       ),
     ).resolves.toBe("ok");
@@ -307,18 +296,21 @@ describe("Matrix read policy", () => {
 
   it("treats explicitly configured two-member rooms as groups like ingress", async () => {
     const getJoinedRoomMembers = vi.fn(async () => ["@bot:example.org", "@alice:example.org"]);
-    const client = createClient([], true, { canonicalAlias: "#ops:example.org" }, undefined, {
+    const client = createClient({
+      members: [],
+      directFlag: true,
+      aliases: { canonicalAlias: "#ops:example.org" },
       getJoinedRoomMembers,
     });
 
     await expect(
       readTarget(
         client,
-        matrixConfig({
+        {
           groupPolicy: "allowlist",
           groups: { "#ops:example.org": {} },
           dm: { policy: "disabled" },
-        }),
+        },
         "!ops:example.org",
       ),
     ).resolves.toBe("ok");
@@ -326,101 +318,57 @@ describe("Matrix read policy", () => {
   });
 
   it("does not let wildcard room config override direct-message policy", async () => {
-    const client = createClient(["@bot:example.org", "@alice:example.org"], true);
+    const client = createClient({ members: DM_MEMBERS, directFlag: true });
 
     await expect(
       readTarget(
         client,
-        matrixConfig({ groupPolicy: "allowlist", groups: { "*": {} }, dm: { policy: "disabled" } }),
+        { groupPolicy: "allowlist", groups: { "*": {} }, dm: { policy: "disabled" } },
         "!dm:example.org",
       ),
     ).rejects.toThrow("Matrix read target is not allowed.");
   });
 
   it("matches configured room names only when mutable matching is enabled", async () => {
-    const client = createClient(
-      ["@bot:example.org", "@alice:example.org", "@bob:example.org"],
-      null,
-      {},
-      "General",
-    );
+    const client = createClient({ members: GROUP_MEMBERS, roomName: "General" });
 
     await expect(
       readTarget(
         client,
-        matrixConfig({
+        {
           dangerouslyAllowNameMatching: true,
           groupPolicy: "allowlist",
           groups: { General: {} },
-        }),
+        },
         "!general:example.org",
       ),
     ).resolves.toBe("ok");
   });
 
-  it.each(["matrix:room:!blocked:example.org"])(
-    "rejects explicitly disabled room target %s before provider access",
-    async (roomId) => {
-      const getRoomStateEvent = vi.fn(async () => ({}));
-      const getJoinedRoomMembers = vi.fn(async () => [
-        "@bot:example.org",
-        "@alice:example.org",
-        "@bob:example.org",
-      ]);
-      const client = createClient([], null, {}, undefined, {
-        getRoomStateEvent,
-        getJoinedRoomMembers,
-      });
-
-      await expect(
-        readTarget(
-          client,
-          matrixConfig({
-            groupPolicy: "open",
-            groups: { "!blocked:example.org": { enabled: false } },
-          }),
-          roomId,
-          {
-            context: {
-              currentChannelProvider: "matrix",
-              currentChannelId: "!blocked:example.org",
-              requesterAccountId: "default",
-            },
-          },
-        ),
-      ).rejects.toThrow("Matrix read target is not allowed.");
-      expect(getRoomStateEvent).not.toHaveBeenCalled();
-      expect(getJoinedRoomMembers).not.toHaveBeenCalled();
+  it.each([
+    {
+      roomId: "matrix:room:!blocked:example.org",
+      groups: { "!blocked:example.org": { enabled: false } },
+      context: {
+        currentChannelProvider: "matrix",
+        currentChannelId: "!blocked:example.org",
+        requesterAccountId: "default",
+      },
     },
-  );
-
-  it.each(["matrix:channel:!other-account:example.org"])(
-    "rejects wrong-account room target %s before provider access",
-    async (roomId) => {
-      const getRoomStateEvent = vi.fn(async () => ({}));
-      const getJoinedRoomMembers = vi.fn(async () => [
-        "@bot:example.org",
-        "@alice:example.org",
-        "@bob:example.org",
-      ]);
-      const client = createClient([], null, {}, undefined, {
-        getRoomStateEvent,
-        getJoinedRoomMembers,
-      });
-
+    {
+      roomId: "matrix:channel:!other-account:example.org",
+      groups: { "!other-account:example.org": { account: "other" } },
+      accountId: "default",
+    },
+  ])(
+    "rejects disabled or wrong-account target $roomId before provider access",
+    async ({ roomId, groups, ...params }) => {
+      const client = createClient();
       await expect(
-        readTarget(
-          client,
-          matrixConfig({
-            groupPolicy: "open",
-            groups: { "!other-account:example.org": { account: "other" } },
-          }),
-          roomId,
-          { accountId: "default" },
-        ),
+        readTarget(client, { groupPolicy: "open", groups }, roomId, params),
       ).rejects.toThrow("Matrix read target is not allowed.");
-      expect(getRoomStateEvent).not.toHaveBeenCalled();
-      expect(getJoinedRoomMembers).not.toHaveBeenCalled();
+      expect(client.getRoomStateEvent).not.toHaveBeenCalled();
+      expect(client.getJoinedRoomMembers).not.toHaveBeenCalled();
     },
   );
 
@@ -436,12 +384,12 @@ describe("Matrix read policy", () => {
       directFlag: true,
     },
   ])("lets a direct operator read an unconfigured $name", async ({ members, directFlag }) => {
-    const client = createClient(members, directFlag);
+    const client = createClient({ members, directFlag });
 
     await expect(
       readTarget(
         client,
-        matrixConfig({ groupPolicy: "allowlist", dm: { policy: "pairing", allowFrom: [] } }),
+        { groupPolicy: "allowlist", dm: { policy: "pairing", allowFrom: [] } },
         "!operator:example.org",
         { context: { conversationReadOrigin: "direct-operator" } },
       ),
@@ -469,10 +417,10 @@ describe("Matrix read policy", () => {
       directFlag: true,
     },
   ])("keeps $name blocked for direct operators", async ({ cfg, members, directFlag }) => {
-    const client = createClient(members, directFlag ?? null);
+    const client = createClient({ members, directFlag: directFlag ?? null });
 
     await expect(
-      readTarget(client, matrixConfig(cfg), "!blocked:example.org", {
+      readTarget(client, cfg, "!blocked:example.org", {
         accountId: "default",
         context: { conversationReadOrigin: "direct-operator" },
       }),

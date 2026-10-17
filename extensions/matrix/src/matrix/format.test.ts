@@ -7,15 +7,11 @@ import {
   renderMarkdownToMatrixHtmlWithMentions,
   renderMatrixMarkdownTables,
 } from "./format.js";
+import type { MatrixClient } from "./sdk.js";
 
-function renderMentions(markdown: string) {
-  return renderMarkdownToMatrixHtmlWithMentions({
-    markdown,
-    client: {
-      getUserId: async () => "@bot:example.org",
-    } as unknown as import("./sdk.js").MatrixClient,
-  });
-}
+const mentionClient = { getUserId: async () => "@bot:example.org" } as unknown as MatrixClient;
+const renderMentions = (markdown: string) =>
+  renderMarkdownToMatrixHtmlWithMentions({ markdown, client: mentionClient });
 
 const MATRIX_TABLE = "| Name | Age |\n|---|---|\n| Alice | 30 |";
 
@@ -52,8 +48,10 @@ describe("Matrix formatting migration goldens", () => {
     expect(markdownToMatrixBody(markdown)).toBe("before [Spoiler] after");
   });
 
-  it("does not mistake an escaped closing bracket for a link label", () => {
-    const markdown = "\\](||secret||)";
+  it.each([
+    ["escaped closing brackets", "\\](||secret||)"],
+    ["image fallback labels", "![||secret||](https://example.test/image.png)"],
+  ])("keeps spoilers in %s", (_label, markdown) => {
     expect(markdownToMatrixHtml(markdown)).toContain("<span data-mx-spoiler>secret</span>");
     expect(markdownToMatrixBody(markdown)).not.toContain("secret");
   });
@@ -71,12 +69,6 @@ describe("Matrix formatting migration goldens", () => {
 
     const reference = "[visible][id||x||]\n\n[id||x||]: https://example.test";
     expect(markdownToMatrixHtml(reference)).not.toContain("secret");
-  });
-
-  it("keeps spoiler formatting inside image fallback labels", () => {
-    const markdown = "![||secret||](https://example.test/image.png)";
-    expect(markdownToMatrixHtml(markdown)).toContain("<span data-mx-spoiler>secret</span>");
-    expect(markdownToMatrixBody(markdown)).not.toContain("secret");
   });
 
   it("keeps spoiler spans nested when they cross bold formatting", () => {
@@ -116,14 +108,16 @@ describe("Matrix formatting migration goldens", () => {
 });
 
 describe("markdownToMatrixHtml", () => {
-  it("does not auto-link bare file references into external urls", () => {
-    expect(markdownToMatrixHtml("Check README.md and backup.sh")).toBe(
-      "<p>Check README.md and backup.sh</p>",
-    );
-  });
-
-  it("escapes raw HTML", () => {
-    expect(markdownToMatrixHtml("<b>nope</b>")).toBe("<p>&lt;b&gt;nope&lt;/b&gt;</p>");
+  it.each([
+    ["file references", "Check README.md and backup.sh", "<p>Check README.md and backup.sh</p>"],
+    ["raw HTML", "<b>nope</b>", "<p>&lt;b&gt;nope&lt;/b&gt;</p>"],
+    [
+      "multi-paragraph list items",
+      "1. First sentence.\n\n   Second sentence in the same item.",
+      "<ol>\n<li>\n<p>First sentence.</p>\n<p>Second sentence in the same item.</p>\n</li>\n</ol>",
+    ],
+  ])("preserves %s", (_label, markdown, html) => {
+    expect(markdownToMatrixHtml(markdown)).toBe(html);
   });
 
   it("compacts loose lists with mentions via renderMarkdownToMatrixHtmlWithMentions", async () => {
@@ -131,13 +125,6 @@ describe("markdownToMatrixHtml", () => {
       html: '<ol>\n<li>hello <a href="https://matrix.to/#/%40alice%3Aexample.org">@alice:example.org</a></li>\n<li>bye</li>\n</ol>',
       mentions: { user_ids: ["@alice:example.org"] },
     });
-  });
-
-  it("preserves paragraph wrappers for multi-paragraph list items", () => {
-    const html = markdownToMatrixHtml("1. First sentence.\n\n   Second sentence in the same item.");
-    expect(html).toBe(
-      "<ol>\n<li>\n<p>First sentence.</p>\n<p>Second sentence in the same item.</p>\n</li>\n</ol>",
-    );
   });
 
   it.each([
