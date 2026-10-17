@@ -40,6 +40,32 @@ async function mockFilesystem(source: string, overlay: boolean) {
 const assets = async (root: string, controlUi: Parameters<typeof readPluginControlUiAssets>[1]) => [
   ...(await readPluginControlUiAssets(root, controlUi)).assets.keys(),
 ];
+function afterFsOperation(
+  method: "mkdir" | "readFile" | "lstat",
+  target: string,
+  after: () => void,
+) {
+  const original = fs[method];
+  vi.spyOn(fs, method).mockImplementation(async (...args) => {
+    let succeeded = false;
+    try {
+      const result = await Reflect.apply(original, fs, args);
+      succeeded = true;
+      return result;
+    } finally {
+      if (args[0] === target && (succeeded || method === "lstat")) {
+        after();
+      }
+    }
+  });
+}
+function beforeLink(check: (source: string) => void) {
+  const link = fs.link;
+  return vi.spyOn(fs, "link").mockImplementation(async (source, destination) => {
+    check(String(source));
+    return await link(source, destination);
+  });
+}
 
 async function fixture(setup?: (source: string) => Promise<void>) {
   const root = await fs.realpath(dirs.make("retained-runtime-link-"));
@@ -95,10 +121,9 @@ it.each([
   async ({ filesystem, existingTwin }) => {
     const controlUi = { entry: "dist/control-ui/index.js", styles: ["dist/control-ui/theme.css"] };
     const nestedBrowser = "dist/control-ui/@scope/nested";
-    const files = new Map([
-      [
-        "openclaw.plugin.json",
-        manifest("fixture", {
+    const files = new Map(
+      Object.entries({
+        "openclaw.plugin.json": manifest("fixture", {
           providerCatalogEntry: "src/catalog.ts",
           capabilityCatalogEntry: "src/capabilities.ts",
           skills: ["./skills"],
@@ -115,10 +140,7 @@ it.each([
             },
           ],
         }),
-      ],
-      [
-        "package.json",
-        JSON.stringify({
+        "package.json": JSON.stringify({
           name: "fixture",
           openclaw: {
             extensions: ["./index.ts"],
@@ -127,41 +149,39 @@ it.each([
             runtimeSetupEntry: "./dist/setup.js",
           },
         }),
-      ],
-      ["index.ts", "export default { id: 'fixture', register() {} };\n"],
-      ["dist/index.js", "export default { id: 'fixture', register() {} };\n"],
-      ["setup.ts", "export const setup = {};\n"],
-      ["dist/setup.js", "export const setup = {};\n"],
-      ["src/catalog.ts", "export const providers = [];\n"],
-      ["src/catalog.js", "export const providers = [];\n"],
-      ["src/capabilities.ts", "export const capabilities = {};\n"],
-      [
-        "skills/fixture/SKILL.md",
-        "---\nname: fixture\ndescription: Retained runtime fixture\n---\n",
-      ],
-      ["provider-policy-api.ts", "export const policy = {};\n"],
-      ["assets/icon.png", "fixture icon"],
-      ["assets/activity.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
-      ["assets/activity/tool.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
-      ["theme.json", "{}"],
-      ["assets/rocket.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
-      ["assets/beret.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
-      ["assets/ferris.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],
-      ["dist/control-ui/index.js", "export {};\n"],
-      ["dist/control-ui/chunks/shared.js", "export {};\n"],
-      ["dist/control-ui/theme.css", ":root {}\n"],
-      ["dist/control-ui/icons/openclaw.plugin.json", manifest("icons")],
-      ["dist/control-ui/icons/assets/activity/shared.js", "export {};\n"],
-      [
-        `${nestedBrowser}/openclaw.plugin.json`,
-        manifest("nested", { controlUi: { entry: "dist/control-ui/index.js" } }),
-      ],
-      [`${nestedBrowser}/dist/control-ui/index.js`, "export {};\n"],
-      [
-        "node_modules/native-addon/package.json",
-        JSON.stringify({ name: "native-addon", version: "1.0.0", main: "addon.node" }),
-      ],
-    ]);
+        "index.ts": "export default { id: 'fixture', register() {} };\n",
+        "dist/index.js": "export default { id: 'fixture', register() {} };\n",
+        "setup.ts": "export const setup = {};\n",
+        "dist/setup.js": "export const setup = {};\n",
+        "src/catalog.ts": "export const providers = [];\n",
+        "src/catalog.js": "export const providers = [];\n",
+        "src/capabilities.ts": "export const capabilities = {};\n",
+        "skills/fixture/SKILL.md":
+          "---\nname: fixture\ndescription: Retained runtime fixture\n---\n",
+        "provider-policy-api.ts": "export const policy = {};\n",
+        "assets/icon.png": "fixture icon",
+        "assets/activity.svg": '<svg xmlns="http://www.w3.org/2000/svg"/>',
+        "assets/activity/tool.svg": '<svg xmlns="http://www.w3.org/2000/svg"/>',
+        "theme.json": "{}",
+        "assets/rocket.svg": '<svg xmlns="http://www.w3.org/2000/svg"/>',
+        "assets/beret.svg": '<svg xmlns="http://www.w3.org/2000/svg"/>',
+        "assets/ferris.svg": '<svg xmlns="http://www.w3.org/2000/svg"/>',
+        "dist/control-ui/index.js": "export {};\n",
+        "dist/control-ui/chunks/shared.js": "export {};\n",
+        "dist/control-ui/theme.css": ":root {}\n",
+        "dist/control-ui/icons/openclaw.plugin.json": manifest("icons"),
+        "dist/control-ui/icons/assets/activity/shared.js": "export {};\n",
+        [`${nestedBrowser}/openclaw.plugin.json`]: manifest("nested", {
+          controlUi: { entry: "dist/control-ui/index.js" },
+        }),
+        [`${nestedBrowser}/dist/control-ui/index.js`]: "export {};\n",
+        "node_modules/native-addon/package.json": JSON.stringify({
+          name: "native-addon",
+          version: "1.0.0",
+          main: "addon.node",
+        }),
+      }),
+    );
     const payloads = [
       "assets/large-model.bin",
       "lib/implementation.js",
@@ -244,8 +264,7 @@ it.each([
       const retained = stat(f.retained(path.join(relativePlugin, relative)));
       expect(retained.ino === original.ino).toBe(!overlay);
       expect(original.nlink).toBe(overlay ? 1 : 2);
-      expect(retained.nlink).toBe(overlay ? 1 : 2);
-      expect(retained.size).toBe(original.size);
+      expect(retained).toMatchObject({ nlink: overlay ? 1 : 2, size: original.size });
     }
     const sourcePlugin = path.join(f.source, relativePlugin);
     await fs.link(
@@ -285,8 +304,13 @@ it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
     });
     const before = stat(f.worker, { bigint: true });
     let fallback: string | undefined;
-    const link = fs.link;
-    const linking = vi.spyOn(fs, "link");
+    const linking = beforeLink((source) => {
+      if (source === fallback) {
+        throw Object.assign(new Error("hard link unavailable"), {
+          code: mode === "fallback-first" ? "EXDEV" : "EMLINK",
+        });
+      }
+    });
     if (overlay) {
       f.plan.entries.sort(
         (left, right) => Number(left.kind === "directory") - Number(right.kind === "directory"),
@@ -302,14 +326,6 @@ it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
         ...f.plan.entries.filter((entry) => !sharedEntries.includes(entry)),
       ];
       fallback = sharedEntries[mode === "fallback-first" ? 0 : 1]!.path;
-      linking.mockImplementation(async (existing, target) => {
-        if (String(existing) === fallback) {
-          throw Object.assign(new Error("hard link unavailable"), {
-            code: mode === "fallback-first" ? "EXDEV" : "EMLINK",
-          });
-        }
-        return await link(existing, target);
-      });
     }
     const mkdir = vi.spyOn(fs, "mkdir");
     const hash = vi.spyOn(fileDescriptor, "hashFileMutationSnapshotSync");
@@ -365,12 +381,10 @@ it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
 
 it("refuses entries that changed after the inventory and never links a replacement", async () => {
   const f = await fixture();
-  const link = fs.link;
-  vi.spyOn(fs, "link").mockImplementation(async (existing, target) => {
-    if (String(existing) === f.worker) {
+  beforeLink((source) => {
+    if (source === f.worker) {
       throw new Error("must not link a changed file");
     }
-    return await link(existing, target);
   });
   fsSync.renameSync(f.worker, `${f.worker}.original`);
   fsSync.writeFileSync(f.worker, "export const generation = 'replaced';\n", { mode: 0o444 });
@@ -421,12 +435,10 @@ it.each(["next-entry", "copy-publication"] as const)(
       },
     });
     if (stage === "copy-publication") {
-      const link = fs.link;
-      vi.spyOn(fs, "link").mockImplementation(async (existing, target) => {
-        if (existing === later) {
+      beforeLink((source) => {
+        if (source === later) {
           throw Object.assign(new Error("hard link unavailable"), { code: "EMLINK" });
         }
-        return await link(existing, target);
       });
     }
     await expect(f.link()).rejects.toThrow("changed after snapshot inventory");
@@ -517,39 +529,19 @@ it.each(["parent", "relocation", "alias"] as const)(
     let current = true;
     const retainedLauncher = f.retained("node_modules/.bin/tool");
     const alias = path.join(f.plan.privateRoot, "module-alias");
+    const revoke = () => {
+      current = false;
+    };
     if (stage === "parent") {
       f.plan.entries.sort(
         (left, right) => Number(right.path === f.worker) - Number(left.path === f.worker),
       );
-      const mkdir = fs.mkdir;
-      vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
-        const result = await mkdir(...args);
-        if (args[0] === f.retained("dist/state")) {
-          current = false;
-        }
-        return result;
-      });
+      afterFsOperation("mkdir", f.retained("dist/state"), revoke);
     } else if (stage === "relocation") {
-      const readFile = fs.readFile;
-      vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
-        const contents = await readFile(...args);
-        if (args[0] === retainedLauncher) {
-          current = false;
-        }
-        return contents;
-      });
+      afterFsOperation("readFile", retainedLauncher, revoke);
     } else {
       f.plan.aliases.push([alias, f.destination]);
-      const lstat = fs.lstat;
-      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-        try {
-          return await lstat(...args);
-        } finally {
-          if (args[0] === alias) {
-            current = false;
-          }
-        }
-      });
+      afterFsOperation("lstat", alias, revoke);
     }
     await expect(
       f.link(() => {

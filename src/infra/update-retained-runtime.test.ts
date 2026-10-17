@@ -161,7 +161,7 @@ it.for([false, true])(
     expect(await maintain()).toContain(`Removed abandoned updater runtime: ${directory}`);
     expect(assertResourcesSettled).toHaveBeenCalledOnce();
     await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await readFile(path.join(root, "dist/state/store.js"), "utf8")).toBe(backend);
+    expect(await contents(root, "dist/state/store.js")).toBe(backend);
   },
 );
 
@@ -226,6 +226,10 @@ async function writeFiles(root: string, files: Record<string, string>) {
     await writeFile(destination, content);
   }
 }
+
+const contents = (root: string, file: string) => readFile(path.join(root, file), "utf8");
+const expectMissing = (operation: Promise<unknown>) =>
+  expect(operation).rejects.toMatchObject({ code: "ENOENT" });
 
 async function retainedDirectory(base: string) {
   const name = (await fs.readdir(base)).find((entry) =>
@@ -365,7 +369,7 @@ it.each(
       expect(retained).not.toBe(fileURLToPath(moduleUrl));
       const retainedRoot = path.resolve(path.dirname(retained), "..");
       for (const relative of assets) {
-        expect(await readFile(path.join(retainedRoot, relative), "utf8")).toBe("runtime asset");
+        expect(await contents(retainedRoot, relative)).toBe("runtime asset");
       }
       expect(await fs.lstat(recoveryFile, { bigint: true })).toMatchObject({
         nlink: before.nlink,
@@ -538,9 +542,7 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked", "git-modules"] as
       retainedPath = fileURLToPath(source.moduleUrl);
       expect(retainedPath).not.toBe(path.join(root, "dist/state/store.js"));
       const retainedRoot = path.resolve(path.dirname(retainedPath), "../..");
-      await expect(stat(path.join(retainedRoot, ".git/private"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectMissing(stat(path.join(retainedRoot, ".git/private")));
 
       const displaced = `${root}.previous`;
       await rename(root, displaced);
@@ -558,13 +560,9 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked", "git-modules"] as
           layout === "git-modules" ? "fixture/index.js" : "node_modules/fixture/index.js";
         if (layout === "git") {
           expect(await fs.realpath(retired)).toBe(path.join(retainedRoot, "extensions/retired"));
-          await expect(stat(path.join(retired, "package.json"))).rejects.toMatchObject({
-            code: "ENOENT",
-          });
+          await expectMissing(stat(path.join(retired, "package.json")));
         }
-        expect(await readFile(path.join(retired, modulePath), "utf8")).toBe(
-          'export const generation = "retained";\n',
-        );
+        expect(await contents(retired, modulePath)).toBe('export const generation = "retained";\n');
       }
 
       // Target-explicit requests keep their selected generation, even in the retained scope.
@@ -672,9 +670,7 @@ it.each(["npm", "npm-linked", "npm-unresolved", "pnpm11"] as const)(
         // These owners resolve their peers from their own locations, as Node does.
         return;
       }
-      await expect(stat(path.join(retainedAmbient, "ambient-peer"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectMissing(stat(path.join(retainedAmbient, "ambient-peer")));
       await expect(
         readFile(path.join(retainedAmbient, "unrelated/sentinel.txt")),
       ).rejects.toMatchObject({
@@ -699,7 +695,7 @@ it("refuses unsafe fallback storage without changing the installed runtime", asy
     }
     return allocate(...args);
   });
-  const original = await readFile(path.join(root, "dist/state/store.js"), "utf8");
+  const original = await contents(root, "dist/state/store.js");
   const moduleUrl = moduleUrlFor(root).href;
   await expect(
     withRetainedUpdateRuntime(moduleUrl, async (retain) => {
@@ -709,7 +705,7 @@ it("refuses unsafe fallback storage without changing the installed runtime", asy
       });
     }),
   ).rejects.toThrow("Updater temporary directory is inside an installation being replaced");
-  expect(await readFile(path.join(root, "dist/state/store.js"), "utf8")).toBe(original);
+  expect(await contents(root, "dist/state/store.js")).toBe(original);
   expect(await fs.readdir(base)).toEqual(["manager-project"]);
 });
 

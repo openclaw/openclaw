@@ -9,11 +9,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { SystemAgentConfiguredRoute } from "../system-agent/inference-route.js";
 import { selectUpdateRepairInference } from "./update-repair-inference.js";
 
-const mocks = vi.hoisted(() => ({
-  hasAuth: vi.fn(),
-  probe: vi.fn(),
-  catalog: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ hasAuth: vi.fn(), probe: vi.fn(), catalog: vi.fn() }));
 
 vi.mock("../agents/model-auth.js", () => ({
   hasAvailableAuthForProvider: mocks.hasAuth,
@@ -73,12 +69,7 @@ config.agents!.entries!.other = { model: "alpha/other" };
 const probedModels = () => mocks.probe.mock.calls.map(([params]) => params.route.modelLabel);
 
 function select(cfg = config, signal = new AbortController().signal) {
-  return selectUpdateRepairInference({
-    config: cfg,
-    runtime,
-    signal,
-    timeoutMs: 10_000,
-  });
+  return selectUpdateRepairInference({ config: cfg, runtime, signal, timeoutMs: 10_000 });
 }
 
 beforeEach(() => {

@@ -301,39 +301,38 @@ it.each([
   }
 });
 
-it("a resumed driver protects the whole recovery selection", () => {
-  const first = create();
-  const second = create();
-  ageRuns();
-  const resumed = recordUpdateRunStep(
-    second.runId,
-    { step: "build", status: "in_progress", startedAtMs: Date.now() },
-    options,
-  );
-
-  expect(reconcile({ explicit: true, runIds: [first.runId, second.runId] })).toEqual([]);
-  expect(read(first)).toEqual(first);
-  expect(read(second)).toEqual(resumed);
-});
-
-it("commits every eligible row in the explicit recovery selection", () => {
-  const runs = [create(), create()];
-  ageRuns();
-  const reconciled = reconcile({
-    explicit: true,
-    runIds: runs.map((run) => run.runId),
-    requireAllActive: true,
-  });
-  expect(reconciled.map((run) => run.runId).toSorted()).toEqual(
-    runs.map((run) => run.runId).toSorted(),
-  );
-  for (const run of runs) {
-    expect(read(run)).toMatchObject({
-      status: "failed",
-      reason: "abandoned",
+it.each(["resumed", "all-eligible", "new-admission"] as const)(
+  "reconciles the complete captured selection only when eligible (%s)",
+  (scenario) => {
+    const captured = scenario === "new-admission" ? [create()] : [create(), create()];
+    const runIds = captured.map((run) => run.runId);
+    ageRuns();
+    const expected = [...captured];
+    if (scenario === "resumed") {
+      expected[1] = recordUpdateRunStep(
+        captured[1]!.runId,
+        { step: "build", status: "in_progress", startedAtMs: Date.now() },
+        options,
+      );
+    } else if (scenario === "new-admission") {
+      expected.push(create());
+    }
+    const reconciled = reconcile({
+      explicit: true,
+      runIds,
+      requireAllActive: scenario !== "resumed",
     });
-  }
-});
+    if (scenario === "all-eligible") {
+      expect(reconciled.map((run) => run.runId).toSorted()).toEqual(runIds.toSorted());
+      for (const run of captured) {
+        expect(read(run)).toMatchObject({ status: "failed", reason: "abandoned" });
+      }
+    } else {
+      expect(reconciled).toEqual([]);
+      expect(expected.map(read)).toEqual(expected);
+    }
+  },
+);
 
 it("automatically reconciles only dead drivers", () => {
   const dead = create({ origin: { driver: exitedDriver() } });
@@ -344,18 +343,6 @@ it("automatically reconciles only dead drivers", () => {
   expect(reconcile()).toMatchObject([{ runId: dead.runId, status: "failed", reason: "abandoned" }]);
   expect(read(live)).toEqual(live);
   expect(read(legacy)).toEqual(legacy);
-});
-
-it("new admissions protect a captured recovery selection", () => {
-  const captured = create();
-  ageRuns();
-  const admitted = create();
-
-  expect(reconcile({ explicit: true, runIds: [captured.runId], requireAllActive: true })).toEqual(
-    [],
-  );
-  expect(read(captured)).toEqual(captured);
-  expect(read(admitted)).toEqual(admitted);
 });
 
 it("adoption rejects old heartbeats without refreshing activity", () => {
