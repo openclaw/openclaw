@@ -6,6 +6,7 @@ import {
   withSessionCompactionPersistenceAsync,
   type CommittedCompactionAppend,
   type PreparedCompactionAppend,
+  type CompactionAppendPersistenceAsync,
 } from "../../agents/sessions/session-compaction-persistence.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -60,7 +61,16 @@ async function seedCompaction(
     await manager.appendMessageAsync({ role: "user", content: "keep", timestamp: 1 }),
     "Compaction fixture must append its retained user entry",
   );
-  return { manager, keptId };
+  const persist: CompactionAppendPersistenceAsync = (prepared) =>
+    persistCompactionBoundaryWithSessionEntryAsync(scope, {
+      prepared,
+      transcriptByteCompactionLatch: byteLatch(scope),
+    });
+  const compact = (save = persist) =>
+    withSessionCompactionPersistenceAsync(manager, save, () =>
+      manager.appendCompactionAsync("summary", keptId, 100),
+    );
+  return { manager, keptId, persist, compact };
 }
 
 type CompactionScope = Parameters<typeof persistCompactionBoundaryWithSessionEntrySync>[0];
@@ -100,17 +110,7 @@ function expectRolledBack(
 
 it("retains intervening accounting writes and publishes a usable transcript version", async () => {
   const scope = sessionScope("successive-compactions", "successive-compactions");
-  const { manager, keptId } = await seedCompaction(scope);
-  const compact = () =>
-    withSessionCompactionPersistenceAsync(
-      manager,
-      (prepared) =>
-        persistCompactionBoundaryWithSessionEntryAsync(scope, {
-          prepared,
-          transcriptByteCompactionLatch: byteLatch(scope),
-        }),
-      () => manager.appendCompactionAsync("summary", keptId, 100),
-    );
+  const { manager, compact } = await seedCompaction(scope);
   await compact();
   await upsertSessionEntryCore(scope, {
     ...loadSessionEntry(scope)!,
@@ -141,22 +141,15 @@ it("retains a committed receipt when accounting retargets the manager before pub
     sessionId: "replacement",
     sessionKey: "agent:main:compaction-retarget-next",
   };
-  const { manager, keptId } = await seedCompaction(scope);
+  const { manager, compact, persist } = await seedCompaction(scope);
   await upsertSessionEntryCore(replacement, { sessionId: replacement.sessionId, updatedAt: 1 });
   let committed: CommittedCompactionAppend | undefined;
-  const pending = withSessionCompactionPersistenceAsync(
-    manager,
-    async (prepared) => {
-      committed = await persistCompactionBoundaryWithSessionEntryAsync(scope, {
-        prepared,
-        transcriptByteCompactionLatch: byteLatch(scope),
-      });
-      // The independent retarget must not inherit the compaction's physical writer admission.
-      await runInDetachedAsyncContext(() => manager.setSessionTargetAsync(replacement));
-      return committed;
-    },
-    () => manager.appendCompactionAsync("summary", keptId, 100),
-  );
+  const pending = compact(async (prepared) => {
+    committed = await persist(prepared);
+    // The independent retarget must not inherit the compaction's physical writer admission.
+    await runInDetachedAsyncContext(() => manager.setSessionTargetAsync(replacement));
+    return committed;
+  });
   const failure: unknown = await pending.catch((error: unknown) => error);
   const receipt = expectDefined(committed, "Compaction must commit before retargeting");
   expect(failure).toMatchObject({
@@ -180,7 +173,7 @@ it.each(["ambient", "explicit"] as const)(
   "refuses a writer acquired while an owner-less compaction waits for admission (%s)",
   async (binding) => {
     const scope = sessionScope("awaited-compaction-owner");
-    const { manager, keptId } = await seedCompaction(scope);
+    const { compact, keptId } = await seedCompaction(scope);
     const original = loadSessionEntry(scope)!;
     expect(original.activeWriterRunId).toBeUndefined();
     const expectedOwner = {
@@ -208,16 +201,7 @@ it.each(["ambient", "explicit"] as const)(
                 assertCommitAllowed: () => {},
                 withTranscriptWrite: async (run) => await run(),
               },
-              () =>
-                withSessionCompactionPersistenceAsync(
-                  manager,
-                  (prepared) =>
-                    persistCompactionBoundaryWithSessionEntryAsync(scope, {
-                      prepared,
-                      transcriptByteCompactionLatch: byteLatch(scope),
-                    }),
-                  () => manager.appendCompactionAsync("summary", keptId, 100),
-                ),
+              () => compact(),
             )
           : persistCompactionBoundaryWithSessionEntryAsync(fencedScope, {
               prepared: preparedBoundary(fencedScope, keptId, "queued-compaction"),
@@ -244,22 +228,15 @@ it.each(["ambient", "explicit"] as const)(
 
 it("resolves after the boundary and accounting commit for incognito sessions", async () => {
   const scope = sessionScope("dashboard:incognito-awaited-compaction");
-  const { manager, keptId } = await seedCompaction(scope, { incognito: true });
+  const { manager, keptId, persist, compact } = await seedCompaction(scope, { incognito: true });
   const latch = byteLatch(scope);
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const pending = withSessionCompactionPersistenceAsync(
-    manager,
-    async (prepared) => {
-      entered.resolve();
-      await release.promise;
-      return await persistCompactionBoundaryWithSessionEntryAsync(scope, {
-        prepared,
-        transcriptByteCompactionLatch: latch,
-      });
-    },
-    () => manager.appendCompactionAsync("summary", keptId, 100),
-  );
+  const pending = compact(async (prepared) => {
+    entered.resolve();
+    await release.promise;
+    return await persist(prepared);
+  });
   let entryId: string;
   try {
     await Promise.race([

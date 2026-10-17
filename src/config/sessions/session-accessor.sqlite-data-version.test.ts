@@ -48,12 +48,10 @@ vi.mock("./session-accessor.sqlite-status.js", async (importOriginal) => {
 afterAll(clearRuntimeConfigSnapshot);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-entry-cache-");
 
-beforeEach(() => {
-  parseSessionEntryCalls.mockClear();
-});
+beforeEach(() => parseSessionEntryCalls.mockClear());
 
 afterEach(() => {
-  vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
@@ -87,18 +85,22 @@ async function seedPair(label: string) {
   return { scope, sibling };
 }
 
-function writeRaw(db: DatabaseSync, sessionKey: string, value: SessionEntry) {
-  db.prepare("UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?").run(
-    JSON.stringify(value),
-    value.updatedAt,
-    sessionKey,
-  );
-}
-
 function insertRaw(db: DatabaseSync, sessionKey: string, value: SessionEntry) {
   db.prepare(
     "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
   ).run(sessionKey, value.sessionId, JSON.stringify(value), value.updatedAt);
+}
+
+function expectSmallListPayloads() {
+  expect(parseSessionEntryCalls.mock.calls.every(([json]) => Buffer.byteLength(json) < 1024)).toBe(
+    true,
+  );
+}
+
+function expectCached<T>(read: () => T, previous: T) {
+  parseSessionEntryCalls.mockClear();
+  expect(read()).toBe(previous);
+  expect(parseSessionEntryCalls).not.toHaveBeenCalled();
 }
 
 function listingEntries(scope: SessionScope, clone = false) {
@@ -145,22 +147,18 @@ it("reopens pre-device-folder entries through the codec, full accessor, and list
     label: previousEntry.label,
     worktree: previousEntry.worktree,
   });
-  expect(listed?.deviceFolder).toBeUndefined();
-  expect(listed?.skillsSnapshot).toBeUndefined();
+  expect([listed?.deviceFolder, listed?.skillsSnapshot]).toEqual([undefined, undefined]);
   expect(parseSessionEntryCalls).toHaveBeenCalled();
-  parseSessionEntryCalls.mockClear();
-  expect(listingEntries(scope).get(scope.sessionKey)).toBe(listed);
-  expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+  expectCached(() => listingEntries(scope).get(scope.sessionKey), listed);
   expect(openSessionEntryReadView(scope).get(scope.sessionKey)).toEqual(listed);
 
   await upsertSessionEntryCore(scope, { ...full!, label: "Continued after upgrade" });
   await closeOpenClawAgentDatabasesAsync(scope.env.OPENCLAW_STATE_DIR);
   const continued = loadSessionEntry(scope);
   expect(continued).toMatchObject({
-    sessionId: previousEntry.sessionId,
+    ...previousEntry,
     label: "Continued after upgrade",
-    modelOverride: previousEntry.modelOverride,
-    worktree: previousEntry.worktree,
+    updatedAt: expect.any(Number),
   });
   expect(continued!.updatedAt).toBeGreaterThanOrEqual(previousEntry.updatedAt);
   expect(continued?.deviceFolder).toBeUndefined();
@@ -184,12 +182,9 @@ it("reads retained candidate windows freshly and honors owner exclusions", () =>
     for (const id of ids) {
       insert.run(id, scope.sessionKey);
     }
-    expect(readReferencedSessionIds(current, undefined, ids.slice(1))).toEqual(
-      new Set(ids.slice(1)),
-    );
-    expect(readReferencedSessionIds(current, undefined, ids.slice(0, 1))).toEqual(
-      new Set(ids.slice(0, 1)),
-    );
+    for (const candidates of [ids.slice(1), ids.slice(0, 1)]) {
+      expect(readReferencedSessionIds(current, undefined, candidates)).toEqual(new Set(candidates));
+    }
     expect(readReferencedSessionIds(current, new Set([scope.sessionKey]), ids)).toEqual(new Set());
   }, scope);
   expect(readReferencedSessionIds(database)).toEqual(new Set(["current", ...ids]));
@@ -229,14 +224,11 @@ it.each(["plugin-owned-state", "promoted-slots"] as const)(
     const scope = createSessionScope("plugin-cleanup");
     vi.stubEnv("OPENCLAW_STATE_DIR", scope.env.OPENCLAW_STATE_DIR);
     const siblingScope = { ...scope, sessionKey: "agent:main:plugin-cleanup-sibling" };
-    const { skillsSnapshot, systemPromptReport } = savedPrompts(
-      "unneeded cleanup prompt".repeat(4096),
-    );
+    const prompts = savedPrompts("unneeded cleanup prompt".repeat(4096));
     const entry = {
       sessionId: "plugin-cleanup",
       updatedAt: 1,
-      skillsSnapshot,
-      systemPromptReport,
+      ...prompts,
       pluginExtensions: { fixture: { state: { active: true } } },
       pluginExtensionSlotKeys: { fixture: { state: "fixtureState" } },
       fixtureState: { active: true },
@@ -249,31 +241,25 @@ it.each(["plugin-owned-state", "promoted-slots"] as const)(
 
     parseSessionEntryCalls.mockClear();
     const clone = vi.spyOn(globalThis, "structuredClone");
-    try {
-      expect(
-        await cleanupPluginHostSessionStore({
-          agentId: scope.agentId,
-          storePath: database.path,
-          sessionKey: scope.sessionKey,
-          pluginId: "fixture",
-          sessionEntrySlotKeys: new Set(["fixtureState"]),
-          mode,
-        }),
-      ).toBe(1);
-      expect(
-        clone.mock.calls.some(
-          ([value]) => isRecord(value) && value.sessionId === "plugin-cleanup-sibling",
-        ),
-      ).toBe(false);
-    } finally {
-      clone.mockRestore();
-    }
     expect(
-      parseSessionEntryCalls.mock.calls.every(([json]) => Buffer.byteLength(json) < 1024),
-    ).toBe(true);
+      await cleanupPluginHostSessionStore({
+        agentId: scope.agentId,
+        storePath: database.path,
+        sessionKey: scope.sessionKey,
+        pluginId: "fixture",
+        sessionEntrySlotKeys: new Set(["fixtureState"]),
+        mode,
+      }),
+    ).toBe(1);
+    expect(
+      clone.mock.calls.some(
+        ([value]) => isRecord(value) && value.sessionId === "plugin-cleanup-sibling",
+      ),
+    ).toBe(false);
+    clone.mockRestore();
+    expectSmallListPayloads();
     const cleaned = loadSessionEntry(scope);
-    expect(cleaned?.skillsSnapshot).toEqual(skillsSnapshot);
-    expect(cleaned?.systemPromptReport).toEqual(systemPromptReport);
+    expect(cleaned).toEqual(expect.objectContaining(prompts));
     expect(cleaned).not.toHaveProperty("fixtureState");
     expect(cleaned?.pluginExtensions).toEqual(
       mode === "promoted-slots" ? entry.pluginExtensions : undefined,
@@ -285,16 +271,12 @@ it.each(["plugin-owned-state", "promoted-slots"] as const)(
 it("omits saved prompts from usage inventory while preserving full transcript reads", async () => {
   const scope = createSessionScope("usage-inventory");
   const sessionId = "usage-inventory";
-  const { skillsSnapshot, systemPromptReport } = savedPrompts(
-    "unused usage snapshot α🦞".repeat(4096),
-  );
+  const prompts = savedPrompts("unused usage snapshot α🦞".repeat(4096));
   const worktree = { id: "usage-worktree", branch: "main", repoRoot: "/repo" };
   const deviceFolder = { deviceId: "device-one", path: "/home/example/project" };
   await upsertSessionEntryCore(scope, {
-    sessionId,
-    updatedAt: 1,
-    skillsSnapshot,
-    systemPromptReport,
+    ...sessionEntry(sessionId),
+    ...prompts,
     worktree,
     deviceFolder,
   });
@@ -315,17 +297,14 @@ it("omits saved prompts from usage inventory while preserving full transcript re
     }),
   ]);
   expect(parseSessionEntryCalls).toHaveBeenCalledOnce();
-  expect(parseSessionEntryCalls.mock.calls.every(([json]) => Buffer.byteLength(json) < 1024)).toBe(
-    true,
-  );
+  expectSmallListPayloads();
   expect(await listUsageCountedTranscriptStats(scope.agentId, inventoryParams)).toEqual(inventory);
 
   const fullScope = { agentId: scope.agentId, env: scope.env };
   for (const options of [{}, { sessionId }]) {
     const full = listSessionTranscriptInstances(fullScope, options)[0];
     const listed = listSessionTranscriptInstances(scope, options)[0];
-    expect(full?.entry.skillsSnapshot).toEqual(skillsSnapshot);
-    expect(full?.entry.systemPromptReport).toEqual(systemPromptReport);
+    expect(full?.entry).toEqual(expect.objectContaining(prompts));
     expect(listed).toEqual({
       ...full,
       entry: { ...full?.entry, skillsSnapshot: undefined, systemPromptReport: undefined },
@@ -333,9 +312,11 @@ it("omits saved prompts from usage inventory while preserving full transcript re
     expect(listed?.entry.worktree).not.toBe(full?.entry.worktree);
     listed!.entry.worktree!.branch = "changed by reader";
     listed!.entry.deviceFolder!.path = "/mutated-copy";
-    expect(listSessionTranscriptInstances(scope, options)[0]?.entry.worktree).toEqual(worktree);
-    expect(listSessionTranscriptInstances(scope, options)[0]?.entry.deviceFolder).toEqual(
-      deviceFolder,
+    expect(listSessionTranscriptInstances(scope, options)[0]?.entry).toEqual(
+      expect.objectContaining({
+        worktree,
+        deviceFolder,
+      }),
     );
   }
 });
@@ -350,6 +331,10 @@ it("keeps same-path caches isolated by live connection", async () => {
   }
   const alternate = opened.database.db;
   const parse = vi.spyOn(JSON, "parse");
+  const expectOneParse = () =>
+    expect(
+      parse.mock.calls.filter(([json]) => json.includes('"sessionId":"connection-identity"')),
+    ).toHaveLength(1);
 
   try {
     parseSessionEntryCalls.mockClear();
@@ -358,24 +343,17 @@ it("keeps same-path caches isolated by live connection", async () => {
       scope.sessionKey,
     );
     expect(alternateEntry?.label).toBe("connection-identity");
-    expect(
-      parse.mock.calls.filter(([json]) => json.includes('"sessionId":"connection-identity"')),
-    ).toHaveLength(1);
+    expectOneParse();
 
-    parseSessionEntryCalls.mockClear();
-    const second = listSessionEntriesCore({ ...scope, clone: false });
-
-    expect(second[0]?.entry).toBe(first[0]?.entry);
-    expect(parseSessionEntryCalls).not.toHaveBeenCalled();
-
-    parseSessionEntryCalls.mockClear();
-    const alternateAgain = readSessionEntryCache(alternateDatabase, { cache: true });
-
-    expect(alternateAgain.entries.get(scope.sessionKey)).toBe(alternateEntry);
-    expect(parseSessionEntryCalls).not.toHaveBeenCalled();
-    expect(
-      parse.mock.calls.filter(([json]) => json.includes('"sessionId":"connection-identity"')),
-    ).toHaveLength(1);
+    expectCached(
+      () => listSessionEntriesCore({ ...scope, clone: false })[0]?.entry,
+      first[0]?.entry,
+    );
+    expectCached(
+      () => readSessionEntryCache(alternateDatabase, { cache: true }).entries.get(scope.sessionKey),
+      alternateEntry,
+    );
+    expectOneParse();
   } finally {
     parse.mockRestore();
     opened.database.close();
@@ -418,19 +396,14 @@ it("adds a native insertion to a warm snapshot without reparsing siblings", asyn
 });
 
 it("rejects a transcript write after its persisted owner changes", async () => {
-  const scope = createSessionScope("transcript-owner-conflict");
   const sessionId = "owned-transcript-session";
-  await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+  const scope = await seed("transcript-owner-conflict", { sessionId });
 
   expect(() =>
     runOpenClawAgentWriteTransaction((database) => {
       ensureTranscriptSessionRoot(
         database,
-        {
-          ...scope,
-          sessionId,
-          sessionKey: "agent:main:stale-owner",
-        },
+        { ...scope, sessionId, sessionKey: "agent:main:stale-owner" },
         2,
       );
     }, scope),
@@ -457,8 +430,12 @@ it("bypasses the cache in a transaction and reuses the persisted snapshot after 
 
   expect(() =>
     runOpenClawAgentWriteTransaction((database) => {
-      const updated = { ...borrowedBefore, label: "uncommitted", updatedAt: 2 };
-      writeRaw(requireNativeSqliteDatabase(database.db), scope.sessionKey, updated);
+      database.db
+        .prepare("UPDATE session_nodes SET entry_json = ?, updated_at = 2 WHERE session_key = ?")
+        .run(
+          JSON.stringify({ ...borrowedBefore, label: "uncommitted", updatedAt: 2 }),
+          scope.sessionKey,
+        );
       expect(loadSessionEntry({ ...scope, clone: false })?.label).toBe("uncommitted");
       throw new Error("roll back cache probe");
     }, scope),
@@ -469,7 +446,5 @@ it("bypasses the cache in a transaction and reuses the persisted snapshot after 
   expect(borrowedAfter).toStrictEqual(borrowedBefore);
   expect(borrowedAfter?.label).toBe("before");
   expect(parseSessionEntryCalls).toHaveBeenCalledTimes(1);
-  parseSessionEntryCalls.mockClear();
-  expect(listSessionEntriesCore({ ...scope, clone: false })[0]?.entry).toBe(borrowedAfter);
-  expect(parseSessionEntryCalls).not.toHaveBeenCalled();
+  expectCached(() => listSessionEntriesCore({ ...scope, clone: false })[0]?.entry, borrowedAfter);
 });

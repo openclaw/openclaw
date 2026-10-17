@@ -7,7 +7,10 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.test-support.js";
@@ -24,6 +27,23 @@ import { recordSessionParticipant } from "./session-accessor.sqlite-participants
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import type { SessionEntry } from "./types.js";
+
+function entryFixture(state: OpenClawTestState, sessionId: string) {
+  const key = `agent:main:${sessionId}`;
+  const scope = { agentId: "main", env: state.env, sessionKey: key };
+  const database = openOpenClawAgentDatabase(scope);
+  const write = (fields: Partial<SessionEntry>) =>
+    runOpenClawAgentWriteTransaction(
+      (writer) => writeSessionEntry(writer, key, { sessionId, updatedAt: 10, ...fields }),
+      scope,
+    );
+  return { key, scope, database, write };
+}
+
+const withEntryFixture = (
+  id: string,
+  run: (fixture: ReturnType<typeof entryFixture>) => void | Promise<void>,
+) => withOpenClawTestState({ scenario: "minimal" }, async (state) => run(entryFixture(state, id)));
 
 type Writer = Parameters<typeof writeSessionEntryPatchInDatabase>[0];
 type Patch = Parameters<typeof writeSessionEntryPatchInDatabase>[1];
@@ -46,10 +66,8 @@ function patchEntry(
   });
 }
 
-it("publishes canonical side metadata through cold, warm, and field-only writes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:cache-metadata" };
-    const database = openOpenClawAgentDatabase(scope);
+it("publishes canonical side metadata through cold, warm, and field-only writes", () =>
+  withEntryFixture("cache-metadata", async ({ scope, database, write: writeFields }) => {
     let published: ReturnType<typeof readPreparedSessionEntryChange>;
     const unsubscribe = sessionChanges.subscribeProjection((change) => {
       if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
@@ -63,16 +81,11 @@ it("publishes canonical side metadata through cold, warm, and field-only writes"
       }
     };
     const write = (label: string, updatedAt = 10) =>
-      runOpenClawAgentWriteTransaction(
-        (writer) =>
-          writeSessionEntry(writer, scope.sessionKey, {
-            sessionId: "cache-metadata",
-            updatedAt,
-            label,
-            skillsSnapshot: { prompt: "saved prompt", skills: [] },
-          }),
-        scope,
-      );
+      writeFields({
+        updatedAt,
+        label,
+        skillsSnapshot: { prompt: "saved prompt", skills: [] },
+      });
     const current = () =>
       readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))?.get(
         scope.sessionKey,
@@ -124,24 +137,14 @@ it("publishes canonical side metadata through cold, warm, and field-only writes"
     } finally {
       unsubscribe();
     }
-  });
-});
+  }));
 
-it("skips unchanged entry and snapshot writes while retaining current transcript observation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:entry-noop" };
-    const database = openOpenClawAgentDatabase(scope);
+it("skips unchanged entry and snapshot writes while retaining current transcript observation", () =>
+  withEntryFixture("entry-noop", async ({ scope, database, write }) => {
     const skillsSnapshot = { prompt: "saved prompt", skills: [] };
-    runOpenClawAgentWriteTransaction(
-      (writer) =>
-        writeSessionEntry(writer, scope.sessionKey, {
-          sessionId: "entry-noop",
-          updatedAt: 10,
-          skillsSnapshot,
-        }),
-      scope,
-    );
+    write({ skillsSnapshot });
     const assertCommitAllowed = vi.fn();
+    const savedPatch = () => ({ skillsSnapshot: structuredClone(skillsSnapshot) });
     const patch = async (fields: Partial<SessionEntry>) =>
       runOpenClawAgentWriteTransaction(
         (writer) =>
@@ -155,34 +158,27 @@ it("skips unchanged entry and snapshot writes while retaining current transcript
       );
     // Settle the initial transcript observation before measuring unchanged rows.
     await patch({});
+    const writeTables = new Map<string, "nodes" | "windows" | "snapshots">([
+      ["session_nodes", "nodes"],
+      ["session_windows", "windows"],
+      ["session_entry_snapshots", "snapshots"],
+    ] as const);
     const sql = trackSqliteStatementExecutions(
       requireNativeSqliteDatabase(database.db),
       ["nodes", "windows", "snapshots"],
-      (query) => {
-        const table = /^(?:insert into|update|delete from) "([^"]+)"/iu.exec(query)?.[1];
-        return table === "session_nodes"
-          ? "nodes"
-          : table === "session_windows"
-            ? "windows"
-            : table === "session_entry_snapshots"
-              ? "snapshots"
-              : null;
-      },
+      (query) =>
+        writeTables.get(/^(?:insert into|update|delete from) "([^"]+)"/iu.exec(query)?.[1] ?? "") ??
+        null,
     );
     try {
       assertCommitAllowed.mockClear();
-      await expect(
-        patch({ skillsSnapshot: structuredClone(skillsSnapshot) }),
-      ).resolves.toMatchObject({
-        updatedAt: 10,
-        skillsSnapshot,
-      });
+      await expect(patch(savedPatch())).resolves.toMatchObject({ updatedAt: 10, skillsSnapshot });
       expect(sql.counts).toEqual({ nodes: 0, windows: 0, snapshots: 0 });
       expect(assertCommitAllowed).toHaveBeenCalled();
 
       await patch({
         lastRunError: "retained error",
-        skillsSnapshot: structuredClone(skillsSnapshot),
+        ...savedPatch(),
       });
       expect(sql.counts).toEqual({ nodes: 1, windows: 0, snapshots: 0 });
       expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
@@ -205,7 +201,7 @@ it("skips unchanged entry and snapshot writes while retaining current transcript
           .get("entry-noop");
       const unobserved = watermark();
       expect(unobserved?.transcript_observed_at).not.toBe(unobserved?.transcript_updated_at);
-      await patch({ skillsSnapshot: structuredClone(skillsSnapshot) });
+      await patch(savedPatch());
       expect(sql.counts).toEqual({ ...before, windows: before.windows + 1 });
       const observed = watermark();
       expect(observed?.transcript_observed_at).toBe(observed?.transcript_updated_at);
@@ -215,15 +211,12 @@ it("skips unchanged entry and snapshot writes while retaining current transcript
     } finally {
       sql.restore();
     }
-  });
-});
+  }));
 
 it.each(["entry", "target"] as const)(
   "publishes exact %s patch postimages without rereading written facts",
-  async (selection) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:entry-postimage" };
-      const database = openOpenClawAgentDatabase(scope);
+  (selection) =>
+    withEntryFixture("entry-postimage", ({ key, scope, database, write }) => {
       const readSnapshot = (writer: typeof database) =>
         selection === "entry"
           ? readSessionEntrySelectionSnapshot(writer, scope.sessionKey, true, true)
@@ -235,27 +228,21 @@ it.each(["entry", "target"] as const)(
               },
               { includeWindowFacts: true },
             );
-      runOpenClawAgentWriteTransaction(
-        (writer) =>
-          writeSessionEntry(writer, scope.sessionKey, {
-            sessionId: "entry-postimage",
-            updatedAt: 10,
-            activitySummary: {
-              version: 1,
-              text: "Empty transcript",
-              updatedAt: 10,
-              sessionId: "entry-postimage",
-              generation: null,
-              maxSeq: null,
-              leafEntryId: null,
-              coveredMessages: 0,
-              totalMessages: 0,
-              omittedContent: false,
-            },
-            skillsSnapshot: { prompt: "private saved prompt", skills: [] },
-          }),
-        scope,
-      );
+      write({
+        activitySummary: {
+          version: 1,
+          text: "Empty transcript",
+          updatedAt: 10,
+          sessionId: "entry-postimage",
+          generation: null,
+          maxSeq: null,
+          leafEntryId: null,
+          coveredMessages: 0,
+          totalMessages: 0,
+          omittedContent: false,
+        },
+        skillsSnapshot: { prompt: "private saved prompt", skills: [] },
+      });
       recordSessionParticipant(scope, { identity: { type: "agent", id: "first" }, promptedAt: 10 });
       const addSideTables = (member: string) => {
         database.db
@@ -318,36 +305,33 @@ it.each(["entry", "target"] as const)(
             maintenancePlans: [],
             membershipInvalidatedKeys: [],
           };
-          const before = { ...sql.counts };
-          const retained = prepareSessionEntryReplacementPublication(committed, writer, {
-            postimages: mutation.postimages,
-            captureFullFacts: true,
-          });
-          expect(sql.counts).toEqual(before);
-          expect(retained.current.get(scope.sessionKey)).toMatchObject({
+          const publish = (change: ReturnType<typeof patchEntry>, full = false) => {
+            const before = { ...sql.counts };
+            const result = prepareSessionEntryReplacementPublication(
+              { ...committed, ...change.identity },
+              writer,
+              { postimages: change.postimages, ...(full ? { captureFullFacts: true } : {}) },
+            );
+            expect(sql.counts).toEqual(before);
+            return result;
+          };
+          const retained = publish(mutation, true);
+          const current = retained.current.get(key);
+          const skills = retained.fullEntries?.get(key)?.skillsSnapshot;
+          expect(current).toMatchObject({
             lastRunError: "updated",
             participants: [{ identity: { type: "agent", id: "first" } }],
             participantCount: 1,
           });
-          expect(retained.current.get(scope.sessionKey)).not.toHaveProperty("skillsSnapshot");
-          expect(retained.fullEntries?.get(scope.sessionKey)?.skillsSnapshot?.prompt).toBe(
-            "private saved prompt",
-          );
+          expect(current).not.toHaveProperty("skillsSnapshot");
+          expect(skills?.prompt).toBe("private saved prompt");
           for (const field of ["resolvedSkills", "discoverySkills"]) {
-            expect(retained.fullEntries?.get(scope.sessionKey)?.skillsSnapshot).not.toHaveProperty(
-              field,
-            );
+            expect(skills).not.toHaveProperty(field);
           }
-          expect(retained.current.get(scope.sessionKey)).not.toHaveProperty("owner");
-          expect(retained.projection?.get(scope.sessionKey)).toMatchObject({
+          expect(current).not.toHaveProperty("owner");
+          expect(retained.projection?.get(key)).toMatchObject({
             activitySummaryWatermark: { generation: null, maxSeq: null },
-            membership: [
-              scope.sessionKey,
-              null,
-              ["first-member"],
-              expect.any(Object),
-              "entry-postimage",
-            ],
+            membership: [key, null, ["first-member"], expect.any(Object), "entry-postimage"],
             hasBoard: true,
           });
 
@@ -366,22 +350,16 @@ it.each(["entry", "target"] as const)(
           if (!changedMutation.identity) {
             throw new Error("Missing changed patch identity");
           }
-          const afterWrite = { ...sql.counts };
-          const refreshed = prepareSessionEntryReplacementPublication(
-            { ...committed, ...changedMutation.identity },
-            writer,
-            { postimages: changedMutation.postimages, captureFullFacts: true },
-          );
-          expect(sql.counts).toEqual(afterWrite);
-          expect(refreshed.current.get(scope.sessionKey)).toMatchObject({
+          const refreshed = publish(changedMutation, true);
+          expect(refreshed.current.get(key)).toMatchObject({
             participants: [
               { identity: { type: "agent", id: "first" } },
               { identity: { type: "agent", id: "later" } },
             ],
             participantCount: 2,
           });
-          expect(refreshed.projection?.get(scope.sessionKey)).toMatchObject({
-            membership: [scope.sessionKey, null, [], expect.any(Object), "entry-postimage"],
+          expect(refreshed.projection?.get(key)).toMatchObject({
+            membership: [key, null, [], expect.any(Object), "entry-postimage"],
             hasBoard: false,
           });
 
@@ -401,22 +379,14 @@ it.each(["entry", "target"] as const)(
             lastRunError: "after transcript append",
           });
           expect(sql.counts.windows).toBe(windowsBeforePatch);
-          const appendedWindow = appendedMutation.postimages?.get(scope.sessionKey)?.window;
-          const appendedWatermark = appendedMutation.postimages?.get(
-            scope.sessionKey,
-          )?.transcriptWatermark;
+          const { window: appendedWindow, transcriptWatermark: appendedWatermark } =
+            appendedMutation.postimages?.get(key) ?? {};
           // The session header precedes the first appended message.
           expect(appendedWatermark).toEqual({ generation: expect.any(String), maxSeq: 1 });
-          const beforePublication = { ...sql.counts };
-          const appendedPublication = prepareSessionEntryReplacementPublication(
-            { ...committed, ...appendedMutation.identity },
-            writer,
-            { postimages: appendedMutation.postimages },
+          const appendedPublication = publish(appendedMutation);
+          expect(appendedPublication.projection?.get(key)?.activitySummaryWatermark).toEqual(
+            appendedWatermark,
           );
-          expect(
-            appendedPublication.projection?.get(scope.sessionKey)?.activitySummaryWatermark,
-          ).toEqual(appendedWatermark);
-          expect(sql.counts).toEqual(beforePublication);
           expect(appendedWindow?.transcript_observed_at).toBe(
             appendedWindow?.transcript_updated_at,
           );
@@ -437,7 +407,7 @@ it.each(["entry", "target"] as const)(
             sessionId: "replacement-postimage",
             updatedAt: 30,
           });
-          const replacementPostimage = replacement.postimages?.get(scope.sessionKey);
+          const replacementPostimage = replacement.postimages?.get(key);
           expect(replacementPostimage?.entry).toMatchObject({
             sessionId: "replacement-postimage",
             participantCount: 2,
@@ -446,13 +416,10 @@ it.each(["entry", "target"] as const)(
             memberIdsJson: "[]",
             hasBoard: true,
           });
-          expect(readExactSessionEntryRow(writer, scope.sessionKey)?.entry).toEqual(
-            replacementPostimage?.entry,
-          );
+          expect(readExactSessionEntryRow(writer, key)?.entry).toEqual(replacementPostimage?.entry);
         }, scope);
       } finally {
         sql.restore();
       }
-    });
-  },
+    }),
 );

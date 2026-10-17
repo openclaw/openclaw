@@ -35,7 +35,12 @@ import { SYNC_REBUILD_MAX_BYTES } from "./session-transcript-index.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
 
-const { createSession } = useSessionMessageCutFixtures();
+const fixtures = useSessionMessageCutFixtures();
+async function createSession() {
+  const fixture = await fixtures.createSession();
+  const { env } = fixture.scope;
+  return { ...fixture, params: { agentId, env, sessionKey, entryId: "user-2" } };
+}
 
 async function retainLegacyCheckpoints(
   scope: Parameters<typeof updateSessionEntry>[0] & { sessionId: string },
@@ -49,6 +54,14 @@ async function retainLegacyCheckpoints(
   ];
   await updateSessionEntry(scope, (entry) => ({ ...entry, compactionCheckpoints: checkpoints }));
   return checkpoints;
+}
+
+function expectCreated(result: Awaited<ReturnType<typeof rewindSessionToMessage>>) {
+  expect(result.status).toBe("created");
+  if (result.status !== "created") {
+    throw new Error("expected created result");
+  }
+  return result;
 }
 
 function expectEditorResult(result: unknown, key: string) {
@@ -87,7 +100,7 @@ it("returns missing-session for history navigation in an absent store", async ()
 });
 
 it("returns a committed rewind after identity publication retires its old authority", async () => {
-  const { env, scope } = await createSession();
+  const { scope, params } = await createSession();
   let current = true;
   const stop = onSessionIdentityMutation((event) => {
     if (
@@ -101,10 +114,7 @@ it("returns a committed rewind after identity publication retires its old author
   try {
     const result = await rewindSessionToMessage(
       {
-        agentId,
-        env,
-        sessionKey,
-        entryId: "user-2",
+        ...params,
         commitGuard() {
           if (!current) {
             throw new Error("The old session authority ended after publication");
@@ -113,9 +123,11 @@ it("returns a committed rewind after identity publication retires its old author
       },
       sourceExpectedState,
     );
-    expect(result.status).toBe("created");
-    expect(current).toBe(false);
-    expect(loadSessionEntry(scope)?.previousSessionId).toBe(scope.sessionId);
+    expect({ status: result.status, current, entry: loadSessionEntry(scope) }).toMatchObject({
+      status: "created",
+      current: false,
+      entry: { previousSessionId: scope.sessionId },
+    });
   } finally {
     stop();
   }
@@ -217,16 +229,18 @@ it("drains fixture resources before retiring native handles and removing the roo
   // Inspect real fixture teardown after both consumer and helper afterEach hooks run.
   onTestFinished(() => {
     expect(closingSnapshots).toEqual([{ agentOpen: true, stateOpen: true, rootExists: true }]);
-    expect(agentDatabase.db.isOpen).toBe(false);
-    expect(stateDatabase.db.isOpen).toBe(false);
-    expect(fs.existsSync(env.OPENCLAW_STATE_DIR)).toBe(false);
+    expect([
+      agentDatabase.db.isOpen,
+      stateDatabase.db.isOpen,
+      fs.existsSync(env.OPENCLAW_STATE_DIR),
+    ]).toEqual([false, false, false]);
   });
 });
 
 it.each(["rewind", "fork"] as const)(
   "rejects %s when the source lifecycle changes in the writer queue",
   async (mode) => {
-    const { env, scope } = await createSession();
+    const { scope, params } = await createSession();
     const ownerChangeGate = createDeferred();
     const ownerChangeStarted = createDeferred();
     const ownerChange = updateSessionEntry(scope, async () => {
@@ -239,19 +253,8 @@ it.each(["rewind", "fork"] as const)(
     const targetKey = `${sessionKey}:raced-fork`;
     const mutation =
       mode === "rewind"
-        ? rewindSessionToMessage({
-            agentId,
-            env,
-            entryId: "user-2",
-            sessionKey,
-          })
-        : forkSessionAtMessage({
-            agentId,
-            env,
-            entryId: "user-2",
-            sessionKey,
-            targetKey,
-          });
+        ? rewindSessionToMessage(params)
+        : forkSessionAtMessage({ ...params, targetKey });
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -263,8 +266,8 @@ it.each(["rewind", "fork"] as const)(
       lifecycleRevision: "replacement-lifecycle-revision",
       sessionId: sourceExpectedState.sessionId,
     });
-    expect(loadSessionEntry({ agentId, env, sessionKey: targetKey })).toBeUndefined();
-    await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toMatchObject({
+    expect(loadSessionEntry({ ...params, sessionKey: targetKey })).toBeUndefined();
+    await expect(listSessionBranches(params)).resolves.toMatchObject({
       status: "ok",
       branches: expect.arrayContaining([
         expect.objectContaining({ active: true, leafEntryId: "assistant-2" }),
@@ -274,30 +277,27 @@ it.each(["rewind", "fork"] as const)(
 );
 
 it("rewinds by repointing the active leaf and returns the editor text", async () => {
-  const { env, scope } = await createSession();
+  const { scope, params } = await createSession();
   const legacyCheckpoints = await retainLegacyCheckpoints(scope);
 
   const canonicalKey = "agent:main:canonical-message-cut";
-  const result = await rewindSessionToMessage({
-    agentId,
-    env,
-    entryId: "user-2",
-    sessionKey: canonicalKey,
-    sessionStoreKey: sessionKey,
-  });
+  const result = expectCreated(
+    await rewindSessionToMessage({
+      ...params,
+      sessionKey: canonicalKey,
+      sessionStoreKey: sessionKey,
+    }),
+  );
 
   expectEditorResult(result, sessionKey);
-  if (result.status !== "created") {
-    throw new Error("expected rewind result");
-  }
   expect(
     readSessionTranscriptMessageEventPage(
-      { agentId, env, sessionId: result.entry.sessionId },
+      { agentId, env: scope.env, sessionId: result.entry.sessionId },
       { maxMessages: 0, offset: 0 },
     ).totalMessages,
   ).toBe(2);
-  expect(loadSessionEntry({ agentId, env, sessionKey })?.sessionId).toBe(result.entry.sessionId);
-  expect(loadSessionEntry({ agentId, env, sessionKey: canonicalKey })).toBeUndefined();
+  expect(loadSessionEntry(params)?.sessionId).toBe(result.entry.sessionId);
+  expect(loadSessionEntry({ ...params, sessionKey: canonicalKey })).toBeUndefined();
   expect(loadSessionEntry(scope)).toHaveProperty("compactionCheckpoints", legacyCheckpoints);
   expect(result.entry).toMatchObject({
     agentHarnessId: undefined,
@@ -322,22 +322,14 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
 });
 
 it("defers an oversized rewind projection until the reconcile worker finishes", async () => {
-  const { env, scope } = await createSession();
+  const { scope, params } = await createSession();
   await appendTranscriptEvent(scope, {
     type: "oversized-padding",
     padding: "x".repeat(SYNC_REBUILD_MAX_BYTES),
   });
 
-  const result = await rewindSessionToMessage({
-    agentId,
-    env,
-    entryId: "user-2",
-    sessionKey,
-  });
-  if (result.status !== "created") {
-    throw new Error("expected oversized rewind result");
-  }
-  const targetScope = { agentId, env, sessionId: result.entry.sessionId, sessionKey };
+  const result = expectCreated(await rewindSessionToMessage(params));
+  const targetScope = { ...scope, sessionId: result.entry.sessionId };
   expect(() => readSessionTranscriptMessageEvents(targetScope)).toThrow(/projection is rebuilding/);
 
   await waitForSessionTranscriptProjection(targetScope);
@@ -345,7 +337,7 @@ it("defers an oversized rewind projection until the reconcile worker finishes", 
 });
 
 it("forks an exact active-path prefix without changing the source", async () => {
-  const { env, scope } = await createSession();
+  const { env, scope, params } = await createSession();
   const legacyCheckpoints = await retainLegacyCheckpoints(scope);
   const canonicalSourceKey = "agent:main:canonical-message-cut-source";
   const targetKey = "agent:main:dashboard:message-cut-fork";
@@ -358,9 +350,7 @@ it("forks an exact active-path prefix without changing the source", async () => 
   let result;
   try {
     result = await forkSessionAtMessage({
-      agentId,
-      env,
-      entryId: "user-2",
+      ...params,
       sessionKey: canonicalSourceKey,
       sessionStoreKey: sessionKey,
       targetKey,
@@ -371,12 +361,9 @@ it("forks an exact active-path prefix without changing the source", async () => 
   }
 
   expectEditorResult(result, targetKey);
-  if (result.status !== "created") {
-    throw new Error("expected fork result");
-  }
+  result = expectCreated(result);
   const forkEvents = await loadTranscriptEvents({
-    agentId,
-    env,
+    ...scope,
     sessionId: result.entry.sessionId,
     sessionKey: targetKey,
   });
@@ -401,25 +388,25 @@ it("forks an exact active-path prefix without changing the source", async () => 
     },
   ]);
   expect(result.entry.lifecycleRevision).not.toBe("source-lifecycle-revision");
-  expect((result.entry as InternalSessionEntry).lifecycleRunId).toBeUndefined();
-  expect((result.entry as InternalSessionEntry).lastRunId).toBeUndefined();
-  expect(result.entry.cliSessionBindings).toBeUndefined();
   expect(deliveryContextFromSession(result.entry)).toBeUndefined();
-  expect(result.entry.parentSessionKey).toBe(canonicalSourceKey);
-  expect(result.entry.previousSessionId).toBeUndefined();
   expect(result.entry.forkedFromParent).toBeUndefined();
   expect(result.entry.createdVia).toBeUndefined();
   expect(result.entry.createdActor).toBeUndefined();
   expect(result.entry.createdAt).toBeUndefined();
+  expect((result.entry as InternalSessionEntry).lifecycleRunId).toBeUndefined();
+  expect((result.entry as InternalSessionEntry).lastRunId).toBeUndefined();
+  expect(result.entry.cliSessionBindings).toBeUndefined();
+  expect(result.entry.previousSessionId).toBeUndefined();
+  expect(result.entry).toMatchObject({
+    parentSessionKey: canonicalSourceKey,
+    modelOverride: "gpt-5",
+    modelOverrideSource: "user",
+    providerOverride: "openai",
+  });
   expect(result.entry.forkSource).toEqual({
     sessionKey: canonicalSourceKey,
     sessionId: "message-cut-source",
     entryId: "user-2",
-  });
-  expect(result.entry).toMatchObject({
-    modelOverride: "gpt-5",
-    modelOverrideSource: "user",
-    providerOverride: "openai",
   });
   expect(loadSessionEntry(scope)?.lifecycleRevision).toBe("source-lifecycle-revision");
 });
