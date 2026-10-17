@@ -120,9 +120,9 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
   const persisted = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
   expect(persisted?.state).toMatchObject({
     nextRunAtMs: job.state.nextRunAtMs,
-    queuedAtMs: undefined,
-    runningAtMs: undefined,
   });
+  expect(persisted?.state.queuedAtMs).toBeUndefined();
+  expect(persisted?.state.runningAtMs).toBeUndefined();
 }, 45_000);
 
 it.each(["removed", "write-failed"] as const)(
@@ -201,8 +201,8 @@ it.each(["removed", "write-failed"] as const)(
       } else {
         expect(persisted?.state).toMatchObject({
           nextRunAtMs: job.state.nextRunAtMs,
-          queuedAtMs: undefined,
         });
+        expect(persisted?.state.queuedAtMs).toBeUndefined();
       }
     } finally {
       database.exec("DROP TRIGGER IF EXISTS reject_manual_receipt");

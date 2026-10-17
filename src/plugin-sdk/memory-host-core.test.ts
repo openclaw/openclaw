@@ -379,8 +379,8 @@ describe("memory-host-core helpers", () => {
       const workspaceAlias = path.join(fixtureRoot, "workspace-alias");
       const aliasCfg = workspaceConfig(workspaceAlias);
       const originalOpen = fs.open.bind(fs);
-      const firstRead = createDeferred<void>();
-      const releaseFirstRead = createDeferred<void>();
+      const firstRead = createDeferred();
+      const releaseFirstRead = createDeferred();
       let shouldBlockFirstRead = true;
       const openSpy = vi
         .spyOn(fs, "open")

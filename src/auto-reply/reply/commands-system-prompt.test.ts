@@ -33,12 +33,15 @@ vi.mock("../../agents/runtime-capabilities.js", () => ({
   })),
 }));
 
+// mock-isolation: Keep shell discovery independent of the host running the prompt fixture.
 vi.mock("../../agents/shell-utils.js", () => ({ detectRuntimeShell: vi.fn(() => "zsh") }));
 
+// mock-isolation: Use a fixed machine label without reading host identity.
 vi.mock("../../infra/machine-name.js", () => ({
   getMachineDisplayName: vi.fn(async () => "test-host"),
 }));
 
+// mock-isolation: Use a fixed OS label without reading the host platform.
 vi.mock("../../infra/os-summary.js", () => ({ resolveRuntimeOsLabel: vi.fn(() => "TestOS 1.0") }));
 
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
@@ -60,6 +63,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Exercise prompt composition without reading workspace bootstrap files.
 vi.mock("../../agents/bootstrap-files.js", () => ({
   makeBootstrapWarn: makeBootstrapWarnMock,
   resolveBootstrapContextForRun: vi.fn(async () => ({ bootstrapFiles: [], contextFiles: [] })),

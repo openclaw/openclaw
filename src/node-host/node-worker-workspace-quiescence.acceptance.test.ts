@@ -578,9 +578,9 @@ process.on("message", (message) => {
     let closing: Promise<void> | undefined;
     let restoreLease: (() => void) | undefined;
     try {
+      await started.promise;
       if (mode === "startup-close") {
         const rejected = expect(acquiring).rejects.toThrow(/closed|identity changed/);
-        await started.promise;
         closing = f.runtime.quiescence.close();
         await held!.promise;
         helper!.send({ type: "acceptance-ready-release" });

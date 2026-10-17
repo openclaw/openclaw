@@ -1,9 +1,8 @@
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
-import { compactionSettings } from "./agent-session-boundary.test-support.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
 import {
   createAssistant,
@@ -14,15 +13,11 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
-import { extractTextContent } from "./agent-session-utils.js";
 import { createCompactionRequestBudget } from "./compaction/request-budget.js";
 import { SessionManager } from "./session-manager.js";
+import { SettingsManager } from "./settings-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
-
-function appendPending(manager: SessionManager, content: string, idempotencyKey: string) {
-  manager.appendMessage({ ...makeUserMessage(content, 3), idempotencyKey });
-}
 
 function inputTokens(
   system: string | undefined,
@@ -47,6 +42,10 @@ it.each([
   "preserves $ingress pending input with $records records during pre-prompt compaction",
   async ({ records, ingress, queued }) => {
     const model = { ...testModel, contextWindow: 4_096, maxTokens: 256 };
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 1_024, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
     const systemPrompt = "Follow the project rules. ".repeat(160);
     const oldInput = "Archived project facts. ".repeat(420);
     const pendingInput = "Incoming request data. ".repeat(records) + "Reply ACK after processing.";
@@ -62,16 +61,24 @@ it.each([
       expect(pendingOnlyTokens).toBeGreaterThan(3_072);
     }
     expect(pendingOnlyTokens + model.maxTokens).toBeLessThan(model.contextWindow);
-    sessionManager.appendMessage(createAssistant(model, "Archive recorded.", "stop", priorTokens));
+    sessionManager.appendMessage(
+      createAssistant(model, [{ type: "text", text: "Archive recorded." }], "stop", priorTokens),
+    );
     const pendingKey = ingress === "new" ? undefined : "pending-ingress";
     if (pendingKey) {
-      appendPending(sessionManager, pendingInput, pendingKey);
+      const pendingUser: PersistedUserTurnMessage = {
+        role: "user",
+        content: pendingInput,
+        timestamp: 3,
+        idempotencyKey: pendingKey,
+      };
+      sessionManager.appendMessage(pendingUser);
     }
     if (ingress.endsWith("carrier")) {
-      const carrier = expectDefined(
-        buildRuntimeContextCustomMessage("Retained runtime context"),
-        "runtime context",
-      );
+      const carrier = buildRuntimeContextCustomMessage("Retained runtime context");
+      if (!carrier) {
+        throw new Error("Expected runtime context carrier");
+      }
       sessionManager.appendCustomMessageEntry(
         carrier.customType,
         carrier.content,
@@ -81,15 +88,15 @@ it.each([
     }
     const { session } = await createTestSession({
       model,
-      settingsManager: compactionSettings({ enabled: true, reserveTokens: 1_024 }),
+      settingsManager,
       sessionManager,
       systemPrompt,
     });
     if (queued) {
-      const suppressed = expectDefined(
-        buildRuntimeContextCustomMessage("Discarded queued context. ".repeat(35)),
-        "queued context",
-      );
+      const suppressed = buildRuntimeContextCustomMessage("Discarded queued context. ".repeat(35));
+      if (!suppressed) {
+        throw new Error("Expected queued runtime context");
+      }
       await session.sendCustomMessage(suppressed, { deliverAs: "nextTurn" });
       await session.sendCustomMessage(
         { customType: "required-fixture", content: "queue-marker", display: false },
@@ -98,6 +105,9 @@ it.each([
     }
     const calls: Array<{
       kind: string;
+      input: number;
+      requestedOutput: number;
+      explicitOutput?: number;
       pendingPreserved: boolean;
       accepted: boolean;
       committedBefore: number;
@@ -116,11 +126,21 @@ it.each([
         }
         const pendingPreserved = context.messages.some(
           (message) =>
-            message.role === "user" && extractTextContent(message.content).includes(pendingInput),
+            message.role === "user" &&
+            (typeof message.content === "string"
+              ? message.content
+              : message.content
+                  .filter((part) => part.type === "text")
+                  .map((part) => part.text)
+                  .join("")
+            ).includes(pendingInput),
         );
         calls.push({
+          explicitOutput: options?.maxTokens,
           pendingPreserved,
           kind: foreground ? "foreground" : "summary",
+          input: tokens,
+          requestedOutput: outputCap,
           accepted,
           committedBefore: sessionManager
             .getEntries()
@@ -134,7 +154,7 @@ it.each([
           });
         }
         const text = foreground ? "ACK" : "Older archive summarized.";
-        const response = createAssistant(activeModel, text, "stop", tokens);
+        const response = createAssistant(activeModel, [{ type: "text", text }], "stop", tokens);
         response.usage.output = Math.ceil(text.length / 4);
         response.usage.totalTokens = tokens + response.usage.output;
         response.usage.contextUsage = {
@@ -149,16 +169,19 @@ it.each([
     await session.prompt(pendingInput, { persistedUserIdempotencyKey: pendingKey });
 
     const foreground = calls.filter((call) => call.kind === "foreground");
-    expect(foreground, JSON.stringify(calls)).toMatchObject([
-      { accepted: true, pendingPreserved: true },
-    ]);
+    expect(
+      foreground.some((call) => call.accepted && call.pendingPreserved),
+      JSON.stringify(calls),
+    ).toBe(true);
     expect(
       calls
         .filter((call) => call.kind === "summary" && call.committedBefore === 0)
         .every((call) => !call.pendingPreserved),
       JSON.stringify(calls),
     ).toBe(true);
+    expect(foreground).toHaveLength(1);
     expect(foreground[0]?.committedBefore).toBeGreaterThan(0);
+    expect(foreground[0]?.accepted).toBe(true);
     expect(session.getLastAssistantText()).toBe("ACK");
   },
 );
@@ -172,19 +195,29 @@ it.each([
   "unchanged fixed overhead",
   "growing fixed overhead",
 ])("validates %s history against the foreground request", async (outcome) => {
-  const model = { ...testModel, contextWindow: 4_096, maxTokens: 256 };
   const processed = outcome.startsWith("processed");
   const fixedOnly = outcome.endsWith("fixed overhead");
+  const model = { ...testModel, contextWindow: 4_096, maxTokens: 256 };
+  const settingsManager = SettingsManager.inMemory({
+    compaction: { enabled: true, reserveTokens: 1_024, keepRecentTokens: 1 },
+    retry: { enabled: false },
+  });
   const sessionManager = SessionManager.inMemory();
   const keptId = sessionManager.appendMessage(makeUserMessage("Continue the project.", 1));
   const originalSummary = "The project uses blue buttons. ".repeat(40);
   sessionManager.appendCompaction(originalSummary, keptId, 2_000);
-  sessionManager.appendMessage(createAssistant(model, "Ready."));
+  sessionManager.appendMessage(createAssistant(model, [{ type: "text", text: "Ready." }]));
   const pending = "Pending project material. ".repeat(550);
   const pendingKey = outcome.endsWith("pending user") ? "protected-pending" : undefined;
   let firstKeptEntryId = keptId;
   if (pendingKey) {
-    appendPending(sessionManager, pending, pendingKey);
+    const pendingUser: PersistedUserTurnMessage = {
+      role: "user",
+      content: pending,
+      idempotencyKey: pendingKey,
+      timestamp: 3,
+    };
+    sessionManager.appendMessage(pendingUser);
     firstKeptEntryId = sessionManager.appendCustomMessageEntry(
       "runtime-context",
       "Retained context",
@@ -205,7 +238,7 @@ it.each([
   }));
   const { session } = await createTestSession({
     model,
-    settingsManager: compactionSettings({ enabled: true, reserveTokens: 1_024 }),
+    settingsManager,
     sessionManager,
     resourceLoader: createResourceLoader(new Map([["session_before_compact", [hook]]])),
     ...(fixedOnly ? { systemPrompt: "Required operating instructions. ".repeat(340) } : {}),

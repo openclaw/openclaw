@@ -44,7 +44,9 @@ describe("agent session deduplication across reconnect", () => {
       const gatewayOwner = createQaGatewayChild();
       cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
       const gateway = await startSessionGateway(gatewayOwner, provider.baseUrl);
-      onTestFailed(() => process.stderr.write(gateway.logs().slice(-12_000)));
+      onTestFailed(() => {
+        process.stderr.write(gateway.logs().slice(-12_000));
+      });
       cleanups.push(async () => provider.release());
       const clientA = await connectOperator(gateway, "Session dedup client A");
       cleanups.push(() => clientA.stopAndWait({ timeoutMs: 1_000 }));

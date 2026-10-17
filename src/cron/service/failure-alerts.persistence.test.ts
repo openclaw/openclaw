@@ -59,7 +59,7 @@ function alertFixture(
       startedAt,
       endedAt: startedAt + 10,
     });
-  const quiet = (startedAt = nowMs(), endedAt = startedAt, busy?: boolean) =>
+  const quiet = (startedAt = nowMs(), endedAt = startedAt, busy?: true) =>
     applyTriggerNoFireResultAndDrainNotifications(state, job, {
       startedAt,
       endedAt,

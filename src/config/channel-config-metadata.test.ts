@@ -172,7 +172,7 @@ describe("collectChannelDmPolicyMetadata", () => {
           id: "proofchat",
           doctorCapabilities:
             origin === "config"
-              ? { dmAllowFromMode: "nestedOnly", openDmRequiresAllowFromWildcard: false }
+              ? { dmAllowFromMode: "nestedOnly" as const, openDmRequiresAllowFromWildcard: false }
               : { openDmRequiresAllowFromWildcard: true },
         },
       })),

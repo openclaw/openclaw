@@ -151,7 +151,7 @@ it("merges an email-less person through admin RPC without main-thread SQL and re
     for (const [profileId, authProfileId] of [
       [source.id, "openai:duplicate"],
       [target.id, "openai:survivor"],
-    ]) {
+    ] as const) {
       setUserProfileAuthLink({ profileId, provider: "openai", authProfileId });
     }
     const captured = await prepareUserProfileIdentity(source.id);

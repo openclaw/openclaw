@@ -259,7 +259,7 @@ describe("tool display details", () => {
       ["rg 'search engine' src/agents", 'search "search engine" in src/agents'],
       ["rg 'search textual data' src/agents", 'search "search textual data" in src/agents'],
       ["rg 'research text in docs' src/agents", 'search "research text in docs" in src/agents'],
-    ]) {
+    ] as const) {
       expect(execDetail(command, "explain")).toBe(expected);
     }
   });
@@ -295,7 +295,7 @@ describe("tool display details", () => {
         "/root/.openclaw/sandboxes/agent-clawsweeper-sandbox-discor-766423d0",
         "command -v discrawl",
       ],
-    ]) {
+    ] as const) {
       expect(execDetail(command, "explain", workdir, "bash")).toBe(expected);
     }
   });
@@ -321,7 +321,7 @@ describe("tool display details", () => {
       ["python3 <<PY\nprint('x')\nPY", "run python3 inline script (heredoc)"],
       ["node --check /tmp/test.js", "check js syntax for /tmp/test.js"],
       ["node -c /tmp/test.js", "check js syntax for /tmp/test.js"],
-    ]) {
+    ] as const) {
       expect(execDetail(command, undefined, "/Users/adityasingh/.openclaw/workspace")).toContain(
         expected,
       );

@@ -85,7 +85,7 @@ function terminalEvents(jobId: string, status?: CronEvent["status"], clone = fal
   return {
     finished: finished.promise,
     events,
-    onEvent(event: CronEvent) {
+    onEvent: (event: CronEvent) => {
       events.push(clone ? structuredClone(event) : event);
       if (
         event.jobId === jobId &&

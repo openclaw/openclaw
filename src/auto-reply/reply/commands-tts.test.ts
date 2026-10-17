@@ -41,6 +41,7 @@ vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
 }));
 
+// mock-isolation: Keep command fixtures independent of installed speech-provider plugins.
 vi.mock("../../tts/provider-registry.js", () => ({
   getSpeechProvider: vi.fn(() => null),
   listSpeechProviders: vi.fn(() => []),
