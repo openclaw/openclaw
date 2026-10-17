@@ -14,6 +14,43 @@ import { managedServiceStateUpdateScript } from "./update-managed-service-handof
 
 const testNodeExecPath = resolveTestNodeExecPath();
 const recoveryReadyMarker = "OPENCLAW_TEST_RECOVERY_DESCENDANT_READY";
+type ManagerBoundary = (
+  kind: "systemd" | "launchd",
+  options?: ManagedServiceManagerBoundaryOptions,
+) => Promise<ManagedServiceManagerBoundaryResult>;
+
+function failedUpdate(reason = "managed-service-handoff-failed") {
+  return {
+    status: "error",
+    mode: "npm",
+    reason,
+    recovery: { serviceRestartSafe: true, version: "1.0.0" },
+  };
+}
+
+function restoreOutcome(
+  expect: typeof import("vitest").expect,
+  status: string,
+  reason: string,
+  exitCode: number,
+  exact = false,
+) {
+  const step = {
+    name: "service-restore",
+    log: { exitCode, ...(exact ? { stderrTail: "managed-service-handoff-restore-failed" } : {}) },
+  };
+  return {
+    payload: {
+      status,
+      stats: {
+        reason,
+        steps: exact
+          ? [expect.objectContaining(step)]
+          : expect.arrayContaining([expect.objectContaining(step)]),
+      },
+    },
+  };
+}
 
 /** A LaunchAgent gateway's own environment; the handoff keeps only the label for its children. */
 export const LAUNCHD_GATEWAY_IDENTITY_ENV = {
@@ -251,10 +288,7 @@ export async function waitForHandoffResponse(
 }
 
 export function registerManagedRecoveryCommandTests(
-  runManagedServiceManagerBoundary: (
-    kind: "systemd" | "launchd",
-    options?: ManagedServiceManagerBoundaryOptions,
-  ) => Promise<ManagedServiceManagerBoundaryResult>,
+  runManagedServiceManagerBoundary: ManagerBoundary,
   itUnix: ReturnType<typeof import("vitest").it.runIf>,
   expect: typeof import("vitest").expect,
 ): void {
@@ -291,12 +325,7 @@ export function registerManagedRecoveryCommandTests(
       const { state, sentinel, log } = await runManagedServiceManagerBoundary("launchd", {
         recoveryChecksServiceIdentity: true,
         updaterNotification: "published",
-        updaterResult: {
-          status: "error",
-          mode: "npm",
-          reason: "global update (omit optional)",
-          recovery: { serviceRestartSafe: true, version: "1.0.0" },
-        },
+        updaterResult: failedUpdate("global update (omit optional)"),
       });
       // The guarded CLI sees the service identity without launchd's own labels or markers.
       expect(state.recoveryEnv, log).toEqual({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" });
@@ -312,17 +341,9 @@ export function registerManagedRecoveryCommandTests(
         "gateway service recovery succeeded (readiness and runtime identity verified)",
       );
       // The updater's published reason survives; only the restore step records recovery.
-      expect(sentinel).toMatchObject({
-        payload: {
-          status: "error",
-          stats: {
-            reason: "global update (omit optional)",
-            steps: expect.arrayContaining([
-              expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
-            ]),
-          },
-        },
-      });
+      expect(sentinel).toMatchObject(
+        restoreOutcome(expect, "error", "global update (omit optional)", 0),
+      );
     },
   );
 
@@ -332,12 +353,7 @@ export function registerManagedRecoveryCommandTests(
       const { commands, sentinel, state } = await runManagedServiceManagerBoundary(kind, {
         recoveryExitCode: 1,
         updaterNotification: "published",
-        updaterResult: {
-          status: "error",
-          mode: "npm",
-          reason: "managed-service-handoff-failed",
-          recovery: { serviceRestartSafe: true, version: "1.0.0" },
-        },
+        updaterResult: failedUpdate(),
       });
       expect(state.guardedRestart).toEqual([
         "gateway",
@@ -349,20 +365,9 @@ export function registerManagedRecoveryCommandTests(
       expect(
         commands.some((command) => /(?:^| )(?:start|enable|bootstrap|kickstart) /.test(command)),
       ).toBe(false);
-      expect(sentinel).toMatchObject({
-        payload: {
-          status: "error",
-          stats: {
-            reason: "managed-service-handoff-failed",
-            steps: [
-              expect.objectContaining({
-                name: "service-restore",
-                log: { exitCode: 1, stderrTail: "managed-service-handoff-restore-failed" },
-              }),
-            ],
-          },
-        },
-      });
+      expect(sentinel).toMatchObject(
+        restoreOutcome(expect, "error", "managed-service-handoff-failed", 1, true),
+      );
     },
   );
 
@@ -374,12 +379,7 @@ export function registerManagedRecoveryCommandTests(
         recoveryHang: true,
         recoveryTimeoutMs,
         updaterNotification: "published",
-        updaterResult: {
-          status: "error",
-          mode: "npm",
-          reason: "managed-service-handoff-failed",
-          recovery: { serviceRestartSafe: true, version: "1.0.0" },
-        },
+        updaterResult: failedUpdate(),
       },
     );
     expect(state.guardedRestart).toEqual(["gateway", "restart", "--preserve-definition", "--json"]);
@@ -397,28 +397,14 @@ export function registerManagedRecoveryCommandTests(
       log.indexOf("managed update recovery command exited"),
     );
     await expect.poll(() => isPidAlive(Number(state.recoveryDescendantPid))).toBe(false);
-    expect(sentinel).toMatchObject({
-      payload: {
-        status: "error",
-        stats: {
-          reason: "managed-service-handoff-failed",
-          steps: [
-            expect.objectContaining({
-              name: "service-restore",
-              log: { exitCode: 1, stderrTail: "managed-service-handoff-restore-failed" },
-            }),
-          ],
-        },
-      },
-    });
+    expect(sentinel).toMatchObject(
+      restoreOutcome(expect, "error", "managed-service-handoff-failed", 1, true),
+    );
   });
 }
 
 export function registerManagedLaunchdTeardownTests(
-  runManagedServiceManagerBoundary: (
-    kind: "systemd" | "launchd",
-    options?: ManagedServiceManagerBoundaryOptions,
-  ) => Promise<ManagedServiceManagerBoundaryResult>,
+  runManagedServiceManagerBoundary: ManagerBoundary,
   itUnix: ReturnType<typeof import("vitest").it.runIf>,
   expect: typeof import("vitest").expect,
 ): void {
@@ -480,19 +466,14 @@ export function registerManagedLaunchdTeardownTests(
       });
       expect(verbs.filter((verb) => verb === "print").length).toBeGreaterThanOrEqual(4);
       expect(parentSignal).toBe("parentExitTimeoutMs" in options ? "SIGKILL" : null);
-      expect(sentinel).toMatchObject({
-        payload: {
-          status: updaterRan ? "error" : "skipped",
-          stats: {
-            reason: updaterRan
-              ? "managed-service-handoff-failed"
-              : "managed-service-handoff-cancelled",
-            steps: expect.arrayContaining([
-              expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
-            ]),
-          },
-        },
-      });
+      expect(sentinel).toMatchObject(
+        restoreOutcome(
+          expect,
+          updaterRan ? "error" : "skipped",
+          updaterRan ? "managed-service-handoff-failed" : "managed-service-handoff-cancelled",
+          0,
+        ),
+      );
     },
     20_000,
   );
@@ -546,22 +527,14 @@ export function registerManagedLaunchdTeardownTests(
         expect(restoration.at(-1)?.timeoutMs).toBeLessThan(commandWorkMs);
         expect(state.restored).toBeUndefined();
       }
-      expect(sentinel).toMatchObject({
-        payload: {
-          status: restored ? "skipped" : "error",
-          stats: {
-            reason: restored
-              ? "managed-service-handoff-cancelled"
-              : "managed-service-handoff-restore-failed",
-            steps: expect.arrayContaining([
-              expect.objectContaining({
-                name: "service-restore",
-                log: { exitCode: restored ? 0 : 1 },
-              }),
-            ]),
-          },
-        },
-      });
+      expect(sentinel).toMatchObject(
+        restoreOutcome(
+          expect,
+          restored ? "skipped" : "error",
+          restored ? "managed-service-handoff-cancelled" : "managed-service-handoff-restore-failed",
+          restored ? 0 : 1,
+        ),
+      );
     },
     15_000,
   );
@@ -601,16 +574,8 @@ export function registerManagedLaunchdTeardownTests(
       ]),
     );
     expect(state).toMatchObject({ disabled: false, parked: true, restored: true });
-    expect(sentinel).toMatchObject({
-      payload: {
-        status: "error",
-        stats: {
-          reason: "managed-service-handoff-restore-failed",
-          steps: expect.arrayContaining([
-            expect.objectContaining({ name: "service-restore", log: { exitCode: 1 } }),
-          ]),
-        },
-      },
-    });
+    expect(sentinel).toMatchObject(
+      restoreOutcome(expect, "error", "managed-service-handoff-restore-failed", 1),
+    );
   });
 }

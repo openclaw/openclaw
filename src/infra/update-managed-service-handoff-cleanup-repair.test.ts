@@ -76,7 +76,10 @@ async function helper(name: string, fields: Record<string, unknown> = {}) {
   return directory;
 }
 
-function run(runId: string, origin: UpdateRunRecord["origin"]): UpdateRunRecord {
+function run(
+  runId: string,
+  origin: UpdateRunRecord["origin"] = { driver: { ...lease.executor, host: os.hostname() } },
+): UpdateRunRecord {
   return {
     runId,
     origin,
@@ -151,36 +154,14 @@ describe("managed handoff repair facts", () => {
   });
 
   it.each([
-    {
-      name: "recovery",
-      recoveryTimeoutMs: 4_000_000,
-      parentExitTimeoutMs: 1_000,
-      commandArgv: ["--timeout", "2"],
-      expected: 4_000_000,
-    },
-    {
-      name: "parent",
-      recoveryTimeoutMs: 1_000,
-      parentExitTimeoutMs: 5_000_000,
-      commandArgv: ["--timeout", "2"],
-      expected: 5_000_000,
-    },
-    {
-      name: "command",
-      recoveryTimeoutMs: 1_000,
-      parentExitTimeoutMs: 2_000,
-      commandArgv: ["node", "update", "--timeout", "8000", "--timeout=7200"],
-      expected: 8_000_000,
-    },
-    {
-      name: "invalid-duration",
-      commandArgv: ["--timeout=9000.5", "--timeout", "Infinity"],
-      expected: null,
-    },
-  ])(
-    "reads the recorded $name phase budget with the CLI timeout parser",
-    async ({ name, expected, ...fields }) => {
-      await helper(name, fields);
+    ["recovery", 4_000_000, 1_000, ["--timeout", "2"], 4_000_000],
+    ["parent", 1_000, 5_000_000, ["--timeout", "2"], 5_000_000],
+    ["command", 1_000, 2_000, ["node", "update", "--timeout", "8000", "--timeout=7200"], 8_000_000],
+    ["invalid-duration", undefined, undefined, ["--timeout=9000.5", "--timeout", "Infinity"], null],
+  ] as const)(
+    "reads the recorded %s phase budget with the CLI timeout parser",
+    async (name, recoveryTimeoutMs, parentExitTimeoutMs, commandArgv, expected) => {
+      await helper(name, { recoveryTimeoutMs, parentExitTimeoutMs, commandArgv });
       vi.mocked(listUpdateRunsAsync).mockResolvedValue([run("retained-run", {})]);
       expect((await readManagedHandoffRepairFacts(lease, env)).timeoutMs).toBe(expected);
     },
@@ -189,9 +170,7 @@ describe("managed handoff repair facts", () => {
   it.each(["missing", "conflicting"])("refuses %s original run identity", async (identity) => {
     if (identity === "conflicting") {
       await helper("matching", { runId: "helper-run" });
-      vi.mocked(listUpdateRunsAsync).mockResolvedValue([
-        run("ledger-run", { driver: { ...lease.executor, host: os.hostname() } }),
-      ]);
+      vi.mocked(listUpdateRunsAsync).mockResolvedValue([run("ledger-run")]);
     }
     await expect(readManagedHandoffRepairFacts(lease, env)).rejects.toThrow(
       "Cannot identify handoff run",
@@ -231,141 +210,67 @@ describe("managed handoff repair facts", () => {
     await expect(readManagedHandoffRepairFacts(lease, env)).rejects.toBe(refusal);
   });
 
-  it.each<{
-    name: string;
-    step?: string;
-    status?: UpdateRunRecord["steps"][number]["status"];
-    outcome?: NonNullable<UpdateRunRecord["verification"]["rollbackOutcome"]>["status"];
-    legacyCompleted?: boolean;
-    refuses: boolean;
-  }>([
-    { name: "failed outcome without a step", outcome: "failed", refuses: true },
-    {
-      name: "in-progress Git rollback after an old no-op outcome",
-      step: "git rollback reset",
-      status: "in_progress",
-      outcome: "not-needed",
-      refuses: true,
+  it.each<
+    [
+      step: string | undefined,
+      status: UpdateRunRecord["steps"][number]["status"],
+      outcome:
+        | NonNullable<UpdateRunRecord["verification"]["rollbackOutcome"]>["status"]
+        | undefined,
+      refuses: boolean,
+      legacyCompleted?: boolean,
+    ]
+  >([
+    [undefined, "failed", "failed", true],
+    ["git rollback reset", "in_progress", "not-needed", true],
+    ["global install rollback", "failed", "not-attempted", true],
+    ["package rollback", "completed", undefined, true],
+    ["config-rollback", "failed", "succeeded", true],
+    ["git-runtime-rollback", "in_progress", undefined, true],
+    ["git-rollback-source", "completed", undefined, true],
+    ["previous generation restoration", "failed", undefined, true],
+    ["package rollback", "completed", "succeeded", false],
+    ["git rollback delete openclaw-update-fixture", "failed", "succeeded", false],
+    ["git rollback checkout", "completed", undefined, false, true],
+    ["package rollback", "skipped", undefined, false],
+    ["rollback-outcome-recording", "failed", undefined, false],
+    ["warning:package rollback", "failed", undefined, false],
+    ["finalize:package-rollback-not-needed", "completed", undefined, false],
+    ["git-rollback-keep-branch", "completed", undefined, false],
+  ])(
+    "classifies legacy %s (%s, outcome=%s)",
+    async (step, status, outcome, refuses, legacyCompleted) => {
+      const original = run("legacy-rollback");
+      if (step) {
+        original.steps = [{ step, status }];
+      }
+      if (outcome) {
+        original.verification.rollbackOutcome = { status: outcome, reason: "Historical rollback" };
+      }
+      if (legacyCompleted) {
+        original.status = "rolled-back";
+        original.verification.recovery = {
+          serviceRestartSafe: true,
+          packageRollbackVerified: true,
+          service: "healthy",
+          version: "1.0.0",
+        };
+      }
+      vi.mocked(listUpdateRunsAsync).mockResolvedValue([original]);
+      if (refuses) {
+        await expect(readManagedHandoffRepairFacts(lease, env)).rejects.toThrow(
+          /legacy-rollback.*rollback.*update status/u,
+        );
+      } else {
+        expect((await readManagedHandoffRepairFacts(lease, env)).runIds).toEqual([original.runId]);
+      }
     },
-    {
-      name: "failed package rollback after an old refusal",
-      step: "global install rollback",
-      status: "failed",
-      outcome: "not-attempted",
-      refuses: true,
-    },
-    {
-      name: "package restored before config settlement",
-      step: "package rollback",
-      status: "completed",
-      refuses: true,
-    },
-    {
-      name: "failed config restoration after old success",
-      step: "config-rollback",
-      status: "failed",
-      outcome: "succeeded",
-      refuses: true,
-    },
-    {
-      name: "in-progress runtime restoration",
-      step: "git-runtime-rollback",
-      status: "in_progress",
-      refuses: true,
-    },
-    {
-      name: "partial source restoration",
-      step: "git-rollback-source",
-      status: "completed",
-      refuses: true,
-    },
-    {
-      name: "unsettled previous generation",
-      step: "previous generation restoration",
-      status: "failed",
-      refuses: true,
-    },
-    {
-      name: "completed headless rollback",
-      step: "package rollback",
-      status: "completed",
-      outcome: "succeeded",
-      refuses: false,
-    },
-    {
-      name: "completed Git rollback with failed temporary-branch cleanup",
-      step: "git rollback delete openclaw-update-fixture",
-      status: "failed",
-      outcome: "succeeded",
-      refuses: false,
-    },
-    {
-      name: "legacy verified previous generation",
-      step: "git rollback checkout",
-      status: "completed",
-      legacyCompleted: true,
-      refuses: false,
-    },
-    { name: "skipped rollback", step: "package rollback", status: "skipped", refuses: false },
-    {
-      name: "outcome recording warning",
-      step: "rollback-outcome-recording",
-      status: "failed",
-      refuses: false,
-    },
-    {
-      name: "diagnostic rollback label",
-      step: "warning:package rollback",
-      status: "failed",
-      refuses: false,
-    },
-    {
-      name: "finalizer no-op",
-      step: "finalize:package-rollback-not-needed",
-      status: "completed",
-      refuses: false,
-    },
-    {
-      name: "retained Git branch",
-      step: "git-rollback-keep-branch",
-      status: "completed",
-      refuses: false,
-    },
-  ])("classifies legacy rollback evidence: $name", async (scenario) => {
-    const original = run("legacy-rollback", {
-      driver: { ...lease.executor, host: os.hostname() },
-    });
-    if (scenario.step) {
-      original.steps = [{ step: scenario.step, status: scenario.status! }];
-    }
-    if (scenario.outcome) {
-      original.verification.rollbackOutcome = { status: scenario.outcome, reason: scenario.name };
-    }
-    if (scenario.legacyCompleted) {
-      original.status = "rolled-back";
-      original.verification.recovery = {
-        serviceRestartSafe: true,
-        packageRollbackVerified: true,
-        service: "healthy",
-        version: "1.0.0",
-      };
-    }
-    vi.mocked(listUpdateRunsAsync).mockResolvedValue([original]);
-    if (scenario.refuses) {
-      await expect(readManagedHandoffRepairFacts(lease, env)).rejects.toThrow(
-        /legacy-rollback.*rollback.*update status/u,
-      );
-    } else {
-      expect((await readManagedHandoffRepairFacts(lease, env)).runIds).toEqual([original.runId]);
-    }
-  });
+  );
 
   it.each(["restored", "retired", "forward"] as const)(
     "honors a %s capture receipt over stale rollback diagnostics",
     async (settlement) => {
-      const original = run("settled-capture", {
-        driver: { ...lease.executor, host: os.hostname() },
-      });
+      const original = run("settled-capture");
       original.verification.rollbackOutcome = { status: "failed", reason: "Old rollback" };
       original.steps = [{ step: "package rollback", status: "failed" }];
       const capture: NonNullable<UpdateRunRecord["origin"]["updateRecoveryCapture"]> = {
@@ -425,7 +330,7 @@ describe("managed handoff repair facts", () => {
     "distinguishes native %s settlement from legacy rollback failure",
     async (settlement) => {
       const created = createUpdateRun({ trigger: "cli" }, { env });
-      const original = run(created.runId, { driver: { ...lease.executor, host: os.hostname() } });
+      const original = run(created.runId);
       original.verification.rollbackOutcome = { status: "failed", reason: "Old rollback" };
       original.steps = [{ step: "package rollback", status: "failed" }];
       vi.mocked(listUpdateRunsAsync).mockResolvedValue([original]);
@@ -482,9 +387,7 @@ describe("managed handoff repair facts", () => {
   it.each(["unreadable", "invalid-json", "invalid-owner"])(
     "keeps an %s helper directory and installation root in the census scope",
     async (kind) => {
-      vi.mocked(listUpdateRunsAsync).mockResolvedValue([
-        run("retained-run", { driver: { ...lease.executor, host: os.hostname() } }),
-      ]);
+      vi.mocked(listUpdateRunsAsync).mockResolvedValue([run("retained-run")]);
       const directory = await helper(kind);
       const file = path.join(directory, "handoff.json");
       if (kind === "unreadable") {

@@ -1,4 +1,5 @@
-import { spawn, spawnSync } from "node:child_process";
+import assert from "node:assert/strict";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -20,6 +21,7 @@ import * as tempRoot from "./tmp-openclaw-dir.js";
 import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
+  type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 
@@ -42,13 +44,10 @@ afterEach(() => {
 });
 
 function snapshot() {
-  const entries: {
+  const entries: (Pick<fs.Stats, "dev" | "ino" | "mode"> & {
     name: string;
-    dev: number;
-    ino: number;
-    mode: number;
     content?: Buffer | string;
-  }[] = [];
+  })[] = [];
   const visit = (name: string) => {
     const file = path.join(root, name);
     const stat = fs.lstatSync(file);
@@ -78,6 +77,47 @@ async function authority() {
     const fence = await executor.enter(root);
     return captureUpdateCommandExecutorAuthority(fence);
   });
+}
+
+function storeFor(existingIdentity: ManagedUpdateLeaseDatabaseIdentity) {
+  return createManagedHandoffLeaseStore({
+    databasePath,
+    serviceManagerEnv: resolveServiceManagerEnv(),
+    existingIdentity,
+  });
+}
+
+async function withChild(
+  child: ChildProcess,
+  signal: AbortSignal,
+  run: (ready: unknown, finish: () => Promise<void>) => Promise<void>,
+) {
+  let stderr = "";
+  const closed = once(child, "close");
+  void closed.catch(() => undefined);
+  try {
+    assert(child.stderr, "Child fixture stderr pipe is missing");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    const [ready] = await withinTest(
+      awaitGateBeforeSettlement(
+        once(child, "message"),
+        closed,
+        "Child fixture exited before readiness",
+      ),
+      signal,
+    );
+    await run(ready, async () => {
+      expect(await withinTest(closed, signal)).toEqual([0, null]);
+      expect(stderr).toBe("");
+    });
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+    await closed;
+  }
 }
 
 function probeWriterAdmission(mode: "IMMEDIATE" | "EXCLUSIVE" = "IMMEDIATE") {
@@ -114,44 +154,31 @@ function probeWriterAdmission(mode: "IMMEDIATE" | "EXCLUSIVE" = "IMMEDIATE") {
   return JSON.parse(child.stdout) as { acquired: boolean; errcode?: number };
 }
 
-const damage = [
-  {
-    name: "missing database",
-    apply: () => fs.renameSync(databasePath, path.join(root, "retained.sqlite")),
-  },
-  {
-    name: "missing parent",
-    apply: () => fs.renameSync(directory, path.join(root, "retained-parent")),
-  },
-  {
-    name: "byte-identical replacement database",
-    apply: () => {
+function replaceParent() {
+  const retained = path.join(root, "retained-parent");
+  fs.renameSync(directory, retained);
+  fs.mkdirSync(directory, { mode: 0o700 });
+  fs.renameSync(path.join(retained, path.basename(databasePath)), databasePath);
+}
+
+const damage: [name: string, apply: () => void][] = [
+  ["missing database", () => fs.renameSync(databasePath, path.join(root, "retained.sqlite"))],
+  ["missing parent", () => fs.renameSync(directory, path.join(root, "retained-parent"))],
+  [
+    "byte-identical replacement database",
+    () => {
       const replacement = path.join(directory, "replacement.sqlite");
       fs.copyFileSync(databasePath, replacement);
       fs.chmodSync(replacement, 0o600);
       fs.renameSync(replacement, databasePath);
     },
-  },
-  {
-    name: "replacement parent with the same database inode",
-    apply: () => {
-      const retained = path.join(root, "retained-parent");
-      fs.renameSync(directory, retained);
-      fs.mkdirSync(directory, { mode: 0o700 });
-      fs.renameSync(path.join(retained, path.basename(databasePath)), databasePath);
-    },
-  },
-  {
-    name: "corrupt database",
-    apply: () => fs.writeFileSync(databasePath, "retained corrupt authority"),
-  },
-  {
-    name: "empty database",
-    apply: () => fs.truncateSync(databasePath, 0),
-  },
-  {
-    name: "missing authority table",
-    apply: () => {
+  ],
+  ["replacement parent with the same database inode", replaceParent],
+  ["corrupt database", () => fs.writeFileSync(databasePath, "retained corrupt authority")],
+  ["empty database", () => fs.truncateSync(databasePath, 0)],
+  [
+    "missing authority table",
+    () => {
       const db = new DatabaseSync(databasePath);
       try {
         db.exec("DROP TABLE managed_update_handoffs");
@@ -159,41 +186,32 @@ const damage = [
         db.close();
       }
     },
-  },
-  {
-    name: "symlink database",
-    apply: () => {
+  ],
+  [
+    "symlink database",
+    () => {
       const retained = path.join(root, "retained.sqlite");
       fs.renameSync(databasePath, retained);
       fs.symlinkSync(retained, databasePath);
     },
-  },
-  {
-    name: "symlink parent",
-    apply: () => {
+  ],
+  [
+    "symlink parent",
+    () => {
       const retained = path.join(root, "retained-parent");
       fs.renameSync(directory, retained);
       fs.symlinkSync(retained, directory, "dir");
     },
-  },
-  {
-    name: "multiply linked database",
-    apply: () => fs.linkSync(databasePath, path.join(root, "linked.sqlite")),
-  },
-  {
-    name: "different user",
-    apply: () => {
+  ],
+  ["multiply linked database", () => fs.linkSync(databasePath, path.join(root, "linked.sqlite"))],
+  [
+    "different user",
+    () => {
       vi.spyOn(process, "getuid").mockReturnValue(process.getuid!() + 1);
     },
-  },
-  {
-    name: "unsafe database permissions",
-    apply: () => fs.chmodSync(databasePath, 0o640),
-  },
-  {
-    name: "unsafe parent permissions",
-    apply: () => fs.chmodSync(directory, 0o750),
-  },
+  ],
+  ["unsafe database permissions", () => fs.chmodSync(databasePath, 0o640)],
+  ["unsafe parent permissions", () => fs.chmodSync(directory, 0o750)],
 ];
 
 describe.skipIf(process.platform === "win32")("existing update authority", () => {
@@ -253,15 +271,9 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
     "releases Bun snapshots with retained statements before later writers commit without GC",
     async () => {
       const existingIdentity = await authority();
-      const store = createManagedHandoffLeaseStore({
-        databasePath,
-        serviceManagerEnv: resolveServiceManagerEnv(),
-        existingIdentity,
-      });
+      const store = storeFor(existingIdentity);
       const acquired = store.acquire(root, "bun-snapshot-owner", { kind: "update" });
-      if (acquired.kind !== "acquired") {
-        throw new Error("Bun snapshot fixture was not admitted");
-      }
+      assert(acquired.kind === "acquired", "Bun snapshot fixture was not admitted");
       const helperModule = new URL("./sqlite-existing-database.ts", import.meta.url).href;
       const authorityModule = new URL(
         "./update-managed-service-handoff-database.ts",
@@ -382,15 +394,9 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
 
   it("keeps a real writer excluded across nested child and owner reads until an update commits", async () => {
     const existingAuthority = await authority();
-    const store = createManagedHandoffLeaseStore({
-      databasePath,
-      serviceManagerEnv: resolveServiceManagerEnv(),
-      existingIdentity: existingAuthority,
-    });
+    const store = storeFor(existingAuthority);
     const admitted = store.acquire(root, "reserved-owner", { kind: "update" });
-    if (admitted.kind !== "acquired") {
-      throw new Error("Writer exclusion fixture was not admitted");
-    }
+    assert(admitted.kind === "acquired", "Writer exclusion fixture was not admitted");
     const withDatabase = createManagedHandoffLeaseDatabase(databasePath, existingAuthority);
     withDatabase(true, (db) => {
       expect(db.isTransaction).toBe(false);
@@ -444,21 +450,13 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(root);
       const existingIdentity = captureUpdateCommandExecutorAuthority(fence);
-      const store = createManagedHandoffLeaseStore({
-        databasePath,
-        serviceManagerEnv: resolveServiceManagerEnv(),
-        existingIdentity,
-      });
+      const store = storeFor(existingIdentity);
       const original = store.read(root);
-      if (original.kind !== "current") {
-        throw new Error("First installation fixture was not admitted");
-      }
+      assert(original.kind === "current", "First installation fixture was not admitted");
       const otherRoot = path.join(root, "other-installation");
       fs.mkdirSync(otherRoot, { mode: 0o700 });
       const other = store.acquire(otherRoot, "other-owner", { kind: "update" });
-      if (other.kind !== "acquired") {
-        throw new Error("Second installation fixture was not admitted");
-      }
+      assert(other.kind === "acquired", "Second installation fixture was not admitted");
       const child = spawn(
         process.execPath,
         [
@@ -485,28 +483,8 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
         ],
         { stdio: ["ignore", "ignore", "pipe", "ipc"], env: {} },
       );
-      let stderr = "";
-      const closed = once(child, "close");
-      void closed.catch(() => undefined);
-      try {
-        if (!child.stderr) {
-          throw new Error("Child fixture stderr pipe is missing");
-        }
-        child.stderr.on("data", (chunk) => {
-          stderr += chunk.toString();
-        });
-        expect(
-          (
-            await withinTest(
-              awaitGateBeforeSettlement(
-                once(child, "message"),
-                closed,
-                "Child fixture exited before readiness",
-              ),
-              signal,
-            )
-          )[0],
-        ).toEqual({
+      await withChild(child, signal, async (ready, finish) => {
+        expect(ready).toEqual({
           ready: true,
           changes: 1,
           inTransaction: true,
@@ -518,8 +496,7 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
         expect(store.owns(original.lease, "executor")).toBe(true);
         expect(() => fence.assertCurrent()).not.toThrow();
         child.send({ commit: true });
-        expect(await withinTest(closed, signal)).toEqual([0, null]);
-        expect(stderr).toBe("");
+        await finish();
         expect(store.read(root)).toEqual(original);
         expect(() => fence.assertCurrent()).not.toThrow();
         const updatedOther = store.read(otherRoot);
@@ -530,12 +507,7 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
         if (updatedOther.kind === "current") {
           expect(store.release(updatedOther.lease)).toBe(true);
         }
-      } finally {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill("SIGKILL");
-        }
-        await closed;
-      }
+      });
     });
   });
 
@@ -543,17 +515,14 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
     signal,
   }) => {
     const existingIdentity = await authority();
-    const store = createManagedHandoffLeaseStore({
-      databasePath,
-      serviceManagerEnv: resolveServiceManagerEnv(),
-      existingIdentity,
-    });
+    const store = storeFor(existingIdentity);
     const parent = store.acquire(root, "parent-owner", { kind: "update" });
     const childKey = `${root}/.openclaw-update-child-${randomUUID()}`;
     const recordedChild = store.acquire(childKey, "child-owner", { kind: "update" });
-    if (parent.kind !== "acquired" || recordedChild.kind !== "acquired") {
-      throw new Error("Release child fixture was not admitted");
-    }
+    assert(
+      parent.kind === "acquired" && recordedChild.kind === "acquired",
+      "Release child fixture was not admitted",
+    );
     const child = spawn(
       process.execPath,
       [
@@ -566,44 +535,17 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       ],
       { stdio: ["ignore", "ignore", "pipe", "ipc"], env: {}, detached: true },
     );
-    let stderr = "";
-    const closed = once(child, "close");
-    void closed.catch(() => undefined);
-    try {
-      if (!child.stderr) {
-        throw new Error("Child fixture stderr pipe is missing");
-      }
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
-      expect(
-        (
-          await withinTest(
-            awaitGateBeforeSettlement(
-              once(child, "message"),
-              closed,
-              "Child fixture exited before readiness",
-            ),
-            signal,
-          )
-        )[0],
-      ).toEqual({
-        ready: true,
-      });
-      if (child.pid === undefined) {
-        throw new Error("Release child fixture has no process identity");
-      }
+    await withChild(child, signal, async (ready, finish) => {
+      expect(ready).toEqual({ ready: true });
+      assert(child.pid !== undefined, "Release child fixture has no process identity");
       const boundChild = store.bind(recordedChild.lease, child.pid);
-      if (!boundChild) {
-        throw new Error("Release child fixture was not bound");
-      }
+      assert(boundChild, "Release child fixture was not bound");
       expect(store.release(parent.lease)).toBe(false);
       expect(store.release(boundChild)).toBe(false);
       expect(store.current(parent.lease)).toBe(true);
       expect(store.current(boundChild)).toBe(true);
       child.send({ exit: true });
-      expect(await withinTest(closed, signal)).toEqual([0, null]);
-      expect(stderr).toBe("");
+      await finish();
       expect(store.release(parent.lease)).toBe(false);
       expect(store.release(boundChild)).toBe(true);
       expect(store.read(childKey)).toEqual({ kind: "absent" });
@@ -652,12 +594,7 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       expect(boundaries).toEqual(["before-write", "after-write", "before-commit", "committed"]);
       expect(probeWriterAdmission()).toEqual({ acquired: true });
       expect(store.read(root)).toEqual({ kind: "absent" });
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-      await closed;
-    }
+    });
   });
 
   describe.each(["admission", "release"] as const)("%s", (phase) => {
@@ -665,10 +602,10 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
     it.each(
       phase === "admission"
         ? damage
-        : damage.filter(({ name }) =>
+        : damage.filter(([name]) =>
             ["missing database", "replacement parent with the same database inode"].includes(name),
           ),
-    )("preserves $name without repair", async ({ apply }) => {
+    )("preserves %s without repair", async (_name, apply) => {
       const existingAuthority = await authority();
       let before: ReturnType<typeof snapshot> | undefined;
       let assertNoRepairs: () => void = () => expect.fail("Authority was not revoked");
@@ -717,11 +654,7 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       { boundary: "before-commit", target: "database" },
     ] as const)("refuses a replaced $target at $boundary", async ({ boundary, target }) => {
       const existingAuthority = await authority();
-      const store = createManagedHandoffLeaseStore({
-        databasePath,
-        serviceManagerEnv: resolveServiceManagerEnv(),
-        existingIdentity: existingAuthority,
-      });
+      const store = storeFor(existingAuthority);
       const admitted =
         operation === "release" ? store.acquire(root, "release-owner", { kind: "update" }) : null;
       if (admitted && admitted.kind !== "acquired") {
@@ -739,10 +672,7 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
           fs.renameSync(databasePath, retainedDatabase);
           fs.copyFileSync(retainedDatabase, databasePath);
         } else {
-          const retained = path.join(root, "retained-parent");
-          fs.renameSync(directory, retained);
-          fs.mkdirSync(directory, { mode: 0o700 });
-          fs.renameSync(path.join(retained, path.basename(databasePath)), databasePath);
+          replaceParent();
         }
       };
       vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {

@@ -12,12 +12,13 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findSystemdGatewayInstallation } from "../daemon/systemd-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnv } from "../test-utils/env.js";
-import { readDevUpdateTarget, type DevUpdateTarget } from "./update-dev-target.js";
+import { readDevUpdateTarget } from "./update-dev-target.js";
 import {
   createManagedHandoffTempDirTracker,
   readManagedHandoffArtifacts,
 } from "./update-managed-service-handoff-artifacts.test-support.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease.js";
+import type { ManagedServiceUpdateHandoffParams } from "./update-managed-service-handoff-types.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -108,48 +109,26 @@ afterEach(async () => {
   vi.resetModules();
 });
 
-async function startHandoffAndReadCommand(params: {
-  argv1?: string;
-  runtime?: "node" | "bun";
-  runId?: string;
-  channel: "beta" | "extended-stable";
-  tag?: string;
-  acceptCapabilities?: boolean;
-  fullIntegrityCheck?: boolean;
-  admission?: "auto" | "installed";
-  reapplyLocalOverrides?: boolean;
-  devTarget?: DevUpdateTarget;
-  env?: NodeJS.ProcessEnv;
-  restartDelayMs?: number;
-  restartDrainTimeoutMs?: number;
-}): Promise<{
-  command: string;
-  commandArgv: string[] | undefined;
-  recoveryCommandArgv: string[];
-  triageCommandArgv: string[];
-  triageContextCommand: string;
-  parentExitTimeoutMs: number;
-  parentExitDeadlineAt: number;
-  spawnEnv: NodeJS.ProcessEnv | undefined;
-}> {
+async function startHandoff(params: Partial<ManagedServiceUpdateHandoffParams> = {}) {
   const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
-  const result = await startManagedServiceUpdateHandoff({
-    runId: params.runId,
+  return startManagedServiceUpdateHandoff({
     root: MOCK_INSTALL_ROOT,
-    restartDrainTimeoutMs: params.restartDrainTimeoutMs ?? 300_000,
-    ...(params.restartDelayMs === undefined ? {} : { restartDelayMs: params.restartDelayMs }),
-    channel: params.channel,
-    ...(params.tag ? { tag: params.tag } : {}),
-    ...(params.acceptCapabilities ? { acceptCapabilities: true } : {}),
-    ...(params.fullIntegrityCheck ? { fullIntegrityCheck: true } : {}),
-    admission: params.admission,
-    ...(params.reapplyLocalOverrides ? { reapplyLocalOverrides: true } : {}),
+    restartDrainTimeoutMs: 300_000,
     parentPid: process.pid,
-    execPath: `/usr/local/bin/${params.runtime ?? "node"}`,
-    argv1: params.argv1 ?? "/opt/openclaw/openclaw.mjs",
+    execPath: "/usr/local/bin/node",
+    argv1: "/opt/openclaw/openclaw.mjs",
     meta: {},
-    ...(params.devTarget ? { devTarget: params.devTarget } : {}),
-    ...(params.env ? { env: params.env } : {}),
+    ...params,
+  });
+}
+
+async function startHandoffAndReadCommand({
+  runtime = "node",
+  ...params
+}: Partial<ManagedServiceUpdateHandoffParams> & { runtime?: "node" | "bun" }) {
+  const result = await startHandoff({
+    execPath: `/usr/local/bin/${runtime}`,
+    ...params,
   });
   expect(forceKillChildProcessTreeMock).not.toHaveBeenCalled();
   const spawnCall = spawnMock.mock.calls[0] as unknown as
@@ -177,14 +156,9 @@ async function startHandoffAndReadCommand(params: {
   );
   expect(metaFile.meta?.runId).toBe(params.runId);
   return {
+    ...helperParams,
     command: result.command,
-    commandArgv: helperParams.commandArgv,
-    recoveryCommandArgv: helperParams.recoveryCommandArgv,
-    triageCommandArgv: helperParams.triageCommandArgv,
-    triageContextCommand: helperParams.triageContextCommand,
-    parentExitTimeoutMs: helperParams.parentExitTimeoutMs,
-    parentExitDeadlineAt: helperParams.parentExitDeadlineAt,
-    spawnEnv: spawnCall?.[2]?.env,
+    spawnEnv: spawnCall[2]?.env,
   };
 }
 
@@ -252,7 +226,7 @@ describe("managed service update handoff command", () => {
           return access(file, mode);
         });
       }
-      const { startManagedServiceUpdateHandoff, waitForSystemServiceUpdateHandoffs } =
+      const { waitForSystemServiceUpdateHandoffs } =
         await import("./update-managed-service-handoff.js");
       expect(waitForSystemServiceUpdateHandoffs()).toBeUndefined();
       const spawned = createDeferredCore<ReturnType<typeof createReadyChild>>();
@@ -261,14 +235,13 @@ describe("managed service update handoff command", () => {
         spawned.resolve(child);
         return child;
       });
-      const started = startManagedServiceUpdateHandoff({
+      const started = startHandoff({
         root,
-        restartDrainTimeoutMs: 300_000,
+        parentPid: undefined,
         supervisor: "systemd",
         env: { ...process.env, OPENCLAW_STATE_DIR: root },
         execPath: process.execPath,
         argv1: path.join(root, "openclaw.mjs"),
-        meta: {},
       });
       if (!writable) {
         await expect(started).rejects.toMatchObject({
@@ -320,7 +293,7 @@ describe("managed service update handoff command", () => {
   )(
     "waits for delayed $phase ACKs within the owning $budgetMs ms budget",
     async ({ phase, budgetMs }) => {
-      const { requestManagedServiceUpdateHandoffPark, startManagedServiceUpdateHandoff } =
+      const { requestManagedServiceUpdateHandoffPark } =
         await import("./update-managed-service-handoff.js");
       const spawned = createDeferredCore<ReturnType<typeof createReadyChild>>();
       spawnMock.mockImplementationOnce((command: string, args: string[]) => {
@@ -332,14 +305,9 @@ describe("managed service update handoff command", () => {
       vi.useFakeTimers();
       let child: ReturnType<typeof createReadyChild> | undefined;
       try {
-        const starting = startManagedServiceUpdateHandoff({
-          root: MOCK_INSTALL_ROOT,
+        const starting = startHandoff({
           timeoutMs: phase === "readiness" ? budgetMs : 5_000,
           restartDrainTimeoutMs: phase === "park" ? budgetMs - 30_000 : 300_000,
-          parentPid: process.pid,
-          execPath: "/usr/local/bin/node",
-          argv1: "/opt/openclaw/openclaw.mjs",
-          meta: {},
         }).then(
           (value) => ({ kind: "ready" as const, value }),
           (error: unknown) => ({ kind: "rejected" as const, error }),
@@ -392,14 +360,13 @@ describe("managed service update handoff command", () => {
   ])(
     "stages automatic triage in a stop-linked scope using $runtime",
     async ({ runtime, runtimeArgs }) => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-triage-command-"));
-      tempDirs.add(root);
+      const root = tempDirs.make("openclaw-triage-command-");
       const executable = path.join(root, runtime);
       await fs.writeFile(path.join(root, "systemd-run"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-      const { startManagedServiceUpdateHandoff } =
-        await import("./update-managed-service-handoff.js");
-      const started = await startManagedServiceUpdateHandoff({
+      const started = await startHandoff({
         root,
+        parentPid: undefined,
+        argv1: undefined,
         restartDrainTimeoutMs: 0,
         supervisor: "systemd",
         env: {
@@ -408,7 +375,6 @@ describe("managed service update handoff command", () => {
         },
         handoffId: "triage-fixture",
         execPath: executable,
-        meta: {},
         action: {
           kind: "triage" as const,
           entrypoint: path.join(root, "dist/index.js"),
@@ -470,21 +436,19 @@ describe("managed service update handoff command", () => {
         placement: { kind: "attached" as const, invocation: "a".repeat(32) },
       },
     };
-    const payload = JSON.stringify({
-      version: 2,
+    const identities = {
+      version: 2 as const,
       executor: { pid: 123, startIdentity: "17" },
       helper: { pid: 123, startIdentity: "17" },
       action,
-    });
+    };
+    const payload = JSON.stringify(identities);
     const lease: ManagedHandoffLease = {
+      ...identities,
       key: MOCK_INSTALL_ROOT,
       owner: "synthetic",
       updatedAt: 1,
       payload,
-      version: 2,
-      executor: { pid: 123, startIdentity: "17" },
-      helper: { pid: 123, startIdentity: "17" },
-      action,
     };
     const databasePath = resolveManagedUpdateLeaseDatabasePath();
     await fs.mkdir(path.dirname(databasePath), { recursive: true, mode: 0o700 });
@@ -512,34 +476,24 @@ describe("managed service update handoff command", () => {
         cleanup.close();
       }
     });
-    spawnSyncMock
-      .mockReturnValueOnce({
-        status: 0,
-        stdout:
-          "Id=synthetic.scope\nLoadState=loaded\nActiveState=active\nInvocationID=" +
-          "a".repeat(32),
-      })
-      .mockReturnValueOnce({ status: 0 })
-      .mockReturnValueOnce({
-        status: 1,
-        stdout: "Id=synthetic.scope\nLoadState=not-found\nActiveState=inactive\nInvocationID=",
-      });
-    expect(store.stopNative(lease)).toBe(true);
-    expect(spawnSyncMock.mock.calls.filter(([, args]) => args.includes("stop"))).toHaveLength(1);
-    spawnSyncMock.mockReset().mockReturnValue({
-      status: 0,
-      stdout:
-        "Id=synthetic.scope\nLoadState=loaded\nActiveState=active\nInvocationID=" + "b".repeat(32),
+    const scopeResult = (invocation: string, active = "active", loaded = "loaded") => ({
+      status: loaded === "loaded" ? 0 : 1,
+      stdout: `Id=synthetic.scope\nLoadState=${loaded}\nActiveState=${active}\n${loaded === "loaded" && active !== "active" ? "ControlGroup=\n" : ""}InvocationID=${invocation}`,
     });
+    const stopCalls = () => spawnSyncMock.mock.calls.filter(([, args]) => args.includes("stop"));
+    spawnSyncMock
+      .mockReturnValueOnce(scopeResult("a".repeat(32)))
+      .mockReturnValueOnce({ status: 0 })
+      .mockReturnValueOnce(scopeResult("", "inactive", "not-found"));
+    expect(store.stopNative(lease)).toBe(true);
+    expect(stopCalls()).toHaveLength(1);
+    spawnSyncMock.mockReset().mockReturnValue(scopeResult("b".repeat(32)));
     expect(store.stopNative(lease)).toBe(false);
-    expect(spawnSyncMock.mock.calls.filter(([, args]) => args.includes("stop"))).toEqual([]);
+    expect(stopCalls()).toEqual([]);
     for (const state of ["inactive", "failed"]) {
-      spawnSyncMock.mockReset().mockReturnValue({
-        status: 0,
-        stdout: `Id=synthetic.scope\nLoadState=loaded\nActiveState=${state}\nControlGroup=\nInvocationID=${"b".repeat(32)}`,
-      });
+      spawnSyncMock.mockReset().mockReturnValue(scopeResult("b".repeat(32), state));
       expect(store.stopNative(lease)).toBe(false);
-      expect(spawnSyncMock.mock.calls.filter(([, args]) => args.includes("stop"))).toEqual([]);
+      expect(stopCalls()).toEqual([]);
     }
   });
 
