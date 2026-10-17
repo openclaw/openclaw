@@ -256,7 +256,8 @@ vi.mock("../secrets/exec-resolution-policy.js", () => ({
   getSkippedExecRefStaticError: mocks.getSkippedExecRefStaticError,
 }));
 
-vi.mock("../commands/doctor-node-services.js", () => ({
+vi.mock("../commands/doctor-node-services.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-node-services.js")>()),
   maybeRepairNodeServiceConfig: mocks.maybeRepairNodeServiceConfig,
 }));
 

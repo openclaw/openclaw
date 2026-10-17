@@ -334,6 +334,43 @@ describe("resolveGatewayProgramArguments", () => {
 });
 
 describe("resolveNodeProgramArguments", () => {
+  it.each([
+    { runtime: "node", entry: "src/entry.ts", runtimePath: validatedNodePath },
+    { runtime: "bun", entry: "openclaw.mjs", runtimePath: validatedBunPath },
+  ] as const)(
+    "keeps the $runtime launcher in the selected package from $entry",
+    async (options) => {
+      const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      const root = tempDirs.make("openclaw-node-selected-package-");
+      const entrypoint = path.join(root, options.entry);
+      const launcher = path.join(root, "openclaw.mjs");
+      await actualFs.mkdir(path.dirname(entrypoint), { recursive: true });
+      await actualFs.writeFile(entrypoint, "");
+      await actualFs.writeFile(launcher, "");
+      fsMocks.realpath.mockImplementation(actualFs.realpath);
+      fsMocks.access.mockImplementation(actualFs.access);
+
+      const result = await resolveNodeProgramArguments({
+        cliEntrypoint: entrypoint,
+        host: "gateway.example",
+        port: 18789,
+        runtime: options.runtime,
+        runtimePath: options.runtimePath,
+      });
+      expect(result.programArguments).toEqual([
+        options.runtimePath,
+        ...(options.runtime === "bun" ? ["--no-install"] : []),
+        launcher,
+        "node",
+        "run",
+        "--host",
+        "gateway.example",
+        "--port",
+        "18789",
+      ]);
+    },
+  );
+
   it.each(["darwin", "linux", "win32"] as const)(
     "keeps %s node services on the launcher and Gateways on index.js",
     async (platform) => {

@@ -7,6 +7,7 @@ import { decodeLaunchAgentPlistFixture } from "../daemon/launchd-plist.test-supp
 import { resolveNodeService } from "../daemon/node-service.js";
 import { resolveGatewaySupervisorLogPaths } from "../daemon/restart-logs.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
+import { seedCompletedRuntimePinMigration } from "../daemon/test-helpers/service-audit-runtime-pin.js";
 import { runGatewayServicesHealth } from "../flows/doctor-health-contribution-runners.gateway.js";
 import * as exec from "../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -36,11 +37,18 @@ vi.mock("../daemon/launchd-system.js", async (importOriginal) => ({
   }),
   assertNoSystemLaunchDaemonOwnership: async () => {},
 }));
-vi.mock("../daemon/future-config-guard.js", () => ({
+vi.mock("../daemon/future-config-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/future-config-guard.js")>()),
   assertFutureConfigActionAllowed: async () => {},
 }));
-vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
-vi.mock("./doctor-foreign-launchd-jobs.js", () => ({ noteMacForeignLaunchdJobs: async () => {} }));
+vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/terminal-core/src/note.js")>()),
+  note: vi.fn(),
+}));
+vi.mock("./doctor-foreign-launchd-jobs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-foreign-launchd-jobs.js")>()),
+  noteMacForeignLaunchdJobs: async () => {},
+}));
 vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./doctor-service-repair-policy.js")>()),
   shouldManageGatewayService: async () => false,
@@ -104,7 +112,7 @@ beforeEach(async () => {
     "OPENCLAW_SUPERVISOR_MODE",
     "OPENCLAW_NIX_MODE",
   ]);
-  home = await fs.mkdtemp(path.join(process.env.HOME!, "doctor-node-"));
+  home = await fs.realpath(await fs.mkdtemp(path.join(process.env.HOME!, "doctor-node-")));
   process.env.HOME = home;
   process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
   for (const key of [
@@ -119,6 +127,8 @@ beforeEach(async () => {
     delete process.env[key];
   }
   mockSystemAccountHome();
+  // Private SQLite creation belongs to the host OS, before the launchd simulation.
+  await seedCompletedRuntimePinMigration(process.env);
   const hostPlatform = process.platform;
   mockProcessPlatform("darwin");
   if (hostPlatform !== "darwin") {
@@ -229,6 +239,15 @@ describe("Doctor node service launcher repair", () => {
       path.join(packageRoot, "openclaw.mjs"),
     );
     expect(native.loaded).toBe(false);
+    expect(native.exec.mock.calls.some(([args]) => args[0] === "bootstrap")).toBe(false);
+  });
+
+  it("leaves an absent node service alone", async () => {
+    await fs.unlink(plist);
+    native.loaded = false;
+    await repair();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(await resolveNodeService().readCommand(process.env)).toBeNull();
     expect(native.exec.mock.calls.some(([args]) => args[0] === "bootstrap")).toBe(false);
   });
 
