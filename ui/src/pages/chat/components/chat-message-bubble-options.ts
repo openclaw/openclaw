@@ -50,7 +50,7 @@ export type GroupedMessageOptions = {
   isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
   toolCardOverrides?: ReadonlyMap<ToolCard, ActivityOperationProps | null>;
-  onRequestUpdate?: () => void;
+  mediaOwner?: object;
   canvasPluginSurfaceUrl?: string | null;
   resourceBasePath?: string;
   mediaPolicyKey?: string;

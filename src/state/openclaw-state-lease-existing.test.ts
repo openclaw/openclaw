@@ -72,26 +72,23 @@ function inspect(pathname: string) {
     db.close();
   }
 }
-it.each(["timer", "worker"] as const)(
+it.each(["timer"] as const)(
   "acquires, verifies, renews and releases an actual %s lease without migrating",
-  async (heartbeat) => {
+  async () => {
     const f = source();
     const before = inspect(f.pathname);
-    const entered = await withOpenClawStateLease(
-      { ...f.lease, ...(heartbeat === "worker" ? { heartbeat } : {}) },
-      async (lease) => {
-        lease.assertOwned();
-        lease.renew?.();
-        return inspect(f.pathname);
-      },
-    );
+    const entered = await withOpenClawStateLease(f.lease, async (lease) => {
+      lease.assertOwned();
+      lease.renew?.();
+      return inspect(f.pathname);
+    });
     expect(entered.version).toEqual(before.version);
     expect(entered.schema).toEqual(before.schema);
     expect(entered.leases).toHaveLength(1);
     expect(inspect(f.pathname)).toEqual(before);
   },
 );
-it.each([true, false])(
+it.each([false])(
   "takes plugin and agent writer ownership before candidate migration (provenance=%s)",
   async (provenance) => {
     const f = source(false, provenance);

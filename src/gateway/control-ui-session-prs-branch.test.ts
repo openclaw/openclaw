@@ -125,10 +125,11 @@ describe("session branch diff stats", () => {
         response: () => githubJson({ fork: false }),
       });
     }
+    const fetchImpl = routedFetch(routes);
+    vi.stubGlobal("fetch", fetchImpl);
     return loadControlUiSessionPullRequests(
       { sessionKey: "agent:main:main" },
       {
-        fetchImpl: routedFetch(routes),
         resolveGitContext: async () => ({
           ...context,
           branch: "feature",
@@ -153,6 +154,7 @@ describe("session branch diff stats", () => {
 
   afterEach(async () => {
     await fs.rm(root, { recursive: true, force: true });
+    vi.unstubAllGlobals();
   });
 
   it("discovers GitHub identity locally and skips network for default, non-GitHub, and detached checkouts", async () => {
@@ -161,10 +163,11 @@ describe("session branch diff stats", () => {
     await trackRemote("main");
     await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
     const fetchImpl = routedFetch([]);
+    vi.stubGlobal("fetch", fetchImpl);
     const load = () =>
       loadControlUiSessionPullRequests(
         { sessionKey: "agent:main:discovery", refresh: true },
-        { fetchImpl, resolveGitRoot: async () => root },
+        { resolveGitRoot: async () => root },
       );
     await expect(load()).resolves.toEqual({
       pullRequests: [],
@@ -242,10 +245,11 @@ describe("session branch diff stats", () => {
       { match: "/pulls?head=", response: () => githubJson([]) },
       { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
     ]);
+    vi.stubGlobal("fetch", fetchImpl);
     const load = () =>
       loadControlUiSessionPullRequests(
         { sessionKey: "agent:main:snapshot-refs" },
-        { fetchImpl, resolveGitRoot: async () => root },
+        { resolveGitRoot: async () => root },
       );
     const initial = await load();
     expect(initial.branch).toMatchObject({ additions: 1, changedFiles: 1 });

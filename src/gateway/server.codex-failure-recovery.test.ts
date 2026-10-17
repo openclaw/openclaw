@@ -455,7 +455,6 @@ module.exports = {
         expect(exitGate.child).toMatchObject({ exitCode: null, signalCode: null });
         expect(nodeProcess.kill(exitGate.pid, 0)).toBe(true);
       } else if (shutdown === "unconfirmed") {
-        await vi.advanceTimersByTimeAsync(2_000);
         expect(await wait(continued.runId)).toMatchObject({
           status: "error",
           error: RECOVERY_FAILURE_TEXT,
@@ -528,10 +527,12 @@ function holdNativeExit(
   };
   child.on("newListener", onListener);
   const end = vi.spyOn(stdin, "end").mockImplementation(() => {
+    // Pause only controls that release the child explicitly. Missing-exit proof
+    // needs real deadlines across asynchronous native containment.
+    if (!closing && !withholdExitConfirmation) {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    }
     closing = true;
-    // Hold the shutdown clock with the child: binding reads and chat.abort
-    // must precede the exit deadline, even when the host is busy.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     return stdin;
   });
   const destroy = vi.spyOn(stdin, "destroy").mockImplementation(() => stdin);

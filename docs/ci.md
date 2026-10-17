@@ -12,6 +12,13 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+Gateway server tests use the same 16-file process bound in local full-suite runs
+and CI config/include selections. This retires the shared worker before retained
+module graphs exhaust a 16 GB runner on Bun. The CI shard keeps its original file
+membership, runtime selection, and outer timing key; the project runner executes
+its chunks sequentially. Native `--shard` and suite-wide state or output options
+retain their single-invocation semantics.
+
 The existing `live-cache` release job has a 30-minute budget for three sequential
 eight-minute checks on one runner: stored cache floors, transport prefixes, and
 agent-turn prefixes. See [prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage).

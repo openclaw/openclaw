@@ -5,6 +5,8 @@ import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { readClaudeCliFallbackSeed } from "./cli-session-history.claude.js";
 import {
   readClaudeCliSessionMessagesAsync,
   createClaudeTextHistoryLines,
@@ -17,6 +19,36 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function readRecord(value: unknown): Record<string, unknown> {
   return requireGatewayRecord(value, "record");
 }
+
+it("imports and seeds history only from the selected Claude config root", async () => {
+  await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+    const configDir = path.join(homeDir, "selected-claude");
+    const projectDir = path.join(configDir, "projects", "configured-workspace");
+    const selectedFile = path.join(projectDir, path.basename(filePath));
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(
+      selectedFile,
+      createClaudeTextHistoryLines([
+        { role: "assistant", uuid: "selected-account", content: "Selected account answer" },
+      ]),
+    );
+    await withEnvAsync({ CLAUDE_CONFIG_DIR: configDir }, async () => {
+      expect(await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId })).toMatchObject([
+        { role: "assistant", content: "Selected account answer" },
+      ]);
+      expect(await readClaudeCliFallbackSeed({ cliSessionId: sessionId })).toMatchObject({
+        recentTurns: [{ role: "assistant", content: "Selected account answer" }],
+      });
+      // Explicit offline homes remain isolated from the running Gateway's account.
+      expect(
+        await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir }),
+      ).toHaveLength(3);
+      await fs.rm(selectedFile);
+      expect(await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId })).toEqual([]);
+      expect(await readClaudeCliFallbackSeed({ cliSessionId: sessionId })).toBeUndefined();
+    });
+  });
+});
 
 it("reads changed Claude sources and preserves discovery precedence", async () => {
   await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {

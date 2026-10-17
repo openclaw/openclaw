@@ -538,12 +538,15 @@ CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
   run_id TEXT,
   event_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
+  event_utf8_bytes INTEGER,
+  event_payload BLOB,
+  event_codec TEXT,
   PRIMARY KEY (session_id, seq),
   FOREIGN KEY (session_id) REFERENCES "session_windows"(session_id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_agent_trajectory_runtime_run
-  ON trajectory_runtime_events(session_id, run_id, created_at, octet_length(event_json));
+  ON trajectory_runtime_events(session_id, run_id, created_at, COALESCE(event_utf8_bytes, octet_length(event_json)));
 
 CREATE TABLE IF NOT EXISTS acp_parent_stream_events (
   session_id TEXT NOT NULL,

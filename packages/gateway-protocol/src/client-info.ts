@@ -84,6 +84,7 @@ export const GATEWAY_CLIENT_CAPS = {
   RUN_TOOL_BINDINGS: "run-tool-bindings",
   SESSION_SCOPED_EVENTS: "session-scoped-events",
   PLUGIN_APPROVALS: "plugin-approvals",
+  PRESENCE_DELTAS: "presence-deltas",
   TASK_SUGGESTIONS: "task-suggestions",
   TERMINAL_OFFSET_SEQ: "terminal-offset-seq",
   TERMINAL_SESSION_METADATA: "terminal-session-metadata",

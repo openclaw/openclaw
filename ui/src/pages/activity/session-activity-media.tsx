@@ -13,7 +13,7 @@ import { ChatImageLightbox } from "../chat/components/chat-image-lightbox-view.t
 import { MessageImages } from "../chat/components/chat-message-images-solid.tsx";
 import {
   assistantMediaPolicyKey,
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type ImageBlock,
 } from "../chat/components/chat-message-media.ts";
 import "./session-activity-media.css";
@@ -94,6 +94,7 @@ export type ActivitySessionMediaProps = {
 
 export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
   let host!: HTMLElement;
+  const mediaOwner = {};
   const [revision, setRevision] = createSignal(0);
   let visible = false;
   let observer: IntersectionObserver | undefined;
@@ -144,7 +145,7 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
       settledEntry = undefined;
       displayedImages = [];
       closeImage(false);
-      releaseChatMediaResourceSubscriber(refresh);
+      releaseChatMediaResourceOwner(mediaOwner);
       boundImageIdentity = identity;
     }
     if (nextOwner !== owner || nextKey !== key) {
@@ -291,7 +292,7 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
         settings: { token: gateway.connection.token },
         password: gateway.connection.password,
       }),
-      onRequestUpdate: refresh,
+      mediaOwner,
       onRequestOpenImage: () => ++imageRequest,
       onOpenImage: (item: ImageLightboxItem, version?: number) => {
         if (
@@ -362,7 +363,7 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
       observer?.disconnect();
       visible = false;
       closeImage(false);
-      releaseChatMediaResourceSubscriber(refresh);
+      releaseChatMediaResourceOwner(mediaOwner);
     };
   });
   const displayEntry = () => {

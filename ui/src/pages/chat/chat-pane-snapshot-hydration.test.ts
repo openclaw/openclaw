@@ -21,7 +21,7 @@ import {
 import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
-import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
+import { releaseChatMediaResourceOwner } from "./components/chat-message-media.ts";
 import { mountChatThread } from "./components/chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
@@ -177,6 +177,7 @@ describe("stored chat snapshot hydration", () => {
           pendingInputs: getChatPendingInputs(remounted.state)?.page.items,
           assistantAttachmentAuthToken: "test-auth-token",
           connectionEpoch: 1,
+          mediaOwner: renderPane,
           onRequestUpdate: renderPane,
         };
         if (view) {
@@ -265,7 +266,7 @@ describe("stored chat snapshot hydration", () => {
         expect(request.mock.calls.every(([method]) => method === "chat.history")).toBe(true);
       } finally {
         view?.unmount();
-        releaseChatMediaResourceSubscriber(renderPane);
+        releaseChatMediaResourceOwner(renderPane);
         transcript.dispose();
         remounted.disconnectedCallback();
         await store.flush();

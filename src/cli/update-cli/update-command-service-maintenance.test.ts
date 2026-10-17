@@ -146,7 +146,7 @@ it.each(maintenanceOperations)(
         if (operation === "changed-during-refresh") {
           command.environment.OPENCLAW_SERVICE_VERSION = "2026.9.6";
         }
-        return true;
+        return { kind: "refreshed" };
       });
       const runId =
         operation === "warning" || operation.startsWith("no-restart")

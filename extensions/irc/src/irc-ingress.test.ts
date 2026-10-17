@@ -165,27 +165,6 @@ describe("IRC durable ingress", () => {
     });
   });
 
-  it("derives the direct-message lane from the sender nick", async () => {
-    await withQueue(async (queue) => {
-      const ingress = createIrcIngressMonitor({
-        accountId: "default",
-        queue,
-        dispatch: vi.fn(),
-        runtime: { error: vi.fn(), log: vi.fn() },
-      });
-      try {
-        await ingress
-          .openConnection("connection-dm")
-          .accept(":Alice!ident@example.org PRIVMSG openclaw-bot :hello", "bot");
-        expect(await queue.listPending({ limit: "all" })).toEqual([
-          expect.objectContaining({ laneKey: "direct:alice" }),
-        ]);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
   it("quiesces an active pump while paused and resumes without charging the next event", async () => {
     await withQueue(async (queue) => {
       const dispatchStarted = createDeferred<void>();

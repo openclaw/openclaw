@@ -17,6 +17,7 @@ import {
   selectSessionWorkspacePreview,
   getSessionWorkspace,
   loadSessionWorkspace,
+  sessionWorkspaceForHost,
 } from "./chat-session-workspace-state.ts";
 import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
 import { openSessionWorkspaceFile, type SessionWorkspaceHost } from "./chat-session-workspace.ts";
@@ -32,7 +33,6 @@ function host(): SessionWorkspaceHost {
     hello: null,
     sidebarContent: null,
     handleOpenSidebar: vi.fn(),
-    requestUpdate: vi.fn(),
   };
 }
 
@@ -70,10 +70,10 @@ function mountPanel() {
 
 // Arm after synchronous open/close notifications and before settling a controlled read.
 function nextWorkspaceUpdate(state: SessionWorkspaceHost) {
-  const updated = new Promise<void>((resolve) => {
-    vi.mocked(state.requestUpdate!).mockImplementationOnce(() => resolve());
-  });
-  return vi.waitFor(() => updated);
+  const updated = createDeferred();
+  const stop = sessionWorkspaceForHost(state).subscribe(() => updated.resolve());
+  onTestFinished(stop);
+  return updated.promise.finally(stop);
 }
 
 afterEach(() => document.body.replaceChildren());
@@ -156,9 +156,11 @@ describe("workspace file tabs", () => {
         closeSessionWorkspacePreview(state, preview.id);
       }
       const workspace = getSessionWorkspace(state);
-      const updated = nextWorkspaceUpdate(state);
       read.resolve({ ...initial, file: { ...initial.file, content: "STALE" } });
-      await updated;
+      // Cross a browser task so all continuations of the retired read have settled.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
       expect(preview.content).toBe(content);
       expect(workspace.previews).toEqual([]);
     },

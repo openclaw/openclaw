@@ -43,6 +43,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   clearRuntimeConfigSnapshot();
+  vi.unstubAllGlobals();
 });
 
 const requestUrl = (input: RequestInfo | URL) =>
@@ -62,11 +63,12 @@ const check = (
   accepted: Scenario["snapshot"] = {},
   pullRequests = [pr],
   assertCurrent = () => {},
-) =>
-  isGitHubPublicationSuperseded({ ...snapshot, ...accepted }, pullRequests, {
-    fetchImpl,
+) => {
+  vi.stubGlobal("fetch", fetchImpl);
+  return isGitHubPublicationSuperseded({ ...snapshot, ...accepted }, pullRequests, {
     assertCurrent,
   });
+};
 
 it.each(["github.com", "ghe.example.test"])(
   "reads publication history at the recorded %s host on an Enterprise Gateway",

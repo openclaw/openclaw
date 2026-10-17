@@ -35,6 +35,7 @@ import {
   readPendingSendStatus,
   resetChatThreadState,
   setExpansionState,
+  subscribeExpansionState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
 import { publishChatSessionProjectionMessages } from "./history-merge.ts";
@@ -1455,7 +1456,7 @@ describe("expansion-state render dependencies", () => {
     expect(getExpandedUserMessages("main").get("user-message")).toBe(false);
   });
 
-  it("prunes cards removed during search when the same visible projection becomes complete", () => {
+  it("prunes implicit defaults when the same visible projection becomes complete", () => {
     const sessionKey = "search-removes-hidden-card";
     const group = (key: string) =>
       preparedGroup(
@@ -1468,10 +1469,8 @@ describe("expansion-state render dependencies", () => {
     syncToolCardExpansionState(sessionKey, [hidden, visible], false);
     const expanded = getExpandedToolCards(sessionKey);
     const hiddenCardId = "hidden-card:toolcard:0";
-    setExpansionState(expanded, hiddenCardId, true);
-
     syncToolCardExpansionState(sessionKey, visibleProjection, false, true);
-    expect(expanded.get(hiddenCardId)).toBe(true);
+    expect(expanded.get(hiddenCardId)).toBe(false);
     const filteredVersion = getExpansionStateVersion(expanded);
 
     syncToolCardExpansionState(sessionKey, visibleProjection, false);
@@ -1479,6 +1478,37 @@ describe("expansion-state render dependencies", () => {
     expect(expanded.has(hiddenCardId)).toBe(false);
     expect(expanded.has("visible-card:toolcard:0")).toBe(true);
     expect(getExpansionStateVersion(expanded)).toBe(filteredVersion + 1);
+  });
+
+  it("retains explicit choices when sibling panes have different loaded history", () => {
+    const sessionKey = "split-history-disclosures";
+    const group = (key: string) =>
+      preparedGroup(
+        key,
+        assistant([{ type: "toolcall", id: `call-${key}`, name: "browser.open" }]),
+      );
+    const older = group("older-card");
+    const recent = group("recent-card");
+    const complete = [older, recent];
+    const partial = [recent];
+    syncToolCardExpansionState(sessionKey, complete, false);
+    const expanded = getExpandedToolCards(sessionKey);
+    const notify = vi.fn();
+    const unsubscribe = subscribeExpansionState(expanded, notify);
+    try {
+      setExpansionState(expanded, "older-card:toolcard:0", true);
+      expect(notify).toHaveBeenCalledTimes(1);
+
+      syncToolCardExpansionState(sessionKey, partial, false);
+      syncToolCardExpansionState(sessionKey, complete, false);
+
+      expect(expanded.get("older-card:toolcard:0")).toBe(true);
+      expect(notify).toHaveBeenCalledTimes(1);
+      setExpansionState(expanded, "older-card:toolcard:0", false);
+      expect(notify).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("auto-expands retained cards hidden while transcript search is active", () => {
