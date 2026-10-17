@@ -1,4 +1,5 @@
 // Failure alerts must describe only cron outcomes that survived durable persistence.
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { setupCronRegressionFixtures } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -19,12 +20,14 @@ import {
 import { restoreFinalizedStartupRun } from "./startup-run-repair.js";
 import type { DeferredCronNotifications } from "./state.js";
 
-const fixtures = setupCronRegressionFixtures({
-  prefix: "cron-failure-alert-persistence-",
-});
+const fixtures = setupCronRegressionFixtures({ prefix: "cron-failure-alert-persistence-" });
 type Outcome = Parameters<typeof applyJobResultAndDrainNotifications>[2];
 type TimelessOutcome = Omit<Outcome, "startedAt" | "endedAt"> &
   Partial<Pick<Outcome, "startedAt" | "endedAt">>;
+const alertDelivery = {
+  mode: "announce",
+  failureDestination: { mode: "webhook", to: "https://alerts.example.test/cron" },
+} satisfies CronJob["delivery"];
 
 function alertFixture(
   id: string,
@@ -64,23 +67,22 @@ function alertFixture(
     });
   const persist = () => saveCronStore(store.storePath, { version: 1, jobs: [job] });
   const durable = async () => (await loadCronStore(store.storePath)).jobs[0]?.state;
-  return { store, job, state, send, outcome, finalize, quiet, persist, durable };
-}
-
-it("shares cooldown across alternating execution and delivery failures", async () => {
-  let now = Date.parse("2026-08-01T14:49:00Z");
-  const { job, send, outcome } = alertFixture("shared-alert-cooldown", () => now);
-  job.delivery = {
-    mode: "announce",
-    failureDestination: { mode: "webhook", to: "https://alerts.example.test/cron" },
-  };
-  for (const status of ["error", "ok"] as const) {
-    await outcome({
+  const failDelivery = (status: "error" | "ok" = "ok") =>
+    outcome({
       status,
       delivered: false,
       error: status === "error" ? "execution failed" : undefined,
       deliveryError: "primary rejected",
     });
+  return { store, job, state, send, outcome, finalize, quiet, persist, durable, failDelivery };
+}
+
+it("shares cooldown across alternating execution and delivery failures", async () => {
+  let now = Date.parse("2026-08-01T14:49:00Z");
+  const { job, send, outcome, failDelivery } = alertFixture("shared-alert-cooldown", () => now);
+  job.delivery = structuredClone(alertDelivery);
+  for (const status of ["error", "ok"] as const) {
+    await failDelivery(status);
     now += 1_000;
   }
   expect(send).toHaveBeenCalledOnce();
@@ -88,11 +90,7 @@ it("shares cooldown across alternating execution and delivery failures", async (
   expect(job.state.lastFailureAlertAtMs).toBeUndefined();
   expect(job.state.failureAlertIncident).toBeUndefined();
   expect(send).toHaveBeenCalledOnce();
-  await outcome({
-    status: "ok",
-    delivered: false,
-    deliveryError: "primary rejected",
-  });
+  await failDelivery();
   expect(send).toHaveBeenCalledTimes(2);
 });
 
@@ -101,17 +99,11 @@ it.each(["skipped run", "quiet trigger"])(
   async (intervening) => {
     const firstAt = Date.parse("2026-08-01T14:49:00Z");
     let now = firstAt;
-    const { job, send, outcome, quiet } = alertFixture("delivery-alert-order", () => now);
-    job.delivery = {
-      mode: "announce",
-      failureDestination: { mode: "webhook", to: "https://alerts.example.test/cron" },
-    };
-    const failDelivery = () =>
-      outcome({
-        status: "ok",
-        delivered: false,
-        deliveryError: "primary rejected",
-      });
+    const { job, send, outcome, quiet, failDelivery } = alertFixture(
+      "delivery-alert-order",
+      () => now,
+    );
+    job.delivery = structuredClone(alertDelivery);
     await failDelivery();
     expect(send).toHaveBeenCalledOnce();
     now += 1_000;
@@ -163,9 +155,7 @@ it.each([
       },
     });
     expect(job.state.lastFailureAlertAtMs).toBe(endedAt + expectedOffset);
-    expect(job.state.lastFailureNotificationDeliveryStatus).toBe(
-      notification?.status ?? "not-requested",
-    );
+    expect(job.state.lastFailureNotificationDeliveryStatus).toBe(notification.status);
     expect(deferredNotifications).toEqual([]);
     expect(send).not.toHaveBeenCalled();
     expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -198,11 +188,8 @@ it("resumes skipped alerts after a clock rollback only after durable persistence
   expect((await durable())?.lastFailureAlertAtMs).toBe(now);
 
   now += 30_000;
-  const currentJob = state.store?.jobs[0];
-  if (!currentJob) {
-    throw new Error("expected persisted cron job");
-  }
-  await finalize("skipped", "provider still unavailable", currentJob);
+  assert(state.store?.jobs[0], "expected persisted cron job");
+  await finalize("skipped", "provider still unavailable");
 
   expect(send).toHaveBeenCalledOnce();
   expect((await durable())?.lastFailureAlertAtMs).toBe(dueAt);
@@ -260,9 +247,7 @@ it("persists an incident and suppresses repeats after a service reload past cool
 
   now += 30_000;
   const currentJob = state.store?.jobs[0];
-  if (!currentJob) {
-    throw new Error("expected persisted cron job");
-  }
+  assert(currentJob, "expected persisted cron job");
   await finalize("error", "first failure", currentJob);
 
   expect(send).toHaveBeenCalledOnce();
@@ -282,9 +267,7 @@ it("persists an incident and suppresses repeats after a service reload past cool
   expect(send).toHaveBeenCalledOnce();
 
   const recoveredJob = reloadedState.store?.jobs[0];
-  if (!recoveredJob) {
-    throw new Error("expected reloaded cron job");
-  }
+  assert(recoveredJob, "expected reloaded cron job");
   now += 1_000;
   await finalize("ok", undefined, recoveredJob, now, reloadedState);
   expect(send).toHaveBeenCalledOnce();

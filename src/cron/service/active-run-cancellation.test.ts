@@ -19,9 +19,10 @@ import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-
 const CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS = 60_000;
 const cores: ReturnType<typeof createDeferred<void>>[] = [];
 const releases: Array<() => void> = [];
-function core() {
+function core(signal?: AbortSignal, agentId?: string) {
   const deferred = createDeferred();
   cores.push(deferred);
+  trackActiveCronTaskRunSettlement(deferred.promise, signal, agentId);
   return deferred;
 }
 function register(params: Parameters<typeof registerActiveCronTaskRun>[0]) {
@@ -58,11 +59,9 @@ afterEach(async () => {
 });
 
 it("keeps a removed agent's unsettled core visible after cancellation and restart retirement", async () => {
-  const removed = core();
-  const survivor = core();
   const controller = new AbortController();
-  trackActiveCronTaskRunSettlement(removed.promise, controller.signal, "removed");
-  trackActiveCronTaskRunSettlement(survivor.promise, undefined, "survivor");
+  const removed = core(controller.signal, "removed");
+  core(undefined, "survivor");
   controller.abort();
   await vi.advanceTimersByTimeAsync(CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS + 1);
   retireActiveCronTaskRunTracking();
@@ -85,7 +84,7 @@ it("consumes a removal request made before the run controller binds", () => {
 it("keeps shutdown drain deadlines stable when the wall clock jumps forward", async () => {
   const initialWallTimeMs = Date.parse("2026-08-23T12:00:00.000Z");
   vi.setSystemTime(initialWallTimeMs);
-  trackActiveCronTaskRunSettlement(core().promise);
+  core();
   const observedDrain = vi.fn();
   const drain = waitForActiveCronTaskRuns(1_000).then(observedDrain);
   vi.setSystemTime(initialWallTimeMs + 86_400_000);
@@ -102,20 +101,17 @@ it.each([
 ])(
   "releases concurrent shutdown drains as soon as the final $lifecycle settles",
   async ({ settleCore }) => {
-    const deferred = core();
+    const deferred = settleCore ? core() : undefined;
     const release = settleCore
       ? undefined
       : register({ runId: "draining-handle", controller: new AbortController() });
-    if (settleCore) {
-      trackActiveCronTaskRunSettlement(deferred.promise);
-    }
     const firstObservedDrain = vi.fn();
     const secondObservedDrain = vi.fn();
     const drains = Promise.all([
       waitForActiveCronTaskRuns(1_000).then(firstObservedDrain),
       waitForActiveCronTaskRuns(2_000).then(secondObservedDrain),
     ]);
-    if (settleCore) {
+    if (deferred) {
       deferred.resolve();
     } else {
       release?.();
@@ -130,7 +126,7 @@ it.each([
 it("drops never-settling cron promises after an abort before tracking", async () => {
   const controller = new AbortController();
   controller.abort();
-  trackActiveCronTaskRunSettlement(core().promise, controller.signal);
+  core(controller.signal);
   await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({ drained: false, active: 1 });
   await vi.advanceTimersByTimeAsync(CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS + 1);
   await expect(waitForActiveCronTaskRuns(0)).resolves.toEqual({ drained: true, active: 0 });
@@ -140,8 +136,8 @@ it("drops never-settling cron promises after an abort before tracking", async ()
 it("does not retire an unrelated active run when one registered run is cancelled", async () => {
   const cancelledController = new AbortController();
   const unaffectedController = new AbortController();
-  trackActiveCronTaskRunSettlement(core().promise, cancelledController.signal);
-  trackActiveCronTaskRunSettlement(core().promise, unaffectedController.signal);
+  core(cancelledController.signal);
+  core(unaffectedController.signal);
   const release = register({
     runId: "cancelled-run",
     controller: cancelledController,
@@ -164,8 +160,8 @@ it("does not retire an unrelated active run when one registered run is cancelled
 
 it("retires mixed active runs during a bulk shutdown", async () => {
   const controller = new AbortController();
-  trackActiveCronTaskRunSettlement(core().promise, controller.signal);
-  trackActiveCronTaskRunSettlement(core().promise);
+  core(controller.signal);
+  core();
   const release = register({ runId: "shutdown-run", controller });
   expect(abortActiveCronTaskRuns()).toBe(1);
   const retirementTimerCount = vi.getTimerCount();

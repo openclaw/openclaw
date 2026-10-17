@@ -1,26 +1,17 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
+import { makeCronJob } from "../delivery.test-helpers.js";
 import { projectCronJobThroughStorageCodec } from "../store/row-codec.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { applyJobPatch, createJob } from "./jobs.js";
 
 function makeJob(overrides: Partial<CronJob> = {}): CronJob {
-  const now = Date.now();
-  return {
-    id: "job-1",
-    name: "test",
-    enabled: true,
-    createdAtMs: now,
-    updatedAtMs: now,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
+  return makeCronJob({
     wakeMode: "now",
-    payload: { kind: "agentTurn", message: "hello" },
     delivery: { mode: "announce", channel: "telegram", to: "-1001234567890" },
-    state: {},
     ...overrides,
-  };
+  });
 }
 
 function makeMainJob(delivery?: CronJob["delivery"]) {
@@ -44,8 +35,7 @@ describe("applyJobPatch schedule retention", () => {
   it("defaults cron to cleanup when converting it to at", () => {
     const job = makeJob({ schedule: { kind: "cron", expr: "0 * * * *" } });
     applyJobPatch(job, { schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" } });
-    expect(job.schedule.kind).toBe("at");
-    expect(job.deleteAfterRun).toBe(true);
+    expect(job).toMatchObject({ schedule: { kind: "at" }, deleteAfterRun: true });
   });
 
   it("preserves an explicit keep policy when converting a recurring job to at", () => {
@@ -175,8 +165,7 @@ describe("applyJobPatch delivery merge", () => {
       payload: { kind: "systemEvent", text: "tick" },
       delivery: { bestEffort: false },
     });
-    expect(job.sessionTarget).toBe("main");
-    expect(job.delivery).toBeUndefined();
+    expect(job).toMatchObject({ sessionTarget: "main", delivery: undefined });
   });
 
   it("preserves inherited main-session webhook mode in a partial delivery update", () => {

@@ -20,14 +20,13 @@ import { createCronStoreHarness, createNoopLogger } from "../service.test-harnes
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
-import type { CronJob } from "../types.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-manual-ack-durability-" });
 
 async function admissionFixture(id: string, count: number, command = false) {
   const { storePath } = await makeStorePath();
   const now = Date.now();
-  const job: CronJob = createDueIsolatedJob({
+  const job = createDueIsolatedJob({
     id,
     nowMs: now,
     nextRunAtMs: now + (command ? 3_600_000 : 60_000),
@@ -48,11 +47,9 @@ async function admissionFixture(id: string, count: number, command = false) {
 }
 
 function receipt(runId: string, jobId: string) {
-  return openOpenClawStateDatabase()
-    .db.prepare(
-      "SELECT status, error_text FROM cron_run_receipts WHERE request_run_id = ? AND job_id = ?",
-    )
-    .get(runId, jobId);
+  const sql =
+    "SELECT status, error_text FROM cron_run_receipts WHERE request_run_id = ? AND job_id = ?";
+  return openOpenClawStateDatabase().db.prepare(sql).get(runId, jobId);
 }
 
 it("records the exact acknowledged manual request after SIGKILL before worker activation", async () => {
@@ -74,8 +71,7 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
           import { CronService } from ${JSON.stringify(serviceUrl.href)};
           import { createTestGatewayScheduler } from ${JSON.stringify(schedulerClockUrl.href)};
           let started = 0;
-          let reportStarted;
-          const blockersStarted = new Promise((resolve) => { reportStarted = resolve; });
+          const { promise: blockersStarted, resolve: reportStarted } = Promise.withResolvers();
           const cron = new CronService({
             scheduler: createTestGatewayScheduler(),
             storePath: ${JSON.stringify(storePath)},
@@ -88,7 +84,6 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
               if (!job.id.startsWith("manual-blocker-")) throw new Error("unexpected execution");
               if (++started === 8) reportStarted();
               await new Promise(() => {});
-              return { status: "ok" };
             },
           });
           await cron.start();

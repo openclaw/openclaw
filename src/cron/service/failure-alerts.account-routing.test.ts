@@ -84,36 +84,35 @@ beforeEach(() => {
 
 afterEach(resetPluginRuntimeStateForTest);
 
-it.each([
+type RoutingCase = {
+  name: string;
+  delivery?: Partial<NonNullable<CronJob["delivery"]>>;
+  failureAlert?: CronJob["failureAlert"];
+  globalAlert?: NonNullable<RoutingDeps["cronConfig"]>["failureAlert"];
+  expected: object;
+};
+it.each<RoutingCase>([
   {
     name: "keeps numeric zero as a distinct primary thread",
-    jobAlert: undefined,
-    deliveryThreadId: 0,
-    failureDestination: { ...failureDestination, to: "tg:19098680" },
+    delivery: { threadId: 0, failureDestination: { ...failureDestination, to: "tg:19098680" } },
     expected: { ...alternateRoute, to: "tg:19098680" },
   },
   {
     name: "lets an explicit alert route override an unthreaded failure destination",
-    jobAlert: { to: "tg:19098680" },
-    failureDestination,
-    expected: {
-      ...failureDestination,
-      to: "tg:19098680",
-      threadId: 42,
-      alternateRoute: false,
-    },
+    failureAlert: { to: "tg:19098680" },
+    delivery: { failureDestination },
+    expected: { ...failureDestination, to: "tg:19098680", threadId: 42, alternateRoute: false },
   },
   {
     name: "preserves an unthreaded failure destination when the alert only selects its mode",
-    jobAlert: { mode: "announce" as const },
-    failureDestination,
+    failureAlert: { mode: "announce" },
+    delivery: { failureDestination },
     expected: alternateRoute,
   },
   {
     name: "does not equate case-sensitive recipient identities across provider aliases",
-    deliveryChannel: "googlechat",
-    deliveryTo: "googlechat:RoomA",
-    jobAlert: { to: "gchat:rooma" },
+    delivery: { channel: "googlechat", to: "googlechat:RoomA" },
+    failureAlert: { to: "gchat:rooma" },
     expected: {
       channel: "googlechat",
       to: "gchat:rooma",
@@ -123,38 +122,21 @@ it.each([
   },
   {
     name: "does not inherit the primary account for another channel",
-    globalChannel: "slack",
-    jobAlert: undefined,
+    globalAlert: { enabled: true, after: 1, channel: "slack" },
     expected: { channel: "slack", to: undefined, accountId: undefined },
   },
-])("$name", (testCase) => {
-  const { jobAlert, expected } = testCase;
+])("$name", ({ delivery, failureAlert, globalAlert, expected }) => {
   const { state, job } = routingFixture(
     {
-      delivery: {
-        ...primaryDelivery,
-        channel: "deliveryChannel" in testCase ? testCase.deliveryChannel : "telegram",
-        to: "deliveryTo" in testCase ? testCase.deliveryTo : "telegram:19098680",
-        threadId: "deliveryThreadId" in testCase ? testCase.deliveryThreadId : 42,
-        ...("failureDestination" in testCase
-          ? { failureDestination: testCase.failureDestination }
-          : {}),
-      },
-      ...(jobAlert ? { failureAlert: jobAlert } : {}),
+      delivery: { ...primaryDelivery, ...delivery },
+      ...(failureAlert ? { failureAlert } : {}),
     },
     {
       defaultAgentId: "main",
-      cronConfig: {
-        failureAlert: {
-          enabled: true,
-          after: 1,
-          ...("globalChannel" in testCase ? { channel: testCase.globalChannel } : {}),
-        },
-      },
+      cronConfig: { failureAlert: globalAlert ?? { enabled: true, after: 1 } },
       sendCronFailureAlert: undefined,
     },
   );
-
   expect(resolveFailureAlert(state, job)).toMatchObject(expected);
 });
 

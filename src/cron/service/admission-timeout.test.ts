@@ -33,7 +33,7 @@ function stallCronHostCallbacks() {
   const held = createDeferred();
   const delayed: Array<() => void> = [];
   const ports = new WeakMap<MessagePort, { paused: boolean }>();
-  const restores: Array<() => void> = [];
+  const restores: Array<{ mockRestore(): void }> = [];
   let stalling = true;
   const mutationTypes = new Set([
     "cron.schedulerStart",
@@ -87,8 +87,7 @@ function stallCronHostCallbacks() {
         submitted.resolve();
       }
     });
-    restores.push(() => reply.mockRestore());
-    restores.push(() => post.mockRestore());
+    restores.push(reply, post);
     return worker;
   });
   const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
@@ -140,7 +139,7 @@ function stallCronHostCallbacks() {
       admissions.mockRestore();
       workers.mockRestore();
       for (const restore of restores.toReversed()) {
-        restore();
+        restore.mockRestore();
       }
     },
   };
@@ -204,19 +203,17 @@ it("finishes startup, state writes, and update history while cron host callbacks
       );
       expect(jobs.find(({ id }) => id === immediate.id)?.state.lastRunStatus).toBe("ok");
       const db = openOpenClawStateDatabase().db;
-      expect(
-        db
-          .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-          .get("cron-independent-writer"),
-      ).toEqual({ value_json: JSON.stringify("saved") });
+      const config = db
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+        .get("cron-independent-writer");
+      expect(config).toEqual({ value_json: JSON.stringify("saved") });
       expect(getUpdateRun(update.runId, options)?.steps).toContainEqual(
         expect.objectContaining({ step: "cron-independent-history", status: "completed" }),
       );
-      expect(
-        db
-          .prepare("SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ?")
-          .all(cronStoreKey(storePath), immediate.id),
-      ).toEqual([{ status: "ok" }]);
+      const receipts = db
+        .prepare("SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ?")
+        .all(cronStoreKey(storePath), immediate.id);
+      expect(receipts).toEqual([{ status: "ok" }]);
     } finally {
       fault.release();
       fault.restore();

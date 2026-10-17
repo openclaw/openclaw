@@ -273,7 +273,6 @@ it("keeps an acknowledged manual run ahead of a later timer tick", async ({ sign
   const dueAt = Date.now() - 1;
   const job = recurringJob("timer-overlap", dueAt, {
     schedule: { kind: "at", at: new Date(dueAt).toISOString() },
-    payload: { kind: "agentTurn", message: "long task" },
   });
   const result = createDeferred<{ status: "ok"; summary: string }>();
   const started = createDeferred();
@@ -341,9 +340,7 @@ it("force-runs a due paced job without consuming its pending slot", async () => 
   const nowMs = Date.parse("2026-07-19T09:00:00.000Z");
   const dueSlot = nowMs - 1_000;
   const job = recurringJob("manual-paced-due-slot", nowMs, {
-    name: "manual paced due slot",
     schedule: { kind: "every", everyMs: 60_000, anchorMs: nowMs - 60_000 },
-    payload: { kind: "agentTurn", message: "manual paced due slot" },
     state: { nextRunAtMs: dueSlot, pacedNextRunAtMs: dueSlot, startupCatchupAtMs: dueSlot },
   });
   job.pacing = { min: "15m", max: "4h" };
@@ -381,7 +378,6 @@ it("applies timeoutSeconds to manual cron.run isolated executions", async () => 
   try {
     const scheduledAt = Date.parse("2026-02-15T13:00:00.000Z");
     const job = recurringJob("manual-timeout", scheduledAt, {
-      name: "manual timeout",
       payload: { kind: "agentTurn", message: "work", timeoutSeconds: FAST_TIMEOUT_SECONDS },
     });
     const abortAwareRunner = createAbortAwareIsolatedRunner();
@@ -415,9 +411,7 @@ it("keeps a queued quiet schedule event separate from its one terminal event", a
 
   const dueAt = Date.parse("2026-02-06T10:05:02.000Z");
   const job = recurringJob("queued-quiet-trigger", dueAt, {
-    name: "queued quiet trigger",
     schedule: { kind: "every", everyMs: 60_000, anchorMs: dueAt - 60_000 },
-    payload: { kind: "agentTurn", message: "watch" },
     trigger: { script: "return false" },
   });
   const terminal = terminalEvents(job.id, undefined, true);
@@ -585,7 +579,6 @@ it("#104518 finalizes watcher-fired on-exit job: onexit-delete-ok", async () => 
   const nowMs = Date.now();
   const job = recurringJob("onexit-delete-ok", nowMs, {
     schedule: { kind: "on-exit", command: 'sh -c "exit 0"' },
-    payload: { kind: "agentTurn", message: "post-exit payload" },
     state: {},
   });
   job.deleteAfterRun = true;
