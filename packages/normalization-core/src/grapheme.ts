@@ -8,6 +8,12 @@ function getGraphemeSegmenter(): Intl.Segmenter {
   return graphemeSegmenter;
 }
 
+function segmentPrefixThrough(text: string, index: number): Intl.Segments {
+  // A boundary needs all preceding context and the code point at the queried
+  // offset. Keep two code units of lookahead without copying the unused suffix into ICU.
+  return getGraphemeSegmenter().segment(text.slice(0, index + 2));
+}
+
 /**
  * Chooses a whole-grapheme cut within the hard budget, honoring a usable preference.
  * If no whole grapheme fits, allowPartial permits a surrogate-safe progress cut;
@@ -45,7 +51,7 @@ export function findGraphemeChunkEnd(
     return preferred;
   }
 
-  const segments = getGraphemeSegmenter().segment(text);
+  const segments = segmentPrefixThrough(text, hardEnd);
   let end = segments.containing(preferred)?.index ?? preferred;
   if (end <= start && preferred < hardEnd) {
     end = hardEnd === text.length ? hardEnd : (segments.containing(hardEnd)?.index ?? hardEnd);
@@ -76,7 +82,14 @@ export function skipWhitespaceGraphemes(
   if (!/\s/u.test(text.charAt(start))) {
     return start;
   }
-  const segments = getGraphemeSegmenter().segment(text);
+  // Whitespace graphemes occupy at most two code units (CRLF). The following
+  // code point keeps whitespace joined to a combining mark from being discarded.
+  const scanEnd = Math.min(text.length, start + maxGraphemes * 2);
+  let whitespaceEnd = start;
+  while (whitespaceEnd < scanEnd && /\s/u.test(text.charAt(whitespaceEnd))) {
+    whitespaceEnd += 1;
+  }
+  const segments = segmentPrefixThrough(text, whitespaceEnd);
   let cursor = start;
   for (let count = 0; count < maxGraphemes && cursor < text.length; count += 1) {
     const cluster = segments.containing(cursor);
@@ -93,7 +106,7 @@ export function trimEndWhitespaceGraphemes(text: string, end = text.length): str
   if (!/\s/u.test(text.charAt(end - 1))) {
     return text.slice(0, end);
   }
-  const segments = getGraphemeSegmenter().segment(text);
+  const segments = segmentPrefixThrough(text, end);
   let cursor = end;
   while (cursor > 0) {
     const cluster = segments.containing(cursor - 1);

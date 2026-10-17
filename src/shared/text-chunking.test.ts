@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { chunkTextByBreakResolver, splitLongTextLine } from "./text-chunking.js";
 
 it("returns empty for blank input and preserves text that needs no split", () => {
@@ -19,6 +19,7 @@ it("resolves bounded chunks while retaining clusters and trimming whole separato
     ["abc   def", 6, ["abc", "def"]],
     ["ab \u0301cd", 2, ["ab", " \u0301", "cd"]],
     ["ab  \u0301cd", 2, ["ab", " \u0301", "cd"]],
+    ["ab \u{1d165}cd", 3, ["ab", " \u{1d165}", "cd"]],
     ["ab\u0600  cd", 5, ["ab\u0600 ", "cd"]],
     [" \u0301x", 1, [" ", "\u0301", "x"]],
     ["  ! ", 2, ["!"]],
@@ -35,6 +36,26 @@ it("resolves bounded chunks while retaining clusters and trimming whole separato
     ).toEqual(expected);
   }
 });
+
+it.each(["alpha beta gamma ", "한글 👩🏽‍💻 문장 "])(
+  "bounds grapheme segmentation work for long replies containing %j",
+  (phrase) => {
+    const text = phrase.repeat(600);
+    const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+    try {
+      const chunks = chunkTextByBreakResolver(text, 128, (window) => window.lastIndexOf(" "));
+      expect(chunks.join(" ")).toBe(text.trimEnd());
+      expect(chunks.every((chunk) => chunk.length <= 128)).toBe(true);
+      const segmentedChars = segment.mock.calls.reduce(
+        (total, [input]) => total + (input?.length ?? 0),
+        0,
+      );
+      expect(segmentedChars).toBeLessThan(text.length * 4);
+    } finally {
+      segment.mockRestore();
+    }
+  },
+);
 
 it("normalizes positive fractional limits before splitting", () => {
   expect(chunkTextByBreakResolver("abc", 0.5, (window) => window.lastIndexOf(" "))).toEqual([
