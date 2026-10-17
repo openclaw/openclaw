@@ -1,3 +1,4 @@
+/** Computer Use readiness probes and their native subscription lifecycle. */
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   CodexAppServerUnsafeSubscriptionError,

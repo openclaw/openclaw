@@ -1,3 +1,4 @@
+/** Lifecycle-owned generation for managed macOS Codex desktop artifacts. */
 import { watch, type FSWatcher } from "node:fs";
 import path from "node:path";
 import type {

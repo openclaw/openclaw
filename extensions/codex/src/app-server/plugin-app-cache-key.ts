@@ -24,6 +24,7 @@ import type {
 const require = createRequire(import.meta.url);
 const CODEX_PLUGIN_VERSION = readPluginPackageVersion({ require });
 
+/** Inputs that identify the Codex app inventory cache scope for one runtime. */
 type CodexPluginAppCacheKeyParams = Omit<
   CodexAppInventoryCacheKeyInput,
   "codexHome" | "endpoint"
@@ -34,6 +35,7 @@ type CodexPluginAppCacheKeyParams = Omit<
   desktopGenerationFingerprint?: string;
 };
 
+/** Builds the full app inventory cache key for Codex plugin/app discovery. */
 export function buildCodexPluginAppCacheKey(params: CodexPluginAppCacheKeyParams): string {
   return buildCodexAppInventoryCacheKey(
     {

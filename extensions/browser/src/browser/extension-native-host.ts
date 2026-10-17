@@ -100,6 +100,7 @@ async function validateNativeManifest(params: {
   }
 }
 
+/** Run one request/response native host process. */
 export async function runBrowserNativeHost(params: {
   manifestPath: string;
   launcherPath: string;

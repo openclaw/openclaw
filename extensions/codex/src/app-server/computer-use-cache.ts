@@ -1,3 +1,4 @@
+/** Shared Computer Use plugin cache reconciliation for isolated Codex homes. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";

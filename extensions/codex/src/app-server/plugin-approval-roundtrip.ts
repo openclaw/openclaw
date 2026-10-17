@@ -1,3 +1,7 @@
+/**
+ * Routes Codex app-server plugin approval prompts through OpenClaw's gateway
+ * approval tool and maps gateway decisions back to Codex outcomes.
+ */
 import type {
   EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   ExecApprovalDecision,

@@ -1,3 +1,4 @@
+/** Managed local wrapper for Codex's reserved bundled marketplace. */
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

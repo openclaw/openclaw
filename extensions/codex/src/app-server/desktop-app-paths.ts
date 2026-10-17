@@ -1,3 +1,4 @@
+/** Shared path candidates for Codex's macOS desktop app bundle. */
 import { existsSync } from "node:fs";
 import path from "node:path";
 

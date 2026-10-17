@@ -105,6 +105,7 @@ export function readCodexNotificationItem(
     : undefined;
 }
 
+/** Reads the stable call id from a model-emitted raw tool item. */
 export function readRawResponseToolCallId(
   notification: CodexServerNotification,
 ): string | undefined {

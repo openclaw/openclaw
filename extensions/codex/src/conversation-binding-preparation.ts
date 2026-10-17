@@ -1,3 +1,4 @@
+/** Canonical conversation thread preparation, policy, and binding ownership. */
 import {
   resolveActiveEmbeddedRunSessionId,
   resolveSandboxContext,

@@ -1,3 +1,4 @@
+// Downloads generated video assets under provider-owned transport policies.
 import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
