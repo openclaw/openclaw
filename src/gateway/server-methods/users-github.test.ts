@@ -383,9 +383,6 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     "reports a %s personal profile unavailable despite native authentication",
     async (failure) => {
       const connected = await connect();
-      if (connected.selection.kind !== "connected") {
-        throw new Error("Expected connected profile");
-      }
       const dir = resolveManagedGitHubProfileDir({
         scope: "personal",
         agentId: "",
@@ -783,11 +780,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         unobserve();
         unobserveAuthority();
       }
-      expect(retired).toEqual(
-        target === "absent" || source.selection.kind !== "connected"
-          ? []
-          : [source.selection.profileId],
-      );
+      expect(retired).toEqual(target === "absent" ? [] : [source.selection.profileId]);
       expect(observedOwners).toEqual(target === "absent" ? [] : [owner(bob)]);
       expect(authorityOwners).toEqual([owner(bob)]);
       expect(authoritySeenAtRetirement).toEqual(target === "absent" ? [] : [1]);
