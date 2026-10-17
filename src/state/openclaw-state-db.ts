@@ -39,7 +39,6 @@ import {
 } from "./openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
-  confirmCachedOpenClawStateDatabaseIntegrity,
   openClawStateDatabaseCache as stateDbCache,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
@@ -124,7 +123,7 @@ function readPublishedStateSchemaVersion(database: EngineConnection): number {
 }
 
 function repairDoctorStateDatabase(
-  options: OpenClawStateDatabaseOptions,
+  options: OpenClawStateDatabaseOptions & { integrityCheck?: "quick" | "full" },
   scope: "doctor" | "indexes" | "readability" | "version",
 ): { changes: string[]; warnings: string[] } {
   if (isStatePostgres()) {
@@ -141,12 +140,15 @@ function repairDoctorStateDatabase(
     assertOpenClawStateDatabaseFreshOpenAllowed(options);
   }
   return withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () =>
-    repairStateSchema(pathname, env, scope),
+    repairStateSchema(pathname, env, scope, options.integrityCheck),
   );
 }
 
 export function repairOpenClawStateDatabaseSchema(
-  options: OpenClawStateDatabaseOptions & { versionMigrationOnly?: boolean } = {},
+  options: OpenClawStateDatabaseOptions & {
+    versionMigrationOnly?: boolean;
+    integrityCheck?: "quick" | "full";
+  } = {},
 ): {
   changes: string[];
   warnings: string[];
@@ -156,21 +158,24 @@ export function repairOpenClawStateDatabaseSchema(
 
 /** Explicit Doctor maintenance before config readers encounter a quarantined index. */
 export function repairOpenClawStateDatabaseIndexesForDoctor(
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { integrityCheck?: "quick" | "full" } = {},
 ): { changes: string[]; warnings: string[] } {
-  return repairDoctorStateDatabase(options, "indexes");
+  return repairDoctorStateDatabase(
+    { ...options, integrityCheck: options.integrityCheck ?? "full" },
+    "indexes",
+  );
 }
 
 /** Repair known catalog damage and preserve orphan rows before Doctor backs up or loads state. */
 export function repairOpenClawStateDatabaseReadabilityForDoctor(
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { integrityCheck?: "quick" | "full" } = {},
 ): { changes: string[]; warnings: string[] } {
   return repairDoctorStateDatabase(options, "readability");
 }
 
 /** Prepare schema and retire resources only when the admitted operation actually repairs it. */
 export async function prepareOpenClawStateDatabaseSchema(
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { integrityCheck?: "quick" | "full" } = {},
   mode: "automatic" | "doctor-preparation" | "doctor" = "automatic",
 ): Promise<{
   changes: string[];
@@ -206,10 +211,11 @@ export async function prepareOpenClawStateDatabaseSchema(
         needsRepair = true;
       }
     }
-    return needsRepair || needsOpenClawStateDatabaseSchemaRepair(pathname, scope)
+    return needsRepair ||
+      needsOpenClawStateDatabaseSchemaRepair(pathname, scope, options.integrityCheck)
       ? withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () => {
           repairStarted = true;
-          return repairStateSchema(pathname, env, scope);
+          return repairStateSchema(pathname, env, scope, options.integrityCheck);
         })
       : { changes: [], warnings: [] };
   } finally {
@@ -702,10 +708,3 @@ export {
   isOpenClawStateDatabaseOpen,
   closeOpenClawStateDatabaseForTest,
 } from "./openclaw-state-db-cache.js";
-
-export async function confirmOpenClawStateDatabaseIntegrity(pathname: string) {
-  if (isStatePostgres()) {
-    requireNativeDatabaseFile("postgres", "integrity");
-  }
-  return confirmCachedOpenClawStateDatabaseIntegrity(pathname);
-}

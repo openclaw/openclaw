@@ -49,7 +49,6 @@ import type {
   OpenClawDatabaseSchemaPreflight,
   OpenClawDatabasePreflightOptions,
 } from "./openclaw-database-preflight.types.js";
-import { requestOpenClawAgentDatabaseIntegrityCheck } from "./openclaw-database-verify.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -607,16 +606,6 @@ export async function preflightOpenClawDatabaseSchemas(
           ) {
             inspection.incompatible.push(incompatible);
           }
-        }
-        if (
-          schemaInspection.integrityGateOutcome === "cached" &&
-          !readSqliteDatabaseCleanClose(agentPath)
-        ) {
-          requestOpenClawAgentDatabaseIntegrityCheck({
-            check: "quick",
-            path: agentPath,
-            env: options.env ?? process.env,
-          });
         }
         recordPreparedSchemaHeader?.(schemaInspection);
         return schemaInspection.preparationPending ? "defer" : undefined;

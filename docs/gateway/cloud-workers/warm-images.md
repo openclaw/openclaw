@@ -28,6 +28,8 @@ Setup-generated dependencies and build output survive into the session. Session 
 
 An empty committed workspace uses the profile's shared runtime image instead of a repository snapshot. With no prepared project, capture happens at eligible worker teardown. A failed detected dependency install skips capture and lets the session start cold; a failed declared recipe stops dispatch. Explicitly skipped setup has a separate snapshot identity.
 
+Environment status reports `stopping` while teardown is pending. A warm-image capture may finish after the lease reports `destroyed`; if the Gateway exits mid-capture, Crabbox's idle timeout or TTL reaps the lease.
+
 ### Later sessions and refresh
 
 A matching ready worker skips provisioning. Otherwise, a compatible snapshot starts a new machine and New Session shows **Starting from snapshot…**. The fork updates its checkout to the requested commit and installs the current runtime when needed before enrollment. Profile setup is already captured; post-create/start commands run after session binding.

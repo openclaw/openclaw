@@ -1,8 +1,12 @@
 import { fork } from "node:child_process";
+import { existsSync } from "node:fs";
 import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
-import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
+import {
+  getDatabaseEngineInput,
+  getDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import {
@@ -112,7 +116,50 @@ export function createAgentSchemaInspectionWorker() {
       }
       busy = true;
       try {
-        if (kind === "agent" && getDatabaseEngineInput("agent")) {
+        const schemaOnly =
+          kind === "agent" &&
+          !input.verifyCurrentSchemaShape &&
+          !input.requireStartupMigrationReadiness &&
+          !input.inspectOwnership &&
+          !input.inspectEmptyStore;
+        let postgresAgent = Boolean(getDatabaseEngineInput("agent"));
+        const selection = getDatabaseEngineSelection();
+        if (schemaOnly && selection?.postgres) {
+          // Update admission includes retained stores that can differ from the selected engine.
+          if (!existsSync(snapshotPath ?? input.pathname)) {
+            return null;
+          }
+          const { readBackupEngine, readBackupEngineImage } =
+            await import("../infra/database-engine/physical-store.js");
+          const physical = snapshotPath
+            ? readBackupEngineImage(snapshotPath, input.pathname)
+            : readBackupEngine(input.pathname);
+          signal?.throwIfAborted();
+          if (physical.engine === "sqlite") {
+            if (postgresAgent && !snapshotPath) {
+              // The caller assumed PostgreSQL; defer to its artifact-preserving SQLite copy.
+              return null;
+            }
+            postgresAgent = false;
+          } else if (!postgresAgent) {
+            const { withPostgresStoreMetadata } =
+              await import("../infra/database-engine/postgres-store-metadata.js");
+            const result = await withPostgresStoreMetadata(
+              selection.postgres,
+              physical,
+              async (_client, metadata) => {
+                if (metadata.store !== "agent") {
+                  throw new Error("PostgreSQL agent inspection requires an agent store.");
+                }
+                return { version: metadata.version };
+              },
+            );
+            signal?.throwIfAborted();
+            inspectionCount += 1;
+            return result;
+          }
+        }
+        if (kind === "agent" && postgresAgent) {
           if (snapshotPath) {
             throw new Error(
               "PostgreSQL agent inspection requires its live engine owner, not a SQLite snapshot.",

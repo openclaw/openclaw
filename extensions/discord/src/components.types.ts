@@ -1,4 +1,4 @@
-import type { TopLevelComponents } from "./internal/discord.js";
+import type { TopLevelComponents } from "./internal/payload.js";
 
 export type DiscordComponentButtonStyle = "primary" | "secondary" | "success" | "danger" | "link";
 

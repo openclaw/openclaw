@@ -27,7 +27,6 @@ import {
 } from "../../tool-replay-safety.js";
 import { addClientToolsToToolCatalog } from "../../tool-search-catalog.js";
 import { resolveToolSearchConfig, type ToolSearchCatalogRef } from "../../tool-search.js";
-import { log } from "../logger.js";
 import {
   AGENT_RESERVED_TOOL_NAMES,
   collectRegisteredToolNames,
@@ -185,11 +184,6 @@ export function prepareEmbeddedAttemptClientTools(params: {
         mode: params.codeModeControlsEnabledForRun ? "code-mode" : "tool-search",
         toolCount: clientToolSearch.catalogToolCount,
       });
-      log.debug(
-        params.codeModeControlsEnabledForRun
-          ? `code-mode: cataloged ${clientToolSearch.catalogToolCount} client tools behind exec/wait`
-          : `tool-search: cataloged ${clientToolSearch.catalogToolCount} client tools behind compact prompt surface`,
-      );
     }
 
     const customTools = toToolDefinitions(

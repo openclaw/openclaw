@@ -120,9 +120,11 @@ export const finalizeSubagentCleanup = async (
       clearSubagentPendingDelivery(draft);
       if (skipRequesterDelivery) {
         const delivery = ensureDeliveryState(draft);
-        delivery.status = "not_required";
-        // Preserve the lifecycle owner's terminal fact after cleanup clears retry state.
-        delivery.disposition = intentionalNonDelivery ? "intentional_non_delivery" : undefined;
+        if (delivery.status !== "delivered") {
+          delivery.status = "not_required";
+          // Preserve the lifecycle owner's terminal fact after cleanup clears retry state.
+          delivery.disposition = intentionalNonDelivery ? "intentional_non_delivery" : undefined;
+        }
         draft.suppressCompletionDelivery = undefined;
       }
       draft.wakeOnDescendantSettle = undefined;

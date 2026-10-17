@@ -9,6 +9,7 @@ import { createGitCommandError, executeGitCommand } from "./git-exec.js";
 import { readInstallOwner, type InstallOwner } from "./install-owner.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { readPackageName } from "./package-json.js";
+import { canAccess } from "./path-existence.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import {
   channelToNpmTag,
@@ -224,15 +225,6 @@ export function formatGitInstallLabel(update: UpdateCheckResult): string | null 
     shortSha ? `@ ${shortSha}` : null,
   ].filter(Boolean);
   return parts.join(" · ");
-}
-
-async function exists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** Classify installation ownership without reading Git history or dependency state. */
@@ -532,7 +524,7 @@ async function checkDepsStatus(params: {
       ? "pnpm-lock.yaml"
       : manager === "npm"
         ? "package-lock.json"
-        : (await exists(path.join(root, "bun.lock")))
+        : (await canAccess(path.join(root, "bun.lock")))
           ? "bun.lock"
           : "bun.lockb";
   const lockfilePath = path.join(root, lockfile);
@@ -541,8 +533,8 @@ async function checkDepsStatus(params: {
     "node_modules",
     ...(manager === "pnpm" ? [".modules.yaml"] : []),
   );
-  const lockExists = await exists(lockfilePath);
-  const markerExists = await exists(markerPath);
+  const lockExists = await canAccess(lockfilePath);
+  const markerExists = await canAccess(markerPath);
   return {
     manager,
     lockfilePath,

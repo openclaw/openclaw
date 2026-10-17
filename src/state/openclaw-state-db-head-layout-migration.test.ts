@@ -4,12 +4,14 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
 import { recordSessionStateEventInDatabase } from "../sessions/session-state-events.kernel.js";
 import { readSessionStateSequence } from "../sessions/session-state-events.read.worker.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
+  repairOpenClawStateDatabaseIndexesForDoctor,
   repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
@@ -69,6 +71,33 @@ function legacyDatabase(refusePublication = false) {
   }
   return { options: { env, path: pathname }, pathname, before: heads(db) };
 }
+
+it.each(["quick", "full"] as const)(
+  "reserves untouched index recovery for %s verification during upgrade preparation",
+  (integrityCheck) => {
+    const { options, pathname } = legacyDatabase();
+    const source = new DatabaseSync(pathname);
+    source.exec(`
+      CREATE TABLE untouched_payloads (value TEXT);
+      CREATE INDEX idx_untouched_payload ON untouched_payloads(value);
+      INSERT INTO untouched_payloads VALUES ('retained');
+    `);
+    source.close();
+    corruptSqliteIndexKey(pathname, "idx_untouched_payload", "retained", "mismatch");
+    const result = repairOpenClawStateDatabaseIndexesForDoctor({ ...options, integrityCheck });
+    expect(result.warnings).toEqual([]);
+    expect(result.changes.some((change) => change.includes("idx_untouched_payload"))).toBe(
+      integrityCheck === "full",
+    );
+    using database = new DatabaseSync(pathname);
+    expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check === "ok").toBe(
+      integrityCheck === "full",
+    );
+    expect(database.prepare("SELECT value FROM untouched_payloads NOT INDEXED").all()).toEqual([
+      { value: "retained" },
+    ]);
+  },
+);
 
 it.each(["runtime", "doctor"] as const)(
   "migrates v25 heads through %s within scope and preserves subsequent event writes",

@@ -24,6 +24,7 @@
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserInspectedNode } from "../components/browser/browser-client.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
 
 export { hasNativeBrowserBridge } from "./native-browser-host.ts";
@@ -235,6 +236,5 @@ export function subscribeNativeBrowserState(
       listener(state);
     }
   };
-  window.addEventListener(STATE_EVENT, onState);
-  return () => window.removeEventListener(STATE_EVENT, onState);
+  return listen(window, STATE_EVENT, onState);
 }

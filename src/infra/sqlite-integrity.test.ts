@@ -4,11 +4,9 @@ import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   assertSqliteIntegrity,
-  confirmSqliteFileIntegrity,
   isTerminalSqliteIntegrityError,
   runSqliteIntegrityOperationSync,
   sqliteIntegrityCheckSteps,
@@ -19,6 +17,63 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("assertSqliteIntegrity", () => {
+  it("refuses structural damage in a table outside the migration scope", () => {
+    const databasePath = path.join(tempDirs.make("sqlite-quick-damage-"), "database.sqlite");
+    const writer = new (requireNodeSqlite().DatabaseSync)(databasePath);
+    writer.exec(`
+      CREATE TABLE touched(value TEXT);
+      CREATE TABLE untouched(value TEXT);
+      INSERT INTO untouched VALUES ('retained');
+    `);
+    const pageSize = Number(writer.prepare("PRAGMA page_size").get()?.page_size);
+    const rootPage = Number(
+      writer.prepare("SELECT rootpage FROM sqlite_schema WHERE name='untouched'").get()?.rootpage,
+    );
+    writer.close();
+    const file = fs.openSync(databasePath, "r+");
+    try {
+      fs.writeSync(file, Buffer.from([0xff]), 0, 1, (rootPage - 1) * pageSize);
+    } finally {
+      fs.closeSync(file);
+    }
+    using database = new (requireNodeSqlite().DatabaseSync)(databasePath);
+    expect(() =>
+      assertSqliteIntegrity(database, "migration source", { check: "quick", tables: ["touched"] }),
+    ).toThrow(expect.objectContaining({ name: "SqliteIntegrityError" }));
+  });
+
+  it.each([
+    { check: "quick", tables: ["touched"], refuses: false },
+    { check: "quick", tables: ["untouched"], refuses: true },
+    { check: "full", tables: ["touched"], refuses: true },
+  ] as const)(
+    "checks index consistency with $check verification scoped to $tables",
+    ({ check, tables, refuses }) => {
+      using database = new (requireNodeSqlite().DatabaseSync)(":memory:");
+      database.exec(`
+        CREATE TABLE touched(value TEXT);
+        CREATE TABLE untouched(id INTEGER PRIMARY KEY, value TEXT);
+        CREATE INDEX idx_untouched ON untouched(id);
+        INSERT INTO untouched VALUES (1, 'retained'), (2, 'history');
+      `);
+      database.enableDefensive?.(false);
+      database.exec("PRAGMA writable_schema = ON");
+      database
+        .prepare("UPDATE sqlite_schema SET sql = ? WHERE name = 'idx_untouched'")
+        .run("CREATE INDEX idx_untouched ON untouched(value)");
+      database.exec("PRAGMA writable_schema = OFF");
+      const version = Number(database.prepare("PRAGMA schema_version").get()?.schema_version);
+      database.exec(`PRAGMA schema_version = ${version + 1}`);
+
+      const verify = () => assertSqliteIntegrity(database, "migration source", { check, tables });
+      if (refuses) {
+        expect(verify).toThrow(/integrity_check.*idx_untouched/su);
+      } else {
+        expect(verify).not.toThrow();
+      }
+    },
+  );
+
   it("classifies cascade-owned task delivery orphans without admitting writes", () => {
     const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
     try {
@@ -429,65 +484,5 @@ describe("isTerminalSqliteIntegrityError", () => {
     expect(isTerminalSqliteIntegrityError(busy)).toBe(false);
     expect(isTerminalSqliteIntegrityError(malformed)).toBe(true);
     expect(isTerminalSqliteIntegrityError(corruptIndex)).toBe(true);
-  });
-});
-
-describe("confirmSqliteFileIntegrity", () => {
-  it("confirms page corruption despite empty WAL sidecars created by its own reader", () => {
-    const databasePath = path.join(tempDirs.make("sqlite-corrupt-wal-"), "database.sqlite");
-    const database = new (requireNodeSqlite().DatabaseSync)(databasePath);
-    database.exec(
-      "PRAGMA journal_mode=WAL; CREATE TABLE damaged(value TEXT); INSERT INTO damaged VALUES ('preserved');",
-    );
-    const pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
-    const rootPage = Number(
-      database.prepare("SELECT rootpage FROM sqlite_schema WHERE name='damaged'").get()?.rootpage,
-    );
-    database.close();
-    expect(fs.existsSync(`${databasePath}-wal`)).toBe(false);
-    const file = fs.openSync(databasePath, "r+");
-    try {
-      fs.writeSync(file, Buffer.from([0xff]), 0, 1, (rootPage - 1) * pageSize);
-    } finally {
-      fs.closeSync(file);
-    }
-    const open = nodeSqlite.openNodeSqliteDatabase;
-    let opening = 0;
-    const reader = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-      const db = open(...args);
-      // Reproduce native empty-WAL creation/retouching independently of SQLite and filesystem versions.
-      fs.writeFileSync(`${databasePath}-wal`, "");
-      fs.utimesSync(`${databasePath}-wal`, ++opening, opening);
-      return db;
-    });
-    try {
-      expect(confirmSqliteFileIntegrity(databasePath, "damaged WAL database")).toMatchObject({
-        status: "failed",
-        terminal: true,
-        error: { name: "SqliteIntegrityError" },
-        generation: { database: { size: BigInt(fs.statSync(databasePath).size) } },
-      });
-    } finally {
-      reader.mockRestore();
-    }
-  });
-
-  it("leaves SQLite open failures unbound because the failed file identity is unknown", () => {
-    const databasePath = path.join(tempDirs.make("sqlite-open-integrity-"), "database.sqlite");
-    fs.writeFileSync(databasePath, "not a sqlite database");
-    const openError = Object.assign(new Error("file is not a database"), { errcode: 26 });
-    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementationOnce(() => {
-      throw openError;
-    });
-
-    try {
-      expect(confirmSqliteFileIntegrity(databasePath, "test database")).toEqual({
-        status: "failed",
-        error: openError,
-        terminal: false,
-      });
-    } finally {
-      open.mockRestore();
-    }
   });
 });
