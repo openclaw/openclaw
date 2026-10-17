@@ -79,10 +79,19 @@ function holdDatabaseAdmission(
   });
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   return {
-    sleeping: sleeping.promise,
     pending,
     release: () => {
       held = false;
+    },
+    expectWaiting: (operation: Promise<unknown>) =>
+      expect(
+        Promise.race([sleeping.promise.then(() => "waiting"), operation.then(() => "settled")]),
+      ).resolves.toBe("waiting"),
+    async finish(operation: Promise<unknown>) {
+      held = false;
+      await vi.advanceTimersByTimeAsync(10);
+      vi.useRealTimers();
+      await operation;
     },
   };
 }
@@ -174,12 +183,7 @@ it("waits for schema publication after opening, then dispatches queued writes on
   const second = append(store, "second");
   const outcomes = Promise.allSettled([first, second]);
   try {
-    expect(
-      await Promise.race([
-        admission.sleeping.then(() => "waiting"),
-        outcomes.then(() => "settled"),
-      ]),
-    ).toBe("waiting");
+    await admission.expectWaiting(outcomes);
     expect(requests).not.toHaveBeenCalled();
     admission.release();
     await vi.advanceTimersByTimeAsync(10);
@@ -211,10 +215,7 @@ it("waits for schema publication after opening, then dispatches queued writes on
       expect(timing?.postFinished).toBeGreaterThanOrEqual(timing!.posted!);
     }
   } finally {
-    admission.release();
-    await vi.advanceTimersByTimeAsync(10);
-    vi.useRealTimers();
-    await outcomes;
+    await admission.finish(outcomes);
   }
 });
 
@@ -243,12 +244,7 @@ it.each(["cancellation", "revocation", "deadline"] as const)(
     );
     const outcome = Promise.allSettled([pending]);
     try {
-      expect(
-        await Promise.race([
-          admission.sleeping.then(() => "waiting"),
-          outcome.then(() => "settled"),
-        ]),
-      ).toBe("waiting");
+      await admission.expectWaiting(outcome);
       const canceled = new Error("Write canceled");
       if (ending === "cancellation") {
         cancel.abort(canceled);
@@ -273,10 +269,7 @@ it.each(["cancellation", "revocation", "deadline"] as const)(
       expect(await append(store, "successor")).toMatchObject({ writes: 1 });
       expect(await read(store)).toEqual(["successor"]);
     } finally {
-      admission.release();
-      await vi.advanceTimersByTimeAsync(10);
-      vi.useRealTimers();
-      await outcome;
+      await admission.finish(outcome);
     }
   },
 );
@@ -408,7 +401,7 @@ poolIt("keeps an independent database responsive while another worker is at capa
     const cancel = new AbortController();
     let current = true;
     waiting = Promise.allSettled([
-      busy.execute({ type: "append", input: { value: "canceled" } }, { signal: cancel.signal }),
+      append(busy, "canceled", cancel.signal),
       runSqliteWorkerStoreOperation(
         busy,
         (scope) => scope.execute({ type: "append", input: { value: "revoked" } }),
@@ -522,12 +515,7 @@ it.each(["drain", "timeout"] as const)(
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     vi.setSystemTime(Date.now() + 60_000);
     const waiters = Promise.allSettled(
-      Array.from({ length: 2 }, () =>
-        store.execute(
-          { type: "append", input: { value: "never dispatched" } },
-          { signal: cancel.signal },
-        ),
-      ),
+      Array.from({ length: 2 }, () => append(store, "never dispatched", cancel.signal)),
     );
     let settled = false;
     void waiters.then(() => {
@@ -552,8 +540,7 @@ it.each(["drain", "timeout"] as const)(
         });
       }
       if (action === "timeout") {
-        expect(warn).toHaveBeenCalledTimes(1);
-        expect(warn).toHaveBeenCalledWith("SQLite worker admission delayed", {
+        expect(warn).toHaveBeenCalledExactlyOnceWith("SQLite worker admission delayed", {
           queueDepth: 2,
           waitMs: 10_000,
         });
@@ -582,10 +569,7 @@ it("charges admission waiters to the byte budget and releases canceled reservati
   );
   const accepted = Promise.allSettled(Array.from({ length: 128 }, () => read(store)));
   const cancel = new AbortController();
-  const waiting = store.execute(
-    { type: "append", input: { value: "x".repeat(40 * 1024 * 1024) } },
-    { signal: cancel.signal },
-  );
+  const waiting = append(store, "x".repeat(40 * 1024 * 1024), cancel.signal);
   const outcome = Promise.allSettled([waiting]);
   try {
     await expect(append(independent, "x".repeat(30 * 1024 * 1024))).rejects.toMatchObject({
@@ -597,10 +581,7 @@ it("charges admission waiters to the byte budget and releases canceled reservati
     ]);
     const replacement = new AbortController();
     const replacementOutcome = Promise.allSettled([
-      store.execute(
-        { type: "append", input: { value: "x".repeat(40 * 1024 * 1024) } },
-        { signal: replacement.signal },
-      ),
+      append(store, "x".repeat(40 * 1024 * 1024), replacement.signal),
     ]);
     replacement.abort(new Error("replacement admitted"));
     expect(await replacementOutcome).toMatchObject([
@@ -626,11 +607,7 @@ poolIt.each([
   try {
     const threads = new Set<number>();
     for (let index = 0; index <= workers; index++) {
-      const store = await broker.open<FixtureOperations>({
-        moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-        databasePath: databasePath(),
-        input: undefined,
-      });
+      const store = await openBroker(broker, databasePath());
       assert(store, "Fixture store missing");
       threads.add((await append(store, "thread count")).threadId);
     }

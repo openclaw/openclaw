@@ -22,18 +22,19 @@ import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
 import { exchangeSqliteDatabaseAdmissions } from "./sqlite-worker-database-admission-relay.js";
 import {
   createSqliteDatabaseAdmissionRelay,
-  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerOperationAdmission,
+  createSqliteWorkerOperationAdmission as createAdmission,
   deferCapturedSqliteWorkerCommitReceipt,
   deferSqliteWorkerCommitReceipt,
-  observeSqliteWorkerCommittedFacts,
-  requestSqliteWorkerOperationAdmission,
-  requestSqliteWorkerSchemaMaintenance,
-  withSqliteWorkerOperationAdmission,
+  observeSqliteWorkerCommittedFacts as observeCommits,
+  requestSqliteWorkerOperationAdmission as requestAdmission,
+  requestSqliteWorkerSchemaMaintenance as requestSchema,
+  withSqliteWorkerOperationAdmission as withAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "./sqlite-worker-operation-admission.js";
 import {
-  captureSqliteWorkerCommitReceipt,
-  settleSqliteWorkerOperationContext,
+  captureSqliteWorkerCommitReceipt as captureReceipt,
+  settleSqliteWorkerOperationContext as settleOperation,
   type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-settlement.js";
 import {
@@ -44,6 +45,20 @@ import { getWorkerMessageMetrics } from "./worker-message-metrics.js";
 
 afterEach(() => vi.restoreAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function admissionFixture(
+  admit: Parameters<typeof createAdmission>[0] = (_request, grant) => grant(),
+) {
+  const admission = createAdmission(admit);
+  onTestFinished(() => admission.finish());
+  return admission;
+}
+function serviceOnWait(admission: SqliteWorkerOperationAdmission) {
+  return vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    admission.service();
+    return "ok";
+  });
+}
 
 it.each([
   "revoke",
@@ -60,7 +75,7 @@ it.each([
   let databaseCurrent = true;
   let inGrant = false;
   const beforeRelease = vi.fn();
-  const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
+  const admission = admissionFixture((_request, grant) => {
     if (outcome === "revoke") {
       throw revoked;
     }
@@ -112,39 +127,35 @@ it.each([
       return "ok";
     });
   const write = () =>
-    withSqliteWorkerOperationAdmission({ port: admission.port }, () => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+    withAdmission({ port: admission.port }, () => {
+      requestAdmission({ stage: "transaction", facts: undefined });
       mutate();
     });
-  try {
-    if (outcome === "self-fence") {
-      expect(write).not.toThrow();
-      expect(beforeRelease).toHaveBeenCalledOnce();
-      expect(mutate).toHaveBeenCalledOnce();
-      expect(admission.failure).toBeUndefined();
-      expect(admission.failureSource).toBeUndefined();
-    } else {
-      expect(write).toThrow("SQLite transaction admission was refused");
-      expect(beforeRelease).not.toHaveBeenCalled();
-      expect(mutate).not.toHaveBeenCalled();
-      expect(admission.failure).toMatchObject({
-        message: outcome.endsWith("close") ? "SQLite worker admission is closed" : revoked.message,
-      });
-      expect(admission.failureSource).toBe(outcome === "revoke" ? "domain" : "authority");
-    }
-    expect(observed).toEqual([{ stage: "transaction", facts: undefined }]);
-    expect(admission.committed).toBeUndefined();
-    expect(admission.settlement).toBeUndefined();
-  } finally {
-    admission.finish();
+  if (outcome === "self-fence") {
+    expect(write).not.toThrow();
+    expect(beforeRelease).toHaveBeenCalledOnce();
+    expect(mutate).toHaveBeenCalledOnce();
+    expect(admission.failure).toBeUndefined();
+    expect(admission.failureSource).toBeUndefined();
+  } else {
+    expect(write).toThrow("SQLite transaction admission was refused");
+    expect(beforeRelease).not.toHaveBeenCalled();
+    expect(mutate).not.toHaveBeenCalled();
+    expect(admission.failure).toMatchObject({
+      message: outcome.endsWith("close") ? "SQLite worker admission is closed" : revoked.message,
+    });
+    expect(admission.failureSource).toBe(outcome === "revoke" ? "domain" : "authority");
   }
+  expect(observed).toEqual([{ stage: "transaction", facts: undefined }]);
+  expect(admission.committed).toBeUndefined();
+  expect(admission.settlement).toBeUndefined();
 });
 
 it("rechecks database ownership after a worker request crosses the message port", () => {
   const root = tempDirs.make("openclaw-worker-admission-maintenance-");
   const databasePath = path.join(root, "state", "openclaw.sqlite");
   const admit = vi.fn((_request: SqliteWorkerAdmissionRequest, grant: () => boolean) => grant());
-  const admission = createSqliteWorkerOperationAdmission(admit);
+  const admission = admissionFixture(admit);
   let maintenance: ReturnType<typeof acquireGatewayStateOwner> | undefined;
   try {
     admission.bindDatabaseAuthority({
@@ -186,7 +197,7 @@ it("retains exact-target schema authority until settlement and rechecks access f
   const release = vi.fn();
   const acquireSchema = vi.fn(() => ({ assertCurrent() {}, release }));
   const admit = vi.fn((_request: SqliteWorkerAdmissionRequest, grant: () => boolean) => grant());
-  const admission = createSqliteWorkerOperationAdmission(admit);
+  const admission = admissionFixture(admit);
   admission.bindDatabaseAuthority({
     databasePath: resolveIdentityPathViaExistingAncestorSync(databasePath),
     assertAccess() {
@@ -196,58 +207,44 @@ it("retains exact-target schema authority until settlement and rechecks access f
     },
     acquireSchema,
   });
-  vi.spyOn(Atomics, "wait").mockImplementation(() => {
-    admission.service();
-    return "ok";
+  serviceOnWait(admission);
+  withAdmission({ port: admission.port }, () => {
+    expect(requestSchema(databasePath)).toBe(true);
+    expect(requestSchema(databasePath)).toBe(true);
+    requestAdmission({ stage: "transaction", facts: "ordinary write" });
+    current = false;
+    expect(() => requestAdmission({ stage: "commit", facts: "revoked write" })).toThrow(
+      "SQLite transaction admission was refused",
+    );
   });
-  try {
-    withSqliteWorkerOperationAdmission({ port: admission.port }, () => {
-      expect(requestSqliteWorkerSchemaMaintenance(databasePath)).toBe(true);
-      expect(requestSqliteWorkerSchemaMaintenance(databasePath)).toBe(true);
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: "ordinary write" });
-      current = false;
-      expect(() =>
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: "revoked write" }),
-      ).toThrow("SQLite transaction admission was refused");
-    });
-    expect(acquireSchema).toHaveBeenCalledOnce();
-    expect(admission.failure).toBe(revoked);
-    expect(release).not.toHaveBeenCalled();
-    admission.finish();
-    expect(release).toHaveBeenCalledOnce();
-  } finally {
-    admission.finish();
-  }
+  expect(acquireSchema).toHaveBeenCalledOnce();
+  expect(admission.failure).toBe(revoked);
+  expect(release).not.toHaveBeenCalled();
+  admission.finish();
+  expect(release).toHaveBeenCalledOnce();
 });
 
 it("refuses schema maintenance for a different database before acquiring authority", () => {
   const databasePath = path.resolve("synthetic-schema.sqlite");
   const admit = vi.fn();
   const acquireSchema = vi.fn(() => ({ assertCurrent() {}, release() {} }));
-  const admission = createSqliteWorkerOperationAdmission(admit);
+  const admission = admissionFixture(admit);
   admission.bindDatabaseAuthority({
     databasePath: resolveIdentityPathViaExistingAncestorSync(databasePath),
     assertAccess() {},
     acquireSchema,
   });
-  vi.spyOn(Atomics, "wait").mockImplementation(() => {
-    admission.service();
-    return "ok";
+  serviceOnWait(admission);
+  expect(() =>
+    withAdmission({ port: admission.port }, () =>
+      requestSchema(path.resolve("another-schema.sqlite")),
+    ),
+  ).toThrow("SQLite transaction admission was refused");
+  expect(admission.failure).toMatchObject({
+    message: "SQLite schema maintenance target differs from its admitted database",
   });
-  try {
-    expect(() =>
-      withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
-        requestSqliteWorkerSchemaMaintenance(path.resolve("another-schema.sqlite")),
-      ),
-    ).toThrow("SQLite transaction admission was refused");
-    expect(admission.failure).toMatchObject({
-      message: "SQLite schema maintenance target differs from its admitted database",
-    });
-    expect(acquireSchema).not.toHaveBeenCalled();
-    expect(admit).not.toHaveBeenCalled();
-  } finally {
-    admission.finish();
-  }
+  expect(acquireSchema).not.toHaveBeenCalled();
+  expect(admit).not.toHaveBeenCalled();
 });
 
 it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
@@ -257,7 +254,7 @@ it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
     const databasePath = path.join(root, "admitted.sqlite");
     const requestedPath =
       scenario === "different-path" ? path.join(root, "other.sqlite") : databasePath;
-    const admission = createSqliteWorkerOperationAdmission(() => {
+    const admission = admissionFixture(() => {
       throw new Error("Format exchange must not request transaction authority");
     });
     if (scenario !== "facts-only") {
@@ -278,22 +275,15 @@ it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
         },
       });
     }
-    vi.spyOn(Atomics, "wait").mockImplementation(() => {
-      admission.service();
-      return "ok";
-    });
-    try {
-      const exchange = () =>
-        exchangeSqliteDatabaseAdmissions(admission.port, [], requestedPath, true);
-      if (scenario === "revoked" || scenario === "different-path") {
-        expect(exchange).toThrow("SQLite admission facts exchange failed");
-      } else {
-        expect(exchange).not.toThrow();
-      }
-      expect(existsSync(requestedPath)).toBe(scenario === "admitted");
-    } finally {
-      admission.finish();
+    serviceOnWait(admission);
+    const exchange = () =>
+      exchangeSqliteDatabaseAdmissions(admission.port, [], requestedPath, true);
+    if (scenario === "revoked" || scenario === "different-path") {
+      expect(exchange).toThrow("SQLite admission facts exchange failed");
+    } else {
+      expect(exchange).not.toThrow();
     }
+    expect(existsSync(requestedPath)).toBe(scenario === "admitted");
   },
 );
 
@@ -306,7 +296,7 @@ it.each(["unadmitted", "retired"] as const)(
         ? createSqliteDatabaseAdmissionRelay(() => {
             throw new Error("Creation relay retired");
           })
-        : createSqliteWorkerOperationAdmission(() => {
+        : admissionFixture(() => {
             throw new Error("File creation must not request transaction authority");
           });
     const { port1, port2 } = new MessageChannel();
@@ -341,7 +331,7 @@ it.each(["unadmitted", "retired"] as const)(
 );
 
 it("reads a queued worker commit before settlement and message callbacks run", async () => {
-  const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
+  const admission = admissionFixture((_request, grant) => grant());
   const posted = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
   const worker = new Worker(
     `
@@ -397,9 +387,8 @@ it("reads a queued worker commit before settlement and message callbacks run", a
   }
 });
 
-function receiptFixture(
-  admission = createSqliteWorkerOperationAdmission((_request, grant) => grant()),
-) {
+function receiptFixture(captured = false) {
+  const admission = createAdmission((_request, grant) => grant());
   const db = new DatabaseSync(":memory:");
   const owner: SqliteWorkerOperationContext = { port: admission.port };
   onTestFinished(() => {
@@ -407,22 +396,36 @@ function receiptFixture(
     db.close();
   });
   const transaction = (operation: () => void) =>
-    withSqliteWorkerOperationAdmission(owner, () =>
+    withAdmission(owner, () =>
       withSqlitePostCommitPublications(db, () => runSqliteImmediateTransactionSync(db, operation)),
     );
-  return { db, admission, owner, transaction };
+  const write = (value: number, rollback = false, delivery: "commit" | "settlement" = "commit") =>
+    transaction(() => {
+      db.prepare("INSERT INTO proof VALUES (?)").run(value);
+      deferReceipt(db, { value }, captured, delivery);
+      if (rollback) {
+        throw new Error("Rollback the synthetic write");
+      }
+    });
+  const rows = () => db.prepare("SELECT value FROM proof ORDER BY value").all();
+  return { db, admission, owner, transaction, write, rows };
 }
 
-function deferReceipt(db: DatabaseSync, facts: unknown, prepared: boolean) {
+function deferReceipt(
+  db: DatabaseSync,
+  facts: unknown,
+  prepared: boolean,
+  delivery: "commit" | "settlement" = "commit",
+) {
   if (!prepared) {
-    deferSqliteWorkerCommitReceipt(db, facts);
+    deferSqliteWorkerCommitReceipt(db, facts, delivery);
     return;
   }
-  const captured = captureSqliteWorkerCommitReceipt(facts);
+  const captured = captureReceipt(facts);
   if (captured.kind !== "inline") {
     throw new Error("Expected an inline test receipt");
   }
-  deferCapturedSqliteWorkerCommitReceipt(db, captured);
+  deferCapturedSqliteWorkerCommitReceipt(db, captured, delivery);
 }
 
 it.each(
@@ -432,20 +435,12 @@ it.each(
 )(
   "keeps committed facts distinct from $outcome settlement (captured: $captured)",
   ({ outcome, captured }) => {
-    const { db, admission, owner, transaction } = receiptFixture();
+    const { db, admission, owner, write, rows } = receiptFixture(captured);
     db.exec("CREATE TABLE proof (value INTEGER)");
     const published = vi.fn();
-    observeSqliteWorkerCommittedFacts(admission, published);
+    observeCommits(admission, published);
     const projected = vi.fn();
-    observeSqliteWorkerCommittedFacts(admission, projected);
-    const write = (value: number, rollback = false) =>
-      transaction(() => {
-        db.prepare("INSERT INTO proof VALUES (?)").run(value);
-        deferReceipt(db, { value }, captured);
-        if (rollback) {
-          throw new Error("Rollback the synthetic write");
-        }
-      });
+    observeCommits(admission, projected);
     if (outcome === "rollback") {
       expect(() => write(1, true)).toThrow("Rollback the synthetic write");
     } else {
@@ -459,7 +454,7 @@ it.each(
     expect(admission.committed).toEqual(committed);
     expect(admission.settlement).toBeUndefined();
     expect(() => admission.waitForSettlement(performance.now())).toThrow("settlement is unknown");
-    settleSqliteWorkerOperationContext(owner, outcome === "unknown" ? "unknown" : "completed");
+    settleOperation(owner, outcome === "unknown" ? "unknown" : "completed");
     if (outcome === "unknown") {
       expect(() => admission.waitForSettlement(performance.now())).toThrow("settlement is unknown");
       expect(admission.settlement).toEqual({
@@ -471,9 +466,7 @@ it.each(
         committed ? { kind: "completed", committed } : { kind: "completed" },
       );
     }
-    expect(db.prepare("SELECT value FROM proof ORDER BY value").all()).toEqual(
-      outcome === "rollback" ? [] : [{ value: 1 }],
-    );
+    expect(rows()).toEqual(outcome === "rollback" ? [] : [{ value: 1 }]);
     admission.finish();
     expect(admission.committed).toEqual(committed);
     const expectedFacts = outcome === "rollback" ? [] : [{ value: 1 }];
@@ -493,8 +486,8 @@ it.each(
   "installs $receipt before reply acknowledgement (publication failure: $publicationFails, captured: $captured)",
   ({ receipt, publicationFails, captured }) => {
     const ownerContext = new AsyncLocalStorage<string>();
-    const { db, admission, owner, transaction } = ownerContext.run("publication owner", () =>
-      receiptFixture(),
+    const { db, admission, owner, write, rows } = ownerContext.run("publication owner", () =>
+      receiptFixture(captured),
     );
     db.exec("CREATE TABLE proof (value INTEGER)");
     const failure = new Error("Synthetic publication failed");
@@ -507,7 +500,7 @@ it.each(
         throw failure;
       }
     });
-    observeSqliteWorkerCommittedFacts(admission, publish);
+    observeCommits(admission, publish);
     const before = getWorkerMessageMetrics().find(
       (metric) => metric.kind === "authority" && metric.direction === "from_worker",
     );
@@ -536,11 +529,8 @@ it.each(
       reject,
       detach() {},
     };
-    transaction(() => {
-      db.prepare("INSERT INTO proof VALUES (1)").run();
-      deferReceipt(db, { value: 1 }, captured);
-    });
-    settleSqliteWorkerOperationContext(owner, "completed");
+    write(1);
+    settleOperation(owner, "completed");
     expect(posted).toHaveBeenLastCalledWith(
       {
         kind: "native-settlement",
@@ -564,7 +554,7 @@ it.each(
     expect(readSqliteWorkerRequestCustody(custody.descriptor)).toBe(false);
     expect(events).toEqual(["publish", publicationFails ? "reject" : "reply"]);
     expect(publish).toHaveBeenCalledOnce();
-    expect(db.prepare("SELECT value FROM proof").all()).toEqual([{ value: 1 }]);
+    expect(rows()).toEqual([{ value: 1 }]);
     expect(admission.committed).toEqual({ facts: { value: 1 } });
     if (publicationFails) {
       expect(resolve).not.toHaveBeenCalled();
@@ -581,7 +571,7 @@ it.each(
 it("publishes the captured snapshot even when its producer changes before deferral", () => {
   const { db, admission, owner, transaction } = receiptFixture();
   const facts = { value: { text: "captured" }, bytes: Buffer.from([1, 2, 3]) };
-  const captured = captureSqliteWorkerCommitReceipt(facts);
+  const captured = captureReceipt(facts);
   if (captured.kind !== "inline") {
     throw new Error("Expected an inline test receipt");
   }
@@ -594,7 +584,7 @@ it("publishes the captured snapshot even when its producer changes before deferr
   expect(admission.committed).toEqual({
     facts: { value: { text: "captured" }, bytes: new Uint8Array([1, 2, 3]) },
   });
-  settleSqliteWorkerOperationContext(owner, "completed");
+  settleOperation(owner, "completed");
   expect(admission.waitForSettlement(performance.now()).committed).toEqual(admission.committed);
 });
 
@@ -603,16 +593,12 @@ it("keeps the exact transport limit inline and retains oversized bytes for trans
   const overhead =
     serialize("x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES)).byteLength -
     SQLITE_WORKER_MAX_MESSAGE_BYTES;
-  const inline = captureSqliteWorkerCommitReceipt(
-    "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES - overhead),
-  );
+  const inline = captureReceipt("x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES - overhead));
   expect(inline.kind).toBe("inline");
   if (inline.kind === "inline") {
     expect(inline.payloadBytes).toBe(SQLITE_WORKER_MAX_MESSAGE_BYTES);
   }
-  const oversized = captureSqliteWorkerCommitReceipt(
-    "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES - overhead + 1),
-  );
+  const oversized = captureReceipt("x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES - overhead + 1));
   expect(oversized.kind).toBe("oversized");
   if (oversized.kind === "oversized") {
     expect(oversized.serialized.byteLength).toBe(SQLITE_WORKER_MAX_MESSAGE_BYTES + 1);
@@ -622,26 +608,19 @@ it("keeps the exact transport limit inline and retains oversized bytes for trans
 it.each(["settlement", "settlement-only", "malformed"] as const)(
   "retains committed facts through %s receipt delivery",
   (delivery) => {
-    const { db, admission, owner, transaction } = receiptFixture();
+    const { db, admission, owner, write, rows } = receiptFixture();
     db.exec("CREATE TABLE proof (value INTEGER)");
     const published = vi.fn();
-    observeSqliteWorkerCommittedFacts(admission, published);
+    observeCommits(admission, published);
     for (const value of [1, 2]) {
-      transaction(() => {
-        db.prepare("INSERT INTO proof VALUES (?)").run(value);
-        deferSqliteWorkerCommitReceipt(
-          db,
-          { value },
-          delivery === "settlement-only" && value === 2 ? "settlement" : "commit",
-        );
-      });
+      write(value, false, delivery === "settlement-only" && value === 2 ? "settlement" : "commit");
     }
     admission.service();
     expect(published.mock.calls.map(([receipt]) => receipt.facts)).toEqual(
       delivery === "settlement-only" ? [{ value: 1 }] : [{ value: 1 }, { value: 2 }],
     );
     if (delivery !== "malformed") {
-      settleSqliteWorkerOperationContext(owner, "completed");
+      settleOperation(owner, "completed");
     } else {
       admission.port.postMessage(
         {
@@ -654,10 +633,7 @@ it.each(["settlement", "settlement-only", "malformed"] as const)(
     admission.finish();
     expect(admission.committed).toEqual({ facts: { value: 2 } });
     expect(published).toHaveBeenCalledTimes(2);
-    expect(db.prepare("SELECT value FROM proof ORDER BY value").all()).toEqual([
-      { value: 1 },
-      { value: 2 },
-    ]);
+    expect(rows()).toEqual([{ value: 1 }, { value: 2 }]);
     if (delivery !== "malformed") {
       expect(admission.failure).toBeUndefined();
       expect(admission.waitForSettlement(performance.now())).toEqual({
@@ -685,7 +661,7 @@ it("retains native COMMIT evidence when an earlier notification fails", () => {
       deferSqliteWorkerCommitReceipt(db, { value: 1 });
     }),
   ).not.toThrow();
-  settleSqliteWorkerOperationContext(owner, "completed");
+  settleOperation(owner, "completed");
   expect(admission.waitForSettlement(performance.now())).toEqual({
     kind: "completed",
     committed: { facts: { value: 1 } },
@@ -702,23 +678,19 @@ it("refuses escaped continuations and captured scopes after synchronous operatio
   const request = () =>
     duplicate.requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
   try {
-    const escaped = withSqliteWorkerOperationAdmission({ port: port1 }, () =>
-      Promise.resolve().then(request),
-    );
+    const escaped = withAdmission({ port: port1 }, () => Promise.resolve().then(request));
     await expect(escaped).rejects.toThrow("requires its retained admission");
-    const escapedSchema = withSqliteWorkerOperationAdmission({ port: port1 }, () =>
+    const escapedSchema = withAdmission({ port: port1 }, () =>
       Promise.resolve().then(schemaRequest),
     );
     await expect(escapedSchema).rejects.toThrow("requires its retained admission");
     expect(schemaRequest()).toBe(false);
-    const captured = withSqliteWorkerOperationAdmission({ port: port1 }, () =>
-      AsyncLocalStorage.snapshot(),
-    );
+    const captured = withAdmission({ port: port1 }, () => AsyncLocalStorage.snapshot());
     expect(() => captured(request)).toThrow("requires its retained admission");
     expect(() => captured(schemaRequest)).toThrow("requires its retained admission");
     let failedScope: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
     expect(() =>
-      withSqliteWorkerOperationAdmission({ port: port1 }, () => {
+      withAdmission({ port: port1 }, () => {
         failedScope = AsyncLocalStorage.snapshot();
         throw new Error("operation failed");
       }),
