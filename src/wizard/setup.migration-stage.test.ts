@@ -20,10 +20,10 @@ import {
 
 const tempRoots = createTempDirTracker();
 
-function migrationPaths() {
+function migrationPaths(workspaceInState = false) {
   const root = tempRoots.make("openclaw-migration-stage-");
   const stateDir = path.join(root, "state");
-  const workspaceDir = path.join(root, "workspace");
+  const workspaceDir = path.join(workspaceInState ? stateDir : root, "workspace");
   const reportDir = path.join(stateDir, "migration", "claude", "attempt");
   return { root, stateDir, workspaceDir, reportDir };
 }
@@ -33,6 +33,26 @@ function createStage(
   targetConfig: OpenClawConfig = { agents: { defaults: { workspace: paths.workspaceDir } } },
 ) {
   return createSetupMigrationStage({ providerId: "claude", ...paths, targetConfig });
+}
+
+async function stageMemory(paths = migrationPaths()) {
+  const stage = await createStage(paths);
+  await fs.writeFile(path.join(stage.staged.workspaceDir, "MEMORY.md"), "staged\n");
+  return { ...paths, stage };
+}
+
+function recover(stateDir: string, config: OpenClawConfig = {}) {
+  return recoverSetupMigrationPromotion({
+    stateDir,
+    providerId: "claude",
+    readConfigFile: async () => config,
+  });
+}
+
+async function expectMissing(...paths: string[]) {
+  for (const target of paths) {
+    await expect(fs.access(target)).rejects.toThrow();
+  }
 }
 
 function promote(
@@ -89,8 +109,7 @@ async function createRecoveryFixture(params: {
   beforeRename?: boolean;
 }) {
   const { root, stateDir, workspaceDir: finalWorkspace } = migrationPaths();
-  const attempt = params.status === "promoting" ? "2026-07-21T000001Z" : "2026-07-21T000002Z";
-  const reportDir = path.join(stateDir, "migration", "claude", attempt);
+  const reportDir = path.join(stateDir, "migration", "claude", "attempt");
   const targetConfig = { gateway: { mode: "local" as const } };
   const stagedRoot = path.join(root, "staged-root");
   const stagedWorkspace = path.join(stagedRoot, "workspace");
@@ -125,8 +144,7 @@ async function createRecoveryFixture(params: {
         stagedReportDir: path.join(stagedRoot, "report"),
         stagedRoots: params.beforeRename ? [stagedRoot] : [],
       },
-      updatedAt:
-        params.status === "promoting" ? "2026-07-21T00:00:01.000Z" : "2026-07-21T00:00:02.000Z",
+      updatedAt: "2026-07-21T00:00:01.000Z",
     }),
     { mode: 0o600 },
   );
@@ -146,23 +164,11 @@ afterEach(async () => {
 
 describe("setup migration stage", () => {
   it.each([
-    {
-      rule: "case",
-      probe: "CaseProbe",
-      alias: "cASEpROBE",
-      left: "FutureWorkspace",
-      right: "futureworkspace",
-    },
-    {
-      rule: "normalization",
-      probe: "CaféProbe",
-      alias: "Cafe\u0301Probe",
-      left: "FuturéWorkspace",
-      right: "Future\u0301Workspace",
-    },
+    ["case", "CaseProbe", "cASEpROBE", "FutureWorkspace", "futureworkspace"],
+    ["normalization", "CaféProbe", "Cafe\u0301Probe", "FuturéWorkspace", "Future\u0301Workspace"],
   ])(
-    "compares missing promotion targets using the destination filesystem's $rule rules",
-    async ({ probe, alias, left, right }) => {
+    "compares missing promotion targets using the destination filesystem's %s rules",
+    async (_rule, probe, alias, left, right) => {
       const root = tempRoots.make("openclaw-migration-case-");
       await fs.mkdir(path.join(root, probe));
       const originalEntries = await fs.readdir(root);
@@ -207,18 +213,12 @@ describe("setup migration stage", () => {
   );
 
   it("uses the most-specific path mapping when workspace lives under state", async () => {
-    const root = tempRoots.make("openclaw-migration-stage-");
-    const stateDir = path.join(root, "state");
-    const workspaceDir = path.join(stateDir, "workspace");
-    const stage = await createStage({
-      stateDir,
-      workspaceDir,
-      reportDir: path.join(stateDir, "migration", "claude", "attempt"),
-    });
+    const paths = migrationPaths(true);
+    const stage = await createStage(paths);
+    const { workspaceDir } = paths;
     const target = path.join(workspaceDir, "MEMORY.md");
     const plan = {
-      providerId: "claude",
-      source: "fixture",
+      ...continuation().plan,
       target,
       items: [
         {
@@ -229,15 +229,7 @@ describe("setup migration stage", () => {
           target,
         },
       ],
-      summary: {
-        total: 1,
-        planned: 1,
-        migrated: 0,
-        skipped: 0,
-        conflicts: 0,
-        errors: 0,
-        sensitive: 0,
-      },
+      summary: { ...continuation().plan.summary, total: 1, planned: 1 },
     } satisfies MigrationPlan;
 
     const projected = stage.projectPlanToStage(plan);
@@ -248,11 +240,11 @@ describe("setup migration stage", () => {
   });
 
   it("journals pre-existing empty targets before promotion starts", async () => {
-    const { stateDir, workspaceDir, reportDir } = migrationPaths();
+    const paths = migrationPaths();
+    const { stateDir, workspaceDir, reportDir } = paths;
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.chmod(workspaceDir, 0o755);
-    const stage = await createStage({ stateDir, workspaceDir, reportDir });
-    await fs.writeFile(path.join(stage.staged.workspaceDir, "MEMORY.md"), "staged\n", "utf8");
+    const { stage } = await stageMemory(paths);
 
     await expect(
       promote(stage, {
@@ -267,8 +259,7 @@ describe("setup migration stage", () => {
     expect((await fs.stat(path.join(reportDir, "onboarding-promotion.json"))).mode & 0o777).toBe(
       0o600,
     );
-    await expect(fs.access(path.join(workspaceDir, "MEMORY.md"))).rejects.toThrow();
-    await expect(fs.access(path.join(stateDir, "agents"))).rejects.toThrow();
+    await expectMissing(path.join(workspaceDir, "MEMORY.md"), path.join(stateDir, "agents"));
     expect(journal.components.find((component) => component.name === "workspace")).toMatchObject({
       targetWasEmptyDirectory: true,
       emptyTargetBackupPath: expect.any(String),
@@ -279,11 +270,9 @@ describe("setup migration stage", () => {
   });
 
   it("rejects a dangling promotion target without replacing it", async () => {
-    const root = tempRoots.make("openclaw-migration-stage-");
-    const stateDir = path.join(root, "state");
-    const workspaceDir = path.join(root, "workspace");
+    const paths = migrationPaths();
+    const { root, workspaceDir, reportDir } = paths;
     const workspaceReferent = path.join(root, "workspace-referent");
-    const reportDir = path.join(stateDir, "migration", "claude", "attempt");
     await fs.mkdir(workspaceReferent, { recursive: true });
     await fs.symlink(
       workspaceReferent,
@@ -291,20 +280,17 @@ describe("setup migration stage", () => {
       process.platform === "win32" ? "junction" : "dir",
     );
     await fs.rmdir(workspaceReferent);
-    const stage = await createStage({ stateDir, workspaceDir, reportDir });
-    await fs.writeFile(path.join(stage.staged.workspaceDir, "MEMORY.md"), "staged\n", "utf8");
+    const { stage } = await stageMemory(paths);
 
     await expect(promote(stage)).rejects.toBeInstanceOf(SetupMigrationTargetChangedError);
 
     expect((await fs.lstat(workspaceDir)).isSymbolicLink()).toBe(true);
-    await expect(fs.access(workspaceReferent)).rejects.toThrow();
-    await expect(fs.access(path.join(reportDir, "onboarding-promotion.json"))).rejects.toThrow();
+    await expectMissing(workspaceReferent, path.join(reportDir, "onboarding-promotion.json"));
     await stage.cleanup();
   });
 
   it("rejects staged state that the promotion owner does not publish", async () => {
-    const { stateDir, workspaceDir, reportDir } = migrationPaths();
-    const stage = await createStage({ stateDir, workspaceDir, reportDir });
+    const stage = await createStage(migrationPaths());
     await fs.mkdir(path.join(stage.staged.stateDir, "credentials"), { recursive: true });
     await fs.writeFile(
       path.join(stage.staged.stateDir, "credentials", "provider.json"),
@@ -317,28 +303,25 @@ describe("setup migration stage", () => {
   });
 
   it("rejects overlap through a state-directory symlink", async () => {
-    const root = tempRoots.make("openclaw-migration-stage-");
-    const stateDir = path.join(root, "state");
+    const { root, stateDir, reportDir } = migrationPaths();
     const stateAlias = path.join(root, "state-alias");
     await fs.mkdir(stateDir, { recursive: true });
     await fs.symlink(stateDir, stateAlias);
     const workspaceDir = path.join(stateAlias, "agents", "main", "agent", "workspace");
-    const reportDir = path.join(stateDir, "migration", "claude", "attempt");
-    const stage = await createStage({ stateDir, workspaceDir, reportDir });
-    await fs.writeFile(path.join(stage.staged.workspaceDir, "MEMORY.md"), "staged\n", "utf8");
+    const { stage } = await stageMemory({ root, stateDir, workspaceDir, reportDir });
 
     await expect(promote(stage)).rejects.toThrow("Migration promotion targets overlap");
-    await expect(fs.access(path.join(reportDir, "onboarding-promotion.json"))).rejects.toThrow();
+    await expectMissing(path.join(reportDir, "onboarding-promotion.json"));
     await stage.cleanup();
   });
 
   it("rejects a report path that resolves inside a promotion target", async () => {
-    const { stateDir, workspaceDir, reportDir } = migrationPaths();
+    const paths = migrationPaths();
+    const { stateDir, workspaceDir } = paths;
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.mkdir(stateDir, { recursive: true });
     await fs.symlink(workspaceDir, path.join(stateDir, "migration"));
-    const stage = await createStage({ stateDir, workspaceDir, reportDir });
-    await fs.writeFile(path.join(stage.staged.workspaceDir, "MEMORY.md"), "staged\n", "utf8");
+    const { stage } = await stageMemory(paths);
 
     await expect(promote(stage)).rejects.toThrow("Migration promotion targets overlap");
     expect(await fs.readdir(workspaceDir)).toEqual([]);
@@ -351,16 +334,10 @@ describe("setup migration stage", () => {
     });
     await fs.writeFile(path.join(finalWorkspace, "MEMORY.md"), "promoted\n", "utf8");
 
-    await expect(
-      recoverSetupMigrationPromotion({
-        stateDir,
-        providerId: "claude",
-        readConfigFile: async () => ({}),
-      }),
-    ).rejects.toThrow("published local data before config commit");
+    await expect(recover(stateDir)).rejects.toThrow("published local data before config commit");
 
     expect(await fs.readFile(path.join(finalWorkspace, "MEMORY.md"), "utf8")).toBe("promoted\n");
-    await expect(fs.access(stagedWorkspace)).rejects.toThrow();
+    await expectMissing(stagedWorkspace);
     const journal = await readJournal(reportDir);
     expect(journal.status).toBe("indeterminate");
   });
@@ -371,14 +348,10 @@ describe("setup migration stage", () => {
       beforeRename: true,
     });
 
-    await recoverSetupMigrationPromotion({
-      stateDir,
-      providerId: "claude",
-      readConfigFile: async () => ({}),
-    });
+    await recover(stateDir);
 
     expect(await fs.readdir(finalWorkspace)).toEqual([]);
-    await expect(fs.access(stagedRoot)).rejects.toThrow();
+    await expectMissing(stagedRoot);
   });
 
   it("reconciles an interrupted promotion after config commit", async () => {
@@ -386,11 +359,7 @@ describe("setup migration stage", () => {
       status: "promoting",
     });
 
-    const resume = await recoverSetupMigrationPromotion({
-      stateDir,
-      providerId: "claude",
-      readConfigFile: async () => targetConfig,
-    });
+    const resume = await recover(stateDir, targetConfig);
 
     expect(resume?.continuation.outcome).toEqual({ kind: "no-imported-inference" });
     const journal = await readJournal(reportDir);
@@ -400,21 +369,17 @@ describe("setup migration stage", () => {
   it("rejects committed recovery after the promoted target was reset", async () => {
     const { stateDir, targetConfig } = await createRecoveryFixture({ createWorkspace: false });
 
-    await expect(
-      recoverSetupMigrationPromotion({
-        stateDir,
-        providerId: "claude",
-        readConfigFile: async () => targetConfig,
-      }),
-    ).rejects.toThrow("no longer matches its promoted target");
+    await expect(recover(stateDir, targetConfig)).rejects.toThrow(
+      "no longer matches its promoted target",
+    );
   });
 
   it("reconciles a config writer that commits and then throws", async () => {
-    const { stateDir, workspaceDir, reportDir } = migrationPaths();
+    const paths = migrationPaths();
+    const { stateDir, workspaceDir, reportDir } = paths;
     await fs.mkdir(path.join(stateDir, "migration"), { recursive: true });
+    const { stage } = await stageMemory(paths);
     const targetConfig = { agents: { defaults: { workspace: workspaceDir } } };
-    const stage = await createStage({ stateDir, workspaceDir, reportDir }, targetConfig);
-    await fs.writeFile(path.join(stage.staged.workspaceDir, "MEMORY.md"), "staged\n", "utf8");
     let currentConfig: typeof targetConfig | Record<string, never> = {};
 
     const promoted = await promote(stage, {
@@ -431,20 +396,10 @@ describe("setup migration stage", () => {
     expect(journal.status).toBe("committed");
     await promoted.resume.complete();
     await fs.rm(workspaceDir, { recursive: true, force: true });
-    const resumed = await recoverSetupMigrationPromotion({
-      stateDir,
-      providerId: "claude",
-      readConfigFile: async () => ({ gateway: { mode: "local" } }),
-    });
+    const resumed = await recover(stateDir, { gateway: { mode: "local" } });
     expect(resumed?.continuation.outcome).toEqual({ kind: "no-imported-inference" });
     await resumed?.acknowledge();
-    await expect(
-      recoverSetupMigrationPromotion({
-        stateDir,
-        providerId: "claude",
-        readConfigFile: async () => structuredClone(currentConfig),
-      }),
-    ).resolves.toBeUndefined();
+    await expect(recover(stateDir, structuredClone(currentConfig))).resolves.toBeUndefined();
     await stage.cleanup();
   });
 });

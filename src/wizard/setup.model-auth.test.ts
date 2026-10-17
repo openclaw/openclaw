@@ -85,6 +85,17 @@ function candidate(
   return { config, authProfiles, persistAuthProfiles: vi.fn(async () => {}) };
 }
 
+function expectCall(mock: unknown, fields: object) {
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
+}
+
+function explicitAgentConfig(
+  defaults: NonNullable<OpenClawConfig["agents"]>["defaults"],
+  entries: NonNullable<OpenClawConfig["agents"]>["entries"],
+): OpenClawConfig {
+  return { agents: { ownership: "explicit", defaults, entries } };
+}
+
 const managedModels: OpenClawConfig["models"] = {
   providers: {
     "managed-local": {
@@ -99,12 +110,7 @@ function createDefaultAgentConfig(): OpenClawConfig {
   return {
     agents: {
       defaults: { workspace: "/tmp/global-workspace" },
-      entries: {
-        ops: {
-          agentDir: "/tmp/ops-agent",
-          workspace: "/tmp/ops-workspace",
-        },
-      },
+      entries: { ops: { agentDir: "/tmp/ops-agent", workspace: "/tmp/ops-workspace" } },
     },
   };
 }
@@ -153,28 +159,21 @@ describe("runSetupModelAuthStep", () => {
     const target = { agentId: "ops", agentDir: "/tmp/ops-agent" };
 
     expect(ensureAuthProfileStore).not.toHaveBeenCalled();
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/ops-workspace",
-        detectedProviderIds: new Set(["ollama"]),
-      }),
-    );
-    expect(applyAuthChoice).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...target,
-        preserveExistingDefaultModel: true,
-      }),
-    );
-    expect(promptDefaultModel).toHaveBeenCalledWith(
-      expect.objectContaining({ ...target, workspaceDir: "/tmp/ops-workspace", allowKeep: false }),
-    );
+    expectCall(promptAuthChoiceGrouped, {
+      workspaceDir: "/tmp/ops-workspace",
+      detectedProviderIds: new Set(["ollama"]),
+    });
+    expectCall(applyAuthChoice, { ...target, preserveExistingDefaultModel: true });
+    expectCall(promptDefaultModel, {
+      ...target,
+      workspaceDir: "/tmp/ops-workspace",
+      allowKeep: false,
+    });
     expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(expect.anything(), prompter, {
       ...target,
       pendingAuthProfiles: prepared.authProfiles,
     });
-    expect(resolvePluginSetupProviderCore).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "anthropic", pluginIds: ["anthropic"] }),
-    );
+    expectCall(resolvePluginSetupProviderCore, { provider: "anthropic", pluginIds: ["anthropic"] });
     expect(result.persistAuthProfiles).toBe(prepared.persistAuthProfiles);
     expect(prepared.persistAuthProfiles).not.toHaveBeenCalled();
   });
@@ -189,13 +188,9 @@ describe("runSetupModelAuthStep", () => {
 
     const agentDir = expect.stringMatching(/[/\\]agents[/\\]robby[/\\]agent$/);
     expect(ensureAuthProfileStore).not.toHaveBeenCalled();
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(expect.objectContaining({ workspaceDir }));
-    expect(applyAuthChoice).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "robby", agentDir, workspaceDir }),
-    );
-    expect(promptDefaultModel).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "robby", agentDir, workspaceDir }),
-    );
+    expectCall(promptAuthChoiceGrouped, { workspaceDir });
+    expectCall(applyAuthChoice, { agentId: "robby", agentDir, workspaceDir });
+    expectCall(promptDefaultModel, { agentId: "robby", agentDir, workspaceDir });
     expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
@@ -205,25 +200,22 @@ describe("runSetupModelAuthStep", () => {
 
   it("keeps managed model defaults owned by the selected fleet agent", async () => {
     const selectedModel = "managed-local/selected";
-    const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          systemAgent: { agentId: "ops" },
-          model: { primary: "global/current" },
-          models: { "global/current": { alias: "global" } },
-        },
-        entries: {
-          ops: {
-            model: { primary: "ops/current" },
-            models: { "ops/current": { alias: "existing" } },
-            agentDir: "/tmp/ops-agent",
-            workspace: "/tmp/ops-workspace",
-          },
-          main: { model: { primary: "main/current" } },
-        },
+    const config = explicitAgentConfig(
+      {
+        systemAgent: { agentId: "ops" },
+        model: { primary: "global/current" },
+        models: { "global/current": { alias: "global" } },
       },
-    };
+      {
+        ops: {
+          model: { primary: "ops/current" },
+          models: { "ops/current": { alias: "existing" } },
+          agentDir: "/tmp/ops-agent",
+          workspace: "/tmp/ops-workspace",
+        },
+        main: { model: { primary: "main/current" } },
+      },
+    );
     applyAuthChoice.mockImplementationOnce(({ config: authConfig }: { config: OpenClawConfig }) =>
       candidate({
         ...authConfig,
@@ -244,19 +236,17 @@ describe("runSetupModelAuthStep", () => {
 
     const result = await runStep({ config, opts: { authChoice: "anthropic-cli" } });
 
-    expect(applyAuthChoice).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "ops",
-        config: expect.objectContaining({
-          agents: expect.objectContaining({
-            defaults: expect.objectContaining({
-              model: { primary: "ops/current" },
-              models: { "ops/current": { alias: "existing" } },
-            }),
+    expectCall(applyAuthChoice, {
+      agentId: "ops",
+      config: expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({
+            model: { primary: "ops/current" },
+            models: { "ops/current": { alias: "existing" } },
           }),
         }),
       }),
-    );
+    });
     expect(result.config.agents?.defaults).toEqual(config.agents?.defaults);
     expect(result.config.agents?.entries?.main).toEqual(config.agents?.entries?.main);
     expect(result.config.agents?.entries?.ops?.model).toEqual({ primary: selectedModel });
@@ -267,13 +257,10 @@ describe("runSetupModelAuthStep", () => {
   });
 
   it("passes the explicit system agent to custom setup while preserving its existing model", async () => {
-    const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "ops" }, model: { primary: "global/current" } },
-        entries: { ops: { model: { primary: "ops/current" }, workspace: "/tmp/ops-workspace" } },
-      },
-    };
+    const config = explicitAgentConfig(
+      { systemAgent: { agentId: "ops" }, model: { primary: "global/current" } },
+      { ops: { model: { primary: "ops/current" }, workspace: "/tmp/ops-workspace" } },
+    );
     promptCustomApiConfig.mockResolvedValueOnce({ config });
 
     const result = await runStep({
@@ -283,12 +270,10 @@ describe("runSetupModelAuthStep", () => {
     });
     await result.persistAuthProfiles();
 
-    expect(promptCustomApiConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: expect.objectContaining({ agentId: "ops", workspaceDir: "/tmp/ops-workspace" }),
-        setAsPrimary: false,
-      }),
-    );
+    expectCall(promptCustomApiConfig, {
+      target: expect.objectContaining({ agentId: "ops", workspaceDir: "/tmp/ops-workspace" }),
+      setAsPrimary: false,
+    });
     expect(result.config.agents).toEqual(config.agents);
   });
 
@@ -368,17 +353,16 @@ describe("runSetupModelAuthStep", () => {
       await withOpenClawTestState({ label: "setup-auth-authority" }, async (state) => {
         const config: OpenClawConfig = { gateway: { port: 19489 } };
         const includePath = path.join(state.stateDir, "provider.json");
-        await fs.writeFile(includePath, JSON.stringify(config));
-        await fs.writeFile(
+        const write = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
+        await write(includePath, config);
+        await write(
           state.configPath,
-          JSON.stringify(source === "include" ? { $include: "provider.json" } : config),
+          source === "include" ? { $include: "provider.json" } : config,
         );
-        const replaceConfig = async () => {
-          await fs.writeFile(
-            source === "include" ? includePath : state.configPath,
-            JSON.stringify({ gateway: { port: 19490 } }),
-          );
-        };
+        const replaceConfig = () =>
+          write(source === "include" ? includePath : state.configPath, {
+            gateway: { port: 19490 },
+          });
         promptAuthChoiceGrouped
           .mockReset()
           .mockImplementationOnce(async () => {

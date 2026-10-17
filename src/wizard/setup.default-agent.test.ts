@@ -1,10 +1,10 @@
 // Classic setup tests keep every workspace-owned effect on the configured default agent.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { WizardPrompter } from "./prompts.js";
 
@@ -72,18 +72,11 @@ vi.mock("./setup.secret-input.js", () => ({
 vi.mock("./setup.gateway-config.js", () => ({
   configureGatewayForSetup: async ({ nextConfig }: { nextConfig: OpenClawConfig }) => ({
     nextConfig,
-    settings: {
-      port: 18789,
-      bind: "loopback",
-      authMode: "token",
-      gatewayToken: "test-token",
-    },
+    settings: { port: 18789, bind: "loopback", authMode: "token", gatewayToken: "test-token" },
   }),
 }));
 
-vi.mock("./setup.memory-import.js", () => ({
-  runSetupMemoryImportStep: vi.fn(),
-}));
+vi.mock("./setup.memory-import.js", () => ({ runSetupMemoryImportStep: vi.fn() }));
 
 vi.mock("./setup.official-plugins.js", () => ({
   setupOfficialPluginInstalls: mocks.setupOfficialPlugins,
@@ -93,13 +86,9 @@ vi.mock("./setup.app-recommendations.js", () => ({
   setupAppRecommendations: mocks.setupRecommendations,
 }));
 
-vi.mock("./setup.plugin-config.js", () => ({
-  setupPluginConfig: mocks.setupPluginConfig,
-}));
+vi.mock("./setup.plugin-config.js", () => ({ setupPluginConfig: mocks.setupPluginConfig }));
 
-vi.mock("./setup.finalize.js", () => ({
-  finalizeSetupWizard: mocks.finalizeSetup,
-}));
+vi.mock("./setup.finalize.js", () => ({ finalizeSetupWizard: mocks.finalizeSetup }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp/default-workspace",
@@ -124,13 +113,8 @@ vi.mock("../plugins/status.js", () => ({
 
 import { runSetupWizard } from "./setup.js";
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-} as unknown as RuntimeEnv;
-
-const prompter = {
+const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+const prompter = createWizardPrompter({
   intro: vi.fn(),
   outro: vi.fn(),
   note: vi.fn(),
@@ -138,8 +122,17 @@ const prompter = {
   multiselect: vi.fn(),
   text: vi.fn(),
   confirm: vi.fn(),
-  progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-} as unknown as WizardPrompter;
+});
+const unchangedConfig = async (config: OpenClawConfig) => config;
+const unchangedParams = async ({ config }: { config: OpenClawConfig }) => config;
+const snapshot = (config: OpenClawConfig) => ({
+  exists: true,
+  valid: true,
+  config,
+  sourceConfig: config,
+  sourceConfigBeforeMigrations: config,
+  issues: [],
+});
 
 function runWizard(opts: OnboardOptions = {}) {
   return runSetupWizard(
@@ -181,38 +174,24 @@ describe("runSetupWizard default-agent ownership", () => {
       agents: {
         defaults: { workspace: "/tmp/global-workspace" },
         entries: {
-          ops: {
-            agentDir: "/tmp/ops-agent",
-            workspace: "/tmp/ops-workspace",
-          },
+          ops: { agentDir: "/tmp/ops-agent", workspace: "/tmp/ops-workspace" },
         },
       },
     } satisfies OpenClawConfig;
-    mocks.readSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config,
-      sourceConfig: config,
-      sourceConfigBeforeMigrations: config,
-      issues: [],
-    });
+    mocks.readSnapshot.mockResolvedValue(snapshot(config));
     mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => ({
       path: "/tmp/openclaw.json",
       nextConfig,
     }));
-    mocks.setupSkills.mockImplementation(async (nextConfig: OpenClawConfig) => nextConfig);
-    mocks.setupOfficialPlugins.mockImplementation(
-      async ({ config: nextConfig }: { config: OpenClawConfig }) => nextConfig,
-    );
+    mocks.setupSkills.mockImplementation(unchangedConfig);
+    mocks.setupOfficialPlugins.mockImplementation(unchangedParams);
     mocks.setupRecommendations.mockImplementation(
       async ({ config: nextConfig }: { config: OpenClawConfig }) => ({
         config: nextConfig,
         commitResult: async () => undefined,
       }),
     );
-    mocks.setupPluginConfig.mockImplementation(
-      async ({ config: nextConfig }: { config: OpenClawConfig }) => nextConfig,
-    );
+    mocks.setupPluginConfig.mockImplementation(unchangedParams);
     mocks.finalizeSetup.mockResolvedValue({ launchedTui: false });
   });
 
@@ -267,23 +246,7 @@ describe("runSetupWizard default-agent ownership", () => {
       agents: { entries: { main: {} } },
     } satisfies OpenClawConfig;
     const current = { ...config, gateway: { ...config.gateway, port: 24444 } };
-    mocks.readSnapshot
-      .mockResolvedValueOnce({
-        exists: true,
-        valid: true,
-        config,
-        sourceConfig: config,
-        sourceConfigBeforeMigrations: config,
-        issues: [],
-      })
-      .mockResolvedValue({
-        exists: true,
-        valid: true,
-        config: current,
-        sourceConfig: current,
-        sourceConfigBeforeMigrations: current,
-        issues: [],
-      });
+    mocks.readSnapshot.mockResolvedValueOnce(snapshot(config)).mockResolvedValue(snapshot(current));
     vi.mocked(prompter.select).mockResolvedValue(false);
     let persisted: OpenClawConfig | undefined;
     mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => {
@@ -404,17 +367,15 @@ describe("runSetupWizard default-agent ownership", () => {
       prompter,
       expect.any(Object),
     );
-    expect(mocks.setupOfficialPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: target.workspaceDir }),
-    );
-    expect(mocks.setupRecommendations).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: target.workspaceDir }),
-    );
-    expect(mocks.setupPluginConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: target.workspaceDir }),
-    );
-    expect(mocks.finalizeSetup).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: target.workspaceDir }),
-    );
+    for (const effect of [
+      mocks.setupOfficialPlugins,
+      mocks.setupRecommendations,
+      mocks.setupPluginConfig,
+      mocks.finalizeSetup,
+    ]) {
+      expect(effect).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceDir: target.workspaceDir }),
+      );
+    }
   });
 });
