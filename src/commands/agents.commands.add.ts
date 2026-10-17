@@ -51,6 +51,7 @@ import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { prepareAuthChoice } from "./auth-choice.apply.js";
 import { warnIfModelConfigLooksOff } from "./auth-choice.model-check.js";
+import { storeChannelSetupCredentials } from "./channels/plugin-config-persistence.js";
 import { requireValidConfigForWrite } from "./config-validation.js";
 import {
   ensureOnboardingAgentWorkspace,
@@ -466,6 +467,7 @@ async function runInteractiveAgentsAdd(
     const channelSetup = createChannelSetupHooks({ runtime: wizardRuntime });
     let selection: ChannelChoice[] = [];
     const channelAccountIds: Partial<Record<ChannelChoice, string>> = {};
+    const configBeforeChannels = nextConfig;
     nextConfig = await setupChannels(nextConfig, wizardRuntime, prompter, {
       workspaceDir,
       deferStatusUntilSelection: true,
@@ -515,6 +517,10 @@ async function runInteractiveAgentsAdd(
       }
     }
 
+    nextConfig = await storeChannelSetupCredentials({
+      cfg: nextConfig,
+      previousConfig: configBeforeChannels,
+    });
     const stagedEntry = existingAgent
       ? undefined
       : listAgentEntries(nextConfig).find(

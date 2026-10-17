@@ -50,8 +50,14 @@ import { resolveSetupWorkspaceSelection, validateSetupWorkspacePath } from "./se
 
 type SetupFlowChoice = WizardFlow | "import" | "keep-model";
 
+/** A Gateway-hosted session binds the channel credential writes to its live, uncancelled state. */
+export type SetupWizardOptions = OnboardOptions & {
+  beforePersistentEffect?: () => Promise<void>;
+  assertPersistentEffectCurrent?: () => void;
+};
+
 export async function runSetupWizard(
-  opts: OnboardOptions,
+  opts: SetupWizardOptions,
   runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
 ) {
@@ -62,7 +68,7 @@ export async function runSetupWizard(
 }
 
 async function runSetupWizardOnce(
-  initialOpts: OnboardOptions,
+  initialOpts: SetupWizardOptions,
   runtimeInput: RuntimeEnv | undefined,
   prompter: WizardPrompter,
 ) {
@@ -602,6 +608,7 @@ async function runSetupWizardOnce(
             .filter((plugin) => plugin.meta.quickstartAllowFrom)
             .map((plugin) => plugin.id)
         : [];
+    const configBeforeChannels = nextConfig;
     nextConfig = await setupChannels(nextConfig, runtime, prompter, {
       allowIMessageInstall: true,
       allowSignalInstall: true,
@@ -613,7 +620,19 @@ async function runSetupWizardOnce(
       secretInputMode: opts.secretInputMode,
       onPostWriteHook: channelSetup.onPostWriteHook,
     });
-    const committed = await commitSetupConfigFile(nextConfig, { allowConfigSizeDrop: false });
+    const { storeChannelSetupCredentials } =
+      await import("../commands/channels/plugin-config-persistence.js");
+    nextConfig = await storeChannelSetupCredentials({
+      cfg: nextConfig,
+      previousConfig: configBeforeChannels,
+      beforePersistentEffect: opts.beforePersistentEffect,
+      assertCurrent: opts.assertPersistentEffectCurrent,
+    });
+    // The commit can wait on locks; the writer checks the requester right before publication.
+    const committed = await commitSetupConfigFile(nextConfig, {
+      allowConfigSizeDrop: false,
+      writeOptions: { assertBeforePublish: opts.assertPersistentEffectCurrent },
+    });
     await channelSetup.runPostWriteHooks(committed.path);
     nextConfig = committed.nextConfig;
   }
