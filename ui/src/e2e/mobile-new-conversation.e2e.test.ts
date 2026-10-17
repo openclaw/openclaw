@@ -22,6 +22,8 @@ const mobile = {
 const currentSession = "agent:research:current";
 const draft = "Help me plan the next release.";
 const composerSelector = ".new-session-page__message";
+const headerSelector = ".chat-pane__header:visible, .header-new-session:visible";
+const drawerToggleSelector = ".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible";
 
 function artifactDir(name: string) {
   return process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? createControlUiE2eArtifactDir(name) : null;
@@ -31,9 +33,7 @@ async function capture(
   page: Page,
   dir: string | null,
   name: string,
-  content: Locator[] = [
-    page.locator(".chat-pane__header:visible, .header-new-session:visible").first(),
-  ],
+  content: Locator[] = [page.locator(headerSelector).first()],
   elementOnly = false,
 ) {
   if (!dir) {
@@ -76,8 +76,8 @@ async function installScenario(page: Page, operatorScopes?: string[], team = fal
             mainKey: "main",
             scope: "per-sender",
             agents: [
-              { id: "research", name: "Atlas", model: { primary: "demo/demo-model" } },
-              { id: "writer", name: "Scout", model: { primary: "demo/demo-model" } },
+              { id: "research", name: "Atlas" },
+              { id: "writer", name: "Scout" },
             ],
           },
         }
@@ -85,29 +85,17 @@ async function installScenario(page: Page, operatorScopes?: string[], team = fal
     agentModel: "demo/demo-model",
     models: [{ id: "demo-model", provider: "demo", name: "Demo model", contextWindow: 32000 }],
     sessionKey: currentSession,
-    sessions: [
-      {
-        key: currentSession,
-        kind: "direct",
-        label: "Launch planning",
-        model: "demo-model",
-        modelProvider: "demo",
-        updatedAt: 1791871200000,
-      },
-    ],
+    sessions: [{ key: currentSession, kind: "direct", label: "Launch planning" }],
     historyMessages: [
-      ["user", "Let's review the launch checklist."],
-      [
-        "assistant",
-        "The release notes and design review are ready. What would you like to work on next?",
-      ],
+      ["user", "Review the launch."],
+      ["assistant", "The release is ready."],
     ].map(([role, text]) => ({ role, content: [{ type: "text", text }] })),
   });
 }
 
 suite.define(() => {
-  it("keeps creation in chat navigation and non-chat page headers", async () => {
-    await suite.withPage(mobile, async ({ page }) => {
+  it("keeps creation in chat navigation and non-chat page headers", () =>
+    suite.withPage(mobile, async ({ page }) => {
       const gateway = await installScenario(page);
       const dir = artifactDir("mobile-new-conversation-after");
       await openComposer(page, "chat");
@@ -148,11 +136,10 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar .sidebar");
         await capture(page, dir, "rail-light", [sidebar], true);
       }
-    });
-  });
+    }));
 
-  it("keeps the mobile welcome with its composer across phone and keyboard viewports", async () => {
-    await suite.withPage(mobile, async ({ page }) => {
+  it("keeps the mobile welcome with its composer across phone and keyboard viewports", () =>
+    suite.withPage(mobile, async ({ page }) => {
       await installScenario(page, undefined, true);
       await page.goto(suite.server.baseUrl + "new?agent=research");
       const composer = page.locator(composerSelector);
@@ -161,6 +148,7 @@ suite.define(() => {
       const triggers = page.locator(".new-session-page__triggers");
       const surface = page.locator(".new-session-page__composer");
       const agentLabel = page.locator(".new-session-page__select--agent .agent-select__label");
+      const scroll = page.locator(".new-session-page__scroll");
       const dir = artifactDir("mobile-composer-layout");
       const content = [identity, triggers, surface];
       for (const state of [
@@ -200,11 +188,7 @@ suite.define(() => {
         expect(composerBox!.x).toBeGreaterThanOrEqual(0);
         expect(composerBox!.x + composerBox!.width).toBeLessThanOrEqual(state.width);
         expect(await composer.inputValue()).toBe(draft);
-        expect(
-          await page
-            .locator(".new-session-page__scroll")
-            .evaluate((element) => element.scrollWidth <= element.clientWidth),
-        ).toBe(true);
+        expect(await scroll.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
       }
       await page.setViewportSize({ width: 390, height: 844 });
       await composer.fill("");
@@ -220,15 +204,12 @@ suite.define(() => {
       expect(await page.evaluate(() => window.scrollX)).toBe(0);
       await page.keyboard.press("Escape");
       await composer.fill("A detailed plan for the next release.\n".repeat(20));
-      expect(
-        await composer.evaluate((element) => element.scrollHeight > element.clientHeight),
-      ).toBe(true);
+      expect(await composer.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
       await capture(page, dir, "long-prompt", content);
-    });
-  });
+    }));
 
-  it.each(["chat", "new"] as const)("opens the team composer directly from %s", async (route) => {
-    await suite.withPage(mobile, async ({ page }) => {
+  it.each(["chat", "new"] as const)("opens the team composer directly from %s", (route) =>
+    suite.withPage(mobile, async ({ page }) => {
       const gateway = await installScenario(page, undefined, true);
       await openComposer(page, route);
       if (route === "new") {
@@ -239,10 +220,7 @@ suite.define(() => {
       const action = page.getByRole("link", { name: "New conversation", exact: true });
       expect(await action.count()).toBe(route === "chat" ? 0 : 1);
       // Mouse hover can reveal the sliding drawer's tooltip, which owns the first Escape.
-      await page
-        .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-        .first()
-        .tap();
+      await page.locator(drawerToggleSelector).first().tap();
       await waitForMobileSidebarDrawerOpen(page);
       expect(await page.locator(".header-new-session:visible").count()).toBe(0);
       expect(await action.count()).toBe(1);
@@ -258,7 +236,7 @@ suite.define(() => {
       await composer.waitFor();
       if (route === "chat") {
         await expect
-          .poll(() => composer.evaluate((element) => element === document.activeElement))
+          .poll(() => composer.evaluate((el) => el === document.activeElement))
           .toBe(true);
         await page.keyboard.type(draft);
       }
@@ -270,48 +248,45 @@ suite.define(() => {
       await picker.getByRole("menuitemradio", { name: "Scout", exact: true }).tap();
       await expect.poll(() => picker.locator(".agent-select__label").textContent()).toBe("Scout");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-    });
-  });
+    }),
+  );
 
   it.each([
     { state: "denied", team: false },
     { state: "disconnected", team: false },
     { state: "denied", team: true },
-  ] as const)(
-    "keeps the $state creation action visible but non-navigable (team: $team)",
-    async ({ state, team }) => {
-      await suite.withPage(mobile, async ({ page }) => {
-        const gateway = await installScenario(
-          page,
-          state === "denied" ? ["operator.read"] : undefined,
-          team,
-        );
-        await page.goto(
-          state === "denied"
-            ? controlUiSessionUrl(suite.server.baseUrl, currentSession)
-            : suite.server.baseUrl + "new?agent=research",
-        );
-        if (state === "denied") {
-          await page.locator(".chat-pane__nav-toggle").tap();
-          await waitForMobileSidebarDrawerOpen(page);
-        }
-        const create = page.locator(
-          state === "denied" ? ".sidebar-rail .sidebar-new-session" : ".header-new-session",
-        );
-        await create.waitFor();
-        if (state === "disconnected") {
-          await gateway.setOnline(false);
-          await gateway.closeLatest(1001, "mobile creation offline proof");
-        }
-        await expect.poll(() => create.isDisabled()).toBe(true);
-        expect(await create.getAttribute("href")).toBeNull();
-        expect(await create.getAttribute("aria-disabled")).toBe("true");
-        expect(await create.getAttribute("tabindex")).toBe("-1");
-        const location = page.url();
-        await create.click({ force: true });
-        expect(page.url()).toBe(location);
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      });
-    },
+  ] as const)("blocks $state creation (team: $team)", ({ state, team }) =>
+    suite.withPage(mobile, async ({ page }) => {
+      const gateway = await installScenario(
+        page,
+        state === "denied" ? ["operator.read"] : undefined,
+        team,
+      );
+      await page.goto(
+        state === "denied"
+          ? controlUiSessionUrl(suite.server.baseUrl, currentSession)
+          : suite.server.baseUrl + "new?agent=research",
+      );
+      if (state === "denied") {
+        await page.locator(".chat-pane__nav-toggle").tap();
+        await waitForMobileSidebarDrawerOpen(page);
+      }
+      const create = page.locator(
+        state === "denied" ? ".sidebar-rail .sidebar-new-session" : ".header-new-session",
+      );
+      await create.waitFor();
+      if (state === "disconnected") {
+        await gateway.setOnline(false);
+        await gateway.closeLatest(1001, "mobile creation offline proof");
+      }
+      await expect.poll(() => create.isDisabled()).toBe(true);
+      expect(await create.getAttribute("href")).toBeNull();
+      expect(await create.getAttribute("aria-disabled")).toBe("true");
+      expect(await create.getAttribute("tabindex")).toBe("-1");
+      const location = page.url();
+      await create.click({ force: true });
+      expect(page.url()).toBe(location);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+    }),
   );
 });

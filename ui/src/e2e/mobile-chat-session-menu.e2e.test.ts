@@ -29,14 +29,50 @@ const visibilities: Array<"shared" | "read-only" | "suggest" | "draft"> = [
 const item = (host: Locator, name: string) => host.getByRole("menuitem", { name, exact: true });
 const height = (element: Locator) =>
   element.evaluate((node) => node.getBoundingClientRect().height);
-const draftRow = (key: string, title: string, sharingRole: "owner" | "member") =>
-  sessionsListResponse([
-    {
-      ...sessionRow(key, title, Date.parse("2026-08-28T12:00:00.000Z")),
-      sharingRole,
-      visibility: "draft",
-    },
-  ]);
+const updatedAt = Date.parse("2026-08-28T12:00:00.000Z");
+async function installDraft(
+  page: Page,
+  sessionKey: string,
+  title: string,
+  role: "owner" | "member",
+) {
+  const featureMethods = ["chat.metadata", "chat.startup", "session.visibility.set"];
+  const methodResponses: Record<string, unknown> = {
+    "sessions.list": sessionsListResponse([
+      sessionRow(sessionKey, title, updatedAt, { sharingRole: role, visibility: "draft" }),
+    ]),
+  };
+  if (role === "owner") {
+    featureMethods.push(
+      "session.members.listEvidence",
+      "session.members.add",
+      "session.members.remove",
+    );
+    const owner = { type: "human", id: "owner", label: "Owner" };
+    methodResponses["session.members.listEvidence"] = {
+      sessionKey,
+      owner,
+      members: [],
+      role,
+      allowedVisibilities: visibilities,
+      identities: [
+        owner,
+        ...Array.from({ length: 30 }, (_, index) => ({
+          type: "human",
+          id: `member-${index}`,
+          label: `Member ${index}`,
+        })),
+      ],
+    };
+  }
+  await installMockGateway(page, {
+    sessionKey,
+    featureMethods,
+    methodResponses,
+    allowedSessionVisibilities: visibilities,
+    operatorScopes: role === "owner" ? ["operator.read", "operator.write"] : ["operator.read"],
+  });
+}
 async function withMobilePage(run: (page: Page) => Promise<void>, colorScheme?: "light" | "dark") {
   await suite.withPage({ ...mobile, colorScheme }, ({ page }) => run(page));
 }
@@ -53,7 +89,7 @@ suite.define(() => {
           featureMethods: ["chat.metadata", "chat.startup", "terminal.open"],
           methodResponses: {
             "sessions.list": sessionsListResponse([
-              sessionRow(sessionKey, "Mobile layout", Date.parse("2026-08-28T12:00:00.000Z")),
+              sessionRow(sessionKey, "Mobile layout", updatedAt),
             ]),
           },
         });
@@ -94,34 +130,27 @@ suite.define(() => {
           await page.setViewportSize(viewport);
           expect(await host.locator("kbd:visible").count()).toBe(0);
           const bounds = await menu.boundingBox();
-          if (!bounds) {
-            throw new Error("Expected visible Layout menu");
-          }
-          expect(bounds.width).toBeLessThanOrEqual(264);
-          expect(bounds.height).toBeLessThanOrEqual(Math.min(360, viewport.height * 0.5) + 1);
-          expect(bounds.x).toBeGreaterThanOrEqual(0);
-          expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width);
-          expect(bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height);
-          // The phone menu opens from its header trigger, not a viewport corner.
           const anchor = await host.locator("button.chat-pane__layout-trigger").boundingBox();
-          if (!anchor) {
-            throw new Error("Expected a visible Layout trigger");
+          if (!bounds || !anchor) {
+            throw new Error("Expected visible Layout menu and trigger");
           }
-          expect(Math.abs(bounds.x + bounds.width - (anchor.x + anchor.width))).toBeLessThanOrEqual(
-            1,
-          );
-          expect(bounds.y).toBeGreaterThanOrEqual(anchor.y + anchor.height);
-          expect(bounds.y).toBeLessThanOrEqual(anchor.y + anchor.height + 12);
-          expect(await menu.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
-            true,
-          );
-          expect(
-            await terminal.evaluate((element) => element.getBoundingClientRect().height),
-          ).toBeGreaterThanOrEqual(44);
+          const right = bounds.x + bounds.width;
+          for (const [name, valid] of [
+            ["width cap", bounds.width <= 264],
+            ["height cap", bounds.height <= Math.min(360, viewport.height * 0.5) + 1],
+            ["left edge", bounds.x >= 0],
+            ["right edge", right <= viewport.width],
+            ["bottom edge", bounds.y + bounds.height <= viewport.height],
+            ["trigger alignment", Math.abs(right - (anchor.x + anchor.width)) <= 1],
+            ["below trigger", bounds.y >= anchor.y + anchor.height],
+            ["trigger gap", bounds.y <= anchor.y + anchor.height + 12],
+          ] as const) {
+            expect(valid, name).toBe(true);
+          }
+          expect(await menu.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
+          expect(await height(terminal)).toBeGreaterThanOrEqual(44);
         }
-        expect(await menu.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(
-          true,
-        );
+        expect(await menu.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
         await selectChatLayoutAction(page, "Subagents");
         await page.locator('[data-panel-slot="subagents"]:visible').waitFor();
         await expect.poll(() => host.getAttribute("open")).toBeNull();
@@ -134,37 +163,7 @@ suite.define(() => {
     async (colorScheme) => {
       const sessionKey = "agent:main:mobile-more";
       await withMobilePage(async (page) => {
-        await installMockGateway(page, {
-          allowedSessionVisibilities: visibilities,
-          featureMethods: [
-            "chat.metadata",
-            "chat.startup",
-            "session.visibility.set",
-            "session.members.listEvidence",
-            "session.members.add",
-            "session.members.remove",
-          ],
-          operatorScopes: ["operator.read", "operator.write"],
-          sessionKey,
-          methodResponses: {
-            "sessions.list": draftRow(sessionKey, "Mobile menu", "owner"),
-            "session.members.listEvidence": {
-              sessionKey,
-              owner: { type: "human", id: "owner", label: "Owner" },
-              members: [],
-              identities: [
-                { type: "human", id: "owner", label: "Owner" },
-                ...Array.from({ length: 30 }, (_, index) => ({
-                  type: "human" as const,
-                  id: `member-${index}`,
-                  label: `Member ${index}`,
-                })),
-              ],
-              role: "owner",
-              allowedVisibilities: visibilities,
-            },
-          },
-        });
+        await installDraft(page, sessionKey, "Mobile menu", "owner");
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByRole("button", { name: "Actions for Mobile menu" }).click();
@@ -203,15 +202,7 @@ suite.define(() => {
   it("keeps the mobile draft indicator for non-manager sessions", async () => {
     const sessionKey = "agent:main:mobile-member-draft";
     await withMobilePage(async (page) => {
-      await installMockGateway(page, {
-        allowedSessionVisibilities: visibilities,
-        featureMethods: ["chat.metadata", "chat.startup", "session.visibility.set"],
-        operatorScopes: ["operator.read"],
-        sessionKey,
-        methodResponses: {
-          "sessions.list": draftRow(sessionKey, "Member draft", "member"),
-        },
-      });
+      await installDraft(page, sessionKey, "Member draft", "member");
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.locator(".chat-pane__draft-indicator").waitFor();

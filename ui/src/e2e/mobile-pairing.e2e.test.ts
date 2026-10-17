@@ -3,8 +3,7 @@ import path from "node:path";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type { Locator, Page } from "playwright";
 import qrcode from "qrcode";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
@@ -22,18 +21,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let uiProofArtifactDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    uiProofArtifactDir = createControlUiE2eArtifactDir("mobile-pairing");
-  }
-});
 
 async function captureUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await page.screenshot({ animations: "disabled", path: path.join(uiProofArtifactDir, fileName) });
+  await page.screenshot({ animations: "disabled", path: path.join(suite.artifactDir, fileName) });
 }
 
 async function expectVisible(locator: Locator) {
@@ -69,39 +62,33 @@ async function expectPairingLayout(page: Page, mode: "node" | "qr") {
     const qr = setup.querySelector<HTMLElement>(".device-pair-setup__qr");
     const outside = [...elements]
       .filter((element) => {
-        const bounds = element.getBoundingClientRect();
+        const { left, right } = element.getBoundingClientRect();
         return (
           element.scrollWidth > element.clientWidth + 1 ||
-          bounds.left < setupBounds.left - 1 ||
-          bounds.right > setupBounds.right + 1
+          left < setupBounds.left - 1 ||
+          right > setupBounds.right + 1
         );
       })
       .map((element) => element.className);
-    if (
-      copy &&
-      code &&
-      code.getBoundingClientRect().right > copy.getBoundingClientRect().left + 1
-    ) {
-      outside.push("copy-overlap");
-    }
-    if (getComputedStyle(setup).overflowX === "hidden") {
-      outside.push("clipped-overflow");
-    }
-    let qrState = qr === null;
-    if (currentMode === "qr") {
-      qrState = qr ? Math.abs(qr.clientWidth - qr.clientHeight) <= 1 : false;
-    }
     return {
       accessCards: document.querySelectorAll(".device-pair-setup__access label").length,
       outside,
+      copyOverlap: Boolean(
+        copy && code && code.getBoundingClientRect().right > copy.getBoundingClientRect().left + 1,
+      ),
+      clipped: getComputedStyle(setup).overflowX === "hidden",
       pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
-      qrState,
+      qrState:
+        currentMode === "qr"
+          ? Boolean(qr && Math.abs(qr.clientWidth - qr.clientHeight) <= 1)
+          : qr === null,
     };
   }, mode);
-
   expect(layout).toEqual({
     accessCards: 3,
     outside: [],
+    copyOverlap: false,
+    clipped: false,
     pageOverflow: false,
     qrState: true,
   });
@@ -141,7 +128,7 @@ suite.define(() => {
         const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [pair], {
           animations: "disabled",
         });
-        await writeFile(path.join(uiProofArtifactDir, "pairing-operator-menu.png"), frame.png);
+        await writeFile(path.join(suite.artifactDir, "pairing-operator-menu.png"), frame.png);
       }
       expect(await pair.getAttribute("disabled")).not.toBeNull();
       expect(await tooltipTitleText(pair)).toBe(
@@ -312,6 +299,19 @@ suite.define(() => {
         const pairFromSettings = page
           .locator(".security-page")
           .getByRole("button", { name: "Pair device" });
+        const access = page.locator('input[name="device-pair-access"]');
+        const openSetup = async (
+          id: string,
+          profile: "full" | "limited" | "node",
+          ttlMs = 120_000,
+        ) => {
+          await pairFromSettings.click();
+          if (profile !== "full") {
+            await access.nth(profile === "limited" ? 1 : 2).check();
+          }
+          await setSetup(id, profile, ttlMs === 0 ? 0 : Date.now() + ttlMs);
+          await button("Create setup code").click();
+        };
         await expect.poll(async () => pairFromSettings.isEnabled()).toBe(true);
         await pairFromSettings.click();
 
@@ -354,7 +354,6 @@ suite.define(() => {
         await button("Create setup code").click();
         await expectVisible(page.getByRole("status").getByText("Creating a secure setup code…"));
         await expectAbsent(qr);
-        const access = page.locator('input[name="device-pair-access"]');
         expect(await access.first().isDisabled()).toBe(true);
         await proof("02-mobile-loading.png");
         await resolveSetup("setup-full", "full");
@@ -373,10 +372,7 @@ suite.define(() => {
         await dialog.waitFor({ state: "hidden" });
 
         await page.setViewportSize({ height: 900, width: 1280 });
-        await pairFromSettings.click();
-        await access.nth(1).check();
-        await setSetup("setup-limited", "limited");
-        await button("Create setup code").click();
+        await openSetup("setup-limited", "limited");
         await qr.waitFor();
         await proof("04-desktop-waiting.png");
         await expectPairingLayout(page, "qr");
@@ -392,12 +388,10 @@ suite.define(() => {
 
         // The completion event is droppable. With the event never delivered, the
         // lapsing credential must still resolve to paired, not to expired.
-        await pairFromSettings.click();
-        await setSetup("setup-missed", "full", Date.now() + 2_000);
         await gateway.setMethodResponse("device.pair.setupStatus", {
           completion: completion("setup-missed", "phone-missed", "full", 5, "Recovered iPhone"),
         });
-        await button("Create setup code").click();
+        await openSetup("setup-missed", "full", 2_000);
         await qr.waitFor();
         await text("Recovered iPhone").waitFor();
         await expectAbsent(qr);
@@ -410,12 +404,10 @@ suite.define(() => {
 
         // Retiring the bearer is not success when the credential-bearing
         // response did not finish. Surface a recovery path instead.
-        await pairFromSettings.click();
-        await setSetup("setup-uncertain", "full", Date.now() + 2_000);
         await gateway.setMethodResponse("device.pair.setupStatus", {
           deliveryUncertain: completion("setup-uncertain", "phone-uncertain", "full", 6),
         });
-        await button("Create setup code").click();
+        await openSetup("setup-uncertain", "full", 2_000);
         await page
           .getByRole("heading", { name: "Pairing delivery could not be confirmed" })
           .waitFor();
@@ -425,10 +417,8 @@ suite.define(() => {
         await proof("07-desktop-delivery-uncertain.png");
         await close();
 
-        await pairFromSettings.click();
         await gateway.deferNext("device.pair.setupStatus");
-        await setSetup("setup-expired", "full", 0);
-        await button("Create setup code").click();
+        await openSetup("setup-expired", "full", 0);
         await page.getByRole("status").getByText("Loading…", { exact: true }).waitFor();
         await expectAbsent(qr);
         await expectAbsent(button("Copy setup code"));
@@ -481,11 +471,7 @@ suite.define(() => {
           { height: 844, width: 390 },
         ]) {
           await page.setViewportSize(viewport);
-          await setSetup(`setup-node-${viewport.width}`, "node", Date.now() + 60_000);
-          await pairFromSettings.click();
-          await dialog.waitFor();
-          await access.nth(2).check();
-          await button("Create setup code").click();
+          await openSetup(`setup-node-${viewport.width}`, "node", 60_000);
           await text(nodeCommand).waitFor();
           await proof(`11-node-${viewport.width}.png`);
           await expectPairingLayout(page, "node");

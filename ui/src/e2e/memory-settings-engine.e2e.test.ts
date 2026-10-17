@@ -1,8 +1,6 @@
-// Control UI tests cover memory engine ordering and serialized config writes.
 import path from "node:path";
-import type { Locator } from "playwright";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -11,14 +9,6 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not available at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-});
-
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let uiProofArtifactDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    uiProofArtifactDir = createControlUiE2eArtifactDir("memory-settings-engine");
-  }
 });
 
 function configResponse(engineId: string, hash: string) {
@@ -57,27 +47,42 @@ function pluginCatalog<T>(plugins: T[]) {
   return { plugins, diagnostics: [], mutationAllowed: true };
 }
 
-async function capture(target: Locator, name: string) {
-  if (captureUiProofEnabled) {
-    await target.screenshot({ animations: "disabled", path: path.join(uiProofArtifactDir, name) });
+function enabledPlugin<T>(plugin: T) {
+  return { ok: true, plugin, restartRequired: false };
+}
+
+type MemoryPlugin = Omit<(typeof memoryPlugins)[number], "kind"> & { kind?: string[] };
+
+async function openSettings(
+  page: Page,
+  engineId: string,
+  hash: string,
+  plugins: MemoryPlugin[] = memoryPlugins,
+) {
+  const gateway = await installMockGateway(page, {
+    methodResponses: {
+      "config.get": configResponse(engineId, hash),
+      "plugins.list": pluginCatalog(plugins),
+    },
+  });
+  expect((await page.goto(`${suite.server.baseUrl}settings/memory/settings`))?.status()).toBe(200);
+  return gateway;
+}
+
+async function capture(
+  page: Page,
+  name: string,
+  target = page.locator(".settings-page > .settings-section").first(),
+) {
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+    await target.screenshot({ animations: "disabled", path: path.join(suite.artifactDir, name) });
   }
 }
 
 suite.define(() => {
   it("config.set keeps the default engine first and drains Off before selecting it", async () => {
     await suite.withPage(desktop, async ({ page }) => {
-      const initialConfig = configResponse("memory-lancedb", "memory-hash-1");
-      const selectedConfig = configResponse("memory-core", "memory-hash-2");
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "config.get": initialConfig,
-          "plugins.list": pluginCatalog(memoryPlugins),
-        },
-      });
-
-      const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
-      expect(response?.status()).toBe(200);
-
+      const gateway = await openSettings(page, "memory-lancedb", "memory-hash-1");
       const engineGroup = page.getByRole("radiogroup").first();
       await engineGroup.waitFor();
       await expect
@@ -89,40 +94,25 @@ suite.define(() => {
       await gateway.deferNext("config.set");
       await gateway.deferNext("plugins.setEnabled");
       await engineGroup.getByRole("radio", { name: "Off", exact: true }).click();
-      // Click again immediately, before the 800 ms autosave debounce. The
-      // write barrier must flush Off first instead of letting the plugin RPC
-      // race a still-scheduled config.set.
+      // Before autosave debounce: the write barrier must flush Off before enabling the plugin.
       await engineGroup.getByRole("radio", { name: "OpenClaw Memory", exact: true }).click();
       expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
 
       const pendingOffSave = await gateway.waitForRequest("config.set");
       expect(pendingOffSave.params).toMatchObject({ baseHash: "memory-hash-1" });
-      await capture(
-        page.locator(".settings-page > .settings-section").first(),
-        "00-off-write-draining.png",
-      );
+      await capture(page, "00-off-write-draining.png");
       await gateway.resolveDeferred("config.set");
       const enableRequest = await gateway.waitForRequest("plugins.setEnabled");
       expect(enableRequest.params).toEqual({ pluginId: "memory-core", enabled: true });
 
-      await gateway.setMethodResponse("config.get", selectedConfig);
-      await gateway.resolveDeferred("plugins.setEnabled", {
-        ok: true,
-        plugin: memoryPlugins[1],
-        restartRequired: false,
-      });
+      await gateway.setMethodResponse("config.get", configResponse("memory-core", "memory-hash-2"));
+      await gateway.resolveDeferred("plugins.setEnabled", enabledPlugin(memoryPlugins[1]));
 
-      const selected = engineGroup.getByRole("radio", {
-        name: "OpenClaw Memory",
-        exact: true,
-      });
+      const selected = engineGroup.getByRole("radio", { name: "OpenClaw Memory", exact: true });
       await expect.poll(() => selected.isChecked()).toBe(true);
       await expect.poll(() => page.getByText("Could not change the memory engine").count()).toBe(0);
 
-      await capture(
-        page.locator(".settings-page > .settings-section").first(),
-        "01-openclaw-memory-selected.png",
-      );
+      await capture(page, "01-openclaw-memory-selected.png");
     });
   });
 
@@ -137,14 +127,10 @@ suite.define(() => {
         enabled: false,
         state: "disabled",
       };
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "config.get": configResponse("memory-lancedb", "memory-refresh-hash-1"),
-          "plugins.list": pluginCatalog([...memoryPlugins, activeMemory]),
-        },
-      });
-
-      await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
+      const gateway = await openSettings(page, "memory-lancedb", "memory-refresh-hash-1", [
+        ...memoryPlugins,
+        activeMemory,
+      ]);
       const toggle = page.getByRole("switch", { name: "Enable or disable Active memory" });
       await toggle.waitFor();
       const initialConfigReads = (await gateway.getRequests("config.get")).length;
@@ -157,11 +143,7 @@ suite.define(() => {
       expect(mutation.params).toEqual({ pluginId: "active-memory", enabled: true });
       const committed = { ...activeMemory, enabled: true, state: "enabled" };
       await gateway.setMethodResponse("plugins.list", pluginCatalog([...memoryPlugins, committed]));
-      await gateway.resolveDeferred("plugins.setEnabled", {
-        ok: true,
-        plugin: committed,
-        restartRequired: false,
-      });
+      await gateway.resolveDeferred("plugins.setEnabled", enabledPlugin(committed));
       await expect
         .poll(async () => (await gateway.getRequests("config.get")).length)
         .toBeGreaterThan(initialConfigReads);
@@ -182,26 +164,21 @@ suite.define(() => {
       expect(pageErrors).toEqual([]);
 
       await capture(
-        page.locator("openclaw-memory-settings"),
+        page,
         "03-addon-committed-refresh-warning.png",
+        page.locator("openclaw-memory-settings"),
       );
     });
   });
 
   it("keeps a missing default engine labelled, first, and selected as unavailable", async () => {
     await suite.withPage(desktop, async ({ page }) => {
-      await installMockGateway(page, {
-        methodResponses: {
-          "config.get": configResponse("memory-core", "memory-hash-missing-default"),
-          "plugins.list": pluginCatalog(
-            memoryPlugins.filter((plugin) => plugin.id !== "memory-core"),
-          ),
-        },
-      });
-
-      const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
-      expect(response?.status()).toBe(200);
-
+      await openSettings(
+        page,
+        "memory-core",
+        "memory-hash-missing-default",
+        memoryPlugins.filter((plugin) => plugin.id !== "memory-core"),
+      );
       const engineGroup = page.getByRole("radiogroup").first();
       await engineGroup.waitFor();
       await expect
@@ -217,10 +194,7 @@ suite.define(() => {
         )
         .toBe(true);
 
-      await capture(
-        page.locator(".settings-page > .settings-section").first(),
-        "02-configured-engine-unavailable.png",
-      );
+      await capture(page, "02-configured-engine-unavailable.png");
     });
   });
 });

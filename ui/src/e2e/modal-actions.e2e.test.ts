@@ -62,26 +62,28 @@ async function inspectActions(page: Page, modal: Locator, selector: string, name
     };
   });
   await writeFile(path.join(suite.artifactDir, name + ".json"), JSON.stringify(geometry, null, 2));
+  expectCompletionPlacement(geometry);
   return geometry;
 }
 
 function expectCompletionPlacement(geometry: Awaited<ReturnType<typeof inspectActions>>) {
+  const { row, card, controls } = geometry;
   expect(geometry.following).toBe(0);
-  expect(geometry.controls.length).toBeGreaterThan(0);
+  expect(controls.length).toBeGreaterThan(0);
   expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
-  expectNear(geometry.row.right, geometry.card.right - geometry.paddingRight, 3);
-  expectNear(geometry.row.bottom, geometry.card.bottom - geometry.paddingBottom, 4);
+  expectNear(row.right, card.right - geometry.paddingRight, 3);
+  expectNear(row.bottom, card.bottom - geometry.paddingBottom, 4);
   const rows = new Map<number, number[]>();
-  for (const control of geometry.controls) {
-    expect(control.left).toBeGreaterThanOrEqual(geometry.row.left - 1);
-    expect(control.right).toBeLessThanOrEqual(geometry.row.right + 1);
+  for (const control of controls) {
+    expect(control.left).toBeGreaterThanOrEqual(row.left - 1);
+    expect(control.right).toBeLessThanOrEqual(row.right + 1);
     expect(control.top).toBeGreaterThanOrEqual(0);
     expect(control.bottom).toBeLessThanOrEqual(geometry.viewport.height);
     const line = Math.round(control.top);
     rows.set(line, [...(rows.get(line) ?? []), control.right]);
   }
   for (const edges of rows.values()) {
-    expectNear(Math.max(...edges), geometry.row.right - geometry.rowPadding, 3);
+    expectNear(Math.max(...edges), row.right - geometry.rowPadding, 3);
   }
 }
 
@@ -175,15 +177,13 @@ suite.define(() => {
       await issue.locator("summary").click();
       await issue.locator(".sidebar-update-card__action").click();
       const modal = modalFor(page, "Update Gateway");
-      const confirm = await inspectActions(page, modal, ".exec-approval-actions", "update-confirm");
+      await inspectActions(page, modal, ".exec-approval-actions", "update-confirm");
       expect(await gateway.getRequests("update.run")).toHaveLength(0);
       await exactButton(modal, "Update and restart").click();
       await gateway.waitForRequest("update.run");
       await exactButton(modal, "Updating…").waitFor();
-      const working = await inspectActions(page, modal, ".exec-approval-actions", "update-working");
+      await inspectActions(page, modal, ".exec-approval-actions", "update-working");
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
-      expectCompletionPlacement(confirm);
-      expectCompletionPlacement(working);
     }));
 
   for (const viewport of viewports) {
@@ -236,7 +236,6 @@ suite.define(() => {
         const bulkActions = await submitSecretDialog(page, "Bulk Add", "secrets-bulk");
         expect(await gateway.getRequests("secrets.store.set")).toHaveLength(4);
         for (const geometry of [addition, editing, bulkActions]) {
-          expectCompletionPlacement(geometry);
           // These short English labels fit one row even at 320px; do not stretch
           // both actions into the old mobile full-width column.
           expectNear(geometry.controls[0]!.top, geometry.controls[1]!.top, 2);

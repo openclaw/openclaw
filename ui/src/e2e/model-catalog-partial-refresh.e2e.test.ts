@@ -41,13 +41,11 @@ const catalog: ModelCatalogResult = {
   ],
 };
 
+function modelIdentity(model = catalog.models[0]!) {
+  return { model: model.id, modelProvider: model.provider, thinkingLevels: model.thinkingLevels };
+}
 function modelFields(model = catalog.models[0]!, thinkingDefault = "high") {
-  return {
-    model: model.id,
-    modelProvider: model.provider,
-    thinkingLevels: model.thinkingLevels,
-    thinkingDefault,
-  };
+  return { ...modelIdentity(model), thinkingDefault };
 }
 
 function sessionList(defaults: Record<string, unknown>, row: Record<string, unknown> = {}) {
@@ -74,52 +72,44 @@ async function expectUnreserved(picker: Locator) {
   );
 }
 
-function readControls(page: Page) {
+function readEffort(page: Page) {
   return page
     .locator(".agent-chat__input")
     .first()
     .evaluate((composer) => {
       const effort = composer.querySelector<HTMLElement>("[data-chat-thinking-select]");
-      return {
-        text: composer.textContent,
-        notice: composer.querySelector("[data-chat-model-catalog-state]")?.textContent,
-        effort: effort
-          ? {
-              label: effort.getAttribute("aria-label"),
-              visible: effort.checkVisibility({ visibilityProperty: true }),
-              disabled: effort.getAttribute("aria-disabled"),
-              reserved: effort.closest("details")?.getAttribute("aria-hidden"),
-              value: effort.getAttribute("data-chat-thinking-value"),
-              fast: effort.getAttribute("data-chat-fast-mode"),
-            }
-          : null,
-      };
+      return effort
+        ? {
+            disabled: effort.getAttribute("aria-disabled"),
+            reserved: effort.closest("details")?.getAttribute("aria-hidden"),
+          }
+        : null;
     });
 }
 
 async function captureControls(page: Page, stage: string) {
-  const controls = await readControls(page);
+  const controls = { effort: await readEffort(page) };
   await writeFile(path.join(suite.artifactDir, `${stage}.json`), JSON.stringify(controls, null, 2));
   await capture(page, stage);
 }
 
 suite.define(() => {
-  it("keeps Astra effort selectable from a usable snapshot when model refresh fails", async () => {
+  it("keeps configured effort selectable from a usable snapshot when model refresh fails", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const thinkingLevels = [
         { id: "low", label: "Low" },
         { id: "xhigh", label: "Extra high" },
       ];
       const model = {
-        id: "gpt-6-astra",
-        name: "GPT-6 Astra",
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
         provider: "openai",
         available: true,
         reasoning: true,
         thinkingLevels,
       };
       const gateway = await installMockGateway(page, {
-        agentModel: "openai/gpt-6-astra",
+        agentModel: "openai/gpt-5.6-sol",
         models: [model],
         methodResponses: {
           "models.list": {
@@ -184,13 +174,7 @@ suite.define(() => {
           const gateway = await installMockGateway(page, {
             agentModel: partialConfig.agents.defaults.model,
             models: catalog.models,
-            sessionInfo: {
-              sessionId,
-              model: "gpt-5.4",
-              modelProvider: "openai",
-              thinkingLevels: levels,
-              thinkingDefault: "high",
-            },
+            sessionInfo: { sessionId, ...modelFields() },
             methodResponses: {
               "models.list": catalog,
               "sessions.list": sessionList(modelFields(), { sessionId }),
@@ -270,68 +254,55 @@ suite.define(() => {
     },
   );
 
-  it("keeps usable effort controls when the selected model is locked during a partial refresh", async () => {
-    await suite.withPage({ locale: "en-US" }, async ({ page }) => {
-      await installMockGateway(page, {
-        agentModel: partialConfig.agents.defaults.model,
-        models: catalog.models,
-        methodResponses: {
-          "models.list": catalog,
-          "sessions.list": sessionList({}, { ...modelFields(), modelSelectionLocked: true }),
-        },
+  it.each(["locked model", "rejected refresh"] as const)(
+    "keeps usable effort controls with a %s and a retained snapshot",
+    async (condition) => {
+      await suite.withPage({ locale: "en-US" }, async ({ page }) => {
+        const locked = condition === "locked model";
+        const selected = catalog.models[0]!;
+        const gateway = await installMockGateway(page, {
+          agentModel: partialConfig.agents.defaults.model,
+          models: catalog.models,
+          sessionInfo: locked ? undefined : modelIdentity(selected),
+          methodResponses: {
+            "models.list": catalog,
+            "sessions.list": locked
+              ? sessionList({}, { ...modelFields(), modelSelectionLocked: true })
+              : sessionList(modelFields()),
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const model = page.locator("[data-chat-model-select]");
+        const effort = page.locator("[data-chat-thinking-select]");
+        if (!locked) {
+          await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
+        }
+        await expect.poll(() => effort.isVisible()).toBe(true);
+        if (locked) {
+          await page.locator('[data-chat-thinking-select][aria-disabled="false"]').waitFor();
+          expect(
+            await page.locator(".chat-controls__effort-picker").getAttribute("aria-hidden"),
+          ).toBe("false");
+          expect(await model.getAttribute("data-chat-model-locked")).toBe("true");
+        } else {
+          await gateway.setMethodResponse("models.list", {
+            __mockError: { code: "UNAVAILABLE", message: "Catalog request failed" },
+          });
+          await model.click();
+          await expect
+            .poll(() => page.locator('[data-chat-model-catalog-state="error"]').isVisible())
+            .toBe(true);
+          await expect.poll(() => effort.isVisible()).toBe(true);
+        }
+        expect(await effort.getAttribute("aria-disabled")).toBe("false");
+        await effort.click();
+        await expect.poll(() => page.locator("[data-chat-thinking-slider]").isEnabled()).toBe(true);
+        if (!locked) {
+          expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        }
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const effort = page.locator("[data-chat-thinking-select]");
-      await expect.poll(() => effort.isVisible()).toBe(true);
-      await page.locator('[data-chat-thinking-select][aria-disabled="false"]').waitFor();
-      expect(await effort.getAttribute("aria-disabled")).toBe("false");
-      expect(await page.locator(".chat-controls__effort-picker").getAttribute("aria-hidden")).toBe(
-        "false",
-      );
-      expect(
-        await page.locator("[data-chat-model-select]").getAttribute("data-chat-model-locked"),
-      ).toBe("true");
-      await effort.click();
-      await expect.poll(() => page.locator("[data-chat-thinking-slider]").isEnabled()).toBe(true);
-    });
-  });
-
-  it("keeps usable effort controls when the catalog refresh is rejected but a snapshot is retained", async () => {
-    await suite.withPage({ locale: "en-US" }, async ({ page }) => {
-      const selected = catalog.models[0]!;
-      const failure = { __mockError: { code: "UNAVAILABLE", message: "Catalog request failed" } };
-      const gateway = await installMockGateway(page, {
-        agentModel: partialConfig.agents.defaults.model,
-        models: catalog.models,
-        sessionInfo: {
-          model: selected.id,
-          modelProvider: selected.provider,
-          thinkingLevels: levels,
-        },
-        methodResponses: {
-          "models.list": catalog,
-          "sessions.list": sessionList(modelFields(selected)),
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const model = page.locator("[data-chat-model-select]");
-      await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
-      await expect.poll(() => page.locator("[data-chat-thinking-select]").isVisible()).toBe(true);
-
-      await gateway.setMethodResponse("models.list", failure);
-      await model.click();
-      await expect
-        .poll(() => page.locator('[data-chat-model-catalog-state="error"]').isVisible())
-        .toBe(true);
-
-      const effort = page.locator("[data-chat-thinking-select]");
-      await expect.poll(() => effort.isVisible()).toBe(true);
-      expect(await effort.getAttribute("aria-disabled")).toBe("false");
-      await effort.click();
-      await expect.poll(() => page.locator("[data-chat-thinking-slider]").isEnabled()).toBe(true);
-      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-    });
-  });
+    },
+  );
 
   it.each(["empty", "rejected", "selected unavailable", "non-reasoning"])(
     "does not expose usable effort for %s",
@@ -352,11 +323,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           agentModel: partialConfig.agents.defaults.model,
           models,
-          sessionInfo: {
-            model: selected.id,
-            modelProvider: selected.provider,
-            thinkingLevels: selected.thinkingLevels,
-          },
+          sessionInfo: modelIdentity(selected),
           methodResponses: {
             "models.list": condition === "rejected" ? failure : { ...catalog, models },
             "sessions.list": sessionList(
@@ -376,7 +343,7 @@ suite.define(() => {
         }
         await expect
           .poll(async () => {
-            const { effort } = await readControls(page);
+            const effort = await readEffort(page);
             return !effort || effort.reserved === "true" || effort.disabled === "true";
           })
           .toBe(true);
@@ -384,7 +351,7 @@ suite.define(() => {
         await model.click();
         await expect
           .poll(async () => {
-            const { effort } = await readControls(page);
+            const effort = await readEffort(page);
             return !effort || effort.disabled === "true";
           })
           .toBe(true);

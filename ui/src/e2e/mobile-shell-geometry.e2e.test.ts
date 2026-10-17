@@ -19,41 +19,37 @@ import { waitForWatchedSessionKey } from "./chat-github-publication.test-support
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Mobile shell geometry" });
+function viewportScenario(
+  name: string,
+  width: number,
+  height: number,
+  insets?: [top: number, bottom: number, left: number, right: number],
+  largeUnit = false,
+  mobile = true,
+) {
+  const [top = 0, bottom = 0, left = 0, right = 0] = insets ?? [];
+  return {
+    name,
+    width,
+    height,
+    mobile,
+    standalone: insets !== undefined,
+    largeUnit,
+    top,
+    bottom,
+    left,
+    right,
+  };
+}
 const scenarios = [
-  {
-    name: "standalone-large-unit-contract",
-    width: 402,
-    height: 874,
-    mobile: true,
-    standalone: true,
-    top: 62,
-    bottom: 34,
-    largeUnit: true,
-  },
-  { name: "desktop-zero", width: 1440, height: 900, mobile: false },
-  { name: "phone-zero", width: 390, height: 844, mobile: true },
-  { name: "landscape-zero", width: 844, height: 390, mobile: true },
-  { name: "compact-landscape", width: 560, height: 390, mobile: true },
-  { name: "standalone-zero-contract", width: 390, height: 844, mobile: true, standalone: true },
-  {
-    name: "standalone-insets-contract",
-    width: 390,
-    height: 844,
-    mobile: true,
-    standalone: true,
-    top: 48,
-    bottom: 30,
-  },
-  {
-    name: "standalone-landscape-contract",
-    width: 844,
-    height: 390,
-    mobile: true,
-    standalone: true,
-    bottom: 20,
-    left: 48,
-    right: 48,
-  },
+  viewportScenario("standalone-large-unit-contract", 402, 874, [62, 34, 0, 0], true),
+  viewportScenario("desktop-zero", 1440, 900, undefined, false, false),
+  viewportScenario("phone-zero", 390, 844),
+  viewportScenario("landscape-zero", 844, 390),
+  viewportScenario("compact-landscape", 560, 390),
+  viewportScenario("standalone-zero-contract", 390, 844, [0, 0, 0, 0]),
+  viewportScenario("standalone-insets-contract", 390, 844, [48, 30, 0, 0]),
+  viewportScenario("standalone-landscape-contract", 844, 390, [0, 20, 48, 48]),
 ];
 
 const saveJson = (artifacts: string, name: string, value: unknown) =>
@@ -62,10 +58,7 @@ const screenshot = (page: Page, artifacts: string, name: string) =>
   page.screenshot({ path: path.join(artifacts, name + ".png"), animations: "disabled" });
 
 async function activateStandaloneStyles(page: Page, largeUnitDifference = 0, shortCanvas = false) {
-  // Fault injection, not an iPhone measurement: CSS viewport units may exceed
-  // the native-scale visible viewport even when layoutHeight == visualHeight.
-  // The previous short-layout fixture assumed the extra lvh region was visible;
-  // neither viewport API (nor a physical screen size) establishes that premise.
+  // Fault injection, not an iPhone measurement: viewport units may exceed the visible viewport.
   await page.evaluate(
     async ({ difference, shortCanvas: short }) => {
       const visit = (rules: CSSRuleList) => {
@@ -119,15 +112,13 @@ async function expectReachableAction(
       .locator(".agent-chat__input")
       .evaluate((element) => element.getBoundingClientRect().width <= 560);
     const targetSize = compact && label === "Send message" ? 36 : 32;
-    expect(bounds!.width).toBe(targetSize);
-    expect(bounds!.height).toBe(targetSize);
+    expect([bounds!.width, bounds!.height]).toEqual([targetSize, targetSize]);
     for (const picker of await page
       .locator(".chat-controls__model-trigger, .chat-controls__effort-trigger")
       .all()) {
       if (compact && (await picker.isVisible())) {
         const box = await picker.boundingBox();
-        expect(box!.width).toBeGreaterThanOrEqual(44);
-        expect(box!.height).toBeGreaterThanOrEqual(44);
+        expect(Math.min(box!.width, box!.height)).toBeGreaterThanOrEqual(44);
       }
     }
   }
@@ -148,9 +139,7 @@ async function expectEditableDraft(
   artifacts: string,
   mobile: boolean,
 ) {
-  // PRs/progress no longer create a scrollable footer context. Close the
-  // independent overlay before exercising the short editor itself; dense
-  // queue/context reachability is covered by chat-footer.e2e.test.ts.
+  // Dense queue/context reachability belongs to chat-footer.e2e.test.ts; this tests the editor.
   await expect(page.locator(".chat-details:popover-open")).toHaveCount(0);
   await expect(
     page.locator(".chat-footer__context .session-progress-card, .chat-footer__context .chat-prs"),
@@ -171,7 +160,6 @@ async function expectEditableDraft(
         top: box.top,
         bottom: box.bottom,
         conversationTop: conversation.top,
-        inputMinHeight: getComputedStyle(editor.closest(".agent-chat__input")!).minHeight,
         clientHeight: editor.clientHeight,
         scrollHeight: editor.scrollHeight,
         scrollTop: editor.scrollTop,
@@ -211,8 +199,6 @@ async function expectEditableDraft(
   await screenshot(page, artifacts, "short-editor-typing");
 
   expect(last.scrollTop).toBeGreaterThan(0);
-  expect(last.lineTop).toBeGreaterThanOrEqual(Math.max(last.top, last.conversationTop));
-  expect(last.lineBottom).toBeLessThanOrEqual(Math.min(last.bottom, visibleBottom));
   await expectReachableAction(page, "Send message", visibleBottom, mobile);
   await page.keyboard.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
   await page.keyboard.type("Edited ");
@@ -220,8 +206,10 @@ async function expectEditableDraft(
   await page.mouse.wheel(0, -1000);
   await expect.poll(() => textarea.evaluate((editor) => editor.scrollTop)).toBe(0);
   const first = await measure();
-  expect(first.lineTop).toBeGreaterThanOrEqual(Math.max(first.top, first.conversationTop));
-  expect(first.lineBottom).toBeLessThanOrEqual(Math.min(first.bottom, visibleBottom));
+  for (const reading of [last, first]) {
+    expect(reading.lineTop).toBeGreaterThanOrEqual(Math.max(reading.top, reading.conversationTop));
+    expect(reading.lineBottom).toBeLessThanOrEqual(Math.min(reading.bottom, visibleBottom));
+  }
   await expect(textarea).toHaveValue("Edited First line\nSecond line\nThird line\nLast line typed");
   await saveJson(artifacts, "short-editor", { before, last, first });
   await textarea.fill("");
@@ -240,19 +228,14 @@ async function geometry(page: Page) {
     };
     return {
       shell: rect(".shell")!,
-      body: rect("body")!,
       composer: rect(".agent-chat__composer-shell")!,
       thread: rect(".chat-thread-inner"),
       footer: rect(".chat-footer"),
-      context: rect(".chat-footer__context"),
-      progress: rect('[data-progress-card-placement="details"]'),
       details: rect(".chat-details:popover-open"),
       conversation: rect(".chat-main__conversation-frame"),
-      header: rect(".chat-pane__header"),
       scrollWidth: document.documentElement.scrollWidth,
       layoutHeight: document.documentElement.clientHeight,
       visualHeight: window.visualViewport?.height,
-      canvas: getComputedStyle(document.documentElement).getPropertyValue("--shell-canvas-height"),
     };
   });
 }
@@ -307,15 +290,13 @@ suite.define(() => {
   );
 
   it.each(scenarios)("keeps $name routes and controls in one usable canvas", async (scenario) => {
-    const { name, width, height, mobile } = scenario;
-    const top = scenario.top ?? 0;
-    const bottom = scenario.bottom ?? 0;
-    const left = scenario.left ?? 0;
-    const right = scenario.right ?? 0;
+    const { name, width, height, mobile, top, bottom, left, right } = scenario;
     const artifacts = createControlUiE2eArtifactDir(name);
     await suite.withPage(
       { viewport: { width, height }, hasTouch: mobile, isMobile: mobile, colorScheme: "dark" },
       async ({ page, context }) => {
+        const reach = (label: string, visibleBottom: number) =>
+          expectReachableAction(page, label, visibleBottom, mobile);
         await page.clock.setFixedTime(new Date("2026-09-20T16:50:10Z"));
         await page.emulateMedia({ reducedMotion: "reduce" });
         if (scenario.standalone) {
@@ -369,11 +350,7 @@ suite.define(() => {
           animations: "disabled",
         });
         await writeFile(path.join(artifacts, "details-transcript.png"), initialFrame.png);
-        if (mobile) {
-          await bubble.tap();
-        } else {
-          await bubble.hover();
-        }
+        await (mobile ? bubble.tap() : bubble.hover());
         const actions = firstMessage.locator(".chat-group-footer-actions");
         await expect(actions.locator(".chat-copy-btn")).toBeVisible();
         const hoverFrame = await takeControlUiScreenshotFrame(page, bubble, [details, actions], {
@@ -447,18 +424,11 @@ suite.define(() => {
         const chat = await geometry(page);
         await screenshot(page, artifacts, "chat");
         await textarea.fill("Please continue the layout check.");
-        const sendPoint = await expectReachableAction(
-          page,
-          "Send message",
-          height - bottom,
-          mobile,
-        );
+        const sendPoint = await reach("Send message", height - bottom);
         // Coordinate input cannot auto-scroll an offscreen control into view.
-        if (mobile) {
-          await page.touchscreen.tap(sendPoint.x, sendPoint.y);
-        } else {
-          await page.mouse.click(sendPoint.x, sendPoint.y);
-        }
+        await (mobile
+          ? page.touchscreen.tap(sendPoint.x, sendPoint.y)
+          : page.mouse.click(sendPoint.x, sendPoint.y));
         await gateway.waitForRequest("chat.send");
         const stop = page.getByRole("button", { name: "Stop generating" });
         await expect(stop).toBeVisible();
@@ -481,14 +451,13 @@ suite.define(() => {
           await textarea.focus();
           // Simulate only the browser's VisualViewport contract. No drawn
           // keyboard, clipped screenshot, or claim of native IME reproduction.
-          const naturalHeight = height;
           for (const state of [
-            { name: "small-browser-bar", height: naturalHeight - 62, offsetTop: 0, scale: 1 },
+            { name: "small-browser-bar", height: height - 62, offsetTop: 0, scale: 1 },
             { name: "keyboard-open", height: height - 240, offsetTop: 0, scale: 1 },
             { name: "keyboard-pan", height: height - 270, offsetTop: 45, scale: 1 },
             {
               name: "keyboard-dismissed-focus-retained",
-              height: naturalHeight,
+              height,
               offsetTop: 0,
               scale: 1,
             },
@@ -501,12 +470,7 @@ suite.define(() => {
               await expectEditableDraft(page, state.height + state.offsetTop, artifacts, mobile);
             }
             if (state.scale === 1) {
-              await expectReachableAction(
-                page,
-                "Stop generating",
-                state.height + state.offsetTop,
-                mobile,
-              );
+              await reach("Stop generating", state.height + state.offsetTop);
             }
           }
           await visualViewport(page, height);
@@ -521,14 +485,14 @@ suite.define(() => {
           await waitForLayoutSettled(page, ".chat-main__conversation-frame");
           const bounds = (await frame.boundingBox())!;
           await expectEditableDraft(page, bounds.y + bounds.height, artifacts, mobile);
-          await expectReachableAction(page, "Stop generating", bounds.y + bounds.height, mobile);
+          await reach("Stop generating", bounds.y + bounds.height);
           await frame.evaluate((element: HTMLElement) => {
             element.style.removeProperty("flex");
           });
         }
         if (mobile && width > height) {
           await visualViewport(page, height - 240);
-          const point = await expectReachableAction(page, "Stop generating", height - 240, mobile);
+          const point = await reach("Stop generating", height - 240);
           await page.touchscreen.tap(point.x, point.y);
         } else {
           await stop.click();
