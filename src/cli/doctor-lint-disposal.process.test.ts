@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { withTestTimeout } from "../../test/helpers/promise.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
@@ -28,22 +29,21 @@ it.each(["release", "timeout"])(
       const naturalExit = path.join(root, "natural-exit");
       fs.mkdirSync(plugin);
       fs.mkdirSync(path.join(root, "workspace"));
-      fs.writeFileSync(
-        path.join(plugin, "package.json"),
-        JSON.stringify({
-          name: "disposal-proof",
-          version: "1.0.0",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(plugin, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "disposal-proof",
-          contracts: { tools: ["disposal_probe"] },
-          configSchema: { type: "object", properties: {}, additionalProperties: false },
-        }),
-      );
+      const writeJson = (file: string, value: unknown) => {
+        const json = JSON.stringify(value);
+        fs.writeFileSync(file, json);
+        return json;
+      };
+      writeJson(path.join(plugin, "package.json"), {
+        name: "disposal-proof",
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.cjs"] },
+      });
+      writeJson(path.join(plugin, "openclaw.plugin.json"), {
+        id: "disposal-proof",
+        contracts: { tools: ["disposal_probe"] },
+        configSchema: { type: "object", properties: {}, additionalProperties: false },
+      });
       fs.writeFileSync(
         path.join(plugin, "index.cjs"),
         `const fs = require("node:fs");
@@ -60,7 +60,7 @@ module.exports = { id: "disposal-proof", register(api) {
 `,
       );
       const configPath = path.join(root, "openclaw.json");
-      const config = JSON.stringify({
+      const config = writeJson(configPath, {
         agents: {
           ownership: "explicit",
           defaults: { systemAgent: { agentId: "main" }, model: "fixture/local" },
@@ -73,17 +73,7 @@ module.exports = { id: "disposal-proof", register(api) {
             fixture: {
               api: "openai-completions",
               baseUrl: "http://127.0.0.1:1/v1",
-              models: [
-                {
-                  id: "local",
-                  name: "Synthetic local model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                },
-              ],
+              models: [{ id: "local", name: "Synthetic local model" }],
             },
           },
         },
@@ -93,7 +83,6 @@ module.exports = { id: "disposal-proof", register(api) {
           slots: { memory: "none" },
         },
       });
-      fs.writeFileSync(configPath, config);
       const doctorHealth = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.doctorHealth);
       const env = {
         PATH: process.env.PATH,
@@ -114,7 +103,7 @@ module.exports = { id: "disposal-proof", register(api) {
       };
       const report = createDeferredCore<unknown>();
       const cli = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli);
-      const cliArgs = [
+      let nodeArgs = [
         ...resolveRuntimeWorkerArgv(cli),
         "doctor",
         "--lint",
@@ -124,7 +113,6 @@ module.exports = { id: "disposal-proof", register(api) {
         "--only",
         "core/doctor/runtime-tool-schemas",
       ];
-      let nodeArgs = cliArgs;
       if (mode === "timeout") {
         const supervisor = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.doctorLintSupervisor);
         const signals = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.signalExitBarrier);
@@ -166,17 +154,12 @@ try {
           async interact(child) {
             child.stdin.end();
             await waitForCliProcessStderrMarker(child, "fixture disposal entered");
-            let timer: NodeJS.Timeout | undefined;
             try {
-              const output = await Promise.race([
+              const output = await withTestTimeout(
                 report.promise,
-                new Promise<never>((_resolve, reject) => {
-                  timer = setTimeout(
-                    () => reject(new Error("Checks were held behind plugin disposal")),
-                    5_000,
-                  );
-                }),
-              ]);
+                5_000,
+                "Checks were held behind plugin disposal",
+              );
               expect(output).toMatchObject({ ok: true, checksRun: 1, findings: [] });
               const observed: { pid: number; stateDir: string } = JSON.parse(
                 fs.readFileSync(observation, "utf8"),
@@ -185,7 +168,6 @@ try {
               expect(observed.stateDir).not.toBe(root);
               expect(fs.existsSync(observed.stateDir)).toBe(true);
             } finally {
-              clearTimeout(timer);
               if (mode === "release") {
                 fs.writeFileSync(release, "release");
               }
