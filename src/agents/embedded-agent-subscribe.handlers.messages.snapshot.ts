@@ -23,6 +23,7 @@ import {
   createAssistantStreamBlockState,
   prepareAssistantVisibleText,
   stripDowngradedToolCallText,
+  THINKING_TAG_TRAILING_CLOSE_RE,
 } from "./embedded-agent-utils.js";
 
 export function extractAssistantStreamSnapshot(
@@ -88,10 +89,10 @@ export function extractAssistantStreamSnapshot(
     }
     return preparedFinal ? preparedPart : visible;
   });
+  let filtersChangedText = false;
   const visibleBlockSource = blockSources
-    .map(({ text, separator, finalAnswer }) => ({
-      separator,
-      text: finalAnswer
+    .map(({ text, separator, finalAnswer }) => {
+      const filtered = finalAnswer
         ? sanitizeUserFacingText(
             applyTextFilters(
               text,
@@ -104,8 +105,10 @@ export function extractAssistantStreamSnapshot(
         : toolCallXmlTextFilter(
             { stripFunctionCallsXmlPayloads: true },
             options?.final === false,
-          ).transform(stripDowngradedToolCallText(text, { preserveTrailingWhitespace: true })),
-    }))
+          ).transform(stripDowngradedToolCallText(text, { preserveTrailingWhitespace: true }));
+      filtersChangedText ||= filtered !== text;
+      return { separator, text: filtered };
+    })
     // An empty observed tail still marks a native boundary for prefix reconciliation.
     .filter(
       ({ text }, index) =>
@@ -113,12 +116,38 @@ export function extractAssistantStreamSnapshot(
     )
     .map(({ text, separator }, index) => `${index > 0 ? separator : ""}${text}`)
     .join("");
-  const blockReply = parseReplyDirectives(
+  const heldDirective =
     options?.final === false
-      ? splitTrailingDirective(visibleBlockSource, { preserveTrailingWhitespace: true }).text
-      : visibleBlockSource,
-    { preserveTrailingWhitespace: true },
-  );
+      ? splitTrailingDirective(visibleBlockSource, { preserveTrailingWhitespace: true })
+      : { text: visibleBlockSource, tail: "" };
+  const blockReply = parseReplyDirectives(heldDirective.text, { preserveTrailingWhitespace: true });
+  const lastLine = () =>
+    visibleBlockSource.slice(
+      Math.max(visibleBlockSource.lastIndexOf("\n"), visibleBlockSource.lastIndexOf("\r")) + 1,
+    );
+  // Verbatim: blockText is exactly the tag-stripped visible source. No filter, held directive
+  // tail, directive, or media extraction rewrote it, and no tag or fence fragment is pending.
+  // A MEDIA: token consumes its whole line once its payload is valid, so the last line must
+  // not hold one. Only then can text without markup characters extend blockText by itself.
+  const isVerbatim = () =>
+    options?.final === false &&
+    !filtersChangedText &&
+    !heldDirective.tail &&
+    blockReply.text === visibleBlockSource &&
+    !blockReply.replyToTag &&
+    !blockReply.audioAsVoice &&
+    !blockReply.mediaUrls?.length &&
+    !blockReply.mediaFailures?.length &&
+    visibleBlockSource.trim() !== "" &&
+    !/media:/i.test(lastLine()) &&
+    // An orphan reasoning close drops the text before it once non-blank text follows, so a
+    // trailing close tag (plus whitespace) is not append-stable.
+    !THINKING_TAG_TRAILING_CLOSE_RE.test(protocol.sourceText) &&
+    !state.thinking &&
+    !state.pendingTagFragment &&
+    !state.pendingFenceFragment &&
+    (!ctx.params.enforceFinalTag || state.final);
+  let verbatim: boolean | undefined;
   let text: string | undefined;
   return {
     get text() {
@@ -128,6 +157,13 @@ export function extractAssistantStreamSnapshot(
     state,
     parts,
     blockText: blockReply.text,
+    get verbatim() {
+      return (verbatim ??= isVerbatim());
+    },
+    /** Whether the prepared source ends on a blank line, where a MEDIA: directive could start. */
+    get endsOnBlankLine() {
+      return !lastLine().trim();
+    },
     message: observedMessage,
   };
 }
