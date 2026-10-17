@@ -623,6 +623,15 @@ internal fun isSafeMarkdownLinkDestination(destination: String): Boolean {
   return scheme == "http" || scheme == "https"
 }
 
+/** Browser VIEW filters match the scheme case-sensitively, so "HTTPS" would not open. */
+internal fun browserSafeUrl(destination: String): String? {
+  if (!isSafeMarkdownLinkDestination(destination)) return null
+  val scheme = runCatching { URI(destination).scheme }.getOrNull() ?: return null
+  val lower = scheme.lowercase(Locale.US)
+  if (scheme == lower) return destination
+  return lower + destination.substring(scheme.length)
+}
+
 /** Builds styled inline markdown for compact chat labels and preview text. */
 internal fun buildChatInlineMarkdown(
   text: String,
