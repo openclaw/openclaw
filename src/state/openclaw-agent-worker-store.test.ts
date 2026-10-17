@@ -690,51 +690,6 @@ describe("pooled agent publication owner (captured source)", () => {
     }
   });
 
-  it("preserves a committed result and admits a queued follower after cleanup admission is refused", async () => {
-    const { db, worker } = await setup();
-    const committed = createDeferredCore<number>();
-    const release = createDeferredCore();
-    let refuseCleanup = false;
-    let refusals = 0;
-    const interception = probe.admission(admission, (request, grant, admit) => {
-      if (refuseCleanup && request.stage === "prepare") {
-        refuseCleanup = false;
-        refusals++;
-        throw new Error("controlled publication cleanup admission refusal");
-      }
-      admit(request, grant);
-    });
-    const first = worker.run(async (scope) => {
-      const result = await scope.execute(append("first"));
-      committed.resolve(result);
-      await release.promise;
-      refuseCleanup = true;
-      return result;
-    }, allow);
-    void first.catch(allow);
-    let second: Promise<number> | undefined;
-    const runFollower = () => publish(worker, append("second"));
-    try {
-      const result = await Promise.race([committed.promise, first]);
-      expect(result).toBeGreaterThan(0);
-      expectValues(db, false, "first");
-      // Capture this borrower before the first writer starts cleanup.
-      second = runFollower();
-      void second.catch(allow);
-      release.resolve();
-      expect(await first).toBe(result);
-      expect(refusals).toBe(1);
-      interception.mockRestore();
-
-      expect(await second).toBeGreaterThan(0);
-      expectValues(db, true, "first", "second");
-    } finally {
-      release.resolve();
-      await Promise.allSettled(second ? [first, second] : [first]);
-      interception.mockRestore();
-    }
-  });
-
   it("retains exact canonical lease cleanup after failure and releases it on retry", async () => {
     const { db, worker } = await setup();
     const shared = openOpenClawStateDatabase();

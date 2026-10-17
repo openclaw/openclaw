@@ -67,55 +67,52 @@ describe("additive memory agent schemas", () => {
     run(db, databasePath);
   }
 
-  it.each(["tables", "creator"] as const)(
-    "lazily repairs missing %s idempotently",
-    async (missing) => {
-      await withDatabase(
-        missing === "tables"
-          ? removeSchemaSection("standing_intents", "session_transcript_index_state")
-          : schemaWithoutStandingIntentCreator(),
-        (db, databasePath) => {
-          expectAccepted(db, databasePath);
-          if (missing === "tables") {
-            expect(table(db, "standing_intents")).toBeUndefined();
-          } else {
-            expect(columnNames(db, "standing_intents")).not.toContain("creator_sender");
-          }
+  it.each(["tables", "creator"] as const)("lazily repairs missing %s idempotently", (missing) =>
+    withDatabase(
+      missing === "tables"
+        ? removeSchemaSection("standing_intents", "session_transcript_index_state")
+        : schemaWithoutStandingIntentCreator(),
+      (db, databasePath) => {
+        expectAccepted(db, databasePath);
+        if (missing === "tables") {
+          expect(table(db, "standing_intents")).toBeUndefined();
+        } else {
+          expect(columnNames(db, "standing_intents")).not.toContain("creator_sender");
+        }
 
-          ensureOpenClawAgentStandingIntentsSchema(db);
-          ensureOpenClawAgentStandingIntentsSchema(db);
+        ensureOpenClawAgentStandingIntentsSchema(db);
+        ensureOpenClawAgentStandingIntentsSchema(db);
 
-          const tables = db
+        const tables = db
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE name IN ('standing_intents', 'standing_intents_fts') ORDER BY name",
+          )
+          .all() as Array<{ name: string }>;
+        expect(tables.map((row) => row.name)).toStrictEqual([
+          "standing_intents",
+          "standing_intents_fts",
+        ]);
+        expect(
+          db
             .prepare(
-              "SELECT name FROM sqlite_schema WHERE name IN ('standing_intents', 'standing_intents_fts') ORDER BY name",
+              "SELECT name, type, pk FROM pragma_table_info('standing_intents') WHERE name IN ('id', 'intent_key') ORDER BY name",
             )
-            .all() as Array<{ name: string }>;
-          expect(tables.map((row) => row.name)).toStrictEqual([
-            "standing_intents",
-            "standing_intents_fts",
-          ]);
-          expect(
-            db
-              .prepare(
-                "SELECT name, type, pk FROM pragma_table_info('standing_intents') WHERE name IN ('id', 'intent_key') ORDER BY name",
-              )
-              .all(),
-          ).toEqual([
-            { name: "id", type: "TEXT", pk: 0 },
-            { name: "intent_key", type: "INTEGER", pk: 1 },
-          ]);
-          expect(columnNames(db, "standing_intents")).toContain("creator_sender");
-          expectAccepted(db, databasePath);
-          expect(db.prepare("PRAGMA user_version").get()).toMatchObject({
-            user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-          });
-        },
-      );
-    },
+            .all(),
+        ).toEqual([
+          { name: "id", type: "TEXT", pk: 0 },
+          { name: "intent_key", type: "INTEGER", pk: 1 },
+        ]);
+        expect(columnNames(db, "standing_intents")).toContain("creator_sender");
+        expectAccepted(db, databasePath);
+        expect(db.prepare("PRAGMA user_version").get()).toMatchObject({
+          user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        });
+      },
+    ),
   );
 
-  it("accepts current-version databases before the provenance lazy ensure", async () => {
-    await withDatabase(
+  it("accepts current-version databases before the provenance lazy ensure", () =>
+    withDatabase(
       removeSchemaSection("memory_index_chunk_provenance", "memory_embedding_cache"),
       (db, databasePath) => {
         expectAccepted(db, databasePath);
@@ -136,11 +133,10 @@ describe("additive memory agent schemas", () => {
           user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
         });
       },
-    );
-  });
+    ));
 
-  it("migrates unreleased inline chunk metadata into rollback-safe storage", async () => {
-    await withDatabase(
+  it("migrates unreleased inline chunk metadata into rollback-safe storage", () =>
+    withDatabase(
       `${removeSchemaSection("memory_index_chunk_recall_metadata", "memory_index_chunk_provenance")}
         ALTER TABLE memory_index_chunks ADD COLUMN importance INTEGER
           CHECK (importance IS NULL OR importance BETWEEN 1 AND 10);
@@ -200,6 +196,5 @@ describe("additive memory agent schemas", () => {
           origin_class: "agent",
         });
       },
-    );
-  });
+    ));
 });
