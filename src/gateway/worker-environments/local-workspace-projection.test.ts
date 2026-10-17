@@ -772,7 +772,7 @@ describe("local sandbox workspace reconciliation", () => {
           repo,
           "worktree",
           "add",
-          "--no-canonical",
+          "--no-checkout",
           "-b",
           owner.worktree.branch,
           canonical,
