@@ -45,6 +45,7 @@ import {
   CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY,
   type CoreSemanticRunProgressProvenance,
 } from "./diagnostic-semantic-run-progress-provenance.js";
+import type { DiagnosticSessionRecoveryStatus } from "./diagnostic-session-recovery-types.js";
 import {
   consumeToolExecutionLivenessDiagnosticEvent,
   TOOL_EXECUTION_LIVENESS_METADATA_KEY,
@@ -342,8 +343,6 @@ type DiagnosticSessionStuckEvent = DiagnosticSessionAttentionBaseEvent & {
   type: "session.stuck";
   classification: "stale_session_state";
 };
-
-type DiagnosticSessionRecoveryStatus = "aborted" | "released" | "skipped" | "noop" | "failed";
 
 type DiagnosticSessionRecoveryBaseEvent = DiagnosticSessionEvent & {
   state: DiagnosticSessionState;
