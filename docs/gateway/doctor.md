@@ -17,7 +17,8 @@ Open the page that matches your task.
 
 Doctor reports configured and observed engines separately for each discovered
 physical store, including agent databases, Matrix roots, and fixed-local safety
-and credential stores. Unknown schema, connectivity, ownership, or backup facts
+and credential stores. Absent optional stores are informational and do not require
+their plugin's database port API. Unknown schema, connectivity, ownership, or backup facts
 stay unknown with an actionable next step. Read the
 [PostgreSQL Doctor guide](/gateway/postgresql#read-the-doctor-and-status-store-report)
 for field definitions, output examples, and recovery instructions. For example,

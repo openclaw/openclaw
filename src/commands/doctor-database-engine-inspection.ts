@@ -104,11 +104,13 @@ if (parentPort && workerData?.doctorDatabaseEngines === true) {
         }
         const files = new Set<string>();
         const unreadableRoots = new Set<string>();
+        let hasPhysicalStore = false;
         for (const root of roots) {
           try {
             const stat = fs.statSync(root, { throwIfNoEntry: false });
             if (stat?.isFile()) {
               files.add(fs.realpathSync(root));
+              hasPhysicalStore = true;
             } else if (!stat && root.endsWith(".sqlite")) {
               files.add(root);
             } else if (stat?.isDirectory()) {
@@ -128,6 +130,7 @@ if (parentPort && workerData?.doctorDatabaseEngines === true) {
               for (const entry of walked.entries) {
                 try {
                   files.add(fs.realpathSync(entry.path));
+                  hasPhysicalStore = true;
                 } catch {
                   result.discoveryFailed = true;
                   files.add(entry.path);
@@ -142,12 +145,15 @@ if (parentPort && workerData?.doctorDatabaseEngines === true) {
           }
         }
         let descriptor;
-        try {
-          descriptor = await provider.loadDescriptor(
-            plugins.plugins.find((plugin) => plugin.id === provider.id),
-          );
-        } catch {
-          result.discoveryFailed = true;
+        // Absent optional stores need no port API or plugin runtime to inspect.
+        if (hasPhysicalStore) {
+          try {
+            descriptor = await provider.loadDescriptor(
+              plugins.plugins.find((plugin) => plugin.id === provider.id),
+            );
+          } catch {
+            result.discoveryFailed = true;
+          }
         }
         for (const file of files.size ? [...files].toSorted() : [null]) {
           if (file && inspected.has(file)) {
