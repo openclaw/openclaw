@@ -42,12 +42,8 @@ describe("openai transport stream", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({
         id: "grok-4.3",
-        name: "Grok 4.3",
         provider: "xai",
         baseUrl: "https://api.x.ai/v1",
-        input: ["text", "image"],
-        contextWindow: 1_000_000,
-        maxTokens: 128_000,
         compat: {
           supportsReasoningEffort: true,
           supportedReasoningEfforts: ["none", "low", "medium", "high"],
@@ -106,7 +102,6 @@ describe("openai transport stream", () => {
       const params = buildOpenAIResponsesParams(
         makeResponsesModel({
           id: "gpt-5.6-sol",
-          name: "GPT-5.6 Sol",
           api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api",
         }),
@@ -116,11 +111,7 @@ describe("openai transport stream", () => {
       ) as CachedParams;
 
       expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
-      expect(Array.isArray(params.input)).toBe(true);
       expect(params.input?.map((item) => item.role)).toEqual(["user"]);
-      expect(
-        params.input?.filter((item) => item.role === "system" || item.role === "developer"),
-      ).toStrictEqual([]);
       expectCodexCache(params, cacheRetention === "none" ? undefined : "session-123");
       expect(params.store).toBe(false);
     },
@@ -131,7 +122,6 @@ describe("openai transport stream", () => {
       {
         ...makeResponsesModel(),
         id: "gpt-5.5",
-        name: "GPT-5.5",
         api: "openclaw-openai-chatgpt-responses-transport" as Api,
         baseUrl: "https://chatgpt.com/backend-api/codex",
       },
@@ -165,7 +155,6 @@ describe("openai transport stream", () => {
     const sanitized = testing.sanitizeOpenAICodexResponsesParams(
       makeResponsesModel({
         id: "gpt-5.4",
-        name: "GPT-5.4",
         api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api",
       }),
@@ -180,7 +169,6 @@ describe("openai transport stream", () => {
     const params = buildOpenAIResponsesParams(
       makeResponsesModel({
         id: "gpt-5.4",
-        name: "GPT-5.4",
         api: "openai-chatgpt-responses",
         baseUrl: "https://proxy.example.com/v1",
         // Custom URLs require explicit instruction/cache-key support.

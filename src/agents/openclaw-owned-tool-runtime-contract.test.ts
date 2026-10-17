@@ -49,10 +49,6 @@ function createToolHandlerCtx(runId: string): ToolHandlerContext {
   };
 }
 
-function createToolExtensionContext(): ExtensionContext {
-  return {} as ExtensionContext;
-}
-
 async function startContract(
   toolName: string,
   execute: AgentTool["execute"],
@@ -81,7 +77,7 @@ async function startContract(
     args,
     undefined,
     undefined,
-    createToolExtensionContext(),
+    {} as ExtensionContext,
   );
   return {
     ctx,
@@ -102,18 +98,19 @@ async function startContract(
   };
 }
 
-async function waitForAfterToolCall(hooks: {
-  afterToolCall: { mock: { calls: unknown[][] } };
-}): Promise<[Record<string, unknown>, Record<string, unknown>]> {
+async function expectAfterToolCall(
+  hooks: ReturnType<typeof installOpenClawOwnedToolHooks>,
+  payload: Record<string, unknown>,
+  context: Record<string, unknown>,
+) {
   // after_tool_call fires asynchronously after the execution-end event is processed.
   await vi.waitFor(() => {
     expect(hooks.afterToolCall).toHaveBeenCalledTimes(1);
+    expect(hooks.afterToolCall).toHaveBeenCalledWith(
+      expect.objectContaining(payload),
+      expect.objectContaining(context),
+    );
   });
-  const call = hooks.afterToolCall.mock.calls.at(0);
-  if (!call) {
-    throw new Error("Expected afterToolCall hook call");
-  }
-  return call as [Record<string, unknown>, Record<string, unknown>];
 }
 
 describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => {
@@ -134,17 +131,15 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
 
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledWith(toolCallId, mergedParams, undefined, undefined);
-    const [afterPayload, afterContext] = await waitForAfterToolCall(hooks);
-    expect(afterPayload).toEqual(
-      expect.objectContaining({
+    await expectAfterToolCall(
+      hooks,
+      {
         toolName: "exec",
         toolCallId,
         params: mergedParams,
         result: { content: [{ type: "text", text: "done" }], details: { ok: true } },
-      }),
-    );
-    expect(afterContext).toEqual(
-      expect.objectContaining({ ...session, runId: "run-contract", toolCallId }),
+      },
+      { ...session, runId: "run-contract", toolCallId },
     );
   });
 
@@ -167,16 +162,16 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
 
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledWith(toolCallId, mergedParams, undefined, undefined);
-    const [afterPayload, afterContext] = await waitForAfterToolCall(hooks);
-    expect(afterPayload).toEqual(
-      expect.objectContaining({
+    await expectAfterToolCall(
+      hooks,
+      {
         toolName: "exec",
         toolCallId,
         params: mergedParams,
         error: "tool failed",
-      }),
+      },
+      { runId: "run-error", toolCallId },
     );
-    expect(afterContext).toMatchObject({ runId: "run-error", toolCallId });
   });
 
   it("commits successful embedded agent messaging text, media, and target telemetry", async () => {
@@ -200,31 +195,24 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
 
     expect(ctx.state.messagingToolSentTexts).toEqual(["hello from embedded agent"]);
     expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/openclaw-reply.png"]);
-    expect(
-      ctx.state.messagingToolSentTargets.map((target) => ({
-        tool: "message",
-        provider: target.provider,
-        to: target.to,
-        text: target.text,
-        mediaUrls: target.mediaUrls,
-      })),
-    ).toEqual([
-      {
-        tool: "message",
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
         provider: "telegram",
         to: "chat-1",
         text: "hello from embedded agent",
         mediaUrls: ["/tmp/openclaw-reply.png"],
+      }),
+    ]);
+    await expectAfterToolCall(
+      hooks,
+      {
+        toolName: "message",
+        toolCallId,
+        params: originalParams,
+        result: expect.objectContaining({ content: [{ type: "text", text: "sent" }] }),
       },
-    ]);
-    const [afterPayload, afterContext] = await waitForAfterToolCall(hooks);
-    expect(afterPayload).toEqual(
-      expect.objectContaining({ toolName: "message", toolCallId, params: originalParams }),
+      { runId: "run-message", toolCallId },
     );
-    expect((afterPayload.result as { content?: unknown }).content).toEqual([
-      { type: "text", text: "sent" },
-    ]);
-    expect(afterContext).toMatchObject({ runId: "run-message", toolCallId });
   });
 
   it("fails closed when before_tool_call blocks an embedded agent dynamic tool", async () => {
@@ -253,21 +241,23 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
 
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
     expect(execute).not.toHaveBeenCalled();
-    const [afterPayload, afterContext] = await waitForAfterToolCall(hooks);
-    expect(afterPayload).toEqual(
-      expect.objectContaining({ toolName: "message", toolCallId, params: originalParams }),
-    );
-    expect(afterPayload.result).toEqual({
-      content: [{ type: "text", text: "blocked by policy" }],
-      details: {
-        status: "blocked",
-        deniedReason: "plugin-before-tool-call",
-        reason: "blocked by policy",
+    await expectAfterToolCall(
+      hooks,
+      {
+        toolName: "message",
+        toolCallId,
+        params: originalParams,
+        result: {
+          content: [{ type: "text", text: "blocked by policy" }],
+          details: {
+            status: "blocked",
+            deniedReason: "plugin-before-tool-call",
+            reason: "blocked by policy",
+          },
+        },
+        error: "blocked by policy",
       },
-    });
-    expect(afterPayload.error).toBe("blocked by policy");
-    expect(afterContext).toEqual(
-      expect.objectContaining({ ...session, runId: "run-blocked", toolCallId }),
+      { ...session, runId: "run-blocked", toolCallId },
     );
   });
 });

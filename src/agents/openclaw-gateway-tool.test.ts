@@ -37,34 +37,9 @@ describe("gateway tool", () => {
   beforeEach(() => {
     callGatewayToolMock.mockClear();
     readGatewayCallOptionsMock.mockClear();
-    callGatewayToolMock.mockImplementation(async (method: string) => {
-      if (method === "config.get") {
-        return {
-          hash: "hash-1",
-          config: { tools: { exec: { ask: "on-miss", security: "allowlist" } } },
-        };
-      }
-      if (method === "config.schema.lookup") {
-        return {
-          path: "gateway.auth",
-          schema: { type: "object" },
-          hint: { label: "Gateway Auth" },
-          hintPath: "gateway.auth",
-          children: [
-            {
-              key: "token",
-              path: "gateway.auth.token",
-              type: "string",
-              required: true,
-              hasChildren: false,
-              hint: { label: "Token", sensitive: true },
-              hintPath: "gateway.auth.token",
-            },
-          ],
-        };
-      }
-      return { ok: true };
-    });
+    callGatewayToolMock.mockImplementation(async (method: string) =>
+      method === "config.get" ? { config: { tools: {} } } : { ok: true },
+    );
   });
 
   it("preserves scoped redacted config.get data through Code Mode", async () => {
@@ -178,6 +153,18 @@ describe("gateway tool", () => {
   });
 
   it("returns a path-scoped schema lookup result", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      path: "gateway.auth",
+      hintPath: "gateway.auth",
+      children: [
+        {
+          key: "token",
+          path: "gateway.auth.token",
+          required: true,
+          hintPath: "gateway.auth.token",
+        },
+      ],
+    });
     const result = await readSchema("gateway.auth");
     expectSchemaRequest("gateway.auth");
     expect(result.details).toMatchObject({
