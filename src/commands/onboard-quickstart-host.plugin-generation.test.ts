@@ -30,7 +30,7 @@ vi.mock("./onboard-helpers.js", async (importOriginal) => ({
 afterEach(() => clearPluginMetadataLifecycleCaches());
 
 it.each([false, true])(
-  "carries an onboarding install into the first foreground Gateway inventory (pinned caller: %s)",
+  "carries an onboarding install and caller cwd into the first foreground Gateway (pinned caller: %s)",
   async (pinnedCaller) => {
     await withOpenClawTestState(
       { label: "onboarding-plugin-generation", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
@@ -102,6 +102,9 @@ it.each([false, true])(
               true,
             );
             const inventoryPath = state.statePath("child-plugin-inventory.json");
+            const packageCwd = process.cwd();
+            const callerCwd = state.path("caller-workspace");
+            await fs.mkdir(callerCwd);
             const metadataUrl = new URL("../config/io.plugin-metadata.ts", import.meta.url).href;
             const fixture = `
               const { writeFile } = await import("node:fs/promises");
@@ -109,18 +112,35 @@ it.each([false, true])(
               const metadata = resolveConfigWidePluginMetadataSnapshot({
                 config: ${JSON.stringify(config)}, env: process.env, allowCurrent: false,
               });
-              await writeFile(${JSON.stringify(inventoryPath)}, JSON.stringify([...metadata.byPluginId.keys()]));
+              await writeFile(${JSON.stringify(inventoryPath)}, JSON.stringify({
+                plugins: [...metadata.byPluginId.keys()], cwd: process.cwd(),
+              }));
             `;
             mocks.invocation.mockReturnValue({
               command: process.execPath,
-              args: ["--import", "./scripts/tsx.mjs", "--input-type=module", "-e", fixture],
-              cwd: process.cwd(),
+              args: [
+                "--import",
+                path.join(packageCwd, "scripts/tsx.mjs"),
+                "--input-type=module",
+                "-e",
+                fixture,
+              ],
+              cwd: packageCwd,
+              env: { TSX_TSCONFIG_PATH: path.join(packageCwd, "tsconfig.json") },
             });
             mocks.readConfigSnapshot.mockResolvedValue({ config });
-            await runQuickstartForegroundGateway({
-              runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            process.chdir(callerCwd);
+            try {
+              await runQuickstartForegroundGateway({
+                runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+              });
+            } finally {
+              process.chdir(packageCwd);
+            }
+            expect(JSON.parse(await fs.readFile(inventoryPath, "utf8"))).toEqual({
+              plugins: expect.arrayContaining(["codex"]),
+              cwd: callerCwd,
             });
-            expect(JSON.parse(await fs.readFile(inventoryPath, "utf8"))).toContain("codex");
             expect(readMetadata().byPluginId.has("codex")).toBe(!pinnedCaller);
           };
           await (pinnedCaller

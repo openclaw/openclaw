@@ -3,6 +3,7 @@ import { isGatewayProtocolResponseError } from "../../packages/gateway-client/sr
 import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { resolveCurrentOpenClawCliInvocation } from "../infra/openclaw-cli-invocation.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { signalChildProcessTree } from "../process/child-process-tree.js";
 import { spawnAndWait } from "../process/spawn-utils.js";
 import { settlesWithin } from "../shared/settle-within.js";
@@ -59,7 +60,7 @@ export async function startOnboardingGatewayProcess(
   const child = await spawnAndWait({
     argv: [invocation.command, ...invocation.args],
     options: {
-      cwd: invocation.cwd,
+      cwd: tryProcessCwd() ?? invocation.cwd,
       env: { ...process.env, ...invocation.env, [CLI_RESPAWN_PARENT_ENV]: String(process.pid) },
       // Terminal Ctrl+C belongs to this parent. IPC retains the CLI's existing parent-loss contract.
       detached,
