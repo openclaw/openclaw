@@ -1,6 +1,9 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
-import { persistColdLoadWarmState } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
+import {
+  persistColdLoadWarmState,
+  restoreColdLoadWarmState,
+} from "../../../scripts/lib/control-ui-bench-warm-state.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -17,7 +20,13 @@ import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Team-scale cold-load fixture" });
 
-async function readStoredTranscript(sessionKey: string) {
+async function readStoredWarmState({
+  sessionKey,
+  sidebarPeople,
+}: {
+  sessionKey: string;
+  sidebarPeople?: number;
+}) {
   const open = indexedDB.open("openclaw-chat-snapshots");
   const database = await new Promise<IDBDatabase>((resolve, reject) => {
     open.addEventListener("success", () => resolve(open.result), { once: true });
@@ -26,22 +35,35 @@ async function readStoredTranscript(sessionKey: string) {
     });
   });
   try {
-    const request = database.transaction("snapshots").objectStore("snapshots").getAll();
-    const records = await new Promise<
-      Array<{ sessionKey: string; snapshot: { messages: unknown[] } }>
-    >((resolve, reject) => {
-      request.addEventListener("success", () => resolve(request.result), { once: true });
-      request.addEventListener(
-        "error",
-        () => reject(request.error ?? new Error("Snapshot read failed")),
-        { once: true },
-      );
-    });
+    const transaction = database.transaction(["snapshots", "sidebarSnapshots"]);
+    const readAll = <T>(name: string) =>
+      new Promise<T[]>((resolve, reject) => {
+        const request = transaction.objectStore(name).getAll();
+        request.addEventListener("success", () => resolve(request.result), { once: true });
+        request.addEventListener(
+          "error",
+          () => reject(request.error ?? new Error("Snapshot read failed")),
+          { once: true },
+        );
+      });
+    const [records, sidebars] = await Promise.all([
+      readAll<{ sessionKey: string; snapshot: { messages: unknown[] } }>("snapshots"),
+      readAll<{ sessionKey: string; model: { onlineUsers: unknown[] } }>("sidebarSnapshots"),
+    ]);
     const record = records.find((entry) => entry.sessionKey.endsWith(`\u0000${sessionKey}`));
     if (!record) {
       throw new Error("Selected transcript was not persisted");
     }
-    return record.snapshot;
+    const sidebar = sidebars.find((entry) =>
+      entry.sessionKey.startsWith(`${record.sessionKey.split("\u0000")[0]}\u0000sidebar:`),
+    );
+    if (!sidebar) {
+      throw new Error("Selected sidebar was not persisted");
+    }
+    if (sidebarPeople !== undefined && sidebar.model.onlineUsers.length !== sidebarPeople) {
+      return null;
+    }
+    return { transcript: record.snapshot, sidebar: sidebar.model };
   } finally {
     database.close();
   }
@@ -222,7 +244,7 @@ suite.define(() => {
         });
         expect(warm.messages).toBeLessThanOrEqual(80);
         expect(warm.messages).toBeGreaterThan(0);
-        const baseline = await page.evaluate(readStoredTranscript, fixture.selectedSessionKey);
+        const baseline = await page.evaluate(readStoredWarmState, warmInput);
         const mutation = "Synthetic warm snapshot mutation";
         await gateway.emitChatFinal({
           sessionKey: fixture.selectedSessionKey,
@@ -241,16 +263,38 @@ suite.define(() => {
           { sessionKey: fixture.selectedSessionKey, text: mutation },
         );
         await page.evaluate(persistColdLoadWarmState, warmInput);
-        expect(
-          JSON.stringify(await page.evaluate(readStoredTranscript, fixture.selectedSessionKey)),
-        ).toContain(mutation);
-        await page.evaluate(persistColdLoadWarmState, { ...warmInput, snapshot: warm.snapshot });
-        expect(await page.evaluate(readStoredTranscript, fixture.selectedSessionKey)).toEqual(
-          baseline,
-        );
+        const presence = fixture.events.find((frame) => frame.event === "presence");
+        if (!presence) {
+          throw new Error("The Team fixture must include presence events");
+        }
+        await gateway.emitGatewayEvent("presence", {
+          presence: presence.payload.presence
+            .filter((entry) => entry.user?.id !== "team-person-120")
+            .map((entry) => ({
+              ...entry,
+              instanceId:
+                entry.instanceId === TEAM_SCALE_SELF_INSTANCE_ID ? instanceId : entry.instanceId,
+            })),
+        });
+        await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor({
+          state: "detached",
+        });
+        expect(await sidebar.locator("[data-online-user-id]").count()).toBe(119);
+        const persistedMutation = await page.waitForFunction(readStoredWarmState, {
+          sessionKey: fixture.selectedSessionKey,
+          sidebarPeople: 119,
+        });
+        const mutated = await persistedMutation.jsonValue();
+        await persistedMutation.dispose();
+        expect(JSON.stringify(mutated?.transcript)).toContain(mutation);
+        expect(mutated?.transcript).not.toEqual(baseline?.transcript);
+        expect(mutated?.sidebar).not.toEqual(baseline?.sidebar);
+        await restoreColdLoadWarmState(page, warm.storage);
+        expect(await page.evaluate(readStoredWarmState, warmInput)).toEqual(baseline);
         await page.reload();
         await sidebar.locator('[data-navigation-view="online"][aria-pressed="true"]').waitFor();
         await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
+        expect(await sidebar.locator("[data-online-user-id]").count()).toBe(120);
         await page
           .locator(".chat-pane__session-title-text", { hasText: "Project dashboard 1" })
           .waitFor();

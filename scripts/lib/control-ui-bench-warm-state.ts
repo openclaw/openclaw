@@ -1,3 +1,5 @@
+import type { Page } from "playwright";
+
 // The serialized browser probe needs only these ports, not the UI module graph.
 type ChatSnapshot = { messages: unknown[] };
 type SnapshotStore = {
@@ -23,7 +25,6 @@ type StoredSidebar = {
 export async function persistColdLoadWarmState(input: {
   sessionKey: string;
   sidebarView: "sessions" | "online";
-  snapshot?: ChatSnapshot;
 }) {
   const pane = document.querySelector(".chat-pane-cache__pane--active");
   const store: SnapshotStore | undefined = pane
@@ -37,8 +38,7 @@ export async function persistColdLoadWarmState(input: {
   if (!store || !entry) {
     throw new Error("Warm reload requires the active transcript cache owner");
   }
-  const snapshot = input.snapshot ?? entry[1].snapshot;
-  store.write(entry[0], { ...snapshot });
+  store.write(entry[0], { ...entry[1].snapshot });
   const started = performance.now();
   const flushed = store.flush();
   const serializeMs = performance.now() - started;
@@ -54,7 +54,7 @@ export async function persistColdLoadWarmState(input: {
     );
   });
   try {
-    const transaction = database.transaction(["snapshots", "sidebarSnapshots"]);
+    const transaction = database.transaction(["snapshots", "sidebarSnapshots", "snapshotMetadata"]);
     const readAll = <T>(name: string) =>
       new Promise<T[]>((resolve, reject) => {
         const read = transaction.objectStore(name).getAll();
@@ -65,9 +65,10 @@ export async function persistColdLoadWarmState(input: {
           { once: true },
         );
       });
-    const [snapshots, sidebars] = await Promise.all([
+    const [snapshots, sidebars, metadata] = await Promise.all([
       readAll<StoredTranscript>("snapshots"),
       readAll<StoredSidebar>("sidebarSnapshots"),
+      readAll<unknown>("snapshotMetadata"),
     ]);
     const record = snapshots.find((value) => value.sessionKey === entry[0]);
     const sidebar = sidebars.find((value) =>
@@ -80,7 +81,14 @@ export async function persistColdLoadWarmState(input: {
     }
     const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
     return {
-      snapshot,
+      storage: {
+        snapshots,
+        sidebarSnapshots: sidebars,
+        snapshotMetadata: metadata,
+        localStorage: Object.entries(localStorage),
+        sessionStorage: Object.entries(sessionStorage),
+      },
+      measurement: "initial warm visit persistence; replayed before each measured reload",
       serializeMs,
       writeMs,
       bytes: bytes(record),
@@ -95,4 +103,56 @@ export async function persistColdLoadWarmState(input: {
   } finally {
     database.close();
   }
+}
+
+export async function restoreColdLoadWarmState(
+  page: Page,
+  storage: Awaited<ReturnType<typeof persistColdLoadWarmState>>["storage"],
+) {
+  const url = page.url();
+  const resetUrl = new URL("/__control-ui-bench-warm-reset__", url).href;
+  await page.route(resetUrl, (route) => route.fulfill({ body: "", contentType: "text/html" }));
+  // Unload first: live/pagehide writers must finish before replaying the application's records.
+  await page.mainFrame().goto(resetUrl);
+  await page.unroute(resetUrl);
+  await page.evaluate("globalThis.__name = (fn) => fn");
+  await page.evaluate(
+    async ({ storage, url }) => {
+      localStorage.clear();
+      sessionStorage.clear();
+      for (const [key, value] of storage.localStorage) localStorage.setItem(key, value);
+      for (const [key, value] of storage.sessionStorage) sessionStorage.setItem(key, value);
+      const request = indexedDB.open("openclaw-chat-snapshots");
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        request.addEventListener("success", () => resolve(request.result), { once: true });
+        request.addEventListener(
+          "error",
+          () => reject(request.error ?? new Error("Warm-state database open failed")),
+          { once: true },
+        );
+      });
+      try {
+        const names = ["snapshots", "sidebarSnapshots", "snapshotMetadata"] as const;
+        const transaction = database.transaction([...names], "readwrite");
+        const complete = new Promise<void>((resolve, reject) => {
+          transaction.addEventListener("complete", () => resolve(), { once: true });
+          transaction.addEventListener(
+            "abort",
+            () => reject(transaction.error ?? new Error("Warm-state replay aborted")),
+            { once: true },
+          );
+        });
+        for (const name of names) {
+          const store = transaction.objectStore(name);
+          store.clear();
+          for (const record of storage[name]) store.put(record);
+        }
+        await complete;
+      } finally {
+        database.close();
+      }
+      history.replaceState(null, "", url);
+    },
+    { storage, url },
+  );
 }

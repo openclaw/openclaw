@@ -43,14 +43,18 @@ Online measurements.
 keep its build identity equal to the checkout head. This preserves a baseline
 bundle while production sources are edited.
 
-Every measured reload flushes the selected transcript through its cache owner and
+The initial warm visit flushes the selected transcript through its cache owner and
 verifies both its persisted snapshot and the sidebar's saved view. Current v8
 persistence trims the transcript to its last 80 messages (whole sequence groups may
 extend that bound), strips replay metadata and retains authoritative pagination.
-The first warm transcript is reused across iterations, so streaming and live-event
-probes cannot change the next reload's cached workload.
+Before each measured reload, the bench unloads the app into an empty same-origin
+document, replays the original snapshot records and browser preferences, and restores
+the deep-link URL. This keeps pagehide writes and live events from changing the next
+run's transcript or sidebar, while preserving the browser's HTTP cache. Only the
+subsequent app reload is measured.
 `snapshotSave` records database/projection versions, message count, sidebar shape
-and UTF-8 sizes. A missing cache or wrong saved view fails setup.
+and UTF-8 sizes; its save costs describe the initial warm visit. A missing cache or
+wrong saved view fails setup.
 
 `--route board|chat` selects a dashboard (default) or chat deep link for the same
 session. Chat measurements require inline content, without requiring a board frame.
@@ -67,7 +71,7 @@ then collect separate traced runs for the storyboard and attribution.
 including tool results and replay metadata. Combine it with `--warm-reload` to
 exercise a large live history with the current bounded IndexedDB restore. `snapshotSave` reports the persisted
 row count and UTF-8 bytes, synchronous serialization time, and total flush time
-for a save through the live cache owner before each reload.
+for the initial save through the live cache owner.
 
 The dashboard fixture includes reaction pickers, widget actions, context usage,
 and viewers. Use `--warm-reload` to measure its cached restore. Transaction labels
