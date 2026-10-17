@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import fs from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import { getAiTransportHost } from "@openclaw/ai";
@@ -23,13 +22,12 @@ import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.j
 import {
   createSystemAgentVerifiedInferenceBinding,
   resolveSystemAgentVerifiedInferenceRoute,
-  type SystemAgentVerifiedInferenceBinding,
 } from "./verified-inference.js";
 
 it.each(["overlap", "cancel-drain", "route-drift"] as const)(
   "retains verified approval completion resources through %s",
-  (mode) =>
-    withOpenClawTestState(
+  async (mode) => {
+    await withOpenClawTestState(
       { label: "approval-owner", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
         const pluginRoot = state.path("provider");
@@ -72,24 +70,23 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
         const finishCancel = createDeferred();
         const cancelStarted = createDeferred();
         const parent = new AsyncWorkScope();
+        const spies: Array<{ mockRestore(): void }> = [];
         let drained = false;
         let drainage: Promise<void> | undefined;
         try {
           const address = server.address();
-          assert(address && typeof address !== "string", "Approval fixture has no TCP port");
+          if (!address || typeof address === "string") {
+            throw new Error("Approval fixture has no TCP port");
+          }
           const profileId = `${fixture.providerId}:verified`;
-          const modelRef = `${fixture.providerId}/approval-model`;
-          const writeCredentials = (key: string) =>
-            state.writeAuthProfiles({
-              version: 1,
-              profiles: { [profileId]: { type: "api_key", provider: fixture.providerId, key } },
-            });
           const cfg: OpenClawConfig = {
             agents: {
               defaults: {
                 workspace: state.workspaceDir,
-                model: `${modelRef}@${profileId}`,
-                models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
+                model: `${fixture.providerId}/approval-model@${profileId}`,
+                models: {
+                  [`${fixture.providerId}/approval-model`]: { agentRuntime: { id: "openclaw" } },
+                },
               },
             },
             auth: { profiles: { [profileId]: { provider: fixture.providerId, mode: "api_key" } } },
@@ -98,7 +95,17 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
                 [fixture.providerId]: {
                   api: "openai-completions",
                   baseUrl: `http://127.0.0.1:${address.port}/v1`,
-                  models: [{ id: "approval-model", name: "Approval model", reasoning: false }],
+                  models: [
+                    {
+                      id: "approval-model",
+                      name: "Approval model",
+                      reasoning: false,
+                      input: ["text"],
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      contextWindow: 8192,
+                      maxTokens: 1024,
+                    },
+                  ],
                 },
               },
             },
@@ -110,20 +117,34 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
             },
           };
           await state.writeConfig(cfg);
-          const authDatabase = await writeCredentials("synthetic-approval-key");
+          const authDatabase = await state.writeAuthProfiles({
+            version: 1,
+            profiles: {
+              [profileId]: {
+                type: "api_key",
+                provider: fixture.providerId,
+                key: "synthetic-approval-key",
+              },
+            },
+          });
           expect(fs.existsSync(authDatabase)).toBe(true);
           const snapshot = await readConfigFileSnapshot();
-          assert(snapshot.valid, "Approval fixture config is invalid");
+          if (!snapshot.valid) {
+            throw new Error("Approval fixture config is invalid");
+          }
           const route = await resolveSystemAgentConfiguredRouteFromConfig(
             snapshot.runtimeConfig ?? snapshot.config,
             undefined,
             {},
             snapshot,
           );
-          assert(
-            route?.runner === "embedded" && route.agentHarnessRuntimeOverride === "openclaw",
-            "Approval fixture did not select the embedded OpenClaw route",
-          );
+          if (
+            !route ||
+            route.runner !== "embedded" ||
+            route.agentHarnessRuntimeOverride !== "openclaw"
+          ) {
+            throw new Error("Approval fixture did not select the embedded OpenClaw route");
+          }
           const probe = await acquireSimpleCompletionModelForAgent({
             cfg: route.runConfig,
             agentId: route.agentId,
@@ -132,86 +153,98 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
             preferredProfile: profileId,
             bindAuthOwner: true,
           });
-          assert(!("error" in probe), "Approval fixture could not acquire a model");
-          let verifiedInference: SystemAgentVerifiedInferenceBinding;
-          try {
-            const response = await completeWithPreparedSimpleCompletionModel({
-              model: probe.model,
-              auth: probe.auth,
-              cfg: route.runConfig,
-              context: {
-                messages: [{ role: "user", content: "verify synthetic inference", timestamp: 0 }],
-              },
-            });
-            expect(
-              response.content.some((part) => part.type === "text" && part.text === "approve"),
-            ).toBe(true);
-            assert(probe.sourceAuthFingerprint, "Probe has no bound auth fingerprint");
-            verifiedInference = await createSystemAgentVerifiedInferenceBinding({
-              configuredRoute: route,
-              executionRoute: route,
-              auth: {
-                authProfileId: profileId,
-                authFingerprint: probe.sourceAuthFingerprint,
-                agentHarnessId: "openclaw",
-                modelId: probe.model.id,
-                modelApi: probe.model.api,
-              },
-            });
-          } finally {
-            await probe[Symbol.asyncDispose]();
+          if ("error" in probe) {
+            throw new Error(probe.error);
           }
+          const verifiedInference = await (async () => {
+            try {
+              const response = await completeWithPreparedSimpleCompletionModel({
+                model: probe.model,
+                auth: probe.auth,
+                cfg: route.runConfig,
+                context: {
+                  messages: [{ role: "user", content: "verify synthetic inference", timestamp: 0 }],
+                },
+              });
+              expect(
+                response.content.some((part) => part.type === "text" && part.text === "approve"),
+              ).toBe(true);
+              if (!probe.sourceAuthFingerprint) {
+                throw new Error("Probe has no bound auth fingerprint");
+              }
+              return await createSystemAgentVerifiedInferenceBinding({
+                configuredRoute: route,
+                executionRoute: route,
+                auth: {
+                  authProfileId: profileId,
+                  authFingerprint: probe.sourceAuthFingerprint,
+                  agentHarnessId: "openclaw",
+                  modelId: probe.model.id,
+                  modelApi: probe.model.api,
+                },
+              });
+            } finally {
+              await probe[Symbol.asyncDispose]();
+            }
+          })();
           expect(
             (await resolveSystemAgentVerifiedInferenceRoute(verifiedInference))?.provider,
           ).toBe(fixture.providerId);
           const builds = vi.spyOn(ModelRegistry, "fromCapturedSources");
+          spies.push(builds);
           if (mode === "cancel-drain") {
             const plugin = getAiTransportHost().plugin;
             const wrap = plugin.wrapSimpleCompletionStream;
             let first = true;
-            vi.spyOn(plugin, "wrapSimpleCompletionStream").mockImplementation((params) => {
-              const stream = wrap(params) ?? params.context.streamFn;
-              return (model, context, options) =>
-                stream(model, context, {
-                  ...options,
-                  onResponse: async (response, responseModel) => {
-                    await options?.onResponse?.(response, responseModel);
-                    if (first) {
-                      first = false;
-                      throw new Error("fixture response rejected");
-                    }
-                  },
-                });
-            });
+            spies.push(
+              vi.spyOn(plugin, "wrapSimpleCompletionStream").mockImplementation((params) => {
+                const stream = wrap(params) ?? params.context.streamFn;
+                return (model, context, options) =>
+                  stream(model, context, {
+                    ...options,
+                    onResponse: async (response, responseModel) => {
+                      await options?.onResponse?.(response, responseModel);
+                      if (first) {
+                        first = false;
+                        throw new Error("fixture response rejected");
+                      }
+                    },
+                  });
+              }),
+            );
             const fetch = process.versions.bun ? fetchWithRuntimeDispatcher : globalThis.fetch;
             let wrapped = false;
-            vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
-              const response = await fetch(...args);
-              if (wrapped || !response.url.startsWith(`http://127.0.0.1:${address.port}/`)) {
-                return response;
-              }
-              wrapped = true;
-              const reader = response.body?.getReader();
-              assert(reader, "Approval response has no body");
-              return new Response(
-                new ReadableStream<Uint8Array>({
-                  async pull(controller) {
-                    const { value, done } = await reader.read();
-                    if (done) {
-                      controller.close();
-                    } else {
-                      controller.enqueue(value);
-                    }
-                  },
-                  async cancel(reason) {
-                    cancelStarted.resolve();
-                    await finishCancel.promise;
-                    await reader.cancel(reason);
-                  },
-                }),
-                { status: response.status, headers: response.headers },
-              );
-            });
+            spies.push(
+              vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
+                const response = await fetch(...args);
+                if (wrapped || !response.url.startsWith(`http://127.0.0.1:${address.port}/`)) {
+                  return response;
+                }
+                wrapped = true;
+                const reader = response.body?.getReader();
+                if (!reader) {
+                  throw new Error("Approval response has no body");
+                }
+                return new Response(
+                  new ReadableStream<Uint8Array>({
+                    async pull(controller) {
+                      const { value, done } = await reader.read();
+                      if (done) {
+                        controller.close();
+                      } else {
+                        controller.enqueue(value);
+                      }
+                    },
+                    async cancel(reason) {
+                      cancelStarted.resolve();
+                      await finishCancel.promise;
+                      await reader.cancel(reason);
+                    },
+                  }),
+                  { status: response.status, headers: response.headers },
+                );
+              }),
+            );
           }
           const start = (managed = false) => {
             const run = () =>
@@ -227,10 +260,14 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
           const arrive = (index: number, result: Promise<unknown>) =>
             Promise.race([
               arrivals[index]!.promise,
-              result.then(() => assert.fail("Classifier settled before its provider request")),
+              result.then(() => {
+                throw new Error("Classifier settled before its provider request");
+              }),
             ]);
+          const started = performance.now();
           const first = start(true);
           await arrive(1, first);
+          const coldMs = performance.now() - started;
           const firstBuilds = builds.mock.calls.length;
           expect(firstBuilds).toBeGreaterThan(0);
           if (mode === "cancel-drain") {
@@ -241,14 +278,29 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
               drained = true;
             });
           }
+          const secondStarted = performance.now();
           const second = start();
           await arrive(2, second);
+          console.info("approval completion preparation", {
+            mode,
+            coldMs,
+            overlapMs: performance.now() - secondStarted,
+          });
           expect.soft(builds.mock.calls.length).toBe(firstBuilds);
           if (mode === "cancel-drain") {
             expect.soft(drained).toBe(false);
           }
           if (mode === "route-drift") {
-            await writeCredentials("rotated-synthetic-key");
+            await state.writeAuthProfiles({
+              version: 1,
+              profiles: {
+                [profileId]: {
+                  type: "api_key",
+                  provider: fixture.providerId,
+                  key: "rotated-synthetic-key",
+                },
+              },
+            });
           }
           finishCancel.resolve();
           requests.forEach(finish);
@@ -275,7 +327,9 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
           requests.forEach(finish);
           await Promise.allSettled(pending);
           await parent.drain();
-          vi.restoreAllMocks();
+          for (const spy of spies) {
+            spy.mockRestore();
+          }
           await resetPreparedModelRuntimeSnapshotsForTest();
           clearPluginMetadataLifecycleCaches();
           resetPluginLoaderTestStateForTest();
@@ -285,5 +339,6 @@ it.each(["overlap", "cancel-drain", "route-drift"] as const)(
           });
         }
       },
-    ),
+    );
+  },
 );

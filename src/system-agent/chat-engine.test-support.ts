@@ -14,7 +14,6 @@ import {
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.js";
 import type { ChatWizardHostDependencies } from "./chat-wizard-host.js";
-import { configSnapshot as makeConfigSnapshot } from "./configured-inference.test-support.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig as resolveRouteImpl,
   type SystemAgentConfiguredRoute,
@@ -33,7 +32,7 @@ import {
 import { profileStore, requireFingerprint } from "./verified-inference.test-support.js";
 
 const mocks = vi.hoisted(() => ({
-  readConfigFileSnapshot: vi.fn(async () => makeConfigSnapshot({}, { hash: "h", raw: null })),
+  readConfigFileSnapshot: vi.fn(async () => configSnapshot({})),
   readSetupConfigFileSnapshot: vi.fn(),
   setupChannels: vi.fn(),
   setupSkills: vi.fn(),
@@ -139,8 +138,23 @@ export function useTempStateDir(): string {
   return dir;
 }
 
-export const configSnapshot = (config: OpenClawConfig): ConfigFileSnapshot =>
-  makeConfigSnapshot(config, { hash: "h", raw: null });
+export function configSnapshot(config: OpenClawConfig): ConfigFileSnapshot {
+  return {
+    exists: true,
+    valid: true,
+    path: "/tmp/openclaw.json",
+    hash: "h",
+    config,
+    runtimeConfig: config,
+    sourceConfig: config,
+    raw: null,
+    parsed: config,
+    resolved: config,
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+  };
+}
 
 const sharedSnapshot = () => configSnapshot(structuredClone(sharedVerifiedInferenceConfig));
 

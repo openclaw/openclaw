@@ -1,12 +1,7 @@
 // Covers outbound direct target resolution, heartbeat target derivation,
 // heartbeat sender context, and route-aware heartbeat refinements.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelOutboundSessionRoute } from "../../channels/plugins/types.core.js";
-import type {
-  ChannelMessagingAdapter,
-  ChannelOutboundAdapter,
-  ChannelPlugin,
-} from "../../channels/plugins/types.public.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -60,96 +55,54 @@ function resolveSessionDeliveryTarget(
   });
 }
 
-type HeartbeatFixture = Omit<
-  Parameters<typeof resolveCanonicalHeartbeatDeliveryTarget>[0],
-  "entry" | "cfg"
-> & { cfg?: OpenClawConfig; entry?: LegacyDeliveryFixture };
-
-function resolveHeartbeatDeliveryTarget(params: HeartbeatFixture) {
+function resolveHeartbeatDeliveryTarget(
+  params: Omit<Parameters<typeof resolveCanonicalHeartbeatDeliveryTarget>[0], "entry"> & {
+    entry?: LegacyDeliveryFixture;
+  },
+) {
   return resolveCanonicalHeartbeatDeliveryTarget({
-    cfg: {},
     ...params,
     entry: params.entry ? normalizeLegacySessionEntryDelivery(params.entry) : undefined,
   });
 }
 
 async function resolveHeartbeatDeliveryTargetWithSessionRoute(
-  params: HeartbeatFixture & { currentSessionKey?: string },
+  params: Omit<
+    Parameters<typeof resolveCanonicalHeartbeatDeliveryTargetWithSessionRoute>[0],
+    "entry"
+  > & { entry?: LegacyDeliveryFixture },
 ) {
   return await resolveCanonicalHeartbeatDeliveryTargetWithSessionRoute({
-    cfg: {},
-    agentId: "main",
     ...params,
     entry: params.entry ? normalizeLegacySessionEntryDelivery(params.entry) : undefined,
   });
 }
 
-const passthroughOutbound: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
-  resolveTarget: ({ to }) =>
-    to ? { ok: true, to: to.trim() } : { ok: false, error: new Error("target required") },
-};
-
-function installPlugins(...plugins: ChannelPlugin[]) {
-  setActivePluginRegistry(createTargetsTestRegistry(plugins));
-}
-
-function directoryResolver(
-  kind: "user" | "group",
-): NonNullable<ChannelMessagingAdapter["targetResolver"]> {
-  return {
-    resolveTarget: async ({ normalized }) => ({ to: normalized, kind, source: "directory" }),
-  };
-}
-
-function sessionRoute(
-  channel: string,
-  target: string,
-  chatType: "direct" | "group",
-  overrides: Partial<ChannelOutboundSessionRoute> = {},
-): ChannelOutboundSessionRoute {
-  const key = `main:${channel}:${chatType === "direct" ? "user" : "group"}:${target}`;
-  return {
-    sessionKey: key,
-    baseSessionKey: key,
-    peer: { kind: chatType, id: target },
-    chatType,
-    from: chatType === "direct" ? `${channel}:${target}` : `${channel}:group:${target}`,
-    to: target,
-    ...overrides,
-  };
-}
-
-const ownerLabels: Record<string, string> = {
-  alpha: "Alpha",
-  beta: "Beta",
-  forum: "Forum",
-  telegram: "Telegram",
-  slack: "Slack",
-  whatsapp: "WhatsApp",
-};
-
-type InferChatType = NonNullable<ChannelPlugin["messaging"]>["inferTargetChatType"];
-
-function ownerPlugin(
-  id: ChannelPlugin["id"],
-  ownerId: string,
-  inferTargetChatType?: InferChatType,
-  label = ownerLabels[id] ?? String(id),
-): ChannelPlugin {
+function createOwnerAllowlistTargetTestPlugin(params: {
+  id: ChannelPlugin["id"];
+  label: string;
+  ownerId: string;
+  inferTargetChatType?: NonNullable<ChannelPlugin["messaging"]>["inferTargetChatType"];
+}): ChannelPlugin {
   const plugin = createTestChannelPlugin({
-    id,
-    label,
-    outbound: passthroughOutbound,
+    id: params.id,
+    label: params.label,
+    outbound: {
+      deliveryMode: "direct",
+      resolveTarget: ({ to }) =>
+        to
+          ? { ok: true as const, to: to.trim() }
+          : { ok: false as const, error: new Error("target required") },
+    },
     messaging: {
-      ...(inferTargetChatType ? { inferTargetChatType } : {}),
+      ...(params.inferTargetChatType ? { inferTargetChatType: params.inferTargetChatType } : {}),
       // Real channel plugins declare their id as a target prefix; prefixed
       // configured-owner entries rely on it to bind to the right channel.
-      targetPrefixes: [String(id)],
+      targetPrefixes: [String(params.id)],
       targetResolver: { looksLikeId: () => true },
     },
   });
-  plugin.config = { ...plugin.config, resolveAllowFrom: () => [ownerId] };
+  plugin.config = { ...plugin.config, resolveAllowFrom: () => [params.ownerId] };
   return plugin;
 }
 
@@ -186,16 +139,11 @@ function session(fields: Partial<LegacyDeliveryFixture> = {}): LegacyDeliveryFix
   return { sessionId: "session", updatedAt: 1, ...fields };
 }
 
-type SessionTargetCase = [
-  name: string,
-  entry: LegacyDeliveryFixture,
-  source: DeliveryContext,
-  expected: Partial<SessionDeliveryTarget>,
-  explicit?: Pick<
-    Parameters<typeof resolveSessionDeliveryTarget>[0],
-    "requestedChannel" | "explicitTo"
-  >,
-];
+type SessionTargetCase = {
+  name: string;
+  input: Parameters<typeof resolveSessionDeliveryTarget>[0];
+  expected: Partial<SessionDeliveryTarget>;
+};
 
 describe("resolveOutboundTarget defaultTo config fallback", () => {
   installResolveOutboundTargetPluginRegistryHooks();
@@ -213,7 +161,10 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
     });
     expect(
       await resolveOutboundTarget({ channel: "alpha", to: "room-one", mode: "explicit" }),
-    ).toEqual({ ok: true, to: "room-one" });
+    ).toEqual({
+      ok: true,
+      to: "room-one",
+    });
   });
 });
 
@@ -247,25 +198,26 @@ describe("resolveSessionDeliveryTarget", () => {
   });
 
   it.each([
-    [
-      "implicit origin",
-      "chat:stale",
-      { channel: "beta", to: "chat:event", threadId: "77" },
-      { channel: "beta", to: "chat:event", threadId: "77" },
-      undefined,
-    ],
-    [
-      "explicit suppression",
-      "chat:one",
-      { channel: "alpha", to: "chat:one" },
-      { channel: "none", reason: "target-none" },
-      "none",
-    ],
-  ] as const)(
-    "honors heartbeat event routing for %s",
-    async (_name, lastTo, turnSource, expected, target) => {
+    {
+      name: "implicit origin",
+      target: undefined,
+      entry: session({ lastChannel: "alpha", lastTo: "chat:stale" }),
+      turnSource: { channel: "beta", to: "chat:event", threadId: "77" },
+      expected: { channel: "beta", to: "chat:event", threadId: "77" },
+    },
+    {
+      name: "explicit suppression",
+      target: "none",
+      entry: session({ lastChannel: "alpha", lastTo: "chat:one" }),
+      turnSource: { channel: "alpha", to: "chat:one" },
+      expected: { channel: "none", reason: "target-none" },
+    },
+  ])(
+    "honors heartbeat event routing for $name",
+    async ({ target, entry, turnSource, expected }) => {
       const resolved = await resolveHeartbeatDeliveryTarget({
-        entry: session({ lastChannel: "alpha", lastTo }),
+        cfg: {},
+        entry,
         heartbeat: target ? { target } : undefined,
         turnSource,
       });
@@ -275,51 +227,104 @@ describe("resolveSessionDeliveryTarget", () => {
 
   it("never reuses a group route for implicit owner delivery", async () => {
     const forum = createForumTargetTestPlugin();
-    forum.config = { ...forum.config, resolveAllowFrom: () => ["dm:operator"] };
-    installPlugins(forum);
+    forum.config = {
+      ...forum.config,
+      resolveAllowFrom: () => ["dm:operator"],
+    };
+    setActivePluginRegistry(createTargetsTestRegistry([forum]));
 
     const resolved = await resolveHeartbeatDeliveryTarget({
       cfg: { channels: { forum: { allowFrom: ["dm:operator"] } } } as OpenClawConfig,
-      entry: session({ lastChannel: "forum", lastTo: "room:ops", chatType: "group" }),
+      entry: {
+        sessionId: "sess-owner-group",
+        updatedAt: 1,
+        lastChannel: "forum",
+        lastTo: "room:ops",
+        chatType: "group",
+      },
       heartbeat: { to: "group:wrong" },
     });
 
-    expect(resolved).toMatchObject({ channel: "forum", to: "dm:operator", chatType: "direct" });
+    expect(resolved.channel).toBe("forum");
+    expect(resolved.to).toBe("dm:operator");
+    expect(resolved.chatType).toBe("direct");
   });
 
   it.each([
     {
       name: "wildcard-only owners fail closed",
-      plugin: () => {
-        const plugin = createGenericTargetTestPlugin("alpha", "Alpha");
-        plugin.config.resolveAllowFrom = () => ["", "*"];
-        return plugin;
-      },
-      cfg: { commands: { ownerAllowFrom: ["", "*"] }, channels: { alpha: { allowFrom: ["*"] } } },
-      heartbeat: undefined,
+      channel: "alpha",
+      allowFrom: ["", "*"],
+      configAllowFrom: ["*"],
+      configuredOwners: ["", "*"],
+      implicit: true,
+      expected: { channel: "none", reason: "no-route" },
     },
     {
       name: "channel-scoped wildcard owners fail closed",
-      plugin: () => ownerPlugin("telegram", "telegram:*", () => "direct"),
-      cfg: {
-        commands: { ownerAllowFrom: ["telegram:*"] },
-        channels: { telegram: { allowFrom: ["telegram:*"] } },
-      },
-      heartbeat: { target: "owner" },
+      channel: "telegram",
+      allowFrom: ["telegram:*"],
+      configuredOwners: ["telegram:*"],
+      classify: () => "direct",
+      expected: { channel: "none", reason: "no-route" },
     },
-  ])("selects heartbeat owners: $name", async ({ plugin, cfg, heartbeat }) => {
-    installPlugins(plugin());
-    expect(await resolveHeartbeatDeliveryTarget({ cfg, heartbeat })).toMatchObject({
-      channel: "none",
-      reason: "no-route",
-    });
-  });
+  ] satisfies Array<{
+    name: string;
+    channel: string;
+    allowFrom: string[];
+    configAllowFrom?: string[];
+    configuredOwners?: string[];
+    classify?: NonNullable<ChannelPlugin["messaging"]>["inferTargetChatType"];
+    implicit?: boolean;
+    expected: { channel: string; to?: string; chatType?: string; reason?: string };
+  }>)(
+    "selects heartbeat owners: $name",
+    async ({
+      channel,
+      allowFrom,
+      configAllowFrom,
+      configuredOwners,
+      classify,
+      implicit,
+      expected,
+    }) => {
+      const plugin =
+        channel === "alpha"
+          ? createGenericTargetTestPlugin("alpha", "Alpha")
+          : createOwnerAllowlistTargetTestPlugin({
+              id: channel,
+              label: "Telegram",
+              ownerId: allowFrom[0] ?? "",
+              inferTargetChatType: classify,
+            });
+      plugin.config = { ...plugin.config, resolveAllowFrom: () => allowFrom };
+      setActivePluginRegistry(createTargetsTestRegistry([plugin]));
+      const resolved = await resolveHeartbeatDeliveryTarget({
+        cfg: {
+          ...(configuredOwners ? { commands: { ownerAllowFrom: configuredOwners } } : {}),
+          channels: { [channel]: { allowFrom: configAllowFrom ?? allowFrom } },
+        },
+        heartbeat: implicit ? undefined : { target: "owner" },
+      });
+      expect(resolved).toMatchObject(expected);
+    },
+  );
 
   it.each(["cold", "disabled"] as const)(
     "keeps heartbeat owner discovery usable when an account is %s",
     async (state) => {
-      const alpha = ownerPlugin("alpha", "user:alpha-owner", () => "direct");
-      const beta = ownerPlugin("beta", "user:beta-owner", () => "direct");
+      const alpha = createOwnerAllowlistTargetTestPlugin({
+        id: "alpha",
+        label: "Alpha",
+        ownerId: "user:alpha-owner",
+        inferTargetChatType: () => "direct",
+      });
+      const beta = createOwnerAllowlistTargetTestPlugin({
+        id: "beta",
+        label: "Beta",
+        ownerId: "user:beta-owner",
+        inferTargetChatType: () => "direct",
+      });
       const resolveAllowFrom = vi.fn(() => {
         throw new Error("unavailable credential must not resolve for owner discovery");
       });
@@ -334,7 +339,7 @@ describe("resolveSessionDeliveryTarget", () => {
         resolveAllowFrom,
       };
       beta.config.listAccountIds = () => ["work"];
-      installPlugins(alpha, beta);
+      setActivePluginRegistry(createTargetsTestRegistry([alpha, beta]));
       if (state === "cold") {
         setActiveDegradedSecretOwners([
           {
@@ -355,15 +360,22 @@ describe("resolveSessionDeliveryTarget", () => {
       ).toBe(true);
       expect(
         await resolveHeartbeatDeliveryTarget({ cfg, heartbeat: { accountId: "work" } }),
-      ).toMatchObject({ channel: "beta", accountId: "work", to: "user:beta-owner" });
+      ).toMatchObject({
+        channel: "beta",
+        accountId: "work",
+        to: "user:beta-owner",
+      });
       expect(resolveAllowFrom).not.toHaveBeenCalled();
     },
   );
 
   it("keeps owner discovery fail-closed for unresolved store SecretRefs and resolves once the credential is materialized", async () => {
-    const telegram = ownerPlugin("telegram", "123456789", ({ to }) =>
-      /^\d+$/.test(to) ? "direct" : undefined,
-    );
+    const telegram = createOwnerAllowlistTargetTestPlugin({
+      id: "telegram",
+      label: "Telegram",
+      ownerId: "123456789",
+      inferTargetChatType: ({ to }) => (/^\d+$/.test(to) ? "direct" : undefined),
+    });
     telegram.config = {
       ...telegram.config,
       listAccountIds: () => ["default"],
@@ -374,7 +386,7 @@ describe("resolveSessionDeliveryTarget", () => {
           : { enabled: true, configured: true, tokenStatus: "configured_unavailable" };
       },
     };
-    installPlugins(telegram);
+    setActivePluginRegistry(createTargetsTestRegistry([telegram]));
 
     // A store-backed SecretRef that this command path could not resolve must keep
     // owner discovery fail-closed instead of reporting a phantom route.
@@ -400,17 +412,19 @@ describe("resolveSessionDeliveryTarget", () => {
 
   it("reuses an exact direct owner route with its account and thread", async () => {
     const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
-    installPlugins(alpha);
+    setActivePluginRegistry(createTargetsTestRegistry([alpha]));
 
     const resolved = await resolveHeartbeatDeliveryTarget({
       cfg: { commands: { ownerAllowFrom: ["alpha:user:owner"] } },
-      entry: session({
+      entry: {
+        sessionId: "sess-owner-direct",
+        updatedAt: 1,
         lastChannel: "alpha",
         lastTo: "user:owner",
         lastAccountId: "work",
         lastThreadId: "thread-7",
         chatType: "direct",
-      }),
+      },
     });
 
     expect(resolved).toMatchObject({
@@ -423,21 +437,25 @@ describe("resolveSessionDeliveryTarget", () => {
   });
 
   it("reports no heartbeat route without a concrete last target", async () => {
-    installPlugins();
+    setActivePluginRegistry(createTargetsTestRegistry([]));
     const resolved = await resolveHeartbeatDeliveryTarget({
+      cfg: {},
       entry: session({ lastChannel: "forum" }),
       heartbeat: { target: "last", accountId: "configured-account" },
     });
-    expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("no-route");
     expect(mocks.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
   });
 
   it("allows heartbeat delivery to plugin-classified direct chats by default", async () => {
     const resolved = await resolveHeartbeatDeliveryTarget({
+      cfg: {},
       entry: session({ lastChannel: "forum", lastTo: "dm:one" }),
       heartbeat: { target: "last" },
     });
-    expect(resolved).toMatchObject({ channel: "forum", to: "dm:one" });
+    expect(resolved.channel).toBe("forum");
+    expect(resolved.to).toBe("dm:one");
     expect(resolved.reason).toBeUndefined();
     expect(resolved.threadId).toBeUndefined();
   });
@@ -445,8 +463,14 @@ describe("resolveSessionDeliveryTarget", () => {
   it("preserves the canonical heartbeat target after route resolution", async () => {
     const cfg: OpenClawConfig = {};
     const heartbeat = { target: "forum", to: "room:ops:topic:1008013" };
-    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({ cfg, heartbeat });
-    expect(resolved).toMatchObject({ channel: "forum", to: "room:ops", threadId: 1008013 });
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg,
+      agentId: "main",
+      heartbeat,
+    });
+    expect(resolved.channel).toBe("forum");
+    expect(resolved.to).toBe("room:ops");
+    expect(resolved.threadId).toBe(1008013);
     expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
       channel: "forum",
       cfg,
@@ -456,9 +480,14 @@ describe("resolveSessionDeliveryTarget", () => {
   });
 
   it("upgrades an owner-route setup shell with the selected agent runtime", async () => {
-    const runtime = ownerPlugin("forum", "user:ops", () => "direct");
+    const runtime = createOwnerAllowlistTargetTestPlugin({
+      id: "forum",
+      label: "Forum",
+      ownerId: "user:ops",
+      inferTargetChatType: () => "direct",
+    });
     const setup = { ...runtime, outbound: undefined };
-    installPlugins(setup);
+    setActivePluginRegistry(createTargetsTestRegistry([setup]));
     mocks.resolveOutboundChannelPlugin.mockImplementation(
       ({
         channel,
@@ -478,7 +507,8 @@ describe("resolveSessionDeliveryTarget", () => {
       heartbeat: { target: "owner" },
     });
 
-    expect(resolved).toMatchObject({ channel: "forum", to: "user:ops" });
+    expect(resolved.channel).toBe("forum");
+    expect(resolved.to).toBe("user:ops");
     expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
       channel: "forum",
       cfg,
@@ -488,23 +518,34 @@ describe("resolveSessionDeliveryTarget", () => {
   });
 
   it.each([
-    ["invalid target", "invalid", undefined, "no-target"],
-    ["invalid account", "room:ops", "missing-account", "unknown-account"],
-  ] as const)("validates a bootstrapped plugin's %s", async (_name, to, accountId, reason) => {
+    {
+      name: "invalid target",
+      to: "invalid",
+      accountId: undefined,
+      expected: { channel: "none", reason: "no-target" },
+    },
+    {
+      name: "invalid account",
+      to: "room:ops",
+      accountId: "missing-account",
+      expected: { channel: "none", reason: "unknown-account" },
+    },
+  ])("validates a bootstrapped plugin's $name", async ({ to, accountId, expected }) => {
     const forum = createForumTargetTestPlugin();
     if (accountId) {
       forum.config = { ...forum.config, listAccountIds: () => ["valid-account"] };
     }
-    installPlugins();
+    setActivePluginRegistry(createTargetsTestRegistry([]));
     mocks.resolveOutboundChannelPlugin.mockImplementation(
       ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) =>
         channel === "forum" && allowBootstrap === true ? forum : undefined,
     );
     const resolved = await resolveHeartbeatDeliveryTarget({
+      cfg: {},
       entry: session({ lastChannel: "forum", lastTo: to }),
       heartbeat: { target: "last", accountId },
     });
-    expect(resolved).toMatchObject({ channel: "none", reason });
+    expect(resolved).toMatchObject(expected);
     expect(
       mocks.resolveOutboundChannelPlugin.mock.calls.filter(
         ([params]) => params.allowBootstrap === true,
@@ -518,85 +559,166 @@ describe("resolveSessionDeliveryTarget", () => {
       ...alpha,
       messaging: {
         ...alpha.messaging,
-        resolveOutboundSessionRoute: () =>
-          sessionRoute("alpha", "u123", "direct", { to: "user:u123" }),
+        resolveOutboundSessionRoute: () => ({
+          sessionKey: "main:alpha:user:u123",
+          baseSessionKey: "main:alpha:user:u123",
+          peer: { kind: "direct", id: "u123" },
+          chatType: "direct",
+          from: "alpha:u123",
+          to: "user:u123",
+        }),
       },
     };
-    installPlugins(routedAlpha);
+    setActivePluginRegistry(createTargetsTestRegistry([routedAlpha]));
     const heartbeat = { target: "last", directPolicy: "block" } as const;
     const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
       cfg: { agents: { defaults: { heartbeat } } },
+      agentId: "main",
       entry: session({ lastChannel: "alpha", lastTo: "channel:D123" }),
     });
-    expect(resolved).toMatchObject({ channel: "none", reason: "dm-blocked" });
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("dm-blocked");
   });
 
   it("uses resolved target kind before applying heartbeat directPolicy to routed handles", async () => {
-    installPlugins(
-      createTestChannelPlugin({
-        id: "telegram",
-        label: "Telegram",
-        outbound: passthroughOutbound,
-        messaging: {
-          targetPrefixes: ["telegram"],
-          inferTargetChatType: () => "group",
-          targetResolver: directoryResolver("group"),
-          resolveOutboundSessionRoute: ({ target, resolvedTarget }) =>
-            sessionRoute("telegram", target, resolvedTarget?.kind === "group" ? "group" : "direct"),
-        },
-      }),
+    setActivePluginRegistry(
+      createTargetsTestRegistry([
+        createTestChannelPlugin({
+          id: "telegram",
+          label: "Telegram",
+          outbound: {
+            deliveryMode: "direct",
+            resolveTarget: ({ to }) =>
+              to
+                ? { ok: true as const, to: to.trim() }
+                : { ok: false as const, error: new Error("target required") },
+          },
+          messaging: {
+            targetPrefixes: ["telegram"],
+            inferTargetChatType: () => "group",
+            targetResolver: {
+              resolveTarget: async ({ normalized }) => ({
+                to: normalized,
+                kind: "group",
+                source: "directory",
+              }),
+            },
+            resolveOutboundSessionRoute: ({ target, resolvedTarget }) => {
+              const isGroup = resolvedTarget?.kind === "group";
+              return {
+                sessionKey: `main:telegram:${isGroup ? "group" : "user"}:${target}`,
+                baseSessionKey: `main:telegram:${isGroup ? "group" : "user"}:${target}`,
+                peer: { kind: isGroup ? "group" : "direct", id: target },
+                chatType: isGroup ? "group" : "direct",
+                from: isGroup ? `telegram:group:${target}` : `telegram:${target}`,
+                to: target,
+              };
+            },
+          },
+        }),
+      ]),
     );
 
     const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
-      heartbeat: { target: "telegram", to: "@public_group", directPolicy: "block" },
+      cfg: {},
+      agentId: "main",
+      heartbeat: {
+        target: "telegram",
+        to: "@public_group",
+        directPolicy: "block",
+      },
     });
 
-    expect(resolved).toMatchObject({ channel: "telegram", to: "@public_group", chatType: "group" });
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("@public_group");
+    expect(resolved.chatType).toBe("group");
   });
 
   it("rejects an owner destination whose canonical session route is a group", async () => {
     const alpha = createTestChannelPlugin({
       id: "alpha",
       label: "Alpha",
-      outbound: passthroughOutbound,
+      outbound: {
+        deliveryMode: "direct",
+        resolveTarget: ({ to }) =>
+          to
+            ? { ok: true as const, to: to.trim() }
+            : { ok: false as const, error: new Error("target required") },
+      },
       messaging: {
         inferTargetChatType: () => "direct",
-        targetResolver: directoryResolver("user"),
-        resolveOutboundSessionRoute: ({ target }) => sessionRoute("alpha", target, "group"),
+        targetResolver: {
+          resolveTarget: async ({ normalized }) => ({
+            to: normalized,
+            kind: "user",
+            source: "directory",
+          }),
+        },
+        resolveOutboundSessionRoute: ({ target }) => ({
+          sessionKey: `main:alpha:group:${target}`,
+          baseSessionKey: `main:alpha:group:${target}`,
+          peer: { kind: "group", id: target },
+          chatType: "group",
+          from: `alpha:group:${target}`,
+          to: target,
+        }),
       },
     });
     alpha.config = { ...alpha.config, resolveAllowFrom: () => ["operator"] };
-    installPlugins(alpha);
+    setActivePluginRegistry(createTargetsTestRegistry([alpha]));
 
     const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
       cfg: { channels: { alpha: { allowFrom: ["operator"] } } } as OpenClawConfig,
+      agentId: "main",
       heartbeat: { target: "owner" },
     });
 
     expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
   });
 
-  it.each<[string, ChannelPlugin["id"], string, InferChatType?]>([
-    ["user-prefixed group", "telegram", "user:shared", () => "group"],
-    ["unclassified opaque id", "external-channel", "opaque-owner-id"],
-  ])("requires a proven direct owner route for %s", async (_name, id, ownerId, classify) => {
-    const plugin = ownerPlugin(id, ownerId, classify, id);
-    installPlugins(plugin);
+  it.each([
+    {
+      name: "user-prefixed group",
+      id: "telegram",
+      ownerId: "user:shared",
+      classify: () => "group",
+    },
+    { name: "unclassified opaque id", id: "external-channel", ownerId: "opaque-owner-id" },
+  ] satisfies Array<{
+    name: string;
+    id: ChannelPlugin["id"];
+    ownerId: string;
+    classify?: NonNullable<ChannelPlugin["messaging"]>["inferTargetChatType"];
+  }>)("requires a proven direct owner route for $name", async ({ id, ownerId, classify }) => {
+    const plugin = createOwnerAllowlistTargetTestPlugin({
+      id,
+      label: id,
+      ownerId,
+      inferTargetChatType: classify,
+    });
+    setActivePluginRegistry(createTargetsTestRegistry([plugin]));
     const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
       cfg: { channels: { [id]: { allowFrom: [ownerId] } } },
+      agentId: "main",
       heartbeat: { target: "owner" },
     });
     expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
   });
 
   it("prefers a prefixed configured owner on a later channel over session-channel allowFrom", async () => {
-    const slack = ownerPlugin("slack", "user:slack-local", ({ to }) =>
-      /^user:/i.test(to) ? "direct" : undefined,
-    );
-    const telegram = ownerPlugin("telegram", "999", ({ to }) =>
-      /^\d+$/.test(to) ? "direct" : undefined,
-    );
-    installPlugins(slack, telegram);
+    const slack = createOwnerAllowlistTargetTestPlugin({
+      id: "slack",
+      label: "Slack",
+      ownerId: "user:slack-local",
+      inferTargetChatType: ({ to }) => (/^user:/i.test(to) ? "direct" : undefined),
+    });
+    const telegram = createOwnerAllowlistTargetTestPlugin({
+      id: "telegram",
+      label: "Telegram",
+      ownerId: "999",
+      inferTargetChatType: ({ to }) => (/^\d+$/.test(to) ? "direct" : undefined),
+    });
+    setActivePluginRegistry(createTargetsTestRegistry([slack, telegram]));
 
     const resolved = await resolveHeartbeatDeliveryTarget({
       cfg: {
@@ -606,7 +728,13 @@ describe("resolveSessionDeliveryTarget", () => {
           telegram: { allowFrom: ["999"] },
         },
       } as OpenClawConfig,
-      entry: session({ lastChannel: "slack", lastTo: "user:someone", chatType: "direct" }),
+      entry: {
+        sessionId: "sess-slack-first",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "user:someone",
+        chatType: "direct",
+      },
       heartbeat: { target: "owner" },
     });
 
@@ -619,8 +747,13 @@ describe("resolveSessionDeliveryTarget", () => {
     const inferTargetChatType = vi.fn(({ to }: { to: string }) =>
       /^\+\d+$/.test(to) ? ("direct" as const) : undefined,
     );
-    const whatsapp = ownerPlugin("whatsapp", "+15555550166", inferTargetChatType);
-    installPlugins(whatsapp);
+    const whatsapp = createOwnerAllowlistTargetTestPlugin({
+      id: "whatsapp",
+      label: "WhatsApp",
+      ownerId: "+15555550166",
+      inferTargetChatType,
+    });
+    setActivePluginRegistry(createTargetsTestRegistry([whatsapp]));
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+15555550166"] } },
     } as OpenClawConfig;
@@ -629,6 +762,7 @@ describe("resolveSessionDeliveryTarget", () => {
 
     const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
       cfg,
+      agentId: "main",
       heartbeat: { target: "owner" },
     });
 
@@ -640,10 +774,24 @@ describe("resolveSessionDeliveryTarget", () => {
     const external = createTestChannelPlugin({
       id: "external-channel",
       label: "External",
-      outbound: passthroughOutbound,
-      messaging: { targetResolver: directoryResolver("user") },
+      outbound: {
+        deliveryMode: "direct",
+        resolveTarget: ({ to }) =>
+          to
+            ? { ok: true as const, to: to.trim() }
+            : { ok: false as const, error: new Error("target required") },
+      },
+      messaging: {
+        targetResolver: {
+          resolveTarget: async ({ normalized }) => ({
+            to: normalized,
+            kind: "user",
+            source: "directory",
+          }),
+        },
+      },
     });
-    installPlugins();
+    setActivePluginRegistry(createTargetsTestRegistry([]));
     mocks.resolveOutboundChannelPlugin.mockImplementation(
       ({ channel, allowBootstrap }: { channel: string; allowBootstrap?: boolean }) => {
         if (channel !== "external-channel") {
@@ -659,18 +807,34 @@ describe("resolveSessionDeliveryTarget", () => {
     );
 
     const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
-      heartbeat: { target: "external-channel", to: "person-123", directPolicy: "block" },
+      cfg: {},
+      agentId: "main",
+      heartbeat: {
+        target: "external-channel",
+        to: "person-123",
+        directPolicy: "block",
+      },
     });
 
-    expect(resolved).toMatchObject({ channel: "none", reason: "dm-blocked" });
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("dm-blocked");
   });
 
   it("uses an activation-aware infer-only plugin for heartbeat direct policy", async () => {
     const external = createTestChannelPlugin({
       id: "external-channel",
       label: "External",
-      outbound: { ...passthroughOutbound, sendText: vi.fn() },
-      messaging: { inferTargetChatType: () => "direct" },
+      outbound: {
+        deliveryMode: "direct",
+        sendText: vi.fn(),
+        resolveTarget: ({ to }) =>
+          to
+            ? { ok: true as const, to: to.trim() }
+            : { ok: false as const, error: new Error("target required") },
+      },
+      messaging: {
+        inferTargetChatType: () => "direct",
+      },
     });
     const setupExternal = { ...external, messaging: undefined };
     mocks.resolveOutboundChannelPlugin.mockImplementation(
@@ -683,10 +847,16 @@ describe("resolveSessionDeliveryTarget", () => {
     );
 
     const resolved = await resolveHeartbeatDeliveryTarget({
-      heartbeat: { target: "external-channel", to: "person-123", directPolicy: "block" },
+      cfg: {},
+      heartbeat: {
+        target: "external-channel",
+        to: "person-123",
+        directPolicy: "block",
+      },
     });
 
-    expect(resolved).toMatchObject({ channel: "none", reason: "dm-blocked" });
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("dm-blocked");
   });
 
   it.each([
@@ -703,30 +873,42 @@ describe("resolveSessionDeliveryTarget", () => {
   ])("resolves heartbeat reserved literals: $name", async ({ groups, expected }) => {
     const listGroups = vi.fn().mockResolvedValue(groups);
     const listGroupsLive = vi.fn().mockResolvedValue([]);
-    installPlugins({
-      ...createTestChannelPlugin({
-        id: "telegram",
-        label: "Telegram",
-        outbound: passthroughOutbound,
-        messaging: {
-          targetPrefixes: ["telegram", "tg"],
-          targetResolver: {
-            reservedLiterals: ["current", "self", "this", "me"],
-            hint: "<chatId>",
-          },
-          resolveOutboundSessionRoute: ({ target, resolvedTarget }) => ({
-            sessionKey: `main:telegram:group:${target}`,
-            baseSessionKey: `main:telegram:group:${target}`,
-            peer: { kind: resolvedTarget?.kind === "user" ? "direct" : "group", id: target },
-            chatType: resolvedTarget?.kind === "user" ? "direct" : "group",
-            from: `telegram:group:${target}`,
-            to: target,
+    setActivePluginRegistry(
+      createTargetsTestRegistry([
+        {
+          ...createTestChannelPlugin({
+            id: "telegram",
+            label: "Telegram",
+            outbound: {
+              deliveryMode: "direct",
+              resolveTarget: ({ to }) =>
+                to
+                  ? { ok: true, to: to.trim() }
+                  : { ok: false, error: new Error("target required") },
+            },
+            messaging: {
+              targetPrefixes: ["telegram", "tg"],
+              targetResolver: {
+                reservedLiterals: ["current", "self", "this", "me"],
+                hint: "<chatId>",
+              },
+              resolveOutboundSessionRoute: ({ target, resolvedTarget }) => ({
+                sessionKey: `main:telegram:group:${target}`,
+                baseSessionKey: `main:telegram:group:${target}`,
+                peer: { kind: resolvedTarget?.kind === "user" ? "direct" : "group", id: target },
+                chatType: resolvedTarget?.kind === "user" ? "direct" : "group",
+                from: `telegram:group:${target}`,
+                to: target,
+              }),
+            },
           }),
+          directory: { listGroups, listGroupsLive },
         },
-      }),
-      directory: { listGroups, listGroupsLive },
-    });
+      ]),
+    );
     const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {},
+      agentId: "main",
       heartbeat: { target: "telegram", to: "current" },
     });
     expect(resolved).toMatchObject(expected);
@@ -738,56 +920,110 @@ describe("resolveSessionDeliveryTarget", () => {
 
   it("keeps heartbeat route canonicalization best-effort when route resolution fails", async () => {
     const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
-    installPlugins({
-      ...alpha,
-      messaging: {
-        ...alpha.messaging,
-        inferTargetChatType: () => "group",
-        resolveOutboundSessionRoute: () => {
-          throw new Error("route lookup failed");
+    setActivePluginRegistry(
+      createTargetsTestRegistry([
+        {
+          ...alpha,
+          messaging: {
+            ...alpha.messaging,
+            inferTargetChatType: () => "group",
+            resolveOutboundSessionRoute: () => {
+              throw new Error("route lookup failed");
+            },
+          },
         },
+      ]),
+    );
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {},
+      agentId: "main",
+      entry: {
+        sessionId: "sess-heartbeat-route-failure",
+        updatedAt: 1,
+        lastChannel: "alpha",
+        lastTo: "group:ops",
+      },
+      heartbeat: {
+        target: "last",
       },
     });
 
-    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
-      entry: session({ lastChannel: "alpha", lastTo: "group:ops" }),
-      heartbeat: { target: "last" },
-    });
-
-    expect(resolved).toMatchObject({ channel: "alpha", to: "group:ops", chatType: "group" });
+    expect(resolved.channel).toBe("alpha");
+    expect(resolved.to).toBe("group:ops");
+    expect(resolved.chatType).toBe("group");
   });
 
   it.each([
-    [
-      "group deliveryContext",
-      session({
+    {
+      name: "group deliveryContext",
+      entry: session({
         deliveryContext: { channel: "forum", to: "room:ops", threadId: 1122 },
         chatType: "group",
       }),
-      "room:ops",
-      1122,
-    ],
-    [
-      "direct route drops stale thread",
-      session({ lastChannel: "forum", lastTo: "dm:one", lastThreadId: 1122, chatType: "direct" }),
-      "dm:one",
-      undefined,
-    ],
-  ] as const)("inherits heartbeat threads only for %s", async (_name, entry, to, threadId) => {
-    const resolved = await resolveHeartbeatDeliveryTarget({ entry, heartbeat: { target: "last" } });
-    expect(resolved).toMatchObject({ channel: "forum", to });
+      to: "room:ops",
+      threadId: 1122,
+    },
+    {
+      name: "direct route drops stale thread",
+      entry: session({
+        lastChannel: "forum",
+        lastTo: "dm:one",
+        lastThreadId: 1122,
+        chatType: "direct",
+      }),
+      to: "dm:one",
+      threadId: undefined,
+    },
+  ])("inherits heartbeat threads only for $name", async ({ entry, to, threadId }) => {
+    const resolved = await resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry,
+      heartbeat: { target: "last" },
+    });
+    expect(resolved.channel).toBe("forum");
+    expect(resolved.to).toBe(to);
     expect(resolved.threadId).toBe(threadId);
   });
 
   it.each([
-    ["direct to group", "user:operator", "direct", "group:ops", "alpha", "group"],
-    ["group to direct", "group:ops", "group", "user:operator", "none", undefined],
-    ["same opaque direct", "opaque-dm", "direct", "opaque-dm", "none", undefined],
+    {
+      name: "moved direct session does not block the event group",
+      storedTo: "user:operator",
+      storedType: "direct",
+      eventTo: "group:ops",
+      expectedChannel: "alpha",
+      expectedType: "group",
+    },
+    {
+      name: "moved group session does not allow the event direct chat",
+      storedTo: "group:ops",
+      storedType: "group",
+      eventTo: "user:operator",
+      expectedChannel: "none",
+      expectedType: undefined,
+    },
+    {
+      name: "same opaque direct conversation retains its hint",
+      storedTo: "opaque-dm",
+      storedType: "direct",
+      eventTo: "opaque-dm",
+      expectedChannel: "none",
+      expectedType: undefined,
+    },
   ] as const)(
-    "qualifies heartbeat chat type by the selected conversation: %s",
-    async (_name, storedTo, storedType, eventTo, expectedChannel, expectedType) => {
+    "qualifies heartbeat chat type by the selected conversation: $name",
+    async ({ storedTo, storedType, eventTo, expectedChannel, expectedType }) => {
       const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
-        entry: session({ lastChannel: "alpha", lastTo: storedTo, chatType: storedType }),
+        cfg: {},
+        agentId: "main",
+        entry: {
+          sessionId: "chat-type-owner",
+          updatedAt: 1,
+          lastChannel: "alpha",
+          lastTo: storedTo,
+          chatType: storedType,
+        },
         heartbeat: { target: "last", directPolicy: "block" },
         turnSource: { channel: "alpha", to: eventTo },
       });
@@ -807,24 +1043,35 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
   const topicSession = session({ lastChannel: "forum", lastTo: "room:ops", lastThreadId: 1122 });
   const changedSession = session({ lastChannel: "beta", lastTo: "wrong-room" });
   it.each([
-    [
-      "explicit channel overrides turn source",
-      changedSession,
-      { channel: "alpha", to: "room-one" },
-      { channel: "forum" },
-      { requestedChannel: "forum", explicitTo: "room:ops" },
-    ],
-    [
-      "turn source owns account and thread",
-      { ...changedSession, lastAccountId: "wrong-account", lastThreadId: 999 },
-      { channel: "forum", to: "room:ops", accountId: "bot-123", threadId: 42 },
-      { channel: "forum", to: "room:ops", accountId: "bot-123", threadId: 42 },
-    ],
-    [
-      "turn source channel suppresses stale metadata",
-      { ...changedSession, lastAccountId: "wrong-account", lastThreadId: "thread-1" },
-      { channel: "alpha" },
-      {
+    {
+      name: "explicit channel overrides turn source",
+      input: {
+        entry: changedSession,
+        requestedChannel: "forum",
+        explicitTo: "room:ops",
+        turnSourceChannel: "alpha",
+        turnSourceTo: "room-one",
+      },
+      expected: { channel: "forum" },
+    },
+    {
+      name: "turn source owns account and thread",
+      input: {
+        entry: { ...changedSession, lastAccountId: "wrong-account", lastThreadId: 999 },
+        turnSourceChannel: "forum",
+        turnSourceTo: "room:ops",
+        turnSourceAccountId: "bot-123",
+        turnSourceThreadId: 42,
+      },
+      expected: { channel: "forum", to: "room:ops", accountId: "bot-123", threadId: 42 },
+    },
+    {
+      name: "turn source channel suppresses stale metadata",
+      input: {
+        entry: { ...changedSession, lastAccountId: "wrong-account", lastThreadId: "thread-1" },
+        turnSourceChannel: "alpha",
+      },
+      expected: {
         channel: "alpha",
         to: undefined,
         accountId: undefined,
@@ -833,53 +1080,56 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
         lastAccountId: undefined,
         lastThreadId: undefined,
       },
-    ],
-    [
-      "same conversation inherits session topic",
-      { ...topicSession, lastAccountId: "work" },
-      { channel: "forum", to: "room:ops", accountId: "work" },
-      {
+    },
+    {
+      name: "same conversation inherits session topic",
+      input: {
+        entry: { ...topicSession, lastAccountId: "work" },
+        turnSourceChannel: "forum",
+        turnSourceTo: "room:ops",
+        turnSourceAccountId: "work",
+      },
+      expected: {
         channel: "forum",
         to: "room:ops",
         accountId: "work",
         threadId: 1122,
         threadIdSource: "session",
       },
-    ],
-    [
-      "different account cannot inherit session topic",
-      { ...topicSession, lastAccountId: "personal" },
-      { channel: "forum", to: "room:ops", accountId: "work" },
-      {
+    },
+    {
+      name: "different account cannot inherit session topic",
+      input: {
+        entry: { ...topicSession, lastAccountId: "personal" },
+        turnSourceChannel: "forum",
+        turnSourceTo: "room:ops",
+        turnSourceAccountId: "work",
+      },
+      expected: {
         accountId: "work",
         threadId: undefined,
         threadIdSource: undefined,
         lastThreadId: undefined,
       },
-    ],
-    [
-      "bare stored destination does not match topic-scoped turn",
-      topicSession,
-      { channel: "forum", to: "forum:room:ops:topic:1122" },
-      { channel: "forum", to: "forum:room:ops:topic:1122", threadId: undefined },
-    ],
-    [
-      "different destination cannot inherit session thread",
-      topicSession,
-      { channel: "forum", to: "room:other" },
-      { channel: "forum", to: "room:other", threadId: undefined },
-    ],
-  ] satisfies SessionTargetCase[])("%s", (_name, entry, source, expected, explicit) => {
-    expect(
-      resolveSessionDeliveryTarget({
-        requestedChannel: "last",
-        entry,
-        turnSourceChannel: source.channel,
-        turnSourceTo: source.to,
-        turnSourceAccountId: source.accountId,
-        turnSourceThreadId: source.threadId,
-        ...explicit,
-      }),
-    ).toMatchObject(expected);
+    },
+    {
+      name: "bare stored destination does not match topic-scoped turn",
+      input: {
+        entry: topicSession,
+        turnSourceChannel: "forum",
+        turnSourceTo: "forum:room:ops:topic:1122",
+      },
+      expected: { channel: "forum", to: "forum:room:ops:topic:1122", threadId: undefined },
+    },
+    {
+      name: "different destination cannot inherit session thread",
+      input: { entry: topicSession, turnSourceChannel: "forum", turnSourceTo: "room:other" },
+      expected: { channel: "forum", to: "room:other", threadId: undefined },
+    },
+  ] satisfies SessionTargetCase[])("$name", ({ input, expected }) => {
+    expect(resolveSessionDeliveryTarget({ requestedChannel: "last", ...input })).toMatchObject(
+      expected,
+    );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -17,17 +17,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { sqliteWriteGate } from "./sqlite-maintenance-fixture.test-support.js";
 import { onSqliteWalCheckpoint } from "./sqlite-wal-checkpoint.js";
 import { observeSqliteWalPeriodicWork } from "./sqlite-wal-scheduler.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-function seedFreePages(db: import("node:sqlite").DatabaseSync) {
-  db.exec(`INSERT INTO cache_entries(scope, key, blob, updated_at)
-    VALUES ('wal-proof', 'pages', zeroblob(4194304), 1);
-    DELETE FROM cache_entries WHERE scope = 'wal-proof';`);
-}
-
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
@@ -44,7 +37,12 @@ it.each(["keep", "close", "replace"] as const)(
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       scheduled.restore();
       const periodic = scheduled.periodic;
-      seedFreePages(database.db);
+      database.db
+        .prepare(
+          "INSERT INTO cache_entries(scope, key, value_json, blob, updated_at) VALUES ('wal-proof', 'pages', '{}', randomblob(4194304), 1)",
+        )
+        .run();
+      database.db.prepare("DELETE FROM cache_entries WHERE scope = 'wal-proof'").run();
       const freePages = () =>
         Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count);
       const before = freePages();
@@ -79,26 +77,31 @@ it.each(["keep", "close", "replace"] as const)(
         }
       });
       try {
-        const gate = sqliteWriteGate();
-        const reservation = runOpenClawAgentWorkerWrite(options, gate.wait);
-        await gate.entered;
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const reservation = runOpenClawAgentWorkerWrite(options, async () => {
+          entered.resolve();
+          await release.promise;
+        });
+        await entered.promise;
         const initialPeriodicWork: Promise<unknown>[] = [];
         try {
           initialPeriodicWork.push(Promise.resolve(periodic()));
           initialPeriodicWork.push(Promise.resolve(periodic()));
           initialPeriodicWork.push(Promise.resolve(periodic()));
-          expect([vacuumCalls(), checkpointCalls()]).toEqual([[], []]);
+          expect(vacuumCalls()).toHaveLength(0);
+          expect(checkpointCalls()).toHaveLength(0);
           expect(freePages()).toBe(before);
           if (retirement !== "keep") {
             expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
             if (retirement === "replace") {
               const replacement = openOpenClawAgentDatabase(options);
               expect(replacement.db.isOpen).toBe(true);
-              expect(replacement.db).not.toBe(database.db);
+              expect(replacement.db === database.db).toBe(false);
             }
           }
         } finally {
-          gate.release();
+          release.resolve();
           try {
             await reservation;
             if (retirement === "keep") {
@@ -111,19 +114,25 @@ it.each(["keep", "close", "replace"] as const)(
           }
         }
         if (retirement === "keep") {
+          expect(vacuumCalls()).toEqual([]);
+          expect(checkpointCalls()).toEqual([]);
           expect(database.walMaintenance.health).toMatchObject({
             state: "complete",
             warning: false,
           });
-          expect(before - freePages()).toBe(512);
+          const reclaimed = before - freePages();
+          expect(reclaimed).toBe(512);
           expect(foregroundFreePages).toBeGreaterThan(before - 512);
           expect(foregroundFreePages).toBeLessThan(before);
           const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
           try {
-            reader.exec("BEGIN; SELECT COUNT(*) FROM cache_entries;");
-            database.db.exec(
-              "INSERT INTO cache_entries(scope,key,blob,updated_at) VALUES('wal-proof','held',zeroblob(4096),1)",
-            );
+            reader.exec("BEGIN");
+            reader.prepare("SELECT COUNT(*) FROM cache_entries").get();
+            database.db
+              .prepare(
+                "INSERT INTO cache_entries(scope,key,blob,updated_at) VALUES('wal-proof','held',zeroblob(4096),1)",
+              )
+              .run();
             const heldFreePages = freePages();
             for (const expectedState of ["blocked", "blocked", "complete"] as const) {
               if (expectedState === "complete") {
@@ -151,11 +160,13 @@ it.each(["keep", "close", "replace"] as const)(
               await runOpenClawAgentWriteAdmission(options, () => undefined);
             }
             expect(checkpointCalls()).toEqual([]);
+            expect(vacuumCalls()).toEqual([]);
           } finally {
             reader.close();
           }
+        } else {
+          expect(vacuumCalls()).toEqual([]);
         }
-        expect(vacuumCalls()).toEqual([]);
       } finally {
         unobserve();
       }
@@ -258,7 +269,9 @@ it.each([
     const root = tempDirs.make("openclaw-worker-wal-admission-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
       const initialized = openOpenClawAgentDatabase({ agentId: "main" });
-      seedFreePages(initialized.db);
+      initialized.db.exec(`INSERT INTO cache_entries(scope, key, blob, updated_at)
+        VALUES ('wal-proof', 'pages', zeroblob(4194304), 1);
+        DELETE FROM cache_entries WHERE scope = 'wal-proof';`);
       const options = {
         agentId: "main",
         path: initialized.path,
@@ -286,9 +299,13 @@ it.each([
       const exited = new Promise<number>((resolve) => {
         worker.once("exit", resolve);
       });
-      const signals = [ready, ticked, requested, result];
-      const fail = (error: Error) => signals.forEach((signal) => signal.reject(error));
-      for (const deferred of signals) {
+      const fail = (error: Error) => {
+        ready.reject(error);
+        ticked.reject(error);
+        requested.reject(error);
+        result.reject(error);
+      };
+      for (const deferred of [ready, ticked, requested, result]) {
         void deferred.promise.catch(() => {});
       }
       worker.once("error", fail);
@@ -321,21 +338,25 @@ it.each([
           fail(new Error(message.message));
         }
       });
-      const gate = sqliteWriteGate();
+      const release = createDeferredCore();
       let holding: Promise<void> | undefined;
       try {
         await ready.promise;
-        holding = runOpenClawAgentWorkerWrite(options, gate.wait);
-        await gate.entered;
+        const entered = createDeferredCore();
+        holding = runOpenClawAgentWorkerWrite(options, async () => {
+          entered.resolve();
+          await release.promise;
+        });
+        await entered.promise;
         worker.postMessage({ type: "tick" }, []);
         expect(await ticked.promise).toBe(0);
         await requested.promise;
-        gate.release();
+        release.resolve();
         await holding;
         expect(await result.promise).toEqual(retire || revoke ? [] : [true]);
         expect(await exited).toBe(0);
       } finally {
-        gate.release();
+        release.resolve();
         await holding;
         await worker.terminate();
         await Promise.allSettled([exited, ...admissions]);
