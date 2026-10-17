@@ -4,10 +4,9 @@ import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
-import type { SessionsListResult } from "../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { createTestSessionCapability } from "../lib/sessions/session-capability.test-support.ts";
-import "../test-helpers/app-sidebar-suite.ts";
 import {
   createContext,
   createGateway,
@@ -15,13 +14,15 @@ import {
   createSessions,
   mountSidebarContext,
 } from "../test-helpers/app-sidebar.ts";
+import "../test-helpers/app-sidebar-suite.ts";
+import { domProbe } from "../test-helpers/dom-probe.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { renderAppSidebarOnline } from "./app-sidebar-online.tsx";
 import { renderSidebarAgentCard } from "./app-sidebar-render.tsx";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
-import { renderRecentSession } from "./app-sidebar-session-row-render.tsx";
+import { renderRecentSession as RecentSession } from "./app-sidebar-session-row-render.tsx";
 import { AppSidebarOwner, type AppSidebarElement } from "./app-sidebar.tsx";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import {
@@ -59,7 +60,7 @@ const emptySnapshot: SidebarSnapshotModel = {
   brand: { name: "Harbor", avatar: null, icon: "claw", environment: null },
 };
 
-function createHost(mode: "chip" | "roster" = "roster") {
+function createHost(mode: "chip" | "roster" = "roster", snapshot?: Partial<SidebarSnapshotModel>) {
   const context = createContext(
     createGateway(createTestGatewayClient(async () => ({}))),
     createSessions("main", []),
@@ -67,17 +68,46 @@ function createHost(mode: "chip" | "roster" = "roster") {
   const container = document.createElement("div");
   const props = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
   props.sidebarAgentsMode = mode;
-  const host = new AppSidebarOwner(props, context, props);
+  const host = new AppSidebarOwner(
+    { dashboards: null, loadMoreDashboards() {} },
+    props,
+    context,
+    props,
+  );
   host.sessionOwnershipVisibility = { filters: true, avatars: true };
   document.body.append(container);
-  return { host, container, context };
+  if (snapshot) {
+    host.restoreSidebarSnapshot({ ...emptySnapshot, ...snapshot });
+  }
+  return { host, container, context, dom: domProbe(container) };
 }
 
-function mountObservedHost(
-  host: AppSidebarOwner,
-  container: HTMLElement,
-  view: (host: AppSidebarOwner) => JSX.Element,
+function mountRow(
+  fields: Partial<GatewaySessionRow>,
+  presentation: Partial<ReturnType<typeof projectSidebarSession>> = {},
+  options: Pick<Parameters<typeof RecentSession>[0], "icon"> = {},
 ) {
+  const fixture = createHost("chip");
+  const session = {
+    ...projectSidebarSession({ key: "agent:main:thread", ...fields }),
+    ...presentation,
+  };
+  const [current, setCurrent] = createSignal(session);
+  mountSolid(() => <RecentSession host={fixture.host} session={current()} {...options} />, {
+    container: fixture.container,
+  });
+  return { ...fixture, session, current, setCurrent };
+}
+
+async function createCachedHost() {
+  const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
+  gateway.publish({ client: null, phase: "connecting", hello: null });
+  const context = createContext(gateway.gateway, createSessions("main", []));
+  const { sidebar: host } = await mountSidebarContext(context);
+  return { host, context, dom: domProbe(host) };
+}
+
+function observeHost(host: AppSidebarOwner) {
   const [revision, setRevision] = createSignal(0);
   const observedHost = new Proxy(host, {
     get(target, key, receiver) {
@@ -85,18 +115,30 @@ function mountObservedHost(
       return Reflect.get(target, key, receiver);
     },
   });
-  mountSolid(() => view(observedHost), { container });
-  return () => {
-    setRevision((value) => value + 1);
-    flush();
+  return {
+    host: observedHost,
+    track: () => {
+      revision();
+    },
+    update: () => {
+      setRevision((value) => value + 1);
+      flush();
+    },
   };
 }
 
+function mountObservedHost(
+  host: AppSidebarOwner,
+  container: HTMLElement,
+  view: (host: AppSidebarOwner) => JSX.Element,
+) {
+  const observed = observeHost(host);
+  mountSolid(() => view(observed.host), { container });
+  return observed.update;
+}
+
 it("hides archived pages in the restored sidebar before live data arrives", async () => {
-  const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
-  gateway.publish({ client: null, phase: "connecting", hello: null });
-  const context = createContext(gateway.gateway, createSessions("main", []));
-  const { sidebar: host } = await mountSidebarContext(context);
+  const { host, context, dom } = await createCachedHost();
   host.restoreSidebarSnapshot({
     ...emptySnapshot,
     mode: "roster",
@@ -118,19 +160,17 @@ it("hides archived pages in the restored sidebar before live data arrives", asyn
   });
   host.requestUpdate();
   await host.updateComplete;
-
   expect(
-    host.querySelector('.sidebar-pages [data-session-key="agent:main:active"]'),
-  ).not.toBeNull();
-  expect(host.querySelector('.sidebar-pages [data-session-key="agent:main:archived"]')).toBeNull();
-  expect(host.querySelector(".sidebar-pages .sidebar-session-sort")).toBeNull();
+    dom.present(
+      '.sidebar-pages [data-session-key="agent:main:active"]',
+      '.sidebar-pages [data-session-key="agent:main:archived"]',
+      ".sidebar-pages .sidebar-session-sort",
+    ),
+  ).toEqual([true, false, false]);
 });
 
 it("paints the restored roster and workspace in the first sidebar update", async () => {
-  const gateway = createGatewayHarness(createTestGatewayClient(async () => ({})));
-  gateway.publish({ client: null, phase: "connecting", hello: null });
-  const context = createContext(gateway.gateway, createSessions("main", []));
-  const { sidebar: host } = await mountSidebarContext(context);
+  const { host, dom } = await createCachedHost();
   host.sidebarAgentsMode = "chip";
   host.sidebarLiveActivity = false;
 
@@ -141,13 +181,11 @@ it("paints the restored roster and workspace in the first sidebar update", async
   });
   host.requestUpdate();
   await host.updateComplete;
-
-  expect(host.querySelector('aside[data-snapshot-state="cached"]')).not.toBeNull();
-  expect(host.querySelector("openclaw-sidebar-agent-roster")).not.toBeNull();
-  await waitForSolid(() =>
-    expect(host.querySelector('[data-agent-group="main"]')?.textContent).toContain("Harbor"),
-  );
-  expect(host.querySelector('[data-avatar="⚓"]')).not.toBeNull();
+  expect(
+    dom.present('aside[data-snapshot-state="cached"]', "openclaw-sidebar-agent-roster"),
+  ).toEqual([true, true]);
+  await waitForSolid(() => expect(dom.text('[data-agent-group="main"]')).toContain("Harbor"));
+  expect(dom.query('[data-avatar="⚓"]')).not.toBeNull();
 });
 
 it("keeps cached session rows while the live roster settles", async () => {
@@ -237,27 +275,117 @@ it("keeps cached session rows while the live roster settles", async () => {
 });
 
 it("keeps the unread badge on an idle child with an icon", () => {
-  const { host, container } = createHost("chip");
-  const session = {
-    ...projectSidebarSession({ key: "agent:main:child", icon: "🦞", unread: true, status: "done" }),
-    isChild: true,
-  };
-  mountSolid(() => renderRecentSession({ host, session }), { container });
-  expect(container.querySelector(".session-glyph__emoji")?.textContent).toBe("🦞");
-  expect(container.querySelector('.session-glyph__badge[aria-label="Unread"]')).not.toBeNull();
+  const { dom } = mountRow(
+    { key: "agent:main:child", icon: "🦞", unread: true, status: "done" },
+    { isChild: true },
+  );
+  expect(dom.text(".session-glyph__emoji")).toBe("🦞");
+  expect(dom.query('.session-glyph__badge[aria-label="Unread"]')).not.toBeNull();
 });
+
+it("keeps an idle child owner's glyph hidden until the run starts", () => {
+  const { dom, session, setCurrent } = mountRow(
+    {
+      key: "agent:main:child",
+      status: "done",
+      owner: { actor: { type: "human", id: "ada", label: "Ada" } },
+    },
+    { isChild: true },
+  );
+  expect(
+    dom.present(".session-glyph", "openclaw-session-owner-chip", ".sidebar-child-session__status"),
+  ).toEqual([false, false, true]);
+
+  setCurrent({ ...session, hasActiveRun: true, isRunVisuallyActive: true });
+  flush();
+  expect(dom.query(".session-glyph--running.session-glyph--bare")).not.toBeNull();
+  expect(dom.query("openclaw-session-owner-chip")).toBeNull();
+});
+
+it.each([false, null, undefined])(
+  "preserves the run glyph's bare styling for icon override %s",
+  (icon) => {
+    const { dom } = mountRow(
+      { key: "agent:main:running", hasActiveRun: true, status: "running", icon: "book" },
+      {},
+      { icon },
+    );
+    const glyph = dom.query(".session-glyph--running");
+    expect(glyph).not.toBeNull();
+    expect(glyph?.classList.contains("session-glyph--bare")).toBe(icon === false);
+    expect(glyph?.querySelector(".session-glyph__icon") !== null).toBe(icon !== false);
+  },
+);
+
+it.each(["owner", "icon"] as const)(
+  "retains %s artwork and actions when live rows republish unchanged presentation",
+  async (kind) => {
+    const { dom, session, current, setCurrent } = mountRow({
+      label: "Research",
+      color: "blue",
+      unread: true,
+      icon: kind === "icon" ? "book" : undefined,
+      owner: { actor: { type: "human", id: "ada", label: "Ada" } },
+    });
+    const chip = dom.query("openclaw-session-owner-chip");
+    await chip?.updateComplete;
+    const content = dom.query(".session-glyph__content")!;
+    const artwork = content.firstElementChild;
+    const graphic = content.querySelector("svg");
+    const initialGraphic = graphic?.innerHTML;
+    const archive = dom.query("[data-sidebar-session-archive]")!;
+    const archiveIcon = archive.querySelector("svg");
+    const row = dom.query(".sidebar-recent-session")!;
+    const observer = new MutationObserver(() => {});
+    observer.observe(content, { childList: true });
+    observer.observe(dom.query(".session-row-actions")!, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+    });
+    observer.observe(row, { attributes: true, attributeFilter: ["style"] });
+    onTestFinished(() => observer.disconnect());
+
+    setCurrent({ ...session, updatedAt: 2, owner: { ...session.owner! } });
+    flush();
+    expect(observer.takeRecords()).toHaveLength(0);
+    expect(dom.query(".session-glyph__content")).toBe(content);
+    expect(content.firstElementChild).toBe(artwork);
+    expect(archive.querySelector("svg")).toBe(archiveIcon);
+
+    setCurrent({
+      ...current(),
+      archived: true,
+      icon: kind === "icon" ? "bot" : undefined,
+      owner: { actor: { type: "human", id: "ada", label: "Ada renamed" } },
+    });
+    flush();
+    await chip?.updateComplete;
+    expect(archive.getAttribute("aria-label")).toBe("Restore session: Research");
+    expect(archive.querySelector("svg")).toBe(archiveIcon);
+    expect(content.firstElementChild).toBe(artwork);
+    if (kind === "owner") {
+      expect(chip?.querySelector(".session-owner-chip")?.getAttribute("aria-label")).toContain(
+        "Ada renamed",
+      );
+    } else {
+      expect(content.querySelector("svg")).toBe(graphic);
+      expect(content.querySelector("svg")?.innerHTML).not.toBe(initialGraphic);
+    }
+  },
+);
 
 it("materializes the archive hint on hover without changing the action name", () => {
   vi.useFakeTimers();
   onTestFinished(installTitleTooltips(document));
-  const { host, container } = createHost();
+  const { host, container, dom } = createHost();
   const session = projectSidebarSession({ key: "agent:main:thread", label: "Research" });
-  mountSolid(() => renderRecentSession({ host, session }), { container });
-  const archive = container.querySelector<HTMLButtonElement>("[data-sidebar-session-archive]")!;
+  mountSolid(() => <RecentSession host={host} session={session} />, { container });
+  const archive = dom.query<HTMLButtonElement>("[data-sidebar-session-archive]")!;
   const name = archive.getAttribute("aria-label");
   const hint = archive.title;
   expect(hint).not.toBe("");
-  expect(container.querySelector("openclaw-tooltip")).toBeNull();
+  expect(dom.query("openclaw-tooltip")).toBeNull();
 
   archive.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
   const tooltip = document.querySelector("openclaw-tooltip");
@@ -266,8 +394,7 @@ it("materializes the archive hint on hover without changing the action name", ()
 });
 
 it("renders the saved chip identity before agent discovery without reviving another agent's chip", async () => {
-  const { host, container, context } = createHost();
-  host.sidebarAgentsMode = "chip";
+  const { host, container, context, dom } = createHost("chip");
   host.sessionKey = "agent:main:thread";
   expect(host.activeChipAgent().agent).toBeUndefined();
   host.restoreSidebarSnapshot({
@@ -275,10 +402,10 @@ it("renders the saved chip identity before agent discovery without reviving anot
     brand: { ...emptySnapshot.brand, agentId: "main", name: "Harbor", textAvatar: "⚓" },
   });
   const update = mountObservedHost(host, container, renderSidebarAgentCard);
-  const card = container.querySelector("openclaw-sidebar-agent-card");
+  const card = dom.query("openclaw-sidebar-agent-card");
   expect(card).not.toBeNull();
   await waitForSolid(() => {
-    expect(container.querySelector(".sidebar-workspace-header")).toBeNull();
+    expect(dom.query(".sidebar-workspace-header")).toBeNull();
     expect(card!.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label")).toContain(
       "Harbor",
     );
@@ -287,15 +414,14 @@ it("renders the saved chip identity before agent discovery without reviving anot
   host.sessionKey = "agent:other:thread";
   context.agentSelection.set("other");
   update();
-  expect(container.querySelector("openclaw-sidebar-agent-card")).toBeNull();
-  expect(container.querySelector(".sidebar-workspace-header")).not.toBeNull();
+  expect(dom.query("openclaw-sidebar-agent-card")).toBeNull();
+  expect(dom.query(".sidebar-workspace-header")).not.toBeNull();
 });
 
 it("retains the workspace name DOM across unrelated sidebar publications and renames", () => {
-  const { host, container } = createHost();
-  host.restoreSidebarSnapshot(emptySnapshot);
+  const { host, container, dom } = createHost("roster", {});
   const update = mountObservedHost(host, container, renderSidebarAgentCard);
-  const name = () => container.querySelector(".sidebar-agent-card__name-text");
+  const name = () => dom.query(".sidebar-agent-card__name-text");
   const original = name();
   expect(original?.textContent).toBe("Harbor");
 
@@ -312,25 +438,17 @@ it("retains the workspace name DOM across unrelated sidebar publications and ren
 });
 
 it("keeps the rendered preview slot after caching without restoring live run authority", () => {
-  const { host, container } = createHost();
-  host.sidebarAgentsMode = "chip";
+  const { host, container, dom } = createHost("chip");
   host.sessionsShowPreview = true;
   const session = projectSidebarSession({
     key: "agent:main:thread",
     lastMessagePreview: "The report is ready for review.",
   });
   const [current, setCurrent] = createSignal(session);
-  const update = mountObservedHost(host, container, (observedHost) =>
-    renderRecentSession({
-      host: observedHost,
-      get session() {
-        return current();
-      },
-    }),
-  );
-  expect(container.querySelector(".sidebar-recent-session__subtitle")?.textContent).toBe(
-    "The report is ready for review.",
-  );
+  const update = mountObservedHost(host, container, (observedHost) => (
+    <RecentSession host={observedHost} session={current()} />
+  ));
+  expect(dom.text(".sidebar-recent-session__subtitle")).toBe("The report is ready for review.");
   const [cached] = snapshotSessions([session], (row) => ({
     snapshotSubtitle: resolveSidebarSessionRowSubtitle(host, row),
   }));
@@ -339,60 +457,47 @@ it("keeps the rendered preview slot after caching without restoring live run aut
   const restored = restoreSnapshotSession(host.sidebarSnapshot!.sessions[0]!, session.key);
   setCurrent(restored);
   update();
-  expect(container.querySelector(".sidebar-recent-session__subtitle")?.textContent).toBe(
-    "The report is ready for review.",
-  );
-  expect(container.querySelector(".sidebar-recent-session--single-line")).toBeNull();
-  expect(restored.hasActiveRun).toBe(false);
-  expect(restored.attention).toEqual({ kind: "none" });
+  expect(dom.text(".sidebar-recent-session__subtitle")).toBe("The report is ready for review.");
+  expect(dom.query(".sidebar-recent-session--single-line")).toBeNull();
+  expect([restored.hasActiveRun, restored.attention]).toEqual([false, { kind: "none" }]);
   expect(
-    container.querySelectorAll(
-      "[data-sidebar-session-pin]:enabled, [data-sidebar-session-archive]:enabled",
-    ),
+    dom.all("[data-sidebar-session-pin]:enabled, [data-sidebar-session-archive]:enabled"),
   ).toHaveLength(0);
 });
 
 it("keeps Users visible despite a cached legacy collapse preference", () => {
-  const { host, container } = createHost();
-  host.sidebarAgentsMode = "chip";
-  host.restoreSidebarSnapshot({
-    ...emptySnapshot,
+  const { host, container, dom } = createHost("chip", {
     collapsedSections: ["online"],
     onlineUsers: [{ id: "ada", name: "Ada", watchedSessions: [] }],
   });
   host.sessionData.presencePayload = { presence: [{ ts: 1, user: { id: "ada", name: "Ada" } }] };
   const update = mountObservedHost(host, container, renderAppSidebarOnline);
-  expect(container.querySelector(".sidebar-online__person-name")?.textContent).toBe("Ada");
+  expect(dom.text(".sidebar-online__person-name")).toBe("Ada");
   host.releaseSidebarSnapshot();
   update();
-  expect(container.querySelector(".sidebar-online__person-name")?.textContent).toBe("Ada");
+  expect(dom.text(".sidebar-online__person-name")).toBe("Ada");
 });
 
 it("shows unavailable counts after a failed live summary instead of retaining saved totals", () => {
-  const { host, container } = createHost();
-  host.restoreSidebarSnapshot({
-    ...emptySnapshot,
+  const { host, container, dom } = createHost("roster", {
     mode: "roster",
-    peoplePresenceFilter: "online",
-    offlineUsers: [],
     onlineUsers: [
       { id: "ada", name: "Ada", identity: { type: "profile", id: "ada" }, watchedSessions: [] },
     ],
     onlineCounts: [["ada", { open: 2, running: 1 }]],
   });
   const update = mountObservedHost(host, container, renderAppSidebarOnline);
-  expect(container.querySelector(".sidebar-online__counts")).not.toBeNull();
+  expect(dom.query(".sidebar-online__counts")).not.toBeNull();
   host.releaseSidebarSnapshot();
   host.sessionData.ownerCounts.error = "Synthetic count failure";
   update();
-  expect(container.querySelector(".sidebar-online__counts")).toBeNull();
-  expect(container.querySelector(".sidebar-online__retry")).not.toBeNull();
+  expect(dom.present(".sidebar-online__counts", ".sidebar-online__retry")).toEqual([false, true]);
 });
 
 it.each([false, true])(
   "keeps row facepiles idle with unchanged inputs (owner: %s), while admitting new presence",
   async (withOwner) => {
-    const { host, container } = createHost();
+    const { host, container, dom } = createHost();
     const session = projectSidebarSession({
       key: "agent:main:thread",
       owner: withOwner
@@ -405,31 +510,16 @@ it.each([false, true])(
       watchedSessions: [session.key],
     }));
     host.sessionData.presencePayload = { presence };
-    const [revision, setRevision] = createSignal(0);
-    const observedHost = new Proxy(host, {
-      get(target, key, receiver) {
-        revision();
-        return Reflect.get(target, key, receiver);
-      },
-    });
-    mountSolid(
-      () =>
-        renderRecentSession({
-          host: observedHost,
-          get session() {
-            revision();
-            return session;
-          },
-        }),
-      { container },
-    );
-    const update = () => {
-      setRevision((value) => value + 1);
-      flush();
+    const observed = observeHost(host);
+    const current = () => {
+      observed.track();
+      return session;
     };
+    mountSolid(() => <RecentSession host={observed.host} session={current()} />, { container });
+    const update = observed.update;
     update();
-    const row = container.querySelector(".sidebar-recent-session")!;
-    const facepile = container.querySelector("openclaw-viewer-facepile")!;
+    const row = dom.query(".sidebar-recent-session")!;
+    const facepile = dom.query("openclaw-viewer-facepile")!;
     await facepile.updateComplete;
     const updates: MutationRecord[] = [];
     const observer = new MutationObserver((records) => updates.push(...records));
@@ -460,34 +550,27 @@ it.each([false, true])(
     update();
     await facepile.updateComplete;
     expect(updates.length > 0).toBe(withOwner);
-    expect(container.querySelector(".sidebar-recent-session")).toBe(row);
-    expect(container.querySelector("openclaw-viewer-facepile")).toBe(facepile);
+    expect(dom.query(".sidebar-recent-session")).toBe(row);
+    expect(dom.query("openclaw-viewer-facepile")).toBe(facepile);
     expect(facepile.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe("ada");
   },
 );
 
 it("updates a pinned session's resolved avatar without replacing its row", () => {
-  const { host, container } = createHost();
+  const { host, container, dom } = createHost();
   const session = projectSidebarSession({ key: "agent:main:pinned" });
   const [avatar, setAvatar] = createSignal("Loading avatar");
-  mountSolid(
-    () =>
-      renderRecentSession({
-        host,
-        session,
-        get icon() {
-          const label = avatar();
-          return <span data-pinned-avatar>{label}</span>;
-        },
-      }),
-    { container },
-  );
-  const row = container.querySelector(".sidebar-recent-session");
-  expect(container.querySelector("[data-pinned-avatar]")?.textContent).toBe("Loading avatar");
+  const icon = () => {
+    const label = avatar();
+    return <span data-pinned-avatar>{label}</span>;
+  };
+  mountSolid(() => <RecentSession host={host} session={session} icon={icon()} />, { container });
+  const row = dom.query(".sidebar-recent-session");
+  expect(dom.text("[data-pinned-avatar]")).toBe("Loading avatar");
 
   setAvatar("Ada");
   flush();
 
-  expect(container.querySelector("[data-pinned-avatar]")?.textContent).toBe("Ada");
-  expect(container.querySelector(".sidebar-recent-session")).toBe(row);
+  expect(dom.text("[data-pinned-avatar]")).toBe("Ada");
+  expect(dom.query(".sidebar-recent-session")).toBe(row);
 });

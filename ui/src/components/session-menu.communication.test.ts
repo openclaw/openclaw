@@ -5,6 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../test-helpers/gateway-client.ts";
+import {
   mountMenu,
   menuPanel,
   openSubmenu,
@@ -91,6 +95,77 @@ describe("session communication menu", () => {
     await menu.updateComplete;
     expect(choice(advanced, "send", "ask").getAttribute("aria-pressed")).toBe("true");
     expect(choice(advanced, "receive", "always").getAttribute("aria-pressed")).toBe("true");
+    expect(request.mock.calls.filter(([method]) => method === "sessions.describe")).toHaveLength(2);
+  });
+
+  it("retires pending settings on disconnect and reads the same session from the new connection", async () => {
+    const oldReply = createDeferred<{ session: GatewaySessionRow }>();
+    const { context, publish } = createSessionOwnerMenuHarness((method) =>
+      method === "sessions.describe" ? oldReply.promise : sessionOwnerProfiles("Ada"),
+    );
+    const menu = await mountMenu({
+      context,
+      session: { target: { key: "agent:main:settings" }, sessionId: "settings-id" },
+    });
+    const advanced = await openSubmenu(menu, "Advanced");
+    publish({ phase: "reconnecting" });
+    await settleSessionMenu(menu);
+    oldReply.reject(new Error("Retired connection"));
+    await settleSessionMenu(menu);
+    expect(advanced.querySelector('[role="alert"]')).toBeNull();
+    const request = createGatewayRequestMock((method) =>
+      method === "sessions.describe"
+        ? {
+            session: {
+              key: "agent:main:settings",
+              sessionId: "settings-id",
+              kind: "direct",
+              updatedAt: 1,
+              effectiveCommunication: { send: "ask", receive: "always" },
+            },
+          }
+        : sessionOwnerProfiles("Ada"),
+    );
+    publish({ phase: "connected", client: createTestGatewayClient(request) });
+    await waitForFast(() => {
+      expect(choice(advanced, "send", "ask").getAttribute("aria-pressed")).toBe("true");
+      expect(choice(advanced, "receive", "always").disabled).toBe(false);
+    });
+    expect(advanced.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("shows descriptor failures and retries through the settings menu", async () => {
+    let failed = false;
+    const { context } = createSessionOwnerMenuHarness((method) => {
+      if (method !== "sessions.describe") {
+        return sessionOwnerProfiles("Ada");
+      }
+      if (!failed) {
+        failed = true;
+        throw new Error("Settings unavailable");
+      }
+      return {
+        session: {
+          key: "agent:main:settings",
+          sessionId: "settings-id",
+          kind: "direct",
+          updatedAt: 1,
+          effectiveCommunication: policy,
+        },
+      };
+    });
+    const menu = await mountMenu({
+      context,
+      session: { target: { key: "agent:main:settings" }, sessionId: "settings-id" },
+    });
+    const advanced = await openSubmenu(menu, "Advanced");
+    await waitForFast(() => expect(advanced.textContent).toContain("Settings unavailable"));
+    expect(choice(advanced, "send", "always").disabled).toBe(true);
+    await selectMenuValue(menu, "reload-settings");
+    await waitForFast(() =>
+      expect(choice(advanced, "send", "never").getAttribute("aria-pressed")).toBe("true"),
+    );
+    expect(advanced.textContent).not.toContain("Settings unavailable");
   });
 
   it("dispatches only the selected direction and resets raw overrides together", async () => {

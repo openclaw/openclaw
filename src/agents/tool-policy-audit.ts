@@ -17,8 +17,8 @@ const toolPolicyAuditLogger = createSubsystemLogger("agents/tool-policy");
 type ToolPolicyRuleKind = "allow" | "deny" | "allow+deny" | "unknown";
 
 function toolPolicyRuleKind(policy: ToolPolicyLike): ToolPolicyRuleKind {
-  const hasAllow = Array.isArray(policy.allow) && policy.allow.length > 0;
-  const hasDeny = Array.isArray(policy.deny) && policy.deny.length > 0;
+  const hasAllow = Boolean(policy.allow?.length);
+  const hasDeny = Boolean(policy.deny?.length);
   if (hasAllow && hasDeny) {
     return "allow+deny";
   }
@@ -42,10 +42,9 @@ function removedToolNamesByRule(params: {
   }
 
   let matchesDeny: ReturnType<typeof createToolPolicyMatcher> | undefined;
-  const fallbackRuleKind =
-    Array.isArray(params.policy.allow) && params.policy.allow.length > 0
-      ? "allow"
-      : toolPolicyRuleKind(params.policy);
+  const fallbackRuleKind = params.policy.allow?.length
+    ? "allow"
+    : toolPolicyRuleKind(params.policy);
   const removed = new Map<ToolPolicyRuleKind, Set<string>>();
   for (const name of normalizeToolList(params.before.map((tool) => tool.name))) {
     const remaining = remainingCounts.get(name) ?? 0;
@@ -54,7 +53,7 @@ function removedToolNamesByRule(params: {
       continue;
     }
     matchesDeny ??= createToolPolicyMatcher({
-      deny: Array.isArray(params.policy.deny) ? params.policy.deny : undefined,
+      deny: params.policy.deny,
     });
     const ruleKind = matchesDeny(name) ? fallbackRuleKind : "deny";
     const names = removed.get(ruleKind) ?? new Set<string>();
@@ -65,7 +64,7 @@ function removedToolNamesByRule(params: {
 }
 
 function createMatchedPolicyRuleForTool(policy: ToolPolicyLike, ruleKind: ToolPolicyRuleKind) {
-  const rules = ruleKind === "deny" && Array.isArray(policy.deny) ? policy.deny : [];
+  const rules = ruleKind === "deny" ? (policy.deny ?? []) : [];
   const matchers: ReturnType<typeof createToolPolicyMatcher>[] = [];
   return (toolName: string) =>
     rules.find(

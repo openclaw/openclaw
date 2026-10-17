@@ -4,12 +4,14 @@
 // when doctor imports or out-of-band writes leave derived rows behind.
 import { sql } from "kysely";
 import { admitStoreSearch } from "../../infra/database-engine/adapters.js";
+import { DatabaseSearchCapabilityUnavailableError } from "../../infra/database-engine/capability-unavailable.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
@@ -21,8 +23,10 @@ import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
+import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 import {
   captureLifecycleDatabaseScope,
+  prepareSqliteScope,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
@@ -94,7 +98,7 @@ export async function searchSessionTranscripts(
           path: preparedDatabase.path,
           env: params.env,
         }
-      : resolveSqliteReadScope(params),
+      : await prepareSqliteScope({ ...params, sessionKey: params.sessionKey ?? "" }),
   );
   const options = toDatabaseOptions(scope);
   const request = {
@@ -184,27 +188,29 @@ export function searchSessionTranscriptsReadOnlySync(
           // Shared databases hold multiple logical agents. Filter before LIMIT;
           // reserved global/unknown sentinels retain their store-wide scope.
           const db = getNodeSqliteKysely<DB>(database.db);
-          const search = admitStoreSearch(database.db, {
-            text: {
-              transcript: {
-                table: "session_transcript_fts",
-                fields: ["text", "session_id", "message_id", "role", "timestamp"],
-              },
-            },
-          });
+          const search = admitStoreSearch(database.db, agentTranscriptSearchSchema);
           if (!search.fullText) {
-            throw new Error(search.diagnostics.join("; "));
+            throw new DatabaseSearchCapabilityUnavailableError(
+              "fullText",
+              search.diagnostics.join("; "),
+            );
           }
           const textIndex = search.text.transcript!;
-          const ranking = search.fullText.rank(textIndex);
+          const literalQuery = sessionTranscriptSearchFtsQuery(query, params.match);
+          const ranking = search.fullText.rank(textIndex, literalQuery);
+          const agentPrefix = toAgentStoreSessionKey({
+            agentId: scope.agentId,
+            requestKey: "*",
+          }).slice(0, -1);
           const selectedWindows = db
             .selectFrom("session_windows")
             .select(["session_id", "session_key"])
             .where((eb) =>
               params.sessionKeys === undefined
                 ? eb.or([
-                    /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */
-                    sql<boolean>`${eb.ref("session_key")} GLOB ${toAgentStoreSessionKey({ agentId: scope.agentId, requestKey: "*" })}`,
+                    isPostgresSqlConnection(database.db)
+                      ? /* kysely-allow-raw: Literal prefix comparison preserves underscores in agent IDs. */ sql<boolean>`left(${eb.ref("session_key")}, ${agentPrefix.length}) = ${agentPrefix}`
+                      : /* kysely-allow-raw: GLOB preserves literal underscores in SQLite agent namespaces. */ sql<boolean>`${eb.ref("session_key")} GLOB ${toAgentStoreSessionKey({ agentId: scope.agentId, requestKey: "*" })}`,
                     eb("session_key", "in", ["global", "unknown"]),
                   ])
                 : params.sessionKeys.length > 0
@@ -222,10 +228,7 @@ export function searchSessionTranscriptsReadOnlySync(
                 .innerJoin(selectedWindows.as("window"), "window.session_id", "cold.session_id")
                 .select((eb) => eb.fn.countAll<number>().as("count")),
             )?.count ?? 0;
-          const match = search.fullText.match(
-            textIndex,
-            sessionTranscriptSearchFtsQuery(query, params.match),
-          );
+          const match = search.fullText.match(textIndex, literalQuery);
           const order =
             params.order === "recent"
               ? sql`session_transcript_fts.timestamp desc, fts_rowid desc`
@@ -245,14 +248,16 @@ export function searchSessionTranscriptsReadOnlySync(
             .where(match)
             // Depend on the scoped window so SQLite cannot read role before excluding sessions.
             .$if(Boolean(params.role), (builder) =>
-              builder.where((eb) =>
-                eb
-                  .case()
-                  .when("window.session_key", "is not", null)
-                  .then(eb("role", "=", params.role!))
-                  .else(false)
-                  .end(),
-              ),
+              isPostgresSqlConnection(database.db)
+                ? builder.where("role", "=", params.role!)
+                : builder.where((eb) =>
+                    eb
+                      .case()
+                      .when("window.session_key", "is not", null)
+                      .then(eb("role", "=", params.role!))
+                      .else(false)
+                      .end(),
+                  ),
             )
             .where(
               "mapped.session_id",
@@ -266,15 +271,39 @@ export function searchSessionTranscriptsReadOnlySync(
               "window.session_key",
               search.fullText.identity(textIndex).as("fts_rowid"),
               ranking.value.as("rank"),
-            ])
-            .orderBy(order)
-            .limit(limit + 1);
+            ]);
+          const selectedHits =
+            params.order === "recent"
+              ? candidates.orderBy(order).limit(limit + 1)
+              : db
+                  .with(
+                    (cte) => cte("scores").materialized(),
+                    () => candidates,
+                  )
+                  .selectFrom("scores")
+                  .crossJoin("session_transcript_fts")
+                  .where((eb) =>
+                    eb(search.fullText!.identity(textIndex), "=", eb.ref("scores.fts_rowid")),
+                  )
+                  // Keep every tie at the cutoff before reading metadata for the final ordering.
+                  .where("scores.rank", "in", (eb) =>
+                    eb
+                      .selectFrom("scores")
+                      .select("rank")
+                      .orderBy("rank", ranking.order)
+                      .limit(limit + 1),
+                  )
+                  .select(["scores.session_key", "scores.fts_rowid", "scores.rank"])
+                  .orderBy("scores.rank", ranking.order)
+                  .orderBy("session_transcript_fts.timestamp", "desc")
+                  .orderBy("session_transcript_fts.message_id", "asc")
+                  .limit(limit + 1);
           const rows = executeSqliteQuerySync(
             database.db,
             db
               .with(
                 (cte) => cte("hits").materialized(),
-                () => candidates,
+                () => selectedHits,
               )
               .selectFrom("hits")
               .crossJoin("session_transcript_fts")
@@ -289,7 +318,7 @@ export function searchSessionTranscriptsReadOnlySync(
                 "role",
                 "timestamp",
                 "hits.rank as rank",
-                search.fullText.snippet(textIndex, "text", 48).as("snippet"),
+                search.fullText.snippet(textIndex, "text", 48, literalQuery).as("snippet"),
               ])
               .orderBy(order),
           ).rows;

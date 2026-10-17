@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createMemo, createRoot, createSignal } from "solid-js";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import "./components/chat-sidebar-region.runtime.tsx";
 import "../../components/browser/browser-panel.ts";
 import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
@@ -16,14 +17,15 @@ import {
   rememberSessionPanelToggle,
   type SessionPanelToggleSlot,
 } from "../../components/session-panel-toggle-buffer.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush as flushSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
-  ChatPaneSessionPanelToggleController,
+  createChatPaneSessionPanelToggles,
   type PendingSessionPanelToggle,
 } from "./chat-pane-session-panel-toggle.ts";
 import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
+import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
@@ -74,19 +76,26 @@ function fixture() {
   const updateSidebarLayout = vi.fn((layout: ChatPageHost["sidebarLayout"]) => {
     state.sidebarLayout = layout;
   });
-  const controller = new ChatPaneSessionPanelToggleController({
-    current: () => owner,
-    pending,
-    requestUpdate,
-    updateSidebarLayout,
+  let flush!: () => void;
+  const dispose = createRoot((stop) => {
+    flush = createChatPaneSessionPanelToggles({
+      current: () => owner,
+      pending,
+      requestUpdate,
+      updateSidebarLayout,
+    });
+    return stop;
   });
+  onTestFinished(dispose);
+
   const event = (url = "https://forge.example/items/1") =>
     new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
       cancelable: true,
       detail: { url, open: true },
     });
   return {
-    controller,
+    flush,
+    dispose,
     definitions,
     commit,
     deliverPanelEvent,
@@ -109,7 +118,7 @@ describe("plugin panel intent delivery", () => {
     "routes %s intents only to registered session panels",
     (delivery) => {
       const f = fixture();
-      const stop = f.controller.subscribe();
+      const stop = f.dispose;
       const send = (panelId: string, open: boolean) =>
         new CustomEvent(PLUGIN_PANEL_TOGGLE_EVENT, {
           detail: { pluginId: "review", panelId, sessionKey: "session-b", open },
@@ -118,7 +127,7 @@ describe("plugin panel intent delivery", () => {
         const event = send("document", true);
         if (delivery === "buffered") {
           rememberSessionPanelToggle("plugin:review/document", event);
-          f.controller.flush();
+          f.flush();
         } else {
           window.dispatchEvent(event);
         }
@@ -127,7 +136,7 @@ describe("plugin panel intent delivery", () => {
         window.dispatchEvent(send("missing", true));
         expect(f.updateSidebarLayout).not.toHaveBeenCalled();
         if (delivery === "buffered") {
-          f.controller.flush();
+          f.flush();
         } else {
           window.dispatchEvent(event);
         }
@@ -154,15 +163,13 @@ describe("session link-reader intent delivery", () => {
       Object.defineProperty(recipient, "updateComplete", { value: recipientCommit.promise });
       f.root.append(recipient);
       const event = f.event();
-      f.controller.handle("link-reader", "openclaw-link-reader-panel", event);
+      window.dispatchEvent(event);
       f.definitions.resolve(HTMLElement);
       f.commit.resolve(true);
       await vi.advanceTimersByTimeAsync(0);
       expect(f.deliverPanelEvent).not.toHaveBeenCalled();
       if (outcome === "closed") {
-        f.controller.handle(
-          "link-reader",
-          "openclaw-link-reader-panel",
+        window.dispatchEvent(
           new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, { detail: { open: false } }),
         );
       } else if (outcome === "session") {
@@ -185,7 +192,7 @@ describe("session link-reader intent delivery", () => {
     const second = f.event("https://forge.example/items/2");
     rememberSessionPanelToggle("link-reader", first);
     rememberSessionPanelToggle("link-reader", second);
-    f.controller.flush();
+    f.flush();
     expect(first.defaultPrevented).toBe(true);
     expect(second.defaultPrevented).toBe(true);
     expect(f.state.sidebarLayout.columns[0]?.panels).toEqual([
@@ -207,10 +214,10 @@ describe("session link-reader intent delivery", () => {
   it("does not append a new session intent to a retired pending batch", async () => {
     const f = fixture();
     const old = f.event();
-    f.controller.handle("link-reader", "openclaw-link-reader-panel", old);
+    window.dispatchEvent(old);
     f.state.sessionKey = "session-b";
     const current = f.event("https://forge.example/items/2");
-    f.controller.handle("link-reader", "openclaw-link-reader-panel", current);
+    window.dispatchEvent(current);
     f.definitions.resolve(HTMLElement);
     f.commit.resolve(true);
     await vi.waitFor(() => expect(f.deliverPanelEvent).toHaveBeenCalledTimes(1));
@@ -227,21 +234,15 @@ describe("session link-reader intent delivery", () => {
     "retires a pending batch after $change (definitions ready=$ready)",
     async ({ change, ready }) => {
       const f = fixture();
-      f.controller.handle("link-reader", "openclaw-link-reader-panel", f.event());
-      f.controller.handle(
-        "link-reader",
-        "openclaw-link-reader-panel",
-        f.event("https://forge.example/items/2"),
-      );
+      window.dispatchEvent(f.event());
+      window.dispatchEvent(f.event("https://forge.example/items/2"));
       if (ready) {
         f.definitions.resolve(HTMLElement);
         await Promise.resolve();
         await Promise.resolve();
       }
       if (change === "close") {
-        f.controller.handle(
-          "link-reader",
-          "openclaw-link-reader-panel",
+        window.dispatchEvent(
           new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, { detail: { open: false } }),
         );
         expect(f.pending.size).toBe(0);
@@ -262,7 +263,7 @@ describe("session link-reader intent delivery", () => {
   it("keeps unsupported URLs unaccepted and leaves the layout alone", () => {
     const f = fixture();
     const event = f.event("https://example.com/ordinary-link");
-    expect(f.controller.handle("link-reader", "openclaw-link-reader-panel", event)).toBe(false);
+    window.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(false);
     expect(f.updateSidebarLayout).not.toHaveBeenCalled();
   });
@@ -302,21 +303,26 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   state.sidebarLayout = { columns: [] };
   state.sessionKey = "agent:main:local-preview";
   const pending = new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>();
-  const toggles = new ChatPaneSessionPanelToggleController({
-    current: () => ({
-      renderRoot: pane,
-      state,
-      linkReaders: [],
-      pluginPanels: [],
-      updateComplete: pendingUpdate ?? Promise.resolve(),
-    }),
-    pending,
-    requestUpdate,
-    updateSidebarLayout: (layout) => {
-      state.sidebarLayout = layout;
-      requestUpdate();
-    },
+  const dispose = createRoot((stop) => {
+    createChatPaneSessionPanelToggles({
+      current: () => ({
+        renderRoot: pane,
+        state,
+        linkReaders: [],
+        pluginPanels: [],
+        updateComplete: pendingUpdate ?? Promise.resolve(),
+      }),
+      pending,
+      requestUpdate,
+      updateSidebarLayout: (layout) => {
+        state.sidebarLayout = layout;
+        requestUpdate();
+      },
+    });
+    return stop;
   });
+  onTestFinished(dispose);
+
   function BrowserCard(props: { sessionKey: string; presented: boolean; refresh: boolean }) {
     return (
       <openclaw-browser-panel
@@ -332,40 +338,60 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   }
   const conversation = document.createElement("main");
   conversation.textContent = "Conversation";
+  const [snapshot, setSnapshot] = createSignal({
+    layout: state.sidebarLayout,
+    sessionKey: state.sessionKey,
+    refresh: !pending.has("browser"),
+  });
+  let view: ReturnType<typeof mountSolid> | undefined;
   function draw() {
-    renderPaneLegacyContent(
-      renderSidebarRegion({
-        presentationId: "delayed-browser-card",
-        availableWidth: 1400,
-        callbacks: {
-          activatePanel: () => undefined,
-          togglePanelExpanded: () => undefined,
-          closeSlot: () => undefined,
-          openSlot: () => undefined,
-          reorderPanel: () => undefined,
-          resizePanel: () => undefined,
-          setOpen: () => undefined,
-        },
-        layout: state.sidebarLayout,
-        narrow: false,
-        panelDefinitions: sidebarPanelDefinitions().map((definition) =>
+    setSnapshot({
+      layout: state.sidebarLayout,
+      sessionKey: state.sessionKey,
+      refresh: !pending.has("browser"),
+    });
+    view ??= mountSolid(
+      () => {
+        const definitions = sidebarPanelDefinitions().map((definition) =>
           Object.assign(definition, {
             available: definition.slot === "browser",
             content:
               definition.slot === "browser"
-                ? solidContent(BrowserCard, {
-                    sessionKey: state.sessionKey,
-                    presented: isSidebarSlotVisible(state.sidebarLayout, "browser"),
-                    refresh: !pending.has("browser"),
-                  })
+                ? () => (
+                    <BrowserCard
+                      sessionKey={snapshot().sessionKey}
+                      presented={isSidebarSlotVisible(snapshot().layout, "browser")}
+                      refresh={snapshot().refresh}
+                    />
+                  )
                 : null,
           }),
-        ),
-        primary: conversation,
-        requestUpdate,
-      }),
-      pane,
+        );
+        const region = createMemo(() =>
+          renderSidebarRegion({
+            presentationId: "delayed-browser-card",
+            availableWidth: 1400,
+            callbacks: {
+              activatePanel: () => undefined,
+              togglePanelExpanded: () => undefined,
+              closeSlot: () => undefined,
+              openSlot: () => undefined,
+              reorderPanel: () => undefined,
+              resizePanel: () => undefined,
+              setOpen: () => undefined,
+            },
+            layout: snapshot().layout,
+            narrow: false,
+            panelDefinitions: definitions,
+            primary: conversation,
+            requestUpdate,
+          }),
+        );
+        return <SidebarRegionView {...region()} />;
+      },
+      { container: pane },
     );
+    flushSolid();
   }
   function requestUpdate() {
     // Expose the new commit promise before the browser card can mount.
@@ -377,9 +403,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   document.body.append(pane);
   try {
     draw();
-    toggles.handle(
-      "browser",
-      "openclaw-browser-panel",
+    window.dispatchEvent(
       new CustomEvent("openclaw:browser-toggle", {
         detail: {
           open: true,
@@ -409,6 +433,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
     ).toBe("Local preview");
   } finally {
     commit.resolve();
+    view?.unmount();
     pane.remove();
     vi.unstubAllGlobals();
     vi.useRealTimers();

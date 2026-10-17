@@ -222,6 +222,8 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               hasCurrentGatewayPolicyClientSource(client) &&
               isCommittedGrantCurrent(),
             subscribe: (onRevoked) => {
+              // Retained source grants must remain reachable by profile/origin revocation after the RPC returns.
+              const releaseSourceClient = clients.retainRequest(client);
               remoteIngress?.signal.addEventListener("abort", onRevoked, { once: true });
               if (remoteIngress?.signal.aborted) {
                 onRevoked();
@@ -248,6 +250,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 releaseClient();
                 releasePolicy();
                 releaseGeneration?.();
+                releaseSourceClient();
               };
             },
           }

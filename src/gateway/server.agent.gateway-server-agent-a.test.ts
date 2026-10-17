@@ -205,7 +205,7 @@ describe("gateway server agent", () => {
     agentCommandMock.mockImplementationOnce(async () => {
       const admitted = getAgentRunContext("idem-agent-owned-global");
       admittedOwner = { sessionKey: admitted?.sessionKey, agentId: admitted?.agentId };
-      return { payloads: [], meta: { durationMs: 0 } };
+      return { payloads: [], meta: { durationMs: 0, terminalReply: { disposition: "empty" } } };
     });
     const res = await rpcReq(gatewaySuite.ws, "agent", {
       message: "hi",

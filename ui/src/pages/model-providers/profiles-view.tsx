@@ -7,6 +7,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { ModelAccountUsageElement } from "./account-usage.tsx";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
@@ -48,6 +49,7 @@ type ProviderProfile = ModelProviderCard["profiles"][number];
 export type ProviderProfilesViewProps = {
   usageClient?: GatewayBrowserClient | null;
   usageAgentId?: string;
+  registerAccountUsage?: (element: ModelAccountUsageElement) => () => void;
   busy: Record<string, boolean>;
   canMutate: boolean;
   mutationBlockedReason: string | null;
@@ -274,11 +276,7 @@ function startPointerDrag(params: {
       return;
     }
     active = false;
-    grip.removeEventListener("pointermove", update);
-    grip.removeEventListener("pointerup", handleUp);
-    grip.removeEventListener("pointercancel", handleCancel);
-    grip.removeEventListener("lostpointercapture", handleCancel);
-    document.removeEventListener("keydown", handleKeyDown, true);
+    stops.forEach((stop) => stop());
     section.classList.remove(SORTING_CLASS);
     for (const { element } of slots) {
       element.classList.remove(DRAGGING_CLASS);
@@ -310,12 +308,14 @@ function startPointerDrag(params: {
       finish(params.event, false);
     }
   };
-  grip.addEventListener("pointermove", update);
-  grip.addEventListener("pointerup", handleUp);
-  grip.addEventListener("pointercancel", handleCancel);
-  grip.addEventListener("lostpointercapture", handleCancel);
-  // A drag owns Escape before the Settings shell handles its back shortcut.
-  document.addEventListener("keydown", handleKeyDown, true);
+  const stops = [
+    listen(grip, "pointermove", { handleEvent: update }),
+    listen(grip, "pointerup", { handleEvent: handleUp }),
+    listen(grip, "pointercancel", { handleEvent: handleCancel }),
+    listen(grip, "lostpointercapture", { handleEvent: handleCancel }),
+    // A drag owns Escape before the Settings shell handles its back shortcut.
+    listen(document, "keydown", { handleEvent: handleKeyDown }, true),
+  ];
   return cleanup;
 }
 
@@ -512,7 +512,11 @@ function ProviderProfileRow(
   },
 ) {
   let cancelDrag: (() => void) | undefined;
-  onCleanup(() => cancelDrag?.());
+  let releaseUsage: (() => void) | undefined;
+  onCleanup(() => {
+    cancelDrag?.();
+    releaseUsage?.();
+  });
   const profile = () => props.row.profile;
   const group = () => props.row.group;
   const provider = () => group().provider;
@@ -614,6 +618,7 @@ function ProviderProfileRow(
       <ProfileIdentity profile={profile()} identity={props.identity} showDetails />
       {provider() === "openai" && profile().type !== "api_key" ? (
         <openclaw-model-account-usage
+          ref={(element) => (releaseUsage = props.registerAccountUsage?.(element))}
           prop:client={props.usageClient ?? null}
           prop:agentId={props.usageAgentId ?? ""}
           prop:profileId={profile().profileId}

@@ -26,9 +26,9 @@ const channelState = vi.hoisted(() => ({
   deliver: vi.fn(),
 }));
 
+// mock-isolation: channel custody tests provide the follow-up route without loading model or auth plans.
 vi.mock("../../agents/runtime-plan/build.js", () => ({
   buildAgentRuntimeDeliveryPlan: () => ({
-    isSilentPayload: () => false,
     resolveFollowupRoute: () => undefined,
   }),
 }));
@@ -302,12 +302,20 @@ describe("follow-up delivery channel boundary", () => {
 
   it.each([
     {
-      name: "optional group generic silence",
+      name: "optional group control-looking failure",
+      expectation: "optional",
+      channel: "discord",
+      recipient: "channel:C1",
+      text: "NO_REPLY.",
+      delivered: true,
+    },
+    {
+      name: "optional group literal control-looking failure",
       expectation: "optional",
       channel: "discord",
       recipient: "channel:C1",
       text: "NO_REPLY",
-      delivered: false,
+      delivered: true,
     },
     {
       name: "optional work without a recipient",

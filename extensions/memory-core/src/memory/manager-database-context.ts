@@ -66,6 +66,7 @@ type PublicationWorker = {
 };
 
 export class MemoryIndexDatabase {
+  postgresStageId?: string;
   private readonly privateQueues = new Map<string, StoreWriterQueue>();
   private nativeWriterActive = false;
   private publicationWorker?: Promise<PublicationWorker>;
@@ -312,7 +313,7 @@ export class MemoryIndexDatabase {
   }
 
   get isShadow(): boolean {
-    return this.shadow !== undefined;
+    return this.shadow !== undefined || this.postgresStageId !== undefined;
   }
 
   assertShadowPath(): void {
@@ -408,7 +409,7 @@ export class MemoryIndexDatabase {
           },
           {
             moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
-            input: { kind: "agent" },
+            input: { kind: "agent", stageId: this.postgresStageId },
           },
         );
         this.terminalSignal = store.terminalSignal;
@@ -516,7 +517,7 @@ export class MemoryIndexDatabase {
     );
   }
 
-  private executePublication<Key extends keyof MemoryPublicationOperations>(
+  executePublication<Key extends keyof MemoryPublicationOperations>(
     command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
     assertCurrent: () => void,
   ): Promise<MemoryPublicationOperations[Key]["output"]> {
@@ -526,7 +527,7 @@ export class MemoryIndexDatabase {
     );
   }
 
-  private async retryPublication<T>(
+  async retryPublication<T>(
     run: () => Promise<MemoryPublicationResult<T>>,
     prepare: () => Promise<boolean> = async () => true,
   ): Promise<T | undefined> {
@@ -546,7 +547,7 @@ export class MemoryIndexDatabase {
     command: Command,
     assertCurrent: () => void,
   ): Promise<MemoryIndexReadOperations[Command["type"]]["output"]> {
-    if (this.isShadow) {
+    if (this.isShadow || this.admission?.engine === "postgres") {
       return this.executePublication(command, assertCurrent);
     }
     const target = this.writeOptions;
@@ -715,11 +716,9 @@ export class MemoryIndexDatabase {
   }
 
   async closePublicationWorker(): Promise<void> {
-    if (this.publicationWorker) {
-      const worker = await this.publicationWorker;
-      await worker.store.close();
-      this.publicationWorker = undefined;
-    }
+    const worker = await this.publicationWorker;
+    await worker?.store.close();
+    this.publicationWorker = undefined;
   }
 
   async withPublicationGeneration(run: () => Promise<void>): Promise<void> {

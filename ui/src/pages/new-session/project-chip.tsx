@@ -75,7 +75,7 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
           params={{
             browser: props.params.browser,
             id: "new-session-place-browser",
-            label: props.params.gatewayLabel,
+            label: props.params.browserLabel,
             registerProjectPath: props.params.registerProjectPath,
             registeringProject: props.params.registeringProject,
             onBack: props.params.onBrowserBack,
@@ -116,6 +116,24 @@ export function ProjectChip(props: { params: ProjectChipOptions }) {
               }}
               submitting={props.params.submitting || props.params.pendingPlacement}
             />
+          ) : undefined}
+          {props.params.onBrowseDevice && props.params.deviceBrowseLabel && !view().query ? (
+            <button
+              type="button"
+              class="session-menu__item"
+              data-value="browse-device"
+              aria-pressed="false"
+              disabled={props.params.submitting || props.params.pendingPlacement}
+              ref={nativeListener("click", () => props.params.onBrowseDevice?.())}
+            >
+              <span class="session-menu__check" aria-hidden="true" />
+              <span class="session-menu__text">
+                {t("newSession.browseDevice", { device: props.params.deviceBrowseLabel })}
+              </span>
+              <span class="new-session-page__menu-chevron" aria-hidden="true">
+                <Icon name="chevronRight" />
+              </span>
+            </button>
           ) : undefined}
           {props.params.workspace && props.params.state.showWorkspace ? (
             <SessionMenuItem

@@ -12,7 +12,10 @@ import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import { CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerRpcError } from "./client.js";
-import { threadStartResult as nativeThreadStartResult } from "./codex-app-server.test-fixtures.js";
+import {
+  disabledMcpServerStatus,
+  threadStartResult as nativeThreadStartResult,
+} from "./codex-app-server.test-fixtures.js";
 import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCodexManagedThreadStore } from "./managed-thread-store.js";
@@ -48,9 +51,9 @@ import {
 } from "./thread-fingerprints.js";
 import {
   createLeasedCodexLifecycleHarness,
+  createLifecycleRequest,
   createThreadRequestAppServerOptions as createAppServerOptions,
   createThreadRequestAttemptParams as createAttemptParams,
-  disabledMcpServerStatus,
   startOrResumeThreadWithEmptySkillCatalog as startOrResumeThreadImpl,
   writeNativeCatalogFixture,
 } from "./thread-lifecycle.test-fixtures.js";
@@ -263,20 +266,6 @@ describe("Codex ring-zero thread config", () => {
   });
 });
 
-function createLifecycleRequest(
-  respond: (method: string, requestParams?: unknown) => Promise<unknown>,
-) {
-  return vi.fn((method: string, requestParams?: unknown) => {
-    if (method === "config/read") {
-      return Promise.resolve({ config: {}, origins: {}, layers: [] });
-    }
-    if (method === "configRequirements/read") {
-      return Promise.resolve({ requirements: null });
-    }
-    return respond(method, requestParams);
-  });
-}
-
 function authoredProjectDocConfig(projectDocMaxBytes: number) {
   return buildCodexProjectDocThreadConfig(undefined, {
     config: { project_doc_max_bytes: projectDocMaxBytes },
@@ -372,7 +361,7 @@ function createThreadLifecycleParams(
     modelId: "gpt-5.4-codex",
     model: createCodexTestModel("codex"),
     thinkLevel: "medium",
-    disableTools: true,
+    disableTools: false,
     timeoutMs: 5_000,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
@@ -1884,6 +1873,8 @@ describe("Codex app-server supervised branch lifecycle", () => {
       appServer: createThreadLifecycleAppServerOptions(),
       nativeCodeModeEnabled: false,
       userMcpServersEnabled: false,
+      webSearchAllowed: false,
+      persistentWebSearchAllowed: false,
       hostSystemAgentActive: true,
     };
 

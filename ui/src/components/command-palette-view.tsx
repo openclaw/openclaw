@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createEffect, createMemo, For, Show, untrack } from "solid-js";
 import type { GatewayAgentRow } from "../api/types.ts";
 import {
   pathForAgentPanel,
@@ -88,13 +88,14 @@ export type CommandPaletteProps = {
   composing: boolean;
   mentionMenu: HumanMentionMenu;
   mentionHost: HumanMentionMenuHost;
-  requestUpdate: () => void;
+  onMentionChange: () => void;
   onActiveIdChange: (id: string) => void;
   onNavigate?: ApplicationContext["navigate"];
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
   pluginIconUrls: Readonly<Record<string, string>>;
   onPluginIconError: (pluginId: string) => void;
+  onPluginIconVisible: (pluginId: string) => void;
   desktopAvailable: boolean;
   custodianAvailable: boolean;
   onInputRef: (element: Element | undefined, previous?: HTMLTextAreaElement) => void;
@@ -181,7 +182,7 @@ function handleKeydown(event: KeyboardEvent, readProps: () => CommandPaletteProp
     !event.altKey &&
     !event.metaKey &&
     !event.ctrlKey &&
-    props.mentionMenu.handleKeydown(event, props.mentionHost, props.requestUpdate)
+    props.mentionMenu.handleKeydown(event, props.mentionHost)
   ) {
     event.stopPropagation();
     return;
@@ -312,6 +313,7 @@ function PaletteOption(props: {
         identity={current().agentIdentity?.get(agentId())}
         pluginIconUrls={current().pluginIconUrls}
         onPluginIconError={current().onPluginIconError}
+        onPluginIconVisible={current().onPluginIconVisible}
       />
     </div>
   );
@@ -470,6 +472,17 @@ function PaletteActions(props: { readProps: () => CommandPaletteProps }) {
 
 export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
   const current = () => props.readProps();
+  // The palette retains one draft owner and picker for this view's lifetime.
+  const { mentionMenu, onMentionChange } = untrack(current);
+  createEffect(
+    () => current().draft.mentionDirectory,
+    (directory) => mentionMenu.syncDirectory(directory),
+  );
+  createEffect(
+    createMemo(() => mentionMenu.open),
+    onMentionChange,
+    { defer: true },
+  );
   const hideSearch = () =>
     current().promptMode || current().mentionMenu.open || current().draft.mentions.length > 0;
   // The collapsing search remains mounted with its last presented projection.
@@ -490,7 +503,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             event.preventDefault();
             if (!current().composing) {
               current().mentionMenu.close();
-              current().requestUpdate();
+              current().onMentionChange();
             }
             return;
           }
@@ -550,7 +563,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                 mentions={current().draft.mentions}
                 onRemove={() => {
                   current().draft.setMessage(current().query, []);
-                  current().requestUpdate();
+                  current().onMentionChange();
                   current().mentionHost.getTextarea()?.focus({ preventScroll: true });
                 }}
                 avatarUrls={current().mentionMenu.selectedAvatarUrls}
@@ -558,9 +571,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             </div>
           </Show>
           <PaletteSessionAttachments draft={current().draft} revision={current()} />
-          <HumanMentionMenuView
-            args={[current().mentionMenu, current().mentionHost, current().requestUpdate]}
-          />
+          <HumanMentionMenuView args={[current().mentionMenu, current().mentionHost]} />
           <span
             id={mentionAnnouncementId()}
             class="sr-only"

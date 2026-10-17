@@ -1,5 +1,7 @@
+import type { PluginToolExecutionCapabilities } from "../agents/plugin-tool-execution.js";
 import { assertMemoryAudienceSession } from "./memory-audience.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
 import type { OpenClawPluginToolContext } from "./tool-types.js";
@@ -20,6 +22,10 @@ export function createPluginToolFactoryContext(params: {
   context: OpenClawPluginToolContext;
   assertInvocationCurrent?: () => void;
   ownerContinuation?: PluginToolOwnerContinuation;
+  bindExecutionCapabilities?: (
+    assertCurrent: () => void,
+    signal?: AbortSignal,
+  ) => PluginToolExecutionCapabilities;
 }): OpenClawPluginToolContext {
   const { entry, registry, context } = params;
   if (context.memoryAudience) {
@@ -49,6 +55,12 @@ export function createPluginToolFactoryContext(params: {
   };
   return {
     ...context,
+    ...(entry.contextVersion === 2
+      ? params.bindExecutionCapabilities?.(
+          assertInvocationCurrent,
+          record && getPluginInstance(record)?.lifecycle.signal,
+        )
+      : {}),
     ...(continuation
       ? {
           requesterSenderId: continuation.senderId,

@@ -1,7 +1,7 @@
 import { createMemo, createSignal, merge, onCleanup, onSettled, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import type { SessionCreatedActor } from "../lib/session-owner.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { activateMenuShortcut } from "./menu-shortcuts.ts";
 import {
   EMPTY_SESSION_MENU_DATA,
@@ -13,7 +13,6 @@ import {
   compactSessionMenuViewForValue,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
-import { useSessionMenuControllers } from "./session-menu-controllers.ts";
 import { SessionMenuShortcut, useSessionMenuEntries } from "./session-menu-view.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
@@ -67,7 +66,6 @@ function SessionMenuContent(
   anchor: SessionMenuProps["anchor"],
 ) {
   const menuId = `session-menu-${++nextSessionMenuId}`;
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const [compactView, setCompactView] = createSignal<CompactSessionMenuView>("root");
   let menu: MenuHandle | undefined;
   const state = merge(props, {
@@ -76,14 +74,6 @@ function SessionMenuContent(
     },
   });
   const readState = () => state;
-  const controllerHost = useSessionMenuControllers(
-    host,
-    () => setRevision((value) => value + 1),
-    () => {
-      revision();
-      return Object.values(props);
-    },
-  );
   let closeNotified = false;
   const notifyClosed = () => {
     if (!closeNotified) {
@@ -97,12 +87,12 @@ function SessionMenuContent(
     }
   };
   const actions = new SessionMenuActions(
-    controllerHost,
+    host,
     readState,
     (action) => props.onAction(action),
     close,
   );
-  const view = useSessionMenuEntries(host, actions, readState, revision);
+  const view = useSessionMenuEntries(actions, readState);
   const shortcut = (event: KeyboardEvent) => {
     if (!actions.handleKeydown(event, view.appearance)) {
       activateMenuShortcut(host, event);
@@ -141,7 +131,6 @@ function SessionMenuContent(
     ),
   };
   const items = createMemo((): MenuEntry[] => {
-    revision();
     if (props.compact && compactView() !== "root") {
       return view.compact(compactView());
     }
@@ -276,10 +265,7 @@ function SessionMenuContent(
           closed();
         }
       }}
-      onBeforeShow={() => {
-        actions.loadOwners();
-        setRevision((value) => value + 1);
-      }}
+      onBeforeShow={actions.loadOwners}
       onEscape={(event) => {
         if (actions.handleKeydown(event, view.appearance)) {
           return true;

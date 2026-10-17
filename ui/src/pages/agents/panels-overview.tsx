@@ -32,10 +32,9 @@ import {
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
-import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
+import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
-import { ControllerHost } from "../../lib/subscriptions-controller.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import { renderAgentPanelFacts } from "./panel-ui.tsx";
@@ -73,15 +72,9 @@ export function AgentOverview(
     onSelectPanel: (panel: AgentsPanel) => void;
   },
 ) {
-  const avatarHost = new ControllerHost();
-  const avatarLoader = new IdentityAvatarController(avatarHost);
-  avatarHost.connect();
-  onCleanup(() => avatarHost.disconnect());
-  const avatarProjection = projectSource(avatarHost, {
-    read: (host) => host,
-    subscribe: (host, notify) => host.subscribe(notify),
-    equality: "revision",
-  });
+  const avatarLoader = createIdentityAvatars();
+  onCleanup(avatarLoader.connect());
+  const avatarProjection = projectOwner(avatarLoader, (owner) => owner);
   const catalogOwnsChoices = createMemo(
     () => params.modelCatalogRetired || params.modelSelectionPolicy?.restricted,
   );
@@ -184,12 +177,11 @@ export function AgentOverview(
     identityDraft().avatar ? null : resolveAgentAvatarUrl(params.agent, params.agentIdentity),
   );
   const identityAvatarUrl = createMemo(() => {
-    avatarProjection.revision();
     const source = persistedAvatarUrl();
     const draftAvatar = identityDraft().avatar;
-    return avatarLoader.withActiveRoutes(
-      () => draftAvatar ?? (source ? avatarLoader.resolve(source) : null),
-    );
+    return avatarProjection
+      .read()
+      .withActiveRoutes(() => draftAvatar ?? (source ? avatarLoader.resolve(source) : null));
   });
   const identityImageError = createMemo(() => {
     identityAvatarUrl();

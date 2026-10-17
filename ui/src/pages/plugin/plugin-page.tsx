@@ -1,29 +1,19 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  Match,
-  onCleanup,
-  Show,
-  Switch,
-  untrack,
-} from "solid-js";
+import { createEffect, createMemo, Match, onCleanup, Show, Switch, untrack } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { isStaleChunkImportError } from "../../app/stale-chunk-reload.ts";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerLoginEnglish } from "../../i18n/locales/en-login.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
-import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
 import { PluginContribution } from "../../plugins/control-ui-view.solid.tsx";
 import {
   BUNDLED_TAB_VIEWS,
-  PluginPageLifecycle,
+  PluginPageOwner,
   type PluginPageProps,
 } from "./plugin-page-lifecycle.ts";
 export type { PluginPageProps } from "./plugin-page-lifecycle.ts";
@@ -32,29 +22,22 @@ registerLoginEnglish();
 
 function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
   const context = useApplication();
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const lifecycle = new PluginPageLifecycle(props, context, host, () =>
-    setRevision((value) => value + 1),
-  );
+  const lifecycle = new PluginPageOwner(props, context, host);
+  const projection = projectOwner(lifecycle, (source) => source);
   host.style.display = "contents";
-  const gateway = projectGateway(context.gateway);
-  const plugins = projectSource(context.plugins, {
-    read: (source) => source,
-    subscribe: (source, notify) => source?.subscribe(notify) ?? (() => {}),
-    equality: "revision",
-  });
+  // Owner callbacks snapshot route props at admission; frame auth and lazy views retire stale results.
   const update = () => untrack(lifecycle.update);
-  const unsubscribeGateway = gateway.subscribe(update);
-  const unsubscribePlugins = plugins.subscribe(update);
+  const unsubscribeGateway = context.gateway.subscribe(update);
+  const unsubscribePlugins = context.plugins?.subscribe(update);
   createEffect(() => [props.pluginId, props.tabId], update);
   update();
   onCleanup(() => {
     unsubscribeGateway();
-    unsubscribePlugins();
+    unsubscribePlugins?.();
     lifecycle.dispose();
   });
   const view = createMemo(() => {
-    revision();
+    projection.read();
     const info = lifecycle.tabInfo();
     const key = lifecycle.tabKey();
     const contribution = context.plugins?.registrations("pages").some((entry) => entry.key === key);
@@ -87,6 +70,7 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
       mode,
       state: lifecycle.bundledViewState,
       generation: lifecycle.pluginFrameGeneration,
+      bundledHost: lifecycle.bundledViewHost,
     };
   });
   const readyView = () => {
@@ -124,20 +108,20 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
           />
         </Show>
         <Show when={readyView()} keyed>
-          {(loaded) =>
-            loaded.render({
-              get host() {
-                revision();
-                return lifecycle.bundledViewHost;
-              },
-              get client() {
-                return gateway.read().snapshot.client;
-              },
-              get connected() {
-                return gateway.read().snapshot.phase === "connected";
-              },
-            })
-          }
+          {(loaded) => (
+            <Show when={view().bundledHost} keyed>
+              {(_epoch) =>
+                loaded.render({
+                  get client() {
+                    return projection.read().context.gateway.snapshot.client;
+                  },
+                  get connected() {
+                    return projection.read().context.gateway.snapshot.phase === "connected";
+                  },
+                })
+              }
+            </Show>
+          )}
         </Show>
       </Match>
       <Match when={view().mode === "insecure"}>

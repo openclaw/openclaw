@@ -916,10 +916,6 @@ const SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
-    "extensions/google-meet/src/cli-artifact-commands.ts",
-    ["extensions/google-meet/src/cli-artifacts.test.ts"],
-  ],
-  [
     "extensions/google-meet/src/cli-export.ts",
     ["extensions/google-meet/src/cli-artifacts.test.ts"],
   ],
@@ -927,11 +923,6 @@ const SOURCE_TEST_TARGETS = new Map([
     "extensions/google-meet/src/cli-space-commands.ts",
     ["extensions/google-meet/src/cli-artifacts.test.ts"],
   ],
-  [
-    "extensions/google-meet/src/cli-runtime-commands.ts",
-    ["extensions/google-meet/src/cli-runtime.test.ts"],
-  ],
-  ["extensions/google-meet/src/cli-doctor.ts", ["extensions/google-meet/src/cli.test.ts"]],
   [
     "extensions/google-meet/src/cli-command-context.ts",
     [
@@ -5284,7 +5275,7 @@ export function buildVitestRunPlans(
   args: string[],
   cwd = process.cwd(),
   listChangedPaths: (baseRef: string, cwd: string) => string[] = listChangedPathsFromGit,
-  options: ChangedTestTargetOptions = {},
+  options: ChangedTestTargetOptions & { changedTargetArgs?: string[] | null } = {},
 ) {
   const {
     forwardedArgs,
@@ -5293,7 +5284,11 @@ export function buildVitestRunPlans(
     watchMode,
   } = parseTestProjectsArgs(args, cwd);
   const changedTargetArgs =
-    targetArgs.length === 0 ? resolveChangedTargetArgs(args, cwd, listChangedPaths, options) : null;
+    targetArgs.length === 0
+      ? options.changedTargetArgs !== undefined
+        ? options.changedTargetArgs
+        : resolveChangedTargetArgs(args, cwd, listChangedPaths, options)
+      : null;
   const requestedTargetArgs = changedTargetArgs ?? targetArgs;
   const ownedTargets = explicitIncludeTargets(targetArgs, cwd);
   if (
@@ -6020,13 +6015,16 @@ export function applyDefaultVitestNoOutputTimeout<T extends WatchableVitestSpecS
 
 export function createVitestRunSpecs(
   args: string[],
-  params: { baseEnv?: NodeJS.ProcessEnv; cwd?: string } = {},
+  params: { baseEnv?: NodeJS.ProcessEnv; cwd?: string; changedTargetArgs?: string[] | null } = {},
 ) {
   const cwd = params.cwd ?? process.cwd();
   const baseEnv = params.baseEnv ?? process.env;
   const ownedTargets = explicitIncludeTargets(parseTestProjectsArgs(args, cwd).targetArgs, cwd);
   const plans = filterPlansForContractIncludeFile(
-    buildVitestRunPlans(args, cwd, listChangedPathsFromGit, { env: baseEnv }),
+    buildVitestRunPlans(args, cwd, listChangedPathsFromGit, {
+      env: baseEnv,
+      changedTargetArgs: params.changedTargetArgs,
+    }),
     baseEnv,
     ownedTargets,
   );

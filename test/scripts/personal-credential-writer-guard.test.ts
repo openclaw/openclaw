@@ -320,6 +320,27 @@ it("limits offline raw machine-state migration exceptions to their reviewed stat
   }
 });
 
+it.each([
+  ["scripts/generate-postgres-schema.mts", "function generatePostgresSchemas() {", "}"],
+  ["src/state/postgres-schema.generated/runtime.ts", "export const runtime = { sql:", "};"],
+])("bounds the v25 metadata publication in %s to its exact statement", (file, before, after) => {
+  const statement =
+    "UPDATE config_machine_state SET value_json = '25' WHERE state_key = 'state.schema.contentVersion' AND value_json = '24';";
+  const inspectSql = (sql: string) =>
+    inspect({ [file]: `${before} ${JSON.stringify(sql)} ${after}` });
+  expect(inspectSql(statement)).toEqual([]);
+  for (const sql of [
+    `${statement} ${statement}`,
+    statement.replace("state.schema.contentVersion", "auth.credentials"),
+    "DELETE FROM auth_profile_store",
+  ]) {
+    expect(inspectSql(sql)).toContainEqual(expect.stringContaining("raw authority-table write"));
+  }
+  expect(
+    inspect({ "src/new-metadata-writer.ts": `const sql = ${JSON.stringify(statement)}` }),
+  ).toContainEqual(expect.stringContaining("raw authority-table write"));
+});
+
 const lifecycle = "src/state/github-publication-session-lifecycles.worker.ts";
 const sharedPublication = "src/gateway/github-publication-store.worker.ts";
 const publicationWorker = "src/state/github-publication.worker.ts";

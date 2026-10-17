@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as globals from "../../globals.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
@@ -118,6 +119,7 @@ describe("createReplyMediaPathNormalizer", () => {
 
   afterEach(() => {
     stateDirEnvSnapshot.restore();
+    vi.restoreAllMocks();
   });
 
   it("stages workspace-relative media and preserves reply metadata", async () => {
@@ -394,8 +396,8 @@ describe("createReplyMediaPathNormalizer", () => {
   }>([
     {
       name: "host-read media type rejection",
-      error: new HostReadMediaTypeError("unsupported test fixture"),
-      mediaUrl: "./out/settings.toml",
+      error: new HostReadMediaTypeError("private_media_error"),
+      mediaUrl: "./private_media_source/settings.toml",
       expectedText:
         "⚠️ settings.toml: Rejected by the local attachment allowlist. Send a supported file type.",
       verifyMetadata: (result) => {
@@ -405,6 +407,7 @@ describe("createReplyMediaPathNormalizer", () => {
       },
     },
   ])("drops media for $name", async ({ error, mediaUrl, text, expectedText, verifyMetadata }) => {
+    const logSpy = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
     resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(error);
     const result = await createTestReplyMediaNormalizer()({ text, mediaUrls: [mediaUrl] });
     expectNoMedia(result);
@@ -412,6 +415,8 @@ describe("createReplyMediaPathNormalizer", () => {
       expect(result.text).toBe(expectedText);
     }
     verifyMetadata?.(result);
+    expect(logSpy).toHaveBeenCalledWith("dropping blocked reply media: reason=unsupported-format");
+    expect(JSON.stringify(logSpy.mock.calls)).not.toContain("private_media_");
   });
 
   it("keeps surviving media and appends a named receipt for each dropped item", async () => {

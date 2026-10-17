@@ -97,7 +97,11 @@ it("leaves yielded tasks with their owner until a final result needs store retir
   );
   delete completed.pauseReason;
   completed.execution.outcome = { status: "ok" };
-  completed.completion = { required: true, resultText: "retained final result" };
+  completed.completion = {
+    required: true,
+    resultText: "retained final result",
+    terminalReply: { disposition: "visible", text: "retained final result" },
+  };
   seedSubagentCompletionDelivery({ subagent: completed });
   publishCommittedRecords(completed);
   publishSystemEventStoreResolver(() => "replacement-store");
@@ -358,12 +362,15 @@ it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"]
       });
       expect(subagentRuns.isCompletionAuthorityRetired(input.subagent)).toBe(true);
     } else if (change === "restore") {
-      await resetSubagentRegistryForTests({ persist: false });
-      publishSystemEventStoreResolver(() => "replacement-store");
-      await initSubagentRegistry();
-      const context = createGatewayRequestContext(makeContextParams());
-      context.resolveGatewayContext = () => context;
-      await activateSubagentRegistry(() => context);
+      for (let boot = 0; boot < 2; boot++) {
+        await resetSubagentRegistryForTests({ persist: false });
+        publishSystemEventStoreResolver(() => "replacement-store");
+        await initSubagentRegistry();
+        const context = createGatewayRequestContext(makeContextParams());
+        context.resolveGatewayContext = () => context;
+        await activateSubagentRegistry(() => context);
+        await settleRootWork(true);
+      }
     } else {
       publishSystemEventStoreResolver(() =>
         change === "same" || unknownStore ? "original-store" : "replacement-store",

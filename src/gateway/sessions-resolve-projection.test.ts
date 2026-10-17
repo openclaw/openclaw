@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsResolveParams } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import * as runtimeOwnership from "../agents/harness/session-runtime-ownership.js";
 import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
@@ -10,6 +11,12 @@ import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/se
 import { seedCanonicalSessionValidation } from "../config/sessions/session-canonical-validation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -86,6 +93,113 @@ async function resolve(p: SessionsResolveParams) {
 const resolved = { ok: true, key: scope.sessionKey, agentId: "main" };
 
 describe("session resolution metadata", () => {
+  it.for(["shortId", "reference"] as const)(
+    "resolves a %s link without waiting for unrelated native runtime ownership",
+    async (selector, { signal }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot(cfg);
+        const sessionId = "4d2e08ab-1111-4000-8000-000000000001";
+        const key = `agent:main:chat:${sessionId}`;
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: key },
+          { sessionId, updatedAt: 2, label: "Resolved target", visibility: "shared" },
+        );
+        const sibling = { agentId: "main", sessionKey: "agent:main:resolve-unrelated" };
+        const siblingEntry = {
+          sessionId: "resolve-unrelated",
+          updatedAt: 1,
+          label: "Original sibling",
+          visibility: "shared" as const,
+          agentHarnessId: "resolve-owner",
+          modelSelectionLocked: true,
+        };
+        replaceSessionEntrySync(sibling, siblingEntry);
+        const previousRegistry = captureActivePluginRegistrySnapshot();
+        const registry = createEmptyPluginRegistry();
+        const entered = createDeferred();
+        const release = createDeferred();
+        let holdOwnership = false;
+        registry.agentHarnesses.push({
+          pluginId: "resolve-owner",
+          source: "test",
+          harness: {
+            id: "resolve-owner",
+            label: "Resolution ownership fixture",
+            supports: () => ({ supported: true }),
+            async resolveSessionRuntimeOwnershipAsync({ assertCurrent }) {
+              if (holdOwnership) {
+                entered.resolve();
+                await release.promise;
+              }
+              assertCurrent();
+              return undefined;
+            },
+            async runAttempt() {
+              throw new Error("Resolving a session must not run a model");
+            },
+          },
+        });
+        setActivePluginRegistry(registry);
+        const abort = () => release.resolve();
+        signal.addEventListener("abort", abort, { once: true });
+        let projection: SessionRowProjection | undefined;
+        let pending: Promise<void> | undefined;
+        try {
+          projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+          await projection.ensureMaterialized();
+          const context = createDirectChatContext({
+            getRuntimeConfig: () => cfg,
+            ...bindSessionRowProjection({}, () => projection),
+          });
+          const respond = vi.fn<RespondFn>();
+          const first = await projection.withSelectionPreparation(async () => {
+            holdOwnership = true;
+            replaceSessionEntrySync(sibling, {
+              ...siblingEntry,
+              label: "Renamed sibling",
+              updatedAt: 3,
+            });
+            const started = performance.now();
+            pending = Promise.resolve(
+              sessionReadHandlers["sessions.resolve"]!({
+                params: selector === "shortId" ? { shortId: "4d2e08ab" } : { reference: { key } },
+                context,
+                req: { type: "req", id: "resolve-owner", method: "sessions.resolve" },
+                client: null,
+                isWebchatConnect: () => false,
+                respond,
+              }),
+            );
+            const winner = await Promise.race([
+              pending.then(() => "response" as const),
+              entered.promise.then(() => "native ownership" as const),
+            ]);
+            console.info("sessions-resolve-readiness", {
+              selector,
+              first: winner,
+              elapsedMs: performance.now() - started,
+            });
+            release.resolve();
+            await pending;
+            expect(respond).toHaveBeenCalledWith(
+              true,
+              { ok: true, key, agentId: "main", displayName: "Resolved target" },
+              undefined,
+            );
+            return winner;
+          });
+          expect(first).toBe("response");
+        } finally {
+          release.resolve();
+          await Promise.allSettled(pending ? [pending] : []);
+          projection?.dispose();
+          restoreActivePluginRegistrySnapshot(previousRegistry);
+          signal.removeEventListener("abort", abort);
+        }
+      });
+    },
+  );
+
   it("reselects indexed candidates when the configured store changes during lookup", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       replaceSessionEntrySync(scope, entry);

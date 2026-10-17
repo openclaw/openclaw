@@ -30,7 +30,7 @@ async function mountSession(paneId: string, sessionKey: string) {
   }));
   pane.render();
   const props = expectDefined(pane.chatProps, "pane transcript props");
-  props.transcript.hostConnected();
+  props.transcript.start();
   const view = mountChatThread(props, props.transcript);
   const { container } = view;
   const thread = expectDefined(container.querySelector<HTMLDivElement>(".chat-thread"), "thread");
@@ -38,7 +38,7 @@ async function mountSession(paneId: string, sessionKey: string) {
     clientHeight: { configurable: true, value: 600 },
     scrollHeight: { configurable: true, value: 3_000 },
   });
-  props.transcript.hostUpdated();
+  props.transcript.update();
   await Promise.resolve();
   flush();
   flushFrames();
@@ -46,7 +46,7 @@ async function mountSession(paneId: string, sessionKey: string) {
   return {
     thread,
     dispose: () => {
-      props.transcript.hostDisconnected();
+      props.transcript.dispose();
       view.unmount();
     },
   };

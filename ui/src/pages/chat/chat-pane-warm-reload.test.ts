@@ -123,7 +123,6 @@ describe("chat pane warm reload", () => {
         ChatPaneRuntime,
       ) as unknown as TestChatPane;
       vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
-      vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
       const context = createInitializationContext(
         createGatewayBrowserClientFixture({
           offlineRecoveryScope: "test-recovery-scope",
@@ -161,7 +160,7 @@ describe("chat pane warm reload", () => {
       let view: ReturnType<typeof mountChatThread> | undefined;
 
       try {
-        expect(() => getPaneTestRuntime(pane).connectedCallback()).toThrow(attached);
+        expect(() => getPaneTestRuntime(pane).start()).toThrow(attached);
         await loadChatHistory(pane.state, { startup: true });
         await read.mock.results[0]?.value;
         expect(pane.state.chatMessages).toEqual(priorProjection ? [] : messages);

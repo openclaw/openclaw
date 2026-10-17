@@ -46,6 +46,7 @@ import {
 import { resolveAvailableLoopbackPort } from "./control-ui-e2e-port.ts";
 import {
   controlUiE2eWaitTimeoutMs,
+  extendControlUiE2eWaitTimeoutForSourceServer,
   waitForControlUiInitialRoster,
 } from "./control-ui-e2e-readiness.ts";
 import { getSharedControlUiE2ePreview } from "./control-ui-e2e-shared-preview.ts";
@@ -584,6 +585,7 @@ export async function startControlUiE2eServer(
       close: async () => {},
     };
   }
+  extendControlUiE2eWaitTimeoutForSourceServer();
   const resolvedBuildInfo = normalizeControlUiBuildInfo(
     buildInfo ?? DEFAULT_CONTROL_UI_E2E_BUILD_INFO,
   );
@@ -593,6 +595,7 @@ export async function startControlUiE2eServer(
     { createServer },
     { controlUiLocaleModulesPlugin },
     { controlUiSolidPlugin },
+    { controlUiPluginDistributionsPlugin },
     {
       commonJsOptimizeDeps,
       resolveExternalPackageAliasesForVite,
@@ -603,6 +606,7 @@ export async function startControlUiE2eServer(
     import("vite"),
     import("../../config/control-ui-locales.ts"),
     import("../../config/control-ui-solid.ts"),
+    import("../../config/control-ui-plugin-distributions.ts"),
     import("../../vite.config.ts"),
   ]);
   const repoRoot = resolveRepoRoot();
@@ -618,10 +622,14 @@ export async function startControlUiE2eServer(
     },
     logLevel: "error",
     optimizeDeps: {
-      include: ["ipaddr.js", "lit/directives/repeat.js", ...commonJsOptimizeDeps],
+      include: ["ipaddr.js", ...commonJsOptimizeDeps],
     },
     publicDir: path.join(uiRoot, "public"),
-    plugins: [controlUiSolidPlugin(), controlUiLocaleModulesPlugin()],
+    plugins: [
+      controlUiSolidPlugin(),
+      controlUiLocaleModulesPlugin(),
+      controlUiPluginDistributionsPlugin(repoRoot, new Set()),
+    ],
     resolve: {
       alias: [
         { find: "json5", replacement: json5EsmPath },

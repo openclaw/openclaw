@@ -58,7 +58,8 @@ vi.mock("./config-guard.js", () => ({
   ensureConfigReady: ensureConfigReadyMock,
 }));
 
-vi.mock("../plugin-registry.js", () => ({
+vi.mock("../../plugins/runtime/runtime-registry-loader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/runtime/runtime-registry-loader.js")>()),
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
 }));
 
@@ -289,15 +290,24 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
-  it("only allows invalid config for explicit official recovery reinstall requests", async () => {
+  it("only allows invalid config when the selected install source owns recovery", async () => {
     const scenarios: Array<{ args: string[]; allowInvalid?: true }> = [
-      { args: ["@openclaw/discord"], allowInvalid: true },
-      { args: ["@openclaw/discord@2026.5.22"], allowInvalid: true },
-      { args: ["@openclaw/brave-plugin"], allowInvalid: true },
-      { args: ["@openclaw/slack"], allowInvalid: true },
+      { args: ["npm:@openclaw/discord"], allowInvalid: true },
+      { args: ["npm:@openclaw/discord@2026.5.22"], allowInvalid: true },
+      { args: ["npm:@openclaw/brave-plugin"], allowInvalid: true },
+      { args: ["npm:@openclaw/slack"], allowInvalid: true },
+      { args: ["discord"], allowInvalid: true },
+      { args: ["brave"], allowInvalid: true },
+      { args: ["@openclaw/discord"] },
+      { args: ["@openclaw/discord@2026.5.22"] },
+      { args: ["@openclaw/brave-plugin"] },
+      { args: ["@openclaw/slack"] },
+      { args: ["clawhub:@openclaw/discord"] },
+      { args: ["clawhub:discord"] },
       { args: ["alpha"] },
       { args: [DISCORD_REPO_INSTALL_SPEC], allowInvalid: true },
       { args: ["@openclaw/discord", "--marketplace", "local/repo"] },
+      { args: ["npm:@openclaw/discord", "--marketplace", "local/repo"] },
     ];
     for (const { args, allowInvalid } of scenarios) {
       vi.clearAllMocks();
@@ -306,7 +316,7 @@ describe("registerPreActionHooks", () => {
         processArgv: ["node", "openclaw", "plugins", "install", ...args],
       });
 
-      expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      expect(ensureConfigReadyMock, args.join(" ")).toHaveBeenCalledWith({
         runtime: runtimeMock,
         measure: expect.any(Function),
         commandPath: ["plugins", "install"],

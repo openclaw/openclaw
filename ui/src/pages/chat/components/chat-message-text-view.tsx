@@ -1,9 +1,10 @@
-import type { JSX } from "@solidjs/web";
+import { dynamic, insert, type JSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
+  createSignal,
+  createRoot,
   getOwner,
-  onCleanup,
   runWithOwner,
   Show,
   useContext,
@@ -17,10 +18,10 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import { toSanitizedJsonHtml } from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import type { MarkdownDomMedia } from "../../../lib/markdown-dom-reconciler.ts";
+import type { MarkdownDomMedia, MarkdownMediaRoot } from "../../../lib/markdown-dom-reconciler.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { mountLitContent, SolidContentPresentation } from "../../../lit/solid-content.tsx";
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { messageOverflowRef, shouldCollapseUserMessage } from "./chat-message-overflow.ts";
 import {
@@ -161,9 +162,8 @@ function DisclosureContent(props: {
   forwarded: boolean;
   children: JSX.Element;
 }) {
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   let element!: HTMLDivElement;
-  let previous: ((element?: Element) => void) | undefined;
   const dependencies = createMemo(
     () => ({
       parts: props.parts,
@@ -180,12 +180,15 @@ function DisclosureContent(props: {
         before.parts.every((value, index) => value === next.parts[index]),
     },
   );
+  // The overflow observer measures the rendered markdown island.
   createEffect(dependencies, ({ expanded, forwarded, connected }) => {
-    previous?.(undefined);
-    previous = connected ? messageOverflowRef(expanded, forwarded) : undefined;
-    previous?.(element);
+    if (!connected) {
+      return undefined;
+    }
+    const overflow = messageOverflowRef(expanded, forwarded);
+    overflow(element);
+    return () => overflow(undefined);
   });
-  onCleanup(() => previous?.(undefined));
   return (
     <div
       class="chat-message-disclosure__content"
@@ -204,11 +207,15 @@ type MarkdownContentProps = {
   incremental?: boolean;
 };
 
-/** Both transcript text and legacy slots share the same incremental DOM owner. */
+/** Transcript text and inline media share the same incremental DOM owner. */
 export function MarkdownContent(props: MarkdownContentProps) {
   const solidOwner = getOwner();
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   const fragment = document.createDocumentFragment();
+  const roots = new Map<
+    HTMLElement,
+    MarkdownMediaRoot & { update: (media: MarkdownMedia) => void }
+  >();
   const markdown = createMarkdownRef(() => {
     const connected = presented();
     const media = props.media;
@@ -216,11 +223,38 @@ export function MarkdownContent(props: MarkdownContentProps) {
       prefix: media.prefix,
       render(index, container) {
         const item = media.items[index];
-        return item
-          ? runWithOwner(solidOwner, () =>
-              mountLitContent(media.render(item, index), container, { isConnected: connected }),
-            )
-          : undefined;
+        if (!item) {
+          return undefined;
+        }
+        const existing = roots.get(container);
+        if (existing) {
+          existing.update(media);
+          return existing;
+        }
+        const root = runWithOwner(solidOwner, () =>
+          createRoot((dispose) => {
+            const [current, update] = createSignal(media, { equals: false, ownedWrite: true });
+            const [active, setConnected] = createSignal(connected, { ownedWrite: true });
+            const Content = dynamic(() => current().render);
+            insert(
+              container,
+              <ContentPresentation value={active}>
+                <Content item={current().items[index]!} index={index} />
+              </ContentPresentation>,
+            );
+            return {
+              update,
+              setConnected,
+              dispose() {
+                roots.delete(container);
+                dispose();
+                container.replaceChildren();
+              },
+            };
+          }),
+        );
+        roots.set(container, root);
+        return root;
       },
     };
     return { content: props.content, media: renderer, incremental: props.incremental, connected };

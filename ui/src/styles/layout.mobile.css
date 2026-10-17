@@ -98,19 +98,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   touch-action: none;
 }
 
-.shell--mobile-nav .shell-nav:is([data-nav-drawer-dragging], [data-nav-drawer-settling]) {
-  will-change: transform;
-}
-
-.shell--mobile-nav .shell-nav-backdrop:is([data-nav-drawer-dragging], [data-nav-drawer-settling]) {
-  will-change: opacity;
-}
-
-.shell--mobile-nav .shell-nav[data-nav-drawer-dragging],
-.shell--mobile-nav .shell-nav-backdrop[data-nav-drawer-dragging] {
-  transition: none;
-}
-
 .shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
   pointer-events: auto;
   visibility: visible;

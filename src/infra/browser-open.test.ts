@@ -11,7 +11,7 @@ const { detectBinaryMock, execFileSyncMock, readFileMock, runCommandWithTimeoutM
   () => ({
     detectBinaryMock: vi.fn<DetectBinary>(async () => false),
     execFileSyncMock: vi.fn<(file: string, args: readonly string[]) => string>(() => ""),
-    readFileMock: vi.fn(async () => "6.8.0-generic"),
+    readFileMock: vi.fn<() => Promise<string>>(),
     runCommandWithTimeoutMock: vi.fn<
       (argv: string[], optionsOrTimeout?: number | { timeoutMs?: number }) => Promise<SpawnResult>
     >(async () => ({

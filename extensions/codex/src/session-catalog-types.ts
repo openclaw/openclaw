@@ -1,4 +1,4 @@
-import type { CodexAppServerRuntimeOptions } from "./app-server/config.js";
+import type { CodexAppServerRuntimeOptions, CodexPluginConfig } from "./app-server/config.js";
 import type {
   CodexThread,
   CodexThreadForkParams,
@@ -31,7 +31,7 @@ export type CodexCatalogNativeThread = Pick<
   | "source"
   | "gitInfo"
   | "status"
->;
+> & { catalogError?: "oversized-thread" };
 
 export type CodexCatalogNativePage = Omit<CodexThreadListResponse, "data"> & {
   data: CodexCatalogNativeThread[];
@@ -61,6 +61,8 @@ export type CodexSessionCatalogSession = {
   fallbackName?: string;
   cwd?: string;
   status: string;
+  /** The native preview could not fit; identity and continuation were recovered. */
+  catalogError?: "oversized-thread";
   activeFlags?: string[];
   createdAt?: number;
   updatedAt?: number;
@@ -98,7 +100,7 @@ export type CodexSessionCatalogControl = {
   forkContext?: {
     client: import("./app-server/client.js").CodexAppServerClient;
     appServer: CodexAppServerRuntimeOptions;
-    pluginConfig: unknown;
+    pluginConfig: CodexPluginConfig;
     agentDir: string;
     localSessionsRoot?: string;
   };

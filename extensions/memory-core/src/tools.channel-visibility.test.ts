@@ -21,6 +21,7 @@ import { asOpenClawConfig, createMemorySearchToolOrThrow } from "./tools.test-he
 const recalls = vi.hoisted(() => ({
   recordShortTermRecalls: vi.fn(async (_params: unknown) => {}),
 }));
+// mock-isolation: keep recall persistence observable without writing promotion state.
 vi.mock("./short-term-promotion-record.js", () => recalls);
 
 it.each(["route", "incarnation", "new-alias"] as const)(

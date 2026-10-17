@@ -1035,7 +1035,7 @@ describe("scheduleRestartSentinelWake", () => {
       sessionMessageSubscribers: { get: () => subscribers },
       chatAbortControllers: new Map(),
     });
-    const publications: Promise<void>[] = [];
+    const publications: ReturnType<typeof publish>[] = [];
     const publicationErrors: unknown[] = [];
     const unsubscribe = onInternalSessionTranscriptUpdate((update) => {
       if (update.target?.sessionId === sessionId) {

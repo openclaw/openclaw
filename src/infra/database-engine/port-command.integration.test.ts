@@ -1,9 +1,10 @@
+import "./port-command-worker.test-support.js";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import net from "node:net";
+import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
@@ -42,81 +43,31 @@ function hash(file: string) {
   return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 async function loseOneCommittedReply(original: string) {
-  const destination = new URL(original);
-  const upstreamAddress = { host: destination.hostname, port: Number(destination.port || 5432) };
-  const sockets = new Set<net.Socket>();
-  let dropped = 0;
-  const server = net.createServer((client) => {
-    const upstream = net.createConnection(upstreamAddress);
-    sockets.add(client);
-    sockets.add(upstream);
-    client.once("close", () => {
-      sockets.delete(client);
-      upstream.destroy();
-    });
-    upstream.once("close", () => {
-      sockets.delete(upstream);
-      client.destroy();
-    });
-    client.on("error", () => upstream.destroy());
-    upstream.on("error", () => client.destroy());
-    let tail = Buffer.alloc(0);
-    let backend = Buffer.alloc(0);
-    let commit = false;
-    const query = Buffer.concat([Buffer.from([81, 0, 0, 0, 11]), Buffer.from("COMMIT\0")]);
-    client.on("data", (chunk) => {
-      const observed = Buffer.concat([tail, Buffer.from(chunk)]);
-      commit ||= observed.includes(query);
-      tail = observed.subarray(Math.max(0, observed.length - query.length));
-      upstream.write(chunk);
-    });
-    upstream.on("data", (chunk) => {
-      if (!commit) {
-        client.write(chunk);
-        return;
-      }
-      backend = Buffer.concat([backend, Buffer.from(chunk)]);
-      while (backend.length >= 5) {
-        const length = backend.readInt32BE(1) + 1;
-        if (backend.length < length) {
-          break;
-        }
-        const packet = backend.subarray(0, length);
-        backend = backend.subarray(length);
-        if (
-          !dropped &&
-          commit &&
-          packet[0] === 67 &&
-          packet.subarray(5).toString() === "COMMIT\0"
-        ) {
-          dropped++;
-          client.destroy();
-          upstream.destroy();
-          return;
-        }
-        client.write(packet);
-      }
-    });
+  const dropped = new Int32Array(new SharedArrayBuffer(4));
+  const url = new URL("./port-command-proxy.test-support.ts", import.meta.url);
+  const worker = new Worker(url, {
+    execArgv: resolveRuntimeWorkerThreadExecArgv(url),
+    workerData: { original, dropped },
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
+  const exited = new Promise<number>((resolve) => {
+    worker.once("exit", resolve);
   });
-  const address = server.address();
-  assert(address && typeof address !== "string");
-  destination.hostname = "127.0.0.1";
-  destination.port = String(address.port);
-  destination.searchParams.set("sslmode", "disable");
+  let proxyConnection: string;
+  try {
+    proxyConnection = await new Promise<string>((resolve, reject) => {
+      worker.once("message", resolve);
+      worker.once("error", reject);
+    });
+  } catch (error) {
+    await exited;
+    throw error;
+  }
   return {
-    connection: destination.toString(),
-    dropped: () => dropped,
+    connection: proxyConnection,
+    dropped: () => Atomics.load(dropped, 0),
     close: async () => {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      worker.postMessage("close", []);
+      expect(await exited).toBe(0);
     },
   };
 }
@@ -242,9 +193,18 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
     }
   }, 120_000);
 
-  it("rolls back a preparing manifest before any target has been verified", async () => {
+  it("rolls back a preparing manifest including an external configured store before any target has been verified", async () => {
     await fixture(async ({ state, source }) => {
       const before = canonical(source);
+      // Discovery chooses the path; the registered provider still owns its family.
+      const agentDir = state.path("external", "agent");
+      const external = path.join(agentDir, "openclaw-agent.sqlite");
+      await fsp.mkdir(agentDir, { recursive: true });
+      await fsp.copyFile(source, external);
+      await state.writeConfig({
+        ...JSON.parse(fs.readFileSync(state.configPath, "utf8")),
+        agents: { entries: { external: { agentDir } } },
+      });
       const run = tasks.runDatabasePortTask;
       vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
         if (args[0].operation === "migrate") {
@@ -257,8 +217,14 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
       const target = manifest(state).targets[0];
       assert(target);
       expect(target.verification).toBeNull();
+      expect(
+        manifest(state).targets.some(
+          (entry) => entry.original.engine === "sqlite" && entry.original.path === external,
+        ),
+      ).toBe(true);
       await doctorDatabasePort({ rollback: recovery.databasePortManifestPath(state.stateDir) });
       expect(canonical(source)).toEqual(before);
+      expect(canonical(external)).toEqual(before);
       expect(fs.existsSync(recovery.databasePortManifestPath(state.stateDir))).toBe(false);
     }, true);
   }, 120_000);
@@ -433,8 +399,14 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         ]);
         const saved = manifest(state);
         expect(saved.state).toBe("publishing");
-        expect(saved.targets).toHaveLength(2);
-        for (const target of saved.targets) {
+        const shared = state.statePath("state", "openclaw.sqlite");
+        expect(
+          saved.targets.map((target) => {
+            assert(target.original.engine === "sqlite");
+            return target.original.path;
+          }),
+        ).toEqual([source, second, shared]);
+        for (const target of saved.targets.slice(0, 2)) {
           expect(canonical(target.originalCapture.path)).toEqual(original);
         }
         await doctorDatabasePort(
@@ -458,6 +430,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           assert(engine.engine === "postgres");
           expect(await canonicalPostgres(client, engine.namespace)).toEqual(original);
         }
+        expect(readBackupEngine(shared).engine).toBe(action === "rollback" ? "sqlite" : "postgres");
         expect(fs.existsSync(recovery.databasePortManifestPath(state.stateDir))).toBe(false);
       }, true);
     },
@@ -494,6 +467,20 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         await expect(doctorDatabasePort({ to: "sqlite" })).rejects.toThrow("switch config");
         vi.restoreAllMocks();
         expect(readBackupEngine(source)).toEqual({ engine: "sqlite" });
+        const shared = state.statePath("state", "openclaw.sqlite");
+        {
+          using later = openNodeSqliteDatabase(shared);
+          later.exec(
+            "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA wal_checkpoint(TRUNCATE)",
+          );
+          const mainFile = hash(shared);
+          later.exec("INSERT INTO config_machine_state VALUES ('r13.external-drift', '1', 1)");
+          expect(hash(shared)).toBe(mainFile);
+          await expect(
+            doctorDatabasePort({ rollback: recovery.databasePortManifestPath(state.stateDir) }),
+          ).rejects.toThrow("canonical");
+          later.exec("DELETE FROM config_machine_state WHERE state_key = 'r13.external-drift'");
+        }
         if (missingNamespace) {
           await client.query(`DROP SCHEMA "${original.namespace}" CASCADE`);
         }

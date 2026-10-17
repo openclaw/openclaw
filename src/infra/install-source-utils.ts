@@ -12,6 +12,7 @@ import {
   satisfies as satisfiesSemver,
   validRange as validSemverRange,
 } from "semver";
+import { resolveRuntimeScriptEnv } from "../../cli-invocation.mjs";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
@@ -86,7 +87,7 @@ function createNpmMetadataEnv(
     NPM_CONFIG_IGNORE_SCRIPTS: "true",
   };
   applyNpmFreshnessBypassEnv(env, new Date(), scope);
-  return env;
+  return resolveRuntimeScriptEnv(env);
 }
 
 export async function loadNpmPackageVersions({

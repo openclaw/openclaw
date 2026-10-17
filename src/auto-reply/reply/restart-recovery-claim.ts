@@ -105,18 +105,6 @@ export function createReplyRestartRecoveryClaimController(params: {
   let sessionActor: SessionActor | undefined;
   let readTarget: SessionEntryTargetPatchScope | undefined;
   const recordReadTarget = (target: SessionEntryTargetPatchScope) => {
-    if (
-      readTarget &&
-      (readTarget.agentId !== target.agentId ||
-        readTarget.storePath !== target.storePath ||
-        readTarget.target.canonicalKey !== target.target.canonicalKey ||
-        readTarget.readSource?.agentId !== target.readSource?.agentId ||
-        readTarget.readSource?.path !== target.readSource?.path ||
-        readTarget.readSource?.databaseIdentity !== target.readSource?.databaseIdentity ||
-        readTarget.readSource?.databaseBirthtime !== target.readSource?.databaseBirthtime)
-    ) {
-      throw createRestartRecoveryClaimChangedError();
-    }
     readTarget ??= target;
   };
   const preparedTarget = () => {

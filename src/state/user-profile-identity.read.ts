@@ -131,7 +131,7 @@ export function readUserProfileAuthorityCommand(
       return {
         profileId: current.id,
         role: current.role ?? null,
-        githubLogin: githubIdentity?.login ?? null,
+        githubLogin: githubIdentity?.host ? null : (githubIdentity?.login ?? null),
         aliases: [current.id, ...aliases.map((alias) => alias.id)],
         display: projectUserProfileDisplay(display),
         ...(includeProfile

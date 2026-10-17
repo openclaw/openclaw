@@ -298,6 +298,25 @@ private func cumulativePrefixes(of text: String, chunkLength: Int) -> [String] {
     return prefixes
 }
 
+struct ChatNarrationPreparedTextTests {
+    @Test(arguments: ["NO_REPLY", "**NO_REPLY**", "no_reply", "NO_REPLY.", "I will not reply: NO_REPLY"])
+    func `prepared narration remains visible and empty progress retracts it`(text: String) {
+        var narration = ChatNarration()
+        func event(_ text: String, sequence: Int) -> OpenClawAgentEventPayload {
+            OpenClawAgentEventPayload(
+                runId: "prepared-run", seq: sequence, stream: "item", ts: sequence,
+                data: [
+                    "kind": AnyCodable("preamble"), "itemId": AnyCodable("prepared-item"),
+                    "phase": AnyCodable("end"), "progressText": AnyCodable(text),
+                ])
+        }
+        narration.receive(event(text, sequence: 1), history: [])
+        #expect(narration.projecting([]).map(\.rawText) == [text])
+        narration.receive(event("", sequence: 2), history: [])
+        #expect(narration.projecting([]).isEmpty)
+    }
+}
+
 // MARK: - Harness
 
 private struct StreamReplayHarness {

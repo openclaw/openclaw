@@ -1,4 +1,8 @@
-import type { ControlUiDisposer, ControlUiPlugin } from "../../../src/plugin-sdk/control-ui.js";
+import type {
+  ControlUiDisposer,
+  ControlUiPlugin,
+  ControlUiSettingsView,
+} from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { controlUiPluginAssetUrls } from "./control-ui-assets.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
@@ -22,34 +26,13 @@ export async function initializeControlUiPlugin(
   const complete: ControlUiPluginOwner = Object.assign(owner, {
     host: createControlUiPluginHost(getContext, runtime, owner),
   });
-  const stylesLoaded = urls.styles.map(async (url) => {
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.media = "not all";
-    link.href = url;
-    const loaded = new Promise<void>((resolve, reject) => {
-      link.addEventListener("load", () => resolve(), { once: true, signal: abort.signal });
-      link.addEventListener(
-        "error",
-        () => reject(new Error(`Could not load plugin stylesheet: ${descriptor.pluginId}`)),
-        { once: true, signal: abort.signal },
-      );
-      abort.signal.addEventListener(
-        "abort",
-        () => reject(new Error("Plugin UI activation ended.")),
-        { once: true },
-      );
-    });
-    document.head.append(link);
-    complete.disposers.add(() => link.remove());
-    styles.push(link);
-    return loaded;
-  });
-  // Fetch code alongside CSS; publish only after this revision's styles are ready.
-  const [module]: [{ default?: ControlUiPlugin }, void[]] = await Promise.all([
-    import(/* @vite-ignore */ urls.entry),
-    Promise.all(stylesLoaded),
-  ]);
+  const module = await loadControlUiPluginAssets(
+    descriptor.pluginId,
+    urls,
+    abort.signal,
+    (stop) => complete.disposers.add(stop),
+    styles,
+  );
   if (!runtime.isCurrent(owner)) {
     dispose();
     return undefined;
@@ -67,4 +50,49 @@ export async function initializeControlUiPlugin(
     return undefined;
   }
   return complete;
+}
+
+export type ControlUiPluginModule = {
+  default?: ControlUiPlugin;
+  pluginId?: string;
+  settingsViews?: readonly ControlUiSettingsView[];
+};
+
+/** Both activation and packaged Settings presentations share one asset loader. */
+export async function loadControlUiPluginAssets(
+  pluginId: string,
+  urls: { entry: string; styles: readonly string[] },
+  signal: AbortSignal,
+  retain: (dispose: ControlUiDisposer) => void,
+  styles?: HTMLLinkElement[],
+): Promise<ControlUiPluginModule> {
+  signal.throwIfAborted();
+  const stylesLoaded = urls.styles.map(async (url) => {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.media = "not all";
+    link.href = url;
+    const loaded = new Promise<void>((resolve, reject) => {
+      link.addEventListener("load", () => resolve(), { once: true, signal });
+      link.addEventListener(
+        "error",
+        () => reject(new Error(`Could not load plugin stylesheet: ${pluginId}`)),
+        { once: true, signal },
+      );
+      signal.addEventListener("abort", () => reject(new Error("Plugin UI activation ended.")), {
+        once: true,
+      });
+    });
+    document.head.append(link);
+    retain(() => link.remove());
+    styles?.push(link);
+    return loaded;
+  });
+  // Fetch code alongside CSS; publish only after this revision's styles are ready.
+  const [module]: [ControlUiPluginModule, void[]] = await Promise.all([
+    import(/* @vite-ignore */ urls.entry),
+    Promise.all(stylesLoaded),
+  ]);
+  signal.throwIfAborted();
+  return module;
 }

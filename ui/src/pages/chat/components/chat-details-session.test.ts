@@ -2,12 +2,12 @@
 import { createComponent } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
-import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
+import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
 
 type ChatSubagentActivityLive = SolidBridgeElement<SubagentActivityProps>;
 
@@ -101,6 +101,27 @@ it("keeps immutable creator, mutable owner and participants distinct without cla
   expect(element.querySelector<HTMLDetailsElement>(".chat-details__participants")?.open).toBe(
     false,
   );
+});
+it("shows participant controls only while the session has participants", async () => {
+  const element = await mount();
+  expect(element.querySelector(".chat-details__meta-actions")).toBeNull();
+  element.props = {
+    ...element.props!,
+    selectedSession: {
+      ...element.props!.selectedSession!,
+      participants: [{ identity: { type: "profile", id: "participant" }, label: "Contributor" }],
+    },
+  };
+  await element.updateComplete;
+  expect(element.querySelector(".chat-details__participants")?.textContent).toContain(
+    "1 participants",
+  );
+  element.props = {
+    ...element.props!,
+    selectedSession: { ...element.props!.selectedSession!, participantCount: 0 },
+  };
+  await element.updateComplete;
+  expect(element.querySelector(".chat-details__meta-actions")).toBeNull();
 });
 it("uses the current PR renderer and preserves CI session identity and branch dismissal", async () => {
   const dismiss = vi.fn();

@@ -47,11 +47,14 @@ that supervise the Gateway as a child process, see
   the gateway closes or drops the frame. These events carry `surface`, byte
   sizes, limits, and a safe reason code, never message bodies, attachment
   contents, raw frame bytes, tokens, cookies, or secrets.
-- The Gateway does not negotiate `permessage-deflate`. Browsers can compress
-  even tiny requests when the extension is enabled; serial decompression then
-  delays each request behind busy event-loop turns before handler scheduling.
-  Uncompressed frames preserve responsive request bursts at the cost of more
-  bandwidth for large histories and rosters. Payload limits are unchanged.
+- The Gateway offers `permessage-deflate` with context takeover disabled in
+  both directions. Peers that negotiate it (browsers, `ws` clients, Foundation,
+  OkHttp) receive frames of 16 KiB and up compressed; smaller session and tool
+  updates stay raw. Browsers compress every request; the Gateway inflates and
+  compresses each message inline instead of through background zlib streams,
+  so request bursts reach handler scheduling together, as uncompressed frames
+  do. Peers that do not offer the extension are unaffected. Payload limits
+  apply to the inflated size.
 
 Frame shapes:
 

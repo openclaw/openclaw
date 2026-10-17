@@ -408,7 +408,7 @@ describe("discord component registry", () => {
   ] as const)(
     "preserves $placement button reuse=$buttonReusable over card reuse=$cardReusable through delivery",
     async ({ placement, buttonReusable, cardReusable, expectedReusable }) => {
-      const { RequestClient } = await import("./internal/discord.js");
+      const { RequestClient } = await import("./internal/rest.js");
       const { sendDiscordComponentMessage } = await import("./send.components.js");
       const button = {
         label: "Refresh",

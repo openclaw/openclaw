@@ -228,6 +228,7 @@ export type ChatEventPayload = {
   deltaText?: string;
   replace?: boolean;
   errorMessage?: string;
+  suppressErrorNotice?: boolean;
   errorKind?: Extract<ChatEvent, { state: "error" }>["errorKind"];
   errorDetail?: ChatErrorDetail;
   stopReason?: string;

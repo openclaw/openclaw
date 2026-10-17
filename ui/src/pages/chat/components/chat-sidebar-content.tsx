@@ -32,7 +32,6 @@ import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { emptyLegacyContent } from "../../../lit/solid-content.tsx";
 import {
   AttachmentCardHeader,
   AttachmentPreviewSkeleton,
@@ -187,7 +186,7 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
       >
         <ChatTextAttachment
           plainText={props.content.plainText ?? false}
-          actions={props.content.renderActions?.() ?? emptyLegacyContent}
+          actions={props.content.renderActions?.()}
           embedSandboxMode={props.embedSandboxMode}
           src={model().src ?? ""}
           sourceIdentity={model().sourceIdentity}
@@ -214,7 +213,11 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
       </Match>
       <Match when={!model().src || model().imagePreview}>
         <div
-          class={`chat-assistant-attachment-card chat-assistant-attachment-card--${model().kind} sidebar-attachment-preview__state-card`}
+          class={[
+            "chat-assistant-attachment-card",
+            `chat-assistant-attachment-card--${model().kind}`,
+            "sidebar-attachment-preview__state-card",
+          ]}
           aria-busy={model().pending ? "true" : undefined}
         >
           <AttachmentCardHeader

@@ -518,7 +518,12 @@ describe("agentCommand", () => {
   it.each([
     {
       name: "completed stop",
-      meta: { stopReason: "stop", finalAssistantVisibleText: "ok", finalAssistantRawText: "ok" },
+      meta: {
+        stopReason: "stop",
+        finalAssistantVisibleText: "ok",
+        finalAssistantRawText: "ok",
+        terminalReply: { disposition: "visible" as const, text: "ok" },
+      },
       outcome: "completed",
     },
     {

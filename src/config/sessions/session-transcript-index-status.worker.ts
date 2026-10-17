@@ -10,6 +10,7 @@ import {
   prepareSqliteQuerySync,
   sqliteStringSetEntries,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import {
   readSqliteDatabaseSiblingWriteRevision,
   sqliteSessionIdWriteScope,
@@ -21,7 +22,11 @@ import {
   installSqliteTempTrackingSchema,
 } from "../../infra/sqlite-schema-facts.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import { selectSessionTranscriptIndexStatus } from "./session-transcript-index.js";
+import {
+  deleteOrphanedTranscriptIndexRowsInTransaction,
+  listSessionsNeedingTranscriptIndexReconcile,
+  selectSessionTranscriptIndexStatus,
+} from "./session-transcript-index.js";
 
 const projectionTables = [
   "session_transcript_active_events",
@@ -136,7 +141,10 @@ function installStatusTracking(db: DatabaseSync, schemaVersion: number): void {
 }
 
 /** Consume the writer's clean receipt without taking a write lock or host write grants. */
-export function isSessionTranscriptIndexStatusClean(db: DatabaseSync): boolean {
+export function isSessionTranscriptIndexStatusClean(db: EngineConnection): boolean {
+  if (isPostgresSqlConnection(db)) {
+    return false;
+  }
   const siblingWriteRevision = readSqliteDatabaseSiblingWriteRevision(db);
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (
@@ -169,7 +177,7 @@ export function isSessionTranscriptIndexStatusClean(db: DatabaseSync): boolean {
 }
 
 /** Advance bounded maintenance inside the canonical writer's transaction. */
-export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
+export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
   sessionIds: string[];
   hasMore: boolean;
   traversalComplete: boolean;
@@ -178,6 +186,15 @@ export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
 } {
   if (!db.isTransaction) {
     throw new Error("Transcript projection status requires its writer transaction");
+  }
+  if (isPostgresSqlConnection(db)) {
+    deleteOrphanedTranscriptIndexRowsInTransaction(db);
+    const sessionIds = listSessionsNeedingTranscriptIndexReconcile(db, MAX_SESSIONS + 1);
+    return {
+      sessionIds: sessionIds.slice(0, MAX_SESSIONS),
+      hasMore: sessionIds.length > MAX_SESSIONS,
+      traversalComplete: true,
+    };
   }
   const siblingWriteRevision = readSqliteDatabaseSiblingWriteRevision(db);
   const schema = getAdmittedSqliteSchemaFacts(db);

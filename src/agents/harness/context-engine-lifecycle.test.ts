@@ -559,6 +559,7 @@ describe("harness context engine lifecycle", () => {
       modelId: "anthropic/claude-sonnet-4-6",
       fallbackReason: "primary_provider_5xx",
       runtimeContext: bootstrapRuntimeContext,
+      tokenBudget: 2048,
       warn: () => {},
     });
 
@@ -649,6 +650,7 @@ describe("harness context engine lifecycle", () => {
     for (const entry of captured) {
       expect(entry.runtimeSettings).toMatchObject({
         schemaVersion: 1,
+        limits: { promptTokenBudget: 2048 },
         runtime: { mode: "fallback" },
         model: {
           requested: "openai/gpt-5.5",

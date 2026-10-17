@@ -17,7 +17,7 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { openOpenClawAgentSqliteWorkerStoreV2 } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
-import { getMemoryManagerLifecycle } from "./lifecycle.js";
+import { getMemoryManagerLifecycle, markMemoryIndexingLive } from "./lifecycle.js";
 import { runMemoryStatus } from "./manager-cpu-worker-runtime.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
@@ -302,6 +302,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     }
     this.batch = this.resolveBatchConfig();
     if (!transient) {
+      markMemoryIndexingLive();
       this.runInBackgroundContext(() => {
         this.ensureWatcher();
         this.ensureSessionListener();
@@ -527,6 +528,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   status(): MemoryProviderStatus {
     if (this.closing || this.closed) {
       throw new Error("Memory index manager is closed");
+    }
+    if (this.database.admission?.engine === "postgres") {
+      return this.publishedStatus();
     }
     return this.withPublishedDatabase(() =>
       this.publishedStatus(

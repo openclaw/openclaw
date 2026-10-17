@@ -2,15 +2,17 @@
 
 UI ownership rules here; repo-global architecture, proof, Git rules in root `AGENTS.md`.
 
-## Solid migration
+## Solid
 
-- Lit 3/Web Awesome ports + Solid 2 components/projections: follow [Solid skill](../.agents/skills/solid/SKILL.md) + assigned migration order for conversion, lifecycle, interop, proof. State ownership below still applies.
-- Final Lit sweep: remove Lit-specific guidance.
+- Before writing, reviewing, or refactoring any Solid code here, read the [Solid skill](../.agents/skills/solid/SKILL.md) in full, the installed `node_modules/solid-js/CHEATSHEET.md` it points to, and the references it routes you to; for existing code, the [refactor checklist](../.agents/skills/solid/references/refactor-checklist.md). State ownership below still applies.
+
+The Control UI and its plugin views use Solid 2 and native primitives. Lit and
+Web Awesome have been removed from these surfaces.
 
 Solid route modules expose `renderSolid(props)` from the existing lazy page import.
 The outlet mounts that renderer once and supplies live `data`, `loaderPending`, and
-`presented` props; loader updates must preserve page-local state. Unported route
-modules keep `render`. Keep page imports inside their route's `component` loader.
+`presented` props; loader updates must preserve page-local state. Keep page
+imports inside their route's `component` loader.
 
 ## State Ownership And Async Results
 
@@ -35,7 +37,7 @@ modules keep `render`. Keep page imports inside their route's `component` loader
 
 ## Reload Performance
 
-- Reload cost is main-thread render/reconcile triggered per Gateway message; JSON parse and transport are negligible. Measured no win or regressions (2026-10-15, Team-scale bench, quiet AWS, ≥7 interleaved pairs): socket worker/SharedWorker, delivery scheduling/chunking, batched boot RPC, V8 compile hints/chunk sizing, cached DOM shell replay, WebSocket permessage-deflate (server keeps it off). Retry only with new evidence.
+- Reload cost is main-thread render/reconcile triggered per Gateway message; JSON parse and transport are negligible. Measured no win or regressions (2026-10-15, Team-scale bench, quiet AWS, ≥7 interleaved pairs): socket worker/SharedWorker, delivery scheduling/chunking, batched boot RPC, V8 compile hints/chunk sizing, cached DOM shell replay. WebSocket permessage-deflate saves bytes on slow links, not render time. Retry only with new evidence.
 - Cut work at its owner: memoize values read per item (`createMemo`), render reused UI as components rather than helper calls, keep row identity through placement/history/live updates, check cheap state before reading layout.
 - Measure with `scripts/bench-control-ui-cold-load.ts` (long-task and render-pass probes) over several untraced runs; single DevTools traces inflate timing.
 
@@ -52,14 +54,13 @@ modules keep `render`. Keep page imports inside their route's `component` loader
 ## CSS / Template Linting
 
 - `pnpm lint`: Solid 2 oxlint rules on `ui/**/*.tsx` and TypeScript helpers in `src/lib/reactive/`, `src/components/solid/`, and `src/test-helpers/`; plain domain owners keep their own contracts. Follow the [Solid idioms](../.agents/skills/solid/references/idioms.md) for split effects, tracking, and lifecycle. `tools/solid-lint` isolates plugin tooling dependencies; corpus: `test/scripts/oxlint-solid.test.ts`.
-- `pnpm lint:ui:styles` (included in lint): `ui/src` stylesheets + Lit CSS templates via `config/stylelint.config.mjs`/postcss-lit. Stylelint owns error rules; oxfmt owns formatting.
-- `pnpm lint:ui:lit` = slow opt-in template diagnostic with existing findings, not CI gate.
+- `pnpm lint:ui:styles` (included in lint): `ui/src` stylesheets via `config/stylelint.config.mjs`. Stylelint owns error rules; oxfmt owns formatting.
 
 ## Stylesheet Policy
 
 - No universal targets/pseudo-elements after `:has()` compound, `:has()` with `::placeholder`, or descendants after sibling-relative `:has(+ …)` on repeated items. Use owner-set classes, named children, or subject custom property. No `:has()` subjects on `.shell`, `.content`, `.chat-thread`, `.chat-split-view`, `:root`, `html`, `body`, including modifiers, `:is()`/`:where()`, nested `&`: insertions restyle subtree; stylelint cannot resolve nesting.
 - New-tab links/controls: pointer cursors; state-changing controls: default arrow.
-- Colors: `src/styles/base.css` tokens (`color-no-hex`). Stated exemptions: token definitions, `lobster-pet.css` artwork, `--theme-chip-*` previews. Prefer tokens in currently ungated Lit CSS templates too.
+- Colors: `src/styles/base.css` tokens (`color-no-hex`). Stated exemptions: token definitions, `lobster-pet.css` artwork, `--theme-chip-*` previews.
 - `max-width` breakpoints: 400/560/640/768/900/1100/1320px + 932×500 landscape-phone compound. Round new thresholds up; new rungs require config comment + this rule updates.
 - Duplicate selectors = errors; deliberate topic reopens need `stylelint-disable-next-line no-duplicate-selectors -- <reason>`.
 - `node --import tsx scripts/audit-control-ui-dead-css.mts` advisory. Verify selectors before deleting; extend dynamic-stem detection, not allowlist.
@@ -68,7 +69,7 @@ modules keep `render`. Keep page imports inside their route's `component` loader
 
 ## Modal Completion Actions
 
-- Place workflow completion actions last in `<openclaw-modal-actions>`, after content, status and validation errors. The native modal stylesheet owns right alignment, wrapping and label containment for Solid and retained Lit callers. Keep submit buttons inside their native form; no renderer or custom-element registration is needed. Caller styles own spacing, not competing alignment or mobile full-width rules. Header X/Expand and field-local controls are not completion actions. Scrollable panels respect `--openclaw-modal-height-limit` so the footer stays reachable. Set the intended width with `--openclaw-modal-width` on the native host and let child panels fill the shell instead of imposing a wider independent width.
+- Place workflow completion actions last in `<openclaw-modal-actions>`, after content, status and validation errors. The native modal stylesheet owns right alignment, wrapping and label containment. Keep submit buttons inside their native form; no renderer or custom-element registration is needed. Caller styles own spacing, not competing alignment or mobile full-width rules. Header X/Expand and field-local controls are not completion actions. Scrollable panels respect `--openclaw-modal-height-limit` so the footer stays reachable. Set the intended width with `--openclaw-modal-width` on the native host and let child panels fill the shell instead of imposing a wider independent width.
 
 ## Gateway Coupling
 

@@ -5,6 +5,7 @@ import {
   createMemo,
   For,
   Match,
+  Repeat,
   Show,
   Switch,
   onCleanup,
@@ -18,28 +19,29 @@ import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-cha
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { presentedContent } from "../../../lit/presentation-binding.ts";
-import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
-import { renderAsyncQuestionSummary } from "./chat-async-question.ts";
+import { usePanePresentation } from "../chat-pane-presentation.ts";
+import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import "../../../components/person-reference.ts";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
 import { ChatPermissionCard } from "./chat-divider.tsx";
+import { ActivityOperation } from "./chat-message-activity-operation.tsx";
 import { OmittedMedia } from "./chat-message-attachment-status-solid.tsx";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
-import { renderAssistantAttachments } from "./chat-message-attachments.ts";
-import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
+import type {
+  ActivityOperationProps,
+  GroupedMessageOptions,
+} from "./chat-message-bubble-options.ts";
 import {
   prepareGroupedMessage,
   type GroupedMessagePresentation,
 } from "./chat-message-bubble-presentation.ts";
 import { MessageWorkContext } from "./chat-message-context-view.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
-import { renderMessageImages } from "./chat-message-images.ts";
 import "./chat-clawhub-card.ts";
 import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
-import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
+import type { MarkdownMedia, PositionedMedia } from "./chat-message-media-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
 import { type AttachmentItem, schedulePairingQrExpiryRefresh } from "./chat-message-media.ts";
 import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-view.tsx";
@@ -54,7 +56,7 @@ import {
 } from "./chat-tool-cards.solid.tsx";
 import { ChatToolContent, ChatToolRawOutput, ChatToolOutcome } from "./chat-tool-content.solid.tsx";
 import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
-import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
+import { WorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 import { ToolPreview } from "./widget-card.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
@@ -79,8 +81,9 @@ export function GroupedMessage(props: GroupedMessageProps) {
     prepareGroupedMessage(props.preparation, props.messageKey, props.options, props.onOpenSidebar),
   );
   let element: Element | undefined;
-  // Bind arrivals before the transcript commit consumes their pending identities.
+  // Snapshot the initial arrival callback so the DOM ref binds before transcript commit.
   let currentEntryRef = untrack(() => props.options.entryRef);
+  // Keep the entry-animation DOM owner bound as its callback changes.
   createEffect(
     () => props.options.entryRef,
     (next) => {
@@ -93,6 +96,7 @@ export function GroupedMessage(props: GroupedMessageProps) {
       }
     },
   );
+  // Expiring pairing QR attachments schedule a timer at their resource owner.
   createEffect(
     () =>
       [props.messageKey, state().nextPairingQrExpiresAt, props.options.onRequestUpdate] as const,
@@ -122,6 +126,19 @@ export function GroupedMessage(props: GroupedMessageProps) {
               <ReplyLineView line={props.options.replyLine!} actions={props.options} inline />
             </Show>
             <Switch>
+              <Match when={state().voiceTranscript}>
+                <ChatBubbleActivity
+                  label={t("chat.messages.voiceTranscript")}
+                  open={props.options.searchResult}
+                >
+                  <BubbleContents
+                    state={state}
+                    messageKey={props.messageKey}
+                    options={props.options}
+                    onOpenSidebar={props.onOpenSidebar}
+                  />
+                </ChatBubbleActivity>
+              </Match>
               <Match when={state().onlyToolCards}>
                 <InlineToolCards cards={state().toolCards} options={state().toolRenderOptions} />
               </Match>
@@ -165,12 +182,10 @@ export function GroupedMessage(props: GroupedMessageProps) {
         </Show>
       }
     >
-      <LitContent
-        value={renderWorkspaceConflictTranscriptMessage(
-          state().workspaceConflict!,
-          props.messageKey,
-          props.options.entryId,
-        )}
+      <WorkspaceConflictTranscriptMessage
+        conflict={state().workspaceConflict!}
+        messageKey={props.messageKey}
+        entryId={props.options.entryId}
       />
     </Show>
   );
@@ -181,7 +196,7 @@ function InlineToolCards(props: {
   options: Omit<ToolCardOptions, "expanded" | "onToggleExpanded"> & {
     isToolExpanded?: (id: string) => boolean;
     onToggleToolExpanded?: (id: string, expanded?: boolean) => void;
-    toolCardOverrides?: ReadonlyMap<ToolCard, unknown>;
+    toolCardOverrides?: ReadonlyMap<ToolCard, ActivityOperationProps | null>;
   };
 }) {
   return (
@@ -205,7 +220,9 @@ function InlineToolCards(props: {
                 />
               }
             >
-              <LitContent value={props.options.toolCardOverrides?.get(card())} />
+              <Show when={props.options.toolCardOverrides?.get(card())}>
+                {(operation) => <ActivityOperation {...operation()} />}
+              </Show>
             </Show>
           );
         }}
@@ -215,11 +232,10 @@ function InlineToolCards(props: {
 }
 
 function PairingQrNotices(props: { count: number }) {
-  const count = createMemo(() => props.count);
   return (
-    <Show when={count() > 0}>
+    <Show when={props.count > 0}>
       <div class="chat-pairing-qr-notices">
-        <For each={Array.from({ length: count() }, (_, index) => index)}>
+        <Repeat count={props.count}>
           {() => (
             <div class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked chat-pairing-qr-expired">
               <span class="chat-pairing-qr-expired__icon" aria-hidden="true">
@@ -240,7 +256,7 @@ function PairingQrNotices(props: { count: number }) {
               </div>
             </div>
           )}
-        </For>
+        </Repeat>
       </div>
     </Show>
   );
@@ -283,6 +299,21 @@ function AssistantViews(props: ContentProps) {
 }
 
 function MessageText(props: ContentProps) {
+  const OrderedMedia = (media: { item: PositionedMedia }) => (
+    <Show
+      when={media.item.type === "image" ? media.item.image : undefined}
+      fallback={
+        <AssistantAttachments
+          attachments={media.item.type === "image" ? [] : [media.item]}
+          options={props.state().imageRenderOptions}
+          onOpenSidebar={props.onOpenSidebar}
+          onAssistantAttachmentLoaded={props.options.onAssistantAttachmentLoaded}
+        />
+      }
+    >
+      {(image) => <MessageImages images={[image()]} options={props.state().imageRenderOptions} />}
+    </Show>
+  );
   const prepared = createMemo(() => {
     const state = props.state();
     const options = {
@@ -292,16 +323,7 @@ function MessageText(props: ContentProps) {
     let text = state.bodyMarkdown;
     let media: MarkdownMedia | undefined;
     if (!state.asyncQuestions && state.renderInOrder) {
-      const ordered = prepareMarkdownMedia(state.orderedContent, (item) =>
-        item.type === "image"
-          ? renderMessageImages([item.image], state.imageRenderOptions)
-          : renderAssistantAttachments(
-              [item],
-              state.imageRenderOptions,
-              props.onOpenSidebar,
-              props.options.onAssistantAttachmentLoaded,
-            ),
-      );
+      const ordered = prepareMarkdownMedia(state.orderedContent, OrderedMedia);
       text = resolveMessageDisplayMarkdown(state.message, {
         ...state.normalizedMessage,
         content: [{ type: "text", text: ordered.markdown }],
@@ -316,11 +338,9 @@ function MessageText(props: ContentProps) {
   return (
     <Switch>
       <Match when={props.state().asyncQuestions}>
-        <LitContent
-          value={renderAsyncQuestionSummary(
-            props.state().asyncQuestions!,
-            props.options.asyncQuestions!,
-          )}
+        <AsyncQuestionSummary
+          questions={props.state().asyncQuestions!}
+          presentation={props.options.asyncQuestions!}
         />
       </Match>
       <Match when={prepared().json}>
@@ -349,28 +369,27 @@ function MessageAvatar(props: { render?: () => JSX.Element }) {
   const render = createMemo(() => props.render);
   const avatar = createMemo(() => {
     const factory = render();
+    // The factory owns nested reactive bindings; only replacement remounts the avatar.
     return factory ? untrack(factory) : undefined;
   });
   return <>{avatar()}</>;
 }
 
 function VideoPreview(props: ContentProps & { item: Accessor<AttachmentItem | undefined> }) {
+  const presented = usePanePresentation(() => props.options.transcriptVisible ?? true);
   return (
     <div class="chat-image-frame chat-video-preview">
       <Show when={props.item()}>
         {(item) => (
-          <LitContent
-            value={presentedContent(
-              props.options.transcriptVisible ?? true,
-              solidContent(MessageAttachment, {
-                item: item(),
-                options: props.state().imageRenderOptions,
-                onOpenSidebar: props.onOpenSidebar,
-                onAssistantAttachmentLoaded: props.options.onAssistantAttachmentLoaded,
-                presentation: "preview",
-              }),
-            )}
-          />
+          <Show when={presented()}>
+            <MessageAttachment
+              item={item()}
+              options={props.state().imageRenderOptions}
+              onOpenSidebar={props.onOpenSidebar}
+              onAssistantAttachmentLoaded={props.options.onAssistantAttachmentLoaded}
+              presentation="preview"
+            />
+          </Show>
         )}
       </Show>
     </div>

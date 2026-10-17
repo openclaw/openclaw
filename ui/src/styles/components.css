@@ -1666,7 +1666,6 @@ openclaw-session-progress-hovercard-provider {
     white-space: normal;
     text-indent: 0;
     transition: none;
-    -webkit-mask-image: none;
     mask-image: none;
   }
 }
@@ -2536,15 +2535,11 @@ select.input {
   background: currentColor;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E")
     center / contain no-repeat;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='14' height='14' x='8' y='8' rx='2'/%3E%3Cpath d='M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'/%3E%3C/svg%3E")
-    center / contain no-repeat;
 }
 
 .code-block-copy__done {
   background: currentColor;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m20 6-11 11-5-5'/%3E%3C/svg%3E")
-    center / contain no-repeat;
-  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m20 6-11 11-5-5'/%3E%3C/svg%3E")
     center / contain no-repeat;
 }
 
@@ -2661,7 +2656,6 @@ select.input {
   max-height: min(70vh, 860px);
   overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
-  -webkit-overflow-scrolling: touch;
 }
 
 .data-table {
@@ -4303,6 +4297,7 @@ td.data-table-key-col {
   color: var(--pr-merged);
 }
 
+.session-row-badge--pull-request[data-pull-request-state="closed"],
 .session-row-badge--cloud[data-placement-state="failed"],
 .session-row-badge--cloud[data-disk-space-status="critical"] {
   color: var(--danger);
@@ -4615,7 +4610,6 @@ td.data-table-key-col {
 .provider-brand-icon:not(.provider-brand-icon--fallback) {
   background: currentColor;
   mask: var(--provider-icon-url) center / contain no-repeat;
-  -webkit-mask: var(--provider-icon-url) center / contain no-repeat;
 }
 
 .cloud-profile-icon,
@@ -4630,7 +4624,6 @@ td.data-table-key-col {
 
 .cloud-provider-icon[data-provider-icon="hetzner"] {
   mask-size: 88%;
-  -webkit-mask-size: 88%;
 }
 
 .provider-brand-icon--fallback {

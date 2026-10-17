@@ -16,12 +16,14 @@ import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
 describe("sidebar cron event publication", () => {
   let store: SidebarAttentionStore | undefined;
 
-  afterEach(() => {
+  afterEach(async () => {
     store?.dispose();
     store = undefined;
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    // Inbox startup also starts a nested composer-storage import.
+    await vi.dynamicImportSettled();
   });
 
   it("updates Inbox attention through a minute of cron publications without inventory rereads", async () => {

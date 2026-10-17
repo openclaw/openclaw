@@ -499,28 +499,23 @@ it("presents current recipient roles without SQLite while rejecting source overr
       for (const client of clients) {
         vi.mocked(client.socket).send.mockClear();
       }
-      vi.mocked(clients[0]!.socket).send.mockImplementationOnce(() => {
-        connection.chatAbortControllers.delete("old-run");
-        connection.chatAbortControllers.set("replacement-run", {
-          ...activeRun,
-          sessionKey: "agent:main:adopted-source",
-          sessionId: ` ${entry.sessionId} `,
-        });
+      connection.chatAbortControllers.delete("old-run");
+      connection.chatAbortControllers.set("replacement-run", {
+        ...activeRun,
+        sessionKey: "agent:main:adopted-source",
+        sessionId: ` ${entry.sessionId} `,
       });
       connection.broadcastToConnIds(
         "sessions.changed",
         { sessionKey: query.key, agentId: query.agentId },
         new Set(clients.map((client) => client.connId)),
       );
-      for (const [index, runId] of [
-        [0, "old-run"],
-        [1, "replacement-run"],
-      ] as const) {
-        const sends = vi.mocked(clients[index]!.socket).send.mock.calls;
+      for (const client of clients.slice(0, 2)) {
+        const sends = vi.mocked(client.socket).send.mock.calls;
         expect(sends).toHaveLength(1);
         expect(JSON.parse(String(sends[0]?.[0])).payload.session).toMatchObject({
           hasActiveRun: true,
-          activeRunIds: [runId],
+          activeRunIds: ["replacement-run"],
         });
       }
       expect(vi.mocked(clients[2]!.socket).send.mock.calls).toHaveLength(0);
@@ -540,27 +535,28 @@ it("presents current recipient roles without SQLite while rejecting source overr
         for (const client of clients) {
           vi.mocked(client.socket).send.mockClear();
         }
-        vi.mocked(clients[0]!.socket).send.mockImplementationOnce(() => {
-          if (change === "session-id") {
-            replacement.sessionId = "adopted-session";
-          } else if (change === "session-key") {
-            replacement.sessionKey = "agent:main:adopted-source";
-          } else if (change === "terminal") {
-            replacement.projectSessionActive = false;
-          } else if (change === "visibility") {
-            replacement.controlUiVisible = false;
-          } else {
-            replacement.agentId = "other";
-          }
-        });
         connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
-        for (const [index, hasActiveRun] of [true, false].entries()) {
-          const sends = vi.mocked(clients[index]!.socket).send.mock.calls;
-          expect(sends).toHaveLength(1);
-          expect(JSON.parse(String(sends[0]?.[0])).payload.session).toMatchObject({
-            hasActiveRun,
-            activeRunIds: hasActiveRun ? ["replacement-run"] : [],
-          });
+        if (change === "session-id") {
+          replacement.sessionId = "adopted-session";
+        } else if (change === "session-key") {
+          replacement.sessionKey = "agent:main:adopted-source";
+        } else if (change === "terminal") {
+          replacement.projectSessionActive = false;
+        } else if (change === "visibility") {
+          replacement.controlUiVisible = false;
+        } else {
+          replacement.agentId = "other";
+        }
+        connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
+        for (const client of clients.slice(0, 2)) {
+          const sends = vi.mocked(client.socket).send.mock.calls;
+          expect(sends).toHaveLength(2);
+          for (const [index, hasActiveRun] of [true, false].entries()) {
+            expect(JSON.parse(String(sends[index]?.[0])).payload.session).toMatchObject({
+              hasActiveRun,
+              activeRunIds: hasActiveRun ? ["replacement-run"] : [],
+            });
+          }
         }
         expect(vi.mocked(clients[2]!.socket).send.mock.calls).toHaveLength(0);
       }
@@ -569,19 +565,14 @@ it("presents current recipient roles without SQLite while rejecting source overr
       for (const client of clients) {
         vi.mocked(client.socket).send.mockClear();
       }
-      vi.mocked(clients[0]!.socket).send.mockImplementationOnce(() => {
-        joining.sessionKey = query.key;
-      });
+      joining.sessionKey = query.key;
       connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
-      for (const [index, activeRunIds] of [
-        [0, ["replacement-run"]],
-        [1, ["replacement-run", "unrelated-0"]],
-      ] as const) {
-        const sends = vi.mocked(clients[index]!.socket).send.mock.calls;
+      for (const client of clients.slice(0, 2)) {
+        const sends = vi.mocked(client.socket).send.mock.calls;
         expect(sends).toHaveLength(1);
         expect(JSON.parse(String(sends[0]?.[0])).payload.session).toMatchObject({
           hasActiveRun: true,
-          activeRunIds,
+          activeRunIds: ["replacement-run", "unrelated-0"],
         });
       }
       connection.chatAbortControllers.clear();

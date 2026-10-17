@@ -57,34 +57,18 @@ export const agentListHandler: GatewayRequestHandler = async ({
     initialAllowedAgents && initialAllowedAgents !== "*"
       ? new Set(initialAllowedAgents)
       : undefined;
-  let result = await listAgentsForGateway(cfg, {
+  const result = await listAgentsForGateway(cfg, {
     ...projectionOptions,
     agentIds: selectedAgentIds,
   });
-  let currentConfig = context.getRuntimeConfig();
+  const currentConfig = context.getRuntimeConfig();
   const roleError = authorizeCurrentOperatorRoleScopes(client, currentConfig);
   if (roleError) {
     respond(false, undefined, roleError);
     return;
   }
-  let allowedAgents = resolveOperatorRolePolicy(client, currentConfig)?.agents;
-  if (
-    selectedAgentIds &&
-    (!allowedAgents ||
-      allowedAgents === "*" ||
-      allowedAgents.some((id) => !selectedAgentIds.has(id)))
-  ) {
-    // A grant while enrichment is pending can expose previously omitted rows.
-    // Prepare the full roster once so later changes need only the final policy filter.
-    result = await listAgentsForGateway(cfg, projectionOptions);
-    currentConfig = context.getRuntimeConfig();
-    const refreshedRoleError = authorizeCurrentOperatorRoleScopes(client, currentConfig);
-    if (refreshedRoleError) {
-      respond(false, undefined, refreshedRoleError);
-      return;
-    }
-    allowedAgents = resolveOperatorRolePolicy(client, currentConfig)?.agents;
-  }
+  // Grants during enrichment appear on the next request; revocations apply now.
+  const allowedAgents = resolveOperatorRolePolicy(client, currentConfig)?.agents;
   const agents =
     allowedAgents && allowedAgents !== "*"
       ? result.agents.filter((agent) => allowedAgents.includes(agent.id))

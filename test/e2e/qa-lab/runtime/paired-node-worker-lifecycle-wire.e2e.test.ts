@@ -26,6 +26,7 @@ import {
   connectWireClient,
   createPairedNodeWorkerHost,
   createPublishedWireWorkspace,
+  createWireWorkspaceSettlementWaiter,
   startPairedNodeWorkerGateway,
   type PairedNodeWorkerHost,
   type PublishedWireWorkspace,
@@ -293,6 +294,7 @@ function processIsAlive(pid: number): boolean {
 
 describe("paired node worker lifecycle wire", () => {
   const gatewayOwner = createQaGatewayChild();
+  const settlement = createWireWorkspaceSettlementWaiter();
   let provider: Awaited<ReturnType<typeof startPairedNodeWorkerLifecycleProvider>>;
   let gateway: WireGateway;
   let operator: GatewayClient;
@@ -310,7 +312,13 @@ describe("paired node worker lifecycle wire", () => {
       providerBaseUrl: provider.baseUrl,
       useRepoCli: false,
     });
-    operator = await connectWireClient({ gateway, role: "operator", identity: null });
+    operator = await connectWireClient({
+      gateway,
+      role: "operator",
+      identity: null,
+      onEvent: settlement.onEvent,
+    });
+    await operator.request("sessions.subscribe", {});
   });
 
   afterAll(async () => {
@@ -552,7 +560,7 @@ describe("paired node worker lifecycle wire", () => {
   it(
     "keeps local control usable across bundle loss, disconnect, capacity, and role removal",
     { timeout: TEST_TIMEOUT_MS },
-    async () => {
+    async ({ signal }) => {
       const root = tempDirs.make("openclaw-paired-node-worker-lifecycle-");
       const published = await createPublishedWireWorkspace(root);
       let workerNode: PairedNodeWorkerHost | undefined;
@@ -594,6 +602,7 @@ describe("paired node worker lifecycle wire", () => {
 
         // Local and node-placed sessions share the Gateway without sharing failure state.
         await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-NODE-BASELINE" });
+        await settlement.wait(operator, retainedKey, signal);
         await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-BASELINE" });
 
         // Stop-and-continue moves reconcile the source before returning local, never pass through
@@ -641,6 +650,7 @@ describe("paired node worker lifecycle wire", () => {
         await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-MOVED-LOCAL" });
         await dispatchNodeSession({ gateway, key: retainedKey, nodeId });
         await expectSuccessfulTurn({ operator, key: retainedKey, marker: "WIRE-MOVED-BACK" });
+        await settlement.wait(operator, retainedKey, signal);
 
         // Bundle maintenance reports only the public status/version projection and repairs loss.
         await expectPublicBundleStatus({
@@ -706,6 +716,7 @@ describe("paired node worker lifecycle wire", () => {
         await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-AFTER-OFFLINE" });
         await workerNode.connect();
         await expectSuccessfulTurn({ operator, key: repairedKey, marker: "WIRE-OFFLINE-RETRY" });
+        await settlement.wait(operator, repairedKey, signal);
         await workerNode.waitForWorkersIdle();
 
         // Two nonterminal real worker children consume both physical slots. The third turn
@@ -761,13 +772,16 @@ describe("paired node worker lifecycle wire", () => {
         await expectSuccessfulTurn({ operator, key: localKey, marker: "WIRE-LOCAL-AT-CAPACITY" });
         provider.release(HOLD_A);
         await expect(waitForTurn(operator, holdARunId)).resolves.toMatchObject({ status: "ok" });
+        await settlement.wait(operator, holdAKey, signal);
         await expectSuccessfulTurn({
           operator,
           key: capacityKey,
           marker: "WIRE-CAPACITY-RETRY",
         });
+        await settlement.wait(operator, capacityKey, signal);
         provider.release(HOLD_B);
         await expect(waitForTurn(operator, holdBRunId)).resolves.toMatchObject({ status: "ok" });
+        await settlement.wait(operator, holdBKey, signal);
 
         // Revocation fences placement before responding but cannot prove remote extinction.
         // Keep the exact attachment pending cleanup rather than invent a terminal environment.

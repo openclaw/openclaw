@@ -19,6 +19,7 @@ import {
   migratePortableIdentityColumnsV22,
   STATE_CURSOR_TABLES_V22,
 } from "./openclaw-state-db-schema-v22-columns.js";
+import { withLegacyStateHeadLayout } from "./openclaw-state-db-schema-v26-layout.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -178,7 +179,7 @@ describe("v21 upgrade preserves portable cursor and resume identities", () => {
   beforeAll(() => {
     template = path.join(directories.make("v21-portable-template-"), "openclaw.sqlite");
     using db = new DatabaseSync(template);
-    db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+    db.exec(withLegacyStateHeadLayout(OPENCLAW_STATE_SCHEMA_SQL));
     // Reconstruct exactly the columns and indexes changed by v22; all other contracts stay current.
     for (const table of STATE_CURSOR_TABLES_V22) {
       const index =
@@ -296,6 +297,7 @@ describe("v21 upgrade preserves portable cursor and resume identities", () => {
           "sqlite_stat1",
           "sqlite_stat4",
           "acp_sessions",
+          "session_state_heads",
           ...STATE_CURSOR_TABLES_V22,
         ],
         () => {

@@ -14,9 +14,10 @@ import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
+import { ChatSubagentActivity } from "./chat-subagent-activity-live.ts";
+import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
 import "./chat-retry-status.tsx";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
@@ -29,7 +30,7 @@ type ChatWorkingIndicatorOptions = {
   waitingApproval?: boolean;
   waitingSubagents?: ChatSubagentWait;
   runningSubagents?: number;
-  subagentActivity?: unknown;
+  subagentActivity?: SubagentActivityProps;
   onOpenSubagents?: () => void;
   startupLabel?: string;
   retryAt?: number;
@@ -196,7 +197,7 @@ export function ChatWorkingIndicator(props: WorkingProps) {
           fallback={
             <>
               <Show when={props.options.subagentActivity !== undefined}>
-                <LitContent value={props.options.subagentActivity} />
+                <ChatSubagentActivity {...props.options.subagentActivity!} />
               </Show>
               <WorkingStatus {...props} branding={branding.read()} />
             </>
@@ -216,7 +217,7 @@ export function ChatWorkingIndicator(props: WorkingProps) {
             </summary>
             <div class="chat-bubble-activity__details">
               <Show when={props.options.subagentActivity !== undefined}>
-                <LitContent value={props.options.subagentActivity} />
+                <ChatSubagentActivity {...props.options.subagentActivity!} />
               </Show>
               <WorkingStatus {...props} branding={branding.read()} />
             </div>
@@ -224,7 +225,7 @@ export function ChatWorkingIndicator(props: WorkingProps) {
         </Show>
       }
     >
-      <LitContent value={props.options.subagentActivity} />
+      <ChatSubagentActivity {...props.options.subagentActivity!} />
     </Show>
   );
 }

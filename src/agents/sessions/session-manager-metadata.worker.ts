@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { persistCompactionBoundaryWithSessionEntryInWorker } from "../../config/sessions/session-accessor.sqlite-compaction.js";
@@ -23,6 +22,7 @@ import {
   parseTranscriptAppendRefusal,
   SessionTranscriptWriterClaimReboundError,
 } from "../../config/sessions/session-transcript-writer-claim-error.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withoutSqliteDatabaseWriteScope,
@@ -68,7 +68,7 @@ export function bindSqliteWorkerBackend(
   _input: undefined,
   nativeContext: {
     databasePath: string;
-    database: DatabaseSync;
+    database: EngineConnection;
     admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
   },
 ): Omit<SqliteWorkerBackend<SessionMetadataWorkerOperations>, "close"> & { close(): undefined } {
@@ -170,9 +170,6 @@ export function bindSqliteWorkerBackend(
           SessionMetadataWorkerOperations["session.transcript.appendMessage"]["output"]
         >(
           (database) => {
-            if (database.db !== context.database) {
-              throw new Error("Session message lost its borrowed canonical connection");
-            }
             admit("transaction");
             const value = applySessionDirectMessageInTransaction(database, {
               ...command.input,
@@ -207,9 +204,6 @@ export function bindSqliteWorkerBackend(
             | "session.metadata.append"]["output"]
         >(
           (database) => {
-            if (database.db !== context.database) {
-              throw new Error("Session metadata lost its borrowed canonical connection");
-            }
             admit("transaction");
             if (command.type === "session.metadata.initialize") {
               const initialized = ensureSessionEntryInTransaction(

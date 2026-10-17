@@ -184,7 +184,7 @@ describe("IMessageRpcClient LF framing", () => {
     child.stdout.write(stdout.subarray(stdoutSplit));
 
     await expect(pending).resolves.toBe("prefix \u20ac");
-    expect(runtimeError.mock.calls).toEqual([["imsg rpc: notice prefix \u732b"]]);
+    expect(runtimeError.mock.calls).toEqual([["imsg rpc: stderr diagnostic received"]]);
   });
 
   it("resolves an unterminated stdout response before rejecting remaining requests on child close", async () => {
@@ -216,7 +216,7 @@ describe("IMessageRpcClient LF framing", () => {
 
     expect(order).toEqual(["stdout", "stderr"]);
     expect(runtimeError).toHaveBeenCalledExactlyOnceWith(
-      "imsg rpc: notice Full Disk Access denied for chat.db",
+      "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
     );
     await pending;
   });
@@ -469,9 +469,8 @@ describe("IMessageRpcClient child stream error handling", () => {
     await expect(client.request("ping", {}, { timeoutMs: 5_000 })).resolves.toEqual({ ok: true });
     await client.stop();
 
-    expect(logVerboseMock).toHaveBeenCalledWith(`imsg rpc: ${documented}`);
-    expect(runtimeError).toHaveBeenCalledWith(`imsg rpc: ${frameworkError}`);
-    expect(runtimeError).not.toHaveBeenCalledWith(`imsg rpc: ${documented}`);
+    expect(logVerboseMock).not.toHaveBeenCalled();
+    expect(runtimeError).toHaveBeenCalledExactlyOnceWith("imsg rpc: stderr diagnostic received");
   });
 
   it("expands cliPath locally while preserving remote dbPath and JSON data", async () => {
@@ -607,7 +606,7 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     });
     expect(error.message).toContain("Timed out waiting for response to 'send-message'");
     expect(runtimeError).toHaveBeenCalledWith(
-      "imessage: automatic bridge recovery failed: launch stderr stream failed",
+      "imessage: automatic bridge recovery failed. The imsg private API bridge stopped responding. Run `imsg launch` to re-inject the dylib, then `openclaw channels status --probe` to refresh capability detection.",
     );
 
     child.emit("close", 0, null);

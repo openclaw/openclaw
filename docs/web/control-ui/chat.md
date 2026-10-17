@@ -12,6 +12,9 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
+Click a session-menu submenu, such as **Assign to…**, to open it immediately.
+Hovering still uses a short delay so moving across the menu does not open every submenu.
+
 When the visible conversation does not fill the chat pane, including when the
 latest history page is empty or tool activity is hidden, earlier history loads
 automatically after the layout settles. Filling stops once the prefetch margin
@@ -84,8 +87,11 @@ activity without a completed parent turn does not invent a parent wait.
 The parent’s own working indicator remains visible while the parent is actively
 working. There is no additional waiting-status line above the composer. Once
 everything it waited on has finished, the activity rows disappear until the agent resumes. Tool rows you opened stay open through the handoff. A
-successful `sessions_yield` leaves no marker in the transcript, and its private
-continuation context stays hidden.
+successful `sessions_yield` waiting for an incoming message shows its public
+acknowledgment, or **Waiting for a message** when none was recorded. Child handoffs
+keep their existing activity rows. Private continuation context stays hidden.
+Turns with only tool calls use the usual activity rows; entries with nothing
+displayable do not leave an empty assistant reply.
 
 When the last subagent finishes, its activity row disappears and the block stays as it
 is, without a working indicator, until the turn resumes. Its answer then
@@ -148,6 +154,27 @@ When the macOS app embeds a single conversation beside its native sidebar, the c
 In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, the navigation panel header and content header share the 52px titlebar row, with back/forward before the conversation title and search in the persistent rail.
 Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
 Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
+
+## Context breakdown
+
+Open **Details → Context** to see the current usage and an estimated breakdown
+of messages and other context, workspace memory, tool schemas, skills, and the
+remaining system prompt. Expand memory, tools, or skills to inspect individual
+contributors. The report loads only while this section is open; **Refresh**
+reloads the saved report without starting an agent turn.
+
+Contributor sizes use character-based token estimates from the last matching
+run report, not the provider's tokenizer. Workspace memory and skills are
+subtracted from the system prompt so they are not counted twice. **Messages &
+other** is the estimated remainder, including context the report does not track
+separately. Unverified injection sizes stay unknown rather than showing zero.
+MCP and deferred tools are not separate categories in this report.
+
+When a matching last-run prompt budget is available, the section shows the
+remaining budget and the reserve outside it. These are estimates, not a promise
+of the exact auto-compaction point. **Compact session** uses the existing
+compaction command and appears only with the required permissions; it is
+disabled while a run is active. It preserves the composer draft.
 
 ## Image viewing
 
@@ -541,13 +568,13 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - When a visible assistant message was truncated in `chat.history`, the Control UI automatically fetches the full display-normalized transcript entry through `chat.message.get` by `sessionKey`, active `agentId` when needed, and transcript `messageId`. The preview remains visible while the entry loads; recovered text replaces it inline.
     - Image previews reserve their space while loading. New uploaded images retain their pixel dimensions in saved messages; older images without dimensions fit inside a stable 3:2 preview instead of shifting the surrounding conversation when they load. Open an image to view its full size.
     - Assistant/generated images are persisted as managed media references. New clients resolve their stable artifact ids through authenticated `artifacts.download` and receive short-lived, exact-resource media URLs, so reloads do not depend on raw base64 payloads or reusable credentials in image URLs. The chat uses bounded thumbnails for still images. GIF attachments load their original bytes inline so they animate without opening the image viewer. Opening uses a screen-sized rendition; Download and Copy explicitly request the full image. These actions share the browser's bounded in-memory image cache, avoiding repeated downloads while a rendition remains cached.
-    - When rendering `chat.history`, the Control UI strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens. It omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply` or the heartbeat acknowledgement token `HEARTBEAT_OK`.
+    - The Gateway prepares `chat.history` for display, stripping inline directive tags (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated blocks), and leaked ASCII/full-width model control tokens. Stored assistant visibility honors display, phase, and final-source facts first, then omits raw assistant text that trims to uppercase `NO_REPLY`; lowercase and wrapped forms remain visible. User text is never classified as silence. Heartbeat acknowledgments retain their separate display rules. The Control UI renders prepared history and live output without parsing silence tokens.
     - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the saved transcript replaces those local messages once the Gateway history catches up. Pending sends in shared sessions remain a single bubble while incremental history catches up, even when another participant's reply arrives first. Saved commentary also replaces its matching live item when incremental history arrives after completion, cancellation, or failure, keeping the progress text in its original place.
     - Your pending prompt stays before its own saved assistant reply even when the reply arrives before history recovery finishes after reconnect; existing saved messages keep their transcript order.
     - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat). After an in-place `/clear` or `/reset`, fresh turns keep their user-before-reply order across live updates, incremental history catch-up, and reload.
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
     - Root sessions and ordinary Home-linked dashboard sessions can be pinned. Spawned and nested-child sessions retain their sidebar nesting and reject pin requests. Subagent runs also reject pin requests and do not appear in sidebar navigation.
-    - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Sessions can be dropped onto Pinned to pin them, or onto a custom group or Chats to move them; custom groups are collapsible and drag-reorderable, group names and order sync through the gateway, and collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names and authenticated sender identity remain separate, so account names are never used as generated titles. When New Session creates a worktree without an explicit worktree name, OpenClaw also uses the session label or generated title for its branch name, falling back to a readable crustacean-themed name. Set `agents.defaults.utilityModel` (or `agents.entries.*.utilityModel`) to route this separate model call to a lower-cost model; if that distinct model fails, title generation retries once with the primary model. Expanding another agent section browses that agent's sessions without leaving the open chat.
+    - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Sessions can be dropped onto Pinned to pin them, or onto a custom group or Chats to move them; custom groups are collapsible and drag-reorderable, group names and order sync through the gateway, and collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names and authenticated sender identity remain separate, so account names are never used as generated titles. When New Session creates a worktree without an explicit worktree name, OpenClaw also uses the session label or generated title for its branch name, falling back to a readable crustacean-themed name. Set `agents.defaults.utilityModel` (or `agents.entries.*.utilityModel`) to route this separate model call to a lower-cost model or `{ primary, fallbacks }` chain; if that distinct utility chain is exhausted, title generation retries once with the primary model. Expanding another agent section browses that agent's sessions without leaving the open chat.
     - Search the active transcript with **⌘F** on Mac or **Ctrl+F** on Windows/Linux; Mac **Ctrl+F** remains available for native text navigation. Search includes recovered full-message text and updates when an in-flight recovery finishes. Press **Escape** while search is focused to close it, clear the query, and return focus to the control that opened it. Clearing the search keeps recovered text available in the thread.
     - Thread search in the command palette (⌘K on Mac, Ctrl+K on Windows/Linux, or the search button in the top-left control cluster) searches the authorized active-session scope across configured agents on the Gateway, filters internal child/cron/system rows before result limits, and lists the best visible matches next to navigation commands. The result limit does not restrict which sessions can match. Only actual indexing, unavailable transcript history, or search failures show status messages; more matches than the displayed limit is normal. On the **Sessions** page at `/sessions`, the quick filter searches visible session metadata on the Gateway before pagination, including names, agent identity, model/runtime labels, run status, and goal text and usage. The selected agent (or **All agents**) and **Active / Archived / All** filters still apply. **Limit** sets the server page size (50 by default); **Load more sessions** appends the next matching page. Table sorting, grouping, overview counts, and **Rows per page** operate on the loaded rows, not a globally sorted result. **Search transcripts** searches message content across the complete selected session scope on the Gateway, separately from the quick filter and roster page size. Available session titles stay with transcript matches even when their sessions are outside the filtered table. Opening a session link preserves its full UUID identity when session identifiers share a prefix, including after reloading links from Sessions and Worktrees.
     - Each sidebar row keeps direct pin access plus a full context menu for unread state, rename, fork, grouping, archive, and delete. Cmd/Ctrl-click opens the session in a new browser tab. Multi-selected rows (Alt/Option-click, Shift-click for ranges) get a batch menu covering unread state, grouping, archive, and delete; batch Archive asks for confirmation when the selection contains active work, then reports per-session failures while archiving eligible rows, whereas batch Delete keeps its separate idle-or-already-archived eligibility. Archive stays disabled for agent main sessions (including `global` in global scope) and the `unknown` sentinel. For any other session, including one with active work, the Gateway stops and fully drains that session's work before archiving it. The selected archived session stays open with an archived notice and **Unarchive** action; deleting the selected session switches Chat back to that agent's main session. If you switch agents while a rename, archive, delete, or batch update is finishing, its completion preserves the newly selected agent's session list, pagination, and ongoing updates, including in Archived and All views.
@@ -669,6 +696,13 @@ those badges. A search with no official match or an unavailable catalog returns
 an explanation in chat.
 
 ### Source previews and copying code
+
+Hover over a `SKILL.md` link in chat to preview the installed skill's current
+source, with syntax colors and line numbers. Focus the link to use the keyboard,
+or tap/click to keep the card open. Copy the source or choose **Open full file**
+to read it in **Review**. The card shows up to 400 lines and rereads the file
+each time it opens; the full-file view includes all lines. Press Escape to
+dismiss it.
 
 Long clipboard text appears as a file-sized card in the composer and a compact
 chip in the transcript. Its label shows the first 30 characters of a plain-text
@@ -900,6 +934,14 @@ HTML widget media keep their existing behavior.
 
 ## Session Details
 
+When a dashboard or another page is the main view, **Chat** in its header toggles
+that session’s existing conversation, not Side chat. The page and chat retain their
+content and drafts. On phones, Chat takes the content area; toggle it off to return
+to the same page. **Layout** remains for tools, docking, and split views.
+
+Open **⋯ → Session details** for context and progress without opening Chat. It works
+with full-screen pages too. Regular desktop chats also retain the **Details** button.
+
 **Details** brings session context and task progress together beside the conversation.
 On wide chat panes it opens automatically as a docked right-hand column, with
 the transcript and composer centered in the remaining space. Docking uses the
@@ -917,7 +959,12 @@ and attached automations; it reuses their existing actions rather than duplicati
 their data. The former pull-request and task-progress bars are not repeated above
 the composer.
 
-The expanded progress card’s options include **Don’t show task progress again**.
+The progress header shows the current step, not a completed-step total. Its
+options menu stays available when the card is expanded or collapsed and contains
+**Refresh task progress** and **Hide this card**. Hiding the card does not stop
+the task. Clearing saved progress for everyone is a separate menu action.
+
+The options also include **Don’t show task progress again**.
 This turns off the existing browser-local **Show task progress cards** preference
 and offers **Undo**. It does not stop work or delete saved progress. Session details
 remain available, as do dashboard progress widgets and session hover previews.

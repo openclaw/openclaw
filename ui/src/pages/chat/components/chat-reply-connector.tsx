@@ -1,13 +1,13 @@
-import { createEffect, onCleanup, onSettled, useContext } from "solid-js";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { createEffect, useContext } from "solid-js";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 
 /** One observer per connector; updates redraw without replacing the SVG. */
 export function ReplyConnector() {
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   let element: SVGSVGElement;
-  let observer: ResizeObserver | undefined;
-  let disposed = false;
+  let path: SVGPathElement;
   const draw = () => {
+    // The transcript owns the sibling attribution and avatar elements.
     const group = element.closest(".chat-message--reply, .chat-group");
     const row = group?.querySelector(".chat-reply-attribution--reply");
     const label = row?.querySelector(".chat-reply-attribution__label");
@@ -26,51 +26,44 @@ export function ReplyConnector() {
     const endY = text.top + text.height / 2 - bounds.top;
     element.setAttribute("width", String(bounds.width));
     element.setAttribute("height", String(bounds.height));
-    element.firstElementChild?.setAttribute(
+    path.setAttribute(
       "d",
       `M ${startX} ${startY} V ${endY + 7} Q ${startX} ${endY} ${startX + direction * 7} ${endY} H ${endX}`,
     );
   };
-  const disconnect = () => {
-    observer?.disconnect();
-    observer = undefined;
-  };
-  const connect = () => {
-    const group = element.closest(".chat-message--reply, .chat-group");
-    if (disposed || !presented() || !element.isConnected || !group) {
-      return;
+  // ResizeObserver tracks external transcript geometry only while presented.
+  createEffect(presented, (active) => {
+    if (!active) {
+      return undefined;
     }
-    draw();
-    if (!observer && typeof ResizeObserver === "function") {
-      observer = new ResizeObserver(draw);
-      observer.observe(group);
+    let cancelled = false;
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(draw) : undefined;
+    queueMicrotask(() => {
+      const group = element.closest(".chat-message--reply, .chat-group");
+      if (cancelled || !element.isConnected || !group) {
+        return;
+      }
+      draw();
+      observer?.observe(group);
       const messages = group.querySelector(".chat-group-messages");
       if (messages) {
-        observer.observe(messages);
+        observer?.observe(messages);
       }
-    }
-  };
-  onSettled(connect);
-  createEffect(presented, (active) => {
-    if (active) {
-      queueMicrotask(connect);
-    } else {
-      disconnect();
-    }
-  });
-  onCleanup(() => {
-    disposed = true;
-    disconnect();
+    });
+    return () => {
+      cancelled = true;
+      observer?.disconnect();
+    };
   });
   return (
-    <svg
-      ref={(node) => {
-        element = node;
-      }}
-      class="chat-reply-connector"
-      aria-hidden="true"
-    >
-      <path fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" />
+    <svg ref={(node) => (element = node)} class="chat-reply-connector" aria-hidden="true">
+      <path
+        ref={(node) => (path = node)}
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1"
+        stroke-linecap="round"
+      />
     </svg>
   );
 }

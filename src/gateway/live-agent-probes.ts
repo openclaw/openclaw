@@ -8,7 +8,10 @@ import {
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
+import {
+  isStandaloneRuntimeExecutable,
+  resolveOpenClawCliInvocation,
+} from "../../cli-invocation.mjs";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { runExec } from "../process/exec.js";
 
@@ -153,15 +156,20 @@ export async function runOpenClawCliJson<T>(args: string[], env: NodeJS.ProcessE
   const cliArgs = args.includes("--timeout")
     ? args
     : [...args, "--timeout", String(OPENCLAW_CLI_GATEWAY_TIMEOUT_MS)];
-  const hasBuildOutput = ["entry.js", "entry.mjs"].some((entry) =>
-    fs.existsSync(path.join(process.cwd(), "dist", entry)),
-  );
-  const [entryPath, ...argsForEntry] = resolveOpenClawCliProcessArgs(cliArgs, hasBuildOutput);
-  const invocation = resolveOpenClawCliInvocation({
-    entryPath,
-    execArgv: [],
-    args: argsForEntry,
-  });
+  let invocation: ReturnType<typeof resolveOpenClawCliInvocation>;
+  if (isStandaloneRuntimeExecutable()) {
+    invocation = resolveOpenClawCliInvocation({ args: cliArgs });
+  } else {
+    const hasBuildOutput = ["entry.js", "entry.mjs"].some((entry) =>
+      fs.existsSync(path.join(process.cwd(), "dist", entry)),
+    );
+    const [entryPath, ...argsForEntry] = resolveOpenClawCliProcessArgs(cliArgs, hasBuildOutput);
+    invocation = resolveOpenClawCliInvocation({
+      entryPath,
+      execArgv: [],
+      args: argsForEntry,
+    });
+  }
   const { stdout, stderr } = await runExec(invocation.command, invocation.args, {
     baseEnv: childEnv,
     cwd: process.cwd(),

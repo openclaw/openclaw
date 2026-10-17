@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, server, userEvent } from "vitest/browser";
 import type { SessionGoal } from "../../api/types.ts";
-import { SolidContentPresentation } from "../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { mountSolid as mountSolidProps } from "../../test-helpers/solid-render.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -38,7 +38,6 @@ describe("composer overflow presentation", () => {
   const [presented, setPresented] = createSignal(true);
   type ComposerFixtureProps = {
     input: ChatComposerProps;
-    revision: object;
     thread: boolean;
   };
   let composerView: ReturnType<typeof mountSolidProps<ComposerFixtureProps>> | undefined;
@@ -46,18 +45,18 @@ describe("composer overflow presentation", () => {
 
   function ComposerFixture(props: ComposerFixtureProps) {
     return (
-      <SolidContentPresentation value={presented}>
+      <ContentPresentation value={presented}>
         {props.thread ? <div class="chat-thread" /> : null}
-        <ChatComposer {...props.input} renderRevision={props.revision} />
-      </SolidContentPresentation>
+        <ChatComposer {...props.input} />
+      </ContentPresentation>
     );
   }
 
   function AttachmentFixture(props: ChatAttachmentControlsProps) {
     return (
-      <SolidContentPresentation value={presented}>
+      <ContentPresentation value={presented}>
         <AttachmentPreview {...props} />
-      </SolidContentPresentation>
+      </ContentPresentation>
     );
   }
 
@@ -69,7 +68,7 @@ describe("composer overflow presentation", () => {
   };
 
   function drawComposer(input: ChatComposerProps, thread = false) {
-    const props = { input: { ...input }, revision: {}, thread };
+    const props = { input: { ...input }, thread };
     if (composerView) {
       composerView.update(props);
     } else {
@@ -112,7 +111,6 @@ describe("composer overflow presentation", () => {
       container.className = "";
       container.style.cssText = `position: fixed; bottom: 24px; left: 16px; width: ${Math.min(width - 32, 760)}px`;
       const props = createComposerProps({
-        onRequestUpdate: () => drawComposer(props),
         capabilityMenu: {
           basePath: "",
           skills: [

@@ -19,14 +19,12 @@ import {
   FollowupRunDeferredError,
   isFollowupRunAborted,
   type FollowupRun,
+  type InternalFollowupRun,
   type QueuedFollowupReplyBatch,
 } from "./types.js";
 
-export function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
-  return (
-    // SAFETY: queue producers attach this private marker; only literal true selects prepared input.
-    (run as FollowupRun & { currentTurnImagesPrepared?: true }).currentTurnImagesPrepared === true
-  );
+export function hasPreparedCurrentTurnImages(run: InternalFollowupRun): boolean {
+  return run.currentTurnImagesPrepared === true;
 }
 
 const QUEUED_ADMISSION_OWNER_STATE_KEY = Symbol.for("openclaw.queuedAdmissionOwnerState");

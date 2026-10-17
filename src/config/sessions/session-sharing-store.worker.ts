@@ -73,7 +73,7 @@ export function bindSqliteWorkerBackend(
     execute(command) {
       const scope = { ...command.input.scope };
       const target = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteScope(scope)));
-      const sameOwner = db.location()
+      const sameOwner = sqlPublicationAnchor(db).location()
         ? readDatabasePathIdentitySync(target).canonicalPath === context.databasePath
         : target === context.databasePath &&
           getOpenClawAgentDatabaseIfOpen(toDatabaseOptions(resolveSqliteScope(scope)))?.db === db;

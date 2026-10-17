@@ -109,11 +109,7 @@ type SplitRenderOptions = {
   onResizeColumns: (columnIndex: number, ratio: number) => void;
   onResizeEnd: () => void;
 };
-export function createChatPageSnapshot(
-  layout: ChatSplitLayout,
-  options: SplitRenderOptions,
-  indicator: DropIndicator | null,
-) {
+export function createChatPageSnapshot(layout: ChatSplitLayout, options: SplitRenderOptions) {
   const cells = new Map(
     layout.columns.flatMap((column, columnIndex) =>
       column.panes.map(
@@ -134,7 +130,7 @@ export function createChatPageSnapshot(
       ),
     ),
   );
-  return { layout, options, cells, indicator };
+  return { layout, options, cells };
 }
 export type ChatPageSnapshot = ReturnType<typeof createChatPageSnapshot>;
 
@@ -379,13 +375,17 @@ function SplitLayout(props: { snapshot: ChatPageSnapshot }) {
   );
 }
 
-export function ChatPageBody(props: { snapshot: ChatPageSnapshot | null }) {
+export function ChatPageBody(props: {
+  snapshot: ChatPageSnapshot | null;
+  indicator: DropIndicator | null;
+  containerRef: (element: HTMLDivElement) => void;
+}) {
   return (
     <Show when={props.snapshot}>
       {(snapshot) => (
-        <div class="chat-split-view__drop-container">
+        <div class="chat-split-view__drop-container" ref={props.containerRef}>
           <SplitLayout snapshot={snapshot()} />
-          <Show when={snapshot().indicator}>
+          <Show when={props.indicator}>
             {(indicator) => (
               <div
                 class={[

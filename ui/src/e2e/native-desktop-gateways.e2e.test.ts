@@ -168,6 +168,10 @@ suite.define(() => {
         await page.locator(".sidebar-identity-card").click();
         await page.locator(".sidebar-identity-menu").waitFor();
       };
+      const openGatewayMenu = async (currentGatewayName: string) => {
+        await openMenu();
+        await page.getByRole("menuitem", { name: currentGatewayName, exact: true }).click();
+      };
       await openMenu();
       expect(await page.getByRole("menuitemradio", { name: /Studio/ }).count()).toBe(0);
       await capture(page, proof, "gateway-menu-before.png");
@@ -180,7 +184,10 @@ suite.define(() => {
       });
       await page.reload();
       await page.getByRole("alert").filter({ hasText: "unavailable during startup" }).waitFor();
-      await openMenu();
+      await openGatewayMenu("Local Gateway");
+      expect(
+        await page.getByRole("menuitem", { name: "Get the apps", exact: true }).isVisible(),
+      ).toBe(true);
       const studio = page.getByRole("menuitemradio", { name: /Studio/ });
       await studio.waitFor();
       await capture(page, proof, "gateway-menu-after.png");
@@ -194,14 +201,14 @@ suite.define(() => {
         },
       ]);
       await ready(page, "next-document", "profile:studio");
-      await openMenu();
+      await openGatewayMenu("Studio");
       await expect.poll(() => studio.getAttribute("aria-checked")).toBe("true");
       await page
         .getByRole("menuitemradio", { name: /Local Gateway/ })
         .click({ modifiers: ["Control"] });
-      await openMenu();
+      await openGatewayMenu("Studio");
       await page.locator('[data-value="command:gateway-set-primary"]').click();
-      await openMenu();
+      await openGatewayMenu("Studio");
       await page.locator('[data-value="command:gateway-settings"]').click();
       await page
         .getByRole("alert")
@@ -235,7 +242,7 @@ suite.define(() => {
           params: { message: { type: "open-settings" }, token: "next-document" },
         },
       ]);
-      await openMenu();
+      await openGatewayMenu("Studio");
       await page.getByRole("menuitemradio", { name: /Local Gateway/ }).click();
       await expect.poll(() => page.getByRole("alert").count()).toBe(0);
       for (const source of ["native", "invoke"] as const) {

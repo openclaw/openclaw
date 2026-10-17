@@ -5,6 +5,7 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import type { SessionInputLifecycleAdmission } from "./restart-resume.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
@@ -42,7 +43,7 @@ export type PendingInputScope = SessionAccessScope & {
 export async function preparePendingInputStore(
   scope: PendingInputScope,
   assertCurrent: () => void,
-  lifecycleAdmission?: import("./restart-resume.js").SessionInputLifecycleAdmission,
+  lifecycleAdmission?: SessionInputLifecycleAdmission,
 ) {
   const memoryOwner = captureSessionActorStorageOwner(scope, {
     assertCurrent,

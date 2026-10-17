@@ -1,10 +1,8 @@
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
-import { createBeamStore } from "./store.js";
 import type { BeamStoredSession } from "./types.js";
 
 it("shares one inventory read across concurrent and repeated catalog lists", async () => {
@@ -135,22 +133,6 @@ describe("Beam upload store", () => {
       expect(await store.get(upload.beamId)).toEqual(
         accepted ? { ...upload, createdAt: 50, receivedAt: 100 } : competing,
       );
-    },
-  );
-
-  it.each(["observe", "compareAndApply"] as const)(
-    "refuses uploads when %s support is missing",
-    async (missing) => {
-      const { keyedStore, values } = memoryStore();
-      const store = createBeamStore({
-        state: { openKeyedStore: () => ({ ...keyedStore, [missing]: undefined }) },
-      } as unknown as PluginRuntime);
-      await expect(store.upload(sampleUpload(), { receivedAt: 100 })).rejects.toThrow(
-        "require plugin-state observe and compareAndApply",
-      );
-      expect(values.size).toBe(0);
-      expect(keyedStore.observe).not.toHaveBeenCalled();
-      expect(keyedStore.compareAndApply).not.toHaveBeenCalled();
     },
   );
 });

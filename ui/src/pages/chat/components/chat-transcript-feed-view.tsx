@@ -26,12 +26,11 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 import { resolveCappedMessageId } from "../chat-message-recovery.ts";
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
 import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
-import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
+import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import { MessageMarkdown } from "./chat-message-text-view.tsx";
 
 type Entry = { key: string; timestamp: number | null } & (
@@ -241,7 +240,9 @@ function ToolGroup(props: { entry: Extract<Entry, { kind: "tools" }> }) {
             </strong>
             <For each={overview().outcomes} keyed={(outcome) => outcome.kind}>
               {(outcome) => (
-                <span class={`chat-task-feed__outcome chat-task-feed__outcome--${outcome().kind}`}>
+                <span
+                  class={["chat-task-feed__outcome", `chat-task-feed__outcome--${outcome().kind}`]}
+                >
                   {outcome().label}{" "}
                 </span>
               )}
@@ -280,7 +281,7 @@ function FeedEntry(props: { entry: Entry }) {
       </span>
       <div class="chat-task-feed__body">
         {props.entry.kind === "assistant" && props.entry.senderSession ? (
-          <LitContent value={renderForwardedAttribution(props.entry, { linkSource: false })} />
+          <ForwardedAttribution group={props.entry} options={{ linkSource: false }} />
         ) : (
           (props.entry.kind === "user" || props.entry.kind === "assistant") && (
             <span class="sr-only">{t(`sessionsView.${props.entry.kind}`)}: </span>
@@ -296,7 +297,7 @@ function FeedEntry(props: { entry: Entry }) {
             markdownOptions={{}}
           />
         ) : (
-          <div class={`chat-task-feed__${props.entry.kind}`}>{props.entry.text}</div>
+          <div class={[`chat-task-feed__${props.entry.kind}`]}>{props.entry.text}</div>
         )}
       </div>
       {props.entry.timestamp !== null && (

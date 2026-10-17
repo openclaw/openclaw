@@ -1,5 +1,6 @@
 import {
   isSyntheticSourceReplyTurn,
+  resolveCommandReplyExpectation,
   type ReplyExpectation,
 } from "../../agents/reply-completion.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -97,6 +98,15 @@ export function resolveSourceReplyExpectation(params: {
   cfg: OpenClawConfig;
   isHeartbeat?: boolean;
 }): ReplyExpectation {
+  const commandExpectation = resolveCommandReplyExpectation({
+    cfg: params.cfg,
+    sessionKey: params.ctx.SessionKey,
+    messageChannel: params.ctx.Provider ?? params.ctx.Surface,
+    opts: { inputProvenance: params.ctx.InputProvenance },
+  });
+  if (commandExpectation === "result-required") {
+    return commandExpectation;
+  }
   if (
     isSyntheticSourceReplyTurn({
       inputProvenance: params.ctx.InputProvenance,
@@ -137,6 +147,8 @@ export function resolveFollowupReplyExpectation(queued: FollowupRun, cfg: OpenCl
     queued.run.terminalReplyExpectation ??
     resolveSourceReplyExpectation({
       ctx: {
+        Provider: queued.run.messageProvider,
+        SessionKey: queued.run.sessionKey,
         InboundEventKind: queued.currentInboundEventKind,
         InputProvenance: queued.run.inputProvenance,
       },

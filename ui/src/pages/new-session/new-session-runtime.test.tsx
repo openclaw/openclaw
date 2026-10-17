@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { Menu, type MenuHandle } from "../../components/solid/menu.tsx";
+import { closeMenusWithin, Menu, type MenuHandle } from "../../components/solid/menu.tsx";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { closeAgentPicker, closeSessionMenus } from "./new-session-runtime.ts";
+import { closeAgentPicker } from "./new-session-runtime.ts";
 
 afterEach(cleanupSolid);
 
@@ -29,7 +29,7 @@ describe("new session menu dismissal", () => {
       if (action === "agent reset") {
         closeAgentPicker(view.container);
       } else {
-        closeSessionMenus(view.container);
+        closeMenusWithin(view.container);
       }
       expect(menu.overlay.open).toBe(false);
     } finally {
@@ -50,9 +50,9 @@ describe("new session menu dismissal", () => {
     ));
     await waitForSolid(() => expect(menu).toBeDefined());
     menu.open();
-    closeSessionMenus(document.createElement("div"));
+    closeMenusWithin(document.createElement("div"));
     expect(menu.overlay.open).toBe(true);
-    closeSessionMenus(view.container);
+    closeMenusWithin(view.container);
     expect(menu.overlay.open).toBe(true);
   });
 });

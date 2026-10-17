@@ -7,8 +7,9 @@ import {
 } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
-import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
+import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { cancelRoutePreload, scheduleRoutePreload } from "../lib/route-preload.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
@@ -17,7 +18,7 @@ import {
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
-import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.tsx";
+import { createSidebarCatalogMenu } from "./app-sidebar-catalog-menu.tsx";
 import { isSidebarRouteActive, renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type {
   SidebarRecentSession,
@@ -101,25 +102,28 @@ export class SidebarMenusController {
       this.host.requestUpdate();
     },
   );
-  readonly catalogMenu: SidebarCatalogMenuController;
-  readonly agentMenuAvatars: IdentityAvatarController;
+  readonly catalogMenu: ReturnType<typeof createSidebarCatalogMenu>;
+  catalogMenuView!: ReturnType<ReturnType<typeof createSidebarCatalogMenu>["createView"]>;
+  // Leases survive view-root replacement; render() owns their reactive projection.
+  readonly agentMenuAvatars = createIdentityAvatars();
   pluginActionLifetime = new AbortController();
 
   constructor(readonly host: SidebarMenusControllerHost) {
     host.addController(this);
-    this.agentMenuAvatars = new IdentityAvatarController(host);
-    this.catalogMenu = new SidebarCatalogMenuController(host, () => {
+    this.catalogMenu = createSidebarCatalogMenu(host, () => {
       this.dismissTransientMenus();
     });
   }
 
   hostConnected(): void {
+    this.agentMenuAvatars.connect();
     if (this.pluginActionLifetime.signal.aborted) {
       this.pluginActionLifetime = new AbortController();
     }
   }
 
   hostDisconnected(): void {
+    this.agentMenuAvatars.disconnect();
     this.pluginActionLifetime.abort();
     this.menuRendererImport.dispose();
     this.clearAgentMenuHoverTimers();
@@ -175,7 +179,7 @@ export class SidebarMenusController {
       this.railPinMenuPosition ||
       this.pluginNavigationMenuPosition ||
       this.sessionMenu ||
-      this.catalogMenu.isOpen ||
+      this.catalogMenu.isOpen() ||
       this.sessionGroupMenu ||
       this.sessionSortMenuPosition ||
       this.peopleFilterMenuPosition ||
@@ -231,7 +235,7 @@ export class SidebarMenusController {
     const rect = trigger.getBoundingClientRect();
     this.dismissTransientMenus();
     if (menu === "peopleFilter") {
-      this.host.people.dismiss();
+      this.host.peopleView?.dismiss();
     }
     const [width, height] = (
       {
@@ -577,6 +581,7 @@ export class SidebarMenusController {
   }
 
   render() {
+    const avatars = projectOwner(this.agentMenuAvatars, (owner) => owner);
     return [
       <Show when={this.menuRenderer && this.railPinMenuPosition} keyed>
         {(_menu) => this.menuRenderer!.renderSidebarRailPinMenuForController(this)}
@@ -587,7 +592,7 @@ export class SidebarMenusController {
       <Show when={this.menuRenderer && this.agentMenuPosition} keyed>
         {(_menu) =>
           this.agentMenuAvatars.withActiveRoutes(() =>
-            this.menuRenderer!.renderSidebarAgentMenuForController(this),
+            this.menuRenderer!.renderSidebarAgentMenuForController(this, avatars.read),
           )
         }
       </Show>,
@@ -597,7 +602,7 @@ export class SidebarMenusController {
       <Show when={this.menuRenderer && this.sessionMenu} keyed>
         {(_menu) => this.menuRenderer!.renderSidebarSessionMenuForController(this)}
       </Show>,
-      this.catalogMenu.render(),
+      this.catalogMenuView.render(),
       <Show when={this.menuRenderer && this.sessionGroupMenu} keyed>
         {(_menu) => this.menuRenderer!.renderSidebarSessionGroupMenuForController(this)}
       </Show>,

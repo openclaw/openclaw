@@ -621,6 +621,44 @@ describe("Goal control requests", () => {
     expect(host.request).toHaveBeenCalledTimes(2);
   });
 
+  it("retires a busy Resume refusal without retrying and permits a distinct later Resume", async () => {
+    vi.useFakeTimers();
+    const pending = createDeferred<never>();
+    let busy = true;
+    const host = goalHost({
+      "sessions.goal.update": () =>
+        busy ? pending.promise : { status: "started", goalId: goal.id, runId: "new-run", goal },
+    });
+    const submitted = mutateChatGoal(host, { action: "resume", goalId: goal.id });
+    const captured = chatGoalRecovery(host);
+    const original = host.request.mock.calls[0]?.[1];
+    pending.reject(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Session is busy; wait for the active run to finish.",
+        details: { reason: "goal-session-busy" },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await submitted).toBe(false);
+    expect(host.chatError).toBe("Session is busy; wait for the active run to finish.");
+    expect(chatGoalRecovery(host)).toBeUndefined();
+    expect(sessionStorage.length).toBe(0);
+    await captured?.onCheck();
+    expect(host.request).toHaveBeenCalledOnce();
+
+    busy = false;
+    expect(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(true);
+    expect(host.request).toHaveBeenCalledTimes(2);
+    expect(host.request.mock.calls[1]?.[1]).toMatchObject({ action: "resume", goalId: goal.id });
+    assert(isRecord(original));
+    expect(host.request.mock.calls[1]?.[1]).not.toMatchObject({
+      operationId: original.operationId,
+    });
+    expect(chatGoalRecovery(host)).toBeUndefined();
+    expect(sessionStorage.length).toBe(0);
+  });
+
   it.each(["goal-invalid"])(
     "retires definitive %s rejection instead of arming a future mutation",
     async (reason) => {

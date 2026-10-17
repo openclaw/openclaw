@@ -429,26 +429,46 @@ async function download(
 }
 
 describe("bootstrap artifact download retries", () => {
+  it.each([502, 503, 504, 520, 521, 522, 523, 524, 530])(
+    "recovers after HTTP %s",
+    async (statusCode) => {
+      const result = await download([statusCode, "success"]);
+      expect(result.code, result.output).toBe(0);
+      expect(result.requests).toHaveLength(2);
+      expect(result.published).toEqual([archive]);
+    },
+  );
+
+  it("rides out a 30-second edge outage for both bootstrap artifacts", async () => {
+    const result = await download((elapsedMs) => (elapsedMs < 30_000 ? 530 : "success"), true);
+    expect(result.code, result.output).toBe(0);
+    expect(result.elapsedMs).toBe(31_750);
+    expect(result.installations).toEqual([31_750]);
+    expect(result.published).toEqual([archive]);
+  });
+
   it("resets the failure budget only when retained bytes advance", async () => {
     const reset = { durationMs: 0, resetAfterBytes: 1 };
-    const result = await download([503, 503, reset, "busy", 503, 503, reset, "success"]);
+    const result = await download([
+      ...Array(8).fill(503),
+      reset,
+      "busy",
+      ...Array(8).fill(503),
+      reset,
+      "success",
+    ]);
     expect(result.code, result.output).toBe(0);
-    expect(result.requests).toHaveLength(8);
+    expect(result.requests).toHaveLength(20);
     expect(result.ranges).toEqual([
-      undefined,
-      undefined,
-      undefined,
-      "bytes=1-",
-      "bytes=1-",
-      "bytes=1-",
-      "bytes=1-",
+      ...Array(9).fill(undefined),
+      ...Array(10).fill("bytes=1-"),
       "bytes=2-",
     ]);
     expect(result.published).toEqual([archive]);
   });
 
   it.each(["resume", "ignore Range", "discard partial"])(
-    "stops after three consecutive failures without retained progress (%s)",
+    "stops after nine consecutive failures without retained progress (%s)",
     async (mode) => {
       const ignoreRange = mode === "ignore Range";
       const result = await download([
@@ -457,14 +477,14 @@ describe("bootstrap artifact download retries", () => {
         { durationMs: 0, resetAfterBytes: ignoreRange ? 1 : 0, ignoreRange },
       ]);
       expect(result.code).toBe(1);
-      expect(result.requests).toHaveLength(4);
+      expect(result.requests).toHaveLength(10);
       expect(result.ranges).toEqual(
         mode === "discard partial"
-          ? [undefined, "bytes=1-", undefined, undefined]
-          : [undefined, "bytes=1-", "bytes=1-", "bytes=1-"],
+          ? [undefined, "bytes=1-", ...Array(8).fill(undefined)]
+          : [undefined, ...Array(9).fill("bytes=1-")],
       );
       expect(result.published).toEqual([]);
-      expect(result.output).toContain("download attempt 4; 3 consecutive no-progress failures");
+      expect(result.output).toContain("download attempt 10; 9 consecutive no-progress failures");
       expect(result.output).not.toContain("The worker could not reach");
     },
   );
@@ -619,27 +639,33 @@ describe("bootstrap artifact download retries", () => {
     expect(result.published).toEqual([]);
     expect(result.output).toContain("failed integrity verification (download attempt 2)");
   });
-  it.each(["short", "size", "pin", 401])("keeps %s terminal without retrying", async (failure) => {
-    const result = await download([failure, "success"]);
-    expect(result.code).toBe(1);
-    expect(result.requests).toHaveLength(1);
-    expect(result.delays).toEqual([]);
-    expect(result.published).toEqual([]);
-    expect(result.output).toContain("download attempt 1");
-  });
-  it.each([{ durationMs: 0, resetAfterBytes: 0 }, 503])(
+  it.each(["short", "size", "pin", 401, 403, 404, 429, 500, 501, 505, 525, 526, 529, 531])(
+    "keeps %s terminal without retrying",
+    async (failure) => {
+      const result = await download([failure, "success"]);
+      expect(result.code).toBe(1);
+      expect(result.requests).toHaveLength(1);
+      expect(result.delays).toEqual([]);
+      expect(result.published).toEqual([]);
+      expect(result.output).toContain("download attempt 1");
+    },
+  );
+  it.each([{ durationMs: 0, resetAfterBytes: 0 }, 503, 530])(
     "reports %s and total attempts after exhaustion",
     async (failure) => {
       const result = await download([failure]);
       expect(result.code).toBe(1);
-      expect(result.requests).toEqual(Array(3).fill("Bearer synthetic-worker-archive-token"));
-      expect(result.delays).toEqual([250, 500]);
+      expect(result.requests).toEqual(Array(9).fill("Bearer synthetic-worker-archive-token"));
+      expect(result.delays).toEqual([250, 500, 1_000, 2_000, 4_000, 8_000, 8_000, 8_000]);
+      expect(result.elapsedMs).toBe(31_750);
       expect(result.published).toEqual([]);
       expect(result.output).toContain(
-        (failure === 503 ? "HTTP 503" : "transport interrupted") +
-          " (download attempt 3; 3 consecutive no-progress failures)",
+        (typeof failure === "number" ? `HTTP ${failure}` : "transport interrupted") +
+          " (download attempt 9; 9 consecutive no-progress failures)",
       );
-      expect(result.output.includes("The worker could not reach")).toBe(failure !== 503);
+      expect(result.output.includes("The worker could not reach")).toBe(
+        typeof failure !== "number",
+      );
     },
   );
 });

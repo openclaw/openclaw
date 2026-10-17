@@ -21,10 +21,16 @@ import {
   type SessionEntryUsageUpdate,
 } from "./session-entry-usage.js";
 import {
+  projectSessionLifecyclePatch,
+  type SessionLifecyclePatchInput,
+  type SessionLifecyclePatchEffects,
+} from "./session-run-lifecycle-projection.js";
+import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
   type InternalSessionEntry as SessionEntry,
 } from "./types.js";
+import { createSessionWorkStartChangedError } from "./work-start-error.js";
 
 type ExpectedSession = Pick<SessionEntry, "sessionId"> &
   Partial<Pick<SessionEntry, "lifecycleRevision" | "activeWriterRunId">>;
@@ -58,6 +64,15 @@ export type SessionEntryBookkeepingReducer =
 type SessionEntryPatchStep = (
   | { kind: "fields"; patch: Partial<SessionEntry> }
   | {
+      kind: "cron-run-continuation";
+      sessionKey: string;
+      source: SessionEntry;
+      continuation: NonNullable<SessionEntry["cronRunContinuation"]>;
+      create: boolean;
+      creation: ReturnType<typeof buildSessionCreationStamp>;
+      thinkingLevel?: string;
+    }
+  | {
       kind: "inbound-metadata";
       metadata: PreparedSessionMetaPatch;
       sessionKey: string;
@@ -68,6 +83,7 @@ type SessionEntryPatchStep = (
       route: Omit<Parameters<typeof projectLastRoutePatch>[0], "existing">;
       creation: ReturnType<typeof buildSessionCreationStamp>;
     }
+  | { kind: "lifecycle"; lifecycle: SessionLifecyclePatchInput }
   | { kind: "public-fields"; patch: Partial<SessionEntry> }
   | {
       kind: "observer-digest";
@@ -117,6 +133,7 @@ export type SessionEntryPatchOperation =
 export function projectSessionEntryPatch(
   params: Omit<Parameters<typeof mergeSessionEntryPatch>[0], "patch"> & {
     operation: SessionEntryPatchOperation;
+    onLifecycleProjection?: (effects: SessionLifecyclePatchEffects | undefined) => void;
   },
 ): SessionEntry | undefined {
   const operations =
@@ -125,7 +142,12 @@ export function projectSessionEntryPatch(
   let writeBase = params.writeBase;
   let next: SessionEntry | undefined;
   for (const operation of operations) {
-    const patch = reduceSessionEntryPatch(operation, writeBase, existing);
+    const patch = reduceSessionEntryPatch(
+      operation,
+      writeBase,
+      existing,
+      params.onLifecycleProjection,
+    );
     if (patch === null) {
       continue;
     }
@@ -172,6 +194,7 @@ export function reduceSessionEntryPatch(
   operation: SessionEntryPatchStep,
   entry: SessionEntry,
   existingEntry: SessionEntry | undefined,
+  onLifecycleProjection?: (effects: SessionLifecyclePatchEffects | undefined) => void,
 ): Partial<SessionEntry> | null {
   const expected = operation.expected;
   const expectedEntry = operation.kind === "public-fields" ? existingEntry : entry;
@@ -191,6 +214,48 @@ export function reduceSessionEntryPatch(
     return null;
   }
   switch (operation.kind) {
+    case "cron-run-continuation": {
+      const { source, continuation, sessionKey } = operation;
+      if (
+        existingEntry
+          ? existingEntry.cronRunContinuation?.lifecycleRevision !== continuation.lifecycleRevision
+          : !operation.create
+      ) {
+        throw createSessionWorkStartChangedError(sessionKey);
+      }
+      // Ready transfers this row to detached continuation turns; the cron owner stops writing.
+      if (existingEntry && existingEntry.cronRunContinuation?.phase !== "running") {
+        if (
+          continuation.phase === "ready" &&
+          existingEntry.cronRunContinuation?.phase === "ready"
+        ) {
+          return null;
+        }
+        throw createSessionWorkStartChangedError(sessionKey);
+      }
+      return {
+        ...existingEntry,
+        ...(existingEntry
+          ? preserveSqliteSameKeySessionRolloverLineage({
+              next: source,
+              previous: existingEntry,
+              sessionKey,
+            })
+          : source),
+        // Absence clears invalid native handles instead of resurrecting the prior binding.
+        cliSessionBindings: source.cliSessionBindings,
+        cliSessionIds: source.cliSessionIds,
+        claudeCliSessionId: source.claudeCliSessionId,
+        ...(!existingEntry ? operation.creation : {}),
+        ...(operation.thinkingLevel ? { thinkingLevel: operation.thinkingLevel } : {}),
+        cronRunContinuation: continuation,
+      };
+    }
+    case "lifecycle": {
+      const projection = projectSessionLifecyclePatch(entry, operation.lifecycle);
+      onLifecycleProjection?.(projection.patch ? projection.effects : undefined);
+      return projection.patch;
+    }
     case "inbound-metadata": {
       const patch = projectSessionMetaPatch({
         prepared: operation.metadata,

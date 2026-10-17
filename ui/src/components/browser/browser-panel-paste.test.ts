@@ -7,7 +7,7 @@ import {
   createView,
   flushBrowserResponses,
 } from "./browser-panel-controller-test-support.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { BrowserPanel } from "./browser-panel-owner.ts";
 import "./browser-panel.ts";
 
 function paste(text: string, types = ["text/plain"]) {
@@ -63,12 +63,12 @@ describe("Browser panel text and touch input", () => {
     panel.client = client;
     mountSolid(() => panel);
     await panel.updateComplete;
-    const controller = (panel as unknown as { browserPanelController: BrowserPanelController })
+    const controller = (panel as unknown as { browserPanelController: BrowserPanel })
       .browserPanelController;
     controller.activeTargetId = "form-tab";
     controller.view = createView("form-tab");
     controller.operations.resetRoute({ profile: "work", target: "node", node: "browser-node" });
-    panel.requestUpdate();
+    panel.invalidate();
     await panel.updateComplete;
     const input = panel.renderRoot.querySelector<HTMLTextAreaElement>(".bp-input")!;
     return { panel, controller, request, input };

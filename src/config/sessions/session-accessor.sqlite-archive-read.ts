@@ -14,9 +14,14 @@ import {
   readSessionTranscriptRunId,
 } from "../../sessions/transcript-events.js";
 import {
+  isAssistantResultEventForRun,
   isVisibleAssistantResultEventForRun,
   isVisibleTranscriptRecord,
 } from "../../sessions/transcript-visible-record.js";
+import {
+  isSilentAssistantTranscriptMessage,
+  readTerminalSourceReplyDeliveryMirror,
+} from "../../shared/chat-message-content.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -179,17 +184,30 @@ export async function readTranscriptArchiveFinalInWorker(
       if (hashSessionArchiveBytes(row.archive_blob) !== row.archive_sha256) {
         throw new Error("Archived transcript bytes do not match their registered hash.");
       }
+      let hasTerminalResult = false;
       await scanArchivedTranscript(
         row.archive_blob,
         row.encoding === "zstd",
         archive.sessionId,
         (event) => {
+          if (!isAssistantResultEventForRun(event, plan.runId)) {
+            return;
+          }
+          hasTerminalResult = true;
           if (isVisibleAssistantResultEventForRun(event, plan.runId)) {
             result.event = event;
+          } else if (isRecord(event) && isSilentAssistantTranscriptMessage(event.message)) {
+            const previousMessage = isRecord(result.event) ? result.event.message : undefined;
+            if (
+              !(isRecord(previousMessage) && previousMessage.display === true) &&
+              !readTerminalSourceReplyDeliveryMirror(previousMessage)
+            ) {
+              result.event = undefined;
+            }
           }
         },
       );
-      if (result.event !== undefined) {
+      if (hasTerminalResult) {
         break;
       }
     }

@@ -294,6 +294,22 @@ export function createGatewayEventLoopHealthMonitor(
 
     const now = nowMs();
     const attributed = stalls.drain();
+    if (
+      attributed.stalls.length > 0 &&
+      areDiagnosticsEnabledForProcess() &&
+      hasInternalDiagnosticEventInterest("gateway.main_thread.stall")
+    ) {
+      runWithDiagnosticTraceContext(undefined, () =>
+        emitInternalDiagnosticEvent({
+          type: "gateway.main_thread.stall",
+          stalls: attributed.stalls.map((stall) => ({
+            task: stall.task,
+            durationMs: stall.elapsedMs,
+          })),
+          dropped: attributed.dropped,
+        }),
+      );
+    }
     // Idle windows retain callback attribution and overdue-deadline detection without
     // the native histogram's 20 ms wakeup. Full resolution returns with active work.
     const delayMaxMs = Math.max(

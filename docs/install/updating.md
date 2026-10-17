@@ -35,11 +35,59 @@ backup.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
+Before replacing a Git checkout's build or an installed package, the updater
+retains its running runtime. Late module imports and background workers keep
+using that generation through finalization, rollback, and CLI cleanup, even when
+the new build has different chunk filenames. The new Gateway starts from the
+activated build.
+
+### Migration integrity checks
+
+SQLite upgrades default to a whole-database `quick_check`, a full
+`integrity_check` of the tables the migration rewrites or re-indexes, and the
+existing foreign-key checks. This avoids checking every unrelated index against
+its table during a routine upgrade. Structural corruption anywhere in the
+database and corruption in the migration's affected tables still refuse the
+migration; quarantine and rollback behavior are unchanged.
+Historical migrations without a declared table scope, same-version Doctor
+repairs, and legacy transformed recovery archives retain full integrity checks.
+
+To request full integrity checking across every table and index during migration:
+
+```bash
+openclaw update --full-integrity-check
+openclaw doctor --fix --full-integrity-check
+```
+
+The default can miss an index/table mismatch in an untouched table. Use the full
+check when you need that coverage; it can take considerably longer on large
+databases. A successful quick check is never recorded as a full verification.
+Later runtime admission still performs a full check when no reusable
+full-verification seal exists, and can detect that mismatch before activation.
+The flag selects migration checks; it does not turn an already-current database
+into a separate verification job. Explicit database verification, backup
+verification, Doctor recovery, and compaction retain their existing checks.
+
+The installed updater runs first. Its own captures and checks keep their shipped
+behavior; the more efficient default begins when the candidate runs its
+migrations. An older installed CLI does not recognize the new flag. For that
+first upgrade, update normally to receive the candidate's new default, or run
+the candidate's `doctor --fix --full-integrity-check` through your manual upgrade
+workflow.
+
 Post-activation schema verification preserves agent databases Doctor holds after
 deletion. These stores may keep an older schema without failing the update;
-Doctor's held-store warning remains visible. Active databases and pending
-deletions still require the candidate schema, and held stores remain part of
-rollback verification.
+Doctor's held-store warning remains visible. Configured agents required by the
+Gateway must still pass runtime admission: Doctor fails if a recovery hold
+leaves a required store unusable. Active databases and pending deletions require
+the candidate schema, and held stores remain part of rollback verification.
+
+OpenClaw.app runs plugin convergence through the selected runtime's Doctor while
+the app owns Gateway activation. This aligns managed official npm plugins with the new
+core before plugin migrations, repairs host peer links, and refreshes the plugin
+registry. Unavailable replacements remain nonblocking: the app's recovery
+diagnostics include the remaining version or peer-link warning and the exact
+repair command. Retry Gateway setup in the app to repeat this owned repair.
 
 ## Retired tenant-container management
 
@@ -62,12 +110,19 @@ changing images or restoring an older OpenClaw version.
 
 ## Upgrading very old versions
 
+Current Doctor can migrate pre-July cron jobs, Voice Wake settings, conversation
+bindings, and OAuth credentials directly. It archives obsolete delivery queues,
+plugin indexes, sandbox registries, and runtime notifications, preserving original
+bytes and reporting recovery instructions. Run `openclaw doctor --fix`; these JSON
+formats do not require an intermediate release. See [Doctor state migrations](/cli/doctor/state-migrations).
+
+The following bridge instructions apply to other retired formats and config keys.
+
 For installations older than July 2026, upgrade to **`2026.9.5` first**, run its
 Doctor migrations, and then upgrade to `latest`. The bridge release still
 imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
-`plugin-state/state.sqlite` databases, imports the JSON plugin install index,
-pre-June plugin JSON state, and
-`credentials/oauth.json`, repairs retired agent and channel config keys, and
+`plugin-state/state.sqlite` databases and pre-June plugin JSON state, repairs retired agent and channel
+config keys, and
 includes the old runtime aliases. The retired plugin imports cover Telegram,
 iMessage, Active Memory, Nostr, and Microsoft Teams; see
 [legacy state migration](/cli/doctor/state-migrations). Current releases leave

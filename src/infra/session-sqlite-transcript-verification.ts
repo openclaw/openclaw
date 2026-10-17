@@ -1,5 +1,3 @@
-/** Shared read-only proof that retained transcript events exist in canonical SQLite. */
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
@@ -11,9 +9,11 @@ import {
   createTranscriptEventReader,
   readTranscriptFingerprint,
 } from "./session-sqlite-migration-readers.js";
+/** Shared read-only proof that retained transcript events exist in canonical SQLite. */
+import type { EngineConnection } from "./sql-connection.js";
 
 export function verifyTranscriptEvents(
-  database: DatabaseSync,
+  database: EngineConnection,
   source: { path: string; sessionId: string; originalPath: string },
   mode: "ordered" | "contained" | "appendable" = "ordered",
 ): { events: number; missingEvents: number; sqliteEvents: number } | undefined {

@@ -8,6 +8,7 @@ import { isPostgresSqlConnection, type PostgresSqlConnection } from "../sql-conn
 import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { admitStoreSearch } from "./adapters.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
+import { DatabaseSearchCapabilityUnavailableError } from "./capability-unavailable.js";
 import type { StoreSchema } from "./contract.js";
 import { openEngineStore, readEngineAnchor } from "./open.js";
 import { pgSearchName } from "./postgres-search-schema.js";
@@ -92,9 +93,23 @@ describe.skipIf(!connection)("PostgreSQL search admission failures", () => {
             }
           }
         });
-        expect(() => fixture(url.href, search, () => {})).toThrow(
-          new RegExp(`PostgreSQL ${missing} capability unavailable.*CREATE EXTENSION`),
-        );
+        let admissionError: unknown;
+        try {
+          fixture(url.href, search, () => {});
+        } catch (error) {
+          admissionError = error;
+        }
+        expect(admissionError).toBeInstanceOf(DatabaseSearchCapabilityUnavailableError);
+        expect(admissionError).toMatchObject({
+          name: "DatabaseSearchCapabilityUnavailableError",
+          code: "DATABASE_SEARCH_CAPABILITY_UNAVAILABLE",
+          capability: missing === "vector" ? "vector" : "fullText",
+        });
+        expect(admissionError).toMatchObject({
+          message: expect.stringMatching(
+            new RegExp(`PostgreSQL ${missing} capability unavailable.*CREATE EXTENSION`),
+          ),
+        });
         if (missing === "vector") {
           fixture(url.href, { ...search, mode: "keyword-only" }, (db) => {
             const admitted = admitStoreSearch(db, { ...search, mode: "keyword-only" });

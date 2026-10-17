@@ -4,7 +4,7 @@ import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { coalesceActivityRuns, groupMessages } from "./chat-thread-grouping.ts";
 
 function preparedGroup(message: unknown, key: string): MessageGroup {
-  const [group] = groupMessages([{ kind: "message", key, message }]);
+  const [group] = groupMessages([{ kind: "message", key, message }], {}, undefined, true);
   if (group?.kind !== "group") {
     throw new Error("expected a prepared message group");
   }
@@ -126,7 +126,6 @@ describe("coalesceActivityRuns", () => {
     { name: "user", role: "user", content: "stop" },
     { name: "divider", content: [] },
     { name: "stream", content: [] },
-    { name: "empty output", content: [] },
     { name: "reasoning", content: [{ type: "thinking", thinking: "Inspecting" }] },
     {
       name: "mixed narration",
@@ -146,7 +145,7 @@ describe("coalesceActivityRuns", () => {
     },
     {
       name: "forwarded input",
-      content: [],
+      content: "Message from the parent session.",
       provenance: { kind: "inter_session", sourceTool: "sessions_send" },
     },
   ])("keeps $name between activity logs", ({ name, ...message }) => {

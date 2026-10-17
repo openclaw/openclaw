@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { GatewayClientInfo } from "../../packages/gateway-protocol/src/client-info.js";
 import { createRestartRecoveryOperatorSource } from "../agents/operator-run-recovery-source.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
@@ -28,7 +29,10 @@ export async function createOperatorRecoveryFixture(params: {
   tokenlessDevice?: boolean;
   gatewayAccessGrant?: GatewayAccessGrantRef;
   sharedGeneration?: string;
+  clientInfo?: Pick<GatewayClientInfo, "id" | "mode">;
+  localOperator?: boolean;
   sourceIngress?: "control-ui" | "internal";
+  sourceRunId?: string;
 }) {
   let config = params.config;
   const context = params.context;
@@ -37,12 +41,18 @@ export async function createOperatorRecoveryFixture(params: {
     profileId: params.profileId,
     scopes: params.scopes ?? ["operator.admin"],
   });
-  client.connect.client.id = params.sourceIngress === "internal" ? "cli" : "openclaw-control-ui";
-  client.connect.client.mode = params.sourceIngress === "internal" ? "cli" : "webchat";
+  client.connect.client.id =
+    params.clientInfo?.id ?? (params.sourceIngress === "internal" ? "cli" : "openclaw-control-ui");
+  client.connect.client.mode =
+    params.clientInfo?.mode ?? (params.sourceIngress === "internal" ? "cli" : "webchat");
   // These facts represent the authenticated handshake, not session attribution.
   client.internal = {
     authenticatedOperator: true,
-    ...(client.connect.scopes?.includes("operator.admin") ? { controlUiAdmin: true } : {}),
+    ...(params.localOperator ? { isLocalClient: true } : {}),
+    ...(client.connect.client.id === "openclaw-control-ui" &&
+    client.connect.scopes?.includes("operator.admin")
+      ? { controlUiAdmin: true }
+      : {}),
   };
   client.authPolicy = captureGatewayAuthPolicy(config, {
     role: "operator",
@@ -95,7 +105,7 @@ export async function createOperatorRecoveryFixture(params: {
     sessionKey: params.sessionKey ?? "agent:main:recovery-authority",
     sessionId: params.sessionId ?? "recovery-authority-session",
     storePath: path.join(params.stateDir, "agents", "main", "sessions", "sessions.json"),
-    sourceRunId: "original-operator-turn",
+    sourceRunId: params.sourceRunId ?? "original-operator-turn",
     recoveryRunId: "recovered-operator-turn",
   };
   const entry: InternalSessionEntry = {
@@ -120,6 +130,7 @@ export async function createOperatorRecoveryFixture(params: {
     }),
     "host-captured recovery source",
   );
+  entry.restartRecoverySourceIngress = entry.restartRecoveryOperatorSource.snapshot.sourceIngress;
   await replaceSessionEntry(target, entry);
   const sourceAuthority = captured.authority;
   captured.release();

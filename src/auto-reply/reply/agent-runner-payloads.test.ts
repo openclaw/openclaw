@@ -23,7 +23,6 @@ import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
 const baseParams = {
   isHeartbeat: false,
-  didLogHeartbeatStrip: false,
   blockStreamingEnabled: false,
   blockReplyPipeline: null,
   replyToMode: "off" as const,
@@ -336,6 +335,26 @@ describe("buildReplyPayloads media filter integration", () => {
       },
     );
   });
+
+  it.each([
+    { name: "text alone", media: false, delivered: false, visible: false },
+    { name: "already-delivered media", media: true, delivered: true, visible: false },
+    { name: "unsent media", media: true, delivered: false, visible: true },
+  ])(
+    "filters internal formatting after media dedupe: $name",
+    async ({ media, delivered, visible }) => {
+      const mediaUrl = "file:///tmp/result.png";
+      const { replyPayloads } = await buildTestReplyPayloads({
+        payloads: [{ text: "───", ...(media ? { mediaUrl } : {}) }],
+        directBlockDeliveries: delivered ? [{ payload: { mediaUrl }, outcome: "delivered" }] : [],
+      });
+
+      expect(replyPayloads).toHaveLength(visible ? 1 : 0);
+      if (visible) {
+        expect(replyPayloads[0]?.mediaUrl).toBe(mediaUrl);
+      }
+    },
+  );
 
   it.each([
     { isHeartbeat: false, visibleAlreadyClean: false },
@@ -689,7 +708,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
   });
 
-  it("keeps voice media payloads during silent turns", async () => {
+  it("keeps prepared voice media captions during silent turns", async () => {
     const { replyPayloads } = await buildTestReplyPayloads({
       silentExpected: true,
       payloads: [{ text: "NO_REPLY", mediaUrl: "file:///tmp/voice.opus", audioAsVoice: true }],
@@ -697,7 +716,7 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(1);
     expectFields(replyPayloads[0], {
-      text: undefined,
+      text: "NO_REPLY",
       mediaUrl: "file:///tmp/voice.opus",
       audioAsVoice: true,
     });

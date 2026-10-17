@@ -129,28 +129,6 @@ export function renderSessionSection(params: {
     Boolean(personOwner() || section().project || section().id.startsWith("agent:")),
   );
   const sectionDropEnabled = createMemo(() => groupWriteAccess().allowed && !derivedSection());
-  const sectionClass = createMemo(() => {
-    const zoneValue = zone();
-    const collapsedValue = collapsed();
-    const hostValue = host();
-    const sectionValue = section();
-    return [
-      "sidebar-recent-sessions__group",
-      `sidebar-recent-sessions__group--zone-${zoneValue}`,
-      collapsedValue ? "sidebar-recent-sessions__group--collapsed" : "",
-      hostValue.sessionOrganizer.draggingSidebarSection === sectionValue.id
-        ? "sidebar-recent-sessions__group--dragging"
-        : "",
-      hostValue.sessionOrganizer.sessionDropTarget === sectionValue.id
-        ? "sidebar-recent-sessions__group--session-drop"
-        : "",
-      hostValue.sessionOrganizer.sidebarSectionDropTarget?.sectionId === sectionValue.id
-        ? `sidebar-recent-sessions__group--section-drop-${hostValue.sessionOrganizer.sidebarSectionDropTarget.position}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
-  });
   const chevron = (
     <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
       <span class="sidebar-session-group-toggle__icon">
@@ -219,7 +197,19 @@ export function renderSessionSection(params: {
   );
   return (
     <div
-      class={sectionClass()}
+      class={[
+        "sidebar-recent-sessions__group",
+        `sidebar-recent-sessions__group--zone-${zone()}`,
+        host().sessionOrganizer.sidebarSectionDropTarget?.sectionId === section().id &&
+          `sidebar-recent-sessions__group--section-drop-${host().sessionOrganizer.sidebarSectionDropTarget?.position}`,
+        {
+          "sidebar-recent-sessions__group--collapsed": collapsed(),
+          "sidebar-recent-sessions__group--dragging":
+            host().sessionOrganizer.draggingSidebarSection === section().id,
+          "sidebar-recent-sessions__group--session-drop":
+            host().sessionOrganizer.sessionDropTarget === section().id,
+        },
+      ]}
       data-session-section={section().id}
       data-zone={zone()}
       onDragOver={(event: DragEvent) => {

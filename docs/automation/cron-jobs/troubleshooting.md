@@ -47,7 +47,7 @@ openclaw doctor
     - For Matrix, copied or legacy jobs with lowercased `delivery.to` room IDs can fail because Matrix room IDs are case-sensitive. Edit the job to the exact `!room:server` or `room:!room:server` value from Matrix.
     - Channel auth errors (`unauthorized`, `Forbidden`) mean delivery was blocked by credentials.
     - When the dispatcher records intentional suppression, job state, run history, and finished events include `deliverySuppressionReason` (`empty`, `silent`, `heartbeat`, or `channel_transform`). This is separate from `lastDeliveryError` / `deliveryError`; required delivery failures also log an error when they happen.
-    - For text-only isolated announcements, a reply containing only `NO_REPLY` / `no_reply` or ending with a trailing silent token suppresses the entire text and the fallback queued summary. See [Silent token suppression](/cli/cron#silent-token-suppression) for examples and media behavior.
+    - For text-only isolated announcements, only a completed final that trims to uppercase `NO_REPLY` suppresses the text and fallback queued summary. Lowercase, wrapped forms, and trailing tokens remain visible. See [Silent token suppression](/cli/cron#silent-token-suppression) for the leading-line form and media behavior.
     - If the agent should message the user itself, check that the job has a usable route (`channel: "last"` with a previous chat, or an explicit channel/target).
 
   </Accordion>

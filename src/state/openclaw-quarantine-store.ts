@@ -39,6 +39,7 @@ const quarantineSchemaAdmission: SqliteDatabaseAdmissionKey<{
   version: number;
 }> = {
   name: "openclaw.quarantine.schema",
+  lifetime: "process",
   schemaDependent: true,
   read(value) {
     if (
@@ -60,6 +61,7 @@ function quarantineDecisionAdmission(
 ): SqliteDatabaseAdmissionKey<QuarantineDecision | null> {
   return {
     name: `openclaw.quarantine.decision:${path.resolve(pathname)}`,
+    lifetime: "process",
     read: (value) => (value === null || isQuarantineDecision(value) ? value : undefined),
   };
 }

@@ -1,5 +1,10 @@
 import { parentPort, workerData } from "node:worker_threads";
 import pg, { type QueryResult } from "pg";
+import {
+  fingerprintPostgresGeneration,
+  inspectPostgresGeneration,
+  lockPostgresGeneration,
+} from "../../snapshot/postgres-generation.js";
 import type {
   BridgeReply,
   BridgeRequest,
@@ -60,25 +65,32 @@ async function handleRequest(request: BridgeRequest) {
       if (connectionError) {
         throw connectionError;
       }
-      const values = request.parameters.map((value) =>
-        ArrayBuffer.isView(value)
-          ? Buffer.from(value.buffer, value.byteOffset, value.byteLength)
-          : value,
-      );
-      const results = await client.query(request.sql, values);
-      const result: QueryResult | undefined = Array.isArray(results) ? results.at(-1) : results;
-      if (!result) {
-        throw new Error("PostgreSQL returned no query result");
+      if (request.operation === "recovery-generation") {
+        if (request.lock) {
+          await lockPostgresGeneration(client, schema);
+        }
+        const anchor = { namespace: schema, storeId: request.storeId };
+        const generation = fingerprintPostgresGeneration(
+          anchor,
+          await inspectPostgresGeneration(client, anchor),
+        );
+        reply = { id: request.id, generation };
+      } else {
+        const results = await client.query(request.sql, [...request.parameters]);
+        const result: QueryResult | undefined = Array.isArray(results) ? results.at(-1) : results;
+        if (!result) {
+          throw new Error("PostgreSQL returned no query result");
+        }
+        reply = {
+          id: request.id,
+          result: {
+            command: result.command,
+            rows: result.rows,
+            rowCount: result.rowCount ?? 0,
+            fields: result.fields.map(({ name, dataTypeID }) => ({ name, dataTypeID })),
+          },
+        };
       }
-      reply = {
-        id: request.id,
-        result: {
-          command: result.command,
-          rows: result.rows,
-          rowCount: result.rowCount ?? 0,
-          fields: result.fields.map(({ name, dataTypeID }) => ({ name, dataTypeID })),
-        },
-      };
     }
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));

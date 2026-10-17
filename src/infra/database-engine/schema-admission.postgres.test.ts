@@ -170,11 +170,24 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
     });
   });
 
+  it("re-admits equivalent DDL text after exact catalog comparison", () => {
+    fixture(({ db, open, invalidate }) => {
+      db.runTransaction(() => db.exec("INSERT INTO items VALUES (1, 5)"));
+      const previous = db.prepare("SELECT ddl_hash FROM openclaw_schema_meta").get()?.ddl_hash;
+      invalidate();
+      const reopened = open({ ...schema, postgres: `-- Equivalent fragment grouping\n${ddl}` });
+      expect(reopened.prepare("SELECT value FROM items WHERE id = 1").get()?.value).toBe(6);
+      expect(
+        reopened.prepare("SELECT ddl_hash FROM openclaw_schema_meta").get()?.ddl_hash,
+      ).not.toBe(previous);
+    });
+  });
+
   it("rejects a generated DDL change at the same version", () => {
     fixture(({ open, invalidate }) => {
       invalidate();
       expect(() => open({ ...schema, postgres: ddl.replace("DEFAULT 0", "DEFAULT 9") })).toThrow(
-        "DDL hash mismatch",
+        "schema drift detected against generated DDL",
       );
     });
   });
@@ -259,23 +272,23 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
   ])(
     "refuses unsupported capabilities at admission (%s, %s, %s)",
     (version, serverEncoding, clientEncoding) => {
-      const query = Reflect.get(
+      const prepare = Reflect.get(
         PostgresSyncConnection.prototype,
-        "query",
-      ) as PostgresSyncConnection["query"];
-      vi.spyOn(PostgresSyncConnection.prototype, "query").mockImplementation(function (
+        "prepare",
+      ) as PostgresSyncConnection["prepare"];
+      vi.spyOn(PostgresSyncConnection.prototype, "prepare").mockImplementation(function (
         this: PostgresSyncConnection,
         sql,
-        ...rest
       ) {
+        const statement = prepare.call(this, sql);
         if (sql.startsWith("SELECT current_setting")) {
-          return {
-            rows: [{ version, server_encoding: serverEncoding, client_encoding: clientEncoding }],
-            rowCount: 1,
-            columns: [],
-          };
+          vi.spyOn(statement, "get").mockReturnValue({
+            version,
+            server_encoding: serverEncoding,
+            client_encoding: clientEncoding,
+          });
         }
-        return query.call(this, sql, ...rest);
+        return statement;
       });
       expect(() => fixture(() => {})).toThrow(/version 16 or newer and UTF8/);
     },

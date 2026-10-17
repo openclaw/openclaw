@@ -19,9 +19,9 @@ import type { CallGatewayRequest } from "./sessions-history-tool.test-support.js
 describe("sessions_history channel disclosure", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it.each([false, true])(
-    "consumes history only while its stored channel route remains authorized (withdraw=%s)",
-    async (withdraw) => {
+  it.each(["retained", "route-withdrawn", "policy-withdrawn"] as const)(
+    "consumes history only while its live channel authorization remains valid (%s)",
+    async (mode) => {
       const requester = "agent:main:slack:channel:c111:thread:200.001";
       const target = "agent:main:slack:channel:c111:thread:200.002";
       const storePath = path.join(tempDirs.make("history-channel-disclosure-"), "sessions.json");
@@ -83,15 +83,17 @@ describe("sessions_history channel disclosure", () => {
         () => tool.execute("history-channel-disclosure", { sessionKey: target }),
       );
       await awaitGateBeforeSettlement(entered.promise, pending, "history read was not admitted");
-      if (withdraw) {
+      if (mode === "route-withdrawn") {
         const reassigned = entry("target", "channel:c222");
         replaceSessionEntrySync({ storePath, sessionKey: target }, reassigned);
         projection.setEntry(target, reassigned);
+      } else if (mode === "policy-withdrawn") {
+        cfg.tools = { sessions: { visibility: "self" } };
       }
       response.resolve({ messages: [{ role: "user", content: "BUFFERED HISTORY SECRET" }] });
       const result = await pending;
 
-      if (withdraw) {
+      if (mode !== "retained") {
         expect(result.details).toMatchObject({ status: "forbidden" });
         expect(JSON.stringify(result)).not.toContain("BUFFERED HISTORY SECRET");
       } else {

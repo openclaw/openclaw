@@ -879,5 +879,10 @@ it("retains the execution's Gateway binding through immutable metadata publicati
   expect(() => subagentRuns.runWithCompletionAuthority(alias, () => "stale")).toThrow(
     "runtime owner is no longer active",
   );
-  expect(subagentRuns.runWithCompletionAuthority(recovered, () => "recovered")).toBe("recovered");
+  // Gateway ownership alone cannot authorize a continuation without its operator source.
+  const dispatch = vi.fn();
+  expect(() => subagentRuns.runWithCompletionAuthority(recovered, dispatch)).toThrow(
+    "Subagent completion authority is no longer active",
+  );
+  expect(dispatch).not.toHaveBeenCalled();
 });

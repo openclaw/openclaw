@@ -63,6 +63,16 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 
 ## Rejected Experiments
 
+- **UI blobless sparse checkout (2026-10-16):** Excluding native mobile/macOS
+  app trees removed 48.31 MiB of logical tracked content, but did not qualify as
+  a runner-cost improvement. In
+  [run 38866595993](https://github.com/openclaw/openclaw/actions/runs/38866595993),
+  the Blacksmith UI E2E checkout took 56s and the hosted browser checkout 58s;
+  same-run full UI checkouts took 22–38s. These are small, unpaired samples,
+  not a measured billing delta. Keep the full source checkout. Reconsider only
+  with lower complete checkout time and billed cost, including filtered fetch,
+  lazy materialization, and trusted-harness export; fewer logical bytes alone
+  do not establish savings.
 - **Declaration-fixture owner selection (2026-10-02):**
   `test/scripts/tsdown-declaration-fixture.ts` derives real source copies from its runtime
   entrypoint closures, so product PRs that edit one do not select the four declaration suites
@@ -618,6 +628,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Its complete current-source replay passed all 19 tests with four CPUs,
   12 GiB RAM, no swap, 4.23 GiB peak, and zero OOMs. Other isolated files,
   including siblings in the same job, retain their planned capacity.
+  The singleton `src/gateway/board-store.test.ts` selection also qualifies as the
+  job's only group, with an explicit two-worker pin, two-worker fallback, and
+  unchanged 28-GiB worker-admission threshold. Its five-test replay passed through
+  the CI shard executor in 40.78 seconds on four CPUs and 15.42 GiB RAM. Maximum
+  process RSS was 3.17 GiB, not an aggregate VM peak. Keep all other database-worker
+  selections and mixed jobs at planned capacity; native billed savings are unverified.
 - Source-only serial Blacksmith tooling bins use the 16-class after packing,
   retaining logical classes, names, file inventories, and two-worker pins.
   Keep the 32-class for compiler/artifact capacity files, explicit runner or

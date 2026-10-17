@@ -1,35 +1,135 @@
 import { note } from "../../packages/terminal-core/src/note.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
-import {
-  listDatabaseEngineStores,
-  selectDatabaseEngine,
-} from "../infra/database-engine/registry.js";
+import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
+import { describeDatabaseEngineSelection } from "../infra/database-engine/report.js";
+import type {
+  DoctorDatabaseEngineInspection,
+  ObservedDatabaseEngines,
+} from "./doctor-database-engine-inspection.js";
+type InspectionOptions = { env?: NodeJS.ProcessEnv };
 
-export function collectDatabaseEngineHealthFindings(cfg: OpenClawConfig): HealthFinding[] {
-  if (cfg.database?.engine !== "postgres") {
-    return [];
+function collectDatabaseEngineHealthFindings(
+  cfg: OpenClawConfig,
+  observed: ObservedDatabaseEngines = {},
+): HealthFinding[] {
+  const families = describeDatabaseEngineSelection(cfg);
+  const findings: HealthFinding[] = families.some((family) => family.effective === "postgres")
+    ? [
+        {
+          checkId: "core/doctor/database-engine",
+          severity: "warning",
+          source: "doctor",
+          path: "database.engine",
+          message:
+            "The PostgreSQL database engine is experimental. Stores without a registered PostgreSQL schema remain on SQLite.",
+          fixHint:
+            "Review the store engine selections and https://docs.openclaw.ai/reference/database-engines before using this configuration.",
+        },
+      ]
+    : [];
+  for (const family of families) {
+    if (observed[family.id]?.some((engine) => engine !== family.effective)) {
+      findings.push({
+        checkId: "core/doctor/database-engine",
+        severity: "warning",
+        source: "doctor",
+        path: family.fixedLocal ? "database" : `database.families.${family.id}.engine`,
+        message: `${family.label}: configured ${family.effective}, observed ${observed[family.id]!.join(" and ")}. Changing configuration does not migrate existing data.`,
+        fixHint: family.fixedLocal
+          ? "Restore the local SQLite safety store from its verified backup."
+          : `Keep the Gateway stopped and use openclaw database port --family ${family.id} to migrate this family, or restore its matching engine selection.`,
+      });
+    }
   }
-  return [
-    {
+  return findings;
+}
+
+function stateRootFindings(
+  cfg: OpenClawConfig,
+  inspection: DoctorDatabaseEngineInspection,
+): HealthFinding[] {
+  const selected = describeDatabaseEngineSelection(cfg).find(
+    (family) => family.id === "state",
+  )!.effective;
+  const findings: HealthFinding[] = inspection.stateRoots
+    .filter(({ physical }) => physical.engine !== selected)
+    .map(({ path, physical }) => ({
       checkId: "core/doctor/database-engine",
       severity: "warning",
       source: "doctor",
-      path: "database.engine",
-      message:
-        "The PostgreSQL database engine is experimental. Stores without a registered PostgreSQL schema remain on SQLite.",
+      path,
+      message: `Shared state root ${path}: physical=${physical.engine}, configured=${selected} (engine mismatch).`,
+      fixHint: `Restore the matching state-family engine setting, or stop the Gateway and use openclaw database port --family state --to ${selected}.`,
+    }));
+  if (inspection.discoveryFailed) {
+    findings.push({
+      checkId: "core/doctor/database-engine",
+      severity: "warning",
+      source: "doctor",
+      path: "database.families.state.engine",
+      message: "Database roots could not all be inspected.",
       fixHint:
-        "Review the store engine selections and https://docs.openclaw.ai/reference/database-engines before using this configuration.",
-    },
+        "Verify the selected database connection and installed plugin inventory, then rerun openclaw doctor.",
+    });
+  }
+  return findings;
+}
+
+async function inspect(cfg: OpenClawConfig, options: InspectionOptions) {
+  const { inspectDoctorDatabaseEngines } = await import("./doctor-database-engine-inspection.js");
+  const env = options.env ?? process.env;
+  return inspectDoctorDatabaseEngines({ config: cfg, stateDir: resolveStateDir(env), env });
+}
+
+function collectInspectionFindings(
+  cfg: OpenClawConfig,
+  inspection: DoctorDatabaseEngineInspection,
+) {
+  // State mismatches retain their precise physical paths instead of a duplicate family warning.
+  const observed = { ...inspection.observed, state: undefined };
+  return [
+    ...collectDatabaseEngineHealthFindings(cfg, observed),
+    ...stateRootFindings(cfg, inspection),
   ];
 }
 
-export function noteDatabaseEngines(cfg: OpenClawConfig): void {
-  const lines = listDatabaseEngineStores().map(
-    (store) => `${store.label}: ${selectDatabaseEngine(store, cfg)}`,
-  );
-  for (const finding of collectDatabaseEngineHealthFindings(cfg)) {
+export async function collectDoctorDatabaseEngineHealthFindings(
+  cfg: OpenClawConfig,
+  options: InspectionOptions = {},
+): Promise<HealthFinding[]> {
+  return collectInspectionFindings(cfg, await inspect(cfg, options));
+}
+
+export async function noteDatabaseEngines(
+  cfg: OpenClawConfig,
+  options: InspectionOptions = {},
+): Promise<HealthFinding[]> {
+  const inspection = await inspect(cfg, options);
+  const findings = collectInspectionFindings(cfg, inspection);
+  const lines = describeDatabaseEngineSelection(cfg).map((family) => {
+    const override = family.fixedLocal ? "fixed local" : (family.override ?? "inherit");
+    const physical = inspection.observed[family.id]?.length
+      ? `; observed=${inspection.observed[family.id]!.join(",")}`
+      : "";
+    return `${family.label}: default=${family.default}, override=${override}, effective=${family.effective} (configured)${physical}`;
+  });
+  for (const { path, physical } of inspection.stateRoots) {
+    const namespace = physical.engine === "postgres" ? `, namespace=${physical.namespace}` : "";
+    lines.push(`Shared state root: ${path} (physical=${physical.engine}${namespace})`);
+  }
+  const sqliteLibrary = ensureSqliteLibrarySelected();
+  if (sqliteLibrary.source !== "runtime") {
+    lines.push(
+      `SQLite (doctor process): ${sqliteLibrary.path} (${sqliteLibrary.version}, extension loading enabled)`,
+    );
+  } else if (sqliteLibrary.ignoredOverride) {
+    lines.push(`SQLite (doctor process): ${sqliteLibrary.ignoredOverride}; override ignored`);
+  }
+  for (const finding of findings) {
     lines.push("", finding.message, finding.fixHint ?? "");
   }
   note(lines.join("\n"), "Database engines");
+  return findings;
 }

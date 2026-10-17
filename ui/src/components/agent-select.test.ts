@@ -129,6 +129,31 @@ it("keeps a failed avatar on its fallback until the image changes", async () => 
   );
 });
 
+it("does not let a removed option's image error poison its replacement lease", async () => {
+  const avatar = "data:image/png;base64,cmV0YWluZWQ=";
+  const element = await createAgentSelect({
+    identityById: { alpha: createIdentity("alpha", { avatar }) },
+  });
+  const retired = element.querySelector<HTMLImageElement>(".agent-select__trigger img")!;
+  expect(retired.getAttribute("src")).toBe(avatar);
+  element.options = options.filter((option) => option.value === "beta");
+  element.value = "beta";
+  await element.updateComplete;
+  await waitForSolid(() => expect(element.querySelector(".agent-select__trigger img")).toBeNull());
+
+  element.options = options;
+  element.value = "alpha";
+  await element.updateComplete;
+  await waitForSolid(() =>
+    expect(element.querySelector(".agent-select__trigger img")?.getAttribute("src")).toBe(avatar),
+  );
+  retired.dispatchEvent(new Event("error"));
+  await element.updateComplete;
+  await waitForSolid(() =>
+    expect(element.querySelector(".agent-select__trigger img")?.getAttribute("src")).toBe(avatar),
+  );
+});
+
 it("fetches local avatars with the bearer credential when token auth is active", async () => {
   const createObjectURL = vi.fn(() => "blob:agent-avatar");
   const revokeObjectURL = vi.fn();

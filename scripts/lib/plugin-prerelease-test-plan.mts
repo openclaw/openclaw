@@ -133,16 +133,25 @@ const staticChecks = Object.freeze([
   },
 ]);
 
-/** Keep each release batch on Node and add only its qualified Bun groups. */
+/** Preserve release defaults while honoring explicit complete-inventory trials. */
 export async function resolvePluginPrereleaseExtensionRuntime({
   planGroups,
   fullReleaseValidation,
   vitestArgs = [],
+  env = process.env,
 }: {
   planGroups: readonly Pick<ExtensionTestPlanGroup, "config" | "roots">[];
   fullReleaseValidation: boolean;
   vitestArgs?: readonly string[];
-}): Promise<{ test_runtime_policy: "dual" | "node"; requires_bun: boolean }> {
+  env?: NodeJS.ProcessEnv;
+}): Promise<{
+  test_runtime_policy: "dual" | "node" | "bun-all" | "dual-all";
+  requires_bun: boolean;
+}> {
+  const trialPolicy = env.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim();
+  if (trialPolicy === "bun-all" || trialPolicy === "dual-all") {
+    return { test_runtime_policy: trialPolicy, requires_bun: true };
+  }
   if (!fullReleaseValidation) {
     return { test_runtime_policy: "node", requires_bun: false };
   }

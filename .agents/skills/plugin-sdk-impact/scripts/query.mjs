@@ -4,11 +4,16 @@ import { parseArgs } from "node:util";
 const statuses = new Set(["complete", "partial", "failed", "missing", "incompatible"]);
 const classifications = new Set(["runtime", "type", "mixed", "declarative"]);
 const help = `Query current public ClawHub plugin SDK usage (read-only; no credentials).
-Usage: node query.mjs <canonical-key> [--base-url https://clawhub.ai] [--max-pages 1000]
+Usage: node query.mjs <canonical-key> [--months <count> | --since <UTC-ISO-instant>] [--base-url https://clawhub.ai] [--max-pages 1000] [--full]
 Examples:
   node query.mjs 'api-member:api.registerTool'
+  node query.mjs 'api-member:api.registerTool' --months 3
+  node query.mjs 'api-member:api.registerTool' --since 2026-07-16T12:00:00Z
   node query.mjs 'sdk-export:openclaw/plugin-sdk/core#OpenClawPluginApi'
-Outputs JSON. Exit 1 means unavailable/incomplete traversal, never zero usage.
+Outputs JSON totals over all pages with at most 5 consumer, gap and warning examples.
+output.omitted counts examples excluded from the display, not from the analysis.
+Use --full > sdk-usage.json for every detail; read that file in sections.
+Exit 1 means unavailable/incomplete traversal, never zero usage.
 Exit 0 can still report incomplete coverage; inspect assessment and coverage.`;
 
 function requireShape(condition, message) {
@@ -64,8 +69,23 @@ async function pages(baseUrl, path, params, maxPages, validate) {
   return items;
 }
 
-async function query(key, baseUrl, maxPages) {
-  const items = await pages(baseUrl, "/api/v1/sdk-usage", { key }, maxPages, (page) => {
+function validateReleaseWindow(page, releasedSince) {
+  if (releasedSince === undefined) {
+    return;
+  }
+  requireShape(page.releasedSince === releasedSince, "release cutoff was not applied");
+  for (const item of page.items) {
+    requireShape(
+      Number.isSafeInteger(item.releaseCreatedAt) && item.releaseCreatedAt >= releasedSince,
+      "missing release date or release outside the requested window",
+    );
+  }
+}
+
+async function query(key, baseUrl, maxPages, releasedSince, full) {
+  const filter = releasedSince === undefined ? {} : { releasedSince: String(releasedSince) };
+  const items = await pages(baseUrl, "/api/v1/sdk-usage", { key, ...filter }, maxPages, (page) => {
+    validateReleaseWindow(page, releasedSince);
     requireShape(page.key === key, "wrong canonical key");
     for (const item of page.items) {
       requireShape(
@@ -86,7 +106,8 @@ async function query(key, baseUrl, maxPages) {
       );
     }
   });
-  const roster = await pages(baseUrl, "/api/v1/sdk-usage/coverage", {}, maxPages, (page) => {
+  const roster = await pages(baseUrl, "/api/v1/sdk-usage/coverage", filter, maxPages, (page) => {
+    validateReleaseWindow(page, releasedSince);
     requireShape(page.scope === "page", "unknown coverage scope");
     for (const item of page.items) {
       requireShape(
@@ -144,10 +165,25 @@ async function query(key, baseUrl, maxPages) {
     coverage.eligible === coverage.complete &&
     coverage.unresolvedReferences === 0 &&
     warnings.length === 0;
+  const sortedConsumers = [...consumers.values()].toSorted((a, b) =>
+    a.packageName.localeCompare(b.packageName),
+  );
+  const gaps = [...current.values()].filter(
+    (item) => item.status !== "complete" || item.unknownCount > 0,
+  );
+  const exampleLimit = full ? Infinity : 5;
   return {
     key,
     source: new URL(baseUrl).origin,
     observedAt: new Date().toISOString(),
+    releaseWindow:
+      releasedSince === undefined
+        ? null
+        : {
+            latestReleaseUploadedSince: new Date(releasedSince).toISOString(),
+            timezone: "UTC",
+            inclusive: true,
+          },
     traversalComplete: true,
     assessment: !complete
       ? "incomplete-coverage"
@@ -159,11 +195,18 @@ async function query(key, baseUrl, maxPages) {
     distinctPlugins: consumers.size,
     referenceCounts,
     coverage,
-    items: [...consumers.values()].toSorted((a, b) => a.packageName.localeCompare(b.packageName)),
-    gaps: [...current.values()].filter(
-      (item) => item.status !== "complete" || item.unknownCount > 0,
-    ),
-    warnings,
+    items: sortedConsumers.slice(0, exampleLimit),
+    gaps: gaps.slice(0, exampleLimit),
+    warnings: warnings.slice(0, exampleLimit),
+    output: {
+      detail: full ? "full" : "summary",
+      exampleLimit: full ? null : exampleLimit,
+      omitted: {
+        items: Math.max(0, sortedConsumers.length - exampleLimit),
+        gaps: Math.max(0, gaps.length - exampleLimit),
+        warnings: Math.max(0, warnings.length - exampleLimit),
+      },
+    },
     scope:
       "Observed static references in latest eligible public plugin artifacts. Pages are live reads, not an atomic snapshot. Private, unpublished and separately installed dependency code is outside this corpus.",
   };
@@ -175,7 +218,10 @@ try {
     options: {
       "base-url": { type: "string", default: "https://clawhub.ai" },
       "max-pages": { type: "string", default: "1000" },
+      since: { type: "string" },
+      months: { type: "string" },
       help: { type: "boolean" },
+      full: { type: "boolean", default: false },
     },
   });
   if (values.help) {
@@ -192,7 +238,47 @@ try {
     if (!Number.isSafeInteger(maxPages) || maxPages < 1) {
       throw new Error("--max-pages must be a positive integer");
     }
-    console.log(JSON.stringify(await query(key, values["base-url"], maxPages), null, 2));
+    if (values.since !== undefined && values.months !== undefined) {
+      throw new Error("Use either --since or --months, not both");
+    }
+    let releasedSince;
+    if (values.months !== undefined) {
+      const months = Number(values.months);
+      if (!Number.isSafeInteger(months) || months < 1 || months > 1200) {
+        throw new Error("--months must be an integer from 1 to 1200");
+      }
+      const cutoff = new Date();
+      const day = cutoff.getUTCDate();
+      // Set day 1 before moving months so May 31 minus 3 months stays in February.
+      cutoff.setUTCDate(1);
+      cutoff.setUTCMonth(cutoff.getUTCMonth() - months);
+      const monthEnd = new Date(cutoff);
+      monthEnd.setUTCMonth(monthEnd.getUTCMonth() + 1, 0);
+      cutoff.setUTCDate(Math.min(day, monthEnd.getUTCDate()));
+      releasedSince = cutoff.getTime();
+      if (releasedSince < 0) {
+        throw new Error("Release cutoff must be on or after 1970-01-01");
+      }
+    }
+    if (values.since !== undefined) {
+      releasedSince = Date.parse(values.since);
+      if (
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(values.since) ||
+        !Number.isSafeInteger(releasedSince) ||
+        releasedSince < 0 ||
+        new Date(releasedSince).toISOString() !==
+          (values.since.includes(".") ? values.since : values.since.replace("Z", ".000Z"))
+      ) {
+        throw new Error("--since must be a valid UTC ISO instant, e.g. 2026-07-16T12:00:00Z");
+      }
+    }
+    console.log(
+      JSON.stringify(
+        await query(key, values["base-url"], maxPages, releasedSince, values.full),
+        null,
+        2,
+      ),
+    );
   }
 } catch (error) {
   console.log(

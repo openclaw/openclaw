@@ -59,8 +59,20 @@ Native adoption bindings still use their storage owner, and paired-node enumerat
 can use network I/O. Previews remain limited to 500 characters;
 native hydration and overflow requests ask for at most 16 threads per page.
 Codex `thread/list` has no preview truncation or exclusion option, so wire JSON can
-still be large. Catalog responses over 8 MiB fail before JSON parsing with a
-per-host error; reduce oversized thread previews and retry. Each local host has
+still be large. Native listing halves a page over 8 MiB and retries the same cursor
+within the original request deadline, retaining the smaller page limit for that
+resident home's lifetime.
+If a single thread still exceeds 8 MiB but fits within 64 MiB, the catalog worker
+parses that page once, retains only its bounded catalog projection as a degraded
+entry, and continues with the server's cursor. The full payload is discarded
+before the worker returns. Interactive entries display `systemError`; their degraded
+marker survives restart and clears when a healthy native response replaces them.
+The normal source filter still applies: noninteractive threads remain hidden
+while discovery continues past them.
+If the singleton exceeds 64 MiB or its identity or continuation cannot be recovered,
+the host reports an error and waits 15 minutes before another native listing attempt; repeated
+reads during backoff reuse that error without repeating its background warning.
+Each local host has
 one eight-second response budget covering all page reads and adoption projection,
 matching the paired-node response budget. Healthy siblings still return; background
 native hydration can continue warming the next request. Complete catalog `thread/list` pages and metadata-only `thread/read` responses
@@ -596,7 +608,7 @@ same child result after the parent replies.
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
 - Managed Codex app-server `0.160.0` or newer. The plugin ships
-  `@openai/codex` `0.161.0` and uses a newer stable `codex` from `PATH` only
+  `@openai/codex` `0.162.0` and uses a newer stable `codex` from `PATH` only
   after it passes a version check and an app-server handshake; see
   [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
   Explicit custom, remote, and macOS desktop-owned

@@ -7,7 +7,9 @@ import { patchSettings } from "../app/settings.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import type { IdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
+import { projectOverlays } from "../lib/reactive/application.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { categoryClearReturnsToGroups } from "../lib/sessions/grouping.ts";
 import {
@@ -97,6 +99,7 @@ export function renderSidebarRailPinMenuForController(
 
 export function renderSidebarAgentMenuForController(
   controller: SidebarMenusController,
+  avatars: () => IdentityAvatars,
 ): JSX.Element {
   const { host } = controller;
   const position = controller.agentMenuPosition;
@@ -146,8 +149,8 @@ export function renderSidebarAgentMenuForController(
           });
         },
         connected: host.connected,
-        resolveAvatarUrl: (url) => controller.agentMenuAvatars.resolve(url),
-        avatarErrorHandler: (url) => controller.agentMenuAvatars.imageErrorHandler(url),
+        resolveAvatarUrl: (url) => avatars().resolve(url),
+        avatarErrorHandler: (url) => avatars().imageErrorHandler(url),
         openMode: controller.agentMenuInteractionState === "open-hover" ? "hover" : "click",
         agentUnreadCount: (agentId) => host.agentUnreadCount(agentId),
         onPointerEnter: () => controller.handleAgentMenuPointerEnter(),
@@ -185,8 +188,11 @@ export function renderSidebarIdentityMenuForController(
     host.sessionDataContext
       ? gatewayPresentationScope(host.sessionDataContext.gateway).displayUser
       : null;
-  const context = () => host.sessionDataContext;
-  const overlaySnapshot = () => context()?.overlays.snapshot;
+  const overlays = createMemo(() => {
+    const source = host.sessionDataContext?.overlays;
+    return source && projectOverlays(source);
+  });
+  const overlaySnapshot = () => overlays()?.read();
   const profileViewer = createMemo(() => {
     const user = selfUser();
     return user ? { ...user, watchedSessions: [] } : undefined;
@@ -432,9 +438,11 @@ export function renderSidebarSessionMenuForController(
                 if (hiddenUnreadRuns().length > 0) {
                   void host.sessionOrganizer.runBatchSessionAction(action, rows(), allUnread());
                 } else {
-                  void host.sessionOrganizer.patchSession(session(), {
-                    unread: !session().unread,
-                  });
+                  void host.sessionOrganizer.patchSession(
+                    session(),
+                    { unread: !session().unread },
+                    { sessionScope: true },
+                  );
                 }
                 break;
               case "rename":

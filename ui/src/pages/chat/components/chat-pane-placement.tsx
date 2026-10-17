@@ -13,7 +13,6 @@ import { Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
 import { resolveChatPaneWorkerPresentation } from "../chat-pane-placement.ts";
 
 let nextPlacementId = 0;
@@ -268,6 +267,3 @@ export function ChatPanePlacement(props: {
     </Show>
   );
 }
-
-export const renderChatPanePlacement = (props: Parameters<typeof ChatPanePlacement>[0]) =>
-  solidContent(ChatPanePlacement, props);

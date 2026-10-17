@@ -25,7 +25,7 @@ type NewSessionComposerCapabilityOptions = {
     capabilityMenuOpen: boolean;
     capabilityMenuView: ChatComposerPlusMenuView;
   };
-  requestUpdate: () => void;
+  onChange: () => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
 };
 
@@ -86,11 +86,11 @@ export function NewSessionPlusMenu(props: {
         if (!open) {
           controller.capabilityMenuView = "root";
         }
-        options.requestUpdate();
+        options.onChange();
       },
       onViewChange: (view) => {
         controller.capabilityMenuView = view;
-        options.requestUpdate();
+        options.onChange();
       },
     };
   });
@@ -108,7 +108,7 @@ export function NewSessionSelectionStatus(props: { options: NewSessionComposerCa
         onClick={() => {
           props.options.textareaController.capabilityMenuView = "root";
           props.options.textareaController.capabilityMenuOpen = true;
-          props.options.requestUpdate();
+          props.options.onChange();
         }}
       >
         {t(count() === 1 ? "chat.composer.overrides.countOne" : "chat.composer.overrides.count", {

@@ -14,7 +14,7 @@ import type {
   SidebarRecentSession,
   SidebarSessionSortMode,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 import type {
   SessionOrganizerController,
   SessionOrganizerControllerHost,
@@ -44,7 +44,7 @@ export interface SidebarMenusControllerHost extends SessionOrganizerControllerHo
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly sessionData: SessionOrganizerControllerHost["sessionData"] &
     Pick<
-      SessionDataController,
+      SessionDataOwner,
       | "context"
       | "activeSessionLineageRoot"
       | "activeSessionLineageSelectedRow"
@@ -58,7 +58,8 @@ export interface SidebarMenusControllerHost extends SessionOrganizerControllerHo
     >;
   readonly sessionDataContext: ApplicationContext | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
-  readonly people: import("./sidebar-people-controller.ts").SidebarPeopleController;
+  readonly people: import("./sidebar-people.ts").SidebarPeoplePreferences;
+  readonly peopleView?: ReturnType<typeof import("./sidebar-people.ts").createSidebarPeople>;
   readonly sessionOwnerFilterActive: boolean;
   readonly sessionOwnerFilterId: string | null;
   readonly sessionInvolvingMeFilterActive: boolean;

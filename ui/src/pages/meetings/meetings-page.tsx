@@ -14,6 +14,7 @@ import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-l
 import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../config/settings-targets.ts";
 import {
   transcriptListParams,
@@ -540,36 +541,34 @@ export function MeetingsPage(props: { routeSearch?: string }) {
         previousListParams = listParams;
       }),
   );
+  // Route and archive commits settle before focus moves into the rendered reader or search field.
   createEffect(
-    () => [routeSearch(), summary(), readerPages(), readerDenial()],
-    () =>
-      untrack(() => {
-        if (!focusSelection) {
-          return;
-        }
-        const target = selection().selector
-          ? host.querySelector<HTMLElement>(
-              ".transcripts-reader h1, .transcripts-reader [role=alert]",
-            )
-          : host.querySelector<HTMLElement>('.transcripts-library input[name="query"]');
-        if (target) {
-          target.focus();
-          focusSelection = false;
-        }
-      }),
+    () => [routeSearch(), selection().selector, summary(), readerPages(), readerDenial()] as const,
+    ([, selector]) => {
+      if (!focusSelection) {
+        return;
+      }
+      const target = selector
+        ? host.querySelector<HTMLElement>(
+            ".transcripts-reader h1, .transcripts-reader [role=alert]",
+          )
+        : host.querySelector<HTMLElement>('.transcripts-library input[name="query"]');
+      if (target) {
+        target.focus();
+        focusSelection = false;
+      }
+    },
   );
   const timer = globalThis.setInterval(() => refreshLive(), 3_000);
   const activate = () => refreshLive(true);
-  document.addEventListener("visibilitychange", activate);
-  globalThis.addEventListener("focus", activate);
+  onCleanup(listen(document, "visibilitychange", activate));
+  onCleanup(listen(globalThis, "focus", activate));
   onCleanup(() => {
     active = false;
     gateway.dispose();
     cancelSummaryGeneration();
     cancelExport();
     globalThis.clearInterval(timer);
-    document.removeEventListener("visibilitychange", activate);
-    globalThis.removeEventListener("focus", activate);
   });
 
   const activeReaderTask = () => (readerTab() === "summary" ? summaryTask : readerTask);

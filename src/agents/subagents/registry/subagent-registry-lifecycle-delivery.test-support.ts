@@ -86,7 +86,7 @@ export function registerLifecycleDeliveryReceiptCases({
           idempotencyKey: entry.swarmLaunchIdempotencyKey,
         }),
       ).toMatchObject({ runId: entry.runId });
-      await completeRun(controller, entry);
+      await completeRun(controller, entry, { terminalReply: undefined });
     }
     for (const entry of entries) {
       expect(findSwarmCollectorSession(entry.childSessionKey, entry.childAgentId)).toMatchObject({

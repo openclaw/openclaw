@@ -12,7 +12,7 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ModelAuthStatusResult, ModelCatalogResult } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { ModelProviderLoginController } from "./login-controller.ts";
+import { createModelProviderLogin, type ModelProviderLogin } from "./login-controller.ts";
 import { ModelProviderLoginView } from "./login-view.tsx";
 import {
   loginHarness,
@@ -217,7 +217,7 @@ describe("Models provider login", () => {
         "Sign in and enable this provider for this agent without changing the active model.",
       );
     }
-    await startSelectedLogin(page, "meta/muse-code");
+    await startSelectedLogin(page, "Muse Code");
     expect(request).toHaveBeenCalledWith(
       "models.authLogin",
       {
@@ -355,7 +355,7 @@ describe("Models provider login", () => {
       );
       const page = appendPage(context);
       try {
-        await chooseLogin(page, "example-browser");
+        await chooseLogin(page, "Example browser sign-in");
         await waitForSolid(() =>
           expect(page.querySelector<HTMLAnchorElement>(".wizard-step__sign-in a")?.href).toBe(
             "https://provider.example/sign-in",
@@ -451,7 +451,7 @@ describe("Models provider login", () => {
             };
       });
       const page = appendPage(context);
-      await chooseLogin(page, "example-browser");
+      await chooseLogin(page, "Example browser sign-in");
       await waitForSolid(() =>
         expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
           outcome === "error" ? "Certificate validation failed." : guidance,
@@ -766,7 +766,7 @@ describe("Models provider login", () => {
     await searchProviders(page, "");
     expect(providerChoices(page)).toEqual(["alpha", "example", "zebra"]);
     await selectProvider(page, "zebra");
-    await startSelectedLogin(page, "plugin/zebra-login");
+    await startSelectedLogin(page, "Device sign-in");
     expect(request).toHaveBeenCalledWith(
       "models.authLogin",
       {
@@ -891,7 +891,7 @@ describe("Models provider login", () => {
         ],
       };
     });
-    await startSelectedLogin(page, "example-browser");
+    await startSelectedLogin(page, "Example browser sign-in");
     expect(request).toHaveBeenCalledWith(
       "models.authLogin",
       {
@@ -962,8 +962,8 @@ describe("Models provider login", () => {
     expect(page.querySelector("[data-models-login-search]")).toBeNull();
     expect(page.querySelector("[data-models-login-choice]")).toBeNull();
     expect(page.querySelector('openclaw-modal-dialog input[type="password"]')).not.toBeNull();
-    expect(page.state.addProviderId).toBe("quick-key");
-    expect(page.state.addProviderOpen).toBe(true);
+    expect(page.view.props.addProviderId).toBe("quick-key");
+    expect(page.view.props.addProviderOpen).toBe(true);
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
     expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
     expect(request.mock.calls.some(([method]) => method.startsWith("openclaw.setup."))).toBe(false);
@@ -977,28 +977,27 @@ describe("Models provider login", () => {
         request.mockRejectedValue(new Error("Account inventory unavailable"));
       }
       const onDiscover = vi.fn(() => expect(controller.busy).toBe(false));
-      const controller = new ModelProviderLoginController(
-        {
-          addController: vi.fn(),
-          removeController: vi.fn(),
-          requestUpdate: vi.fn(),
-          updateComplete: Promise.resolve(true),
-        },
-        {
-          getScope: () => ({ context, agentId: "writer" }),
-          canStart: () => true,
-          canContinue: () => true,
-          refresh: async () => undefined,
-          onDiscover,
-        },
-      );
+      let controller!: ModelProviderLogin;
       const container = document.createElement("div");
       document.body.append(container);
+      const view = mountSolid(
+        () => {
+          controller = createModelProviderLogin({
+            getScope: () => ({ context, agentId: "writer" }),
+            canStart: () => true,
+            canContinue: () => true,
+            refresh: async () => undefined,
+            onDiscover,
+          });
+          return createComponent(ModelProviderLoginView, { controller });
+        },
+        { container },
+      );
       expect(controller.pageActions.connectDisabled).toBe(false);
       await controller.pageActions.onConnect();
-      const view = mountSolid(() => createComponent(ModelProviderLoginView, { controller }), {
-        container,
-      });
+      await waitForSolid(() =>
+        expect(container.querySelector("openclaw-modal-dialog")).not.toBeNull(),
+      );
       const modal = container.querySelector("openclaw-modal-dialog")!;
       expect(modal.isConnected).toBe(true);
       expect(providerChoices(container)).toEqual([]);
@@ -1012,7 +1011,6 @@ describe("Models provider login", () => {
         ),
       ).toBe(false);
       view.unmount();
-      mountSolid(() => createComponent(ModelProviderLoginView, { controller }), { container });
       expect(container.querySelector("[data-models-login-search]")).toBeNull();
       // Discovery can replace the picker before its custom-element update finishes.
       await modal.updateComplete;

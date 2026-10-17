@@ -159,12 +159,10 @@
 }
 
 .markdown-table--can-scroll-right .markdown-table__viewport {
-  -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
   mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
 }
 
 .markdown-table--can-scroll-left .markdown-table__viewport {
-  -webkit-mask-image: linear-gradient(to right, transparent, black 28px);
   mask-image: linear-gradient(to right, transparent, black 28px);
 }
 
@@ -176,7 +174,6 @@
     black calc(100% - 28px),
     transparent
   );
-  -webkit-mask-image: var(--markdown-table-scroll-mask);
   mask-image: var(--markdown-table-scroll-mask);
 }
 
@@ -677,7 +674,6 @@
   height: 1em;
   background: currentColor;
   mask: var(--github-mark) center / contain no-repeat;
-  -webkit-mask: var(--github-mark) center / contain no-repeat;
 }
 
 .chat-text :where(a.markdown-github-link) {
@@ -792,7 +788,6 @@
   content: "";
   background: currentColor;
   mask: var(--session-link-mark) center / contain no-repeat;
-  -webkit-mask: var(--session-link-mark) center / contain no-repeat;
 }
 
 :is(.chat-text, .sidebar-markdown, .chat-reply-attribution) a.markdown-session-link::before,
@@ -958,7 +953,6 @@
   height: 1em;
   background: currentColor;
   mask: var(--file-glyph) center / contain no-repeat;
-  -webkit-mask: var(--file-glyph) center / contain no-repeat;
 }
 
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link[data-file-kind="code"]::before {
@@ -1175,7 +1169,6 @@
   height: 16px;
   background: currentColor;
   mask: var(--code-block-icon) center / contain no-repeat;
-  -webkit-mask: var(--code-block-icon) center / contain no-repeat;
 }
 
 .code-block-chevron {

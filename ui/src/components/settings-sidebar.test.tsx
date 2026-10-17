@@ -665,6 +665,7 @@ describe("Settings agent selector", () => {
       expect(container.querySelectorAll("openclaw-agent-select")).toHaveLength(1);
       const selector = container.querySelector<AgentSelectElement>("openclaw-agent-select")!;
       await selector.updateComplete;
+      expect(props.agentIdentity.ensure).toHaveBeenCalledWith(["main"]);
       expect(
         selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label"),
       ).toContain("Main");
@@ -681,6 +682,19 @@ describe("Settings agent selector", () => {
         expect(props.settingsAgentSelection.set).toHaveBeenCalledWith("research"),
       );
       expect(props.onNavigate).not.toHaveBeenCalled();
+      render(
+        {
+          ...props,
+          settingsAgentSelection: {
+            ...props.settingsAgentSelection,
+            state: { selectedId: "research", scopeId: "research" },
+          },
+        },
+        container,
+      );
+      await waitForSolid(() =>
+        expect(props.agentIdentity.ensure).toHaveBeenLastCalledWith(["research"]),
+      );
     },
   );
 
@@ -735,7 +749,7 @@ describe("Settings agent selector", () => {
   });
 });
 
-it("preserves search drafts and navigation focus during unrelated status updates", () => {
+it("preserves search drafts, navigation focus, and instance-local scroll shadows", () => {
   const props: SidebarProps = {
     ...sidebarAgentProps(),
     basePath: "",
@@ -764,6 +778,21 @@ it("preserves search drafts and navigation focus during unrelated status updates
   render({ ...props, connectionStatus: "offline" }, container);
   expect(container.querySelector(".settings-sidebar__item")).toBe(link);
   expect(document.activeElement).toBe(link);
+  render({ ...props, searchQuery: "gateway" }, container);
+  expect(input.value).toBe("gateway");
+  const other = mountSolid(() => <SettingsSidebar {...props} />);
+  flush();
+  const nav = container.querySelector<HTMLElement>(".settings-sidebar__nav")!;
+  const search = container.querySelector(".settings-sidebar__search")!;
+  const otherSearch = other.container.querySelector(".settings-sidebar__search")!;
+  nav.scrollTop = 12;
+  nav.dispatchEvent(new Event("scroll"));
+  expect(search.classList.contains("settings-sidebar__search--scrolled")).toBe(true);
+  expect(otherSearch.classList.contains("settings-sidebar__search--scrolled")).toBe(false);
+  nav.scrollTop = 0;
+  nav.dispatchEvent(new Event("scroll"));
+  expect(search.classList.contains("settings-sidebar__search--scrolled")).toBe(false);
+  other.unmount();
 });
 
 it("refreshes the Ask label when the branding owner publishes", () => {
@@ -798,55 +827,73 @@ it("refreshes the Ask label when the branding owner publishes", () => {
   }
 });
 
-it("follows shared agent selection and identity publications without remounting", async () => {
+it("follows agent owner replacement and publications without remounting", async () => {
   const agents = sidebarAgentProps();
   type SelectionListener = Parameters<SidebarProps["settingsAgentSelection"]["subscribe"]>[0];
-  const selectionListeners = new Set<SelectionListener>();
-  const identityListeners = new Set<() => void>();
-  let identities: AgentIdentityResult[] = [];
-  const settingsAgentSelection = {
-    ...agents.settingsAgentSelection,
-    subscribe(listener: SelectionListener) {
-      selectionListeners.add(listener);
-      return () => {
-        selectionListeners.delete(listener);
-      };
-    },
-  };
-  const agentIdentity = {
-    ...agents.agentIdentity,
-    get: (agentId: string | null | undefined) =>
-      identities.find((identity) => identity.agentId === agentId) ?? null,
-    entries: () => identities,
-    subscribe(listener: () => void) {
-      identityListeners.add(listener);
-      return () => {
-        identityListeners.delete(listener);
-      };
-    },
-  };
-  render(
-    {
-      ...agents,
-      agentIdentity,
+  const createOwners = () => {
+    const selectionListeners = new Set<SelectionListener>();
+    const identityListeners = new Set<() => void>();
+    let identities: AgentIdentityResult[] = [];
+    const settingsAgentSelection = {
+      ...agents.settingsAgentSelection,
+      state: { selectedId: "main", scopeId: "main" },
+      subscribe(listener: SelectionListener) {
+        selectionListeners.add(listener);
+        return () => {
+          selectionListeners.delete(listener);
+        };
+      },
+    };
+    const agentIdentity = {
+      ...agents.agentIdentity,
+      ensure: vi.fn(async () => {}),
+      get: (agentId: string | null | undefined) =>
+        identities.find((identity) => identity.agentId === agentId) ?? null,
+      entries: () => identities,
+      subscribe(listener: () => void) {
+        identityListeners.add(listener);
+        return () => {
+          identityListeners.delete(listener);
+        };
+      },
+    };
+    return {
       settingsAgentSelection,
-      basePath: "",
-      activeRouteId: "appearance",
-      connectionStatus: null,
-      lastError: null,
-      gatewayVersion: "",
-      searchQuery: "",
-      onExit: vi.fn(),
-      onRetryConnect: vi.fn(),
-      onNavigate: vi.fn(),
-      onSearchQueryChange: vi.fn(),
-      preloadTimers: new Map(),
-      saveIndicator: saveIndicator(),
-    },
-    container,
-  );
+      agentIdentity,
+      selectionListeners,
+      identityListeners,
+      publishIdentity(emoji: string) {
+        identities = [{ agentId: settingsAgentSelection.state.selectedId, emoji }];
+        for (const notify of identityListeners) {
+          notify();
+        }
+      },
+    };
+  };
+  const original = createOwners();
+  const props: SidebarProps = {
+    ...agents,
+    ...original,
+    basePath: "",
+    activeRouteId: "appearance",
+    connectionStatus: null,
+    lastError: null,
+    gatewayVersion: "",
+    searchQuery: "",
+    onExit: vi.fn(),
+    onRetryConnect: vi.fn(),
+    onNavigate: vi.fn(),
+    onSearchQueryChange: vi.fn(),
+    preloadTimers: new Map(),
+    saveIndicator: saveIndicator(),
+  };
+  render(props, container);
   const selector = container.querySelector<AgentSelectElement>("openclaw-agent-select")!;
   await selector.updateComplete;
+  const { settingsAgentSelection, selectionListeners, identityListeners } = original;
+  const subscriptions = [[...selectionListeners], [...identityListeners]];
+  render({ ...props, gatewayVersion: "test" }, container);
+  expect([[...selectionListeners], [...identityListeners]]).toEqual(subscriptions);
   settingsAgentSelection.state.selectedId = "research";
   settingsAgentSelection.state.scopeId = "research";
   for (const notify of selectionListeners) {
@@ -857,10 +904,7 @@ it("follows shared agent selection and identity publications without remounting"
       "Research",
     ),
   );
-  identities = [{ agentId: "research", emoji: "🦉" }];
-  for (const notify of identityListeners) {
-    notify();
-  }
+  original.publishIdentity("🦉");
   await waitForSolid(() =>
     expect(
       selector
@@ -868,5 +912,28 @@ it("follows shared agent selection and identity publications without remounting"
         ?.getAttribute("data-avatar"),
     ).toBe("🦉"),
   );
+  const replacement = createOwners();
+  render({ ...props, ...replacement }, container);
+  await waitForSolid(() =>
+    expect(selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toContain(
+      "Main",
+    ),
+  );
+  expect(selectionListeners.size).toBe(0);
+  expect(identityListeners.size).toBe(0);
+  expect(replacement.agentIdentity.ensure).toHaveBeenCalledWith(["main"]);
+  replacement.settingsAgentSelection.state.selectedId = "research";
+  for (const notify of replacement.selectionListeners) {
+    notify(replacement.settingsAgentSelection.state);
+  }
+  replacement.publishIdentity("🦊");
+  await waitForSolid(() => {
+    expect(replacement.agentIdentity.ensure).toHaveBeenLastCalledWith(["research"]);
+    expect(
+      selector
+        .querySelector(".agent-select__trigger .identity-avatar__text")
+        ?.getAttribute("data-avatar"),
+    ).toBe("🦊");
+  });
   expect(container.querySelector("openclaw-agent-select")).toBe(selector);
 });

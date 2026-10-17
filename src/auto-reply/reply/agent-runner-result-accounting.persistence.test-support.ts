@@ -164,7 +164,6 @@ export async function createAgentAccountingPersistenceFixture({
       },
       fallback: { exhausted: false, attempts: [] },
       autoCompactionCount: 0,
-      didLogHeartbeatStrip: false,
     },
     runId,
     runStartedAt: Date.now(),
@@ -338,6 +337,7 @@ export async function createAgentAccountingPersistenceFixture({
             prepared: {
               kind: "continue",
               activeSessionEntry: accounting.activeSessionEntry,
+              replyCompletion: { expectation: "required", outcome: "delivered" },
               // The reply was already delivered; exercise completion bookkeeping
               // without creating another pending delivery intent.
               completedSourceReplyDelivery: true,

@@ -2,7 +2,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, Show } from "solid-js";
 import { vi } from "vitest";
-import type { SolidController, SolidControllerHost } from "../../../lit/solid-controller-host.ts";
+import type {
+  SolidController,
+  SolidControllerHost,
+} from "../../../lib/reactive/solid-controller-host.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
@@ -12,7 +15,8 @@ import {
   type ChatThreadProps,
 } from "../components/chat-thread-interactions.ts";
 import { ChatThread } from "../components/chat-thread-view.tsx";
-import type { ChatTranscriptController } from "../components/chat-transcript-controller.ts";
+import type { ChatTranscript } from "../components/chat-transcript-controller.ts";
+import { withTranscriptTestLifecycle } from "../components/chat-transcript-owner.test-support.ts";
 import { TranscriptSearch } from "../components/chat-transcript-search.tsx";
 import type { ChatTranscriptSession } from "../components/chat-transcript-session.ts";
 import {
@@ -23,7 +27,7 @@ import {
 class ThreadFixture {
   constructor(
     readonly props: ChatThreadProps,
-    readonly transcript: ChatTranscriptController,
+    readonly transcript: ChatTranscript,
     readonly search?: () => void,
   ) {}
 }
@@ -55,6 +59,7 @@ function Content(props: { value: NativeContent }) {
       <Show when={search()}>
         {(value) => (
           <TranscriptSearch
+            revision={value()}
             state={getTranscriptState(value().paneId)}
             requestUpdate={value().requestUpdate}
             onClose={() =>
@@ -75,7 +80,7 @@ function Content(props: { value: NativeContent }) {
 
 export function renderChatThread(
   props: ChatThreadProps,
-  transcript: ChatTranscriptController,
+  transcript: ChatTranscript,
   options?: { search: () => void },
 ) {
   return new ThreadFixture(props, transcript, options?.search);
@@ -176,7 +181,7 @@ export class TranscriptTestHost extends HTMLElement implements SolidControllerHo
 export async function mountTestTranscript(
   paneId: string,
   initialRows: readonly TestContentRow[],
-  transcript = createTestTranscript(paneId),
+  transcript: ChatTranscript = createTestTranscript(paneId),
 ) {
   const container = document.body.appendChild(document.createElement("div"));
   let currentSession: ChatTranscriptSession;
@@ -195,16 +200,16 @@ export async function mountTestTranscript(
       }),
       container,
     );
-    transcript.hostUpdated();
+    transcript.update();
     flush();
   };
-  transcript.hostConnected();
+  transcript.start();
   renderRows(initialRows);
   await flushDeferredRowPrune();
   return {
     container,
     renderRows,
-    transcript,
+    transcript: withTranscriptTestLifecycle(transcript),
     get session() {
       return currentSession;
     },
@@ -234,7 +239,7 @@ export function numberedContentRows(length: number): TestContentRow[] {
   }));
 }
 
-export function mcpRangeRows(appContent: unknown): TestContentRow[] {
+export function mcpRangeRows(appContent: JSX.Element): TestContentRow[] {
   return Array.from({ length: 24 }, (_, index) => ({
     kind: "content" as const,
     key: `row:${index}`,

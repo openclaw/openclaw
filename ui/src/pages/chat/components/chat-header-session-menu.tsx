@@ -15,7 +15,6 @@ import {
   compactSessionMenuViewForValue,
   type CompactSessionMenuView,
 } from "../../../components/session-menu-compact.ts";
-import { useSessionMenuControllers } from "../../../components/session-menu-controllers.ts";
 import { useSessionMenuEntries } from "../../../components/session-menu-view.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import {
@@ -26,7 +25,7 @@ import {
 } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { isChatBubbleMode, setChatBubbleMode } from "../chat-bubble-mode.ts";
 import { chatQuickActionEntry, type HeaderMenuSessionAction } from "./chat-quick-action.tsx";
 import {
@@ -51,6 +50,7 @@ type HeaderMenuProps = {
   onboarding: boolean;
   preferencesBrowserOnly: boolean;
   compact: boolean;
+  prewarm?: boolean;
   bubbleModeEnabled: boolean;
   mainKey: string;
   copyMarkdownAllowed: boolean;
@@ -76,6 +76,7 @@ type HeaderMenuProps = {
   deleteAllowed: boolean;
   onOpen: () => void;
   onOpenCommandPalette: () => void;
+  onOpenDetails?: (source: HTMLElement) => void;
   onSettingsChange: (patch: Partial<UiSettings>) => void;
   onAction: (action: HeaderMenuAction) => void;
 };
@@ -100,29 +101,20 @@ function ChatHeaderSessionMenuContent(
   host: SolidBridgeElement<HeaderMenuProps, HeaderMenuMethods>,
 ) {
   const menuId = `chat-header-session-${++nextMenuId}`;
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const [compactView, setCompactView] = createSignal<CompactMenuView>("root");
   let menu: MenuHandle | undefined;
   const state = merge(props, { selectionCount: 1, navigationAllowed: true, disabled: false });
   const readState = () => state;
-  const controllerHost = useSessionMenuControllers(
-    host,
-    () => setRevision((value) => value + 1),
-    () => {
-      revision();
-      return Object.values(props);
-    },
-  );
   const close = () => {
     menu?.close();
   };
   const actions = new SessionMenuActions(
-    controllerHost,
+    host,
     readState,
     (action) => props.onAction(action),
     close,
   );
-  const view = useSessionMenuEntries(host, actions, readState, revision, {
+  const view = useSessionMenuEntries(actions, readState, {
     openInExtra: () => [
       {
         id: "continue-in-terminal",
@@ -261,6 +253,21 @@ function ChatHeaderSessionMenuContent(
           </span>
         ),
       },
+      ...(props.onOpenDetails
+        ? [
+            {
+              id: "session-details",
+              label: t("chat.sessionDetails.menu"),
+              class: "session-menu__item",
+              labelClass: "session-menu__text",
+              icon: (
+                <span class="session-menu__icon" aria-hidden="true">
+                  <Icon name="listChecks" />
+                </span>
+              ),
+            },
+          ]
+        : []),
       paletteDivider,
       ...(board
         ? [
@@ -307,7 +314,6 @@ function ChatHeaderSessionMenuContent(
   }
   const backDivider = separator("back-divider");
   const items = createMemo((): MenuEntry[] => {
-    revision();
     const current = compactView();
     if (!props.compact || current === "root") {
       return root();
@@ -348,6 +354,15 @@ function ChatHeaderSessionMenuContent(
         props.sharing?.onOpen();
       }
       onSettled(() => actions.focusCurrentView());
+      return;
+    }
+    if (value === "session-details") {
+      event.preventDefault();
+      close();
+      const trigger = menu?.overlay.trigger;
+      if (trigger) {
+        props.onOpenDetails?.(trigger);
+      }
       return;
     }
     if (value === "open-command-palette") {
@@ -418,6 +433,7 @@ function ChatHeaderSessionMenuContent(
     <Menu
       id={menuId}
       lazy
+      prewarm={props.prewarm && !props.compact}
       class={`session-menu chat-header-session-menu${props.compact ? " session-menu--compact chat-header-session-menu--compact" : ""}${props.compact && compactView() === "sharing" ? " chat-header-session-menu--compact-sharing" : ""}`}
       panelClass="chat-header-session-menu__panel"
       placement="bottom-end"
@@ -434,7 +450,6 @@ function ChatHeaderSessionMenuContent(
       onOpenChange={(open) => {
         if (open) {
           actions.loadOwners();
-          setRevision((value) => value + 1);
           props.onOpen();
         } else {
           setCompactView("root");
@@ -456,6 +471,7 @@ defineSolidBridge<HeaderMenuProps, HeaderMenuMethods>(
       onboarding: { default: false, attribute: false },
       preferencesBrowserOnly: { default: false, attribute: false },
       compact: { default: false, attribute: false },
+      prewarm: { default: false, attribute: false },
       bubbleModeEnabled: { default: false, attribute: false },
       mainKey: { default: "main", attribute: false },
       copyMarkdownAllowed: { default: false, attribute: false },
@@ -477,6 +493,7 @@ defineSolidBridge<HeaderMenuProps, HeaderMenuMethods>(
       deleteAllowed: { default: false, attribute: false },
       onOpen: { default: () => {}, attribute: false },
       onOpenCommandPalette: { default: () => {}, attribute: false },
+      onOpenDetails: { default: undefined, attribute: false },
       onSettingsChange: { default: () => {}, attribute: false },
       onAction: { default: () => {}, attribute: false },
     },

@@ -92,9 +92,15 @@ export function stagePackage(root, work, target) {
     fs.mkdirSync(home);
     fs.writeFileSync(path.join(installed, "package.json"),
       JSON.stringify({ private: true, allowScripts: { [archive]: true } }));
+    // Reuse only npm download bytes; the install and user configuration stay isolated.
+    let npmCache;
+    for (const [key, value] of Object.entries(process.env)) {
+      if (key.toLowerCase() === "npm_config_cache" && value) npmCache = value;
+    }
     const env = {
       PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, HOME: home,
       USERPROFILE: home, TMPDIR: scratch, TEMP: scratch, TMP: scratch,
+      npm_config_cache: npmCache,
     };
     const npm = resolveNpmRunner({ env, npmArgs: ["install", "--prefix", installed,
       "--omit=dev", "--include=optional", "--no-audit", "--no-fund",

@@ -10,6 +10,7 @@ import {
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptMessage,
+  resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
@@ -27,6 +28,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
   completedTurnMessageAnchor,
@@ -377,7 +379,7 @@ describe("context-engine turn outbox", () => {
   it.each(["accepted", "admission-only"] as const)(
     "recovers %s prior work before recording the next dispatch",
     async (state) => {
-      const accepted = state === "accepted";
+      const accepted = state !== "admission-only";
       const {
         target,
         current: admitted,
@@ -464,6 +466,10 @@ describe("context-engine turn outbox", () => {
           database.db.prepare("SELECT advancement_key FROM context_engine_turn_outbox").all(),
         ).toHaveLength(0);
         expect(commitTurn.mock.calls[0]?.[0]).not.toHaveProperty("prePromptMessageCount");
+        expect(commitTurn.mock.calls[0]?.[0].runtimeSettings).toMatchObject({
+          model: { provider: "anthropic", resolved: "claude-sonnet-4-6" },
+          limits: { promptTokenBudget: 180_000 },
+        });
         recorder.markRuntimePersisted(currentMessage, currentAdmission);
         // The dispatch wait settles admission in the agent database worker.
         expect(recorder.hasRuntimePersistencePending()).toBe(true);
@@ -762,6 +768,53 @@ describe("context-engine turn outbox", () => {
     );
   });
 
+  it("preserves an unbound incognito namespace under a symlinked state directory", () => {
+    const stateDir = createStateDir();
+    const alias = path.join(createStateDir(), "state");
+    fs.symlinkSync(fs.realpathSync(stateDir), alias, "junction");
+    const storePath = path.join(
+      alias,
+      "agents",
+      "main",
+      "agent",
+      "incognito-openclaw-agent.sqlite",
+    );
+    expect(
+      resolveSessionTranscriptDatabasePath({
+        agentId: "main",
+        sessionId: "unbound-incognito",
+        sessionKey: "agent:main:dashboard:incognito-unbound",
+        storePath,
+      }),
+    ).toBe(storePath);
+  });
+
+  it("admits a runtime transcript through a symlinked state directory", async () => {
+    const { stateDir, target, admission, database } = await createTranscript("symlink-turn");
+    const alias = path.join(createStateDir(), "state");
+    fs.symlinkSync(fs.realpathSync(stateDir), alias, "junction");
+    const currentMessage = { role: "user" as const, content: "current", timestamp: 1_000 };
+    const recorder = createUserTurnTranscriptRecorder({
+      message: currentMessage,
+      target: async () => undefined,
+    });
+    const lease = createLease(createEngine(async () => ({ status: "committed" })));
+    await drainPendingContextEngineTurnsBeforeRun({
+      admission: undefined,
+      lease,
+      recorder,
+      sessionTarget: { ...target, storePath: path.join(alias, "sessions.json") },
+    });
+
+    recorder.markRuntimePersisted(currentMessage, admission);
+    await expect(recorder.waitForRuntimePersistence()).resolves.toBeUndefined();
+    expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+    const queued = database.db
+      .prepare("SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?")
+      .get(admission.logicalTurnId) as { payload_json: string } | undefined;
+    expect(JSON.parse(queued?.payload_json ?? "{}")).toMatchObject({ state: "admitted" });
+  });
+
   it("queues a runtime admission reported inside a session write lane behind that lane", async () => {
     const { stateDir, target, admission, database } = await createTranscript("lane-turn");
     const currentMessage = { role: "user" as const, content: "current", timestamp: 1_000 };
@@ -854,13 +907,17 @@ describe("context-engine turn outbox", () => {
     };
     enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
     const queries: string[] = [];
-    const statements = trackSqliteStatementExecutions(database.db, ["outbox"], (sql) => {
-      if (!/^select/i.test(sql) || !sql.includes("context_engine_turn_outbox")) {
-        return null;
-      }
-      queries.push(sql);
-      return "outbox";
-    });
+    const statements = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["outbox"],
+      (sql) => {
+        if (!/^select/i.test(sql) || !sql.includes("context_engine_turn_outbox")) {
+          return null;
+        }
+        queries.push(sql);
+        return "outbox";
+      },
+    );
     try {
       expect(backend.execute(command)).toEqual({ warnings: [], pending: true, admitted: false });
       expect(statements.counts.outbox).toBe(1);

@@ -50,6 +50,7 @@ import { serviceProcessEnvEntrypoints } from "../../src/daemon/service-process-e
 import { sessionChildCacheRetentionEntrypoint } from "../../src/gateway/session-child-cache-retention-entrypoint.test-support.ts";
 import { sessionTitleRetentionEntrypoints } from "../../src/gateway/session-title-retention.test-support.ts";
 import { workspaceProcessTestEntrypoints } from "../../src/gateway/worker-environments/workspace-process-runtime.test-support.ts";
+import { updatePreflightTeamReportsEntrypoint } from "../../src/infra/database-engine/update-preflight.runtime.test-support.ts";
 import { nativeBoundaryTestEntrypoints } from "../../src/infra/native-boundary-runtime.test-support.ts";
 import { nativeProcessTestEntrypoints } from "../../src/infra/native-process-runtime.test-support.ts";
 import { externalProxyTestEntrypoints } from "../../src/infra/net/proxy/external-proxy-runtime.test-support.ts";
@@ -89,7 +90,6 @@ import { gitBackupCommandRuntimeEntrypoint } from "../../src/snapshot/git-backup
 import { stateNativeProcessEntrypoints } from "../../src/state/native-process-runtime.test-support.ts";
 import { agentDatabaseModuleIdentityEntrypoints } from "../../src/state/openclaw-agent-db-module-identity-runtime.test-support.ts";
 import { agentWorkerStoreFixtureEntrypoint } from "../../src/state/openclaw-agent-worker-store.runtime.test-support.ts";
-import { databaseVerifyHostRuntimeEntrypoint } from "../../src/state/openclaw-database-verify-runtime.test-support.ts";
 import {
   agentDatabaseHeldRuntimeEntrypoint,
   stateLeaseProcessExitRuntimeEntrypoint,
@@ -383,12 +383,12 @@ export const vitestWorkerBuildEntries = {
     qaGatewayCleanupRuntimeEntrypoint,
     logbookSqliteBackendEntrypoint,
     teamReportsSqliteBackendEntrypoint,
+    updatePreflightTeamReportsEntrypoint,
     workboardSqliteBackendEntrypoint,
     ...Object.values(agentDatabaseModuleIdentityEntrypoints),
     stateLeaseProcessExitRuntimeEntrypoint,
     stateLeaseRetentionRuntimeEntrypoint,
     agentDatabaseHeldRuntimeEntrypoint,
-    databaseVerifyHostRuntimeEntrypoint,
     transcriptLibraryTimezoneEntrypoint,
   ]),
   // The real ulimit fixture must import its parent before imposing a file-size limit.

@@ -3,38 +3,16 @@ import type {
   ProviderNormalizeToolSchemasContext,
   ProviderToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { findUnsupportedSchemaKeywords } from "openclaw/plugin-sdk/provider-tools";
+import {
+  findUnsupportedSchemaKeywords,
+  SCHEMA_MAP_KEYS,
+  SCHEMA_NESTED_KEYS,
+} from "openclaw/plugin-sdk/provider-tools";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "patternProperties",
   "additionalProperties",
-]);
-const SCHEMA_MAP_KEYS = new Set([
-  "properties",
-  "$defs",
-  "definitions",
-  "dependentSchemas",
-  // Legacy `dependencies` mixes schema values with property-name arrays; the
-  // walker leaves non-record values untouched, so both forms stay valid.
-  "dependencies",
-]);
-const SCHEMA_VALUE_KEYS = new Set([
-  "items",
-  "additionalItems",
-  "prefixItems",
-  "anyOf",
-  "oneOf",
-  "allOf",
-  "then",
-  "else",
-  "if",
-  "not",
-  "contains",
-  "propertyNames",
-  "unevaluatedItems",
-  "unevaluatedProperties",
-  "contentSchema",
 ]);
 
 // JSON Schema allows `type` to be an array; a union containing "object" still
@@ -68,7 +46,7 @@ function normalizePerplexitySchema(value: unknown): unknown {
     }
     normalized[key] = SCHEMA_MAP_KEYS.has(key)
       ? normalizeSchemaMap(child)
-      : SCHEMA_VALUE_KEYS.has(key)
+      : SCHEMA_NESTED_KEYS.has(key)
         ? normalizePerplexitySchema(child)
         : child;
   }
@@ -91,6 +69,9 @@ function findObjectSchemasMissingProperties(schema: unknown, path: string): stri
   const violations =
     isObjectType(record.type) && !("properties" in record) ? [`${path}.properties`] : [];
   for (const [key, child] of Object.entries(record)) {
+    if (PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS.has(key)) {
+      continue;
+    }
     if (SCHEMA_MAP_KEYS.has(key)) {
       const schemas = readRecord(child);
       if (schemas) {
@@ -102,7 +83,7 @@ function findObjectSchemasMissingProperties(schema: unknown, path: string): stri
       }
       continue;
     }
-    if (SCHEMA_VALUE_KEYS.has(key)) {
+    if (SCHEMA_NESTED_KEYS.has(key)) {
       violations.push(...findObjectSchemasMissingProperties(child, `${path}.${key}`));
     }
   }

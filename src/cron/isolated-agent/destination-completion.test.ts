@@ -657,9 +657,12 @@ describe("destination-owned completion", () => {
               { ...fixture.job, ...fixture.params.deliveryPlan },
             );
           }
-          const text = mode === "silent" ? "NO_REPLY" : "Final creator report";
-          fixture.params.deliveryPayloads = [{ text }];
+          const text = mode === "silent" ? undefined : "Final creator report";
+          fixture.params.deliveryPayloads = text ? [{ text }] : [];
           fixture.params.synthesizedText = text;
+          if (mode === "silent") {
+            fixture.params.skipDelivery = "silent";
+          }
           const result = await dispatchCronDelivery(fixture.params);
           if (mode === "no-route") {
             expect(result.delivered).toBe(true);

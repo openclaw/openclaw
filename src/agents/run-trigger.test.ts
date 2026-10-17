@@ -25,6 +25,7 @@ describe("resolveModelCallUrgency", () => {
     ["cron trigger", { trigger: "cron" }],
     ["heartbeat trigger", { trigger: "heartbeat" }],
     ["memory trigger", { trigger: "memory" }],
+    ["skill review", { skillWorkshopReviewOf: "agent:main:conversation" }],
     ["cron bootstrap", { bootstrapContextRunKind: "cron" }],
     ["heartbeat bootstrap", { bootstrapContextRunKind: "heartbeat" }],
   ] as const)(

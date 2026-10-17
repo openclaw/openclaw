@@ -20,8 +20,8 @@ const generateSchema = z.strictObject({
 export function registerTeamReportsGatewayMethods(
   api: OpenClawPluginApi,
   access: {
-    scheduler: () => TeamReportsScheduler;
-    store: () => TeamReportsStore;
+    scheduler: () => Promise<TeamReportsScheduler>;
+    store: () => Promise<TeamReportsStore>;
   },
 ): void {
   const register = (
@@ -49,30 +49,30 @@ export function registerTeamReportsGatewayMethods(
       { scope },
     );
   };
-  register("status", "operator.read", (params) => {
+  register("status", "operator.read", async (params) => {
     z.strictObject({}).parse(params);
-    return access.scheduler().status();
+    return (await access.scheduler()).status();
   });
   register("list", "operator.read", async (params) => ({
-    periods: await access.store().listPeriods(listSchema.parse(params)),
+    periods: await (await access.store()).listPeriods(listSchema.parse(params)),
   }));
   register("get", "operator.read", async (params) => {
     const { period, key, format } = getSchema.parse(params);
     describePeriod(period, key);
     if (format === "markdown") {
-      const stored = await access.store().getPeriod(period, key);
+      const stored = await (await access.store()).getPeriod(period, key);
       if (!stored) {
         throw new Error("Report not found; generate the requested UTC day first");
       }
       return { markdown: stored.markdown };
     }
-    const stored = await access.store().getPeriodDocument(period, key);
+    const stored = await (await access.store()).getPeriodDocument(period, key);
     if (!stored) {
       throw new Error("Report not found; generate the requested UTC day first");
     }
     return stored;
   });
   register("generate", "operator.admin", async (params) => ({
-    runId: await access.scheduler().generate(generateSchema.parse(params)),
+    runId: await (await access.scheduler()).generate(generateSchema.parse(params)),
   }));
 }

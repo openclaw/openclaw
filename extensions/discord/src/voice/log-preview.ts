@@ -1,12 +1,5 @@
 import type { RealtimeVoiceBridgeEvent } from "openclaw/plugin-sdk/realtime-voice";
 
-const DISCORD_REALTIME_VERBOSE_OMITTED_EVENTS = new Set([
-  "conversation.output_audio.delta",
-  "input_audio_buffer.append",
-  "response.audio.delta",
-  "response.output_audio.delta",
-]);
-
 const DISCORD_REALTIME_INTERRUPTION_MESSAGES = new Map([
   ["client:response.cancel", "interrupt requested"],
   ["client:conversation.item.truncate.skipped", "interrupt ignored"],
@@ -33,8 +26,4 @@ export function formatRealtimeInfoLog(event: RealtimeVoiceBridgeEvent): string |
   }
   const detail = event.detail ? ` ${event.detail}` : "";
   return `discord voice: realtime lifecycle ${event.direction}:${event.type}${detail}`;
-}
-
-export function shouldLogRealtimeVerboseEvent(event: RealtimeVoiceBridgeEvent): boolean {
-  return !DISCORD_REALTIME_VERBOSE_OMITTED_EVENTS.has(event.type);
 }

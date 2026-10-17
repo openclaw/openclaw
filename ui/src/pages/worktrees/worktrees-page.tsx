@@ -38,6 +38,7 @@ export function WorktreesPage() {
 }
 
 export function WorktreesView(props: { model: WorktreesModel }) {
+  // One model owns this mounted view; its Gateway context remains live.
   const model = untrack(() => props.model);
   model.gateway = useGatewayPage({
     getGateway: () => model.context.gateway,
@@ -52,14 +53,8 @@ export function WorktreesView(props: { model: WorktreesModel }) {
     equality: "revision",
   });
   const view = projection.read;
-  let tabGroup!: HTMLDivElement;
-  onSettled(() =>
-    reclaimHubTabFocus(
-      "sessions",
-      "worktrees",
-      tabGroup.querySelector("#sessions-tab-worktrees") ?? undefined,
-    ),
-  );
+  let worktreesTab!: HTMLButtonElement;
+  onSettled(() => reclaimHubTabFocus("sessions", "worktrees", worktreesTab));
 
   const owner = (record: WorktreesModel["records"][number]) => {
     if (record.ownerKind === "session" && record.ownerId) {
@@ -117,9 +112,6 @@ export function WorktreesView(props: { model: WorktreesModel }) {
               active="worktrees"
               ariaLabel={t("sessionsPage.hubTablistLabel")}
               activation="manual"
-              ref={(element) => {
-                tabGroup = element;
-              }}
               items={[
                 {
                   value: "sessions",
@@ -134,6 +126,9 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                   panelId: "sessions-hub-panel",
                   className: "hub-tab",
                   label: t("tabs.worktrees"),
+                  attributes: {
+                    ref: (element) => (worktreesTab = element),
+                  },
                 },
               ]}
               onSelect={(value, tab, event) => {
@@ -285,7 +280,7 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                           }
                         />
                         <button
-                          class={record().removedAt ? "btn btn--sm" : "btn btn--sm danger"}
+                          class={["btn btn--sm", { danger: !record().removedAt }]}
                           title={view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequired")}
                           disabled={!view().operatorAccess.canAdmin || view().operationPending}
                           onClick={() =>

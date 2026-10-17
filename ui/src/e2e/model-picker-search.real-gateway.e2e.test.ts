@@ -286,8 +286,8 @@ suite.define(() => {
           await page.locator('[data-test-id="cron-new-task"]').click();
           const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
           const trigger = picker.locator(".picker-select__trigger");
-          await expect.poll(() => picker.locator('[data-value="fixture/anchor"]').count()).toBe(1);
           await trigger.click();
+          await expect.poll(() => picker.locator('[data-value="fixture/anchor"]').count()).toBe(1);
           await picker.getByRole("listbox").waitFor({ state: "visible" });
           const compact = await capture("compact-desktop", picker);
           expect(compact.query).toBeUndefined();
@@ -302,6 +302,7 @@ suite.define(() => {
           expect(await pickerValue(picker)).toBe("");
 
           await publish(models);
+          await trigger.click();
           await expect
             .poll(() => picker.locator('[data-value="fixture/aurora-large"]').count())
             .toBe(1);
@@ -309,6 +310,7 @@ suite.define(() => {
             .locator("[role=option]:not([hidden])")
             .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-value")));
           expect(inventory.length).toBeGreaterThan(8);
+          await trigger.click();
           await page.locator("#cron-name").fill("Keep this draft");
           await page.locator("#cron-payload-text").fill("Do not submit this automation");
           const writesBeforeSearch = mutations.length;

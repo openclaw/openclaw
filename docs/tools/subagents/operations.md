@@ -86,6 +86,24 @@ interrupted and that partially completed actions need checking. A parent waiting
 for its child batch receives the settled results, including children that finished
 before the restart, and decides what work remains.
 
+Detached orphan reads, restored requester wakes, and cleanup share a bounded
+background budget per Gateway. A large retained backlog waits there instead of
+filling the reader task limit needed by reconnecting clients. Queued cleanup stays
+tracked through restart drain and checks its original ownership before proceeding.
+
+Operator-admitted children retain bounded source evidence with their run record.
+Before continuing the requester after restart, the Gateway revalidates the current
+operator profile, role, authentication policy, device identity, and access grant,
+preserving the original scope restrictions. The saved evidence contains no credentials
+and cannot authorize execution by itself. Missing, invalid, or revoked evidence leaves
+the interrupted result available for inspection; recovery never substitutes system
+authority. Start a new authorized requester turn to continue that work.
+
+Legacy individual completions without saved operator evidence record permanent
+non-delivery once. Later restarts leave their retained results available without
+attempting to restore the same missing authority again. Temporary worker overload,
+unavailable access policy, and failed settlement writes remain retryable.
+
 Visible and private requester-settle completions retain their processing outcome
 across restart. A replay of the same frozen child batch acknowledges an already
 completed requester turn without executing or delivering it again. Unfinished

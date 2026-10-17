@@ -41,9 +41,11 @@ export function createCodexWebSearchProvider(
         parameters: CodexWebSearchSchema,
         execute: async (args, executionContext) => {
           const { executeCodexWebSearchProviderTool } = await loadCodexWebSearchRuntime();
+          const { readCodexPluginConfig } = await import("./app-server/config-parsing.js");
           return await executeCodexWebSearchProviderTool(ctx, args, executionContext, {
-            pluginConfig:
+            pluginConfig: readCodexPluginConfig(
               options.resolvePluginConfig?.() ?? resolvePluginConfigObject(ctx.config, "codex"),
+            ),
             clientFactory: options.clientFactory,
           });
         },

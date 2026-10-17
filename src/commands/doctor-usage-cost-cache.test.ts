@@ -132,6 +132,23 @@ describe("legacy usage-cost cache cleanup", () => {
     await expect(fs.stat(uploadRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it.each([false, true])("reports skill-upload inspection failures (repair=%s)", async (repair) => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-inspection-"));
+    const uploadRoot = path.join(root, "tmp", "skill-uploads");
+    const metadataPath = path.join(uploadRoot, randomUploadId(), "metadata.json");
+    await fs.mkdir(path.dirname(metadataPath), { recursive: true });
+    await fs.writeFile(metadataPath, "{}\n", "utf8");
+    vi.spyOn(fs, "lstat").mockRejectedValueOnce(fsError("EACCES"));
+
+    await maybeRepairLegacyRuntimeFiles(repair, { OPENCLAW_STATE_DIR: root });
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringMatching(/Failed (?:removing|inspecting) legacy skill-upload staging:.*EACCES/u),
+      "Skill uploads",
+    );
+    await expect(fs.readFile(metadataPath, "utf8")).resolves.toBe("{}\n");
+  });
+
   const symlinkTest = process.platform === "win32" ? it.skip : it;
   symlinkTest("removes a legacy staging symlink without touching its target", async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-upload-link-"));
@@ -150,9 +167,10 @@ describe("legacy usage-cost cache cleanup", () => {
     await expect(fs.readFile(path.join(external, "keep.txt"), "utf8")).resolves.toBe("keep");
   });
 
-  it.each([false, true])(
-    "continues retired-row cleanup after a rejected write (rejectFirst=%s)",
-    async (rejectFirst) => {
+  it.each(["none", "write", "inspection"] as const)(
+    "continues retired-row cleanup after an agent failure (failure=%s)",
+    async (failure) => {
+      const rejectFirst = failure !== "none";
       root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-cost-sqlite-doctor-"));
       const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
       const firstDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -195,7 +213,9 @@ describe("legacy usage-cost cache cleanup", () => {
         .prepare("SELECT * FROM cache_entries ORDER BY scope, key")
         .all();
 
-      if (rejectFirst) {
+      if (failure === "inspection") {
+        vi.spyOn(fs, "stat").mockRejectedValueOnce(fsError("EACCES"));
+      } else if (failure === "write") {
         vi.spyOn(usageCacheSqlite, "retireLegacySessionCostUsageCache").mockRejectedValueOnce(
           new Error("pruning rejected"),
         );
@@ -204,7 +224,7 @@ describe("legacy usage-cost cache cleanup", () => {
 
       if (rejectFirst) {
         expect(note).toHaveBeenCalledWith(
-          expect.stringContaining("pruning rejected"),
+          expect.stringContaining(failure === "inspection" ? "EACCES" : "pruning rejected"),
           "Doctor warnings",
         );
         expect(

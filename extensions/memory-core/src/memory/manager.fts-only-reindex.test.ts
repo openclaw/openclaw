@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  requireNativeSqliteDatabase,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
   openOpenClawAgentDatabase,
@@ -762,7 +763,7 @@ describe("memory manager FTS-only reindex", () => {
   });
 
   it("removes chunks and FTS rows when the dirty source file is already deleted", async () => {
-    const seedDb = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const seedDb = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
     expect(() => seedDb.loadExtension("not-a-real-extension")).toThrow(
       "extension loading is not allowed",
     );

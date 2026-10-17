@@ -368,7 +368,7 @@ describe("SidebarSessionNarrationController", () => {
     );
     expect(updates.at(-1)?.get("agent:main:run")).toBe("First visible progress.");
 
-    for (const text of ["", "REPLY_SKIP", "HEARTBEAT_OK"]) {
+    for (const text of ["", "HEARTBEAT_OK"]) {
       controller.handleEvent(digest("Visible draft."));
       controller.handleEvent(digest(text));
       expect(updates.at(-1)?.has("agent:main:run")).toBe(false);
@@ -669,7 +669,7 @@ describe("SidebarSessionNarrationController", () => {
               "REPLY_SKIP",
             ].join("\n"),
           ),
-          "Visible work is complete.",
+          "REPLY_SKIP",
         ],
       ],
     ],

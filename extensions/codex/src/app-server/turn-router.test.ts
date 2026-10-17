@@ -340,7 +340,7 @@ describe("CodexAppServerTurnRouter", () => {
         params: { threadId: "thread-2", turn: { id: "turn-2", status: "completed", items: [] } },
         threadId: "thread-2",
         turnId: "turn-2",
-        completedTurn: { id: "turn-2", status: "completed", items: [], itemsView: "full" },
+        completedTurn: { id: "turn-2", status: "completed", items: [] },
       },
       { threadId: "thread-2", turnId: "turn-2" },
     );

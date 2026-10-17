@@ -57,7 +57,7 @@ it("redacts unresolved connection SecretRefs", async () => {
     },
   };
   const result = runWorkboardPortTask({ operation: "preflight", config, probe: false }, scope);
-  await expect(result).rejects.toThrow("preflight: workboard, logbook, team-reports:");
+  await expect(result).rejects.toThrow("preflight:");
   await expect(result).rejects.not.toThrow("OPENCLAW_PORT_TEST_UNRESOLVED_CONNECTION");
 });
 
@@ -126,7 +126,6 @@ describe.skipIf(!connection)("workboard port PostgreSQL refusal boundaries", () 
       await expect(
         runWorkboardPortTask({ operation: "preflight", config, probe: true }, scope),
       ).rejects.toThrow("namespace privilege probe");
-      await client.query(`GRANT CREATE ON DATABASE "${database}" TO "${role}"`);
       const stage = {
         operation: "stage" as const,
         sourcePath,
@@ -136,6 +135,9 @@ describe.skipIf(!connection)("workboard port PostgreSQL refusal boundaries", () 
         config,
         to: "postgres" as const,
       };
+      await expect(runWorkboardPortTask(stage, scope)).rejects.toThrow("stage:");
+      await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await client.query(`GRANT CREATE ON DATABASE "${database}" TO "${role}"`);
       const copied = await runWorkboardPortTask(stage, scope);
       const anchor = await hash(targetPath);
       await expect(

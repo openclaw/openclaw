@@ -85,6 +85,7 @@ export function buildDeveloperInstructions(
     !isMessageOnlyCodexSourceReply(params);
   const nativeDelegationAvailable =
     delegationGuidanceAvailable &&
+    params.delegationCapability !== "host_only" &&
     params.pluginHarnessToolPolicyRestricted !== true &&
     params.requireWorkspaceOnly !== true &&
     !isCodexResponsesOAuthRun(params) &&

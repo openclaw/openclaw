@@ -588,6 +588,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     "uses managed daemon health timing on $platform",
     async ({ platform, healthTimeoutMs }) => {
       await withStateDir("state-local-daemon-health-", async (stateDir) => {
+        // Create native filesystem state before spoofing only the daemon timing platform.
+        const { initializeFreshDaemonRuntimePinMigration } =
+          await import("../infra/state-migrations.daemon-runtime-pins.js");
+        initializeFreshDaemonRuntimePinMigration(process.env);
         const captured = createOnboardGatewayTimeoutCapture();
         gatewayReachableState.mock = captured.mock;
 

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import nodePath from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import {
   observeSqliteReadSql,
@@ -12,8 +11,10 @@ import { applyAgentDatabaseReaderRequest } from "../infra/agent-database-readers
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
 import {
@@ -115,7 +116,7 @@ it("keeps a multi-statement snapshot stable until the next read after an in-proc
     await closeOpenClawAgentDatabaseByPathAsync(path);
     const scope = new OpenClawAgentDatabaseReadOnlyScope();
     const writer = nodeSqlite.openNodeSqliteDatabase(path);
-    const readStamp = (db: DatabaseSync) =>
+    const readStamp = (db: EngineConnection) =>
       db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get()?.updated_at;
     writer.exec("UPDATE schema_meta SET updated_at = 1 WHERE meta_key = 'primary'");
     try {
@@ -151,7 +152,7 @@ it("keeps one connection while nested reads retain independent committed snapsho
     const target = { agentId: "main", path };
     const scope = new OpenClawAgentDatabaseReadOnlyScope();
     const writer = new (requireNodeSqlite().DatabaseSync)(path);
-    let retained: DatabaseSync | undefined;
+    let retained: EngineConnection | undefined;
     const query = "SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'";
     try {
       scope.run(target, () => {
@@ -514,8 +515,11 @@ it("loads canonical proof before fresh full selections without trusting a copied
           if (!opened.found) {
             throw new Error("Expected the seeded canonical database");
           }
-          const queries = trackSqliteStatementExecutions(opened.value.db, ["inventory"], (sql) =>
-            sql.includes("retained_window") && !/\bwhere\b/iu.test(sql) ? "inventory" : null,
+          const queries = trackSqliteStatementExecutions(
+            requireNativeSqliteDatabase(opened.value.db),
+            ["inventory"],
+            (sql) =>
+              sql.includes("retained_window") && !/\bwhere\b/iu.test(sql) ? "inventory" : null,
           );
           try {
             const result = readExactSessionEntriesWithLifecycle({

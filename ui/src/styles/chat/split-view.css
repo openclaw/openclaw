@@ -698,6 +698,7 @@
 }
 
 .chat-pane__workspace-chip > .oc-menu-item__label,
-.chat-pane__layout-trigger > .oc-menu-item__label {
+.chat-pane__layout-trigger > .oc-menu-item__label,
+.chat-pane__sharing-trigger > .oc-menu-item__label {
   display: contents;
 }

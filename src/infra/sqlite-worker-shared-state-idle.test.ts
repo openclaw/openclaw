@@ -1,10 +1,8 @@
 import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { deserialize } from "node:v8";
-import { Worker, type Transferable } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -22,8 +20,6 @@ import {
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
-import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
 import * as sqliteWorkers from "./sqlite-worker-store.js";
 import {
   getSqliteWorkerActorIdentity,
@@ -42,21 +38,6 @@ vi.mock("node:diagnostics_channel", async (importOriginal) => {
   };
 });
 
-// Keep the shared-state owner on the fixture backend across reopenings.
-vi.mock("./runtime-worker-url.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime-worker-url.js")>();
-  const { runtimeProcessEntrypoints } = await import("./runtime-process-entrypoints.js");
-  const { storageProcessTestEntrypoints } =
-    await import("./storage-process-runtime.test-support.js");
-  return {
-    ...actual,
-    resolveRuntimeWorkerUrl: (params: Parameters<typeof actual.resolveRuntimeWorkerUrl>[0]) =>
-      params.sourceWorkerName === runtimeProcessEntrypoints.sharedStateStore.sourceWorkerName
-        ? actual.resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.sharedStateIdleFixture)
-        : actual.resolveRuntimeWorkerUrl(params),
-  };
-});
-
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -66,10 +47,7 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 const minute = 60_000;
 
-async function fixture(mode: "healthy" | "local-reader" | "unsettled-inspection" = "healthy") {
-  const now = performance.now.bind(performance);
-  let elapsed = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => now() + elapsed);
+async function fixture() {
   const timers = vi.spyOn(globalThis, "setTimeout");
   const open = async (context: OpenClawStateWorkerContext) => {
     const messages = vi.spyOn(Worker.prototype, "postMessage");
@@ -78,7 +56,7 @@ async function fixture(mode: "healthy" | "local-reader" | "unsettled-inspection"
       const read = () =>
         executeOpenClawStateWorker(context, {
           type: "deviceAuth.read",
-          input: { deviceId: `idle-fixture:${mode}`, role: "operator", readOnly: false },
+          input: { deviceId: "idle-fixture:healthy", role: "operator", readOnly: false },
         });
       expect(await read()).toEqual({ entry: null, expectedToken: null });
       const worker = messages.mock.contexts[0];
@@ -115,9 +93,6 @@ async function fixture(mode: "healthy" | "local-reader" | "unsettled-inspection"
     ...first,
     open,
     scheduled,
-    advance: (duration: number) => {
-      elapsed += duration;
-    },
   };
 }
 
@@ -162,211 +137,16 @@ it("retains pressure retirement across path close and releases its subscription 
   expect(pressure.hasSubscribers).toBe(false);
 });
 
-it("retains the original healthy worker after one minute and closes it after 30 minutes", async () => {
+it("reuses the original worker until its 30-minute idle deadline, resetting it on real work", async () => {
   const f = await fixture();
-  f.advance(minute);
-  f.scheduled(minute)();
-  // Joining a real call also joins the original owner's retirement, if it retired at one minute.
+  const originalExpiry = f.scheduled(30 * minute);
   expect(await f.read()).toEqual({ entry: null, expectedToken: null });
-  expect(f.worker.threadId).not.toBe(-1);
-  f.advance(minute);
-  f.scheduled(minute)();
-  await vi.waitFor(() => expect(f.scheduled(29 * minute)).toBeTypeOf("function"));
+  originalExpiry();
   expect(f.worker.threadId).not.toBe(-1);
   const exited = once(f.worker, "exit");
-  f.advance(29 * minute);
-  f.scheduled(29 * minute)();
+  f.scheduled(30 * minute)();
   await exited;
   expect(await f.read()).toEqual({ entry: null, expectedToken: null });
-});
-
-it("retires an unavailable actor even when its completed idle result is healthy", async () => {
-  const f = await fixture();
-  const available = vi
-    .spyOn(sqliteWorkers, "isSqliteWorkerStoreAvailable")
-    .mockReturnValueOnce(false);
-  try {
-    f.advance(minute);
-    f.scheduled(minute)();
-    await vi.waitFor(() => expect(f.worker.threadId).toBe(-1));
-    expect(await f.read()).toEqual({ entry: null, expectedToken: null });
-  } finally {
-    available.mockRestore();
-  }
-});
-
-it("retires a worker with an untracked local reader and releases its actual WAL pin", async () => {
-  const f = await fixture("local-reader");
-  const { DatabaseSync } = requireNodeSqlite();
-  const writer = new DatabaseSync(f.context.admission.databasePath);
-  try {
-    writer.exec("PRAGMA busy_timeout=0; CREATE TABLE idle_probe (value TEXT)");
-    expect(writer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(1);
-    const exited = once(f.worker, "exit");
-    f.advance(minute);
-    f.scheduled(minute)();
-    await exited;
-    expect(writer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(0);
-  } finally {
-    writer.close();
-  }
-});
-
-it("keeps a healthy worker when another connection holds the WAL reader", async () => {
-  const f = await fixture();
-  const { DatabaseSync } = requireNodeSqlite();
-  const writer = new DatabaseSync(f.context.admission.databasePath);
-  const reader = new DatabaseSync(f.context.admission.databasePath);
-  try {
-    writer.exec("PRAGMA busy_timeout=0; CREATE TABLE idle_probe (value TEXT)");
-    reader.exec("BEGIN");
-    reader.prepare("SELECT * FROM sqlite_schema").get();
-    writer.exec("INSERT INTO idle_probe VALUES ('after-reader')");
-    expect(writer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(1);
-    f.advance(minute);
-    f.scheduled(minute)();
-    await vi.waitFor(() => expect(f.scheduled(29 * minute)).toBeTypeOf("function"));
-    expect(f.worker.threadId).not.toBe(-1);
-    expect(await f.read()).toEqual({ entry: null, expectedToken: null });
-    expect(f.worker.threadId).not.toBe(-1);
-  } finally {
-    if (reader.isTransaction) {
-      reader.exec("ROLLBACK");
-    }
-    reader.close();
-    writer.close();
-  }
-});
-
-it("ignores an inspection result and old expiry when real work resumes", async () => {
-  const f = await fixture();
-  const postMessage = f.worker.postMessage.bind(f.worker);
-  const dispatched = createDeferredCore();
-  let resume: (() => void) | undefined;
-  const send = vi
-    .spyOn(f.worker, "postMessage")
-    .mockImplementation((request: SqliteWorkerRequest, transfers?: readonly Transferable[]) => {
-      if (
-        request.type === "execute" &&
-        deserialize(request.input).type === "database.inspectIdle"
-      ) {
-        resume = () => postMessage(request, transfers);
-        dispatched.resolve();
-        return;
-      }
-      return postMessage(request, transfers);
-    });
-  const oldInspection = f.scheduled(minute);
-  f.advance(minute);
-  oldInspection();
-  await dispatched.promise;
-  const entered = createDeferredCore();
-  const finish = createDeferredCore();
-  const active = runOpenClawStateWorkerOperation(f.context, async (scope) => {
-    entered.resolve();
-    await finish.promise;
-    return scope.execute({
-      type: "deviceAuth.read",
-      input: { deviceId: "idle-fixture:idle", role: "operator", readOnly: false },
-    });
-  });
-  await entered.promise;
-  send.mockRestore();
-  try {
-    if (!resume) {
-      throw new Error("Expected a held native inspection request");
-    }
-    resume();
-    f.advance(30 * minute);
-    oldInspection();
-    expect(f.worker.threadId).not.toBe(-1);
-  } finally {
-    finish.resolve();
-  }
-  expect(await active).toEqual({ entry: null, expectedToken: null });
-  oldInspection();
-  f.advance(minute);
-  f.scheduled(minute)();
-  await vi.waitFor(() => expect(f.scheduled(29 * minute)).toBeTypeOf("function"));
-  expect(f.worker.threadId).not.toBe(-1);
-});
-
-it("replaces a failed idle actor after an enclosing callback settles", async () => {
-  const f = await fixture("unsettled-inspection");
-  const nativePost = f.worker.postMessage.bind(f.worker);
-  let resume: (() => void) | undefined;
-  const send = vi
-    .spyOn(f.worker, "postMessage")
-    .mockImplementation((request: SqliteWorkerRequest, transfers?: readonly Transferable[]) => {
-      if (
-        request.type === "execute" &&
-        deserialize(request.input).type === "database.inspectIdle"
-      ) {
-        // Hold the admitted dispatch before the native inspection executes.
-        send.mockRestore();
-        resume = () => nativePost(request, transfers);
-        return;
-      }
-      return nativePost(request, transfers);
-    });
-  f.advance(minute);
-  f.scheduled(minute)();
-  const entered = createDeferredCore();
-  const finish = createDeferredCore();
-  const escape = createDeferredCore<never>();
-  void escape.promise.catch(() => {});
-  let active: Promise<string> | undefined;
-  try {
-    await vi.waitFor(() => expect(resume).toBeTypeOf("function"));
-    if (!resume) {
-      throw new Error("Expected an admitted native inspection");
-    }
-    active = runOpenClawStateWorkerOperation(f.context, () =>
-      Promise.race([
-        (async () => {
-          entered.resolve();
-          await finish.promise;
-          await expect(f.read()).rejects.toMatchObject({ code: "unavailable" });
-          await expect(
-            openOpenClawStateWorkerCleanupStore(
-              f.context.admission.databasePath,
-              f.context,
-              f.context.admission.assertCurrent,
-              f.context.admission.identity,
-            ).then((store) => store?.close()),
-          ).rejects.toMatchObject({ code: "unavailable" });
-          return "completed without dispatch";
-        })(),
-        escape.promise,
-      ]),
-    );
-    await entered.promise;
-    const exited = once(f.worker, "exit");
-    resume();
-    resume = undefined;
-    await exited;
-    await nextTurn();
-    finish.resolve();
-    let settled = false;
-    void active.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    await vi.waitFor(() => expect(settled).toBe(true));
-    expect(await active).toBe("completed without dispatch");
-    await nextTurn();
-    expect(await f.read()).toEqual({ entry: null, expectedToken: null });
-  } finally {
-    send.mockRestore();
-    resume?.();
-    finish.resolve();
-    escape.reject(new Error("Release the enclosing fixture after failed observation"));
-    await active?.catch(() => {});
-  }
 });
 
 const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
@@ -474,10 +254,7 @@ poolIt("joins expiring idle-client maintenance without retiring a healthy co-use
   const context = f.context;
   const env = context.environment;
   const first = await openClient(context);
-  f.advance(minute);
-  f.scheduled(minute)();
-  await vi.waitFor(() => expect(f.scheduled(29 * minute)).toBeTypeOf("function"));
-  const expire = f.scheduled(29 * minute);
+  const expire = f.scheduled(30 * minute);
   const maintenance = createOpenClawDatabaseMaintenanceScope();
   const resume = createDeferred();
   const entered = createDeferred();
@@ -499,7 +276,6 @@ poolIt("joins expiring idle-client maintenance without retiring a healthy co-use
     );
     await Promise.race([entered.promise, accepted]);
 
-    f.advance(29 * minute);
     expire();
     await expect(first.store.execute(read)).rejects.toMatchObject({ code: "closed" });
     expect(getSqliteWorkerActorIdentity(peer.store)).toBe(first.actor);

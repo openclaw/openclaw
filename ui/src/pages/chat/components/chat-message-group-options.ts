@@ -4,7 +4,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import type { ForwardedAvatarOptions } from "../chat-avatar-view.tsx";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { TurnRecap } from "../chat-progress.ts";
-import type { renderGroupedMessage } from "./chat-message-bubble.ts";
+import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import type { MessageReplyTarget } from "./chat-message-markdown.types.ts";
 import type { MessageReactionOptions } from "./chat-message-reaction-model.ts";
 import type { ChatSendStatusActions } from "./chat-message-send-status-view.tsx";
@@ -14,7 +14,7 @@ import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 
 export type RenderMessageGroupOptions = Omit<
-  Parameters<typeof renderGroupedMessage>[2],
+  GroupedMessageOptions,
   | "isStreaming"
   | "duplicateCount"
   | "assistantMessageDisclosure"
@@ -61,6 +61,4 @@ export type RenderMessageGroupOptions = Omit<
     frameContent?: readonly unknown[];
     frameActionOwner?: MessageGroup["messages"][number] | null;
     latestAssistant?: boolean;
-    /** Rendered as a transcript search result, outside its turn. */
-    searchResult?: boolean;
   } & MessageReactionOptions;

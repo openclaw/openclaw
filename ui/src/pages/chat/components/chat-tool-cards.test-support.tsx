@@ -1,30 +1,11 @@
 import { createSignal } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
-import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatToolCard, type ToolCardOptions } from "./chat-tool-cards.solid.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
-import { ToolPreview } from "./widget-card.ts";
-
-type Props = { card: ToolCard; options: ToolCardOptions & { children?: unknown } };
-
-function ToolCardFixture(props: Props) {
-  return (
-    <ChatToolCard
-      card={props.card}
-      options={props.options}
-      hasChildren={Boolean(props.options.children)}
-    >
-      <LitContent value={props.options.expanded ? props.options.children : undefined} />
-    </ChatToolCard>
-  );
-}
-
-export function renderToolCard(card: Props["card"], options: Props["options"]) {
-  return solidContent(ToolCardFixture, { card, options });
-}
+import { ToolPreview } from "./widget-card-view.tsx";
 
 type CardState = { card: ToolCard; options: ToolCardOptions };
 const cards = new Map<HTMLElement, (state: CardState) => void>();

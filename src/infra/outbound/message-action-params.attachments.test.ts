@@ -12,6 +12,7 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 import {
   messageActionRunnerMocks,
   resetMessageActionMediaMocks,
@@ -29,18 +30,6 @@ const onePixelPng = Buffer.from(
 const onePixelPngBase64 = onePixelPng.toString("base64");
 const wrappedOnePixelPngBase64 = onePixelPngBase64.match(/.{1,24}/g)?.join("\r\n") ?? "";
 const parameterizedPngDataUrl = `data:image/png;charset=utf-8;name=../../ignored.svg;base64,${wrappedOnePixelPngBase64}`;
-
-function firstMockArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  label: string,
-): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  const [arg] = call;
-  return requireRecord(arg);
-}
 
 async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
@@ -639,7 +628,11 @@ describe("runMessageAction media behavior", () => {
           expect.any(Object),
         );
         expect(handleActionMock).toHaveBeenCalledTimes(1);
-        const handlerParams = firstMockArg(handleActionMock, "handleAction");
+        const handlerParams = mockFirstRecordArg(
+          handleActionMock,
+          "handleAction",
+          "Expected a non-array record",
+        );
         expect(handlerParams.buffer).toBe(Buffer.from("hello").toString("base64"));
         expect(handlerParams.filename).toBe(metadata.filename ?? "reply.png");
         expect(handlerParams.contentType).toBe(contentType);
@@ -679,7 +672,11 @@ describe("runMessageAction media behavior", () => {
         });
 
         expect(result.kind).toBe("action");
-        const handlerParams = firstMockArg(handleActionMock, "handleAction");
+        const handlerParams = mockFirstRecordArg(
+          handleActionMock,
+          "handleAction",
+          "Expected a non-array record",
+        );
         expect(handlerParams.filename).toBe("photo.png");
         expect(handlerParams.contentType).toBe("image/png");
         expect(typeof handlerParams.buffer).toBe("string");

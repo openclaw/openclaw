@@ -265,7 +265,7 @@ it("renders required placement as a readonly indicator, not a machine or workspa
           onConnectMachine: vi.fn(),
           onNavigate: vi.fn(),
           onFocusComposer: vi.fn(),
-          requestUpdate: vi.fn(),
+          onChange: vi.fn(),
         },
       }),
     { container },

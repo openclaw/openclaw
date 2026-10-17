@@ -11,10 +11,11 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerGitHubEnglish } from "../../i18n/locales/en-github.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
+import { projectGateway, projectAgentSelection } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
+import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../../pages/config/settings-targets.ts";
-import { GitHubIdentityController } from "./github-identity-controller.ts";
 import {
   GitHubConnectionError,
   GitHubConnectionSetup,
@@ -22,32 +23,47 @@ import {
   GitHubHealth,
   GitHubUnloadedStatus,
 } from "./github-identity-view.tsx";
+import { createGitHubIdentity } from "./github-identity.ts";
+
+function access(snapshot: ApplicationGatewaySnapshot) {
+  const profileId = snapshot.phase === "connected" ? (snapshot.selfUser?.id ?? null) : null;
+  // Access comes from the authenticated connection, never a status RPC error.
+  const canRead =
+    snapshot.phase === "connected" &&
+    Boolean(snapshot.hello?.auth) &&
+    hasOperatorReadAccess(snapshot.hello?.auth ?? null);
+  return {
+    profileId,
+    canRead,
+    canAdmin: canRead && hasOperatorAdminAccess(snapshot.hello?.auth ?? null),
+  };
+}
 
 /** Profile credentials have their own read-scoped lifecycle, independent of users.self edits. */
 export function GitHubConnections() {
   const context = useApplication();
-  const [revision, setRevision] = createSignal(0);
+  const gateway = projectGateway(context.gateway);
+  const agents = projectAgents(context.agents);
+  const selection = projectAgentSelection(context.settingsAgentSelection);
   const [purpose, setPurpose] = createSignal<"personal" | "system">("personal");
   const [setupOpen, setSetupOpen] = createSignal(false);
   let snapshot: ApplicationGatewaySnapshot | null = null;
   let clientRevision = 0;
-  let canRead = false;
-  let canAdmin = false;
-  let profileId: string | null = null;
-  const requestUpdate = () => setRevision((value) => value + 1);
+  // Gateway snapshots may mutate in place; retain the previous profile transition fact.
+  let observedProfileId: string | null = null;
   const authorizationSucceeded = () => setSetupOpen(false);
-  const personal = new GitHubIdentityController({ requestUpdate, authorizationSucceeded });
-  const system = new GitHubIdentityController({
-    requestUpdate,
+  const personal = createGitHubIdentity({ authorizationSucceeded });
+  const system = createGitHubIdentity({
     authorizationSucceeded,
     runExternalMutation: (task, options) =>
       context.runtimeConfig.runExternalMutation(task, options),
   });
 
-  const syncControllers = () => {
+  const syncIdentities = () => {
     if (!snapshot) {
       return;
     }
+    const { profileId, canRead, canAdmin } = access(snapshot);
     const common = {
       client: snapshot.client,
       connected: snapshot.phase === "connected",
@@ -67,6 +83,7 @@ export function GitHubConnections() {
         ? {
             kind: "shared",
             scope: "system",
+            profileId,
             agentId,
             config: currentConfigObject(context.runtimeConfig.state),
           }
@@ -75,13 +92,8 @@ export function GitHubConnections() {
       authorizable: canAdmin,
       configurable: canAdmin,
     });
-    if (personal.statusReadable && !personal.personal && !personal.loading && !personal.error) {
-      void personal.verify();
-    }
-    if (agentId && canAdmin && !system.status && !system.loading && !system.error) {
-      void system.verify();
-    }
-    requestUpdate();
+    personal.ensureVerified();
+    system.ensureVerified();
   };
   const applySnapshot = (next: ApplicationGatewaySnapshot) => {
     const changed =
@@ -89,21 +101,16 @@ export function GitHubConnections() {
       snapshot.client !== next.client ||
       snapshot.phase !== next.phase ||
       snapshot.hello !== next.hello ||
-      profileId !== (next.selfUser?.id ?? null);
+      observedProfileId !== (next.selfUser?.id ?? null);
     snapshot = next;
-    profileId = next.phase === "connected" ? (next.selfUser?.id ?? null) : null;
-    // Access comes from the authenticated connection, never an error from users.github.status.
-    canRead =
-      next.phase === "connected" &&
-      Boolean(next.hello?.auth) &&
-      hasOperatorReadAccess(next.hello?.auth ?? null);
-    canAdmin = canRead && hasOperatorAdminAccess(next.hello?.auth ?? null);
+    const { profileId, canAdmin } = access(next);
+    observedProfileId = profileId;
     if (changed) {
       clientRevision += 1;
       setSetupOpen(false);
       setPurpose(profileId ? "personal" : "system");
     }
-    syncControllers();
+    syncIdentities();
     if (canAdmin) {
       void context.runtimeConfig.ensureLoaded();
     }
@@ -111,25 +118,21 @@ export function GitHubConnections() {
   onSettled(() => {
     const subscriptions = [
       context.gateway.subscribe(applySnapshot),
-      context.agents.subscribe(syncControllers),
-      context.settingsAgentSelection.subscribe(syncControllers),
-      context.runtimeConfig.subscribe(syncControllers),
+      context.agents.subscribe(syncIdentities),
+      context.settingsAgentSelection.subscribe(syncIdentities),
+      context.runtimeConfig.subscribe(syncIdentities),
     ];
     applySnapshot(context.gateway.snapshot);
-    return () => {
-      for (const unsubscribe of subscriptions) {
-        unsubscribe();
-      }
-      personal.dispose();
-      system.dispose();
-    };
+    return () => subscriptions.forEach((unsubscribe) => unsubscribe());
   });
 
   const view = createMemo(() => {
-    revision();
-    const account = personal.personal;
-    const agentId = context.settingsAgentSelection.state.selectedId;
-    const agent = context.agents.state.agentsList?.agents?.find((entry) => entry.id === agentId);
+    const { profileId, canRead, canAdmin } = access(gateway.read().snapshot);
+    const personalState = personal.read();
+    const systemState = system.read();
+    const account = personalState.personal;
+    const agentId = selection.read().state.selectedId;
+    const agent = agents.read().agentsList?.agents?.find((entry) => entry.id === agentId);
     const connected = account?.state === "connected";
     const reconnectRequired =
       account?.state === "unavailable" ||
@@ -144,16 +147,17 @@ export function GitHubConnections() {
       profileId,
       canRead,
       canAdmin,
-      systemIdentity: system.status?.selected.identity ?? personal.system,
-      effective: system.status?.effective ?? null,
+      systemIdentity: systemState.status?.selected.identity ?? personalState.system,
+      effective: systemState.status?.effective ?? null,
       locked:
-        personal.loading ||
-        system.loading ||
-        personal.authorizationActive ||
-        system.authorizationActive ||
-        personal.busy ||
-        system.busy,
-      showSetup: setupOpen() || personal.authorizationActive || system.authorizationActive,
+        personalState.loading ||
+        systemState.loading ||
+        personalState.authorizationActive ||
+        systemState.authorizationActive ||
+        personalState.busy ||
+        systemState.busy,
+      showSetup:
+        setupOpen() || personalState.authorizationActive || systemState.authorizationActive,
       personalLabel: !profileId
         ? t("githubConnections.signInRequired")
         : reconnectRequired
@@ -163,19 +167,11 @@ export function GitHubConnections() {
             : t("githubConnections.disconnected"),
     };
   });
-  const personalView = () => {
-    revision();
-    return personal;
-  };
-  const systemView = () => {
-    revision();
-    return system;
-  };
-  const active = () => {
-    revision();
-    return purpose() === "personal" ? personal : system;
-  };
+  const personalView = personal.read;
+  const systemView = system.read;
+  const active = () => (purpose() === "personal" ? personal : system);
   const openSetup = (next: "personal" | "system") => {
+    const { profileId, canRead, canAdmin } = access(context.gateway.snapshot);
     if (view().locked || (next === "personal" ? !profileId || !canRead : !canAdmin)) {
       return;
     }
@@ -198,7 +194,7 @@ export function GitHubConnections() {
                 <button
                   class="btn btn--sm"
                   disabled={view().locked || (!view().profileId && !systemView().status)}
-                  onClick={() => openSetup(profileId ? "personal" : "system")}
+                  onClick={() => openSetup(view().profileId ? "personal" : "system")}
                 >
                   {t("githubConnections.manage")}
                 </button>
@@ -357,7 +353,7 @@ export function GitHubConnections() {
                   )
                 }
               />
-              <GitHubConnectionSetup controller={active()} />
+              <GitHubConnectionSetup identity={active()} />
               {!view().locked ? (
                 <SettingsRow
                   title={t("githubConnections.purposeHint")}

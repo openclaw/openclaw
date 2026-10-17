@@ -3,10 +3,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
-import type { AdmissionOperations } from "../../infra/sqlite-database-admission.worker.test-support.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
-import { SqliteWorkerBroker } from "../../infra/sqlite-worker-broker.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { openTrackedStateDatabase } from "../../state/openclaw-state-db-handle.js";
 import { createRuntimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
+import { deleteAuthProfileJsonCell, writeAuthProfileJsonCell } from "./sqlite-json-write.js";
 import { readAuthProfileRows } from "./sqlite-json.js";
 import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
 
@@ -32,7 +33,7 @@ it("preserves absent source provenance through first database admission", () => 
 
   cache.recordSource(databasePath, "created", null);
   database.exec("INSERT INTO session_fixture VALUES (1)");
-  expect(cache.hasSource(databasePath)).toBe(false);
+  expect(cache.hasSource(databasePath)).toBe(true);
 });
 
 it("releases retired database baselines while retaining named live owners", async () => {
@@ -103,7 +104,8 @@ it("serves a committed postimage without rereading or freezing its publisher", a
   const databasePath = path.join(tempDirs.make("auth-row-postimage-"), "auth.sqlite");
   using database = openNodeSqliteDatabase(databasePath);
   database.exec("CREATE TABLE cache_fixture (value)");
-  const cache = createRuntimeAuthProfileRowsCache(() => "1");
+  let revision = "1";
+  const cache = createRuntimeAuthProfileRowsCache(() => revision);
   const read = vi.fn(async () => emptyRows());
   const resolve = () =>
     cache.prepare(databasePath, { identity: "fixture", read, assertCurrent() {} }).read();
@@ -113,6 +115,7 @@ it("serves a committed postimage without rereading or freezing its publisher", a
     profiles: { "example:key": { type: "api_key", provider: "example", key: "fixture-new" } },
     lastGood: { example: "example:key" },
   };
+  revision = "2";
   cache.recordSource(databasePath, "fixture", committed);
   committed.profiles = {};
   committed.lastGood!.example = "caller-edit";
@@ -135,77 +138,102 @@ it("serves a committed postimage without rereading or freezing its publisher", a
   expect(read).toHaveBeenCalledTimes(2);
 });
 
-it("retains rows across session writes and invalidates them on auth writer-worker receipts", async () => {
-  const databasePath = path.join(tempDirs.make("auth-row-receipts-"), "auth.sqlite");
-  using database = openNodeSqliteDatabase(databasePath);
-  database.exec(`
-    CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT);
-    CREATE TABLE auth_profile_state (state_key TEXT PRIMARY KEY, state_json TEXT);
-    CREATE TABLE session_fixture (value INTEGER);
-    INSERT INTO session_fixture VALUES (0);
-    INSERT INTO auth_profile_store VALUES ('primary', '{"version":1,"profiles":{}}');
-    INSERT INTO auth_profile_state VALUES ('primary', '{"lastGood":{}}');
-  `);
-  admitSqliteSchema(database);
-  const broker = new SqliteWorkerBroker();
-  const cache = createRuntimeAuthProfileRowsCache(() => "1");
-  const read = vi.fn(async () => readAuthProfileRows(database, databasePath, "agent"));
-  const resolve = () => cache.prepare(databasePath, { read, assertCurrent() {} }).read();
-  const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-  try {
-    const store = await broker.open<AdmissionOperations>({
-      moduleUrl: new URL(
-        "../../infra/sqlite-database-admission.worker.test-support.ts",
-        import.meta.url,
-      ),
-      databasePath,
-      input: undefined,
-    });
-    const first = await resolve();
-    expect(await resolve()).toBe(first);
-    expect(read).toHaveBeenCalledTimes(1);
-    expect(
-      observation.queries.filter((sql) => /auth_profile_(store|state)/u.test(sql)),
-    ).toHaveLength(1);
-    await store!.execute({
-      type: "writeRows",
-      input: {
-        sql: "UPDATE session_fixture SET value=value+1",
-        sessionKeys: ["agent:fixture"],
+it("retains private lifetimes across runtime publication and reloads incomplete postimages", async () => {
+  const databasePath = path.join(tempDirs.make("auth-row-lifetimes-"), "auth.sqlite");
+  let revision = "1";
+  const cache = createRuntimeAuthProfileRowsCache(() => revision);
+  const store: AuthProfileStore = {
+    version: 1,
+    profiles: { "example:key": { type: "api_key", provider: "example", key: "fixture" } },
+  };
+  const rows = {
+    ...emptyRows(),
+    store: {
+      status: "readable" as const,
+      raw: {
+        ...store,
+        authorizationLifetimes: { "example:key": "00000000-0000-4000-8000-000000000001" },
       },
-    });
-    expect(await resolve()).toBe(first);
-    expect(read).toHaveBeenCalledTimes(1);
-    const write = () =>
-      store!.execute({
-        type: "writeRows",
-        input: {
-          sql: `UPDATE auth_profile_state SET state_json='{"lastGood":{"example":"example:key"}}'`,
-        },
+    },
+  };
+  const read = vi.fn(async () => rows);
+  const resolve = (source: "runtime" | "canonical") =>
+    cache.prepare(databasePath, { identity: "fixture", read, assertCurrent() {} }, source).read();
+  await resolve("runtime");
+  cache.recordSource(databasePath, "fixture", store);
+  expect(await resolve("canonical")).toEqual(rows);
+  expect(read).toHaveBeenCalledOnce();
+
+  revision = "2";
+  cache.recordSource(databasePath, "fixture", store);
+  expect((await resolve("runtime")).store).toEqual({ status: "readable", raw: store });
+  expect(await resolve("canonical")).toEqual(rows);
+  expect(read).toHaveBeenCalledTimes(2);
+});
+
+it.each(["agent", "shared-state"] as const)(
+  "retains %s rows across unrelated writes and follows committed auth writes",
+  async (kind) => {
+    const databasePath = path.join(tempDirs.make("auth-row-receipts-"), "auth.sqlite");
+    using database = openTrackedStateDatabase(databasePath);
+    database.exec(`
+      CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT, updated_at INTEGER);
+      CREATE TABLE auth_profile_state (state_key TEXT PRIMARY KEY, state_json TEXT, updated_at INTEGER);
+      CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER);
+      CREATE TABLE session_fixture (value INTEGER);
+      INSERT INTO session_fixture VALUES (0);
+    `);
+    admitSqliteSchema(database);
+    const transact = (write: () => void) => runSqliteImmediateTransactionSync(database, write);
+    transact(() => {
+      writeAuthProfileJsonCell(database, "store", kind, {
+        version: 1,
+        profiles: { "example:key": { type: "api_key", provider: "example", key: "fixture" } },
       });
-    await write();
+      writeAuthProfileJsonCell(database, "state", kind, { lastGood: {} });
+    });
+    const cache = createRuntimeAuthProfileRowsCache(() => "1");
+    const read = vi.fn(async () => readAuthProfileRows(database, databasePath, kind));
+    const resolve = () =>
+      cache.prepare(databasePath, { read, assertCurrent() {} }, "canonical").read();
+    const first = await resolve();
+    database.exec("UPDATE session_fixture SET value=value+1");
+    expect(await resolve()).toBe(first);
+    expect(read).toHaveBeenCalledOnce();
+
+    expect(() =>
+      transact(() => {
+        deleteAuthProfileJsonCell(database, "store", kind);
+        throw new Error("rollback");
+      }),
+    ).toThrow("rollback");
+    // Rollback retires staged admission facts; the next read restores durable rows.
+    const afterRollback = await resolve();
+    expect(afterRollback).toEqual(first);
+    expect(await resolve()).toBe(afterRollback);
+    expect(read).toHaveBeenCalledTimes(2);
+
+    transact(() =>
+      writeAuthProfileJsonCell(database, "state", kind, {
+        lastGood: { example: "example:key" },
+      }),
+    );
     expect((await resolve()).state).toEqual({
       status: "readable",
       raw: { lastGood: { example: "example:key" } },
     });
-    expect(read).toHaveBeenCalledTimes(2);
-    cache.clear();
-    read.mockImplementationOnce(async () => {
-      const rows = readAuthProfileRows(database, databasePath, "agent");
-      await write();
-      return rows;
+    expect(read).toHaveBeenCalledTimes(3);
+    transact(() => {
+      deleteAuthProfileJsonCell(database, "state", kind);
+      deleteAuthProfileJsonCell(database, "store", kind);
     });
-    await resolve();
-    await resolve();
+    expect(await resolve()).toMatchObject({
+      store: { status: "missing", reason: "row" },
+      state: { status: "missing", reason: "row" },
+    });
     expect(read).toHaveBeenCalledTimes(4);
-    expect(
-      observation.queries.filter((sql) => /data_version|wal_checkpoint|page_size/iu.test(sql)),
-    ).toEqual([]);
-  } finally {
-    observation.restore();
-    await broker.close();
-  }
-});
+  },
+);
 
 it("reads shared credentials and health together after an in-process write", () => {
   const databasePath = path.join(tempDirs.make("shared-auth-rows-"), "state.sqlite");

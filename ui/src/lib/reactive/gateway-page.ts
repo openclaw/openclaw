@@ -8,23 +8,20 @@ export function useGatewayPage(options: GatewayPageBindingOptions) {
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const binding = new GatewayPageBinding(() => setRevision((value) => value + 1), {
     ...options,
-    onIdentityChange: (change) => untrack(() => options.onIdentityChange?.(change)),
-    invalidateRequests: (change) => untrack(() => options.invalidateRequests?.(change)),
-    ensureInitialData: (change) => untrack(() => options.ensureInitialData?.(change)),
-    onSnapshot: (change) => untrack(() => options.onSnapshot?.(change)),
+    // Imperative admission checks sample the current source; the effect tracks replacement.
+    getGateway: () => untrack(options.getGateway),
   });
   let connected = false;
+  // The binding owns synchronous request retirement; only source identity is reactive.
   createEffect(options.getGateway, () => {
-    untrack(() => {
-      if (connected) {
-        binding.refresh();
-      } else {
-        connected = true;
-        binding.connect();
-      }
-    });
+    if (connected) {
+      binding.refresh();
+    } else {
+      connected = true;
+      binding.connect();
+    }
   });
-  onCleanup(() => untrack(() => binding.dispose()));
+  onCleanup(() => binding.dispose());
   return {
     get gateway() {
       revision();

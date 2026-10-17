@@ -155,6 +155,7 @@ export async function finalizeSessionsListChannelRead<T>(params: {
   visibility: "self" | "tree" | "channel" | "agent" | "all";
   requesterAgentId: string;
   requesterSessionKey: string;
+  sandboxed: boolean;
   a2aPolicy: AgentToAgentPolicy;
   allowArchivedMetadata: boolean;
   requireSessionReadOwner: boolean;
@@ -169,6 +170,7 @@ export async function finalizeSessionsListChannelRead<T>(params: {
   const channelRead = {
     requesterAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
+    sandboxed: params.sandboxed,
     a2aPolicy: params.a2aPolicy,
     allowArchivedMetadata: params.allowArchivedMetadata,
     targets: params.sessions.map(({ entry, agentId: sessionAgentId }) => ({

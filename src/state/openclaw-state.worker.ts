@@ -93,25 +93,9 @@ let agentCleanup: typeof import("./openclaw-agent-execution-cleanup.worker.js") 
 let clawAddState: typeof import("../claws/add-state.worker.js") | undefined;
 let pluginState: typeof import("../plugin-state/plugin-state.worker.js") | undefined;
 let capture: typeof import("../proxy-capture/store.worker.js") | undefined;
-let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
+let cron: typeof import("../cron/store/dispatch.worker.js") | undefined;
+let updater: typeof import("../infra/update-run-dispatch.worker.js") | undefined;
 let publicationSource: typeof import("./github-publication-source.worker.js") | undefined;
-
-function prepareStateCommand(commandType: PropertyKey): Promise<void> | undefined {
-  const prepared = stateWorkerRegistry.prepare(commandType);
-  if (prepared) {
-    return prepared.then(() => prepareStateCommand(commandType));
-  }
-  if (stateWorkerRegistry.has({ type: commandType, input: undefined })) {
-    return undefined;
-  }
-  if (runtime) {
-    return runtime.prepareSharedStateCommand(commandType);
-  }
-  return import("./openclaw-state-worker-runtime.js").then((loaded) => {
-    runtime = loaded;
-    return runtime.prepareSharedStateCommand(commandType);
-  });
-}
 
 function stateDatabaseInitializationEnvironment(): NodeJS.ProcessEnv {
   const context = getSqliteWorkerStateContext();
@@ -300,6 +284,23 @@ function createSharedStateWorkerBackend(
       }
     },
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
+      if (commandType.startsWith("cron.")) {
+        if (cron) {
+          return cron.prepareCronStateWorkerCommand(commandType);
+        }
+        return import("../cron/store/dispatch.worker.js").then((loaded) => {
+          cron = loaded;
+          return cron.prepareCronStateWorkerCommand(commandType);
+        });
+      }
+      if (commandType.startsWith("updateRuns.")) {
+        if (updater) {
+          return undefined;
+        }
+        return import("../infra/update-run-dispatch.worker.js").then((loaded) => {
+          updater = loaded;
+        });
+      }
       if (isClawAddStateCommand({ type: commandType })) {
         if (clawAddState) {
           return undefined;
@@ -320,7 +321,7 @@ function createSharedStateWorkerBackend(
               }),
           commandType === "githubPublication.sourceFacts"
             ? undefined
-            : prepareStateCommand(commandType),
+            : stateWorkerRegistry.prepare(commandType),
         ]).then(() => undefined);
       }
       if (
@@ -357,7 +358,6 @@ function createSharedStateWorkerBackend(
         });
       }
       if (
-        commandType === "database.inspectIdle" ||
         commandType === "database.walMaintenance" ||
         commandType === "database.publishSchema" ||
         commandType === "stateLease.acquire" ||
@@ -368,7 +368,7 @@ function createSharedStateWorkerBackend(
       ) {
         return undefined;
       }
-      return prepareStateCommand(commandType);
+      return stateWorkerRegistry.prepare(commandType);
     },
     execute(command) {
       if (closed) {
@@ -474,21 +474,6 @@ function createSharedStateWorkerBackend(
           ) ?? { reclaimedPages: 0 }
         );
       }
-      if (command.type === "database.inspectIdle") {
-        // Idle maintenance must never materialize a connection for an artifact-preserving reader.
-        if (
-          !nativeDatabase?.db.isOpen ||
-          openClawStateDatabaseCache.getCachedOpenClawStateDatabase(nativeDatabase.path) !==
-            nativeDatabase
-        ) {
-          if (!nativeDatabase && updateRunWriter) {
-            updateRunWriter.assertSettled();
-            return "healthy";
-          }
-          return "retire";
-        }
-        return nativeDatabase.walMaintenance.inspectIdle?.() ?? "retire";
-      }
       if (isPluginStateWorkerCommand(command)) {
         if (!pluginState) {
           throw new Error("Plugin-state worker command runtime is not prepared");
@@ -503,12 +488,19 @@ function createSharedStateWorkerBackend(
           nativeDatabase?.db.isOpen === true,
         );
       }
-      if (stateWorkerRegistry.has(command)) {
-        return stateWorkerRegistry.execute(command, operationContext);
+      if (cron?.isCronStateWorkerCommand(command)) {
+        return cron.executeCronStateCommand(command, open());
       }
-      const currentRuntime = runtime;
-      if (!currentRuntime) {
-        throw new Error("Shared-state worker command runtime is not prepared");
+      const currentUpdater = updater;
+      if (currentUpdater?.isUpdateRunWorkerCommand(command)) {
+        return currentUpdater.executeUpdateRunCommand(
+          command,
+          operationContext.stateOptions(),
+          () =>
+            (updateRunWriter ??= currentUpdater.openUpdateRunWriter(
+              operationContext.stateOptions(),
+            )),
+        );
       }
       if (command.type === "secrets.write" && !secretSchemaAdmitted) {
         runOpenClawStateWriteTransaction(
@@ -520,17 +512,10 @@ function createSharedStateWorkerBackend(
         );
         secretSchemaAdmitted = true;
       }
-      return currentRuntime.executeSharedStateCommand(
-        command,
-        context,
-        open,
-        write,
-        () =>
-          (updateRunWriter ??= currentRuntime.openUpdateRunWriter({
-            path: context.databasePath,
-            env: getSqliteWorkerStateContext().environment,
-          })),
-      );
+      if (stateWorkerRegistry.has(command)) {
+        return stateWorkerRegistry.execute(command, operationContext);
+      }
+      throw new Error(`Shared-state worker command is not prepared: ${command.type}`);
     },
     assertSettled() {
       updateRunWriter?.assertSettled();

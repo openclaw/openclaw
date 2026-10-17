@@ -37,9 +37,10 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage, type GatewayPageChange } from "../../lib/reactive/gateway-page.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
-import { DevicesDialogController } from "./devices-dialogs.ts";
+import { createDevicesDialogs } from "./devices-dialogs.ts";
 import { createPageRequest } from "./page-request.ts";
 import { DevicesView } from "./view.tsx";
 import type { DevicesProps } from "./view.types.ts";
@@ -58,288 +59,286 @@ export type DevicesRouteData = {
 const DEVICES_ACTIVE_POLL_INTERVAL_MS = 30_000;
 const SYSTEM_INFO_POLL_INTERVAL_MS = 60_000;
 
-class DevicesPageController {
-  constructor(
-    public context: ApplicationContext,
-    private readonly publish: () => void,
-  ) {}
-
-  presence: PresenceEntry[] = [];
-  private gatewaySystemInfo: SystemInfoResult | null = null;
-  private desktopEnvironments: EnvironmentSummary[] = [];
-  private systemInfoUnavailable = false;
-  private pageState = createInitialDevicesState();
-  private canManagePairing = false;
-  private canAdmin = false;
-  private execApprovalsTarget: "gateway" | "node" = "gateway";
-  private execApprovalsTargetNodeId: string | null = null;
-  private readonly dialogs = new DevicesDialogController({
-    canManagePairing: () => this.canManagePairing,
-    gatewayConnected: () => this.gateway.connected,
-    requestGeneration: () => this.requestGeneration,
-    gatewayClient: () => this.gateway.client,
-    gatewayUrl: () => this.context.gateway.connection.gatewayUrl,
-    runPageTask: (task) => this.runPageTask(task),
+export function DevicesPage(props: { routeData?: DevicesRouteData }) {
+  const context = useApplication();
+  const [presence, setPresence] = createSignal<PresenceEntry[]>([], { ownedWrite: true });
+  const [gatewaySystemInfo, setGatewaySystemInfo] = createSignal<SystemInfoResult | null>(null, {
+    ownedWrite: true,
+  });
+  const [desktopEnvironments, setDesktopEnvironments] = createSignal<EnvironmentSummary[]>([], {
+    ownedWrite: true,
+  });
+  // Event admission compares against the latest delivery, before Solid's next flush.
+  let connectivitySignature = presenceConnectivitySignature([]);
+  function updatePresence(entries: PresenceEntry[]) {
+    const signature = presenceConnectivitySignature(entries);
+    const connectivityChanged = signature !== connectivitySignature;
+    connectivitySignature = signature;
+    setPresence(entries);
+    return connectivityChanged;
+  }
+  let systemInfoUnavailable = false;
+  let dataState = createInitialDevicesState();
+  let canManagePairing = false;
+  let canAdmin = false;
+  let execApprovalsTarget: "gateway" | "node" = "gateway";
+  let execApprovalsTargetNodeId: string | null = null;
+  let routeDataInitialized = false;
+  let publishData = () => {};
+  // Request admission and policy drafts retain their synchronous mutation contract.
+  const pageData = projectSource(() => dataState, {
+    read: (readState) => readState(),
+    subscribe: (_source, notify) => {
+      publishData = notify;
+      return () => {
+        publishData = () => {};
+      };
+    },
+    equality: "revision",
+  });
+  const configProjection = projectRuntimeConfig(context.runtimeConfig);
+  const dialogs = createDevicesDialogs({
+    canManagePairing: () => canManagePairing,
+    gatewayConnected: () => gatewayBinding.connected,
+    requestGeneration: () => dataState.requestGeneration,
+    gatewayClient: () => gatewayBinding.client,
+    gatewayUrl: () => context.gateway.connection.gatewayUrl,
+    runPageTask,
     setDevicesError: (message) => {
-      this.pageState.devicesError = message;
-      // The controller writes outside the page's task cycle; the callout must
-      // render without waiting for the next unrelated update.
-      this.publish();
+      dataState.devicesError = message;
+      publishData();
     },
   });
-
-  private routeDataInitialized = false;
-  gateway!: ReturnType<typeof useGatewayPage>;
-  bindGateway() {
-    this.gateway = useGatewayPage({
-      getGateway: () => this.context.gateway,
-      onIdentityChange: (change) => this.resetServerState(change.snapshot),
-      invalidateRequests: (change) => {
-        this.pageState.requestGeneration = this.gateway.epoch;
-        if (!change.identityChanged && change.snapshot.phase !== "connected") {
-          this.resetServerState(change.snapshot);
-        }
-        this.presenceTask.cancel();
-      },
-      onSnapshot: (change) => this.handleGatewaySnapshot(change),
-      ensureInitialData: () => this.ensureInitialData(),
-    });
-  }
-  private readonly presenceTask = createPageRequest({
+  const presenceTask = createPageRequest({
     task: (signal) =>
-      this.gateway.connected && this.gateway.gateway
-        ? this.gateway.client?.request("system-presence", {}, { signal })
+      gatewayBinding.connected && gatewayBinding.gateway
+        ? gatewayBinding.client?.request("system-presence", {}, { signal })
         : undefined,
     onComplete: (response) => {
       if (Array.isArray(response)) {
         // SAFETY: system-presence returns listSystemPresence() rows conforming to PresenceEntry.
-        this.presence = response as PresenceEntry[];
-        this.publish();
+        updatePresence(response as PresenceEntry[]);
       }
     },
     onError: (error) => {
       if (isMissingOperatorReadScopeError(error)) {
-        this.presence = [];
-        this.publish();
+        updatePresence([]);
       }
     },
   });
-  private readonly systemInfoTask = createPageRequest({
+  const systemInfoTask = createPageRequest({
     task: (signal) =>
-      this.gateway.gateway && this.canLoadSystemInfo && this.gateway.client
-        ? readSystemInfo(this.gateway.gateway, signal).then((sample) => sample.value)
+      gatewayBinding.gateway && canLoadSystemInfo() && gatewayBinding.client
+        ? readSystemInfo(gatewayBinding.gateway, signal).then((sample) => sample.value)
         : undefined,
     onComplete: (result) => {
-      this.gatewaySystemInfo = result;
+      setGatewaySystemInfo(result);
       // Quiet node reloads also fetch stats; a fresh snapshot restarts the periodic deadline.
-      this.systemInfoPolling.stop();
-      this.systemInfoPolling.start();
-      this.publish();
+      systemInfoPolling.stop();
+      systemInfoPolling.start();
     },
     onError: (error) => {
       if (isMissingOperatorReadScopeError(error)) {
-        this.gatewaySystemInfo = null;
-        this.systemInfoUnavailable = true;
-        this.systemInfoPolling.stop();
-        this.publish();
+        setGatewaySystemInfo(null);
+        systemInfoUnavailable = true;
+        systemInfoPolling.stop();
       }
     },
   });
-  private readonly environmentsTask = createPageRequest({
+  const environmentsTask = createPageRequest({
     task: (signal) =>
-      this.gateway.gateway && this.canLoadDesktopEnvironments
-        ? this.gateway.client?.request<EnvironmentsListResult>("environments.list", {}, { signal })
+      gatewayBinding.gateway && canLoadDesktopEnvironments()
+        ? gatewayBinding.client?.request<EnvironmentsListResult>(
+            "environments.list",
+            {},
+            { signal },
+          )
         : undefined,
-    onComplete: (result) => {
-      this.desktopEnvironments = result.environments;
-      this.publish();
-    },
-    onError: () => {
-      this.desktopEnvironments = [];
-      this.publish();
-    },
+    onComplete: (result) => setDesktopEnvironments(result.environments),
+    onError: () => setDesktopEnvironments([]),
   });
-  private systemInfoPolling!: ReturnType<typeof useVisiblePoll>;
-  private polling!: ReturnType<typeof useVisiblePoll>;
-
-  bindPolling() {
-    this.systemInfoPolling = useVisiblePoll(SYSTEM_INFO_POLL_INTERVAL_MS, () =>
-      this.refreshSystemInfo(),
-    );
-    this.polling = useVisiblePoll(DEVICES_ACTIVE_POLL_INTERVAL_MS, () => {
-      this.refreshNodeInventory(true);
-      if (this.canManagePairing) {
-        void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+  const systemInfoPolling = useVisiblePoll(SYSTEM_INFO_POLL_INTERVAL_MS, refreshSystemInfo);
+  const polling = useVisiblePoll(DEVICES_ACTIVE_POLL_INTERVAL_MS, () => {
+    refreshNodeInventory(true);
+    if (canManagePairing) {
+      void runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+    }
+  });
+  const gatewayBinding = useGatewayPage({
+    getGateway: () => context.gateway,
+    onIdentityChange: (change) => resetServerState(change.snapshot),
+    invalidateRequests: (change) => {
+      dataState.requestGeneration = gatewayBinding.epoch;
+      if (!change.identityChanged && change.snapshot.phase !== "connected") {
+        resetServerState(change.snapshot);
       }
-    });
-  }
-  bindEvents() {
-    createEffect(
-      () => this.context.gateway,
-      (gateway) =>
-        gateway.subscribeEvents((event) => {
-          if (this.gateway.gateway !== gateway || this.context.gateway !== gateway) {
-            return;
-          }
-          const presence = event.event === "presence" ? readPresenceEntries(event.payload) : null;
-          if (presence) {
-            const connectivityChanged =
-              presenceConnectivitySignature(presence) !==
-              presenceConnectivitySignature(this.presence);
-            this.presenceTask.cancel();
-            this.presence = presence;
-            this.publish();
-            if (connectivityChanged) {
-              if (this.canManagePairing) {
-                void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
-              }
-              this.refreshNodeInventory(true);
+      presenceTask.cancel();
+    },
+    onSnapshot: handleGatewaySnapshot,
+    ensureInitialData,
+  });
+  // Gateway events refresh pairing and presence inventory within the bound request generation.
+  createEffect(
+    () => context.gateway,
+    (gateway) =>
+      gateway.subscribeEvents((event) => {
+        if (gatewayBinding.gateway !== gateway || context.gateway !== gateway) {
+          return;
+        }
+        const entries = event.event === "presence" ? readPresenceEntries(event.payload) : null;
+        if (entries) {
+          presenceTask.cancel();
+          if (updatePresence(entries)) {
+            if (canManagePairing) {
+              void runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
             }
+            refreshNodeInventory(true);
           }
-          if (
-            event.event === GATEWAY_EVENT_DEVICE_PAIR_CHANGED ||
-            event.event === "device.pair.requested" ||
-            event.event === "device.pair.resolved"
-          ) {
-            if (this.canManagePairing) {
-              void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
-            }
+        }
+        if (
+          event.event === GATEWAY_EVENT_DEVICE_PAIR_CHANGED ||
+          event.event === "device.pair.requested" ||
+          event.event === "device.pair.resolved"
+        ) {
+          if (canManagePairing) {
+            void runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
           }
-          if (
-            event.event === "node.pair.requested" ||
-            event.event === "node.pair.resolved" ||
-            event.event === "node.runnerInventory.changed" ||
-            event.event === "node.hostStats"
-          ) {
-            this.refreshNodeInventory(true);
-          }
-        }),
-    );
+        }
+        if (
+          event.event === "node.pair.requested" ||
+          event.event === "node.pair.resolved" ||
+          event.event === "node.runnerInventory.changed" ||
+          event.event === "node.hostStats"
+        ) {
+          refreshNodeInventory(true);
+        }
+      }),
+  );
+  onCleanup(() => {
+    dialogs.cancel();
+    presenceTask.cancel();
+    systemInfoTask.cancel();
+    environmentsTask.cancel();
+    canManagePairing = false;
+    canAdmin = false;
+  });
+
+  function setRouteData(data: DevicesRouteData | undefined) {
+    applyRouteData(data);
+    ensureInitialData();
+    publishData();
   }
 
-  dispose() {
-    this.dialogs.cancel();
-    this.presenceTask.cancel();
-    this.resetInventoryDetails();
-    this.presence = [];
-    this.canManagePairing = false;
-    this.canAdmin = false;
-  }
-
-  setRouteData(data: DevicesRouteData | undefined) {
-    this.applyRouteData(data);
-    this.ensureInitialData();
-    this.publish();
-  }
-
-  get requestGeneration(): number {
-    return this.pageState.requestGeneration;
-  }
-
-  private handleGatewaySnapshot(change: GatewayPageChange) {
+  function handleGatewaySnapshot(change: GatewayPageChange) {
     const snapshot = change.snapshot;
-    this.pageState.client = snapshot.client;
-    this.pageState.connected = snapshot.phase === "connected";
-    this.pageState.requestGeneration = this.gateway.epoch;
+    dataState.client = snapshot.client;
+    dataState.connected = snapshot.phase === "connected";
+    dataState.requestGeneration = gatewayBinding.epoch;
     const connected = snapshot.phase === "connected";
     const auth = snapshot.hello?.auth ?? null;
-    this.canAdmin = connected && hasOperatorAdminAccess(auth);
-    this.canManagePairing = connected && (!auth || hasOperatorPairingAccess(auth));
-    if (!this.canLoadSystemInfo) {
-      this.systemInfoTask.cancel();
-      this.gatewaySystemInfo = null;
+    canAdmin = connected && hasOperatorAdminAccess(auth);
+    canManagePairing = connected && (!auth || hasOperatorPairingAccess(auth));
+    if (change.identityChanged || !connected) {
+      clearInventorySamples();
     }
-    if (!this.canLoadDesktopEnvironments) {
-      this.environmentsTask.cancel();
-      this.desktopEnvironments = [];
+    if (!canLoadSystemInfo()) {
+      systemInfoTask.cancel();
+      setGatewaySystemInfo(null);
+    }
+    if (!canLoadDesktopEnvironments()) {
+      environmentsTask.cancel();
+      setDesktopEnvironments([]);
     }
     if (
-      this.routeDataInitialized &&
+      routeDataInitialized &&
       snapshot.phase === "connected" &&
       snapshot.client &&
       (change.identityChanged || change.connectionChanged)
     ) {
       const initialPresence = readPresenceEntries(snapshot.hello?.snapshot);
-      this.presence = initialPresence ?? [];
-      void this.presenceTask.run();
+      updatePresence(initialPresence ?? []);
+      void presenceTask.run();
     }
     if (change.initial || change.identityChanged || change.connectionChanged) {
-      this.refreshSystemInfo();
-      if (this.canLoadDesktopEnvironments) {
-        void this.environmentsTask.run();
+      refreshSystemInfo();
+      if (canLoadDesktopEnvironments()) {
+        void environmentsTask.run();
       }
     }
-    this.syncPolling();
-    this.publish();
+    syncPolling();
+    publishData();
   }
 
-  private applyRouteData(data: DevicesRouteData | undefined) {
+  function applyRouteData(data: DevicesRouteData | undefined) {
     if (!data) {
       return;
     }
-    this.routeDataInitialized = true;
-    const snapshot = this.context.gateway.snapshot;
-    if (!this.gateway.isRouteDataCurrent(data)) {
-      this.resetServerState(snapshot);
-      this.presence = readPresenceEntries(snapshot.hello?.snapshot) ?? [];
-      void this.presenceTask.run();
+    routeDataInitialized = true;
+    const snapshot = context.gateway.snapshot;
+    if (!gatewayBinding.isRouteDataCurrent(data)) {
+      resetServerState(snapshot);
+      clearInventorySamples();
+      updatePresence(readPresenceEntries(snapshot.hello?.snapshot) ?? []);
+      void presenceTask.run();
       return;
     }
-    this.pageState = {
+    dataState = {
       ...data.devices,
       client: snapshot.client,
       connected: snapshot.phase === "connected",
-      requestGeneration: this.gateway.epoch,
+      requestGeneration: gatewayBinding.epoch,
     };
     const initialPresence = readPresenceEntries(snapshot.hello?.snapshot);
     if (initialPresence) {
-      this.presence = initialPresence;
+      updatePresence(initialPresence);
     }
-    void this.presenceTask.run();
+    void presenceTask.run();
   }
 
-  private resetServerState(snapshot: ApplicationGatewaySnapshot) {
-    this.dialogs.cancel();
-    this.pageState.requestGeneration += 1;
+  function resetServerState(snapshot: ApplicationGatewaySnapshot) {
+    dialogs.cancel();
+    dataState.requestGeneration += 1;
     const next = createInitialDevicesState({
       client: snapshot.client,
       connected: snapshot.phase === "connected",
     });
-    next.requestGeneration = this.gateway.epoch;
-    this.pageState = next;
-    this.presenceTask.cancel();
-    this.presence = [];
-    this.resetInventoryDetails();
+    next.requestGeneration = gatewayBinding.epoch;
+    dataState = next;
+    presenceTask.cancel();
+    systemInfoTask.cancel();
+    environmentsTask.cancel();
+    systemInfoPolling.stop();
+    systemInfoUnavailable = false;
   }
 
-  private async runPageTask<T>(
+  async function runPageTask<T>(
     task: (pageState: DevicesPageDataState) => T | Promise<T>,
   ): Promise<T> {
-    const pageState = this.pageState;
+    const pageState = dataState;
     try {
       const result = task(pageState);
-      if (this.pageState === pageState) {
-        this.publish();
+      if (dataState === pageState) {
+        publishData();
       }
       return await result;
     } finally {
-      if (this.pageState === pageState) {
-        this.publish();
+      if (dataState === pageState) {
+        publishData();
       }
     }
   }
 
-  private runAdminTask(task: (pageState: DevicesPageDataState) => unknown) {
-    if (this.canAdmin) {
-      void this.runPageTask(task);
+  function runAdminTask(task: (pageState: DevicesPageDataState) => unknown) {
+    if (canAdmin) {
+      void runPageTask(task);
     }
   }
 
-  private bindNode(nodeId: string | null, agentId?: string) {
-    if (!this.canAdmin) {
+  function bindNode(nodeId: string | null, agentId?: string) {
+    if (!canAdmin) {
       return;
     }
-    const config = this.context.runtimeConfig;
+    const config = context.runtimeConfig;
     const target =
       agentId === undefined
         ? { path: [] }
@@ -355,91 +354,86 @@ class DevicesPageController {
     }
   }
 
-  private ensureInitialData() {
-    const pageState = this.pageState;
-    if (!pageState.connected || !pageState.client || !this.routeDataInitialized) {
+  function ensureInitialData() {
+    const pageState = dataState;
+    if (!pageState.connected || !pageState.client || !routeDataInitialized) {
       return;
     }
     if (!pageState.nodes.length && !pageState.nodesLoading) {
-      this.refreshNodeInventory();
+      refreshNodeInventory();
     }
-    if (this.canManagePairing && !pageState.devicesList && !pageState.devicesLoading) {
-      void this.runPageTask((current) => loadDevices(current));
+    if (canManagePairing && !pageState.devicesList && !pageState.devicesLoading) {
+      void runPageTask((current) => loadDevices(current));
     }
-    const config = this.context.runtimeConfig.state;
+    const config = context.runtimeConfig.state;
     if (!config.configSnapshot && !config.configLoading) {
-      void this.context.runtimeConfig.refresh();
+      void context.runtimeConfig.refresh();
     }
-    if (this.canAdmin && !pageState.execApprovalsSnapshot && !pageState.execApprovalsLoading) {
-      void this.runPageTask((current) =>
-        loadExecApprovals(current, this.resolveExecApprovalsTarget()),
-      );
+    if (canAdmin && !pageState.execApprovalsSnapshot && !pageState.execApprovalsLoading) {
+      void runPageTask((current) => loadExecApprovals(current, resolveExecApprovalsTarget()));
     }
   }
 
-  private syncPolling() {
-    if (this.canLoadSystemInfo) {
-      this.systemInfoPolling.start();
+  function syncPolling() {
+    if (canLoadSystemInfo()) {
+      systemInfoPolling.start();
     } else {
-      this.systemInfoPolling.stop();
+      systemInfoPolling.stop();
     }
-    if (this.gateway.connected && this.gateway.client) {
-      this.polling.start();
+    if (gatewayBinding.connected && gatewayBinding.client) {
+      polling.start();
       return;
     }
-    this.polling.stop();
+    polling.stop();
   }
 
-  private get canLoadSystemInfo(): boolean {
-    const snapshot = this.gateway.snapshot;
-    return this.gateway.connected && !this.systemInfoUnavailable && canReadSystemInfo(snapshot);
+  function canLoadSystemInfo(): boolean {
+    const snapshot = gatewayBinding.snapshot;
+    return gatewayBinding.connected && !systemInfoUnavailable && canReadSystemInfo(snapshot);
   }
 
-  private get canLoadDesktopEnvironments(): boolean {
-    const snapshot = this.gateway.snapshot;
-    return this.gateway.connected && Boolean(snapshot && isDesktopPanelAvailable(snapshot));
+  function canLoadDesktopEnvironments(): boolean {
+    const snapshot = gatewayBinding.snapshot;
+    return gatewayBinding.connected && Boolean(snapshot && isDesktopPanelAvailable(snapshot));
   }
 
-  private refreshSystemInfo() {
-    if (this.canLoadSystemInfo && !this.systemInfoTask.pending) {
-      void this.systemInfoTask.run();
+  function refreshSystemInfo() {
+    if (canLoadSystemInfo() && !systemInfoTask.pending) {
+      void systemInfoTask.run();
     }
   }
 
-  private refreshNodeInventory(quiet = false) {
-    this.refreshSystemInfo();
-    if (this.canLoadDesktopEnvironments && !this.environmentsTask.pending) {
-      void this.environmentsTask.run();
+  function refreshNodeInventory(quiet = false) {
+    refreshSystemInfo();
+    if (canLoadDesktopEnvironments() && !environmentsTask.pending) {
+      void environmentsTask.run();
     }
-    void this.runPageTask((pageState) => loadNodes(pageState, { quiet }));
+    void runPageTask((pageState) => loadNodes(pageState, { quiet }));
   }
 
-  private resetInventoryDetails() {
-    // A replacement source or reconnect must retire callbacks before its data can arrive.
-    this.systemInfoTask.cancel();
-    this.environmentsTask.cancel();
-    this.systemInfoPolling.stop();
-    this.gatewaySystemInfo = null;
-    this.desktopEnvironments = [];
-    this.systemInfoUnavailable = false;
+  function clearInventorySamples() {
+    // Binding disposal also resets request state; only live snapshots publish samples.
+    updatePresence([]);
+    setGatewaySystemInfo(null);
+    setDesktopEnvironments([]);
   }
 
   // A rotation always ends in a dialog: with the replacement when the Gateway issued it
   // to this operator, otherwise with what it did instead. The reveal sits deliberately
   // outside the confirmation slot, which a reconnect aborts — aborting a shown secret
   // would destroy the only copy the Gateway can hand out.
-  private async reportRotationOutcome(
+  async function reportRotationOutcome(
     device: { id: string; name: string },
     role: string,
     scopes?: string[],
   ) {
-    if (!this.canManagePairing) {
+    if (!canManagePairing) {
       return;
     }
-    const outcome = await this.runPageTask((pageState) =>
+    const outcome = await runPageTask((pageState) =>
       rotateDeviceToken(pageState, {
         deviceId: device.id,
-        gatewayUrl: this.context.gateway.connection.gatewayUrl,
+        gatewayUrl: context.gateway.connection.gatewayUrl,
         role,
         scopes,
       }),
@@ -473,34 +467,34 @@ class DevicesPageController {
   // operator confirms: the target, the form, the scope and the dirty flag are
   // still the ones the selector was rendered from, and the re-render puts the
   // selector itself back on that target.
-  private async changeExecApprovalsTarget(kind: "gateway" | "node", nodeId: string | null) {
-    const devices = this.pageState;
-    if (devices.execApprovalsDirty && !(await this.dialogs.confirmExecApprovalsDiscard())) {
-      this.publish();
+  async function changeExecApprovalsTarget(kind: "gateway" | "node", nodeId: string | null) {
+    const devices = dataState;
+    if (devices.execApprovalsDirty && !(await dialogs.confirmExecApprovalsDiscard())) {
+      publishData();
       return;
     }
-    if (this.pageState !== devices) {
+    if (dataState !== devices) {
       return;
     }
-    this.execApprovalsTarget = kind;
-    this.execApprovalsTargetNodeId = nodeId;
+    execApprovalsTarget = kind;
+    execApprovalsTargetNodeId = nodeId;
     devices.execApprovalsSnapshot = null;
     devices.execApprovalsForm = null;
     devices.execApprovalsDirty = false;
     devices.execApprovalsSelectedAgent = null;
-    this.publish();
+    publishData();
   }
 
-  private resolveExecApprovalsTarget(): ExecApprovalsTarget {
-    return this.execApprovalsTarget === "node" && this.execApprovalsTargetNodeId
-      ? { kind: "node", nodeId: this.execApprovalsTargetNodeId }
+  function resolveExecApprovalsTarget(): ExecApprovalsTarget {
+    return execApprovalsTarget === "node" && execApprovalsTargetNodeId
+      ? { kind: "node", nodeId: execApprovalsTargetNodeId }
       : { kind: "gateway" };
   }
 
-  viewProps(): DevicesProps {
-    const devices = this.pageState;
-    const config = this.context.runtimeConfig.state;
-    const gatewaySnapshot = this.context.gateway.snapshot;
+  function viewProps(): DevicesProps {
+    const devices = pageData.read();
+    const config = configProjection.read().state;
+    const gatewaySnapshot = gatewayBinding.snapshot ?? context.gateway.snapshot;
     const gatewayVersion =
       gatewaySnapshot.phase === "connected"
         ? gatewaySnapshot.hello?.server?.version?.trim() || null
@@ -508,18 +502,18 @@ class DevicesPageController {
     return {
       loading: devices.nodesLoading,
       nodes: devices.nodes,
-      presence: this.presence,
+      presence: presence(),
       gatewayVersion,
-      basePath: this.context.basePath,
-      gatewaySystemInfo: this.gatewaySystemInfo,
-      desktopEnvironments: this.desktopEnvironments,
+      basePath: context.basePath,
+      gatewaySystemInfo: gatewaySystemInfo(),
+      desktopEnvironments: desktopEnvironments(),
       lastError: devices.lastError,
       devicesLoading: devices.devicesLoading,
       devicesError: devices.devicesError,
       devicesList: devices.devicesList,
-      canPairDevice: this.canAdmin,
-      canManagePairing: this.canManagePairing,
-      canAdmin: this.canAdmin,
+      canPairDevice: canAdmin,
+      canManagePairing,
+      canAdmin,
       configForm: currentConfigObject(config),
       configLoading: config.configLoading,
       configSaving: config.configSaving,
@@ -531,87 +525,64 @@ class DevicesPageController {
       execApprovalsSnapshot: devices.execApprovalsSnapshot,
       execApprovalsForm: devices.execApprovalsForm,
       execApprovalsSelectedAgent: devices.execApprovalsSelectedAgent,
-      execApprovalsTarget: this.execApprovalsTarget,
-      execApprovalsTargetNodeId: this.execApprovalsTargetNodeId,
+      execApprovalsTarget,
+      execApprovalsTargetNodeId,
       onDevicePairSetupOpen: () => {
-        if (this.canAdmin) {
-          void this.context.overlays.openDevicePairSetup();
+        if (canAdmin) {
+          void context.overlays.openDevicePairSetup();
         }
       },
       onDeviceApprove: (requestId) => {
-        if (this.canManagePairing) {
-          void this.runPageTask((pageState) => approveDevicePairing(pageState, requestId));
+        if (canManagePairing) {
+          void runPageTask((pageState) => approveDevicePairing(pageState, requestId));
         }
       },
-      onDeviceReject: (requestId) => void this.dialogs.confirmPairingReject("device", requestId),
+      onDeviceReject: (requestId) => void dialogs.confirmPairingReject("device", requestId),
       onNodeApprove: (requestId) => {
-        if (this.canManagePairing) {
-          void this.runPageTask((pageState) => approveNodePairingRequest(pageState, requestId));
+        if (canManagePairing) {
+          void runPageTask((pageState) => approveNodePairingRequest(pageState, requestId));
         }
       },
-      onNodeReject: (requestId) => void this.dialogs.confirmPairingReject("node", requestId),
-      onInventoryRemove: (entry) =>
-        void this.dialogs.confirmInventoryRemoval({ kind: "entry", entry }),
+      onNodeReject: (requestId) => void dialogs.confirmPairingReject("node", requestId),
+      onInventoryRemove: (entry) => void dialogs.confirmInventoryRemoval({ kind: "entry", entry }),
       onInventoryCleanup: (entries) => {
         if (entries.length > 0) {
-          void this.dialogs.confirmInventoryRemoval({ kind: "stale", entries });
+          void dialogs.confirmInventoryRemoval({ kind: "stale", entries });
         }
       },
-      onDeviceRotate: (device, role, scopes) =>
-        void this.reportRotationOutcome(device, role, scopes),
-      onDeviceRevoke: (deviceId, role) => void this.dialogs.confirmTokenRevoke(deviceId, role),
-      onDeviceRename: (device) => void this.dialogs.editAlias(device),
-      onLoadConfig: () => void this.context.runtimeConfig.discardDraft({ reloadOnly: true }),
+      onDeviceRotate: (device, role, scopes) => void reportRotationOutcome(device, role, scopes),
+      onDeviceRevoke: (deviceId, role) => void dialogs.confirmTokenRevoke(deviceId, role),
+      onDeviceRename: (device) => void dialogs.editAlias(device),
+      onLoadConfig: () => void context.runtimeConfig.discardDraft({ reloadOnly: true }),
       onLoadExecApprovals: () =>
-        this.runAdminTask((pageState) =>
-          loadExecApprovals(pageState, this.resolveExecApprovalsTarget()),
-        ),
-      onBindDefault: (nodeId) => this.bindNode(nodeId),
-      onBindAgent: (agentId, nodeId) => this.bindNode(nodeId, agentId),
+        runAdminTask((pageState) => loadExecApprovals(pageState, resolveExecApprovalsTarget())),
+      onBindDefault: (nodeId) => bindNode(nodeId),
+      onBindAgent: (agentId, nodeId) => bindNode(nodeId, agentId),
       onSaveBindings: () => {
-        if (this.canAdmin) {
-          void this.context.runtimeConfig.save();
+        if (canAdmin) {
+          void context.runtimeConfig.save();
         }
       },
-      onExecApprovalsTargetChange: (kind, nodeId) =>
-        void this.changeExecApprovalsTarget(kind, nodeId),
+      onExecApprovalsTargetChange: (kind, nodeId) => void changeExecApprovalsTarget(kind, nodeId),
       onExecApprovalsSelectAgent: (agentId) => {
         devices.execApprovalsSelectedAgent = agentId;
-        this.publish();
+        publishData();
       },
       onExecApprovalsPatch: (path, value) =>
-        this.runAdminTask((pageState) => updateExecApprovalsFormValue(pageState, path, value)),
+        runAdminTask((pageState) => updateExecApprovalsFormValue(pageState, path, value)),
       onExecApprovalsRemove: (path) =>
-        this.runAdminTask((pageState) => removeExecApprovalsFormValue(pageState, path)),
+        runAdminTask((pageState) => removeExecApprovalsFormValue(pageState, path)),
       onSaveExecApprovals: () =>
-        this.runAdminTask((pageState) =>
-          saveExecApprovals(pageState, this.resolveExecApprovalsTarget()),
-        ),
+        runAdminTask((pageState) => saveExecApprovals(pageState, resolveExecApprovalsTarget())),
     };
   }
-}
 
-export function DevicesPage(props: { routeData?: DevicesRouteData }) {
-  const context = useApplication();
-  // This signal publishes changes from the synchronous page owner, including lifecycle effects.
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const controller = new DevicesPageController(context, () => setRevision((value) => value + 1));
-  controller.bindPolling();
-  controller.bindGateway();
-  controller.bindEvents();
-  const config = projectRuntimeConfig(context.runtimeConfig);
+  const view = createMemo(viewProps);
   createEffect(
     createMemo(() => props.routeData),
     // Receipt adoption samples live admission; useGatewayPage owns Gateway observation.
-    (data) => untrack(() => controller.setRouteData(data)),
+    (data) => untrack(() => setRouteData(data)),
   );
-  onCleanup(() => controller.dispose());
-  const view = createMemo(() => {
-    revision();
-    config.read();
-    void controller.gateway.snapshot;
-    return controller.viewProps();
-  });
   return (
     <openclaw-devices-page>
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>

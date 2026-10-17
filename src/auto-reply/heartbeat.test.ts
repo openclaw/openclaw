@@ -72,7 +72,7 @@ describe("stripHeartbeatToken", () => {
 });
 
 describe("isHeartbeatAcknowledgementText", () => {
-  it.each([undefined, "NO_REPLY", "HEARTBEAT_OK all good"])(
+  it.each([undefined, "HEARTBEAT_OK", "HEARTBEAT_OK all good"])(
     "recognizes %s as a quiet acknowledgement",
     (text) => {
       expect(isHeartbeatAcknowledgementText(text)).toBe(true);
@@ -80,6 +80,7 @@ describe("isHeartbeatAcknowledgementText", () => {
   );
 
   it("preserves substantive replies and the legacy acknowledgement length limit", () => {
+    expect(isHeartbeatAcknowledgementText("NO_REPLY")).toBe(false);
     expect(isHeartbeatAcknowledgementText("NO_REPLY: actual reminder")).toBe(false);
     expect(isHeartbeatAcknowledgementText("HEARTBEAT_OK all good", 0)).toBe(false);
   });

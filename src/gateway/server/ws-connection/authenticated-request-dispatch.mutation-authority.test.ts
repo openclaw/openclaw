@@ -102,11 +102,12 @@ describe("authenticated request mutation custody", () => {
         client,
       );
       expect(source?.()).toBe(true);
-      expect([...harness.clients.authorityClients]).toEqual([]);
+      expect([...harness.clients.authorityClients]).toEqual([client]);
       ingress.abort(new Error("remote grant expired"));
       expect(source?.()).toBe(false);
     } finally {
       release?.();
+      expect([...harness.clients.authorityClients]).toEqual([]);
     }
   });
 

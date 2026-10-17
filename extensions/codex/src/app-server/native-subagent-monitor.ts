@@ -403,9 +403,6 @@ class Monitor {
     if (this.disposal) {
       return this.disposal;
     }
-    if (this.disposed) {
-      return Promise.resolve();
-    }
     this.disposed = true;
     this.removeNotificationHandler();
     this.removeCloseHandler();

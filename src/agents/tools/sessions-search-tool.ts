@@ -673,6 +673,7 @@ export function createSessionsSearchTool(opts?: {
             {
               requesterAgentId,
               requesterSessionKey: effectiveRequesterKey,
+              sandboxed: opts?.sandboxed === true,
               a2aPolicy,
               targets: authorizedHits.map(({ target }) => target),
             },

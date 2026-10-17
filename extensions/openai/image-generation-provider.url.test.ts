@@ -129,6 +129,13 @@ describe("OpenAI-compatible image URL responses", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not extend the local API test allowance to other private image origins", async () => {
+    vi.stubEnv("OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER", "1");
+    payload = { data: [{ url: privateUrl }] };
+    await expect(generate()).rejects.toThrow(/private|blocked|internal/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("applies the provider's explicit private-network opt-in to image downloads", async () => {
     payload = { data: [{ url: privateUrl }] };
     const result = await generate({
@@ -149,10 +156,16 @@ describe("OpenAI-compatible image URL responses", () => {
     await expect(generate()).rejects.toThrow(/image.*content.type/i);
   });
 
-  it("enforces the configured image byte cap on streamed downloads", async () => {
-    await expect(
-      generate({ cfg: { ...config, agents: { defaults: { mediaMaxMb: 1 / (1024 * 1024) } } } }),
-    ).rejects.toThrow(/exceeds|too large/i);
+  it("keeps streamed downloads above the configured media cap", async () => {
+    const result = await generate({
+      cfg: { ...config, agents: { defaults: { mediaMaxMb: 1 / (1024 * 1024) } } },
+    });
+    expect(result.images[0]?.buffer).toEqual(png);
+  });
+
+  it("rejects streamed downloads above the generated image download ceiling", async () => {
+    imageBytes = new Uint8Array(65 * 1024 * 1024);
+    await expect(generate()).rejects.toThrow(/exceeds|too large/i);
   });
 
   it("bounds downloads by the provider's declared maximum result count", async () => {

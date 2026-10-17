@@ -9,6 +9,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
@@ -132,7 +133,7 @@ describe("pre-device-folder session entries", () => {
     };
     const database = openOpenClawAgentDatabase(scope);
     // Persist the previous writer's shape, not a current upsert that could add defaults.
-    insertRaw(database.db, scope.sessionKey, previousEntry);
+    insertRaw(requireNativeSqliteDatabase(database.db), scope.sessionKey, previousEntry);
     await closeOpenClawAgentDatabasesAsync(scope.env.OPENCLAW_STATE_DIR);
     parseSessionEntryCalls.mockClear();
 
@@ -170,7 +171,10 @@ describe("SQLite retained session window references", () => {
   it("reads retained candidate windows freshly and honors owner exclusions", () => {
     const scope = createSessionScope("reference-window-candidates");
     const database = openOpenClawAgentDatabase(scope);
-    insertRaw(database.db, scope.sessionKey, { sessionId: "current", updatedAt: 1 });
+    insertRaw(requireNativeSqliteDatabase(database.db), scope.sessionKey, {
+      sessionId: "current",
+      updatedAt: 1,
+    });
     readReferencedSessionIds(database);
     const ids = Array.from({ length: 1201 }, (_, index) => `history-${index}`);
     runOpenClawAgentWriteTransaction((current) => {
@@ -464,7 +468,7 @@ describe("SQLite session entry cache", () => {
     expect(() =>
       runOpenClawAgentWriteTransaction((database) => {
         const updated = { ...borrowedBefore, label: "uncommitted", updatedAt: 2 };
-        writeRaw(database.db, scope.sessionKey, updated);
+        writeRaw(requireNativeSqliteDatabase(database.db), scope.sessionKey, updated);
         expect(loadSessionEntry({ ...scope, clone: false })?.label).toBe("uncommitted");
         throw new Error("roll back cache probe");
       }, scope),

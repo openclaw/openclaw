@@ -34,10 +34,7 @@ import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   resolveSessionCreateAgentId,
 } from "../session-request-agent.js";
-import {
-  loadGatewaySessionEntryReadOnlyInWorker,
-  resolveGatewaySessionStoreTargetInWorker,
-} from "../session-utils-store-worker.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import {
   prepareSessionWorktreeCreation,
   resolveSessionProjectRoot,
@@ -462,14 +459,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         }
       }
       targetKey ??= buildDashboardSessionKey(agentId, { incognito: p.incognito });
-      const target = await resolveGatewaySessionStoreTargetInWorker({
-        cfg,
-        key: targetKey,
-        agentId,
-        assertActive: commitGuard,
-      });
       sessionKey = preservesUnspecifiedKey ? undefined : targetKey;
-      sessionAgentId = target.agentId;
+      sessionAgentId = agentId;
       const inheritParentWorktree =
         !emptyWorkspace &&
         !projectRoot &&
@@ -478,7 +469,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         spawnRequesterSessionKey &&
         spawnRequesterSessionKey === parentSessionKey &&
         sessionCreation.actor?.type === "agent" &&
-        normalizeAgentId(sessionCreation.actor.id) === target.agentId;
+        normalizeAgentId(sessionCreation.actor.id) === agentId;
       prepareLifecycle = async (lifecycleTarget) => {
         const prepared = await prepareSessionWorktreeCreation({
           cfg,

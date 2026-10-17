@@ -1,10 +1,11 @@
-import { createEffect, createSignal, For, Show, onCleanup } from "solid-js";
+import { createSignal, For, Show, onSettled } from "solid-js";
 import { isReactionEmoji } from "../../../../../packages/gateway-protocol/src/index.js";
 import { EmojiSearchPanel } from "../../../components/emoji-search-panel.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import type { MessageReactionPlacement } from "./chat-message-reaction-model.ts";
 import "./chat-message-reactions.css";
 
@@ -49,36 +50,21 @@ export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProp
     const triggerId = `reaction-trigger-${++nextPickerId}`;
     let popover: PopoverHandle | undefined;
     let trigger!: HTMLButtonElement;
-    let focusAfterCommit: "input" | "palette" | undefined;
-    const paletteButtons = () => [...host.querySelectorAll<HTMLButtonElement>(".palette button")];
-    const focusPalette = () => {
-      const buttons = paletteButtons();
-      (
-        buttons.find((button) => button.getAttribute("aria-pressed") === "true") ?? buttons[0]
+    let searchInput: HTMLInputElement | undefined;
+    const paletteButtons: HTMLButtonElement[] = [];
+    const stop: (() => void)[] = [];
+    const focusPicker = () => {
+      if (!popover?.overlay.open) {
+        return;
+      }
+      (custom()
+        ? searchInput
+        : (paletteButtons.find((button) => button.getAttribute("aria-pressed") === "true") ??
+          paletteButtons[0])
       )?.focus();
     };
-    const focusPicker = () => {
-      if (custom()) {
-        host.querySelector("input")?.focus();
-      } else {
-        focusPalette();
-      }
-    };
-    onCleanup(() => {
-      popover?.overlay.surface.removeEventListener("overlay-after-show", focusPicker);
-      popover?.overlay.surface.removeEventListener("overlay-after-hide", reset);
-    });
-    createEffect(custom, () => {
-      if (focusAfterCommit === "input") {
-        host.querySelector("input")?.focus();
-      } else if (focusAfterCommit === "palette") {
-        focusPalette();
-      }
-      focusAfterCommit = undefined;
-    });
-    const close = () => {
-      popover?.overlay.request(false, "return");
-    };
+    onSettled(() => () => stop.forEach((dispose) => dispose()));
+    const close = () => popover?.overlay.request(false, "return");
     const select = (emoji: string) => {
       props.onSelect?.(emoji, props.activeEmoji.has(emoji));
       close();
@@ -96,15 +82,15 @@ export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProp
       setQuery("");
     };
     const showPalette = () => {
-      focusAfterCommit = "palette";
       reset();
+      onSettled(focusPicker);
     };
     const showCustom = () => {
-      focusAfterCommit = "input";
       setCustom(true);
+      onSettled(focusPicker);
     };
     const movePaletteFocus = (event: KeyboardEvent) => {
-      const buttons = paletteButtons();
+      const buttons = paletteButtons;
       const current = buttons.findIndex((button) => button === host.ownerDocument.activeElement);
       const target =
         event.key === "ArrowRight"
@@ -152,21 +138,20 @@ export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProp
           </button>
         </openclaw-tooltip>
         <Popover
+          lazy="while-open"
+          sameRoot
           id={`${triggerId}-popover`}
           ref={(handle) => {
             popover = handle;
-            handle.overlay.surface.addEventListener("overlay-after-show", focusPicker);
-            handle.overlay.surface.addEventListener("overlay-after-hide", reset);
+            stop.push(
+              listen(handle.overlay.surface, "overlay-after-show", focusPicker),
+              listen(handle.overlay.surface, "overlay-after-hide", reset),
+            );
           }}
           anchor={trigger}
-          class={custom() ? "chat-reaction-picker custom" : "chat-reaction-picker"}
+          class={["chat-reaction-picker", { custom: custom() }]}
           placement={props.placement}
           label={t("chat.reactions.add")}
-          onOpenChange={(open) => {
-            if (!open) {
-              focusAfterCommit = undefined;
-            }
-          }}
         >
           <Show
             when={custom()}
@@ -180,6 +165,9 @@ export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProp
                 <For each={QUICK_REACTIONS}>
                   {(emoji) => (
                     <button
+                      ref={(button) => {
+                        paletteButtons[QUICK_REACTIONS.indexOf(emoji)] = button;
+                      }}
                       class="emoji"
                       type="button"
                       aria-label={emoji}
@@ -193,6 +181,9 @@ export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProp
                 <span class="divider" aria-hidden="true" />
                 <openclaw-tooltip prop:content={t("chat.reactions.more")}>
                   <button
+                    ref={(button) => {
+                      paletteButtons[QUICK_REACTIONS.length] = button;
+                    }}
                     class="more"
                     type="button"
                     aria-label={t("chat.reactions.more")}
@@ -206,6 +197,9 @@ export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProp
           >
             <div class="custom">
               <EmojiSearchPanel
+                inputRef={(input) => {
+                  searchInput = input;
+                }}
                 query={query()}
                 onQueryChange={search}
                 onSelect={select}

@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 
 const evidenceWarnSpy = vi.hoisted(() => vi.fn());
 vi.mock("../logging/subsystem.js", async () => {
@@ -112,7 +113,7 @@ describe("worker placement session evidence", () => {
         const database = openOpenClawAgentDatabase({ agentId: "main" });
         readSessionIdentityEvidenceInDatabase(database, placements);
         const statements = trackSqliteStatementExecutions(
-          database.db,
+          requireNativeSqliteDatabase(database.db),
           ["exact", "fallback"],
           (sql) => {
             const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ");

@@ -7,7 +7,6 @@ import {
   For,
   Show,
   onCleanup,
-  untrack,
 } from "solid-js";
 import type {
   EnvironmentSummary,
@@ -112,7 +111,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     ensureInitialData: () => queueMicrotask(() => void load()),
     onPageActivation: () => void load(),
   });
-
+  // Config receipts and permissions invalidate the Gateway environment inventory.
   createEffect(
     () =>
       [
@@ -218,32 +217,31 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
           draft.loading = false;
         });
         stopPolling();
-        queueMicrotask(() =>
-          untrack(() => {
-            if (!gateway.isCurrent(scope)) {
-              return;
-            }
-            if (refreshAgain) {
-              refreshAgain = false;
-              void load();
-            } else if (
-              view.inventory?.environments.some(
-                (environment) =>
-                  environment.preparation &&
-                  environment.worker &&
-                  !environment.worker.attachedSessionIds.length &&
-                  ["requested", "provisioning", "bootstrapping", "ready"].includes(
-                    environment.worker.state,
-                  ),
-              ) ||
-              view.result?.images.some(
-                (image) => image.capture && image.capture.phase !== "uncertain",
-              )
-            ) {
-              pollTimer = setTimeout(() => void load(), 10_000);
-            }
-          }),
-        );
+        // This native microtask samples settled state once for polling, without subscribing.
+        queueMicrotask(() => {
+          if (!gateway.isCurrent(scope)) {
+            return;
+          }
+          if (refreshAgain) {
+            refreshAgain = false;
+            void load();
+          } else if (
+            view.inventory?.environments.some(
+              (environment) =>
+                environment.preparation &&
+                environment.worker &&
+                !environment.worker.attachedSessionIds.length &&
+                ["requested", "provisioning", "bootstrapping", "ready"].includes(
+                  environment.worker.state,
+                ),
+            ) ||
+            view.result?.images.some(
+              (image) => image.capture && image.capture.phase !== "uncertain",
+            )
+          ) {
+            pollTimer = setTimeout(() => void load(), 10_000);
+          }
+        });
       }
     }
   }

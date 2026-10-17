@@ -47,17 +47,18 @@ function installControlUiPaneRuntimeTestAdapter() {
           : undefined;
       };
     for (const key of ["requestUpdate", "render"] as const) {
+      const ownerKey = key === "requestUpdate" ? "invalidate" : key;
       Object.defineProperty(element, key, {
         configurable: true,
         get() {
           const owner = readOwner();
-          const method: unknown = owner && Reflect.get(owner, key);
+          const method: unknown = owner && Reflect.get(owner, ownerKey);
           return typeof method === "function" ? forwardMethod(method) : method;
         },
         set(method: unknown) {
           const owner = readOwner();
           if (owner) {
-            Reflect.set(owner, key, method);
+            Reflect.set(owner, ownerKey, method);
           }
         },
       });

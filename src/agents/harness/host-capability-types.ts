@@ -42,6 +42,12 @@ export type AgentHarnessHostCapabilities = Readonly<{
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /**
+   * Freeze the host continuation count before tools or inference, using the native
+   * owner's admitted Gateway-local cwd. Never pass a remote/container path.
+   * Repeat calls must use the same cwd; omission preserves the harness result budget.
+   */
+  prepareContinuationRetryCount?: (workspace: Readonly<{ cwd: string }>) => void;
   /** Capture admitted request ancestry for descendants that outlive this foreground turn. */
   captureRequestCustody?: () =>
     | import("../../infra/exec-request-context.js").ExecRequestCustody

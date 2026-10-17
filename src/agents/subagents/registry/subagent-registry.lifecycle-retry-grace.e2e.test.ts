@@ -841,6 +841,8 @@ describe("subagent registry lifecycle error grace", () => {
       { sessionKey: "agent:main:subagent:refresh-silent" },
     );
     await flushAsync();
+    // The legacy session refresh polls briefly when the follow-up has no visible output.
+    await vi.advanceTimersByTimeAsync(50);
 
     const runAfterSilent = mod
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)

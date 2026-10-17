@@ -136,7 +136,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     session: GatewaySessionRow | undefined,
   ): void {
     const signature = session
-      ? `${agentId}\0${session.key}\0${session.sessionId ?? ""}\0${session.visibility ?? "shared"}\0${session.sharingRole ?? "owner"}`
+      ? `${this.connectionGeneration}\0${agentId}\0${session.key}\0${session.sessionId ?? ""}\0${session.visibility ?? "shared"}\0${session.sharingRole ?? "owner"}`
       : "";
     if (signature === this.sessionSuggestionTargetSignature) {
       return;
@@ -281,7 +281,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     const sessionKey = scope.state.sessionKey;
     const operation = Symbol("session-suggestion-add");
     this.sessionSuggestionAddOperation = operation;
-    this.requestUpdate();
+    this.invalidate();
     try {
       const result = await scope.client.request<{ suggestion: SessionSuggestion }>(
         "session.suggestions.add",
@@ -316,7 +316,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     } finally {
       if (this.sessionSuggestionAddOperation === operation) {
         this.sessionSuggestionAddOperation = undefined;
-        this.requestUpdate();
+        this.invalidate();
       }
     }
   }
@@ -357,13 +357,14 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     this.sessionSuggestionBusyIds.add(suggestion.id);
     if (resolution === "edit") {
       scope.state.handleChatDraftChange(suggestion.text, []);
+      // The native pane hands focus to the composer renderer after publishing the draft.
       queueMicrotask(() =>
-        this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
+        this.element.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
           preventScroll: true,
         }),
       );
     }
-    this.requestUpdate();
+    this.invalidate();
     try {
       const result = await scope.client.request<{ suggestion: SessionSuggestion }>(
         "session.suggestions.resolve",
@@ -407,7 +408,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
           this.sessionSuggestionEditOperation = undefined;
         }
         this.sessionSuggestionBusyIds.delete(suggestion.id);
-        this.requestUpdate();
+        this.invalidate();
       }
     }
   }
@@ -621,7 +622,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     }
     this.typingViews = views;
     this.typingOverflow = overflow;
-    this.requestUpdate();
+    this.invalidate();
   }
 
   protected typingActorViews(): ChatTypingActorView[] {

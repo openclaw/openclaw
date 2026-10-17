@@ -127,10 +127,18 @@ async function writeUnextractableArchive(archivePath: string) {
 }
 
 describe("backupRestoreCommand", () => {
-  it("restores verified root-relative hardlinks", async () => {
+  it.each([false, true])("restores verified root-relative hardlinks (mixed: %s)", async (mixed) => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-backup-restore-hardlink-", scenario: "minimal" },
       async (state) => {
+        if (mixed) {
+          await state.writeConfig({
+            database: {
+              families: { workboard: { engine: "postgres" } },
+              postgres: { connection: "postgresql://fixture" },
+            },
+          });
+        }
         const archivePath = state.path("backup.tar.gz");
         const targetPath = state.path("restored");
         const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";

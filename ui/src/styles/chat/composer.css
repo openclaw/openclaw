@@ -19,10 +19,6 @@
   transform-origin: bottom;
 }
 
-.chat-controls__inline-select[open] > .chat-picker-overlay[data-placement^="bottom"] {
-  transform-origin: top;
-}
-
 .chat-picker-overlay {
   /* Try the full panel before shrinking it to the preferred side's remaining space. */
   max-height: min(var(--oc-overlay-max-height, 420px), calc(100dvh - 16px));
@@ -588,7 +584,6 @@
     );
     background-size: 200% 100%;
     background-repeat: repeat-x;
-    -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
     -webkit-text-fill-color: transparent;
@@ -1251,7 +1246,6 @@
   .agent-chat__input:has(.chat-controls__inline-select[open]),
   .agent-chat__input:has(.context-usage details[open]) {
     backdrop-filter: none;
-    -webkit-backdrop-filter: none;
   }
 }
 
@@ -2796,7 +2790,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__reasoning-range {
-  -webkit-appearance: none;
   appearance: none;
   position: relative;
   z-index: 1;
@@ -3612,9 +3605,14 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .agent-chat__recent-time {
+  /* The timestamp never yields width: the name and subtitle truncate first, so
+     every row keeps a one-line timestamp flush with the right edge. */
+  flex: none;
   margin-left: auto;
   color: var(--muted);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: end;
   white-space: nowrap;
 }
 

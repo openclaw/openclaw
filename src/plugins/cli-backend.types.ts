@@ -1,3 +1,4 @@
+import type { ModelThinkingLevel } from "@openclaw/llm-core/types";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
@@ -121,15 +122,7 @@ export type CliBackendPreparedExecution = {
   execute?: CliBackendExecute;
 };
 
-export type CliBackendThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max";
+export type CliBackendThinkingLevel = ModelThinkingLevel | "adaptive";
 
 export type CliBackendExecutionMode = "agent" | "side-question";
 
@@ -286,7 +279,7 @@ type CliBackendResolveModelIdContext = {
 
 export type CliBackendJsonlUsage = Pick<
   NormalizedUsage,
-  "input" | "output" | "cacheRead" | "cacheWrite" | "total"
+  "input" | "output" | "cacheRead" | "cacheWrite" | "cacheWrite1h" | "total"
 >;
 
 export type CliBackendParsedJsonlEvent =

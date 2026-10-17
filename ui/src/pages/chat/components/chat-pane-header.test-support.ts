@@ -1,12 +1,84 @@
-import { nothing } from "lit";
-import { createComponent, createSignal, flush } from "solid-js";
-import { expect, vi } from "vitest";
+import { createComponent, createSignal, flush, merge } from "solid-js";
+import { expect, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
+import { EMPTY_SESSION_MENU_DATA } from "../../../components/session-menu-actions.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { renderChatPaneHeader } from "./chat-pane-header.ts";
+import {
+  ChatPaneHeader,
+  PaneHeaderView,
+  type ChatPaneHeaderPresentation,
+} from "./chat-pane-header.tsx";
+import type { ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
+import "./chat-header-session-menu.ts";
 
-export type ChatPaneHeaderProps = Parameters<typeof renderChatPaneHeader>[0];
+export type ChatPaneHeaderProps = Parameters<typeof ChatPaneHeader>[0];
+
+export function chatPaneHeaderSessionMenu(): NonNullable<ChatPaneHeaderProps["sessionMenuAction"]> {
+  return {
+    session: EMPTY_SESSION_MENU_DATA,
+    worktreePath: null,
+    onboarding: false,
+    preferencesBrowserOnly: false,
+    compact: false,
+    bubbleModeEnabled: false,
+    mainKey: "main",
+    copyMarkdownAllowed: false,
+    splitAllowed: false,
+    settings: { chatShowThinking: false, chatShowToolCalls: false },
+    sessionActions: [],
+    sharing: null,
+    groups: [],
+    currentOwner: null,
+    actionDisabledReasons: {},
+    forkDisabled: false,
+    forkFromLastCompleted: false,
+    archiveAllowed: false,
+    archiveShortcut: false,
+    deleteAllowed: false,
+    onOpen: vi.fn(),
+    onOpenCommandPalette: vi.fn(),
+    onSettingsChange: vi.fn(),
+    onAction: vi.fn(),
+  };
+}
+
+const mountedHeaders = new WeakMap<HTMLElement, (value: ChatPaneHeaderPresentation) => void>();
+
+export function renderPaneHeaderInto(value: ChatPaneHeaderPresentation, container: HTMLElement) {
+  const update = mountedHeaders.get(container);
+  if (update) {
+    update(value);
+    flush();
+    return;
+  }
+  const [current, setCurrent] = createSignal(value);
+  const mounted = mountSolid(
+    () =>
+      createComponent(
+        PaneHeaderView,
+        merge(() => current()),
+      ),
+    { container },
+  );
+  mountedHeaders.set(container, setCurrent);
+  onTestFinished(() => {
+    mountedHeaders.delete(container);
+    mounted.unmount();
+  });
+}
+
+export function chatPaneHeaderSharing(
+  patch: Partial<ChatSessionSharingProps> = {},
+): ChatSessionSharingProps {
+  return {
+    session: chatPaneHeaderSessionRow({ visibility: "shared", sharingRole: "owner" }),
+    state: undefined,
+    onOpen: vi.fn(),
+    onVisibilityChange: vi.fn(),
+    onMemberChange: vi.fn(),
+    ...patch,
+  };
+}
 
 async function settleNativeMenu() {
   flush();
@@ -42,8 +114,8 @@ export function chatPaneHeaderSessionRow(
 }
 
 /**
- * Mounts the header with every required prop filled in. Callers own teardown so each suite
- * keeps its own afterEach; `containers` collects the mounted nodes for removal.
+ * Mounts a retained native header with complete props and test-scoped disposal.
+ * `containers` lets callers keep their existing DOM cleanup.
  */
 export function mountChatPaneHeader(
   containers: HTMLElement[],
@@ -73,7 +145,6 @@ export function mountChatPaneHeader(
     canReveal: true,
     copiedAction: null,
     renameDisabledReason: undefined,
-    sessionMenuAction: nothing,
     onBeginRename: vi.fn(),
     onRenameInput: vi.fn(),
     onCommitRename: vi.fn(),
@@ -87,13 +158,13 @@ export function mountChatPaneHeader(
   const [current, setCurrent] = createSignal(props);
   const mounted = mountSolid(
     () =>
-      createComponent(LitContent, {
-        get value() {
-          return renderChatPaneHeader(current());
-        },
-      }),
+      createComponent(
+        ChatPaneHeader,
+        merge(() => current()),
+      ),
     { container },
   );
+  onTestFinished(mounted.unmount);
   return {
     container,
     get props() {

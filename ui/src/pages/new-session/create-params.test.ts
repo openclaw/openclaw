@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
-import { NewSessionCapabilityController } from "./capability-controller.ts";
+import { NewSessionCapabilities } from "./capability-controller.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
 
 describe("create-as-draft availability", () => {
-  const capabilities = new NewSessionCapabilityController(
+  const capabilities = new NewSessionCapabilities(
     () => {},
     () => {},
   );

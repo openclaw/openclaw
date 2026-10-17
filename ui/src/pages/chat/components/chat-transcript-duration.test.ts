@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SolidControllerHost } from "../../../lit/solid-controller-host.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { ChatStateController } from "../chat-state-controller.ts";
+import { createChatState } from "../chat-state-controller.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
@@ -129,14 +128,11 @@ describe("completed-work duration", () => {
       render(renderChatThread(props, transcript), container);
       transcript.hostUpdated();
     };
-    const host: SolidControllerHost = {
-      addController: () => undefined,
-      removeController: () => undefined,
-      requestUpdate: rerender,
+    const controller = createChatState({
+      invalidate: rerender,
       updateComplete: Promise.resolve(true),
-    };
-    const controller = new ChatStateController(host);
-    controller.hostConnected();
+    });
+    const dispose = controller.dispose;
     const original = controller.createRenderLifecycle();
     props.onRequestUpdate = () => original.invalidate();
     try {
@@ -159,7 +155,7 @@ describe("completed-work duration", () => {
       expect(container.textContent).not.toContain("read");
       expect(container.textContent).toContain("Inspection complete");
     } finally {
-      controller.hostDisconnected();
+      dispose();
       transcript.hostDisconnected();
       container.remove();
       vi.useRealTimers();

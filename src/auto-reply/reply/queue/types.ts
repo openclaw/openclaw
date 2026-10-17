@@ -7,6 +7,7 @@ import type {
   CurrentInboundPromptContext,
   RunEmbeddedAgentParams,
 } from "../../../agents/embedded-agent-runner/run/params.js";
+import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
 import type {
   ReplyDeliveryFactsObserver,
@@ -320,6 +321,13 @@ export function bindReplyOperationQueueDisposition(
     }
   };
 }
+
+/** Admission-owned image facts stay out of the public FollowupRun contract. */
+export type InternalFollowupRun = FollowupRun & {
+  currentTurnImagesPrepared?: true;
+  /** Fact indexes are relative to this run's media array. */
+  mediaImageLayout?: MediaImageLayout;
+};
 
 export function isFollowupRunAborted(
   run: Pick<FollowupRun, "abortSignal" | "queueAbortSignal" | "operatorAuthority">,

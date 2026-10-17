@@ -7,7 +7,7 @@ import { resetChatViewState } from "../chat-view-state.ts";
 import { renderChatThread, TranscriptTestHost } from "../test-helpers/chat-transcript-native.tsx";
 import type { SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
 import { toggleTranscriptSearch, type ChatThreadProps } from "./chat-thread-interactions.ts";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import { createTranscriptTestOwner } from "./chat-transcript-owner.test-support.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -31,7 +31,7 @@ function fullMessage(content: string): FullMessageResult {
 class RecoveryTranscriptElement extends TranscriptTestHost {
   props: ChatThreadProps = threadProps("recovery-pane");
   resetPresentationOnDisconnect = true;
-  private readonly transcript = new ChatTranscriptController(this, () => this.props.paneId);
+  private readonly transcript = createTranscriptTestOwner(this, () => this.props.paneId);
 
   override renderTranscript = () => {
     const requestUpdate = () => this.requestUpdate();

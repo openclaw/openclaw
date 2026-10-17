@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
   createComposerProps as props,
@@ -175,9 +176,7 @@ function mountComposer(overrides: Parameters<typeof props>[0]) {
   const container = createComposerContainer();
   document.body.append(container);
   const composerProps = props(overrides);
-  const draw = () => renderComposerInto(container, composerProps);
-  composerProps.onRequestUpdate = draw;
-  draw();
+  renderComposerInto(container, composerProps);
   return { container };
 }
 
@@ -190,7 +189,7 @@ beforeEach(() => {
   vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(
     discoverRealtimeTalkInputsMock,
   );
-  vi.spyOn(realtimeTalkInput.RealtimeTalkInputController.prototype, "open").mockImplementation(
+  vi.spyOn(realtimeTalkInput.RealtimeTalkInputOwner.prototype, "open").mockImplementation(
     openMicrophoneMock,
   );
 });
@@ -235,9 +234,7 @@ describe("renderChatComposer controls", () => {
     composerProps.realtimeTalkDetail = "The selected microphone is unavailable";
     composerProps.onUseSystemDefaultMicrophone = vi.fn();
     composerProps.onDismissRealtimeTalkError = dismissRecovery;
-    const draw = () => renderComposerInto(container, composerProps);
-    composerProps.onRequestUpdate = draw;
-    draw();
+    renderComposerInto(container, composerProps);
     await vi.advanceTimersByTimeAsync(0);
     button(container, t("chat.composer.startVoiceInput")).dispatchEvent(
       dictationPointer("pointerdown", 15),
@@ -578,27 +575,25 @@ describe("renderChatComposer controls", () => {
 describe("renderChatComposer status", () => {
   it("keeps every concurrent gateway question reachable", async () => {
     const container = createComposerContainer();
-    const onRequestUpdate = vi.fn();
     const composerProps = props({
       sessionKey: "queue-test",
       gatewayQuestionPrompts: [
         questionPrompt("question-1", "First prompt"),
         questionPrompt("question-2", "Second prompt"),
       ],
-      onRequestUpdate,
     });
 
     renderComposerInto(container, composerProps);
-    let panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
+    const panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
     expect(panel.props!.model.questions[0]?.question).toBe("First prompt");
     expect(panel.props!.model.requestPosition).toEqual({ current: 1, total: 2 });
 
     panel.props!.onNextRequest?.();
-    expect(onRequestUpdate).toHaveBeenCalledOnce();
-    renderComposerInto(container, composerProps);
-    panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
-    expect(panel.props!.model.questions[0]?.question).toBe("Second prompt");
-    expect(panel.props!.model.requestPosition).toEqual({ current: 2, total: 2 });
+    await waitForSolid(() => {
+      const nextPanel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
+      expect(nextPanel.props!.model.questions[0]?.question).toBe("Second prompt");
+      expect(nextPanel.props!.model.requestPosition).toEqual({ current: 2, total: 2 });
+    });
   });
 
   it("keeps fallback status in the composer without a compaction overlay", () => {

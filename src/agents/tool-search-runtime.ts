@@ -31,6 +31,7 @@ import {
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
 } from "./tool-result-error.js";
+import { runWithToolResultDelivery } from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,
   prepareToolSearchCatalogExecutionTool,
@@ -63,6 +64,7 @@ import type {
   ToolSearchToolContext,
   UnknownToolErrorOptions,
 } from "./tool-search-types.js";
+import { ToolSourceReplyCell } from "./tool-source-reply-completion.js";
 import { textResult, ToolInputError } from "./tools/common.js";
 
 type ToolSearchExactCallOptions = Pick<
@@ -208,6 +210,7 @@ function sanitizeToolCallIdPart(value: string): string {
 }
 
 export class ToolSearchRuntime {
+  readonly sourceReplyCell = new ToolSourceReplyCell();
   private readonly pluginRuntimeRefresh = captureAgentPluginRuntimeRefresh();
   private callSequence = 0;
   private readonly terminalTargetBatchByParent = new Map<string, boolean>();
@@ -322,11 +325,38 @@ export class ToolSearchRuntime {
     );
   };
 
-  callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>
-    projectToolResultValue((await this.call(id, input, options)).result);
+  callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
+    const catalog = resolveCatalog(this.ctx);
+    return projectToolResultValue(
+      (
+        await this.callEntry(
+          findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
+          input,
+          options,
+          true,
+        )
+      ).result,
+    );
+  };
 
-  callExactValue = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) =>
-    projectToolResultValue((await this.callExactId(id, input, options)).result);
+  callExactValue = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) => {
+    const catalog = resolveCatalog(this.ctx);
+    return projectToolResultValue(
+      (
+        await this.callEntry(
+          findEntry(
+            catalog,
+            id,
+            { ...options, codeModeSkills: this.ctx.codeModeSkills },
+            "exact-id",
+          ),
+          input,
+          options,
+          true,
+        )
+      ).result,
+    );
+  };
 
   observeNetworkContent(parentToolCallId: string): void {
     const state = this.networkInvocations.get(parentToolCallId) ?? { active: 0, observed: false };
@@ -376,13 +406,16 @@ export class ToolSearchRuntime {
     entry: ToolSearchCatalogEntry,
     input?: unknown,
     options?: ToolSearchCallOptions,
+    fullValue = false,
   ) =>
     runScheduledToolSearchCall({
       ctx: this.ctx,
       entry,
       signal: options?.signal,
       execute: (currentEntry, signal) =>
-        this.executeEntry(resolveCatalog(this.ctx), currentEntry, input, { ...options, signal }),
+        runWithToolResultDelivery(fullValue, () =>
+          this.executeEntry(resolveCatalog(this.ctx), currentEntry, input, { ...options, signal }),
+        ),
     });
 
   private readonly executeEntry = async (
@@ -426,6 +459,8 @@ export class ToolSearchRuntime {
     // Reuse only this call's accepted snapshot; outer schema validation must still run.
     let acceptedSnapshot: AgentToolResult<unknown> | undefined;
     const acceptResultBeforeProjection = async (candidate: AgentToolResult<unknown>) => {
+      // Projection failure cannot revoke delivery already committed by the producer.
+      this.sourceReplyCell.observe(candidate);
       if (isPreExecutionBlockedToolResult(candidate)) {
         // The JSON-safe snapshot drops the private blocked-result marker.
         preExecutionBlocked = true;

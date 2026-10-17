@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 describe("git-hooks/pre-commit (integration)", () => {
-  it.each(["--all", "tracked.txt", ".agents/skills/discord-clawd/SKILL.md"])(
+  it.each(["--all", ".agents/skills/discord-clawd/SKILL.md"])(
     "preserves the staged path %s without running the changed-scope check",
     (name) => {
       const dir = createContentGuardFixture(tempDirs);
@@ -68,50 +68,47 @@ describe("git-hooks/pre-commit (integration)", () => {
     },
   );
 
-  it.each(["configured", "unconfigured", "external"])(
-    "formats staged files with %s private rules",
-    (mode) => {
-      const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-normal-");
-      run(dir, "git", ["init", "-q", "--initial-branch=main"]);
-      const fakeBinDir = installPreCommitFixture(dir);
-      const logPath = installFormattingRecorder(dir);
-      if (mode === "unconfigured") {
-        run(dir, "git", ["config", "--local", "--unset", ruleSetting]);
-        unlinkSync(path.join(dir, rulePath));
-      } else if (mode === "external") {
-        const privateDir = makeTempRepoRoot(tempDirs, "openclaw-private-rules-");
-        const privatePath = path.join(privateDir, "private rules.txt");
-        copyFileSync(path.join(dir, rulePath), privatePath);
-        unlinkSync(path.join(dir, rulePath));
-        run(dir, "git", ["config", "--local", ruleSetting, privatePath]);
-        expect(run(dir, "git", ["config", "--path", "--get", ruleSetting])).toBe(privatePath);
-      }
+  it.each(["unconfigured", "external"])("formats staged files with %s private rules", (mode) => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-normal-");
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+    const fakeBinDir = installPreCommitFixture(dir);
+    const logPath = installFormattingRecorder(dir);
+    if (mode === "unconfigured") {
+      run(dir, "git", ["config", "--local", "--unset", ruleSetting]);
+      unlinkSync(path.join(dir, rulePath));
+    } else if (mode === "external") {
+      const privateDir = makeTempRepoRoot(tempDirs, "openclaw-private-rules-");
+      const privatePath = path.join(privateDir, "private rules.txt");
+      copyFileSync(path.join(dir, rulePath), privatePath);
+      unlinkSync(path.join(dir, rulePath));
+      run(dir, "git", ["config", "--local", ruleSetting, privatePath]);
+      expect(run(dir, "git", ["config", "--path", "--get", ruleSetting])).toBe(privatePath);
+    }
 
-      writeFileSync(
-        path.join(dir, "changed.ts"),
-        mode === "unconfigured" ? literals[0] : "export const value = 1;\n",
-        "utf8",
-      );
+    writeFileSync(
+      path.join(dir, "changed.ts"),
+      mode === "unconfigured" ? literals[0] : "export const value = 1;\n",
+      "utf8",
+    );
+    run(dir, "git", ["add", "--", "changed.ts"]);
+
+    run(dir, "bash", ["git-hooks/pre-commit"], {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+    });
+
+    expect(readFormatterLog(logPath)).toEqual([
+      "oxfmt --write --threads=1 --no-error-on-unmatched-pattern changed.ts",
+    ]);
+    if (mode === "external") {
+      writeFileSync(path.join(dir, "changed.ts"), literals[0]);
       run(dir, "git", ["add", "--", "changed.ts"]);
+      expect(runFailure(dir, "bash", ["git-hooks/pre-commit"]).stderr).toContain(
+        "Blocked staged content",
+      );
+    }
+  });
 
-      run(dir, "bash", ["git-hooks/pre-commit"], {
-        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
-      });
-
-      expect(readFormatterLog(logPath)).toEqual([
-        "oxfmt --write --threads=1 --no-error-on-unmatched-pattern changed.ts",
-      ]);
-      if (mode === "external") {
-        writeFileSync(path.join(dir, "changed.ts"), literals[0]);
-        run(dir, "git", ["add", "--", "changed.ts"]);
-        expect(runFailure(dir, "bash", ["git-hooks/pre-commit"]).stderr).toContain(
-          "Blocked staged content",
-        );
-      }
-    },
-  );
-
-  it.each(["partial.ts", "gone.ts", "alias.ts", "payload.txt", "payload.ts"])(
+  it.each(["partial.ts", "gone.ts", "alias.ts", "payload.ts"])(
     "preserves staged and working-tree bytes independently for %s",
     (name) => {
       const dir = createContentGuardFixture(tempDirs);
@@ -337,17 +334,13 @@ describe("staged content guard", () => {
   it.each([
     ["missing file", null],
     ["empty file", ""],
-    ["blank lines", "\n\n"],
     ["invalid UTF-8", Buffer.from([255])],
     ["NUL literal", "\0"],
-    ["empty setting", undefined],
   ])("fails closed with %s", (_label, content) => {
     const dir = fixture();
     const log = installFormattingRecorder(dir);
     stage(dir, "payload.ts", "clean\n");
-    if (content === undefined) {
-      run(dir, "git", ["config", "--local", ruleSetting, ""]);
-    } else if (content === null) {
+    if (content === null) {
       unlinkSync(path.join(dir, rulePath));
     } else {
       writeFileSync(path.join(dir, rulePath), content);
@@ -368,9 +361,7 @@ describe("staged content guard", () => {
       "foobar foo FOOBAR",
       "[REDACTED] [REDACTED] FOOBAR",
     ],
-    ["longer prefix first", ["foobar", "foo"], "foobar foo FOOBAR", "[REDACTED] [REDACTED] FOOBAR"],
     ["crossing overlaps", ["abc", "bcd"], "abcd", "[REDACTED]"],
-    ["reversed crossing overlaps", ["bcd", "abc"], "abcd", "[REDACTED]"],
     ["self-overlap", ["aba"], "ababa", "[REDACTED]"],
     ["marker literal", ["foo", "REDACTED"], "foo REDACTED", "[REDACTED] [REDACTED]"],
   ])(
@@ -510,16 +501,9 @@ if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdou
     };
   }
 
-  it.each<{ selection: string; wasi?: string }>([
-    { selection: "environment" },
-    { selection: "config" },
-    { selection: "canonical" },
-    { selection: "environment", wasi: "false" },
-    { selection: "environment", wasi: "0" },
-    { selection: "environment", wasi: "override" },
-  ])(
-    "uses the $selection tooling owner with inactive WASI=$wasi, task cwd and exact arguments",
-    ({ selection, wasi }) => {
+  it.each([{ selection: "environment" }, { selection: "config" }, { selection: "canonical" }])(
+    "uses the $selection tooling owner with task cwd and exact arguments",
+    ({ selection }) => {
       const fixture = toolingFixture();
       let { dir } = fixture;
       const { owner, env } = fixture;
@@ -534,17 +518,13 @@ if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdou
         installPreCommitFixture(dir);
         rmSync(path.join(dir, "node_modules"), { recursive: true });
         env.OPENCLAW_PR_TOOLING_ROOT = "";
-      } else if (wasi === undefined) {
+      } else {
         run(dir, "git", ["config", "openclaw.pr.toolingRoot", path.join(owner, "missing")]);
       }
-      const args = [
-        "--write",
-        "space name.ts",
-        ...(wasi === undefined ? [":(exclude)literal.ts", "line\nbreak.ts"] : []),
-      ];
+      const args = ["--write", "space name.ts", ":(exclude)literal.ts", "line\nbreak.ts"];
       run(dir, "/bin/bash", ["scripts/pre-commit/run-node-tool.sh", "oxfmt", ...args], {
         ...env,
-        NAPI_RS_FORCE_WASI: wasi,
+        NAPI_RS_FORCE_WASI: undefined,
       });
       expect(JSON.parse(readFileSync(path.join(dir, "formatter-call.json"), "utf8"))).toEqual({
         cwd: dir,

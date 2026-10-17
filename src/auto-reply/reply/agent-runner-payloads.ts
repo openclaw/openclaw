@@ -19,9 +19,9 @@ import {
   isRenderablePayload,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { createBlockReplyContentKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
 import { shouldRetryReplyDispatch } from "./reply-dispatch-outcome.js";
@@ -34,11 +34,11 @@ const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 
 async function normalizeSentMediaUrlsForDedupe(params: {
-  sentMediaUrls: readonly string[];
+  sentMediaUrls: string[];
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
 }): Promise<string[]> {
   if (params.sentMediaUrls.length === 0 || !params.normalizeMediaPaths) {
-    return [...params.sentMediaUrls];
+    return params.sentMediaUrls;
   }
 
   const normalizedUrls = new Set<string>();
@@ -114,7 +114,6 @@ export async function buildReplyPayloads(params: {
   /** Exact prompt bytes from this turn's finalized inbound owner. */
   conversationContext?: string;
   isHeartbeat: boolean;
-  didLogHeartbeatStrip: boolean;
   silentExpected?: boolean;
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
@@ -137,18 +136,13 @@ export async function buildReplyPayloads(params: {
   accountId?: string;
   extractMarkdownImages?: boolean;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
-}): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
-  let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
+}): Promise<{ replyPayloads: ReplyPayload[] }> {
   const sanitizedPayloads: ReplyPayload[] = [];
   for (const payload of params.payloads) {
     let text = payload.text;
     if (params.isHeartbeat) {
       if (text) {
-        const withoutLegacyBlocks = stripLegacyBracketToolCallBlocks(text);
-        if (withoutLegacyBlocks !== text) {
-          logVerbose("Stripped legacy tool-call block from heartbeat reply");
-        }
-        text = withoutLegacyBlocks;
+        text = stripLegacyBracketToolCallBlocks(text);
       }
     } else {
       if (payload.isError && text && BUN_FETCH_SOCKET_ERROR_RE.test(text)) {
@@ -158,10 +152,6 @@ export async function buildReplyPayloads(params: {
 
       if (text?.includes("HEARTBEAT_OK")) {
         const stripped = stripHeartbeatToken(text, { mode: "message" });
-        if (stripped.didStrip && !didLogHeartbeatStrip) {
-          didLogHeartbeatStrip = true;
-          logVerbose("Stripped stray HEARTBEAT_OK token from reply");
-        }
         if (stripped.shouldSkip && !resolveSendableOutboundReplyParts(payload).hasMedia) {
           continue;
         }
@@ -197,7 +187,6 @@ export async function buildReplyPayloads(params: {
       const parsed = normalizeReplyPayloadDirectives({
         payload,
         currentMessageId: params.currentMessageId,
-        silentToken: SILENT_REPLY_TOKEN,
         parseMode: "always",
         extractMarkdownImages: params.extractMarkdownImages,
       });
@@ -208,9 +197,6 @@ export async function buildReplyPayloads(params: {
               await params.normalizeMediaPaths(parsed.payload),
             )
           : parsed.payload;
-      if (parsed.isSilent) {
-        mediaNormalizedPayload.text = undefined;
-      }
       return setReplyPayloadMetadata(mediaNormalizedPayload, {
         replyDelivery,
         ...(replyDeliverySource ? { replyDeliverySource } : {}),
@@ -415,7 +401,12 @@ export async function buildReplyPayloads(params: {
         })
       : contentSuppressedPayloads;
   return {
-    replyPayloads: filteredPayloads.filter(isRenderablePayload),
-    didLogHeartbeatStrip,
+    replyPayloads: filteredPayloads.flatMap(
+      (payload) =>
+        normalizeReplyPayload(payload, {
+          applyChannelTransforms: false,
+          conversationContext: params.conversationContext,
+        }) ?? [],
+    ),
   };
 }

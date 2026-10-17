@@ -13,7 +13,6 @@ import {
 } from "../../config/sessions/paths.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { logVerbose } from "../../globals.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
@@ -381,15 +380,16 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   ) {
     assertPreparationActive();
     // Keyless runs use an incarnation-unique sessionId lane; session-key lanes can be shared.
-    const cleared = sessionKey
-      ? (await import("./queue/cleanup.js")).clearSessionLifecycleLanes({
-          keys: [sessionKey],
-          agentId,
-          sessionKey,
-          assertCurrent: assertPreparationActive,
-        })
-      : clearCommandLane(sessionLaneKey);
-    logVerbose(`Cleared ${cleared} queued command(s) before interrupting ${sessionLaneKey}`);
+    if (sessionKey) {
+      (await import("./queue/cleanup.js")).clearSessionLifecycleLanes({
+        keys: [sessionKey],
+        agentId,
+        sessionKey,
+        assertCurrent: assertPreparationActive,
+      });
+    } else {
+      clearCommandLane(sessionLaneKey);
+    }
   }
   const agentHarnessPolicy = useFastReplyRuntime
     ? undefined

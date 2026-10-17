@@ -129,7 +129,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           if (snapshot.progressCard !== undefined) {
             const target = this.resolveChatReadTarget();
             if (target) {
-              this.progressCard.hydrate(target, snapshot.progressCard);
+              this.progressCards.hydrate(target, snapshot.progressCard);
             }
           }
           // Release the history response before Lit queues the cached transcript render.
@@ -188,7 +188,10 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     this.historyViewportFillPages = 0;
     this.stagedOlder = { page: null, load: null };
     this.resetReplyNavigation();
-    this.loadingOlder = false;
+    if (this.loadingOlder) {
+      this.loadingOlder = false;
+      this.invalidate();
+    }
     this.historyObserverArmed = false;
     this.historyAutoLoadBlocked = false;
     this.historyInput.reset();
@@ -215,6 +218,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       if (this.loadingOlder) {
         this.olderLoadGeneration += 1;
         this.loadingOlder = false;
+        this.invalidate();
       }
     }
     if (
@@ -235,6 +239,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       return;
     }
     const root = this.transcript.scrollElement;
+    // The transcript renderer owns the sentinel observed by this history owner.
     const sentinel = root?.querySelector<HTMLElement>(".chat-history-sentinel") ?? null;
     if (!root || !sentinel) {
       this.clearHistoryObserver();
@@ -737,7 +742,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
   protected announceCommandPaletteTarget(
     onSlashCommand: CommandPaletteTargetDetail["onSlashCommand"],
   ) {
-    this.dispatchEvent(
+    this.element.dispatchEvent(
       new CustomEvent<CommandPaletteTargetDetail>(COMMAND_PALETTE_TARGET_EVENT, {
         bubbles: true,
         composed: true,

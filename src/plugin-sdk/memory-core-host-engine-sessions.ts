@@ -73,6 +73,7 @@ export async function prepareSessionTranscriptChannelRead(params: {
         const allowed = channel.currentSessionChannelReadAccess({
           requesterAgentId: params.requesterAgentId,
           requesterSessionKey: params.requesterSessionKey,
+          sandboxed: params.sandboxed,
           a2aPolicy: visibility.createAgentToAgentPolicy(params.cfg),
           targets: params.groups.flat(),
         });
@@ -141,14 +142,11 @@ export async function prepareSessionTranscriptChannelRead(params: {
               ) {
                 throw new Error("Gateway changed while preparing transcript disclosure; retry.");
               }
-              const currentVisibility = visibility.resolveEffectiveSessionToolsVisibility({
-                cfg: currentRead.state.policyConfig,
-                sandboxed: params.sandboxed,
-              });
               const channelAllowed = channel.currentSessionChannelReadAccess(
                 {
                   requesterAgentId: params.requesterAgentId,
                   requesterSessionKey: params.requesterSessionKey,
+                  sandboxed: params.sandboxed,
                   a2aPolicy: visibility.createAgentToAgentPolicy(currentRead.state.policyConfig),
                   targets: captured.map((entry) => entry.target),
                 },
@@ -159,11 +157,7 @@ export async function prepareSessionTranscriptChannelRead(params: {
                   entry.binding,
                   current[0] === true &&
                     current[index + 1] === true &&
-                    channelAllowed[index] === true &&
-                    (currentVisibility === "channel" ||
-                      currentVisibility === "agent" ||
-                      currentVisibility === "all" ||
-                      entry.target.key === params.requesterSessionKey),
+                    channelAllowed[index] === true,
                 ]),
               );
               const identity = (target: { key: string; agentId: string; storePath: string }) =>

@@ -647,7 +647,7 @@ export function createGatewayHttpRequestHandler(
           (await getManagedMediaAttachmentsModule()).handleManagedOutgoingMediaHttpRequest(
             req,
             res,
-            { ...routeAuth, basePath: controlUiRouteBasePath },
+            { ...routeAuth, basePath: controlUiRouteBasePath, clients },
           ),
         false,
         "outgoing-media",

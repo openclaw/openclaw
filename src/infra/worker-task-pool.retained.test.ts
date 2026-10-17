@@ -4,6 +4,12 @@ import { DatabaseSync } from "node:sqlite";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  installDatabaseEngineSelection,
+  withDatabaseEngineSelection,
+} from "./database-engine/context.js";
+import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import type {
   AdmissionTaskInput,
   AdmissionTaskResult,
@@ -19,7 +25,52 @@ const pools: Array<{ close(): Promise<void> }> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
+  resetDatabaseEngineSelectionForTest();
 });
+
+it.each([false, true])(
+  "carries boot and offline selections through a reused task worker (retained: %s)",
+  async (retainedTransport) => {
+    const pool = createOwnedWorkerTaskPool<PoolFixtureInput, PoolFixtureResult>(
+      {
+        workerUrl: new URL("./worker-task-pool.test-support.ts", import.meta.url),
+        maxWorkers: 1,
+        idleTimeoutMs: 0,
+      },
+      retainedTransport ? { retainedTransport: true } : undefined,
+    );
+    pools.push(pool);
+    const run = () => pool.run({ label: "selection", readEngineSelection: true }, {});
+    const prewarmed = await run();
+    expect(prewarmed.engineSelection).toBeUndefined();
+    const sqlite = { effectiveEngines: resolveDatabaseFamilyEngines({}) };
+    const offline = await withDatabaseEngineSelection(sqlite, run);
+    expect(offline.threadId).toBe(prewarmed.threadId);
+    expect(offline.engineSelection).toEqual(sqlite);
+    expect((await run()).engineSelection).toBeUndefined();
+    const selection = {
+      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+      postgres: { connection: "postgresql://synthetic.invalid/r4", schemaPrefix: "r4" },
+    };
+    installDatabaseEngineSelection(selection);
+    const selected = await run();
+    expect(selected.threadId).toBe(prewarmed.threadId);
+    expect(selected.engineSelection).toEqual(selection);
+    expect((await run()).engineSelection).toEqual(selection);
+    for (const scoped of [
+      sqlite,
+      {
+        effectiveEngines: { ...sqlite.effectiveEngines, state: "postgres" as const },
+        postgres: { connection: "postgresql://synthetic.invalid/port", schemaPrefix: "port" },
+      },
+    ]) {
+      const reply = await withDatabaseEngineSelection(scoped, run);
+      expect(reply.threadId).toBe(prewarmed.threadId);
+      expect(reply.engineSelection).toEqual(scoped);
+      expect((await run()).engineSelection).toEqual(selection);
+    }
+  },
+);
 
 it("preserves workerData through retained task startup", async () => {
   const workerData = { type: "user data", port: "user port" };

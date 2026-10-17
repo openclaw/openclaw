@@ -4,8 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Worker } from "node:worker_threads";
 import { afterEach, assert, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
@@ -45,7 +47,6 @@ import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execu
 import { AgentDatabaseExecutionLifetime } from "./openclaw-agent-execution-authority.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import * as verification from "./openclaw-database-verify.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -58,6 +59,7 @@ import * as stateWorkerStore from "./openclaw-state-worker-store.js";
 const counter = vi.hoisted(() => ({
   path: "",
   checks: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2),
+  gate: undefined as SharedArrayBuffer | undefined,
 }));
 vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/worker-cpu.js")>();
@@ -72,6 +74,12 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
         for (const method of ["all", "get", "iterate", "run"]) {
           const execute = statement[method].bind(statement);
           statement[method] = (...args) => {
+            if (workerData.testIntegrityGate) {
+              const gate = new Int32Array(workerData.testIntegrityGate);
+              Atomics.store(gate, 1, 1);
+              Atomics.notify(gate, 1);
+              while (Atomics.load(gate, 0) === 1) Atomics.wait(gate, 0, 1);
+            }
             Atomics.add(new Int32Array(workerData.testIntegrityChecks),
               match[1].toLowerCase() === "integrity_check" ? 0 : 1, 1);
             return execute(...args);
@@ -98,6 +106,7 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
           ...options?.workerData,
           testIntegrityPath: counter.path,
           testIntegrityChecks: counter.checks,
+          testIntegrityGate: counter.gate,
         },
       });
     },
@@ -150,6 +159,63 @@ function createNativeSource(assertCurrent: () => void): AgentDatabaseRequestExec
     }),
   };
 }
+
+it.for(["warm", "cold"] as const)(
+  "admits durable channel messages while agent integrity is pending (%s shared writer)",
+  async (sharedWriter, { signal }) => {
+    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-ingress-isolation-")) };
+    const ready = openOpenClawAgentDatabase({ agentId: "ready", env });
+    const preparing = openOpenClawAgentDatabase({ agentId: "preparing", env });
+    const context = captureOpenClawStateWorkerContext({ env });
+    const assertCurrent = () => context.admission.assertCurrent();
+    const source = createNativeSource(assertCurrent);
+    const readyGeneration = createNativeGeneration(
+      ready.agentId,
+      ready.path,
+      context,
+      assertCurrent,
+    );
+    const preparingGeneration = createNativeGeneration(
+      preparing.agentId,
+      preparing.path,
+      context,
+      assertCurrent,
+    );
+    const queue = createChannelIngressQueue<{ text: string }>({
+      channelId: "synthetic",
+      stateDir: env.OPENCLAW_STATE_DIR,
+    });
+    const gate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
+    Atomics.store(gate, 0, 1);
+    counter.path = preparing.path;
+    counter.gate = gate.buffer;
+    invalidateOpenClawAgentDatabaseValidation(preparing.path);
+    let preparation: Promise<unknown> | undefined;
+    try {
+      // Occupy both ordinary slots on the old implementation before opening the slow agent.
+      if (sharedWriter === "warm") {
+        await queue.enqueue("before", { text: "before preparation" });
+      }
+      await readyGeneration.run(source, async () => {});
+      preparation = preparingGeneration.run(source, async () => {});
+      void preparation.catch(() => {});
+      await withinTest(Promise.resolve(Atomics.waitAsync(gate, 1, 0).value), signal);
+
+      await withinTest(queue.enqueue("during", { text: "during preparation" }), signal);
+      expect(Atomics.load(gate, 0)).toBe(1);
+      expect((await queue.listPending()).map((event) => event.id)).toEqual(
+        sharedWriter === "warm" ? ["before", "during"] : ["during"],
+      );
+    } finally {
+      Atomics.store(gate, 0, 0);
+      Atomics.notify(gate, 0);
+      counter.gate = undefined;
+      await preparation;
+      await preparingGeneration.close();
+      await readyGeneration.close();
+    }
+  },
+);
 
 it.each(["confirmed close", "native exit"] as const)(
   "uses native close evidence before recovering an agent lease (%s)",
@@ -358,7 +424,7 @@ it("opens an unconfigured external store without reconstructing unknown deletion
   expect(opening).toEqual([{ status: "fulfilled", value: "opened" }]);
   expect(closing).toEqual([{ status: "fulfilled", value: undefined }]);
   expect(fs.readFileSync(pathname)).toEqual(bytes);
-  expect(fs.readdirSync(external)).toEqual(["retained.sqlite", "retained.sqlite.seal"]);
+  expect(fs.readdirSync(external).toSorted()).toEqual(["retained.sqlite", "retained.sqlite.seal"]);
   const shared = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(env), { readOnly: true });
   try {
     expect(
@@ -512,7 +578,6 @@ it.each([
     invalidateOpenClawAgentDatabaseValidation(database.path);
     revokeSqliteDatabaseAdmissionsForPath(database.path);
   }
-  const integrityCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseIntegrityCheck");
   try {
     if (proof === "revoked-after-verification-admission") {
       const operation = vi.fn(async () => "not admitted");
@@ -535,7 +600,6 @@ it.each([
     await expect(
       generation.run(source, async () => "opened", undefined, proof === "prepared-existing"),
     ).resolves.toBe("opened");
-    expect(integrityCheck).not.toHaveBeenCalled();
     expect(Array.from(new Int32Array(counter.checks))).toEqual(
       proof === "verified" ||
         proof === "prepared-existing" ||
@@ -550,7 +614,6 @@ it.each([
     );
     expect(revokedBeforeGrant).toBe(proof === "revoked-before-grant");
   } finally {
-    integrityCheck.mockRestore();
     try {
       await generation.close();
     } finally {
@@ -667,14 +730,12 @@ it.runIf(process.platform === "linux")(
       const generation = createNativeGeneration(agentId, pathname, context, assertCurrent, () =>
         context.admission.assertCurrent(),
       );
-      const integrityCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseIntegrityCheck");
       try {
         if (agentId === "corrupt-page") {
           await expect(generation.run(source, async () => "opened")).rejects.toThrow(
             /integrity|malformed|corrupt/i,
           );
           expect(Atomics.load(new Int32Array(counter.checks), 0)).toBeGreaterThan(0);
-          expect(integrityCheck).not.toHaveBeenCalled();
           continue;
         }
         const sessionKey = `agent:${agentId}:after-crash`;
@@ -691,12 +752,10 @@ it.runIf(process.platform === "linux")(
         };
         await initialize();
         expect(Array.from(new Int32Array(counter.checks)), agentId).toEqual([1, 1]);
-        expect(integrityCheck).not.toHaveBeenCalled();
         expect(readSqliteDatabaseIntegrityVerification(pathname)).toEqual({
           verifiedAt: expect.any(Number),
         });
       } finally {
-        integrityCheck.mockRestore();
         await generation.close();
       }
       expect(readSqliteDatabaseCleanClose(pathname)).toBe(true);
@@ -710,3 +769,66 @@ it.runIf(process.platform === "linux")(
     }
   },
 );
+
+it("settles peer native leases when close revokes a shared worker's opening executor", async () => {
+  const fixture = () => ({
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-close-peers-")) },
+  });
+  const source = createNativeSource(() => {});
+  const peers = [];
+  const options = [];
+  // Retained agents share broker workers with the next native opener.
+  for (let index = 0; index < 4; index += 1) {
+    const target = fixture();
+    options.push(target);
+    const peer = captureOpenClawAgentDatabaseExecution(target);
+    await peer.prepare(source);
+    peers.push(peer);
+  }
+  const target = fixture();
+  options.push(target);
+  const execution = captureOpenClawAgentDatabaseExecution(target);
+  let closing: Promise<void> | undefined;
+  const preparing = execution.prepare({
+    ...source,
+    createAdmission(binding) {
+      return source.createAdmission({
+        ...binding,
+        authorize(request) {
+          if (
+            !closing &&
+            request.stage === "prepare" &&
+            typeof request.facts === "object" &&
+            request.facts !== null &&
+            "kind" in request.facts &&
+            request.facts.kind === "agent-open-resume"
+          ) {
+            closing = closeOpenClawAgentDatabasesAsync();
+            void closing.catch(() => {});
+          }
+          binding.authorize(request);
+        },
+      });
+    },
+  });
+  try {
+    await expect(preparing).rejects.toThrow("Agent database execution admission is closed");
+    expect(closing).toBeDefined();
+    await closing;
+    for (const owner of options) {
+      expect(
+        openOpenClawStateDatabase({ env: owner.env })
+          .db.prepare("SELECT lease_id FROM agent_database_leases")
+          .all(),
+      ).toEqual([]);
+    }
+  } finally {
+    await Promise.allSettled([
+      preparing,
+      closing,
+      execution.release(),
+      ...peers.map((peer) => peer.release()),
+    ]);
+  }
+});

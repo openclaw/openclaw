@@ -163,6 +163,7 @@ async function stageQaPackagedMockAuthProfiles(params: {
           cwd: params.command.cwd ?? params.cwd,
           env: { ...params.env, OPENCLAW_CONFIG_PATH: params.configPath },
           stdin: `${createQaPackagedMockApiKey()}\n`,
+          bootstrapPhase: "mock-auth",
         }),
     );
   }
@@ -473,13 +474,19 @@ export async function prepareQaGatewayChild(
         // Published candidates such as 2026.7.1-2 predate capability consent.
         const help = await runQaPackagedBootstrap(
           "installed package plugin setup failed (update repair --help)",
-          () => runQaGatewayCliCommand({ ...command, args: ["update", "repair", "--help"] }),
+          () =>
+            runQaGatewayCliCommand({
+              ...command,
+              args: ["update", "repair", "--help"],
+              bootstrapPhase: "repair-help",
+            }),
         );
         const consentArgs = help.includes("--accept-capabilities") ? ["--accept-capabilities"] : [];
         await runQaPackagedBootstrap("installed package plugin setup failed (update repair)", () =>
           runQaGatewayCliCommand({
             ...command,
             args: ["update", "repair", ...consentArgs, "--yes", "--no-restart", "--json"],
+            bootstrapPhase: "repair",
           }),
         );
       }

@@ -92,7 +92,12 @@ export function records() {
     endedAt: now - 1_000,
     outcome: { status: "ok" },
     expectsCompletionMessage: true,
-    completion: { required: true, resultText: "canonical result", capturedAt: now },
+    completion: {
+      required: true,
+      resultText: "canonical result",
+      terminalReply: { disposition: "visible", text: "canonical result" },
+      capturedAt: now,
+    },
     delivery: {
       status: "in_progress",
       disposition: "session_queued",

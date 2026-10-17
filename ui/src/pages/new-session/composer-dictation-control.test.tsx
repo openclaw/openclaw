@@ -5,14 +5,14 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { ComposerDictationStatus } from "../chat/components/chat-composer-controls.tsx";
 import type * as ComposerDictationModule from "../chat/composer-dictation.ts";
-import { NewSessionComposerTextareaController } from "./composer-controller.ts";
-import { NewSessionDictationView, NewSessionDictationStatus } from "./composer-dictation-view.tsx";
+import { createNewSessionComposerTextarea } from "./composer-controller.ts";
+import { NewSessionDictationView } from "./composer-dictation-view.tsx";
 
 const dictationHarness = vi.hoisted(() => ({
   options: null as null | {
     onCommit: (transcript: string) => void;
-    onStateChange?: () => void;
   },
   controllers: [] as Array<{
     active: boolean;
@@ -27,12 +27,12 @@ const dictationHarness = vi.hoisted(() => ({
 
 vi.mock("../chat/composer-dictation.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof ComposerDictationModule>()),
-  ComposerDictationController: class {
+  ComposerDictationOwner: class extends EventTarget {
     active = false;
     connecting = false;
     finalizing = false;
     transcript = "";
-    private options: { onCommit: (transcript: string) => void; onStateChange?: () => void };
+    private options: { onCommit: (transcript: string) => void };
 
     get locksComposer() {
       return this.active;
@@ -45,22 +45,27 @@ vi.mock("../chat/composer-dictation.ts", async (importOriginal) => ({
     });
     startDirect = vi.fn(() => {
       this.active = true;
-      this.options.onStateChange?.();
+      this.dispatchEvent(new Event("change"));
       return true;
     });
     finishActive = vi.fn(async () => {
       this.options.onCommit("spoken task");
       this.active = false;
-      this.options.onStateChange?.();
+      this.dispatchEvent(new Event("change"));
       return true;
     });
 
-    constructor(options: { onCommit: (transcript: string) => void; onStateChange?: () => void }) {
+    constructor(options: { onCommit: (transcript: string) => void }) {
+      super();
       this.options = options;
       dictationHarness.options = options;
       dictationHarness.controllers.push(this);
     }
-    update(options: { onCommit: (transcript: string) => void; onStateChange?: () => void }) {
+    subscribe(listener: () => void) {
+      this.addEventListener("change", listener);
+      return () => this.removeEventListener("change", listener);
+    }
+    update(options: { onCommit: (transcript: string) => void }) {
       this.options = options;
       dictationHarness.options = options;
     }
@@ -75,13 +80,16 @@ vi.mock("../chat/composer-dictation.ts", async (importOriginal) => ({
 
 vi.mock("../chat/composer-microphone-picker.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../chat/composer-microphone-picker.ts")>()),
-  ComposerMicrophonePicker: class {
+  ComposerMicrophoneOwner: class {
     devices = [];
     loading = false;
     open = false;
     issue = null;
     realtimeStatus = "ready";
     dictationStatus = "ready";
+    subscribe() {
+      return () => {};
+    }
     syncCatalog() {}
     handleOpen() {}
     handleClose() {}
@@ -109,7 +117,6 @@ describe("NewSessionDictationControl", () => {
       onMessage,
       onError: vi.fn(),
       onSubmit: vi.fn(),
-      requestUpdate: vi.fn(),
     });
 
     control.prepare("agent-a");
@@ -134,7 +141,6 @@ describe("NewSessionDictationControl", () => {
       onMessage: vi.fn(),
       onError,
       onSubmit: vi.fn(),
-      requestUpdate: vi.fn(),
     });
     const container = document.createElement("div");
     mountSolid(() => <NewSessionDictationView control={control} ownerKey="agent-a" />, {
@@ -172,7 +178,6 @@ describe("NewSessionDictationControl", () => {
       onMessage,
       onError: vi.fn(),
       onSubmit,
-      requestUpdate: vi.fn(),
     });
     const container = document.createElement("div");
     control.prepare("agent-a");
@@ -192,7 +197,12 @@ describe("NewSessionDictationControl", () => {
     mountSolid(
       () => (
         <>
-          <NewSessionDictationStatus control={control} renderRevision={revision()} />
+          <ComposerDictationStatus
+            readDictation={() => {
+              revision();
+              return control.dictation;
+            }}
+          />
           <NewSessionDictationView
             control={control}
             ownerKey="agent-a"
@@ -225,7 +235,7 @@ describe("NewSessionDictationControl", () => {
   });
 
   it("does not submit a replacement route after finishing the previous draft's dictation", async () => {
-    const textarea = new NewSessionComposerTextareaController();
+    const textarea = createNewSessionComposerTextarea();
     const client = createTestGatewayClient(async () => ({}));
     const onSubmit = vi.fn();
     const control = new NewSessionDictationControl({
@@ -236,7 +246,6 @@ describe("NewSessionDictationControl", () => {
       onMessage: vi.fn(),
       onError: vi.fn(),
       onSubmit,
-      requestUpdate: vi.fn(),
     });
     onTestFinished(() => {
       control.dispose();
@@ -277,7 +286,6 @@ describe("NewSessionDictationControl", () => {
       onMessage,
       onError: vi.fn(),
       onSubmit: vi.fn(),
-      requestUpdate: vi.fn(),
     });
 
     control.prepare("agent-a");
@@ -290,10 +298,11 @@ describe("NewSessionDictationControl", () => {
     expect(routeAController?.active).toBe(true);
 
     control.prepare("agent-b");
+    control.prepare("agent-a");
     routeACommit?.("late route A transcript");
 
     expect(routeAController?.active).toBe(false);
-    expect(dictationHarness.controllers).toHaveLength(2);
+    expect(dictationHarness.controllers).toHaveLength(3);
     expect(insertTranscript).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
   });

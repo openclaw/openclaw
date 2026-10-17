@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { Show, createMemo, createUniqueId } from "solid-js";
 import type { ChatFollowUpMode } from "../../../app/settings.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -6,8 +7,7 @@ import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
-import type { ComposerDictationController } from "../composer-dictation.ts";
+import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { ComposerTalkCapabilityStatus } from "../composer-microphone-picker.ts";
 import {
   realtimeTalkDeviceIssueMessage,
@@ -16,10 +16,14 @@ import {
 } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
+import { ComposerContent } from "./chat-composer-content.tsx";
 import { ChatVoiceStatus, MicrophoneActivity, voiceStatusLabel } from "./chat-voice-activity.tsx";
 
-export type ChatRunControlsProps = Omit<ComposerVoiceButtonProps, "idleLabel"> & {
+export type ChatRunControlsProps = Omit<
+  ComposerVoiceButtonProps,
+  "idleLabel" | "microphonePicker"
+> & {
+  microphonePicker?: MicrophonePickerProps;
   canAbort: boolean;
   canSend: boolean;
   sending: boolean;
@@ -45,7 +49,7 @@ export type ChatRunControlsProps = Omit<ComposerVoiceButtonProps, "idleLabel"> &
   onToggleCamera?: () => void;
 };
 
-type MicrophonePickerProps = {
+export type MicrophonePickerProps = {
   devices: RealtimeTalkInputDevice[];
   loading: boolean;
   open: boolean;
@@ -298,8 +302,8 @@ type ComposerVoiceButtonProps = {
   connected: boolean;
   disabled?: boolean;
   submitDisabledReason?: string | null;
-  readDictation?: () => ComposerDictationController;
-  microphonePicker?: unknown;
+  readDictation?: () => ComposerDictationOwner;
+  microphonePicker?: JSX.Element;
   /** Dictation-only surfaces must not promise Talk. */
   idleLabel?: string;
   onDictationPointerDown?: (event: PointerEvent) => void;
@@ -384,7 +388,7 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
           )}
         </button>
       </openclaw-tooltip>
-      <LitContent value={props.microphonePicker} />
+      <ComposerContent>{props.microphonePicker}</ComposerContent>
     </span>
   );
 }
@@ -396,7 +400,7 @@ function primaryPointerDownRef(read: () => ((event: PointerEvent) => void) | und
 }
 
 export function ComposerDictationSendAction(props: {
-  readDictation: () => ComposerDictationController;
+  readDictation: () => ComposerDictationOwner;
   onSend: (submissionAction?: Event) => void;
   onPointerDown?: (event: PointerEvent) => void;
 }) {
@@ -411,58 +415,60 @@ export function ComposerDictationSendAction(props: {
     send(event);
   };
   return (
-    <>
-      {props.readDictation().active ? (
-        <>
-          {props.readDictation().connecting ? null : (
-            <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
-              {props.readDictation().finalizing
-                ? t("chat.composer.dictationFinalizing")
-                : t("chat.composer.dictationListening")}
-            </span>
-          )}
-          <openclaw-tooltip prop:content={t("chat.runControls.send")}>
-            <button
-              class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
-              type="button"
-              ref={primaryPointerDownRef(() => props.onPointerDown)}
-              onClick={(event: MouseEvent) => void finishAndSend(event)}
-              aria-disabled={props.readDictation().finalizing ? "true" : "false"}
-              aria-label={t("chat.runControls.send")}
-            >
-              <Icon name="arrowUp" />
-            </button>
-          </openclaw-tooltip>
-        </>
-      ) : null}
-    </>
-  );
-}
-
-export function renderComposerDictationStatusSolid(dictation?: ComposerDictationController) {
-  if (!dictation?.active) {
-    return null;
-  }
-  if (dictation.connecting) {
-    return (
-      <ChatVoiceStatus status="connecting" detail={t("chat.composer.microphoneAccessPending")} />
-    );
-  }
-  return (
-    <div class="agent-chat__composer-status-stack">
-      <div
-        class={`agent-chat__dictation-status${dictation.finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
-      >
-        <span
-          class={`agent-chat__dictation-phase${!dictation.finalizing ? " agent-chat__dictation-phase--listening" : ""}`}
-        >
-          {dictation.finalizing
+    <Show when={props.readDictation().active}>
+      {props.readDictation().connecting ? null : (
+        <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {props.readDictation().finalizing
             ? t("chat.composer.dictationFinalizing")
             : t("chat.composer.dictationListening")}
         </span>
-      </div>
-    </div>
+      )}
+      <openclaw-tooltip prop:content={t("chat.runControls.send")}>
+        <button
+          class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
+          type="button"
+          ref={primaryPointerDownRef(() => props.onPointerDown)}
+          onClick={(event: MouseEvent) => void finishAndSend(event)}
+          aria-disabled={props.readDictation().finalizing ? "true" : "false"}
+          aria-label={t("chat.runControls.send")}
+        >
+          <Icon name="arrowUp" />
+        </button>
+      </openclaw-tooltip>
+    </Show>
   );
+}
+
+export function ComposerDictationStatus(props: {
+  readDictation: () => ComposerDictationOwner | undefined;
+}) {
+  const content = createMemo(() => {
+    const dictation = props.readDictation();
+    if (!dictation?.active) {
+      return null;
+    }
+    if (dictation.connecting) {
+      return (
+        <ChatVoiceStatus status="connecting" detail={t("chat.composer.microphoneAccessPending")} />
+      );
+    }
+    return (
+      <div class="agent-chat__composer-status-stack">
+        <div
+          class={`agent-chat__dictation-status${dictation.finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
+        >
+          <span
+            class={`agent-chat__dictation-phase${!dictation.finalizing ? " agent-chat__dictation-phase--listening" : ""}`}
+          >
+            {dictation.finalizing
+              ? t("chat.composer.dictationFinalizing")
+              : t("chat.composer.dictationListening")}
+          </span>
+        </div>
+      </div>
+    );
+  });
+  return <>{content()}</>;
 }
 
 export function renderChatAbortActionSolid(
@@ -488,6 +494,10 @@ export function renderChatAbortActionSolid(
 }
 
 export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
+  const MicrophonePicker = renderMicrophonePickerSolid;
+  const microphonePicker = (
+    <Show when={props.microphonePicker}>{(picker) => <MicrophonePicker {...picker()} />}</Show>
+  );
   const hasComposedContent = createMemo(() => Boolean(props.draft.trim() || props.hasAttachments));
   const labels = createMemo(() =>
     props.suggestionComposer
@@ -641,7 +651,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
                 </span>
               </button>
             </openclaw-tooltip>
-            <LitContent value={props.microphonePicker} />
+            <ComposerContent>{microphonePicker}</ComposerContent>
           </span>
           {voiceErrored() || props.voiceStatus === "connecting" ? null : (
             <span
@@ -663,6 +673,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
           {props.readDictation || props.onToggleVoice ? (
             <VoiceButton
               {...props}
+              microphonePicker={microphonePicker}
               disabled={!props.readDictation && (props.sending || props.isBusy)}
             />
           ) : null}
@@ -697,8 +708,4 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
       )}
     </>
   );
-}
-
-export function renderMicrophonePicker(props: MicrophonePickerProps) {
-  return solidContent(renderMicrophonePickerSolid, props);
 }

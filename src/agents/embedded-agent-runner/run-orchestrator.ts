@@ -3,7 +3,6 @@ import {
   createAgentLifecycleTerminalBackstop,
   resolveAgentLifecycleTerminalMetadata,
 } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { prepareCronRootSessionGeneration } from "../../config/sessions/session-delivery-generation.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -36,6 +35,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { createStageTimingTracker } from "../../shared/stage-timing.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
+import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -73,6 +73,7 @@ import {
 import { SessionManager } from "../sessions/session-manager.js";
 import { redactRunIdentifier } from "../workspace-run.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
+import { buildCompletedAgentUsageMeta, mergeCompletedAgentUsage } from "./completed-usage.js";
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -101,12 +102,7 @@ import {
 } from "./run/runtime-resolution.js";
 import { prepareEmbeddedRunSession } from "./run/session-bootstrap.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
-import {
-  createUsageAccumulator,
-  mergeAttemptRunStatsIntoAccumulator,
-  mergeUsageIntoAccumulator,
-  toNormalizedUsage,
-} from "./usage-accumulator.js";
+import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
 
@@ -243,12 +239,14 @@ async function runEmbeddedAgentForSession(
       params = { ...params, onAgentEvent };
       const refresh = createEmbeddedAgentPluginRuntimeRefresh(params);
       const usage = createUsageAccumulator();
+      const diagnosticUsage = createUsageAccumulator();
       let refreshed = false;
       let generationCleanup = Promise.resolve();
       let terminal: ReturnType<typeof createAgentLifecycleTerminalBackstop> | undefined;
       let assistantErrorTranscript: ReturnType<typeof createAssistantErrorTranscript> | undefined;
       const ownsAssistantErrorTranscript = params.assistantErrorTranscript === undefined;
       const onAttemptStart = params.onAttemptStart;
+      const onAttemptTerminalReplaced = params.onAttemptTerminalReplaced;
       const runGeneration = async (): Promise<EmbeddedAgentRunResult> => {
         throwIfAborted();
         assertInitialOperatorModelPolicy(params, sessionAdmission?.entry);
@@ -384,8 +382,8 @@ async function runEmbeddedAgentForSession(
             ) {
               throw new Error("prepared model runtime replaced the admitted plugin generation");
             }
-            // A reload may complete while admission waits. The committed generation owns config,
-            // directories, model selection, hooks, fallbacks, and every later run projection.
+            // Admission follows committed config, directories, model selection, hooks, and fallbacks.
+            // Connection recovery may refresh transport while retaining this admitted run policy.
             const rebound = bindRunToPreparedModelRuntime({
               runParams: params,
               requestedWorkspaceResolution,
@@ -503,16 +501,13 @@ async function runEmbeddedAgentForSession(
                   payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
                   meta: {
                     durationMs: Date.now() - started,
-                    agentMeta: {
-                      sessionId: params.sessionId,
-                      provider,
-                      model: modelId,
-                    },
-                    finalAssistantVisibleText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
-                    finalAssistantRawText: hookResult.reply?.text ?? SILENT_REPLY_TOKEN,
+                    agentMeta: { sessionId: params.sessionId, provider, model: modelId },
+                    terminalReply: hookResult.reply
+                      ? sanitizeAgentRunTerminalReply(hookResult.reply.text ?? "")
+                      : { disposition: "silent" },
                     providerStarted: false,
                   },
-                };
+                } satisfies EmbeddedAgentRunResult;
               }
 
               assistantErrorTranscript ??=
@@ -547,6 +542,10 @@ async function runEmbeddedAgentForSession(
                   onAttemptStart: () => {
                     runTerminal?.beginAttempt();
                     onAttemptStart?.();
+                  },
+                  onAttemptTerminalReplaced: () => {
+                    runTerminal?.replaceAttemptTerminal();
+                    onAttemptTerminalReplaced?.();
                   },
                   onAgentEvent: runTerminal
                     ? (event) => {
@@ -650,8 +649,13 @@ async function runEmbeddedAgentForSession(
               : run());
             const continuation = refresh.takeContinuation();
             if (refreshed || continuation) {
-              mergeUsageIntoAccumulator(usage, result.meta.agentMeta?.usage);
-              mergeAttemptRunStatsIntoAccumulator(usage, result.meta.agentMeta ?? {});
+              mergeCompletedAgentUsage({
+                usage,
+                diagnosticUsage,
+                agentMeta: result.meta.agentMeta,
+                config: params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG,
+                agentDir: params.agentDir,
+              });
             }
             if (!continuation) {
               if (refreshed && result.meta.agentMeta) {
@@ -662,11 +666,7 @@ async function runEmbeddedAgentForSession(
                     durationMs: Date.now() - started,
                     agentMeta: {
                       ...result.meta.agentMeta,
-                      usage: toNormalizedUsage(usage),
-                      costUsd:
-                        usage.cost && usage.cost !== "unavailable" ? usage.cost.total : undefined,
-                      assistantTurns: usage.assistantTurns,
-                      ...(usage.bridgeCalls ? { bridgeCalls: usage.bridgeCalls } : {}),
+                      ...buildCompletedAgentUsageMeta(usage, diagnosticUsage),
                     },
                   },
                 };

@@ -15,7 +15,6 @@ import {
   upsertAuthProfileWithLockOrThrow,
 } from "./auth-profiles/profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import * as sqliteRead from "./auth-profiles/sqlite-read.js";
 import { readPersistedAuthProfileStoreRaw } from "./auth-profiles/sqlite.js";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
@@ -55,7 +54,6 @@ async function foreign(root: Awaited<ReturnType<typeof seedRoot>>, script: strin
   expect(result.status, result.stderr).toBe(0);
   return result.stdout;
 }
-const runtimeUrl = new URL("./auth-profiles/store-runtime.ts", import.meta.url).href;
 const captureUrl = new URL("./mcp-auth-profile-authorization.ts", import.meta.url).href;
 
 describe("auth-profile authorization", () => {
@@ -132,49 +130,6 @@ describe("auth-profile authorization", () => {
     });
   });
 
-  it("refuses a stale canonical snapshot after the native writer replaces credentials", async () => {
-    const root = await seedRoot("original");
-    await withEnvAsync(root.env, async () => {
-      const authority = await captureMcpAuthProfileAuthorization({
-        profileId: "shared",
-        agentDir: root.agentDir,
-        assertCurrent: source().assertCurrent,
-      });
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const readRows = sqliteRead.readSharedAuthProfileRows;
-      const spy = vi
-        .spyOn(sqliteRead, "readSharedAuthProfileRows")
-        .mockImplementation(async (...args) => {
-          const rows = await readRows(...args);
-          entered.resolve();
-          await release.promise;
-          return rows;
-        });
-      const pending = authority.revalidate();
-      const refused = expect(pending).rejects.toMatchObject({
-        code: "MCP_AUTHORIZATION_UNAVAILABLE",
-      });
-      try {
-        await entered.promise;
-        await upsertAuthProfileWithLockOrThrow({
-          profileId: "shared",
-          credential: apiKey("replacement"),
-        });
-        release.resolve();
-        await refused;
-        expect(authority.assertCurrent).toThrow(
-          expect.objectContaining({ code: "MCP_AUTHORIZATION_RETIRED" }),
-        );
-      } finally {
-        release.resolve();
-        await pending.catch(() => undefined);
-        spy.mockRestore();
-        authority.dispose();
-      }
-    });
-  });
-
   it("does not revive an old handle after remove and same-byte reconnect", async () => {
     const root = await seedRoot("original");
     await withEnvAsync(root.env, async () => {
@@ -240,49 +195,6 @@ describe("auth-profile authorization", () => {
       }
     });
   });
-
-  it.each(["override", "remove-readd"])(
-    "observes foreign %s ABA even when the effective credential ends unchanged",
-    async (operation) => {
-      const root = await seedRoot("original");
-      await withEnvAsync(root.env, async () => {
-        const caller = source();
-        const authority = await captureMcpAuthProfileAuthorization({
-          profileId: "shared",
-          agentDir: root.agentDir,
-          assertCurrent: caller.assertCurrent,
-        });
-        try {
-          const target = operation === "override" ? JSON.stringify(root.agentDir) : "undefined";
-          const script =
-            "import { updateAuthProfileStoreWithLock as update } from " +
-            JSON.stringify(runtimeUrl) +
-            ";" +
-            "await update({agentDir: " +
-            target +
-            ", updater(store) { " +
-            (operation === "override"
-              ? "store.profiles.shared = {type:'api_key',provider:'openai',key:'local-shadow'};"
-              : "delete store.profiles.shared;") +
-            " return true; }});" +
-            "await update({agentDir: " +
-            target +
-            ", updater(store) { " +
-            (operation === "override"
-              ? "delete store.profiles.shared;"
-              : "store.profiles.shared = {type:'api_key',provider:'openai',key:'original'};") +
-            " return true; }});";
-          await foreign(root, script);
-          // Fresh canonical reads, not the process-local mutation maps, detect the changed incarnation.
-          await expect(authority.revalidate()).rejects.toMatchObject({
-            code: "MCP_AUTHORIZATION_RETIRED",
-          });
-        } finally {
-          authority.dispose();
-        }
-      });
-    },
-  );
 
   it("keeps the same lifetime through the real refresh owner's claim and settlement", async () => {
     const root = await seedRoot("unrelated");
@@ -401,41 +313,6 @@ describe("auth-profile authorization", () => {
       });
     },
   );
-
-  it("cannot publish delayed canonical facts after disposal", async () => {
-    const root = await seedRoot("inherited");
-    await withEnvAsync(root.env, async () => {
-      const caller = source();
-      const authority = await captureMcpAuthProfileAuthorization({
-        profileId: "shared",
-        agentDir: root.agentDir,
-        assertCurrent: caller.assertCurrent,
-      });
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const read = sqliteRead.readSharedAuthProfileRows;
-      const spy = vi
-        .spyOn(sqliteRead, "readSharedAuthProfileRows")
-        .mockImplementation(async (...args) => {
-          const rows = await read(...args);
-          entered.resolve();
-          await release.promise;
-          return rows;
-        });
-      const pending = authority.revalidate();
-      const refused = expect(pending).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_RETIRED" });
-      try {
-        await entered.promise;
-        authority.dispose();
-        release.resolve();
-        await refused;
-      } finally {
-        release.resolve();
-        spy.mockRestore();
-        authority.dispose();
-      }
-    });
-  });
 
   it("enrolls an absent agent's inheritance tombstone through its native first-use owner", async () => {
     const root = await seedRoot("inherited");

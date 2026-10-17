@@ -4,8 +4,6 @@ import { createComponent, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { UiSettings } from "../../../app/settings.ts";
-import { icons } from "../../../components/icons.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -22,8 +20,9 @@ import {
 } from "../chat-pane.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import type { HeaderMenuAction } from "./chat-header-session-menu.ts";
+import { PaneHeaderView } from "./chat-pane-header.tsx";
 import "./chat-header-session-menu.ts";
-import type { ChatSessionSharingProps } from "./chat-session-sharing.ts";
+import type { ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
 import { openNativeSessionMenu } from "./native-session-menu.runtime.ts";
 
 type HeaderMenuElement = HTMLElementTagNameMap["openclaw-chat-header-session-menu"];
@@ -109,6 +108,7 @@ async function mountMenu(
   if (open) {
     expect(menu.openMenu()).toBe(true);
     flush();
+    await materializeSubmenus(menu);
     await menu.updateComplete;
   }
   return menu;
@@ -145,6 +145,31 @@ function item(menu: ParentNode, label: string): MenuItemElement {
     throw new Error(`Expected menu item: ${label}`);
   }
   return found;
+}
+
+async function materializeSubmenus(menu: HeaderMenuElement): Promise<void> {
+  const visit = async (root: HTMLElement) => {
+    for (const trigger of root.querySelectorAll<HTMLButtonElement>(
+      'button[aria-haspopup="menu"]',
+    )) {
+      if (trigger.closest('[role="menu"]') !== root || trigger.disabled) {
+        continue;
+      }
+      trigger.click();
+      flush();
+      await menu.updateComplete;
+      const branch = document.getElementById(trigger.getAttribute("aria-controls") ?? "");
+      if (!branch) {
+        throw new Error("Expected submenu panel");
+      }
+      await visit(branch);
+      if (branch.matches(":popover-open")) {
+        trigger.click();
+        flush();
+      }
+    }
+  };
+  await visit(panel(menu));
 }
 
 function submenuItems(trigger: HTMLElement): MenuItemElement[] {
@@ -339,8 +364,9 @@ describe("chat header session menu", () => {
       containers.push(container);
       mountSolid(
         () =>
-          createComponent(LitContent, {
-            value: pane.renderPaneHeader(
+          createComponent(
+            PaneHeaderView,
+            pane.renderPaneHeader(
               createPaneHeaderWorkspaceFixture(state),
               session,
               false,
@@ -348,7 +374,7 @@ describe("chat header session menu", () => {
               false,
               null,
             ),
-          }),
+          ),
         { container },
       );
       const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
@@ -356,6 +382,10 @@ describe("chat header session menu", () => {
       expect(menu?.openMenu()).toBe(true);
       flush();
       await menu?.updateComplete;
+      if (!menu) {
+        throw new Error("Expected chat header session menu");
+      }
+      await materializeSubmenus(menu);
 
       expect(menu?.textContent?.includes("Open in")).toBe(true);
       expect(menu?.textContent?.includes("Cursor")).toBe(testCase.offered);
@@ -399,8 +429,9 @@ describe("chat header session menu", () => {
     containers.push(container);
     mountSolid(
       () =>
-        createComponent(LitContent, {
-          value: pane.renderPaneHeader(
+        createComponent(
+          PaneHeaderView,
+          pane.renderPaneHeader(
             createPaneHeaderWorkspaceFixture(state),
             session,
             false,
@@ -408,7 +439,7 @@ describe("chat header session menu", () => {
             false,
             null,
           ),
-        }),
+        ),
       { container },
     );
     const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
@@ -420,6 +451,7 @@ describe("chat header session menu", () => {
     flush();
     await menu.updateComplete;
 
+    await materializeSubmenus(menu);
     const moveToGroup = item(menu, "Move to group");
     const groupLabels = submenuItems(moveToGroup).map(itemLabel);
     expect(groupLabels).toEqual(["Catalog", "Discovered", "New group"]);
@@ -534,13 +566,13 @@ describe("chat header session menu", () => {
         {
           id: "plugin/export",
           label: "Export transcript",
-          icon: icons.plug,
+          icon: "plug",
           onActivate: exportTranscript,
         },
         {
           id: "stop-cloud-worker",
           label: "Stop cloud worker",
-          icon: icons.stop,
+          icon: "stop",
           variant: "danger",
           disabled: true,
           description: "Worker is restarting",

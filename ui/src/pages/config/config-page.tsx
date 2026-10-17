@@ -1,38 +1,21 @@
 import "../../styles/config.css";
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
-import { subscribeLobsterdex } from "../../components/lobster-dex.ts";
 import {
   SettingsPageHeader,
   LearnMoreLink,
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import {
-  projectNativeDeviceSettings,
-  projectNativeNotifications,
-} from "../../lib/reactive/application-native.ts";
-import {
-  projectGateway,
-  projectAgentSelection,
-  projectApplicationConfig,
-  projectOverlays,
-  projectWebPush,
-} from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import {
-  projectRuntimeConfig,
-  projectAgents,
-  projectAgentIdentity,
-} from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { ConfigPageController, extractQuickSettingsSecurity } from "./config-page.ts";
+import { createConfigPage, extractQuickSettingsSecurity } from "./config-page-state.ts";
 import type { ConfigPageId } from "./config-sections.ts";
 import { Mcp, McpIntro } from "./mcp.tsx";
 import { MeetingCaptureSettings } from "./meeting-capture.tsx";
@@ -45,7 +28,6 @@ import { TalkSettingsPage } from "./talk-page.tsx";
 import { UpdatesPage } from "./updates-page.tsx";
 import type { ConfigProps } from "./view-types.ts";
 import { Config } from "./view.tsx";
-export { ConfigPageController, extractQuickSettingsSecurity } from "./config-page.ts";
 export type { ConfigPageId } from "./config-sections.ts";
 
 function renderConfigPageSubtitle(pageId: ConfigPageId) {
@@ -80,13 +62,13 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
 }
 
 function ConfigBody(props: {
-  controller: ConfigPageController;
+  state: ReturnType<typeof createConfigPage>;
   pageId: ConfigPageId;
   routeData: ConfigRouteData | null;
   config: ConfigProps;
   configObject: Record<string, unknown>;
 }) {
-  const context = () => props.controller.application;
+  const context = () => props.state.application();
   const renderSection = (editor: JSX.Element) => (
     <>
       <Show
@@ -97,7 +79,7 @@ function ConfigBody(props: {
             fallback={editor}
           >
             <SessionStorageSettings
-              mutationDisabled={props.controller.mutationDisabled}
+              mutationDisabled={props.state.mutationDisabled()}
               advancedExpanded={
                 props.config.forceAdvancedSection === "session" ||
                 props.routeData?.targetBlockId === "config-section-session"
@@ -108,7 +90,7 @@ function ConfigBody(props: {
         }
       >
         <MeetingCaptureSettings
-          mutationDisabled={props.controller.mutationDisabled}
+          mutationDisabled={props.state.mutationDisabled()}
           advancedExpanded={
             props.config.forceAdvancedSection === "transcripts" ||
             props.routeData?.targetBlockId === "config-section-transcripts"
@@ -153,15 +135,15 @@ function ConfigBody(props: {
         <UpdatesPage
           context={context()}
           configObject={props.configObject}
-          nowMs={props.controller.nowMs}
-          configBusy={props.controller.mutationDisabled}
-          updateBusy={props.controller.updateBusy}
+          nowMs={props.state.nowMs()}
+          configBusy={props.state.mutationDisabled()}
+          updateBusy={props.state.updateBusy()}
         />
       </Show>
       <Show when={props.pageId === "memory"}>
         <MemorySettingsPage
           configObject={props.configObject}
-          mutationDisabled={props.controller.mutationDisabled}
+          mutationDisabled={props.state.mutationDisabled()}
           pluginsHref={pathForRoute("plugins", context().basePath)}
           memoryImportHref={pathForRoute("memory-import", context().basePath)}
           routeData={props.routeData}
@@ -173,7 +155,7 @@ function ConfigBody(props: {
       <Show when={props.pageId === "talk"}>
         <TalkSettingsPage
           configObject={props.configObject}
-          mutationDisabled={props.controller.mutationDisabled}
+          mutationDisabled={props.state.mutationDisabled()}
           buildEditor={() => editor("talk", t("tabs.talk"))}
         />
       </Show>
@@ -187,7 +169,7 @@ function ConfigBody(props: {
       <Show when={props.pageId === "security"}>
         <Security
           security={extractQuickSettingsSecurity(props.configObject)}
-          configBusy={props.controller.mutationDisabled}
+          configBusy={props.state.mutationDisabled()}
           canPairDevice={
             context().runtimeConfig.state.connected &&
             hasOperatorAdminAccess(context().gateway.snapshot.hello?.auth ?? null)
@@ -216,72 +198,11 @@ export type ConfigPageProps = { pageId: ConfigPageId; routeData: ConfigRouteData
 export function ConfigPage(props: ConfigPageProps) {
   let host!: HTMLElement;
   const context = useApplication();
-  // Plain controllers can notify while a descendant owns the current scope.
-  const [revision, publish] = createSignal(0, { ownedWrite: true });
-  const controller = new ConfigPageController(
+  const state = createConfigPage(
     context,
-    () => publish((value) => value + 1),
-    revision,
+    () => ({ pageId: props.pageId, routeData: props.routeData }),
+    () => host,
   );
-  const gateway = projectGateway(context.gateway);
-  const runtime = projectRuntimeConfig(context.runtimeConfig);
-  const selection = projectAgentSelection(context.settingsAgentSelection);
-  const agentSelection = projectAgentSelection(context.agentSelection);
-  const agents = projectAgents(context.agents);
-  const identities = projectAgentIdentity({
-    identities: context.agentIdentity,
-    agentId: context.agentSelection.state.selectedId,
-  });
-  const config = projectApplicationConfig(context.config);
-  const overlays = projectOverlays(context.overlays);
-  const webPush = projectWebPush(context.webPush);
-  const nativeDevice = context.nativeDeviceSettings
-    ? projectNativeDeviceSettings(context.nativeDeviceSettings)
-    : null;
-  const nativeNotifications = context.nativeNotifications
-    ? projectNativeNotifications(context.nativeNotifications)
-    : null;
-  const refresh = () => {
-    controller.synchronize();
-    publish((value) => value + 1);
-  };
-  const subscriptions = [
-    gateway,
-    runtime,
-    selection,
-    agentSelection,
-    agents,
-    identities,
-    config,
-    overlays,
-    webPush,
-    nativeDevice,
-    nativeNotifications,
-  ].flatMap((source) => (source ? [source.subscribe(refresh)] : []));
-  // Server selection intent can change while the stored preferences stay equal.
-  subscriptions.push(context.theme.subscribe(refresh), subscribeLobsterdex(refresh));
-  createEffect(
-    () => [props.pageId, props.routeData] as const,
-    ([pageId, routeData]) => controller.updateRoute(pageId, routeData),
-  );
-  onSettled(() => {
-    controller.connect(host);
-    return () => controller.dispose();
-  });
-  onCleanup(() => {
-    for (const stop of subscriptions) {
-      stop();
-    }
-  });
-  const configProps = createMemo(() => {
-    revision();
-    return controller.configProps;
-  });
-  const configObject = createMemo(() => {
-    revision();
-    return controller.configObject;
-  });
-  createEffect(revision, () => controller.afterCommit());
   return (
     <openclaw-config-page ref={(element) => (host = element)}>
       <Show when={props.pageId !== "memory"}>
@@ -292,11 +213,11 @@ export function ConfigPage(props: ConfigPageProps) {
       </Show>
       <SettingsWorkspace>
         <ConfigBody
-          controller={controller}
+          state={state}
           pageId={props.pageId}
           routeData={props.routeData}
-          config={configProps()}
-          configObject={configObject()}
+          config={state.configProps()}
+          configObject={state.configObject()}
         />
       </SettingsWorkspace>
     </openclaw-config-page>

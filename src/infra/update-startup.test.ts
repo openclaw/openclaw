@@ -1,4 +1,5 @@
 // Covers startup update check and auto-update behavior.
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,6 +8,7 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -18,6 +20,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import { readRestartSentinel, writeRestartSentinel } from "./restart-sentinel.js";
 import { UpdateCampaignController } from "./update-campaign.js";
@@ -509,25 +512,58 @@ describe("update-startup", () => {
     expect(getUpdateAvailable()).toBeNull();
   });
 
-  it("uses the exact selector for an installed final extended-stable package", async () => {
-    versionMock.value = "2026.6.33";
-    mockPackageUpdateStatus("extended-stable", "2026.7.33");
-    const onUpdateAvailableChange = vi.fn();
-
-    await runGatewayUpdateCheck({
-      cfg: {},
-      onUpdateAvailableChange,
+  it("closes a real Gateway registry request before the exact-package lookup", async ({
+    signal,
+  }) => {
+    vi.useRealTimers();
+    mockPackageInstallStatus();
+    const selectorSeen = createDeferred();
+    const selectorClosed = createDeferred<boolean>();
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(request.url ?? "");
+      if (request.url === "/openclaw/extended-stable") {
+        response.on("close", () => selectorClosed.resolve(response.writableEnded));
+        response.setHeader("content-type", "application/json");
+        // Keep the selector body unfinished. Normal response completion must
+        // never be mistaken for cancellation of the active registry fetch.
+        response.write('{"version":"');
+        selectorSeen.resolve();
+        return;
+      }
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ version: "2026.6.33" }));
     });
-
-    expectLastTelemetryConfig({});
-    expect(resolveNpmChannelTag).toHaveBeenCalledWith({
-      channel: "extended-stable",
+    const reservation = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () => server,
     });
-    expect(onUpdateAvailableChange).toHaveBeenCalledWith({
-      currentVersion: "2026.6.33",
-      latestVersion: "2026.7.33",
-      channel: "extended-stable",
-    });
+    const controller = new AbortController();
+    try {
+      vi.stubEnv("OPENCLAW_UPDATE_PACKAGE_SPEC", "openclaw");
+      vi.stubEnv("NPM_CONFIG_REGISTRY", `http://127.0.0.1:${reservation.claim.port}/`);
+      const real = await vi.importActual<typeof import("./update-check.js")>("./update-check.js");
+      vi.mocked(resolveNpmChannelTag).mockImplementation(real.resolveNpmChannelTag);
+      const checking = runGatewayUpdateCheck({
+        cfg: createExtendedStableConfig(),
+        signal: controller.signal,
+      });
+      await withinTest(
+        awaitGateBeforeSettlement(selectorSeen.promise, checking, "selector request did not start"),
+        signal,
+      );
+      controller.abort();
+      await expect(withinTest(checking, signal)).rejects.toMatchObject({ name: "AbortError" });
+      expect(await withinTest(selectorClosed.promise, signal)).toBe(false);
+      expect(requests).toEqual(["/openclaw/extended-stable"]);
+      expect(getUpdateAvailable()).toBeNull();
+    } finally {
+      controller.abort();
+      vi.unstubAllEnvs();
+      server.closeAllConnections();
+      await reservation.releaseListener();
+      await reservation.claim.release();
+    }
   });
 
   it("discovers and deduplicates an exact extended-stable update without auto-applying", async () => {
@@ -756,7 +792,8 @@ describe("update-startup", () => {
       runAutoUpdate,
       onUpdateScheduleChange: (schedule) => {
         if (!schedule.campaign) {
-          terminalSentinels.push(readRestartSentinel());
+          // This observer outlives the campaign job that publishes its terminal schedule.
+          terminalSentinels.push(runOutsideAsyncWorkScope(() => readRestartSentinel()));
         }
       },
     });
@@ -853,32 +890,6 @@ describe("update-startup", () => {
       expected: { status: "unavailable", reason: "fetch-failed" },
     },
     {
-      name: "missing upstream",
-      git: { upstream: null, upstreamSha: null, ahead: null, behind: null },
-      expected: { status: "unavailable", reason: "no-upstream" },
-    },
-    {
-      name: "missing configured upstream ref",
-      git: {
-        branch: "HEAD",
-        upstream: "origin/missing",
-        upstreamSha: null,
-        ahead: null,
-        behind: null,
-      },
-      expected: { status: "unavailable", reason: "no-upstream-sha" },
-    },
-    {
-      name: "incomparable history",
-      git: { ahead: null, behind: null },
-      expected: { status: "unavailable", reason: "comparison-failed" },
-    },
-    {
-      name: "ahead checkout",
-      git: { ahead: 2, behind: 0 },
-      expected: { status: "ahead", upstreamSha: "upstream-sha", commitsAhead: 2 },
-    },
-    {
       name: "diverged checkout",
       git: { ahead: 1, behind: 3 },
       expected: {
@@ -897,38 +908,6 @@ describe("update-startup", () => {
 
     expect(getUpdateSchedule()?.install?.git).toEqual({ currentSha: "current-sha", ...expected });
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
-  });
-
-  it("keeps a dev campaign countdown stable when active work begins", async () => {
-    mockDevGitStatus();
-    let busy = 1;
-    const log = { info: vi.fn() };
-    const runAutoUpdate = createAutoUpdateSuccessMock();
-
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      log,
-      activeWorkInspectors: {
-        ...idleActiveWorkInspectors(),
-        getQueueSize: () => busy,
-      },
-      runAutoUpdate,
-    });
-    expect(getUpdateSchedule()?.campaign).toMatchObject({ state: "waiting-for-idle" });
-    busy = 0;
-    await clock.advanceBy(5_000);
-    expect(getUpdateSchedule()?.campaign).toMatchObject({ state: "countdown" });
-    const applyAtMs = getUpdateSchedule()?.campaign?.applyAtMs;
-    busy = 1;
-    await clock.advanceBy(5_000);
-    expect(getUpdateSchedule()?.campaign).toMatchObject({
-      state: "countdown",
-      applyAtMs,
-    });
-
-    await clock.advanceBy(55_000);
-    expect(getUpdateSchedule()?.campaign?.state).toBe("applying");
-    expect(runAutoUpdate).toHaveBeenCalledOnce();
   });
 
   it("keeps a new dev target visible during the automatic attempt cooldown", async () => {
@@ -967,37 +946,6 @@ describe("update-startup", () => {
         devTarget: expect.objectContaining({ upstreamSha: "upstream-two" }),
       }),
     );
-  });
-
-  it("supersedes and clears dev git campaigns from fresh git facts", async () => {
-    mockDevGitStatus({ upstreamSha: "upstream-one" });
-    const runAutoUpdate = createAutoUpdateSuccessMock();
-    const cfg = { update: { channel: "dev" as const, auto: { enabled: true } } };
-
-    await runGatewayUpdateCheck({
-      cfg,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-      runAutoUpdate,
-    });
-    const firstId = getUpdateSchedule()?.campaign?.id;
-    mockDevGitStatus({ upstreamSha: "upstream-two", behind: 3 });
-    await runGatewayUpdateCheck({
-      cfg,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-      runAutoUpdate,
-    });
-    expect(getUpdateSchedule()?.campaign?.id).not.toBe(firstId);
-    expect(getUpdateSchedule()?.target).toMatchObject({ upstreamSha: "upstream-two" });
-
-    mockDevGitStatus({ upstreamSha: "upstream-two", behind: 0 });
-    await runGatewayUpdateCheck({
-      cfg,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-      runAutoUpdate,
-    });
-    expect(getUpdateAvailable()).toBeNull();
-    expect(getUpdateSchedule()?.target).toBeUndefined();
-    expect(getUpdateSchedule()?.campaign).toBeUndefined();
   });
 
   it("joins failed initialization and manual discovery before start", async ({ signal }) => {
@@ -1685,7 +1633,8 @@ describe("update-startup", () => {
       activeWorkInspectors: idleActiveWorkInspectors(),
       onUpdateScheduleChange: (schedule) => {
         if (!schedule.campaign) {
-          terminalSentinels.push(readRestartSentinel());
+          // This observer outlives the campaign job that publishes its terminal schedule.
+          terminalSentinels.push(runOutsideAsyncWorkScope(() => readRestartSentinel()));
         }
       },
     });

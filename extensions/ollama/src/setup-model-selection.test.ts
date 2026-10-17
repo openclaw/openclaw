@@ -2,7 +2,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OllamaModelWithContext } from "./provider-models.js";
 import {
+  buildAppGuidedOllamaModel,
+  buildOllamaModelsConfig,
   discoverOllamaModelsForSetup,
   selectAppGuidedOllamaModelFromDiscovery,
 } from "./setup-model-selection.js";
@@ -21,6 +24,53 @@ function pendingAbortableResponse(signal: AbortSignal | null | undefined): Promi
 }
 
 describe("Ollama onboarding model selection", () => {
+  it("retains freshly inspected size when using a configured cloud definition", () => {
+    const model = buildAppGuidedOllamaModel({
+      baseUrl: "http://127.0.0.1:11434",
+      model: { name: "compact-chat:cloud" },
+      showInfo: {
+        contextWindow: 32_768,
+        capabilities: ["completion", "tools"],
+        parameterCount: 4_000_000_000,
+      },
+      configuredCloudModel: {
+        id: "compact-chat:cloud",
+        name: "Compact Chat",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_768,
+        maxTokens: 8192,
+      },
+    });
+    expect(model?.parameterCount).toBe(4_000_000_000);
+  });
+
+  it.each([{ remote_host: "https://ollama.com" }, { remote_model: "upstream-cloud-model" }])(
+    "keeps a remote alias output budget during setup: %j",
+    (remote) => {
+      const models = buildOllamaModelsConfig(
+        ["private-alias", "local-model"],
+        new Map<string, OllamaModelWithContext>([
+          ["private-alias", { name: "private-alias", contextWindow: 262_144, ...remote }],
+          ["local-model", { name: "local-model", contextWindow: 262_144 }],
+        ]),
+      );
+      expect(models.map(({ id, maxTokens }) => ({ id, maxTokens }))).toEqual([
+        { id: "private-alias", maxTokens: 262_144 },
+        { id: "local-model", maxTokens: 8192 },
+      ]);
+    },
+  );
+
+  it("keeps discovery-only parameter metadata out of user config", () => {
+    const models = buildOllamaModelsConfig(
+      ["model"],
+      new Map([["model", { name: "model", parameterCount: 4_000_000_000 }]]),
+    );
+    expect(models[0]).not.toHaveProperty("parameterCount");
+  });
+
   it("selects a deterministic tools-capable model with enough context", () => {
     expect(
       selectAppGuidedOllamaModelFromDiscovery([

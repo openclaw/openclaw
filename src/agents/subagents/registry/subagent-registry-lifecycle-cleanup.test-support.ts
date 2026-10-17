@@ -166,6 +166,29 @@ export function registerDirectSessionCleanupAuthorityTests({
   };
   helperMocks: { persistSubagentSessionTiming: Mock<() => Promise<void>> };
 }) {
+  it("preserves a delivered receipt while cleaning up a suppressed completion", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      expectsCompletionMessage: true,
+      suppressCompletionDelivery: true,
+      delivery: {
+        status: "delivered",
+        disposition: "delivered",
+        deliveredAt: 4_010,
+        announcedAt: 4_020,
+      },
+    });
+    const controller = createLifecycleController({ entry });
+    const join = observeRootWork();
+    expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
+    await join();
+    expect(readLifecycleRun(entry)).toMatchObject({
+      delivery: entry.delivery,
+      cleanupCompletedAt: expect.any(Number),
+    });
+  });
+
   it("commits cancellation of a yielded run before browser cleanup", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: false });
     expect(markSubagentRunPausedAfterYield({ entry, endedAt: 3_000 })).toBe(true);
@@ -427,6 +450,7 @@ export function registerDeliveryRetryOwnerTests({
     );
     const controller = createLifecycleController({
       entry,
+      captureSubagentCompletionReply: vi.fn(async () => terminalReply.text),
       runSubagentAnnounceFlow,
       resumeSubagentRun,
     });

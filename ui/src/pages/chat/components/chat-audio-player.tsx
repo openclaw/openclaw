@@ -1,24 +1,16 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  For,
-  onCleanup,
-  onSettled,
-  Show,
-  untrack,
-} from "solid-js";
+import { createEffect, createMemo, createStore, For, onCleanup, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
+import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import { AttachmentCardHeader, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import {
   openAttachmentCardFromClick,
   type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
-import { ChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
+import { createChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import {
   canResumeChatAudioPlayback,
   claimChatAudioPlayback,
@@ -35,7 +27,7 @@ import {
   type CachedChatAudioBlob,
 } from "./chat-audio-waveform.ts";
 import { buildChatMediaFetchHeaders, type ChatMediaPlaybackMode } from "./chat-media-playback.ts";
-import { ChatMediaSourceController } from "./chat-media-source.ts";
+import { ChatMediaSourceOwner } from "./chat-media-source.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
 const SEEK_STEP_SECONDS = 5;
@@ -66,12 +58,13 @@ function ChatAudioPlayerContent(
   host: SolidBridgeElement<ChatAudioPlayerProps>,
 ) {
   host.style.display = "contents";
-  const [revision, setRevision] = createSignal(0);
-  const state: Record<"currentTime" | "duration" | "buffered" | "waveformWidth", number> & {
-    playing: boolean;
-    muted: boolean;
-    waveformPeaks: readonly number[] | null;
-  } = {
+  const [state, setState] = createStore<
+    Record<"currentTime" | "duration" | "buffered" | "waveformWidth", number> & {
+      playing: boolean;
+      muted: boolean;
+      waveformPeaks: readonly number[] | null;
+    }
+  >({
     currentTime: 0,
     duration: 0,
     buffered: 0,
@@ -79,21 +72,9 @@ function ChatAudioPlayerContent(
     muted: false,
     waveformPeaks: null,
     waveformWidth: 0,
-  };
-  const publish = () => setRevision((value) => value + 1);
-  const updateState = (patch: Partial<typeof state>) => {
-    Object.assign(state, patch);
-    publish();
-  };
-  const view = () => {
-    revision();
-    return state;
-  };
-  const sourceState = () => {
-    revision();
-    return sourceController;
-  };
-  const sourceController = new ChatMediaSourceController();
+  });
+  const sourceController = new ChatMediaSourceOwner();
+  const sourceState = projectOwner(sourceController, (owner) => owner);
   const cancelPendingResume = () => sourceController.cancelPendingResume();
   let mediaElement: HTMLAudioElement | null = null;
   let waveformElement: HTMLElement | null = null;
@@ -103,20 +84,16 @@ function ChatAudioPlayerContent(
   let waveformAttempted = false;
   let waveformVisible = false;
   let active = true;
-  const viewport = new ChatAttachmentViewportRef(() => {
-    waveformVisible = true;
-    void prepareWaveformAudio().catch(() => undefined);
-  });
   const sourceSnapshot = createMemo(
     () => [props.src, props.sourceIdentity, props.playback, props.authToken] as const,
     { equals: (before, after) => before.every((value, index) => value === after[index]) },
   );
+  // Synchronize the browser media resource when its authorized source changes.
   createEffect(sourceSnapshot, (next, previous) => {
     if (sourceController.readiness === "unavailable") {
       releaseWaveformBlob?.();
       releaseWaveformBlob = undefined;
       sourceController.cancel();
-      publish();
     }
     if (
       previous &&
@@ -127,34 +104,36 @@ function ChatAudioPlayerContent(
       releaseWaveformBlob?.();
       releaseWaveformBlob = undefined;
       waveformAttempted = false;
-      updateState({ waveformPeaks: null, currentTime: 0, duration: 0, buffered: 0 });
+      setState((draft) =>
+        Object.assign(draft, { waveformPeaks: null, currentTime: 0, duration: 0, buffered: 0 }),
+      );
       if (mediaElement && !mediaElement.paused) {
         mediaElement.pause();
         releaseChatAudioPlayback(mediaElement);
       }
     }
     syncSource();
-    if (waveformVisible) {
-      void prepareWaveformAudio().catch(() => undefined);
-    }
   });
   const waveformMetadata = createMemo(() => [props.sizeBytes, props.serverDurationMs] as const, {
     equals: (before, after) => before.every((value, index) => value === after[index]),
   });
+  // Server metadata admits bounded Web Audio decoding for the browser waveform.
   createEffect(waveformMetadata, () => {
     if (waveformVisible) {
       void prepareWaveformAudio().catch(() => undefined);
     }
   });
-  onSettled(syncSource);
-  onCleanup(() => {
-    active = false;
-    sourceController.cancel();
+  onSettled(() => {
+    syncSource();
+    return () => {
+      active = false;
+      sourceState.dispose();
+      sourceController.cancel();
+    };
   });
 
   const setMedia = (element: HTMLAudioElement) => {
     mediaElement = element;
-    mediaElement.muted = state.muted;
     syncSource();
   };
 
@@ -176,9 +155,11 @@ function ChatAudioPlayerContent(
 
   function updateWaveformWidth(width: number): void {
     const nextWidth = Math.max(0, width);
-    if (Math.abs(nextWidth - state.waveformWidth) >= 0.5) {
-      updateState({ waveformWidth: nextWidth });
-    }
+    setState((draft) => {
+      if (Math.abs(nextWidth - draft.waveformWidth) >= 0.5) {
+        draft.waveformWidth = nextWidth;
+      }
+    });
   }
 
   function syncSource(): void {
@@ -186,39 +167,31 @@ function ChatAudioPlayerContent(
     if (!media || !active || !host.isConnected || releaseWaveformBlob) {
       return;
     }
-    // The source effect tracks changes; imperative ref/event calls sample current props.
-    const pending = untrack(() =>
-      sourceController.sync(
-        media,
-        props.src,
-        props.sourceIdentity,
-        props.playback,
-        props.authToken,
-      ),
+    // The bridge holds current synchronous inputs for ref, event, and async callbacks.
+    const pending = sourceController.sync(
+      media,
+      host.src,
+      host.sourceIdentity,
+      host.playback,
+      host.authToken,
     );
-    publish();
     if (!pending && waveformVisible) {
       void prepareWaveformAudio().catch(() => undefined);
     }
     void pending?.then(() => {
-      if (active && host.isConnected) {
-        publish();
-        if (waveformVisible) {
-          void prepareWaveformAudio().catch(() => undefined);
-        }
+      if (active && host.isConnected && waveformVisible) {
+        void prepareWaveformAudio().catch(() => undefined);
       }
     });
   }
 
   function resolveWaveformCacheKey(): string {
-    return untrack(() =>
-      [
-        props.sourceIdentity.trim(),
-        props.playback,
-        props.src.trim(),
-        props.authToken?.trim() ?? "",
-      ].join("\0"),
-    );
+    return [
+      host.sourceIdentity.trim(),
+      host.playback,
+      host.src.trim(),
+      host.authToken?.trim() ?? "",
+    ].join("\0");
   }
 
   function applyPreparedAudio(
@@ -232,15 +205,13 @@ function ChatAudioPlayerContent(
     }
     releaseWaveformBlob?.();
     releaseWaveformBlob = prepared.release;
-    updateState({ waveformPeaks: prepared.value.peaks?.length ? prepared.value.peaks : null });
-    if (prepared.value.durationSeconds !== undefined) {
-      updateState({ duration: prepared.value.durationSeconds });
-    }
-    sourceController.updateSource(
-      media,
-      prepared.value.blobUrl,
-      untrack(() => props.sourceIdentity),
-    );
+    setState((draft) => {
+      draft.waveformPeaks = prepared.value.peaks?.length ? prepared.value.peaks : null;
+      if (prepared.value.durationSeconds !== undefined) {
+        draft.duration = prepared.value.durationSeconds;
+      }
+    });
+    sourceController.updateSource(media, prepared.value.blobUrl, host.sourceIdentity);
   }
 
   function adoptPreparedAudioForPlayback(): void {
@@ -270,11 +241,7 @@ function ChatAudioPlayerContent(
       applyPreparedAudio(cacheKey, cached);
       return;
     }
-    const { serverDurationMs, sizeBytes, authToken } = untrack(() => ({
-      serverDurationMs: props.serverDurationMs,
-      sizeBytes: props.sizeBytes,
-      authToken: props.authToken,
-    }));
+    const { serverDurationMs, sizeBytes, authToken } = host;
     const durationSeconds = serverDurationMs !== undefined ? serverDurationMs / 1_000 : undefined;
     if (
       durationSeconds === undefined ||
@@ -378,7 +345,7 @@ function ChatAudioPlayerContent(
       const playback = media.play();
       const failed = () => {
         releaseChatAudioPlayback(media);
-        updateState({ playing: false });
+        setState((draft) => Object.assign(draft, { playing: false }));
       };
       void playback.then(() => prepareWaveformAudio().catch(() => undefined)).catch(failed);
     } else {
@@ -391,16 +358,18 @@ function ChatAudioPlayerContent(
     if (!media) {
       return;
     }
-    if (sourceController.seek(media, Math.min(nextTime, state.duration || nextTime))) {
-      updateState({ currentTime: media.currentTime });
+    const duration = Number.isFinite(media.duration) ? media.duration : state.duration;
+    if (sourceController.seek(media, Math.min(nextTime, duration || nextTime))) {
+      setState((draft) => Object.assign(draft, { currentTime: media.currentTime }));
     }
   }
 
   function toggleMuted(): void {
-    updateState({ muted: !state.muted });
+    const muted = !(mediaElement?.muted ?? state.muted);
     if (mediaElement) {
-      mediaElement.muted = state.muted;
+      mediaElement.muted = muted;
     }
+    setState((draft) => Object.assign(draft, { muted }));
   }
 
   function handlePlayerKeydown(event: KeyboardEvent): void {
@@ -420,22 +389,20 @@ function ChatAudioPlayerContent(
     ) {
       event.preventDefault();
       const direction = event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : 1;
-      seekTo(state.currentTime + direction * SEEK_STEP_SECONDS);
+      seekTo((mediaElement?.currentTime ?? 0) + direction * SEEK_STEP_SECONDS);
     }
   }
 
-  function updateBuffered(media: HTMLAudioElement): void {
-    if (!state.duration || media.buffered.length === 0) {
-      updateState({ buffered: 0 });
-      return;
-    }
-    updateState({
-      buffered: Math.min(1, media.buffered.end(media.buffered.length - 1) / state.duration),
+  function updateBuffered(media: HTMLAudioElement, duration = state.duration): void {
+    setState((draft) => {
+      draft.buffered =
+        duration && media.buffered.length
+          ? Math.min(1, media.buffered.end(media.buffered.length - 1) / duration)
+          : 0;
     });
   }
 
-  const progress = () =>
-    view().duration > 0 ? Math.min(1, view().currentTime / view().duration) : 0;
+  const progress = () => (state.duration > 0 ? Math.min(1, state.currentTime / state.duration) : 0);
   const downloadHref = () => safeMediaAttachmentHref(props.src);
   const card = (): AttachmentCardHeaderOptions => ({
     kind: "audio",
@@ -447,29 +414,27 @@ function ChatAudioPlayerContent(
     voiceNote: props.voiceNote,
   });
   const timeLabel = () =>
-    `${formatChatMediaTime(view().currentTime)} / ${formatChatMediaTime(view().duration)}`;
+    `${formatChatMediaTime(state.currentTime)} / ${formatChatMediaTime(state.duration)}`;
   const Seek = () => {
-    const waveformPeaks = createMemo(() => view().waveformPeaks);
-    const waveformWidth = createMemo(() => view().waveformWidth);
     const displayedPeaks = createMemo(() =>
-      resampleChatAudioWaveformPeaks(waveformPeaks(), waveformWidth()),
+      resampleChatAudioWaveformPeaks(state.waveformPeaks, state.waveformWidth),
     );
     const Input = () => (
       <input
         class={[
           "chat-audio-player__seek",
-          { "chat-audio-player__seek--waveform": Boolean(view().waveformPeaks) },
+          { "chat-audio-player__seek--waveform": Boolean(state.waveformPeaks) },
         ]}
         type="range"
         min="0"
-        max={String(view().duration || 0)}
+        max={String(state.duration || 0)}
         step="0.01"
-        value={String(Math.min(view().currentTime, view().duration || view().currentTime))}
+        value={String(Math.min(state.currentTime, state.duration || state.currentTime))}
         aria-label={t("chat.mediaPlayer.seek")}
         aria-valuetext={timeLabel()}
         style={{
           "--chat-audio-progress": `${progress() * 100}%`,
-          "--chat-audio-buffered": `${Math.max(progress(), view().buffered) * 100}%`,
+          "--chat-audio-buffered": `${Math.max(progress(), state.buffered) * 100}%`,
         }}
         onInput={(event) => seekTo(Number(event.currentTarget.value))}
       />
@@ -509,14 +474,17 @@ function ChatAudioPlayerContent(
       );
     };
     return (
-      <Show when={view().waveformPeaks} fallback={<Input />}>
+      <Show when={state.waveformPeaks} fallback={<Input />}>
         <Waveform />
       </Show>
     );
   };
   const Player = () => {
+    const viewport = createChatAttachmentViewportRef(() => {
+      waveformVisible = true;
+      void prepareWaveformAudio().catch(() => undefined);
+    });
     onCleanup(() => {
-      viewport.disconnect();
       waveformVisible = false;
       waveformController?.abort();
       waveformController = null;
@@ -537,7 +505,7 @@ function ChatAudioPlayerContent(
           "chat-assistant-attachment-card chat-assistant-attachment-card--audio",
           { "chat-assistant-attachment-card--voice-note": props.voiceNote },
         ]}
-        ref={viewport.setElement}
+        ref={viewport}
         data-openable={!props.voiceNote && props.onExpand ? "" : undefined}
         onClick={(event) =>
           openAttachmentCardFromClick(event, props.voiceNote ? undefined : props.onExpand)
@@ -547,7 +515,7 @@ function ChatAudioPlayerContent(
           <AttachmentCardHeader {...card()} visualMode="preview-with-favicon" />
         </Show>
         <Show
-          when={sourceState().readiness !== "preparing"}
+          when={sourceState.read().readiness !== "preparing"}
           fallback={
             <div class="chat-assistant-attachment-card__reason chat-media-preparing">
               {t("chat.mediaPlayer.preparing")}
@@ -564,11 +532,11 @@ function ChatAudioPlayerContent(
             <button
               type="button"
               class="chat-audio-player__toggle"
-              disabled={props.playback === "transcode" && sourceState().readiness !== "ready"}
-              aria-label={t(view().playing ? "chat.mediaPlayer.pause" : "chat.mediaPlayer.play")}
+              disabled={props.playback === "transcode" && sourceState.read().readiness !== "ready"}
+              aria-label={t(state.playing ? "chat.mediaPlayer.pause" : "chat.mediaPlayer.play")}
               onClick={togglePlayback}
             >
-              <Icon name={view().playing ? "pause" : "play"} />
+              <Icon name={state.playing ? "pause" : "play"} />
             </button>
             <div class="chat-audio-player__time" aria-live="off">
               <span>{timeLabel()}</span>
@@ -579,52 +547,56 @@ function ChatAudioPlayerContent(
             <button
               type="button"
               class="chat-audio-player__volume"
-              aria-label={t(view().muted ? "chat.mediaPlayer.unmute" : "chat.mediaPlayer.mute")}
+              aria-label={t(state.muted ? "chat.mediaPlayer.unmute" : "chat.mediaPlayer.mute")}
               onClick={toggleMuted}
             >
-              <Icon name={view().muted ? "volumeX" : "volume2"} />
+              <Icon name={state.muted ? "volumeX" : "volume2"} />
             </button>
           </div>
         </Show>
         <audio
           class="chat-audio-player__media"
           preload="metadata"
+          muted={state.muted}
           ref={setMedia}
           onLoadedMetadata={(event) => {
             const media = event.currentTarget;
             sourceController.handleLoadedMetadata(media, () => canResumeChatAudioPlayback(media));
-            updateState({
-              duration: Number.isFinite(media.duration) ? media.duration : 0,
-              currentTime: media.currentTime,
+            const duration = Number.isFinite(media.duration) ? media.duration : 0;
+            setState((draft) => {
+              draft.duration = duration;
+              draft.currentTime = media.currentTime;
             });
-            updateBuffered(media);
+            updateBuffered(media, duration);
             props.onMediaLoaded?.();
           }}
           onDurationChange={(event) => {
             const media = event.currentTarget;
-            updateState({ duration: Number.isFinite(media.duration) ? media.duration : 0 });
+            setState((draft) => {
+              draft.duration = Number.isFinite(media.duration) ? media.duration : 0;
+            });
           }}
           onTimeUpdate={(event) => {
-            updateState({ currentTime: event.currentTarget.currentTime });
+            const currentTime = event.currentTarget.currentTime;
+            setState((draft) => Object.assign(draft, { currentTime }));
             updateBuffered(event.currentTarget);
           }}
           onProgress={(event) => updateBuffered(event.currentTarget)}
           onPlay={(event) => {
             claimChatAudioPlayback(event.currentTarget, cancelPendingResume);
-            updateState({ playing: true });
+            setState((draft) => Object.assign(draft, { playing: true }));
           }}
-          onPause={() => updateState({ playing: false })}
+          onPause={() => setState((draft) => Object.assign(draft, { playing: false }))}
           onEnded={(event) => {
             releaseChatAudioPlayback(event.currentTarget);
             sourceController.handleEnded(event.currentTarget);
-            updateState({ playing: false });
+            setState((draft) => Object.assign(draft, { playing: false }));
           }}
           onError={(event) => {
             if (!sourceController.handleError(event.currentTarget)) {
               releaseChatAudioPlayback(event.currentTarget);
-              updateState({ playing: false });
+              setState((draft) => Object.assign(draft, { playing: false }));
             }
-            publish();
           }}
         />
       </div>
@@ -632,7 +604,7 @@ function ChatAudioPlayerContent(
   };
   return (
     <Show
-      when={sourceState().readiness !== "unavailable"}
+      when={sourceState.read().readiness !== "unavailable"}
       fallback={
         <Show when={props.voiceNote} fallback={<CompactAttachmentCard {...card()} />}>
           <div class="chat-assistant-attachment-card chat-assistant-attachment-card--voice-note">

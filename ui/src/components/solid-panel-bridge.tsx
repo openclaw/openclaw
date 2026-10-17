@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createRenderEffect } from "solid-js";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import type { SolidPanelController } from "./solid-panel-controller.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import type { SolidPanelOwner } from "./solid-panel-owner.ts";
 
 type MethodKey<T> = {
   [Key in keyof T]-?: T[Key] extends (...args: never[]) => unknown ? Key : never;
@@ -14,7 +14,7 @@ type BridgeSpec<Props extends object, Methods extends object> = Parameters<
 /** The bridge owns input properties; the controller reads that same synchronous state. */
 export function definePanelBridge<
   Props extends object,
-  Controller extends SolidPanelController,
+  Controller extends SolidPanelOwner,
   Method extends MethodKey<Controller>,
 >(
   tag: string,

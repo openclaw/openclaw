@@ -79,23 +79,19 @@ export async function writeLegacyUsageCostRollupForTest(sessionFile: string): Pr
   }
 }
 
-export function readSessionCostUsageRollupEntry(
-  row: SessionCostUsageRollupRow,
-  agentId?: string,
-  databasePath?: string,
-) {
+export function readSessionCostUsageRollupEntry(row: SessionCostUsageRollupRow, agentId?: string) {
   const envelope = decodeUsageCostRollupEnvelope(row.valueJson);
   if (!envelope) {
     return undefined;
   }
   const result = withOpenClawAgentDatabaseReadOnly(
     ({ db }) => {
-      const body = readSessionCostUsageRollupBodyInDatabase(db, row);
+      const body = readSessionCostUsageRollupBodyInDatabase(db, row.key);
       return body
         ? decodeUsageCostRollup(row.valueJson, envelope.pricingFingerprint, body.blob)
         : undefined;
     },
-    { agentId: normalizeAgentId(agentId), ...(databasePath ? { path: databasePath } : {}) },
+    { agentId: normalizeAgentId(agentId) },
   );
   return result.found ? result.value : undefined;
 }

@@ -87,18 +87,21 @@ it("counts resident and durable descendants without restoring settled text", asy
       subagentRuns.set(completed.runId, compactSubagentRunForMemory(completed));
       clearSubagentRunsReadCacheForTest();
       const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-      await expect(read()).resolves.toEqual({ unsettled: true, active: 0 });
-      for (const disposition of [
-        "delivered",
-        "intentional_non_delivery",
-        "permanent_failure",
+      await expect(read()).resolves.toEqual({
+        unsettled: true,
+        active: 0,
+        deliveryWaitUntil: 300_005,
+      });
+      for (const delivery of [
+        { status: "delivered" },
+        { status: "not_required" },
+        { status: "discarded" },
+        { status: "failed", disposition: "intentional_non_delivery" },
+        { status: "failed", disposition: "permanent_failure" },
       ] as const) {
-        persistRegistryFixture(
-          new Map([
-            [pending.runId, { ...pending, delivery: { ...pending.delivery!, disposition } }],
-          ]),
-          [pending.runId],
-        );
+        persistRegistryFixture(new Map([[pending.runId, { ...pending, delivery }]]), [
+          pending.runId,
+        ]);
         await expect(read()).resolves.toEqual({ unsettled: false, active: 0 });
       }
       expect(execute.mock.calls.filter(([, command]) => command.type === "subagents.runs")).toEqual(

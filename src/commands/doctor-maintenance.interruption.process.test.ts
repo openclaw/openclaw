@@ -54,7 +54,7 @@ function interruptionScript(
       ["/config/paths.js", 'export const isDefaultInstallIdentity = () => true;'],
       ["/commands/doctor-service-repair-policy.js", 'export const shouldManageGatewayService = async () => true; export const isServiceRepairExternallyManaged = () => false; export const resolveUpdateParentGatewayActivation = () => undefined;'],
       ["/commands/doctor-maintenance-admission.js", 'export const resolveDoctorUpdateAdmission = () => ({ assertCurrent() {}, recordContinuation() {} });'],
-      ["/commands/doctor-agent-lease-refusal.js", 'export const assertDoctorAgentLeaseAdmission = async () => {}; export const preflightExternalDoctorAgentLease = async () => {};'],
+      ["/commands/doctor-agent-lease-refusal.js", 'export const admitDoctorAgentLeases = ({ acquire }) => acquire(); export const assertDoctorAgentLeaseAdmission = async () => {}; export const preflightExternalDoctorAgentLease = async () => {};'],
       ["/commands/doctor-maintenance-stale-service.js", 'export const inspectStaleDoctorGateway = async () => undefined;'],
       ["/infra/gateway-lock-legacy.js", 'export const assertLegacyGatewayStoppedForMaintenance = async () => {};'],
       ["/infra/gateway-lock.js", 'export const acquireGatewayLock = async () => { let active = true; return { assertCurrent(assertPolicy) { if (!active) throw new Error("Fixture Gateway ownership released"); assertPolicy?.(); if (!active) throw new Error("Fixture Gateway ownership released"); }, run(operation) { if (!active) throw new Error("Fixture Gateway ownership released"); return operation(); }, async release() { active = false; } }; };'],

@@ -275,8 +275,9 @@ inter-session user turns that only have provenance metadata.
   Encrypted reasoning bytes, executable tool arguments, and previously approved
   history remain unchanged.
 - Successful SDK Responses completions omit absent error fields. The session
-  owner attaches run metadata to fresh assistant history before persistence, so
-  the next tool step and transcript reload retain the same run envelope.
+  owner attaches run metadata to fresh assistant and tool-result history before
+  persistence, so the next tool step and transcript reload retain the same run
+  envelope. This internal metadata is not sent in Responses tool outputs.
 - Native ChatGPT Codex Responses follows Codex wire parity by replaying
   prior Responses reasoning/message/function payloads without prior item
   IDs while preserving session `prompt_cache_key`.

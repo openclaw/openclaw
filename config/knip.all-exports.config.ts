@@ -59,10 +59,6 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/scripts/state-read-worker-dependency.test-support.mts!",
   // tsgo:test:root checks these compile-only contracts without runtime imports.
   "test/type-contracts/**/*.ts!",
-  // The corpus README runs this generator by path; remove with that proof command.
-  "test/fixtures/lit-to-solid/compile.mts!",
-  // The codemod test spawns this runtime fixture; remove with that consumer.
-  "test/fixtures/lit-to-solid/runtime.mts!",
   // The module-generation test launches this Bun regression directly from its source path.
   "src/plugins/plugin-module-generation.bun.test-support.ts!",
   // The deprecated-import test launches this isolated SDK caller by path.
@@ -79,8 +75,6 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/helpers/openclaw-test-instance.cli.test-support.mjs!",
   // The public QA Gateway child launches this transport proxy by path.
   "test/fixtures/qa-gateway-rpc-proxy.mjs!",
-  // ClawSweeper's paired consumer proof launches this cross-repository fixture by path.
-  "test/fixtures/mantis-request-producer.mts!",
   // Prior-release fixture generation invokes this CLI from the selected release checkout.
   "test/fixtures/state-corpus/generate.mjs!",
   // Vitest loads these by configuration or module alias rather than imports.
@@ -105,6 +99,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/e2e/qa-lab/runtime/codex-isolated-app-server.fixture.mjs!",
   // The physical-admission test resolves this worker from physicalFactsTestEntrypoint.
   "src/infra/database-engine/physical-facts-worker.test-support.ts!",
+  // The PostgreSQL namespace isolation test resolves this worker through resolveRuntimeWorkerUrl.
+  "src/infra/database-engine/multi-namespace.worker.test-support.ts!",
   // The proxy owner test spawns this capture child through resolveRuntimeWorkerUrl.
   "src/proxy-capture/child-transport.process.test-support.ts!",
   // The PostgreSQL state owner test resolves this worker through resolveRuntimeWorkerUrl.

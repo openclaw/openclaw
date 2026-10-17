@@ -38,10 +38,15 @@ describe("portaled hovercard presentation ownership", () => {
     // The application delegates these events before the portal installs native listeners.
     delegateEvents(["focusin", "focusout"]);
     mountSolid(() => content, { container: card });
+    const showPopover = card.showPopover.bind(card);
+    vi.spyOn(card, "showPopover").mockImplementation(() => {
+      showPopover();
+      first.focus();
+    });
     view.controller.mount(view.trigger, card, "vertical");
     onTestFinished(() => view.controller.reset());
 
-    first.focus();
+    expect(document.activeElement).toBe(first);
     view.controller.handleCardPointerLeave();
     await vi.advanceTimersByTimeAsync(200);
     expect(card.isConnected).toBe(true);
@@ -88,6 +93,28 @@ describe("portaled hovercard presentation ownership", () => {
       }
     },
   );
+
+  it("retires card listeners before an animated card is replaced", () => {
+    vi.useFakeTimers();
+    const view = fixture();
+    view.mount();
+    const previous = view.controller.card!;
+    view.controller.reset(100);
+    view.controller.markTrigger(view.trigger);
+    view.mount();
+    onTestFinished(() => view.controller.reset());
+
+    previous.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(view.dismiss).not.toHaveBeenCalled();
+    expect(view.controller.card?.isConnected).toBe(true);
+    expect(previous.isConnected).toBe(false);
+
+    view.controller.card?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(view.dismiss).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it.each([false, true])(
     "ignores unrelated scrolls and coalesces anchor movement (shadow=%s)",

@@ -32,6 +32,7 @@ import {
   resolveExtensionTestPlan,
 } from "../../scripts/lib/extension-test-plan.mts";
 import { relativizeExtensionVitestArgs } from "../../scripts/lib/extension-vitest-paths.mts";
+import bunPin from "../../scripts/lib/openclaw-bun.json" with { type: "json" };
 import type { VitestBatchRunParams } from "../../scripts/lib/vitest-batch-runner.mts";
 import {
   prepareVitestRuntime,
@@ -512,11 +513,18 @@ describe("scripts/test-extension.mts", () => {
       const entry = path.join(root, "batch.mts");
       mkdirSync(home);
       mkdirSync(bin);
-      symlinkSync(
-        process.execPath,
-        path.join(bin, process.platform === "win32" ? `${runtime}.exe` : runtime),
-        "file",
-      );
+      const executable = path.join(bin, process.platform === "win32" ? `${runtime}.exe` : runtime);
+      if (runtime === "bun" && process.platform !== "win32") {
+        // This fixture owns attestation metadata; real test execution still uses the outer runtime.
+        const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+        writeFileSync(
+          executable,
+          `#!/bin/sh\nif [ "$1" = --revision ]; then\n  printf '%s\\n' ${quote(bunPin.revision)}\nelse\n  exec ${quote(process.execPath)} "$@"\nfi\n`,
+          { mode: 0o755 },
+        );
+      } else {
+        symlinkSync(process.execPath, executable, "file");
+      }
       symlinkSync(
         path.join(process.cwd(), "node_modules"),
         path.join(root, "node_modules"),
@@ -848,6 +856,69 @@ await new Promise(()=>{});export default {};`,
     ).toBe(true);
   });
 
+  it.each([
+    { policy: "bun-all", nodeCode: 0, bunCode: 0 },
+    {
+      policy: "bun-all",
+      nodeCode: 0,
+      bunCode: 0,
+      args: ["--reporter=dot", "--", "literal"],
+    },
+    { policy: "dual-all", nodeCode: 0, bunCode: 0 },
+    { policy: "dual-all", nodeCode: 1, bunCode: 0 },
+    { policy: "dual-all", nodeCode: 0, bunCode: 1 },
+    { policy: "dual-all", nodeCode: 7, bunCode: 0 },
+  ])("runs the complete extension trial $policy ($nodeCode/$bunCode)", async (row) => {
+    const calls: RunGroupParams[] = [];
+    let completedNode = 0;
+    const args = row.args ?? ["--reporter=dot"];
+    vi.mocked(prepareVitestRuntime).mockClear();
+    const result = await runExtensionBatchPlan(createConcurrentExtensionBatchPlan(), {
+      env: {
+        OPENCLAW_CI_TEST_RUNTIME_POLICY: row.policy,
+        OPENCLAW_VITEST_RUNTIME: "bun",
+        OPENCLAW_EXTENSION_BATCH_PARALLEL: row.nodeCode === 7 ? "1" : "2",
+      },
+      vitestArgs: args,
+      runGroup: async (invocation) => {
+        calls.push(invocation);
+        const bun = invocation.env?.OPENCLAW_VITEST_RUNTIME === "bun";
+        if (bun && row.policy === "dual-all") {
+          expect(completedNode).toBe(3);
+        }
+        await Promise.resolve();
+        if (!bun) {
+          completedNode += 1;
+        }
+        return bun ? row.bunCode : row.nodeCode;
+      },
+    });
+    expect(result).toBe(row.nodeCode || row.bunCode);
+    const node = calls.filter((call) => call.env?.OPENCLAW_VITEST_RUNTIME === "node");
+    const bun = calls.filter((call) => call.env?.OPENCLAW_VITEST_RUNTIME === "bun");
+    expect(node.map((call) => call.config)).toEqual(
+      row.policy === "bun-all" ? [] : row.nodeCode === 7 ? ["light"] : ["heavy", "middle", "light"],
+    );
+    expect(bun.map((call) => call.config)).toEqual(
+      row.nodeCode === 7 ? [] : ["heavy", "middle", "light"],
+    );
+    for (const call of bun) {
+      expect(call.env?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toMatch(/-bun$/u);
+      expect(call.args.slice(-args.length)).toEqual(args);
+      const sameOwner = node.find((entry) => entry.config === call.config);
+      if (sameOwner) {
+        expect(call.targets).toEqual(sameOwner.targets);
+        expect(call.env?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).not.toBe(
+          sameOwner.env?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
+        );
+      }
+    }
+    expect(prepareVitestRuntime).toHaveBeenCalledOnce();
+    expect(vi.mocked(prepareVitestRuntime).mock.calls[0]?.[1]).toMatchObject({
+      OPENCLAW_VITEST_RUNTIME: "node",
+    });
+  });
+
   it.each([["--retry", "1", "--exclude=extensions/codex/src/app-server/run-attempt.test.ts"]])(
     "preserves Codex process bounds with release options %j",
     async (...vitestArgs) => {
@@ -864,7 +935,7 @@ await new Promise(()=>{});export default {};`,
 
       const result = await runExtensionBatchPlan(
         resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["codex"] }),
-        { runGroup, vitestArgs },
+        { runGroup, vitestArgs, env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "node" } },
       );
 
       expect(result).toBe(0);
@@ -902,7 +973,7 @@ await new Promise(()=>{});export default {};`,
 
     const result = await runExtensionBatchPlan(
       resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["matrix"] }),
-      { runGroup },
+      { runGroup, env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "node" } },
     );
 
     expect(result).toBe(1);
@@ -916,7 +987,11 @@ await new Promise(()=>{});export default {};`,
 
       const result = await runExtensionBatchPlan(
         resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["matrix"] }),
-        { runGroup, vitestArgs: [vitestArg] },
+        {
+          runGroup,
+          vitestArgs: [vitestArg],
+          env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "node" },
+        },
       );
 
       expect(result).toBe(0);

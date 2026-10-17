@@ -6,15 +6,14 @@ import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { emptyLegacyContent, LitContent } from "../../lit/solid-content.tsx";
 import { CreationComposer } from "../new-session/creation-composer-render.tsx";
 import { NewSessionBody } from "../new-session/draft-body.solid.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
-import { renderChatPaneHeader } from "./components/chat-pane-header.ts";
+import { ChatPaneHeader, type ChatPaneHeaderProps } from "./components/chat-pane-header.tsx";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 registerNewSessionSetupEnglish();
@@ -121,7 +120,7 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
     const noAction = () => {};
     return {
       submitting,
-      header: renderChatPaneHeader({
+      header: {
         paneId: composerId,
         presented: false,
         narrow: props.narrow,
@@ -144,7 +143,6 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
         platform: null,
         canReveal: false,
         copiedAction: null,
-        sessionMenuAction: emptyLegacyContent,
         onBeginRename: noAction,
         onRenameInput: noAction,
         onCommitRename: noAction,
@@ -153,7 +151,7 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
         onMenuAction: noAction,
         onOpenParentSession: noAction,
         onBranchSelect: noAction,
-      }),
+      } satisfies ChatPaneHeaderProps,
       body: {
         inChat: true,
         error: failed
@@ -184,7 +182,6 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
         onOpenImage: openImage,
       },
       creationComposer: composer?.canDisplay() ? composer : undefined,
-      renderRevision: {},
       composer: {
         paneId: composerId,
         sessionKey: props.sessionKey,
@@ -212,7 +209,7 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
     <>
       <div class="sidebar-region">
         <div class="sidebar-region__header">
-          <LitContent value={view()?.header} />
+          <Show when={view()?.header}>{(header) => <ChatPaneHeader {...header()} />}</Show>
         </div>
         <section class="chat" data-region="main" aria-busy={view()?.submitting ? "true" : "false"}>
           <div class="chat-main__conversation-frame">
@@ -224,19 +221,10 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
                     <Show
                       when={current().creationComposer}
                       keyed
-                      fallback={
-                        <ChatComposer
-                          {...current().composer}
-                          renderRevision={current().renderRevision}
-                        />
-                      }
+                      fallback={<ChatComposer {...current().composer} />}
                     >
                       {(composer) => (
-                        <CreationComposer
-                          composer={composer}
-                          onOpenImage={openImage}
-                          renderRevision={current().renderRevision}
-                        />
+                        <CreationComposer composer={composer} onOpenImage={openImage} />
                       )}
                     </Show>
                   )}

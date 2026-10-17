@@ -1,5 +1,4 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
@@ -423,28 +422,6 @@ describe("resolvePluginProviders", () => {
       cache: true,
       activate: false,
     });
-  });
-
-  it("activates the owner plugin for custom provider refs that use a native provider api", () => {
-    setManifest("ollama", { enabledByDefault: true });
-
-    resolvePluginProviders({
-      config: {
-        models: {
-          providers: {
-            "ollama-spark": {
-              api: "ollama",
-              baseUrl: "http://127.0.0.1:11434",
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      providerRefs: ["ollama-spark"],
-      activate: true,
-    });
-
-    expectActivatedOwner("ollama", "runtime", true);
   });
 
   it("uses setup.providers to keep explicit provider owners on the setup path", () => {

@@ -346,6 +346,8 @@ export function buildAgentSystemPrompt(params: {
   projectMemoryBootstrap?: string[];
   /** Prepared repository identities used to filter curated raw context fail-closed. */
   activeProjectKeys?: readonly string[];
+  /** Current repository identity passed to memory prompt sections. */
+  projectKey?: string;
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const promptMode = params.promptMode ?? "full";
@@ -534,6 +536,7 @@ export function buildAgentSystemPrompt(params: {
             agentId: runtimeInfo?.agentId,
             agentSessionKey: runtimeInfo?.sessionKey,
             sandboxed: sandboxedRuntime,
+            projectKey: params.projectKey,
           },
           params.preparedMemoryPrompt,
         );
@@ -566,7 +569,7 @@ export function buildAgentSystemPrompt(params: {
     filterProjectScopedCuratedContextFiles({
       contextFiles: params.contextFiles,
       activeProjectKeys: params.activeProjectKeys,
-    }).filter((file) => typeof file.path === "string" && file.path.trim().length > 0),
+    }).filter((file) => file.path.trim().length > 0),
   );
   // Cache keys and bootstrap checks retain the original ordered file objects.
   const contextFiles = preparedContextFiles.map(({ file }) => file);
@@ -851,8 +854,8 @@ export function buildAgentSystemPrompt(params: {
     !isMinimal &&
       silentReplyPromptMode !== "none" && [
         "## Silent Replies",
-        `Nothing to say: entire reply exactly ${SILENT_REPLY_TOKEN}`,
-        `Never append to real response or wrap in Markdown/code.`,
+        `Nothing to say: entire reply exactly uppercase ${SILENT_REPLY_TOKEN}, without Markdown, punctuation, quotes, or other text.`,
+        `Only that whole reply is silent. A literal leading ${SILENT_REPLY_TOKEN} followed by a newline removes just that line; all remaining text is visible. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`,
         "",
       ],
     // Approval UI and owner identity vary by turn, so keep both below the stable prefix.

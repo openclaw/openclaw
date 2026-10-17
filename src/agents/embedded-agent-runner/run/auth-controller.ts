@@ -2,6 +2,10 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
 import type { ProviderModelRouteAuthRequirement } from "../../../plugin-sdk/provider-model-types.js";
+import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../../../plugins/provider-auth-authority.js";
 import { prepareProviderRuntimeAuth } from "../../../plugins/provider-runtime.js";
 import { SecretSurfaceUnavailableError } from "../../../secrets/runtime-degraded-state.js";
 import {
@@ -29,7 +33,6 @@ import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
 import { applyPreparedRuntimeAuthToModel } from "../../provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "../../provider-runtime-auth-protection.js";
-import { unwrapSecretSentinelsForProviderEgress } from "../../provider-secret-egress.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
@@ -213,10 +216,7 @@ export function createEmbeddedRunAuthController(params: {
         provider: prepareParams.runtimeModel.provider,
         modelId: params.modelId,
         model: prepareParams.runtimeModel,
-        apiKey: unwrapSecretSentinelsForProviderEgress(
-          prepareParams.apiKey,
-          "provider runtime auth exchange",
-        ),
+        apiKey: prepareParams.apiKey,
         authMode: prepareParams.authMode,
         profileId: prepareParams.profileId,
       },
@@ -263,7 +263,6 @@ export function createEmbeddedRunAuthController(params: {
         throw new Error(`Runtime auth refresh requires a source credential.`);
       }
       const runtimeModel = state.models.runtime;
-      params.log.debug(`Refreshing runtime auth for ${runtimeModel.provider} (${reason})...`);
       const preparedAuth = await prepareRuntimeAuthForModel({
         runtimeModel,
         apiKey: sourceApiKey,
@@ -291,14 +290,9 @@ export function createEmbeddedRunAuthController(params: {
       applyPreparedRuntimeRequestOverrides(runtimeModel, preparedAuth);
       state.runtimeAuthState = {
         ...activeRuntimeAuthState,
+        apiKey: preparedAuth.apiKey,
         expiresAt: preparedAuth.expiresAt,
       };
-      if (preparedAuth.expiresAt) {
-        const remaining = preparedAuth.expiresAt - Date.now();
-        params.log.debug(
-          `Runtime auth refreshed for ${runtimeModel.provider}; expires in ${Math.max(0, Math.floor(remaining / 1000))}s.`,
-        );
-      }
     })()
       .catch((err: unknown) => {
         const runtimeModel = state.models.runtime;
@@ -534,6 +528,9 @@ export function createEmbeddedRunAuthController(params: {
       state.models.runtime = baseRuntimeModel;
       state.models.effective = baseEffectiveModel;
     }
+    const authAuthority = getProviderAuthAuthority(apiKeyInfo);
+    state.models.runtime = attachProviderAuthAuthority(state.models.runtime, authAuthority);
+    state.models.effective = attachProviderAuthAuthority(state.models.effective, authAuthority);
     const runtimeModel = state.models.runtime;
     // AWS's default credential chain has no explicit key. The sentinel admits
     // runtime auth preparation or, without a plugin token, SDK request signing.
@@ -553,6 +550,7 @@ export function createEmbeddedRunAuthController(params: {
         params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
         state.runtimeAuthState = {
           generation: (state.runtimeAuthState?.generation ?? 0) + 1,
+          apiKey: preparedAuth.apiKey,
           sourceApiKey,
           authMode: apiKeyInfo.mode,
           profileId,

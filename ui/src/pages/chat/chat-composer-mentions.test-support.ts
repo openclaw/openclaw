@@ -8,7 +8,10 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
-import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
+import {
+  createNewSessionComposerTextarea,
+  type NewSessionComposerTextarea,
+} from "../new-session/composer-controller.ts";
 import { composerContext, mountNewSessionComposer } from "../new-session/composer.test-support.ts";
 import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
@@ -28,7 +31,7 @@ export const people: UsersMentionableResult = {
   ],
   truncated: false,
 };
-const controllers: NewSessionComposerTextareaController[] = [];
+const controllers: NewSessionComposerTextarea[] = [];
 
 export async function resetMentionComposerFixture() {
   controllers.splice(0).forEach((controller) => controller.disconnect());
@@ -52,7 +55,7 @@ export function composerFixture(
   const client = createTestGatewayClient((method, params, options) =>
     method === "commands.list" ? { commands: [] } : request(method, params, options),
   );
-  const controller = new NewSessionComposerTextareaController();
+  const controller = createNewSessionComposerTextarea();
   controllers.push(controller);
   const context = composerContext({
     client,
@@ -106,7 +109,6 @@ export function composerFixture(
         mentionDirectory: unsupported ? undefined : directory,
         mentionsUnsupported: unsupported,
         onDraftChange: onInput,
-        onRequestUpdate: renderCurrent,
         onSlashCommand: slashCommand,
         canAbort: true,
         onAbort: abort,
@@ -125,7 +127,7 @@ export function composerFixture(
         getMentions: () => mentions,
         canSubmit: true,
         requiresModifier: false,
-        requestUpdate: renderCurrent,
+        onChange: renderCurrent,
         submitting: false,
         textareaController: controller,
         onInput: (next, selected) => {

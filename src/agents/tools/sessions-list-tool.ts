@@ -707,6 +707,7 @@ export function createSessionsListTool(opts?: {
         visibility,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        sandboxed: opts?.sandboxed === true,
         a2aPolicy,
         allowArchivedMetadata:
           (archived === true || archived === "all") &&

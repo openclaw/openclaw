@@ -194,11 +194,7 @@ export { stripInternalRuntimeContext } from "../../../../src/agents/internal-run
 export { isHeartbeatUserMessage } from "../../../../src/auto-reply/heartbeat-filter.js";
 export { HEARTBEAT_PROMPT } from "../../../../src/auto-reply/heartbeat.js";
 export { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
-export {
-  HEARTBEAT_TOKEN,
-  SILENT_REPLY_TOKEN,
-  isSilentReplyPayloadText,
-} from "../../../../src/auto-reply/tokens.js";
+export { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../../../../src/auto-reply/tokens.js";
 export { getRuntimeConfig } from "../../../../src/config/config.js";
 export {
   isCompactionCheckpointTranscriptFileName,
@@ -222,6 +218,7 @@ export {
 } from "../../../../src/plugin-sdk/session-store-runtime.js";
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
+export { prepareAssistantTranscriptText } from "../../../../src/shared/chat-message-content.js";
 
 /**
  * Returns an opaque revision that changes for every canonical transcript mutation.

@@ -2,17 +2,17 @@ import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { SolidControllerHost } from "../lib/reactive/solid-controller-host.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
-import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import type {
   SidebarRecentSession,
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 
 export interface SessionOrganizerControllerHost extends SolidControllerHost {
   readonly sessionData: Pick<
-    SessionDataController,
+    SessionDataOwner,
     | "beginSessionMutation"
     | "isSessionMutationScopeCurrent"
     | "publishSessionMutationError"

@@ -1,6 +1,9 @@
 import path from "node:path";
 import { TextDecoder } from "node:util";
-import { assertNoSymlinkParentsSync, readRegularFileSync } from "@openclaw/fs-safe/advanced";
+import {
+  assertNoSymlinkParentsSync,
+  readRegularFileSync,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const MAX_FILES = 8;

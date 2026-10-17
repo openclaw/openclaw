@@ -109,11 +109,11 @@ export async function withCodexStartupTimeout<T>(params: {
 }
 
 /**
- * Bounds app-server startup by the turn budget and, when known, by a multiple of
- * the per-request timeout, so a turn with a long budget cannot hang silently in startup.
+ * Bounds physical startup by a multiple of the configured request timeout.
+ * Turn startup additionally respects its own remaining budget.
  */
 export function resolveCodexStartupTimeoutMs(params: {
-  timeoutMs: number;
+  timeoutMs?: number;
   requestTimeoutMs?: number;
   timeoutFloorMs?: number;
 }): number {
@@ -129,7 +129,10 @@ export function resolveCodexStartupTimeoutMs(params: {
           params.requestTimeoutMs * CODEX_APP_SERVER_STARTUP_REQUEST_TIMEOUT_MULTIPLE,
           turnTimeoutMs,
         );
-  return Math.max(timeoutFloorMs, Math.min(turnTimeoutMs, requestBudgetMs));
+  return Math.max(
+    timeoutFloorMs,
+    params.timeoutMs === undefined ? requestBudgetMs : Math.min(turnTimeoutMs, requestBudgetMs),
+  );
 }
 
 export function resolveCodexGatewayTimeoutWithGraceMs(timeoutMs: number, graceMs = 10_000): number {

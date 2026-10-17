@@ -109,6 +109,159 @@ describe("Plugin link reader panel", () => {
     vi.unstubAllGlobals();
   });
 
+  it("shows the overview while independent sections wait and loads files on selection", async () => {
+    const overview = deferredDetail();
+    const checks = deferredDetail();
+    const discussion = deferredDetail();
+    const files = deferredDetail();
+    const request = vi.fn((_method: string, params?: unknown) => {
+      const section = (params as { section: string }).section;
+      return ({ overview, checks, discussion, files }[section] ?? overview).promise;
+    });
+    const panel = await mount(request);
+    panel.readers = [{ ...reader, linkReader: { ...reader.linkReader, progressive: true } }];
+    await panel.updateComplete;
+    open(panel);
+    await waitForFast(() => expect(panel.querySelector(".lr-skeleton")).not.toBeNull());
+    overview.resolve({
+      ...item(),
+      comments: undefined,
+      revision: "head-a",
+      deferredSections: ["checks", "files", "discussion"],
+      filesTotal: 13,
+    });
+    await expectTitle(panel, "Item 1");
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+    expect(panel.textContent).toContain("Description");
+    expect(panel.textContent).not.toContain("No comments yet");
+    expect(panel.querySelector(".lr-checks--pending")).toBeNull();
+    discussion.resolve({ ...item(), revision: "head-a" });
+    await waitForFast(() =>
+      expect(panel.querySelector(".lr-comment")?.textContent).toContain("Comment text"),
+    );
+    const filesButton = [
+      ...panel.querySelectorAll<HTMLButtonElement>(".lr-section-nav button"),
+    ].find((node) => node.textContent?.includes("Files"))!;
+    filesButton.click();
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
+    files.resolve({
+      ...item(),
+      revision: "head-a",
+      files: [{ path: "index.ts", additions: 1, deletions: 0, patch: "+new" }],
+    });
+    await waitForFast(() =>
+      expect(panel.querySelector(".lr-file")?.textContent).toContain("index.ts"),
+    );
+    checks.resolve({
+      ...item(),
+      revision: "head-b",
+      checks: {
+        state: "success",
+        summary: "Wrong head passed",
+        total: 1,
+        items: [{ name: "Build", state: "success" }],
+      },
+    });
+    await waitForFast(() => expect(panel.textContent).toContain("This item changed"));
+    expect(panel.textContent).not.toContain("Wrong head passed");
+  });
+
+  it.each(["checks", "files", "discussion"] as const)(
+    "retains previous %s when an upstream failure is normalized to empty partial data",
+    async (section) => {
+      const previous: ControlUiLinkReaderDocument = {
+        ...item(),
+        revision: "head-a",
+        checks: {
+          state: "success",
+          summary: "Build passed",
+          total: 1,
+          items: [{ name: "Build", state: "success" }],
+        },
+        files: [{ path: "kept.ts", additions: 1, deletions: 0 }],
+      };
+      const overview: ControlUiLinkReaderDocument = {
+        ...item(),
+        revision: "head-a",
+        comments: undefined,
+        deferredSections: [section],
+      };
+      const failed: ControlUiLinkReaderDocument = {
+        ...overview,
+        checks: {
+          state: "unavailable",
+          summary: "Checks unavailable",
+          total: 0,
+          items: [],
+          truncated: true,
+        },
+        files: [],
+        filesTruncated: true,
+        comments: [],
+        commentsTruncated: true,
+      };
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(previous)
+        .mockResolvedValueOnce(overview)
+        .mockResolvedValueOnce(failed);
+      const panel = await mount(request);
+      panel.readers = [{ ...reader, linkReader: { ...reader.linkReader, progressive: true } }];
+      open(panel);
+      await expectTitle(panel, "Item 1");
+      button(panel, "Refresh item").click();
+      await waitForFast(() => expect(panel.textContent).toContain("Could not refresh"));
+      expect(panel.textContent).toContain(
+        section === "checks" ? "Build passed" : section === "files" ? "kept.ts" : "Comment text",
+      );
+      request.mockResolvedValueOnce(previous);
+      const name =
+        section === "discussion" ? "Discussion" : section === "checks" ? "Checks" : "Files";
+      [...panel.querySelectorAll<HTMLButtonElement>(".lr-section-nav button")]
+        .find((node) => node.textContent?.startsWith(name))!
+        .click();
+      await waitForFast(() => expect(panel.textContent).not.toContain("Could not refresh"));
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(request).toHaveBeenLastCalledWith(
+        "forge.item",
+        expect.objectContaining({ section, refresh: true }),
+        expect.anything(),
+      );
+    },
+  );
+
+  it("retains the document during refresh and retryable failure, but clears it on access loss", async () => {
+    let reject!: (error: Error) => void;
+    const refresh = new Promise((_resolve, fail) => {
+      reject = fail;
+    });
+    const request = vi.fn().mockResolvedValueOnce(item()).mockReturnValueOnce(refresh);
+    const panel = await mount(request);
+    open(panel);
+    await expectTitle(panel, "Item 1");
+    const document = panel.querySelector(".lr-document");
+    button(panel, "Refresh item").click();
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(panel.querySelector(".lr-document")).toBe(document);
+    expect(panel.textContent).toContain("Showing previous details");
+    reject(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Temporary failure",
+        retryable: true,
+      }),
+    );
+    await waitForFast(() => expect(panel.textContent).toContain("Temporary failure"));
+    expect(panel.querySelector(".lr-document")).toBe(document);
+    // A changed identity or denied repository must never keep admitted pixels.
+    request.mockRejectedValueOnce(
+      new GatewayRequestError({ code: "UNAVAILABLE", message: "Access denied", retryable: false }),
+    );
+    button(panel, "Refresh item").click();
+    await waitForFast(() => expect(panel.querySelector("h1")).toBeNull());
+    expect(panel.textContent).toContain("Access denied");
+  });
+
   it.each([
     ["Merged", "accent", "2026-09-23T12:31:58Z"],
     ["Closed", "negative", "2026-09-24T09:15:00Z"],
@@ -426,6 +579,15 @@ describe("Plugin link reader panel", () => {
     panel.remove();
     await Promise.resolve();
     expect(header.childElementCount).toBe(0);
+  });
+
+  it("carries only the current session into a session-scoped detail reader", async () => {
+    const request = vi.fn(async (_method: string, params?: unknown) => requestedItem(params));
+    const panel = await mount(request, { sessionKey: "agent:main:private" });
+    panel.readers = [{ ...reader, linkReader: { ...reader.linkReader, sessionScoped: true } }];
+    open(panel);
+    await expectTitle(panel, "Item 1");
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ sessionKey: "agent:main:private" });
   });
 
   it("loads only an explicitly selected item and persists layout, not content or history", async () => {

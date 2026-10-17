@@ -8,7 +8,7 @@ import {
   useContext,
 } from "solid-js";
 import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.ts";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 
 type WidgetProperties = Pick<
   OpenClawCanvasWidgetView,
@@ -41,7 +41,7 @@ function releaseParking(key: string, parked: ParkedWidget): void {
 }
 
 function CanvasWidgetHost(props: { properties: WidgetProperties; widgetKey: string }) {
-  const presented = useContext(SolidContentPresentation);
+  const presented = useContext(ContentPresentation);
   let container!: HTMLSpanElement;
   let element: OpenClawCanvasWidgetView | undefined;
   createEffect(

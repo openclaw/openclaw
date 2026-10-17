@@ -155,6 +155,7 @@ async function runDoctorConfigPreflightOperation(
   configSnapshotRead = await readConfigSnapshotForPreflight(!stateDirMigrations);
   const recovery = await prepareDoctorConfigRecovery({
     enabled: options.repairPrefixedConfig === true && !skipLegacyParentConfigWrite,
+    stateMigrationsRequested,
     snapshotRead: configSnapshotRead,
     planRepair: planScopedConfigRepair,
     readSnapshot: () => readConfigSnapshotForPreflight(false),
@@ -188,6 +189,12 @@ async function runDoctorConfigPreflightOperation(
       throwIfDoctorStateMigrationRefused(stateMigrationStepReceipts);
     }
   }
+  if (options.doctorOnlyStateMigrations === true && stateDirMigrations) {
+    const { repairRetiredDoctorState } = await import("./doctor-retired-state-repair.js");
+    noteDoctorStateMigrationResult(
+      await measurePreflightStep("retired-state-repair", () => repairRetiredDoctorState()),
+    );
+  }
   if (options.invocationPurpose === "doctor" || options.doctorOnlyStateMigrations === true) {
     // Plugin and legacy-state repairs can inspect sessions during config preflight.
     const { repairLegacySessionEntryStates } = await import("./doctor-session-delivery-state.js");
@@ -209,6 +216,7 @@ async function runDoctorConfigPreflightOperation(
     }
   }
   let postConvergenceStateConfig: OpenClawConfig | undefined;
+  let pluginConvergenceWarnings: string[] = [];
   if (stateDirMigrations) {
     const refreshed = await prepareDoctorMigrationPlugins({
       cfg: automaticConfigRepair?.config ?? baseConfig,
@@ -225,9 +233,10 @@ async function runDoctorConfigPreflightOperation(
           inspection,
         ),
     });
-    configSnapshotRead = refreshed;
+    pluginConvergenceWarnings = refreshed.warnings;
+    configSnapshotRead = refreshed.snapshotRead;
     pluginMetadata.invalidate();
-    snapshot = refreshed.snapshot;
+    snapshot = refreshed.snapshotRead.snapshot;
     baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     automaticConfigRepair = await planAdmittedConfigRepair(snapshot);
     // Core migrations use the validated runtime projection; plugins retain source locators.
@@ -367,6 +376,7 @@ async function runDoctorConfigPreflightOperation(
   return {
     snapshot,
     baseConfig,
+    ...(pluginConvergenceWarnings.length > 0 ? { warnings: pluginConvergenceWarnings } : {}),
     rosterMigrationSource,
     ...(rosterMigrationOwnerId ? { rosterMigrationOwnerId } : {}),
     ...(deferredPluginMigrations.length > 0 ? { deferredPluginMigrations } : {}),

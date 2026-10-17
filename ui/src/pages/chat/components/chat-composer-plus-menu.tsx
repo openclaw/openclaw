@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createUniqueId, Show, untrack } from "solid-js";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import {
@@ -22,7 +22,7 @@ import {
 import { uploadsEnabled } from "../../../lib/uploads.ts";
 import { handleChatAttachmentMenuSelection } from "./chat-attachment-inputs.ts";
 import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
+import { ComposerContent } from "./chat-composer-content.tsx";
 import {
   handleComposerLibrarySelection,
   composerLibraryMenuItems,
@@ -551,13 +551,26 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
           }}
         />
       </div>
-      <LitContent value={props.menu.addServerDialog} />
-      <LitContent value={props.menu.libraryDialog} />
+      <ComposerContent>{props.menu.addServerDialog}</ComposerContent>
+      <ComposerContent>{props.menu.libraryDialog}</ComposerContent>
     </>
   );
 }
 
 export function ChatComposerPlusMenu(props: { menu: ChatComposerPlusMenuProps }) {
+  // Reconnects can replace the capability owner while this menu stays open.
+  createEffect(
+    () => ({
+      open: props.menu.open,
+      view: props.menu.view,
+      load: props.menu.capabilityMenu?.onLoadView,
+    }),
+    ({ open, view, load }) => {
+      if (open) {
+        load?.(view);
+      }
+    },
+  );
   const resolved = createMemo(() => {
     const current = props.menu;
     const capabilityMenu = current.capabilityMenu;

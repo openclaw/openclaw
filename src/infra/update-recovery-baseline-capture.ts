@@ -9,6 +9,7 @@ import {
 } from "../commands/backup-verify-manifest.js";
 import { createDoctorRehearsalDatabaseCoverage } from "../commands/doctor-rehearsal-databases.js";
 import { createConfigIO } from "../config/io.factory.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
 import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-registry.js";
@@ -27,6 +28,7 @@ import {
 import { resolveBackupConfigCapture } from "./backup-config-capture.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256Hex } from "./crypto-digest.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import {
   pinDirectory,
   publishFileExclusive,
@@ -35,7 +37,6 @@ import {
   syncDirectory,
 } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
-import { formatErrorMessage } from "./errors.js";
 import {
   copyFileHandle,
   hashFileMutationSnapshotSync,
@@ -54,10 +55,8 @@ import {
 import { createUpdateDatabaseBackup } from "./update-database-backup.js";
 import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
-import { hasPendingUpdateRecoverySeal } from "./update-recovery-capture-seal.js";
 import { canonicalEntryPath } from "./update-recovery-path.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
-import { getUpdateRunAsync } from "./update-run-reader.js";
 
 declare const SEALED_RUNTIME_BUILD: boolean;
 
@@ -227,21 +226,32 @@ export function captureUpdateRecoveryBaseline(params: {
       configPaths.add(declare(file.sourcePath, "file"));
       configPaths.add(declare(file.canonicalPath, "file"));
     }
+    const collect = async () => {
+      const plugins = await preparePluginDoctorMigrationBackupResources({
+        config: snapshot.sourceConfig,
+        env,
+        stateDir,
+        warnings,
+        requireLocalResources: true,
+        ...(resolveDatabaseFamilyEngines(snapshot.sourceConfig).state === "postgres"
+          ? {
+              manifestRegistry: (
+                await resolveConfigWidePluginMetadataSnapshotAsync({
+                  config: snapshot.sourceConfig,
+                  env,
+                  stateDir,
+                })
+              ).manifestRegistry,
+            }
+          : {}),
+      });
+      plugins.assertCurrent();
+      return plugins.resources;
+    };
     const collectResources = () =>
-      withOpenClawStateDatabaseReadSnapshot(
-        async () => {
-          const plugins = await preparePluginDoctorMigrationBackupResources({
-            config: snapshot.sourceConfig,
-            env,
-            stateDir,
-            warnings,
-            requireLocalResources: true,
-          });
-          plugins.assertCurrent();
-          return plugins.resources;
-        },
-        { env },
-      );
+      resolveDatabaseFamilyEngines(snapshot.sourceConfig).state === "postgres"
+        ? collect()
+        : withOpenClawStateDatabaseReadSnapshot(collect, { env });
     const declared = await collectResources();
     assertCurrent();
     for (const resource of declared) {
@@ -482,10 +492,12 @@ export function captureUpdateRecoveryBaseline(params: {
       assertCurrent();
       const generations =
         params.acquisition?.mode === "maintenance-owner" &&
+        !databases.databases.some((entry) => entry.engine === "postgres") &&
         maintenanceOwnerMayReadGenerationsInProcess(sharedStatePath, databasePaths)
           ? readUpdateDatabaseGenerations([...databasePaths])
           : await readUpdateDatabaseGenerationsIsolated([...databasePaths], {
               env,
+              pluginOwners: databases.pluginOwners,
               signal: params.signal,
               timeoutMs: params.timeoutMs,
               acquisition: params.acquisition,
@@ -620,80 +632,4 @@ export function captureUpdateRecoveryBaseline(params: {
       await pin.close();
     }
   });
-}
-
-const STANDALONE_DOCTOR_CAPTURE_RETENTION_MS = 30 * 24 * 60 * 60_000;
-
-/** Only sealed, unassociated standalone originals are eligible for retirement. */
-export async function retireExpiredStandaloneDoctorCaptures(params: {
-  stateDir: string;
-  keepRunId: string;
-  now?: number;
-  assertCurrent: () => void;
-}): Promise<{ retired: string[]; warnings: string[] }> {
-  const retired: string[] = [];
-  const warnings: string[] = [];
-  const root = resolveUpdateCaptureRoot(params.stateDir);
-  const now = params.now ?? Date.now();
-  let names: string[];
-  try {
-    names = await fs.readdir(root);
-  } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      warnings.push(
-        `Standalone Doctor capture retirement unavailable at ${root}: ${formatErrorMessage(error)}`,
-      );
-    }
-    return { retired, warnings };
-  }
-  for (const name of names.toSorted()) {
-    if (
-      name === params.keepRunId ||
-      !/^doctor-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(name)
-    ) {
-      continue;
-    }
-    const directory = path.join(root, name);
-    try {
-      const entry = await fs.lstat(directory);
-      if (!entry.isDirectory() || entry.isSymbolicLink()) {
-        continue;
-      }
-      if (
-        (await hasPendingUpdateRecoverySeal(directory)) ||
-        !(await statOrMissing(path.join(directory, "manifest.json")))
-      ) {
-        continue;
-      }
-      const source = await safeRoot(directory, { symlinks: "reject", hardlinks: "reject" });
-      const manifest = parseUpdateRecoveryBackupManifest(
-        await source.readText("manifest.json", { maxBytes: 128 * 1024 * 1024 }),
-      );
-      const createdAt = Date.parse(manifest.createdAt);
-      if (
-        manifest.runId !== name ||
-        manifest.schemaVersion !== 2 ||
-        manifest.generation?.kind !== "baseline" ||
-        !Number.isFinite(createdAt) ||
-        now - createdAt <= STANDALONE_DOCTOR_CAPTURE_RETENTION_MS ||
-        (await statOrMissing(path.join(directory, "outcome.json"))) ||
-        (await getUpdateRunAsync(manifest.runId, {
-          path: path.join(params.stateDir, "state", "openclaw.sqlite"),
-        })) !== undefined
-      ) {
-        continue;
-      }
-      if (await hasPendingUpdateRecoverySeal(directory)) {
-        continue;
-      }
-      params.assertCurrent();
-      await fs.rm(directory, { recursive: true });
-      retired.push(directory);
-    } catch (error) {
-      warnings.push(
-        `Standalone Doctor capture retained at ${directory}: ${formatErrorMessage(error)}`,
-      );
-    }
-  }
-  return { retired, warnings };
 }

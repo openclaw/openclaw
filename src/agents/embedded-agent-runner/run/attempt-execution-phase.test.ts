@@ -94,7 +94,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
             changedSystem && index === 1 ? "changed instructions" : "stable instructions",
           messages: [],
         };
-        guards.onModelRequest(testModel, context);
+        await guards.onModelRequest(testModel, context);
         const stream = await runtime.agentSession.activeSession.agent.streamFn(testModel, context);
         await stream.result();
         guards.onModelUsage({ input: 8_000, cacheRead });
@@ -404,7 +404,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           },
         ],
       };
-      guards.onModelRequest?.(testModel, context);
+      await guards.onModelRequest?.(testModel, context);
       await runAgentLoop(
         [{ role: "user", content: "Read once", timestamp: 0 }],
         context,

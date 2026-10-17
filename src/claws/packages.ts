@@ -102,10 +102,7 @@ export async function installClawPackages(
 /** Undo only plugin installs made by this in-flight Add, before its agent is published. */
 export async function rollbackStatelessClawPackages(
   packages: PersistedClawPackageRef[],
-  options: Pick<
-    InstallClawPackagesOptions,
-    "assertCurrent" | "deps" | "env" | "path" | "runtime"
-  > = {},
+  options: Pick<InstallClawPackagesOptions, "assertCurrent" | "env" | "path" | "runtime"> = {},
 ): Promise<string[]> {
   return await rollbackStatelessClawPackagesWithStamps(
     packages,
@@ -118,50 +115,35 @@ async function installClawPackagesUnlocked(
   plan: ClawAddPlan,
   options: InstallClawPackagesOptions,
 ): Promise<PersistedClawPackageRef[]> {
-  const deps = options.deps ?? {};
   const runtime = options.runtime ?? defaultRuntime;
-  const installPlugin =
-    deps.installPlugin ??
-    (async (params) => {
-      const result = await installManagedPlugin(params);
-      for (const warning of result.warnings ?? []) {
-        runtime.log(warning);
-      }
-      runtime.log(`Installed plugin requirement: ${result.plugin.id}`);
-      if (!params.deferRuntime && !params.applyRuntime) {
-        runtime.log("Restart the gateway to load plugins.");
-      }
-    });
-  const uninstallPlugin =
-    deps.uninstallPlugin ??
-    (async (params) => {
-      const result = await uninstallPluginWithPolicy(params);
-      if (!result.ok) {
-        throw new Error(result.error);
-      }
-      runtime.log(`Rolled back plugin requirement: ${result.value.pluginId}`);
-    });
-  const installSkill = deps.installSkill ?? installSkillFromClawHub;
-  const preflightPlugin = deps.preflightPlugin ?? preflightPluginInstall;
-  const preflightSkill = deps.preflightSkill ?? preflightSkillFromClawHub;
-  const persistPackageRef =
-    deps.persistPackageRef ??
-    (options.stateless
-      ? (currentPlan, pkg, refOptions) =>
-          createStatelessClawPackageReceipt(currentPlan, pkg, {
-            ...refOptions,
-            nowMs: refOptions?.nowMs ?? options.nowMs,
-          })
-      : persistClawPackageRefForAdd);
-  const completePackageRef =
-    deps.completePackageRef ??
-    (options.stateless
-      ? (ref, status) => ({ ...ref, status, updatedAtMs: options.nowMs ?? Date.now() })
-      : updateClawPackageRefStatusForAdd);
-  const readPackageRefs =
-    deps.readPackageRefs ?? (options.stateless ? async () => [] : readClawPackageRefsForAdd);
-  const acquirePackageLease = deps.acquirePackageLease ?? acquireClawPackageLifecycleLease;
-  const resolvePlugin = deps.resolvePlugin ?? resolveInstalledClawHubPlugin;
+  const installPlugin = async (params: Parameters<typeof installManagedPlugin>[0]) => {
+    const result = await installManagedPlugin(params);
+    for (const warning of result.warnings ?? []) {
+      runtime.log(warning);
+    }
+    runtime.log(`Installed plugin requirement: ${result.plugin.id}`);
+    if (!params.deferRuntime && !params.applyRuntime) {
+      runtime.log("Restart the gateway to load plugins.");
+    }
+  };
+  const uninstallPlugin = async (params: Parameters<typeof uninstallPluginWithPolicy>[0]) => {
+    const result = await uninstallPluginWithPolicy(params);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    runtime.log(`Rolled back plugin requirement: ${result.value.pluginId}`);
+  };
+  const persistPackageRef: typeof persistClawPackageRefForAdd = options.stateless
+    ? async (currentPlan, pkg, refOptions) =>
+        createStatelessClawPackageReceipt(currentPlan, pkg, {
+          ...refOptions,
+          nowMs: refOptions?.nowMs ?? options.nowMs,
+        })
+    : persistClawPackageRefForAdd;
+  const completePackageRef: typeof updateClawPackageRefStatusForAdd = options.stateless
+    ? async (ref, status) => ({ ...ref, status, updatedAtMs: options.nowMs ?? Date.now() })
+    : updateClawPackageRefStatusForAdd;
+  const readPackageRefs = options.stateless ? async () => [] : readClawPackageRefsForAdd;
   const installedPackages: PersistedClawPackageRef[] = [];
   const installedPlugins: Array<{ installId: string; packageIndex: number }> = [];
 
@@ -169,12 +151,7 @@ async function installClawPackagesUnlocked(
     let packageLease: MaintainedClawPackageLifecycleLease | null = null;
     try {
       const pkg = packageFromAction(action);
-      packageLease = await acquireMaintainedClawPackageLease(
-        pkg,
-        plan.agent.workspace,
-        options,
-        acquirePackageLease,
-      );
+      packageLease = await acquireMaintainedClawPackageLease(pkg, plan.agent.workspace, options);
       const forwardWriter = createClawPackageRefWriter(
         packageLease,
         options,
@@ -193,7 +170,7 @@ async function installClawPackagesUnlocked(
           }
           await upgrade.assertCurrent();
         }
-        const rawPreflight = await preflightSkill({
+        const rawPreflight = await preflightSkillFromClawHub({
           workspaceDir: plan.agent.workspace,
           slug: pkg.ref,
           version: pkg.version,
@@ -262,7 +239,7 @@ async function installClawPackagesUnlocked(
         if (upgrade) {
           await upgrade.assertCurrent();
         }
-        const installed = await installSkill({
+        const installed = await installSkillFromClawHub({
           workspaceDir: plan.agent.workspace,
           slug: pkg.ref,
           version: pkg.version,
@@ -310,7 +287,7 @@ async function installClawPackagesUnlocked(
         continue;
       }
 
-      const preflight = await preflightPlugin({
+      const preflight = await preflightPluginInstall({
         clawhubPackage: pkg.ref,
         rawSpec: `clawhub:${pkg.ref}@${pkg.version}`,
         expectedVersion: pkg.version,
@@ -348,8 +325,6 @@ async function installClawPackagesUnlocked(
         );
       }
       const probe = await probeClawPluginArtifact(pkg, true, {
-        probePlugin: deps.probePlugin,
-        inspectPluginCapabilities: deps.inspectPluginCapabilities,
         env: options.env,
         config: options.config,
         currentArtifactDir: preflight.installedPath,
@@ -366,7 +341,7 @@ async function installClawPackagesUnlocked(
         );
       }
       const capabilityReviewToken = computeDeclaredSurfaceHash(pkg.declaredCapabilities);
-      const sourceHostConflict = sourceHostPluginConflict(pkg, probe.pluginId, options);
+      const sourceHostConflict = await sourceHostPluginConflict(pkg, probe.pluginId, options);
       if (sourceHostConflict) {
         throw new ClawPackageInstallError(
           "plugin_source_host_conflict",
@@ -513,7 +488,7 @@ async function installClawPackagesUnlocked(
         });
       }
       if (options.stateless) {
-        const installed = await resolvePlugin({ clawhubPackage: pkg.ref });
+        const installed = await resolveInstalledClawHubPlugin({ clawhubPackage: pkg.ref });
         if (
           installed.status === "found" &&
           installed.pluginId === probe.pluginId &&
@@ -572,7 +547,7 @@ async function installClawPackagesUnlocked(
         }
         let rollbackLease: MaintainedClawPackageLifecycleLease | null = null;
         try {
-          const acquiredRollbackLease = await acquirePackageLease(
+          const acquiredRollbackLease = await acquireClawPackageLifecycleLease(
             { kind: "plugin", source: "clawhub", ref: packageRef.ref },
             { env: options.env, path: options.path, required: true },
           );
@@ -616,7 +591,7 @@ async function installClawPackagesUnlocked(
             );
             continue;
           }
-          const installed = await resolvePlugin({ clawhubPackage: packageRef.ref });
+          const installed = await resolveInstalledClawHubPlugin({ clawhubPackage: packageRef.ref });
           const installedIntegrity =
             installed.status === "found" && installed.record.integrity
               ? normalizeClawHubSha256Integrity(installed.record.integrity)

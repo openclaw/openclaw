@@ -108,10 +108,7 @@ export async function normalizeProviders(params: {
       secretRefManagedProviders: params.secretRefManagedProviders,
     });
 
-    const needsProfileApiKey =
-      Array.isArray(normalizedProvider.models) &&
-      normalizedProvider.models.length > 0 &&
-      !normalizedProvider.apiKey;
+    const needsProfileApiKey = normalizedProvider.models?.length && !normalizedProvider.apiKey;
     const profileApiKey = needsProfileApiKey
       ? await resolveProfileApiKey(normalizedKey)
       : undefined;

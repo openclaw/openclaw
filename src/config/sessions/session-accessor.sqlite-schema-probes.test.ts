@@ -20,6 +20,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { resolveInternalSessionEffectsIdentity } from "./internal-session-key.js";
 import { listSessionEntriesCore, listSessionEntriesReadOnly } from "./session-accessor.js";
@@ -97,7 +98,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
         admission: createSqliteWorkerOperationAdmission((_request, grant) => {
           setCanonicalSqliteSessionMainKey(writer, "configured-during-read");
           writer.db.exec("CREATE TABLE main_key_race_unrelated (value TEXT)");
-          admitSqliteSchema(writer.db);
+          admitSqliteSchema(requireNativeSqliteDatabase(writer.db));
           grant();
         }),
       }),
@@ -185,7 +186,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
                 expect(readCanonicalSessionMainKey(reader.database)).toBe("main");
               }, options);
             },
-            writer.db,
+            requireNativeSqliteDatabase(writer.db),
           );
           expect(fixtureWriteStarted).toBe(false);
         },
@@ -209,7 +210,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
           }, options),
         ).toThrow("rollback main key");
       },
-      writer.db,
+      requireNativeSqliteDatabase(writer.db),
     );
     expect((await worker.execute({ type: "mainKey", input: undefined })).mainKey).toBe(
       "configured",
@@ -218,19 +219,20 @@ it("refreshes admitted session readers after worker commits without schema or fr
       mainKey: "configured",
       statements: 0,
     });
+    const nativeWriter = requireNativeSqliteDatabase(writer.db);
     // Exercise both native execution paths with statements retained before observation.
     const probeGroups = [
       ["schema_version", "user_version", "data_version"].map((name) =>
-        writer.db.prepare(`PRAGMA ${name}`),
+        nativeWriter.prepare(`PRAGMA ${name}`),
       ),
       [
-        writer.db.prepare(`SELECT schema_version, user_version, data_version
+        nativeWriter.prepare(`SELECT schema_version, user_version, data_version
           FROM main.pragma_schema_version(), main.pragma_user_version(), main.pragma_data_version()`),
       ],
     ];
     for (const statements of probeGroups) {
       for (const method of ["get", "all", "iterate"] as const) {
-        const probes = measureSqliteSchemaProbes(writer.db, () => {
+        const probes = measureSqliteSchemaProbes(nativeWriter, () => {
           for (const statement of statements) {
             if (method === "iterate") {
               Array.from(statement.iterate());
@@ -243,9 +245,9 @@ it("refreshes admitted session readers after worker commits without schema or fr
         expect(probes).toMatchObject({ schemaVersion: 100, userVersion: 100, dataVersion: 100 });
       }
     }
-    if (typeof writer.db.setAuthorizer === "function") {
+    if (typeof nativeWriter.setAuthorizer === "function") {
       let allowed = true;
-      writer.db.setAuthorizer(() => (allowed ? constants.SQLITE_OK : constants.SQLITE_DENY));
+      nativeWriter.setAuthorizer(() => (allowed ? constants.SQLITE_OK : constants.SQLITE_DENY));
       const read = () =>
         entryCache.readSessionEntryCache(writer, { cache: true }).entries.get("agent:main:probe");
       const publications: Array<{
@@ -270,7 +272,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
               updatedAt: 1,
               label: "current",
             }),
-          writer.db,
+          requireNativeSqliteDatabase(writer.db),
         );
         expect(publications).toEqual([
           {
@@ -286,7 +288,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
         expect(read).toThrow(/not authorized/i);
       } finally {
         stop();
-        writer.db.setAuthorizer(null);
+        nativeWriter.setAuthorizer(null);
       }
       expect(read()?.label).toBe("current");
     }
@@ -345,8 +347,9 @@ it.each<{
     read();
     const materialized: string[] = [];
     let hotPayloadBytes = 0;
-    const prepare = database.db.prepare.bind(database.db);
-    vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+    const nativeDb = requireNativeSqliteDatabase(database.db);
+    const prepare = nativeDb.prepare.bind(nativeDb);
+    vi.spyOn(nativeDb, "prepare").mockImplementation((sql) => {
       const statement = prepare(sql);
       const observe = (row: Record<string, unknown>) => {
         if (typeof row.entry_json === "string") {
