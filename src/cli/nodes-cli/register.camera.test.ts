@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "../../runtime.js";
 import { writeCameraPayloadToFile } from "../nodes-camera.js";
 import { registerNodesCameraCommands } from "./register.camera.js";
 import * as rpc from "./rpc.js";
@@ -43,6 +44,7 @@ vi.mock("./rpc.js", async () => {
       platform: "ios",
       remoteIp: "198.51.100.42",
     })),
+    resolveCliNodeId: vi.fn(async () => "node-abc123"),
     callNodesGatewayCli: vi.fn(async (_method, _opts, invokeParams) => {
       capturedInvokeParams.push(invokeParams as Record<string, unknown>);
       return {
@@ -193,5 +195,37 @@ describe("nodes camera snap CLI option forwarding", () => {
     await expect(
       nodes.parseAsync(cameraSnapArgs(["--node", "test-node", "--delay-ms", "-1"])),
     ).rejects.toThrow("--delay-ms must be a non-negative integer");
+  });
+
+  it("strips terminal controls from device fields in the camera list report", async () => {
+    vi.mocked(rpc.callNodesGatewayCli).mockResolvedValueOnce({
+      payload: {
+        devices: [
+          { name: "front\u0007bell", position: "front", id: "dev-1" },
+          { name: "\u001b]0;title-pwned\u0007", position: "back", id: "dev-2" },
+        ],
+      },
+    });
+
+    const log = vi.spyOn(defaultRuntime, "log");
+    try {
+      await buildRootCommand().parseAsync([
+        "node",
+        "nodes",
+        "camera",
+        "list",
+        "--node",
+        "test-node",
+      ]);
+      const raw = log.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(raw).not.toContain("\u001b");
+      expect(raw).not.toContain("\u0007");
+      expect(raw).toContain("frontbell");
+      expect(raw).toContain("dev-1");
+      expect(raw).toContain("dev-2");
+      expect(raw).not.toContain("title-pwned");
+    } finally {
+      log.mockRestore();
+    }
   });
 });

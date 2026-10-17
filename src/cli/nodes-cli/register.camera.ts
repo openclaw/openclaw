@@ -4,7 +4,10 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../../packages/terminal-core/src/table.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import {
@@ -83,7 +86,7 @@ export function registerNodesCameraCommands(nodes: Command) {
           }));
           defaultRuntime.log(heading("Cameras"));
           defaultRuntime.log(
-            renderTable({
+            renderTerminalSafeTable({
               width: tableWidth,
               columns: [
                 { key: "Name", header: "Name", minWidth: 14, flex: true },
