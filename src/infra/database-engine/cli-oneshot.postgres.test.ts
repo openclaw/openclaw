@@ -21,6 +21,8 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 const roots = useAutoCleanupTempDirTracker(afterAll);
 const childTimeoutMs = 60_000;
+// Repair preserves a complete PostgreSQL recovery capture before running its checks.
+const doctorRepairTimeoutMs = 120_000;
 
 describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
   it(
@@ -120,7 +122,12 @@ describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
       try {
         const schemas = new Set<string>();
         for (const args of commands) {
-          const result = await runBuiltRuntime(runtimeRoot, env, args, childTimeoutMs);
+          const result = await runBuiltRuntime(
+            runtimeRoot,
+            env,
+            args,
+            args.includes("--fix") ? doctorRepairTimeoutMs : childTimeoutMs,
+          );
           expect(
             result.code,
             formatCliProcessFailure({
@@ -188,7 +195,7 @@ describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
         }
       }
     },
-    getCliProcessTestTimeout(childTimeoutMs, ...Array<number>(6).fill(childTimeoutMs)),
+    getCliProcessTestTimeout(doctorRepairTimeoutMs, ...Array<number>(6).fill(childTimeoutMs)),
   );
 });
 
