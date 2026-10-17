@@ -581,7 +581,9 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     "uses managed daemon health timing on $platform",
     async ({ platform, healthTimeoutMs }) => {
       await withStateDir("state-local-daemon-health-", async (stateDir) => {
-        // Create native filesystem state before spoofing only the daemon timing platform.
+        // Bootstrap shared/client state and runtime pins before spoofing daemon timing.
+        const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+        openOpenClawStateDatabase({ env: process.env });
         const { initializeFreshDaemonRuntimePinMigration } =
           await import("../infra/state-migrations.daemon-runtime-pins.js");
         initializeFreshDaemonRuntimePinMigration(process.env);
