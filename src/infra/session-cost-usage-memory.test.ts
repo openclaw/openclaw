@@ -22,6 +22,7 @@ import {
   type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
+import { resolveZstdCodec } from "./zstd-codec.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -315,21 +316,24 @@ describe("actor memory usage", () => {
     });
   });
 
-  it("defers compressed expansion within the same report allowance", async () => {
-    const cached = await cachedFixture();
-    const encoded = paddedRollup(cached.entry, 33 * 1024 * 1024, true);
-    expect(encoded.blob.byteLength).toBeLessThan(1024 * 1024);
-    await writeRollup(cached, encoded);
-    const report = await memoryReport(cached);
-    expect(report.kind === "sessions" && report.summaries[0] === null).toBe(true);
-    expect(report).toMatchObject({
-      kind: "sessions",
-      summaries: [null],
-      staleSessionFiles: [],
-      invalidRows: [],
-      cacheStatus: { status: "partial", staleFiles: 0 },
-    });
-  });
+  it.skipIf(!resolveZstdCodec())(
+    "defers compressed expansion within the same report allowance",
+    async () => {
+      const cached = await cachedFixture();
+      const encoded = paddedRollup(cached.entry, 33 * 1024 * 1024, true);
+      expect(encoded.blob.byteLength).toBeLessThan(1024 * 1024);
+      await writeRollup(cached, encoded);
+      const report = await memoryReport(cached);
+      expect(report.kind === "sessions" && report.summaries[0] === null).toBe(true);
+      expect(report).toMatchObject({
+        kind: "sessions",
+        summaries: [null],
+        staleSessionFiles: [],
+        invalidRows: [],
+        cacheStatus: { status: "partial", staleFiles: 0 },
+      });
+    },
+  );
 
   it.each(["valid", "missing"] as const)(
     "preserves freshness or repairs %s bodies after header allowance exhaustion",
