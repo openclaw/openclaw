@@ -23,7 +23,7 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js
 /** Upgrade older owned databases to the structural schema required by the media cutover. */
 export function* migrateOpenClawAgentDatabaseToMediaPrerequisiteSchemaSteps(
   db: DatabaseSync,
-  options: OpenClawAgentDatabaseOptions,
+  options: OpenClawAgentDatabaseOptions & { integrityCheck?: "quick" | "full" },
 ): SqliteIntegrityOperation<void> {
   const targetVersion = AGENT_MEDIA_SCHEMA_VERSION - 1;
   if (readSqliteUserVersion(db) > targetVersion) {
