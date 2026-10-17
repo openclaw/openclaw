@@ -32,6 +32,36 @@ const model: Model = {
   maxTokens: 1_000,
 };
 
+function response(
+  content: AssistantMessage["content"],
+  stopReason: "toolUse" | "error" | "stop",
+  timestamp: number,
+) {
+  const message: AssistantMessage = {
+    role: "assistant",
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: createZeroUsageFixture(),
+    timestamp,
+    content,
+    stopReason,
+    ...(stopReason === "error"
+      ? { errorMessage: "Provider failed answering steered input B" }
+      : {}),
+  };
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => {
+    if (stopReason === "error") {
+      stream.push({ type: "error", reason: "error", error: message });
+    } else {
+      stream.push({ type: "done", reason: stopReason, message });
+    }
+    stream.end();
+  });
+  return stream;
+}
+
 describe("confirmed message-tool turn completion", () => {
   it.each([false, true])(
     "surfaces a steered input failure after the preceding source reply (final=%s)",
@@ -86,39 +116,20 @@ describe("confirmed message-tool turn completion", () => {
         },
         streamFn: () => {
           requests += 1;
-          const message: AssistantMessage = {
-            role: "assistant",
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: createZeroUsageFixture(),
-            timestamp: requests,
-            content:
-              requests === 1
-                ? [
-                    {
-                      type: "toolCall",
-                      id: "source-a",
-                      name: "message",
-                      arguments: { action: "send", message: "Answer for input A.", final },
-                    },
-                  ]
-                : [],
-            stopReason: requests === 1 ? "toolUse" : "error",
-            ...(requests === 1
-              ? {}
-              : { errorMessage: "Provider failed answering steered input B" }),
-          };
-          const stream = createAssistantMessageEventStream();
-          queueMicrotask(() => {
-            if (message.stopReason === "error") {
-              stream.push({ type: "error", reason: "error", error: message });
-            } else {
-              stream.push({ type: "done", reason: "toolUse", message });
-            }
-            stream.end();
-          });
-          return stream;
+          return response(
+            requests === 1
+              ? [
+                  {
+                    type: "toolCall",
+                    id: "source-a",
+                    name: "message",
+                    arguments: { action: "send", message: "Answer for input A.", final },
+                  },
+                ]
+              : [],
+            requests === 1 ? "toolUse" : "error",
+            requests,
+          );
         },
       });
       Object.assign(session, { agent });
@@ -151,10 +162,9 @@ describe("confirmed message-tool turn completion", () => {
         expect(requests).toBe(2);
         expect(delivered).toBe(final);
         expect(subscription.getSourceReplyDeliveryState()).toBe("missing");
-        expect(subscription.answerSegments).toHaveLength(1);
-        expect(subscription.answerSegments[0]?.sourceReplyDeliveryState).toBe(
-          final ? "delivered" : "missing",
-        );
+        expect(subscription.answerSegments).toEqual([
+          expect.objectContaining({ sourceReplyDeliveryState: final ? "delivered" : "missing" }),
+        ]);
         const messagingToolSourceReplyPayloads = subscription.getMessagingToolSourceReplyPayloads();
         expect(messagingToolSourceReplyPayloads).toEqual([
           expect.objectContaining({
@@ -249,23 +259,7 @@ describe("confirmed message-tool turn completion", () => {
                   { type: "toolCall", id: "lookup", name: "lookup", arguments: {} },
                 ]
               : [{ type: "text", text: "Another visible answer." }];
-          const stopReason = requests === 1 ? "toolUse" : "stop";
-          const message: AssistantMessage = {
-            role: "assistant",
-            content,
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: createZeroUsageFixture(),
-            stopReason,
-            timestamp: 0,
-          };
-          const stream = createAssistantMessageEventStream();
-          queueMicrotask(() => {
-            stream.push({ type: "done", reason: stopReason, message });
-            stream.end();
-          });
-          return stream;
+          return response(content, requests === 1 ? "toolUse" : "stop", 0);
         },
       });
       agent.afterToolCall = async (context) => {
