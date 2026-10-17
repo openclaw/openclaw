@@ -11,19 +11,16 @@ import {
 import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import {
   connectProofClient,
+  createModelGatewayProof,
   contentTexts,
   readRequestText,
 } from "./helpers/gateway-integration-fixtures.js";
 import {
-  createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
   type OpenAiResponsesModelServer,
 } from "./helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "./helpers/openclaw-test-instance.js";
+import type { OpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
 const TEST_TIMEOUT_MS = 180_000;
 const SESSION_KEY = "agent:main:main";
@@ -42,19 +39,10 @@ it(
   async () => {
     const modelServer = await startMockModelServer();
     modelServers.push(modelServer);
-    const instance = await createOpenClawTestInstance({
+    const instance = await createModelGatewayProof({
       name: "embedded-transcript-cursor",
-      config: createOpenAiResponsesModelConfig({
-        baseUrl: modelServer.baseUrl,
-        providerId: "cursor-settlement",
-        modelId: "cursor-settlement",
-        reasoning: false,
-        toolProfile: "minimal",
-      }),
-      env: {
-        OPENCLAW_SKIP_PROVIDERS: undefined,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      },
+      baseUrl: modelServer.baseUrl,
+      modelId: "cursor-settlement",
     });
     instances.push(instance);
     await instance.startGateway();

@@ -2,8 +2,36 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { Server as HttpsServer } from "node:https";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import type { ToolProfileId } from "../../src/config/types.tools.js";
 import type { connectGatewayClient } from "../../src/gateway/test-helpers.e2e.js";
 import type { OpenClawTestInstance } from "./openclaw-test-instance.js";
+
+export async function createModelGatewayProof(options: {
+  name: string;
+  baseUrl: string;
+  modelId: string;
+  toolProfile?: ToolProfileId;
+  config?: (base: OpenClawConfig) => OpenClawConfig;
+  env?: Record<string, string | undefined>;
+}) {
+  const { createOpenClawTestInstance } = await import("./openclaw-test-instance.js");
+  const { createOpenAiResponsesModelConfig } = await import("./openai-responses-model-fixture.js");
+  const base = createOpenAiResponsesModelConfig({
+    ...options,
+    providerId: options.modelId,
+    reasoning: false,
+    toolProfile: options.toolProfile ?? "minimal",
+  });
+  return createOpenClawTestInstance({
+    name: options.name,
+    config: options.config ? options.config(base) : base,
+    env: {
+      OPENCLAW_SKIP_PROVIDERS: undefined,
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+      ...options.env,
+    },
+  });
+}
 
 export const commandSecretFixture = {
   getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),

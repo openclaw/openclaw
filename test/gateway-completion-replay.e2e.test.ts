@@ -4,26 +4,22 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { isInternalRuntimeContextCarrierText } from "../extensions/qa-lab/api.js";
 import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
-import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import {
   closeHttpServer,
   connectProofClient,
   contentTexts,
+  createModelGatewayProof,
   listenLoopback,
   readRequestText,
   respondJson,
 } from "./helpers/gateway-integration-fixtures.js";
-import { createOpenAiResponsesModelConfig } from "./helpers/openai-responses-model-fixture.js";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "./helpers/openai-responses-sse.js";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "./helpers/openclaw-test-instance.js";
+import type { OpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { createDeferred } from "./helpers/promise.js";
 
 const SESSION_KEY = "agent:main:slack:channel:completion-replay";
@@ -48,10 +44,23 @@ it(
   async () => {
     const model = await startModel();
     servers.push(model);
-    const instance = await createOpenClawTestInstance({
+    const instance = await createModelGatewayProof({
       name: "gateway-completion-replay",
-      config: config(model.url),
-      env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
+      baseUrl: model.url,
+      modelId: "completion-replay",
+      toolProfile: "coding",
+      config: (base) => ({
+        ...base,
+        plugins: { enabled: false },
+        messages: { groupChat: { visibleReplies: "message_tool" } },
+        tools: {
+          profile: "coding",
+          codeMode: false,
+          toolSearch: false,
+          allow: ["sessions_spawn", "exec"],
+          exec: { security: "full", ask: "off" },
+        },
+      }),
     });
     instances.push(instance);
     instance.state.applyEnv();
@@ -67,6 +76,8 @@ it(
         { sessionKey: SESSION_KEY, message, deliver: false, idempotencyKey },
         { expectFinal: true, timeoutMs },
       );
+    const childEntry = () =>
+      [...loadSubagentRegistryFromSqlite().values()].find((row) => row.task === CHILD_TASK)!;
     try {
       await expect(
         turn("START_REPLAY_REQUESTER", "start-replay-requester", 90_000),
@@ -78,10 +89,7 @@ it(
       });
       await vi.waitFor(
         () => {
-          const entry = [...loadSubagentRegistryFromSqlite().values()].find(
-            (row) => row.task === CHILD_TASK,
-          );
-          expect(entry?.delivery).toMatchObject({
+          expect(childEntry()?.delivery).toMatchObject({
             status: "suspended",
             suspendedReason: "permanent_failure",
             lastDropReason: "message_tool_delivery_missing",
@@ -93,11 +101,7 @@ it(
       expect(model.failures()).toEqual([]);
     } catch (error) {
       throw new Error(
-        String(error) +
-          "\nFixture failures: " +
-          JSON.stringify(model.failures()) +
-          "\nGateway: " +
-          instance.logs(),
+        `${String(error)}\nFixture failures: ${JSON.stringify(model.failures())}\nGateway: ${instance.logs()}`,
         { cause: error },
       );
     } finally {
@@ -107,9 +111,7 @@ it(
     }
 
     // No manually seeded terminal row: the child and completion above created it.
-    const before = [...loadSubagentRegistryFromSqlite().values()].find(
-      (row) => row.task === CHILD_TASK,
-    )!;
+    const before = childEntry();
     expect(before).toMatchObject({
       execution: { outcome: { status: "ok" } },
       completion: { resultText: "CHILD_REPLAY_RESULT" },
@@ -139,27 +141,6 @@ it(
     expect(after.requesterSettleWake).toBeUndefined();
   },
 );
-function config(url: string): OpenClawConfig {
-  const base = createOpenAiResponsesModelConfig({
-    baseUrl: url,
-    providerId: "completion-replay",
-    modelId: "completion-replay",
-    reasoning: false,
-    toolProfile: "coding",
-  });
-  return {
-    ...base,
-    plugins: { enabled: false },
-    messages: { groupChat: { visibleReplies: "message_tool" } },
-    tools: {
-      profile: "coding",
-      codeMode: false,
-      toolSearch: false,
-      allow: ["sessions_spawn", "exec"],
-      exec: { security: "full", ask: "off" },
-    },
-  };
-}
 
 type ModelInput = {
   type?: string;

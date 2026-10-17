@@ -245,12 +245,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(routes)("performs $name normally for a current caller", async (route) => {
-  await withFeishuMutation(async ({ execute, paths }) => {
+it.each(routes)("performs $name normally for a current caller", (route) =>
+  withFeishuMutation(async ({ execute, paths }) => {
     await expect(execute(route.params)).resolves.toMatchObject({ details: route.result });
     expect(paths()).toEqual([`POST ${AUTH_PATH}`, `GET ${MESSAGE_PATH}`, ...route.requests]);
-  });
-});
+  }),
+);
 
 it.each([
   ...mutationScopes.map((route) => ({
@@ -265,8 +265,8 @@ it.each([
     waitAt,
     renewed: false,
   })),
-])("stops after retirement during $name", async ({ params, waitAt, renewed }) => {
-  await withFeishuMutation(async ({ execute, paths, respond, retire, gate }) => {
+])("stops after retirement during $name", ({ params, waitAt, renewed }) =>
+  withFeishuMutation(async ({ execute, paths, respond, retire, gate }) => {
     const started = gate();
     const release = gate();
     let tokens = 0;
@@ -297,11 +297,11 @@ it.each([
       ...(renewed || waitAt === MESSAGE_PATH ? [`GET ${MESSAGE_PATH}`] : []),
       ...(renewed ? [`POST ${AUTH_PATH}`] : []),
     ]);
-  });
-});
+  }),
+);
 
-it.each([false, true])("checks reaction-page currentness (retired: %s)", async (retired) => {
-  await withFeishuMutation(async ({ cfg, execute, requests, paths, respond, retire }) => {
+it.each([false, true])("checks reaction-page currentness (retired: %s)", (retired) =>
+  withFeishuMutation(async ({ cfg, execute, requests, paths, respond, retire }) => {
     respond(async ({ method, path, query }) => {
       if (method !== "GET" || path !== REACTION_PATH) {
         return undefined;
@@ -330,13 +330,13 @@ it.each([false, true])("checks reaction-page currentness (retired: %s)", async (
     }
     expect(requests.filter(({ path }) => path === REACTION_PATH)).toHaveLength(retired ? 1 : 2);
     expect(paths("DELETE")).toEqual(retired ? [] : [`${REACTION_PATH}/reaction_own`]);
-  });
-});
+  }),
+);
 
 it.each(["retirement", "provider failure"])(
   "preserves %s after an accepted reaction deletion",
-  async (failure) => {
-    await withFeishuMutation(async ({ cfg, execute, paths, respond, retire }) => {
+  (failure) =>
+    withFeishuMutation(async ({ cfg, execute, paths, respond, retire }) => {
       respond(async ({ method, path }) => {
         if (method === "GET" && path === REACTION_PATH) {
           return items(
@@ -361,14 +361,13 @@ it.each(["retirement", "provider failure"])(
         `${REACTION_PATH}/first`,
         ...(failure === "provider failure" ? [`${REACTION_PATH}/second`] : []),
       ]);
-    });
-  },
+    }),
 );
 
 it.each(["accepted", "redirected"])(
   "preserves %s edit settlement after caller retirement",
-  async (outcome) => {
-    await withFeishuMutation(async ({ execute, paths, respond, retire }) => {
+  (outcome) =>
+    withFeishuMutation(async ({ execute, paths, respond, retire }) => {
       const handler = vi.spyOn(feishuPlugin.actions!, "handleAction");
       respond(async ({ method, path }, response) => {
         if (method === "PUT" && path === MESSAGE_PATH) {
@@ -390,14 +389,13 @@ it.each(["accepted", "redirected"])(
         expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
       }
       expect(paths("PUT")).toEqual([MESSAGE_PATH]);
-    });
-  },
+    }),
 );
 
 it.each(mutationScopes)(
   "keeps provider errors with incidental IDs as failures for $name",
-  async (route) => {
-    await withFeishuMutation(async ({ execute, respond }) => {
+  (route) =>
+    withFeishuMutation(async ({ execute, respond }) => {
       respond(async ({ method, path }) => {
         if (`${method} ${path}` === route.requests.at(-1)) {
           return {
@@ -409,14 +407,12 @@ it.each(mutationScopes)(
         return undefined;
       });
       await expect(execute(route.params)).rejects.toThrow("Fixture rejected mutation");
-    });
-  },
+    }),
 );
 
-it("retains the configured group policy denial", async () => {
-  await withFeishuMutation(async ({ cfg, execute, requests }) => {
+it("retains the configured group policy denial", () =>
+  withFeishuMutation(async ({ cfg, execute, requests }) => {
     cfg.channels!.feishu!.groupPolicy = "disabled";
     await expect(execute()).rejects.toThrow(/not allowed/);
     expect(requests).toEqual([]);
-  });
-});
+  }));

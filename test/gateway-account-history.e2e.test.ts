@@ -1,23 +1,31 @@
 import { createHash } from "node:crypto";
 import { createServer, request as httpRequest, type ServerResponse } from "node:http";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test } from "vitest";
 import {
   startQaMockOpenAiServer,
   type MockOpenAiRequestSnapshot,
 } from "../extensions/qa-lab/api.js";
 import { listConversations } from "../src/config/sessions/conversation-registry.js";
-import type { GatewaySessionRow } from "../src/gateway/session-utils.types.js";
 import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import {
   closeHttpServer,
   connectProofClient,
+  createModelGatewayProof,
   listenLoopback,
   readRequestText,
   respondJson,
 } from "./helpers/gateway-integration-fixtures.js";
-import { createOpenAiResponsesModelConfig } from "./helpers/openai-responses-model-fixture.js";
-import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
+
+function expectTurns(text: string, present: number[], absent: (number | string)[] = []) {
+  for (const fragment of present) {
+    expect(text).toContain(`HISTORY_TURN_${fragment}`);
+  }
+  for (const fragment of absent) {
+    expect(text).not.toContain(`HISTORY_TURN_${fragment}`);
+  }
+}
 
 async function runAccountHistoryProof(compactionMode: "client" | "server-endpoint") {
   const model = await startQaMockOpenAiServer({ modelRefs: ["history-proof/history-proof"] });
@@ -97,71 +105,59 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
     });
   });
   const origin = await listenLoopback(transport);
-  const base = createOpenAiResponsesModelConfig({
-    baseUrl: origin,
-    providerId: "history-proof",
-    modelId: "history-proof",
-    reasoning: false,
-    toolProfile: "minimal",
-  });
-  const instance = await createOpenClawTestInstance({
+  const instance = await createModelGatewayProof({
     name: "account-history",
-    config: {
-      ...base,
-      agents: {
-        defaults: {
-          ...base.agents!.defaults!,
-          models: {
-            "history-proof/history-proof": {
-              agentRuntime: { id: "openclaw" },
-              ...(compactionMode === "server-endpoint"
-                ? { params: { responsesCompactEndpoint: true } }
-                : {}),
-            },
-          },
-          compaction: {
-            mode: "default",
-            keepRecentTokens: 1,
-            recentTurnsPreserve: 0,
-            memoryFlush: { enabled: false },
-          },
+    baseUrl: origin,
+    modelId: "history-proof",
+    config: (base) => {
+      const defaults = base.agents!.defaults!;
+      defaults.compaction = {
+        mode: "default",
+        keepRecentTokens: 1,
+        recentTurnsPreserve: 0,
+        memoryFlush: { enabled: false },
+      };
+      if (compactionMode === "server-endpoint") {
+        defaults.models!["history-proof/history-proof"]!.params = {
+          responsesCompactEndpoint: true,
+        };
+      }
+      return {
+        ...base,
+        messages: { visibleReplies: "automatic" },
+        session: {
+          dmScope: "per-channel-peer",
+          identityLinks: { "direct:peer": ["telegram:123"] },
         },
-      },
-      messages: { visibleReplies: "automatic" },
-      session: {
-        dmScope: "per-channel-peer",
-        identityLinks: { "direct:peer": ["telegram:123"] },
-      },
-      channels: {
-        telegram: {
-          enabled: true,
-          defaultAccount: "direct",
-          apiRoot: origin,
-          dmHistoryLimit: 20,
-          commands: { native: false, nativeSkills: false },
-          streaming: { mode: "off" },
-          accounts: {
-            direct: {
-              botToken: "424242:TEST_TOKEN_PLACEHOLDER_FOR_LOCAL_GATEWAY",
-              dmPolicy: "allowlist",
-              allowFrom: ["123"],
-              dmHistoryLimit: 10,
-              // Telegram's channel context uses the native ID; the embedded
-              // transcript historically uses the linked session peer.
-              dms: {
-                "123": { historyLimit: 2 },
-                "direct:peer": { historyLimit: 2 },
-                peer: { historyLimit: 6 },
+        channels: {
+          telegram: {
+            enabled: true,
+            defaultAccount: "direct",
+            apiRoot: origin,
+            dmHistoryLimit: 20,
+            commands: { native: false, nativeSkills: false },
+            streaming: { mode: "off" },
+            accounts: {
+              direct: {
+                botToken: "424242:TEST_TOKEN_PLACEHOLDER_FOR_LOCAL_GATEWAY",
+                dmPolicy: "allowlist",
+                allowFrom: ["123"],
+                dmHistoryLimit: 10,
+                // Telegram's channel context uses the native ID; the embedded
+                // transcript historically uses the linked session peer.
+                dms: {
+                  "123": { historyLimit: 2 },
+                  "direct:peer": { historyLimit: 2 },
+                  peer: { historyLimit: 6 },
+                },
               },
             },
           },
         },
-      },
+      };
     },
     env: {
       OPENCLAW_SKIP_CHANNELS: undefined,
-      OPENCLAW_SKIP_PROVIDERS: undefined,
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
       TELEGRAM_BOT_TOKEN: undefined,
     },
   });
@@ -195,16 +191,8 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
         .toBe(true);
       // Telegram receives the ACK before delivery cleanup releases the session.
       await expect
-        .poll(
-          async () =>
-            (
-              await gateway.request<{ session: GatewaySessionRow | null }>("sessions.describe", {
-                key,
-              })
-            ).session,
-          { timeout: 30000 },
-        )
-        .toMatchObject({ hasActiveRun: false, status: "done" });
+        .poll(() => gateway.request("sessions.describe", { key }), { timeout: 30000 })
+        .toMatchObject({ session: { hasActiveRun: false, status: "done" } });
     };
     for (let turn = 1; turn <= 6; turn++) {
       await sendTurn(turn);
@@ -216,44 +204,39 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
     const latestPrompt = async () =>
       (await requests()).findLast((request) => request.requestKind === "agent-initial")!;
     const prompt = await latestPrompt();
-    expect(prompt.allInputText).toContain("HISTORY_TURN_6");
-    expect(prompt.allInputText).not.toContain("HISTORY_TURN_1");
-    expect(prompt.allInputText).not.toContain("HISTORY_TURN_2");
+    expectTurns(prompt.allInputText, [6], [1, 2]);
     const listed = await client.request<{ sessions: Array<{ key: string; sessionId: string }> }>(
       "sessions.list",
       { limit: 20 },
     );
     const session = listed.sessions.find((entry) => entry.key === key);
-    expect(session).toBeDefined();
-    const conversation = (
+    expect(
       await listConversations({
         agentId: "main",
         storePath: path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite"),
-      })
-    ).find(
-      (entry) =>
-        entry.sessionKey === key &&
-        entry.sessionId === session!.sessionId &&
-        entry.role === "primary",
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        sessionKey: key,
+        sessionId: expectDefined(session, "listed history session").sessionId,
+        role: "primary",
+        accountId: "direct",
+        kind: "direct",
+        routeContext: expect.objectContaining({ peerId: "123" }),
+      }),
     );
-    expect(conversation).toMatchObject({
-      accountId: "direct",
-      kind: "direct",
-      routeContext: { peerId: "123" },
-    });
-    const compacted = await client.request<{
-      ok: boolean;
-      compacted: boolean;
-      result?: { summary?: string; kind?: string };
-    }>("sessions.compact", { key }, { timeoutMs: 60000 });
+    const compact = () =>
+      gateway.request<{
+        ok: boolean;
+        compacted: boolean;
+        result?: { summary?: string; kind?: string };
+      }>("sessions.compact", { key }, { timeoutMs: 60000 });
+    const compacted = await compact();
     expect(compacted).toMatchObject({ ok: true, compacted: true });
     if (compactionMode === "server-endpoint") {
       expect(compacted.result?.kind).toBe("server-endpoint");
       expect(compactRequests).toHaveLength(1);
-      expect(compactRequests[0]).toContain("HISTORY_TURN_5");
-      expect(compactRequests[0]).toContain("HISTORY_TURN_6");
-      expect(compactRequests[0]).not.toContain("HISTORY_TURN_1");
-      expect(compactRequests[0]).not.toContain("HISTORY_TURN_2");
+      expectTurns(compactRequests[0]!, [5, 6], [1, 2]);
       for (let generation = 1; generation <= 2; generation++) {
         const firstTurn = generation * 6 + 1;
         for (let turn = firstTurn; turn < firstTurn + 6; turn++) {
@@ -261,24 +244,17 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
           const replay = await latestPrompt();
           const body = JSON.parse(replay.raw) as { input: Array<{ type?: string }> };
           const checkpoints = body.input.filter((item) => item.type === "compaction");
-          expect(checkpoints).toHaveLength(1);
           expect(hash(checkpoints)).toBe(hash([checkpoint(generation)]));
           if (turn === firstTurn + 5) {
-            expect(replay.allInputText).not.toContain(`HISTORY_TURN_${firstTurn}.`);
-            expect(replay.allInputText).not.toContain(`HISTORY_TURN_${firstTurn + 1}.`);
+            expectTurns(replay.allInputText, [], [`${firstTurn}.`, `${firstTurn + 1}.`]);
           }
         }
         if (generation === 1) {
-          const next = await client.request<{ result?: { kind?: string } }>(
-            "sessions.compact",
-            { key },
-            { timeoutMs: 60000 },
-          );
+          const next = await compact();
           expect(next.result?.kind).toBe("server-endpoint");
           expect(compactRequests).toHaveLength(2);
           expect(compactRequests[1]).toContain(checkpoint(1).encrypted_content);
-          expect(compactRequests[1]).not.toContain("HISTORY_TURN_5.");
-          expect(compactRequests[1]).not.toContain("HISTORY_TURN_6.");
+          expectTurns(compactRequests[1]!, [], ["5.", "6."]);
         }
       }
       return;
@@ -287,22 +263,17 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
     const summary = (await requests()).filter(
       (request) => request.requestKind === "compaction-summary",
     );
-    expect(summary.length).toBeGreaterThan(0);
     const summaryInput = summary.map((request) => request.allInputText).join("\n");
-    expect(summaryInput).toContain("HISTORY_TURN_5");
     // Compaction preserves older durable context, rather than treating a prompt
     // window as deletion. Its saved summary survives subsequent history cuts.
-    expect(summaryInput).toContain("HISTORY_TURN_1");
-    expect(summaryInput).toContain("HISTORY_TURN_4");
+    expectTurns(summaryInput, [5, 1, 4]);
     expect(compacted.result?.summary).toBeTruthy();
     for (let turn = 7; turn <= 12; turn++) {
       await sendTurn(turn);
     }
     const afterCompaction = await latestPrompt();
     expect(afterCompaction.allInputText).toContain(compacted.result!.summary);
-    expect(afterCompaction.allInputText).toContain("HISTORY_TURN_12");
-    expect(afterCompaction.allInputText).not.toContain("HISTORY_TURN_7.");
-    expect(afterCompaction.allInputText).not.toContain("HISTORY_TURN_8.");
+    expectTurns(afterCompaction.allInputText, [12], ["7.", "8."]);
   } catch (error) {
     throw new Error(`${String(error)}\n${instance.logs()}`, { cause: error });
   } finally {

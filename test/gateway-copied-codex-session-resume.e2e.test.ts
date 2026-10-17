@@ -1,4 +1,3 @@
-// Admission prepares the trusted harness selected by a copied persisted session.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -51,24 +50,20 @@ function buildCopiedStateConfig(enabled: boolean | undefined): OpenClawConfig {
 async function installCodexHarnessFixture(stateDir: string, config: OpenClawConfig): Promise<void> {
   const pluginDir = path.join(stateDir, "extensions", PLUGIN_ID);
   await fs.mkdir(pluginDir, { recursive: true });
-  await fs.writeFile(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: PLUGIN_ID,
-      name: "Copied Codex session proof",
-      activation: { onStartup: false, onAgentHarnesses: [PLUGIN_ID] },
-      configSchema: { type: "object", additionalProperties: false },
-    }),
-  );
-  await fs.writeFile(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({
-      name: "@openclaw/codex",
-      version: VERSION,
-      type: "module",
-      openclaw: { extensions: ["./index.js"] },
-    }),
-  );
+  const writeMetadata = (name: string, value: unknown) =>
+    fs.writeFile(path.join(pluginDir, name), JSON.stringify(value));
+  await writeMetadata("openclaw.plugin.json", {
+    id: PLUGIN_ID,
+    name: "Copied Codex session proof",
+    activation: { onStartup: false, onAgentHarnesses: [PLUGIN_ID] },
+    configSchema: { type: "object", additionalProperties: false },
+  });
+  await writeMetadata("package.json", {
+    name: "@openclaw/codex",
+    version: VERSION,
+    type: "module",
+    openclaw: { extensions: ["./index.js"] },
+  });
   await fs.writeFile(
     path.join(pluginDir, "index.js"),
     `import { createAgentHarnessAssistantMessage } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
@@ -139,7 +134,9 @@ it.each([
   async (_name, enabled, unavailableReason, cron) => {
     const config = buildCopiedStateConfig(enabled);
     if (cron) {
-      config.agents!.entries = {
+      const agents = config.agents!;
+      const provider = config.models!.providers!["copied-session-proof"]!;
+      agents.entries = {
         main: {
           model: {
             primary: "copied-session-proof/alternate-model",
@@ -147,12 +144,12 @@ it.each([
           },
         },
       };
-      config.agents!.defaults!.models = {
+      agents.defaults!.models = {
         "copied-session-proof/cron-model": { agentRuntime: { id: "codex" } },
       };
       for (const id of ["alternate-model", "cron-model"]) {
-        config.models!.providers!["copied-session-proof"]!.models.push({
-          ...config.models!.providers!["copied-session-proof"]!.models[0]!,
+        provider.models.push({
+          ...provider.models[0]!,
           id,
           name: id,
         });
@@ -188,9 +185,7 @@ it.each([
     closeOpenClawAgentDatabasesForTest();
 
     await instance.startGateway();
-    const client = await connectProofClient(instance, {
-      requestTimeoutMs: 30_000,
-    });
+    const client = await connectProofClient(instance, { requestTimeoutMs: 30_000 });
     try {
       if (cron) {
         const job = await client.request<{ id: string }>("cron.add", {
@@ -210,16 +205,11 @@ it.each([
         try {
           await client.request("cron.run", { id: job.id, mode: "force" });
           await expect
-            .poll(
-              async () =>
-                (
-                  await client.request<{
-                    entries: Array<{ status: string; summary?: string }>;
-                  }>("cron.runs", { id: job.id, limit: 1 })
-                ).entries,
-              { timeout: 30_000, interval: 100 },
-            )
-            .toMatchObject([{ status: "ok", summary: VISIBLE_REPLY }]);
+            .poll(() => client.request("cron.runs", { id: job.id, limit: 1 }), {
+              timeout: 30_000,
+              interval: 100,
+            })
+            .toMatchObject({ entries: [{ status: "ok", summary: VISIBLE_REPLY }] });
         } finally {
           await client.request("cron.remove", { id: job.id });
         }

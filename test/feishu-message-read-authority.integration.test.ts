@@ -61,6 +61,7 @@ const PINS_PATH = "/open-apis/im/v1/pins";
 const USER_PATH = `/open-apis/contact/v3/users/${MEMBER}`;
 const PEERS_PATH = "/open-apis/contact/v3/users";
 const PEERS_PAGE_TOKEN = "peers/next+%2F=";
+const READ = { action: "read", channel: "feishu", target: `chat:${ALLOWED}`, messageId: MESSAGE };
 type ActionResult = NonNullable<Awaited<ReturnType<typeof dispatchChannelMessageAction>>>;
 type ProviderRequest = { method: string; path: string; query: URLSearchParams };
 
@@ -187,7 +188,6 @@ beforeAll(async () => {
       };
       requests.push(recorded);
       beforeReply?.(recorded);
-      response.setHeader("content-type", "application/json");
       if (url.pathname === AUTH_PATH) {
         const body = JSON.parse(raw) as Record<string, unknown>;
         if (
@@ -362,7 +362,13 @@ function createFixture(
       }
     };
   };
-  return { cfg, settings, record, run, dispatch, retire, atRequest };
+  const localTool = (config: OpenClawConfig = cfg) => {
+    setRuntimeConfigSnapshot(config, config);
+    const tool = run.createTool(config);
+    return (params: Record<string, unknown> = READ, signal?: AbortSignal) =>
+      track(tool.execute(randomUUID(), params, signal));
+  };
+  return { cfg, settings, dispatch, retire, atRequest, localTool };
 }
 
 const readCases: Array<{
@@ -445,45 +451,37 @@ it("filters live directory pages before applying the limit", async () => {
   expect(contentRequests()).toContain("/open-apis/contact/v3/users");
 });
 
-it("finds a live peer on later pages through the registered channel-list action", async () => {
-  const fixture = createFixture();
-  fixture.settings.allowFrom = ["*"];
-
-  expectResult(
-    await fixture.dispatch("channel-list", { scope: "peers", query: "Other", limit: 1 }),
-    { peers: [{ kind: "user", id: OTHER, name: "Other" }] },
-  );
-  const pages = requests.filter((request) => request.path === PEERS_PATH);
-  expect(pages.map(({ query }) => query.get("page_token"))).toEqual([null, PEERS_PAGE_TOKEN]);
-  expect(contentRequests()).toEqual([PEERS_PATH, PEERS_PATH]);
-});
-
-it("stops live peer pagination when the plugin retires between pages", async () => {
-  const fixture = createFixture();
-  fixture.settings.allowFrom = ["*"];
-  fixture.atRequest(PEERS_PATH, fixture.retire.plugin);
-
-  await expect(
-    fixture.dispatch("channel-list", { scope: "peers", query: "Other", limit: 1 }),
-  ).rejects.toThrow("no longer active");
-  expect(contentRequests()).toEqual([PEERS_PATH]);
-});
+it.each([false, true])(
+  "paginates live peers while the plugin is current (retired: %s)",
+  async (retired) => {
+    const fixture = createFixture();
+    fixture.settings.allowFrom = ["*"];
+    if (retired) {
+      fixture.atRequest(PEERS_PATH, fixture.retire.plugin);
+    }
+    const result = fixture.dispatch("channel-list", { scope: "peers", query: "Other", limit: 1 });
+    if (retired) {
+      await expect(result).rejects.toThrow("no longer active");
+    } else {
+      expectResult(await result, { peers: [{ kind: "user", id: OTHER, name: "Other" }] });
+      const pages = requests.filter((request) => request.path === PEERS_PATH);
+      expect(pages.map(({ query }) => query.get("page_token"))).toEqual([null, PEERS_PAGE_TOKEN]);
+    }
+    expect(contentRequests()).toEqual(retired ? [PEERS_PATH] : [PEERS_PATH, PEERS_PATH]);
+  },
+);
 
 it("cancels live peer pagination through the local message tool", async () => {
   const fixture = createFixture();
   fixture.settings.allowFrom = ["*"];
-  setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
-  const tool = fixture.run.createTool(fixture.cfg);
+  const execute = fixture.localTool();
   const controller = new AbortController();
   fixture.atRequest(PEERS_PATH, () => controller.abort());
 
   await expect(
-    track(
-      tool.execute(
-        "feishu-peer-directory",
-        { action: "channel-list", channel: "feishu", scope: "peers", query: "Other", limit: 1 },
-        controller.signal,
-      ),
+    execute(
+      { action: "channel-list", channel: "feishu", scope: "peers", query: "Other", limit: 1 },
+      controller.signal,
     ),
   ).rejects.toMatchObject({ name: "AbortError" });
   expect(contentRequests()).toEqual([PEERS_PATH]);
@@ -507,44 +505,42 @@ it.each([SELF, OTHER])(
   },
 );
 
-it.each(["account", "origin", "target", "reactions", "sticker", "catalog"] as const)(
-  "retains the %s denial before provider I/O",
-  async (kind) => {
-    const fixture = createFixture();
-    let action: ChannelMessageActionName = "read";
-    let params: Record<string, unknown> = { chatId: ALLOWED, messageId: MESSAGE };
-    let overrides: Partial<ChannelMessageActionContext> = {};
-    let error = "current provider and account";
-    if (kind === "account") {
-      overrides = { requesterAccountId: "other" };
+it.each([
+  ["account", "current provider and account"],
+  ["origin", "current provider and account"],
+  ["target", "not allowed"],
+  ["reactions", "disabled"],
+  ["sticker", "disabled"],
+  ["catalog", "this account's appId"],
+] as const)("retains the %s denial before provider I/O", async (kind, error) => {
+  const fixture = createFixture();
+  let action: ChannelMessageActionName = "read";
+  let params: Record<string, unknown> = {
+    chatId: kind === "target" ? BLOCKED : ALLOWED,
+    messageId: MESSAGE,
+  };
+  const overrides =
+    kind === "account"
+      ? { requesterAccountId: "other" }
+      : kind === "origin"
+        ? { toolContext: undefined }
+        : {};
+  if (kind === "reactions") {
+    action = "reactions";
+    fixture.settings.actions.reactions = false;
+  }
+  if (kind === "sticker" || kind === "catalog") {
+    action = "sticker-search";
+    params = { query: "thumbs" };
+    if (kind === "sticker") {
+      fixture.settings.actions.sticker = false;
+    } else {
+      delete fixture.settings.stickerSets[fixture.settings.appId];
     }
-    if (kind === "origin") {
-      overrides = { toolContext: undefined };
-    }
-    if (kind === "target") {
-      params.chatId = BLOCKED;
-      error = "not allowed";
-    }
-    if (kind === "reactions") {
-      action = "reactions";
-      fixture.settings.actions.reactions = false;
-      error = "disabled";
-    }
-    if (kind === "sticker" || kind === "catalog") {
-      action = "sticker-search";
-      params = { query: "thumbs" };
-      if (kind === "sticker") {
-        fixture.settings.actions.sticker = false;
-        error = "disabled";
-      } else {
-        delete fixture.settings.stickerSets[fixture.settings.appId];
-        error = "this account's appId";
-      }
-    }
-    await expect(fixture.dispatch(action, params, overrides)).rejects.toThrow(error);
-    expect(requests).toEqual([]);
-  },
-);
+  }
+  await expect(fixture.dispatch(action, params, overrides)).rejects.toThrow(error);
+  expect(requests).toEqual([]);
+});
 
 it.each([
   ["plugin", "metadata"],
@@ -582,21 +578,13 @@ it.each(["allowed", "turn", "claim"] as const)(
   "uses the normal local message tool (%s)",
   async (mode) => {
     const fixture = createFixture();
-    setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
-    const tool = fixture.run.createTool(fixture.cfg);
+    const execute = fixture.localTool();
     fixture.atRequest(CHAT_PATH, () => {
       if (mode !== "allowed") {
         fixture.retire[mode]();
       }
     });
-    const result = track(
-      tool.execute("feishu-read", {
-        action: "read",
-        channel: "feishu",
-        target: `chat:${ALLOWED}`,
-        messageId: MESSAGE,
-      }),
-    );
+    const result = execute();
     if (mode === "allowed") {
       expectResult(await result, { message: { messageId: MESSAGE, content: "allowed context" } });
     } else {
@@ -616,8 +604,7 @@ it("rejects a configured account disabled after local message-tool creation", as
       },
     },
   } satisfies OpenClawConfig;
-  setRuntimeConfigSnapshot(cfg, cfg);
-  const tool = fixture.run.createTool(cfg);
+  const execute = fixture.localTool(cfg);
   cfg.channels.feishu.accounts.default.enabled = false;
   setRuntimeConfigSnapshot(cfg, cfg);
   expect(feishuPlugin.config.resolveAccount(cfg, "default")).toMatchObject({
@@ -625,16 +612,8 @@ it("rejects a configured account disabled after local message-tool creation", as
     enabled: false,
   });
 
-  await expect(
-    track(
-      tool.execute("feishu-disabled-read", {
-        action: "read",
-        channel: "feishu",
-        accountId: "default",
-        target: `chat:${ALLOWED}`,
-        messageId: MESSAGE,
-      }),
-    ),
-  ).rejects.toThrow('Account "default" for channel feishu is disabled.');
+  await expect(execute({ ...READ, accountId: "default" })).rejects.toThrow(
+    'Account "default" for channel feishu is disabled.',
+  );
   expect(requests).toEqual([]);
 });

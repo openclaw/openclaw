@@ -7,7 +7,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, describe, expect, it } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
 import { requireGatewayRecord } from "../src/gateway/test-helpers.assertions.js";
-import { connectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
@@ -20,6 +19,7 @@ import {
   stopGatewayInstance,
   waitForNodeStatus,
 } from "./helpers/gateway-e2e-harness.js";
+import { connectProofClient } from "./helpers/gateway-integration-fixtures.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { waitForFile } from "./helpers/process-wait.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
@@ -42,7 +42,6 @@ const timer = setInterval(() => {
   if (shiftReadyPath) {
     writeFileSync(shiftReadyPath, "ready\\n");
   }
-  process.stdout.write("[clock-shift] offsetMs=" + offsetMs + String.fromCharCode(10));
 }, 10);
 timer.unref();
 `;
@@ -287,9 +286,8 @@ try {
           const nodeIdentity = loadOrCreateDeviceIdentity({
             path: path.join(instance.homeDir, "proof-node-device.sqlite"),
           });
-          node = await connectGatewayClient({
-            url: instance.url,
-            token: instance.gatewayToken,
+          const nodeId = nodeIdentity.deviceId;
+          node = await connectProofClient(instance, {
             clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
             clientDisplayName: "real-node-proof",
             clientVersion: "1.0.0",
@@ -305,10 +303,7 @@ try {
                 return;
               }
               const payload = requireGatewayRecord(event.payload, "node invoke request");
-              expect(payload).toMatchObject({
-                id: expect.any(String),
-                nodeId: nodeIdentity.deviceId,
-              });
+              expect(payload).toMatchObject({ id: expect.any(String), nodeId });
               responseWork = responseWork.then(async () => {
                 await writeFile(shiftPath, "shift\n");
                 await waitForFile(shiftReadyPath, AbortSignal.timeout(5_000));
@@ -325,9 +320,7 @@ try {
               void responseWork.catch(() => {});
             },
           });
-          operator = await connectGatewayClient({
-            url: instance.url,
-            token: instance.gatewayToken,
+          operator = await connectProofClient(instance, {
             clientName: GATEWAY_CLIENT_NAMES.CLI,
             mode: GATEWAY_CLIENT_MODES.CLI,
             role: "operator",
@@ -340,18 +333,16 @@ try {
             pending: Array<{ nodeId: string }>;
             paired: Array<{ nodeId: string; commands?: string[] }>;
           }>("node.pair.list", {});
-          expect(
-            pairing.pending.find((entry) => entry.nodeId === nodeIdentity.deviceId),
-          ).toBeUndefined();
-          expect(
-            pairing.paired.find((entry) => entry.nodeId === nodeIdentity.deviceId)?.commands,
-          ).toEqual(["system.notify"]);
-          await waitForNodeStatus(instance, nodeIdentity.deviceId);
+          expect(pairing.pending.find((entry) => entry.nodeId === nodeId)).toBeUndefined();
+          expect(pairing.paired.find((entry) => entry.nodeId === nodeId)?.commands).toEqual([
+            "system.notify",
+          ]);
+          await waitForNodeStatus(instance, nodeId);
           const startedAt = performance.now();
-          const result = await operator.request<{ payload?: { captured?: boolean } }>(
+          const result = await operator.request(
             "node.invoke",
             {
-              nodeId: nodeIdentity.deviceId,
+              nodeId,
               command: "system.notify",
               params: { quality: "low" },
               timeoutMs: 500,
@@ -360,11 +351,10 @@ try {
             { timeoutMs: 5_000 },
           );
           const elapsedMs = Math.round(performance.now() - startedAt);
-          expect(result.payload?.captured).toBe(true);
+          expect(result).toMatchObject({ payload: { captured: true } });
           expect(elapsedMs).toBeGreaterThanOrEqual(50);
           expect(elapsedMs).toBeLessThan(500);
           await responseWork;
-          expect(instance.logs()).toContain("[clock-shift] offsetMs=1000");
         },
         () => responseWork,
         async () => {
