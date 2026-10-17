@@ -558,10 +558,13 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       if (!this.videoFramesActive || this.closed || this.camera.video !== video) {
         return;
       }
-      if (!this.send(googleLiveVideoMessage(frame))) {
-        throw new Error("Google Live socket is not open");
+      // Keep polling through a mute that occurs while preview data becomes ready.
+      if (this.camera.hasUsableTrack()) {
+        if (!this.send(googleLiveVideoMessage(frame))) {
+          throw new Error("Google Live socket is not open");
+        }
+        this.hasSentVideoFrame = true;
       }
-      this.hasSentVideoFrame = true;
     } catch (error) {
       if (!this.closed && this.camera.video === video) {
         this.videoFramesActive = false;
