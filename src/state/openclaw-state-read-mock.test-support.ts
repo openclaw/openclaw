@@ -26,7 +26,6 @@ export function createMockStateReadSource(transport: {
 }): ReadSource {
   return {
     own: () => () => {},
-    service() {},
     createTransport: () => ({
       startValidateFresh: () => startAwaitedReadMock(async () => {}),
       startRead: (...args) => startAwaitedReadMock(() => transport.read(...args)),

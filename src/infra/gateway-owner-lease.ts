@@ -134,16 +134,10 @@ export async function assertGatewayOwnerLeaseStopped(
     })().finally(() => {
       closing = undefined;
     }));
-  const releaseSource = source.own(
-    () => {
-      read?.service();
-      retirement?.service();
-    },
-    () => {
-      controller.abort();
-      return close();
-    },
-  );
+  const releaseSource = source.own(() => {
+    controller.abort();
+    return close();
+  });
   const errors: unknown[] = [];
   let outcome: OpenClawStateReadOutcome | undefined;
   try {

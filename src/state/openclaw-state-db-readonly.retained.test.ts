@@ -163,8 +163,8 @@ function observeReaders() {
     readers.push({ name, source: capturedSource, released });
     return {
       ...capturedSource,
-      own(service, close) {
-        const unregister = capturedSource.own(service, close);
+      own(close) {
+        const unregister = capturedSource.own(close);
         return () => {
           expect(owner.getStore()).toBe(name);
           unregister();
@@ -182,111 +182,6 @@ function observeReaders() {
   };
 }
 
-it("services queued readers through release while retaining native source custody", async () => {
-  const observed = observeReaders();
-  const options = source();
-  const backup = createDeferredCore<{ location: string; cleanupAsync(): Promise<boolean> }>();
-  const nativeCleanup = createDeferredCore<boolean>();
-  const release = vi.fn();
-  const observe = vi.fn();
-  const cleanupAsync = vi.fn(() => nativeCleanup.promise);
-  mock.borrow.mockReturnValueOnce({
-    database: { db: {} },
-    assertCurrent() {},
-    observe,
-    release,
-  });
-  mock.prepareNative.mockReturnValueOnce(backup.promise);
-  releaseFixtures.push(() => {
-    backup.resolve({ location: options.path, cleanupAsync });
-    nativeCleanup.resolve(true);
-  });
-  const read = () => executeExistingOpenClawStateRead(options, { type: "backup.runs" });
-  const first = owner.run("first", () => withArtifactPreservingStateReads(read));
-  observed("first").source.service();
-  expect(mock.prepareNative).toHaveBeenCalledOnce();
-  expect(mock.prepareFresh).not.toHaveBeenCalled();
-  expect(tasks).toHaveLength(0);
-  expect(observed("first").released).not.toHaveBeenCalled();
-  backup.resolve({ location: options.path, cleanupAsync });
-  await submitted.promise;
-  const second = owner.run("second", read);
-  const follower = owner.run("follower", read);
-  expect(events).toEqual(["admit first", "admit second"]);
-  ready = true;
-  let microtaskRan = false;
-  queueMicrotask(() => {
-    microtaskRan = true;
-  });
-  owner.run("unrelated caller", () => observed("follower").source.service());
-  expect(microtaskRan).toBe(false);
-  expect(observed("second").released).toHaveBeenCalledOnce();
-  expect(observed("follower").released).toHaveBeenCalledOnce();
-  expect(events).toEqual([
-    "admit first",
-    "admit second",
-    "release first",
-    "release second",
-    "admit follower",
-    "release follower",
-  ]);
-  expect(occupied).toBe(0);
-  expect(observed("first").released).not.toHaveBeenCalled();
-  expect(observe).toHaveBeenCalledOnce();
-  expect(cleanupAsync).toHaveBeenCalledOnce();
-  expect(release).not.toHaveBeenCalled();
-  nativeCleanup.resolve(true);
-  await expect(Promise.all([first, second, follower])).resolves.toEqual([reply, reply, reply]);
-  expect(release).toHaveBeenCalledOnce();
-  expect(observed("first").released).toHaveBeenCalledOnce();
-  expect(mock.prepareFresh).not.toHaveBeenCalled();
-});
-
-it("finishes fresh snapshot preparation, query, and snapshot cleanup without Promise callbacks", async () => {
-  const observed = observeReaders();
-  const options = source();
-  const snapshotCleanup = createRetainedOperation<boolean>(() => {
-    expect(events.at(-1)).toBe("release fresh");
-    events.push("snapshot cleaned");
-    snapshotCleanup.resolve(true);
-  });
-  const prepared = {
-    location: options.path,
-    cleanupAsync: () => snapshotCleanup.operation.result,
-    startCleanup: () => snapshotCleanup.operation,
-  };
-  const preparation = createRetainedOperation<typeof prepared>(() => preparation.resolve(prepared));
-  const preparationClose = createRetainedOperation<void>(() => {
-    expect(snapshotCleanup.operation.read()).toEqual({ status: "fulfilled", value: true });
-    preparationClose.resolve(undefined);
-  });
-  mock.prepareFresh.mockReturnValueOnce({
-    ...preparation.operation,
-    startClose: () => preparationClose.operation,
-  });
-  const completion = owner.run("fresh", () =>
-    withArtifactPreservingStateReads(() =>
-      executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
-    ),
-  );
-  ready = true;
-  let microtaskRan = false;
-  queueMicrotask(() => {
-    microtaskRan = true;
-  });
-  observed("fresh").source.service();
-  expect(microtaskRan).toBe(false);
-  expect(observed("fresh").released).toHaveBeenCalledOnce();
-  expect(events).toEqual([
-    "admit fresh",
-    "release fresh",
-    "admit fresh",
-    "release fresh",
-    "snapshot cleaned",
-  ]);
-  await expect(completion).resolves.toEqual(reply);
-});
-
 it("retains failed preparation custody through a pending close and canonical retry", async () => {
   const observed = observeReaders();
   const options = source();
@@ -297,10 +192,14 @@ it("retains failed preparation custody through a pending close and canonical ret
   const preparation = createRetainedOperation<RetainedPreparedSqliteReadOnlyLocation>(() => {});
   const firstClose = createRetainedOperation<void>(() => {});
   const retryClose = createRetainedOperation<void>(() => {});
+  const initialCloseStarted = createDeferredCore();
   const retryStarted = createDeferredCore();
   const startClose = vi
     .fn()
-    .mockReturnValueOnce(firstClose.operation)
+    .mockImplementationOnce(() => {
+      initialCloseStarted.resolve();
+      return firstClose.operation;
+    })
     .mockImplementation(() => {
       retryStarted.resolve();
       return retryClose.operation;
@@ -330,7 +229,7 @@ it("retains failed preparation custody through a pending close and canonical ret
     );
     const reader = observed();
     preparation.reject(preparationFailure);
-    reader.source.service();
+    await initialCloseStarted.promise;
     expect(readSettled).toBe(false);
     expect(mapError).not.toHaveBeenCalled();
     expect(startClose).toHaveBeenCalledOnce();
@@ -340,7 +239,7 @@ it("retains failed preparation custody through a pending close and canonical ret
     expect(handleClosed).not.toHaveBeenCalled();
 
     firstClose.reject(closeFailure);
-    reader.source.service();
+    await expect(completion).rejects.toBe(mapped);
     expect(mapError).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         cause: preparationFailure,
@@ -357,7 +256,6 @@ it("retains failed preparation custody through a pending close and canonical ret
     expect(handleClosed).not.toHaveBeenCalled();
 
     retryClose.resolve(undefined);
-    reader.source.service();
     await canonicalClose;
     await maintenanceClose;
     expect(reader.released).toHaveBeenCalledOnce();
@@ -368,9 +266,6 @@ it("retains failed preparation custody through a pending close and canonical ret
     preparation.reject(preparationFailure);
     firstClose.resolve(undefined);
     retryClose.resolve(undefined);
-    if (completion) {
-      observed().source.service();
-    }
     await Promise.allSettled([canonicalClose, maintenanceClose, maintenance.close(), completion]);
   }
 });

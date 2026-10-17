@@ -516,8 +516,7 @@ export function executeExistingOpenClawStateRead<Command extends OpenClawStateRe
   } catch (error) {
     throw mapError ? mapError(error, receipt.phase) : error;
   }
-  const result = completion.kind === "retained" ? completion.operation.result : completion.result;
-  return result.then((reply) => {
+  return completion.then((reply) => {
     if (!reply || isStateReadReply(reply, type)) {
       return reply;
     }
@@ -585,6 +584,7 @@ function startRetainedOpenClawStateRead(
       onChunkAsync,
       controller,
       signal: readSignal,
+      callerSignal,
       receipt,
       mapError,
     });
@@ -595,9 +595,7 @@ function startRetainedOpenClawStateRead(
     (operation, scope) => () =>
       scope.work.run(() => {
         const completion = operation();
-        const result =
-          completion.kind === "retained" ? completion.operation.result : completion.result;
-        void scope.work.track(() => result).catch(() => undefined);
+        void scope.work.track(() => completion).catch(() => undefined);
         return completion;
       }),
     run,
@@ -609,7 +607,7 @@ function startRetainedOpenClawStateRead(
     void maintenance.run(() => {
       const accepted = tracked();
       completion = accepted;
-      return accepted.kind === "retained" ? accepted.operation.result : accepted.result;
+      return accepted;
     });
   } else {
     completion = tracked();
@@ -617,8 +615,7 @@ function startRetainedOpenClawStateRead(
   if (!completion) {
     throw new Error("Shared-state read maintenance scope did not start its operation");
   }
-  const result = completion.kind === "retained" ? completion.operation.result : completion.result;
-  void retainSnapshotWork(result, () =>
+  void retainSnapshotWork(completion, () =>
     controller.abort(new Error("Shared-state read admission closed")),
   );
   return completion;
