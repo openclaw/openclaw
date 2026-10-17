@@ -256,18 +256,20 @@ describe("attempt prompt preflight", () => {
     );
   });
 
-  it("admits heuristic tool-result pressure without requesting recovery", async () => {
+  it("admits heuristic tool-result pressure without recovery or mutating history", async () => {
     const toolResult = makeToolResult("alpha beta gamma delta epsilon ".repeat(2_200));
+    const messages = [toolResult];
+    const messagesBefore = structuredClone(messages);
     const reserveTokens = 2_000;
     const prompt = { systemPrompt: "sys", prompt: "hello" };
     const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
-      messages: [toolResult],
+      messages,
       ...prompt,
     });
 
     const result = await preflight({
       contextTokenBudget: estimatedPromptTokens - 200 + reserveTokens,
-      hookMessagesForCurrentPrompt: [toolResult],
+      hookMessagesForCurrentPrompt: messages,
       includeBoundaryTimestamp: true,
       promptForPrecheck: prompt.prompt,
       reserveTokens,
@@ -281,5 +283,6 @@ describe("attempt prompt preflight", () => {
       promptErrorSource: null,
       preflightRecovery: undefined,
     });
+    expect(messages).toEqual(messagesBefore);
   });
 });

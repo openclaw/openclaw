@@ -31,7 +31,7 @@ const mediaAt = (...paths: string[]) =>
   paths.map((file) => ({ path: file, contentType: "image/png" }));
 const png = (r = 0, g = 0, b = 0) => createSolidPngBuffer(1, 1, { r, g, b });
 const tinyPng = Buffer.from(TINY_PNG_BASE64, "base64");
-async function writeImage(dir: string, name: string, data = tinyPng) {
+async function writeImage(dir: string, name: string, data: Uint8Array = tinyPng) {
   const target = path.join(dir, name);
   await fs.mkdir(path.dirname(target), { recursive: true });
   await fs.writeFile(target, data);

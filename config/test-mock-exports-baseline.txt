@@ -2264,7 +2264,6 @@
 ["src/agents/embedded-agent-runner/run/attempt-prompt-error.test.ts","./midturn-precheck.js","8fd7c6a1e74d11c3da4c73a8e51f8f203610089b62d5443816555d57b6d63e5b",1]
 ["src/agents/embedded-agent-runner/run/attempt-prompt-execution-prepare.test.ts","./images.js","a790985990d3b61ffbbe23129bd36fe368d1b8dedbbb15c6c62f96a5e2335e0b",1]
 ["src/agents/embedded-agent-runner/run/attempt-prompt-observability.test.ts","../../../infra/diagnostic-events.js","84cd2c3c5bbe125731b080b18fb20d1c6295b96456b88e5d5c303e408354a9c1",1]
-["src/agents/embedded-agent-runner/run/attempt-prompt-observability.test.ts","../../../plugins/hook-agent-context.js","0f4c15470c157e3e3b40772eb9e5175e2fa3495cd92aa609b4c5d4f632fd2236",1]
 ["src/agents/embedded-agent-runner/run/attempt-prompt-observability.test.ts","../../../trajectory/runtime.js","cb46605a28f5cf071b8bc46eff8896e6c861f6b2ac9f74e91964cff7c9f2c67b",1]
 ["src/agents/embedded-agent-runner/run/attempt-prompt-observability.test.ts","../logger.js","0b465d5385cd804864f5deab362442ed7a42a76213783c602117726fb4141495",1]
 ["src/agents/embedded-agent-runner/run/attempt-prompt-phase.test-support.ts","../../subagents/registry/subagent-registry.js","f290f5f3333e42f3232acfbdf23d48f4f67da2d4bcebf7dca6f7306f47f4416b",1]

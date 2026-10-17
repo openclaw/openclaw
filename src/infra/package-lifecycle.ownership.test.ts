@@ -74,7 +74,7 @@ const settle = <T>(work: Promise<T>) =>
     (completed) => ({ completed }),
     (error: unknown) => ({ error }),
   );
-function onLockOpen(action: (flags: string | number) => Promise<void>) {
+function onLockOpen(action: (flags: Parameters<typeof fs.open>[1]) => Promise<void>) {
   const open = fs.open;
   vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
     if (file === lock) {
