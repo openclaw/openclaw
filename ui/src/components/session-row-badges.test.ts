@@ -36,18 +36,20 @@ function renderPlacementBadges(
   workspaceConflictCount?: number,
   diskSpaceStatus?: "ok" | "warning" | "critical",
 ) {
-  renderBadges({
-    placementState,
-    workspaceConflictCount,
-    diskSpaceStatus,
-  });
+  renderBadges({ placementState, workspaceConflictCount, diskSpaceStatus });
 }
 
-function expectTooltipText(badge: Element | null | undefined, text: string) {
-  expect(badge?.hasAttribute("title")).toBe(false);
+function expectLabel(indicator: Element | null | undefined, text: string) {
+  expect(indicator?.getAttribute("aria-label")).toBe(text);
+  expect(indicator?.hasAttribute("title")).toBe(false);
   expect(
-    (badge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)?.content,
+    (indicator?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+      ?.content,
   ).toBe(text);
+}
+
+function badge<T extends Element = HTMLElement>(kind: string) {
+  return container.querySelector<T>(`.session-row-badge--${kind}`);
 }
 
 describe("session row placement badges", () => {
@@ -62,39 +64,29 @@ describe("session row placement badges", () => {
     });
     const label =
       "machine0 · team · Linux · medium · 4 vCPU · 16 GB · active · 2 workspace conflicts · Cloud session disk space is low";
-    const badge = container.querySelector(".session-row-badge--cloud");
-    expect(badge?.getAttribute("aria-label")).toBe(label);
-    expectTooltipText(badge, label);
+    const indicator = badge("cloud");
+    expectLabel(indicator, label);
   });
 
   it("renders the incognito indicator", () => {
-    renderBadges({
-      incognito: true,
-    });
+    renderBadges({ incognito: true });
 
-    const badge = container.querySelector(".session-row-badge--incognito");
-    expect(badge?.getAttribute("aria-label")).toBe("Incognito session");
-    expectTooltipText(badge, "Incognito session");
+    const indicator = badge("incognito");
+    expectLabel(indicator, "Incognito session");
   });
 
   it("renders outbox attention and stays quiet when empty", () => {
-    renderBadges({
-      hasApproval: true,
-      outboxAttentionCount: 3,
-    });
+    renderBadges({ hasApproval: true, outboxAttentionCount: 3 });
 
-    const badge = container.querySelector<HTMLElement>(".session-row-badge--attention");
-    expect(badge?.getAttribute("aria-label")).toBe("3 messages need attention");
-    expectTooltipText(badge, "3 messages need attention");
-    expect(badge?.textContent).toContain("3");
-    const attentionIcon = badge?.querySelector("svg");
-    const approvalIcon = container.querySelector(".session-row-badge--approval svg");
+    const indicator = badge<HTMLElement>("attention");
+    expectLabel(indicator, "3 messages need attention");
+    expect(indicator?.textContent).toContain("3");
+    const attentionIcon = indicator?.querySelector("svg");
+    const approvalIcon = badge("approval svg");
     expect(attentionIcon?.isEqualNode(approvalIcon ?? null)).toBe(true);
 
     renderBadges({ outboxAttentionCount: 1 });
-    expect(
-      container.querySelector(".session-row-badge--attention")?.getAttribute("aria-label"),
-    ).toBe("1 message needs attention");
+    expect(badge("attention")?.getAttribute("aria-label")).toBe("1 message needs attention");
 
     renderBadges({ outboxAttentionCount: 0 });
     expect(container.querySelector(".session-row-badges")).toBeNull();
@@ -113,24 +105,20 @@ describe("session row placement badges", () => {
     const placementState = "active";
     renderPlacementBadges(placementState);
 
-    const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
-    expect(badge?.dataset.placementState).toBe(placementState);
-    expect(badge?.getAttribute("aria-label")).toBe(`Placement: ${placementState}`);
-    expectTooltipText(badge, `Placement: ${placementState}`);
-    expect(badge?.querySelector("circle")).not.toBeNull();
-    expect(badge?.querySelector("rect")).toBeNull();
+    const indicator = badge<HTMLElement>("cloud");
+    expect(indicator?.dataset.placementState).toBe(placementState);
+    expectLabel(indicator, `Placement: ${placementState}`);
+    expect(indicator?.querySelector("circle")).not.toBeNull();
+    expect(indicator?.querySelector("rect")).toBeNull();
   });
 
   it("renders a green open-pull-request indicator", () => {
-    renderBadges({
-      pullRequest: { numbers: [111532], state: "open" },
-    });
+    renderBadges({ pullRequest: { numbers: [111532], state: "open" } });
 
-    const badge = container.querySelector(".session-row-badge--pull-request");
-    expect(badge?.getAttribute("aria-label")).toBe("#111532 · Open");
-    expectTooltipText(badge, "#111532 · Open");
-    expect(badge?.getAttribute("data-pull-request-state")).toBe("open");
-    expect(badge?.querySelector("svg")).not.toBeNull();
+    const indicator = badge("pull-request");
+    expectLabel(indicator, "#111532 · Open");
+    expect(indicator?.getAttribute("data-pull-request-state")).toBe("open");
+    expect(indicator?.querySelector("svg")).not.toBeNull();
   });
 
   it.each([
@@ -138,27 +126,20 @@ describe("session row placement badges", () => {
     { state: "merged" as const, label: "#111751, #111772 · Merged" },
   ])("renders catalog pull request metadata for $state threads", ({ state, label }) => {
     renderBadges({
-      pullRequest: {
-        numbers: state === "draft" ? [107302] : [111751, 111772],
-        state,
-      },
+      pullRequest: { numbers: state === "draft" ? [107302] : [111751, 111772], state },
     });
 
-    const badge = container.querySelector(".session-row-badge--pull-request");
-    expect(badge?.getAttribute("aria-label")).toBe(label);
-    expectTooltipText(badge, label);
-    expect(badge?.getAttribute("data-pull-request-state")).toBe(state);
+    const indicator = badge("pull-request");
+    expectLabel(indicator, label);
+    expect(indicator?.getAttribute("data-pull-request-state")).toBe(state);
   });
 
   it("renders a warning-colored approval-needed indicator", () => {
-    renderBadges({
-      hasApproval: true,
-    });
+    renderBadges({ hasApproval: true });
 
-    const badge = container.querySelector(".session-row-badge--approval");
-    expect(badge?.getAttribute("aria-label")).toBe("Approval needed");
-    expectTooltipText(badge, "Approval needed");
-    expect(badge?.querySelector("svg")).not.toBeNull();
+    const indicator = badge("approval");
+    expectLabel(indicator, "Approval needed");
+    expect(indicator?.querySelector("svg")).not.toBeNull();
   });
 
   it("keeps child placement badges hidden while showing PR and approval", () => {
@@ -170,37 +151,30 @@ describe("session row placement badges", () => {
     });
 
     expect(container.querySelectorAll(".session-row-badge")).toHaveLength(2);
-    expect(container.querySelector(".session-row-badge--pull-request")).not.toBeNull();
-    expect(container.querySelector(".session-row-badge--approval")).not.toBeNull();
-    expect(container.querySelector(".session-row-badge--cloud")).toBeNull();
+    expect(badge("pull-request")).not.toBeNull();
+    expect(badge("approval")).not.toBeNull();
+    expect(badge("cloud")).toBeNull();
   });
 
   it("keeps conflict attention visible for child sessions", () => {
-    renderBadges({
-      isChild: true,
-      placementState: "reclaimed",
-      workspaceConflictCount: 2,
-    });
+    renderBadges({ isChild: true, placementState: "reclaimed", workspaceConflictCount: 2 });
 
-    const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
-    expect(badge?.dataset.placementState).toBe("reclaimed");
-    expect(badge?.dataset.workspaceConflicts).toBe("2");
+    const indicator = badge<HTMLElement>("cloud");
+    expect(indicator?.dataset.placementState).toBe("reclaimed");
+    expect(indicator?.dataset.workspaceConflicts).toBe("2");
     expect(container.querySelectorAll(".session-row-badge")).toHaveLength(1);
   });
 
   it("uses the existing cloud badge to call out workspace conflicts", () => {
     renderPlacementBadges("active", 3);
 
-    const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
-    expect(badge?.dataset.workspaceConflicts).toBe("3");
-    expectTooltipText(badge, "Placement: active · 3 workspace conflicts");
+    const indicator = badge<HTMLElement>("cloud");
+    expect(indicator?.dataset.workspaceConflicts).toBe("3");
+    expectLabel(indicator, "Placement: active · 3 workspace conflicts");
     expect(container.querySelectorAll(".session-row-badge")).toHaveLength(1);
 
     renderPlacementBadges("active", 1);
-    expectTooltipText(
-      container.querySelector(".session-row-badge--cloud"),
-      "Placement: active · 1 workspace conflict",
-    );
+    expectLabel(badge("cloud"), "Placement: active · 1 workspace conflict");
   });
 
   it.each([
@@ -209,27 +183,27 @@ describe("session row placement badges", () => {
   ])("uses the cloud badge's $status tone for background pressure", ({ status, label }) => {
     renderPlacementBadges("active", undefined, status);
 
-    const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
-    expect(badge?.dataset.diskSpaceStatus).toBe(status);
-    expectTooltipText(badge, `Placement: active · ${label}`);
+    const indicator = badge<HTMLElement>("cloud");
+    expect(indicator?.dataset.diskSpaceStatus).toBe(status);
+    expectLabel(indicator, `Placement: active · ${label}`);
     expect(container.querySelectorAll(".session-row-badge--cloud")).toHaveLength(1);
   });
 
   it("keeps retained workspace conflicts visible after reclaim", () => {
     renderPlacementBadges("reclaimed", 2);
 
-    const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
-    expect(badge?.dataset.placementState).toBe("reclaimed");
-    expect(badge?.dataset.workspaceConflicts).toBe("2");
-    expectTooltipText(badge, "Placement: reclaimed · 2 workspace conflicts");
+    const indicator = badge<HTMLElement>("cloud");
+    expect(indicator?.dataset.placementState).toBe("reclaimed");
+    expect(indicator?.dataset.workspaceConflicts).toBe("2");
+    expectLabel(indicator, "Placement: reclaimed · 2 workspace conflicts");
   });
 
   it("renders descendant conflict attention without claiming a parent placement state", () => {
     renderPlacementBadges(undefined, 2);
 
-    const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
-    expect(badge?.dataset.placementState).toBeUndefined();
-    expect(badge?.dataset.workspaceConflicts).toBe("2");
-    expectTooltipText(badge, "Cloud worker children: 2 workspace conflicts");
+    const indicator = badge<HTMLElement>("cloud");
+    expect(indicator?.dataset.placementState).toBeUndefined();
+    expect(indicator?.dataset.workspaceConflicts).toBe("2");
+    expectLabel(indicator, "Cloud worker children: 2 workspace conflicts");
   });
 });

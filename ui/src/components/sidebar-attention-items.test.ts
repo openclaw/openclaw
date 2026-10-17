@@ -9,10 +9,14 @@ import {
 } from "./sidebar-attention-entries.ts";
 import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 
-function cronJob(id: string): CronJob {
+function cronJob(
+  id: string,
+  state: CronJob["state"] = { lastRunStatus: "error" },
+  name = id,
+): CronJob {
   return {
     id,
-    name: id,
+    name,
     enabled: true,
     createdAtMs: 0,
     updatedAtMs: 0,
@@ -20,7 +24,7 @@ function cronJob(id: string): CronJob {
     sessionTarget: "isolated",
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "test" },
-    state: { lastRunStatus: "error" },
+    state,
   };
 }
 
@@ -47,18 +51,28 @@ function cronItems(cronJobs: readonly CronJob[], now = 0, cronSchedulerEnabled =
   });
 }
 
+function updateEntry(requiresAction: boolean): Extract<SidebarInboxEntry, { type: "update" }> {
+  return {
+    type: "update",
+    category: "system",
+    dismissal: null,
+    requiresAction,
+    severity: "warning",
+  };
+}
+
 describe("automation attention", () => {
   it("lists each failed job as direct automation navigation", () => {
-    const primary = cronJob("primary");
-    primary.name = "Nightly backup";
-    primary.state = { lastRunStatus: "error", lastError: "  disk full  " };
-    const reason = cronJob("reason-id");
-    reason.name = "";
-    reason.state = {
-      lastRunStatus: "error",
-      lastError: "   ",
-      lastErrorReason: "timeout",
-    };
+    const primary = cronJob(
+      "primary",
+      { lastRunStatus: "error", lastError: "  disk full  " },
+      "Nightly backup",
+    );
+    const reason = cronJob(
+      "reason-id",
+      { lastRunStatus: "error", lastError: "   ", lastErrorReason: "timeout" },
+      "",
+    );
     const unknown = cronJob("unknown-id");
 
     const failed = cronItems([primary, reason, unknown]).filter(
@@ -73,13 +87,9 @@ describe("automation attention", () => {
   });
 
   it("does not flag an actively running job as overdue", () => {
-    // The gateway leaves nextRunAtMs past-due during execution; runningAtMs is
-    // the recorded fact that a run is in flight (agentTurn runs may take up to
-    // an hour, far beyond the 5-minute overdue grace).
-    const running = cronJob("running-id");
-    running.state = { lastRunStatus: "ok", nextRunAtMs: 1, runningAtMs: 2 };
-    const stalled = cronJob("stalled-id");
-    stalled.state = { lastRunStatus: "ok", nextRunAtMs: 2 };
+    // A running job can retain a past-due nextRunAtMs beyond the grace period.
+    const running = cronJob("running-id", { lastRunStatus: "ok", nextRunAtMs: 1, runningAtMs: 2 });
+    const stalled = cronJob("stalled-id", { lastRunStatus: "ok", nextRunAtMs: 2 });
 
     const overdue = cronItems([running, stalled], 300_003).find(
       (item) => item.kind === "cronOverdue",
@@ -110,14 +120,10 @@ describe("automation attention", () => {
   });
 
   it("orders failed before overdue and newest first within each group", () => {
-    const failedJob = cronJob("failed");
-    failedJob.state = { lastRunStatus: "error", lastRunAtMs: 200 };
-    const olderFailedJob = cronJob("older-failed");
-    olderFailedJob.state = { lastRunStatus: "error", lastRunAtMs: 100 };
-    const overdueJob = cronJob("overdue");
-    overdueJob.state = { lastRunStatus: "ok", nextRunAtMs: 2 };
-    const olderOverdueJob = cronJob("older-overdue");
-    olderOverdueJob.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
+    const failedJob = cronJob("failed", { lastRunStatus: "error", lastRunAtMs: 200 });
+    const olderFailedJob = cronJob("older-failed", { lastRunStatus: "error", lastRunAtMs: 100 });
+    const overdueJob = cronJob("overdue", { lastRunStatus: "ok", nextRunAtMs: 2 });
+    const olderOverdueJob = cronJob("older-overdue", { lastRunStatus: "ok", nextRunAtMs: 1 });
 
     const items = cronItems(
       [olderOverdueJob, olderFailedJob, overdueJob, failedJob],
@@ -135,23 +141,12 @@ describe("automation attention", () => {
 
 describe("sidebar Inbox projection", () => {
   it("derives every tab count and dismiss control from one entry list", () => {
-    const attention = buildSidebarAttentionEntries({
-      cronJobs: [cronJob("failed-job")],
-      cronSchedulerEnabled: true,
-      modelAuthStatus: null,
-      now: 0,
-    });
+    const attention = cronItems([cronJob("failed-job")]);
     const scopeUpgrade = buildScopeUpgradeInboxEntry({
       scopes: ["operator.read"],
       state: { phase: "available" },
     });
-    const update: Extract<SidebarInboxEntry, { type: "update" }> = {
-      type: "update",
-      category: "system",
-      dismissal: null,
-      requiresAction: true,
-      severity: "warning",
-    };
+    const update = updateEntry(true);
     const entries = buildSidebarInboxEntries({
       approvals: [
         {
@@ -186,13 +181,7 @@ describe("sidebar Inbox projection", () => {
   });
 
   it("keeps informational updates visible without adding them to attention counts", () => {
-    const update: Extract<SidebarInboxEntry, { type: "update" }> = {
-      type: "update",
-      category: "system",
-      dismissal: null,
-      requiresAction: false,
-      severity: "warning",
-    };
+    const update = updateEntry(false);
     const entries = buildSidebarInboxEntries({
       approvals: [],
       attention: [],

@@ -82,17 +82,7 @@ type SidebarAttentionElement = HTMLElement & {
 };
 
 function authStatus(ts: number, status: "missing" | "ok" = "missing"): ModelAuthStatusResult {
-  return {
-    ts,
-    providers: [
-      {
-        provider: "openai",
-        displayName: "OpenAI",
-        status,
-        profiles: [],
-      },
-    ],
-  };
+  return { ts, providers: [{ provider: "openai", displayName: "OpenAI", status, profiles: [] }] };
 }
 
 function authItems(agentId: string) {
@@ -103,6 +93,27 @@ function authItems(agentId: string) {
     modelAuthAgentId: agentId,
     now: 0,
   }).filter((item) => item.kind === "modelAuthExpired");
+}
+
+function selection(selectedId: string, scopeId: string | null = selectedId) {
+  return {
+    state: { selectedId, scopeId },
+    subscribe: () => () => undefined,
+  } as unknown as ApplicationContext["agentSelection"];
+}
+
+function respond(responses: Record<string, unknown>) {
+  return vi.fn(async (method: string) => {
+    if (!Object.hasOwn(responses, method)) {
+      throw new Error(`Unexpected request: ${method}`);
+    }
+    const response = responses[method];
+    return typeof response === "function" ? response() : response;
+  });
+}
+
+function issues<T extends Element = HTMLElement>(element: ParentNode, suffix: string) {
+  return element.querySelector<T>(`.sidebar-issues-${suffix}`);
 }
 
 describe("model auth attention", () => {
@@ -118,12 +129,7 @@ describe("model auth attention", () => {
       modelAuthStatus: {
         ts: 1,
         providers: [
-          {
-            provider: "anthropic",
-            displayName: "Claude",
-            status: "missing",
-            profiles: [],
-          },
+          { provider: "anthropic", displayName: "Claude", status: "missing", profiles: [] },
           {
             provider: "claude-cli",
             displayName: "Claude",
@@ -182,20 +188,14 @@ describe("sidebar attention refresh ownership", () => {
         subscribe: () => () => undefined,
         subscribeEvents: () => () => undefined,
       },
-      overlays: {
-        snapshot: { approvalQueue: [] },
-        subscribe: () => () => undefined,
-      },
+      overlays: { snapshot: { approvalQueue: [] }, subscribe: () => () => undefined },
       agentSelection: {
         state: { selectedId: null, scopeId: null },
         subscribe: () => () => undefined,
       },
       scopeUpgrade: hiddenScopeUpgradeCapability,
       ...overrides,
-      agents: {
-        state: { agentsList: null },
-        subscribe: () => () => undefined,
-      },
+      agents: { state: { agentsList: null }, subscribe: () => () => undefined },
     } as unknown as Parameters<typeof createSidebarAttentionStore>[0];
     const store = createSidebarAttentionStore(sources);
     store.activate(SidebarAttentionStoreController);
@@ -208,10 +208,8 @@ describe("sidebar attention refresh ownership", () => {
     provider.append(element);
     document.body.append(provider);
 
-    await waitForFast(() =>
-      expect(element.querySelector<HTMLButtonElement>(".sidebar-issues-button")).not.toBeNull(),
-    );
-    const trigger = element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!;
+    await waitForFast(() => expect(issues<HTMLButtonElement>(element, "button")).not.toBeNull());
+    const trigger = issues<HTMLButtonElement>(element, "button")!;
     return { element, provider, store, trigger };
   }
 
@@ -221,12 +219,12 @@ describe("sidebar attention refresh ownership", () => {
     await vi.dynamicImportSettled();
     flush();
 
-    const panel = element.querySelector(".sidebar-issues-panel");
+    const panel = issues(element, "panel");
     expect(panel).not.toBeNull();
     expect(panel?.closest("openclaw-menu-surface")).not.toBeNull();
     panel!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     flush();
-    expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
+    expect(issues(element, "panel")).toBeNull();
     await waitForFast(() => expect(document.activeElement).toBe(trigger));
   });
 
@@ -234,26 +232,26 @@ describe("sidebar attention refresh ownership", () => {
     const { element, trigger } = await mountAttention();
     const frame = document.body.appendChild(document.createElement("iframe"));
     trigger.click();
-    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
+    await waitForFast(() => expect(issues(element, "panel")).not.toBeNull());
 
     // jsdom can focus the frame but does not emit the browsing-context blur.
     frame.focus();
     window.dispatchEvent(new Event("blur"));
     flush();
 
-    expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
+    expect(issues(element, "panel")).toBeNull();
     expect(document.activeElement).toBe(frame);
   });
 
   it("keeps Inbox open when the window loses focus without entering an outside frame", async () => {
     const { element, trigger } = await mountAttention();
     trigger.click();
-    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
+    await waitForFast(() => expect(issues(element, "panel")).not.toBeNull());
 
     window.dispatchEvent(new Event("blur"));
     flush();
 
-    expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull();
+    expect(issues(element, "panel")).not.toBeNull();
   });
 
   it("updates cross-agent mentions and opens them through shell navigation", async () => {
@@ -263,15 +261,7 @@ describe("sidebar attention refresh ownership", () => {
       "cron.status": { enabled: true, triggersEnabled: true, jobs: 0 },
       "models.authStatus": { ts: 1, providers: [] },
     };
-    const request = vi.fn(async (method: string) => {
-      if (method === "mentions.list") {
-        return result;
-      }
-      if (method in responses) {
-        return responses[method];
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
+    const request = respond({ ...responses, "mentions.list": () => result });
     const harness = createGatewayHarness(mockClient(request));
     harness.update({ selfUser: { id: "alice", name: "Alice" } });
     harness.update({
@@ -286,24 +276,21 @@ describe("sidebar attention refresh ownership", () => {
     });
     const { element } = await mountAttention({
       gateway: harness.gateway,
-      agentSelection: {
-        state: { selectedId: "main", scopeId: "main" },
-        subscribe: () => () => undefined,
-      } as unknown as ApplicationContext["agentSelection"],
+      agentSelection: selection("main", "main"),
     });
 
     await waitForFast(() =>
-      expect(element.querySelector(".sidebar-issues-button__count")?.textContent?.trim()).toBe("1"),
+      expect(issues(element, "button__count")?.textContent?.trim()).toBe("1"),
     );
     result = { ...result, revision: 2, items: [mentionItem("first"), mentionItem("second")] };
     harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 2 });
     await waitForFast(() =>
-      expect(element.querySelector(".sidebar-issues-button__count")?.textContent?.trim()).toBe("2"),
+      expect(issues(element, "button__count")?.textContent?.trim()).toBe("2"),
     );
-    expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
+    expect(issues(element, "panel")).toBeNull();
     const onNavigate = vi.fn();
     element.onNavigate = onNavigate;
-    element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!.click();
+    issues<HTMLButtonElement>(element, "button")!.click();
     await waitForFast(() => expect(element.querySelector(".sidebar-mention-row a")).not.toBeNull());
     element.querySelector<HTMLAnchorElement>(".sidebar-mention-row a")!.click();
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith(
@@ -311,75 +298,58 @@ describe("sidebar attention refresh ownership", () => {
       expect.objectContaining({ pathname: "/chat/writer/review" }),
     );
     flush();
-    expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
+    expect(issues(element, "panel")).toBeNull();
   });
 
   it("retains an open panel during a move but resets it after a genuine disconnect", async () => {
     const { element, provider, trigger } = await mountAttention();
     trigger.click();
-    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
-    const panel = element.querySelector(".sidebar-issues-panel");
+    await waitForFast(() => expect(issues(element, "panel")).not.toBeNull());
+    const panel = issues(element, "panel");
 
     element.remove();
     provider.append(element);
     flush();
-    expect(element.querySelector(".sidebar-issues-panel")).toBe(panel);
+    expect(issues(element, "panel")).toBe(panel);
 
     element.remove();
     await Promise.resolve();
     provider.append(element);
-    await waitForFast(() => expect(element.querySelector(".sidebar-issues-button")).not.toBeNull());
-    expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
-    const reconnectedTrigger = element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!;
+    await waitForFast(() => expect(issues(element, "button")).not.toBeNull());
+    expect(issues(element, "panel")).toBeNull();
+    const reconnectedTrigger = issues<HTMLButtonElement>(element, "button")!;
     expect(reconnectedTrigger.getAttribute("aria-expanded")).toBe("false");
     reconnectedTrigger.click();
-    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
+    await waitForFast(() => expect(issues(element, "panel")).not.toBeNull());
   });
 
   it("keeps loaded health attention across a view-only remount", async () => {
-    const request = vi.fn((method: string) => {
-      if (method === "cron.list") {
-        return Promise.resolve(cronListResponse([cronJob("failed")]));
-      }
-      if (method === "cron.status") {
-        return Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 1 });
-      }
-      if (method === "models.authStatus") {
-        return Promise.resolve(authStatus(1));
-      }
-      throw new Error(`Unexpected request: ${method}`);
+    const request = respond({
+      "cron.list": cronListResponse([cronJob("failed")]),
+      "cron.status": { enabled: true, triggersEnabled: true, jobs: 1 },
+      "models.authStatus": authStatus(1),
     });
     const harness = createGatewayHarness(mockClient(request));
     harness.update({ selfUser: { id: "alice", name: "Alice" } });
     const { element, provider } = await mountAttention({
       gateway: harness.gateway,
-      agentSelection: {
-        state: { selectedId: "main", scopeId: null },
-        subscribe: () => () => undefined,
-      } as unknown as ApplicationContext["agentSelection"],
+      agentSelection: selection("main", null),
     });
-    await waitForFast(() =>
-      expect(element.querySelector(".sidebar-issues-button__count")?.textContent).toBe("2"),
-    );
+    await waitForFast(() => expect(issues(element, "button__count")?.textContent).toBe("2"));
 
     element.remove();
     provider.append(element);
 
-    expect(element.querySelector(".sidebar-issues-button__count")?.textContent).toBe("2");
+    expect(issues(element, "button__count")?.textContent).toBe("2");
   });
 
   it("keeps overdue jobs out of the Inbox while the scheduler is disabled", async () => {
     const overdue = cronJob("overdue-id");
     overdue.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
     vi.spyOn(Date, "now").mockReturnValue(300_002);
-    const request = vi.fn((method: string) => {
-      if (method === "cron.list") {
-        return Promise.resolve(cronListResponse([overdue]));
-      }
-      if (method === "cron.status") {
-        return Promise.resolve({ enabled: false, triggersEnabled: true, jobs: 1 });
-      }
-      throw new Error(`Unexpected request: ${method}`);
+    const request = respond({
+      "cron.list": cronListResponse([overdue]),
+      "cron.status": { enabled: false, triggersEnabled: true, jobs: 1 },
     });
     const harness = createGatewayHarness(mockClient(request));
     harness.update({ selfUser: { id: "alice", name: "Alice" } });
@@ -387,7 +357,7 @@ describe("sidebar attention refresh ownership", () => {
     const { element } = await mountAttention({ gateway: harness.gateway });
 
     await waitForFast(() => expect(request).toHaveBeenCalledWith("cron.status", {}));
-    expect(element.querySelector(".sidebar-issues-button__count")).toBeNull();
+    expect(issues(element, "button__count")).toBeNull();
   });
 
   it.each(["visible", "hidden"] as const)(
@@ -401,14 +371,9 @@ describe("sidebar attention refresh ownership", () => {
       const job = cronJob("quiet-deadline");
       job.state = { lastRunStatus: "ok", nextRunAtMs: Date.now() };
       const deadline = Date.now() + 300_000;
-      const request = vi.fn(async (method: string) => {
-        if (method === "cron.list") {
-          return cronListResponse([job]);
-        }
-        if (method === "cron.status") {
-          return { enabled: true, triggersEnabled: true, jobs: 1 };
-        }
-        throw new Error(`Unexpected request: ${method}`);
+      const request = respond({
+        "cron.list": cronListResponse([job]),
+        "cron.status": { enabled: true, triggersEnabled: true, jobs: 1 },
       });
       const harness = createGatewayHarness(mockClient(request));
       const { element } = await mountAttention({ gateway: harness.gateway });
@@ -419,16 +384,16 @@ describe("sidebar attention refresh ownership", () => {
       }
       await vi.advanceTimersByTimeAsync(deadline - Date.now());
       flush();
-      expect(element.querySelector(".sidebar-issues-button__count")).toBeNull();
+      expect(issues(element, "button__count")).toBeNull();
       await vi.advanceTimersByTimeAsync(1);
       flush();
       if (presentation === "hidden") {
-        expect(element.querySelector(".sidebar-issues-button__count")).toBeNull();
+        expect(issues(element, "button__count")).toBeNull();
         visibility = "visible";
         document.dispatchEvent(new Event("visibilitychange"));
         flush();
       }
-      expect(element.querySelector(".sidebar-issues-button__count")?.textContent).toBe("1");
+      expect(issues(element, "button__count")?.textContent).toBe("1");
       await vi.advanceTimersByTimeAsync(30 * 60_000);
       expect(request).toHaveBeenCalledTimes(2);
     },
@@ -441,7 +406,7 @@ describe("sidebar attention refresh ownership", () => {
     trigger.click();
     await vi.dynamicImportSettled();
     flush();
-    expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull();
+    expect(issues(element, "panel")).not.toBeNull();
     const obsolete = pending.splice(0);
 
     element.dismissPanel();
@@ -452,7 +417,7 @@ describe("sidebar attention refresh ownership", () => {
     for (const callback of pending.splice(0)) {
       callback();
     }
-    expect(document.activeElement).toBe(element.querySelector(".sidebar-issues-panel__list"));
+    expect(document.activeElement).toBe(issues(element, "panel__list"));
     const nextControl = document.body.appendChild(document.createElement("button"));
     nextControl.focus();
     for (const callback of obsolete) {
@@ -464,7 +429,7 @@ describe("sidebar attention refresh ownership", () => {
   it("does not restore an obsolete close's focus after another open and close", async () => {
     const { element, trigger } = await mountAttention();
     trigger.click();
-    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
+    await waitForFast(() => expect(issues(element, "panel")).not.toBeNull());
     const pending: VoidFunction[] = [];
     vi.spyOn(globalThis, "queueMicrotask").mockImplementation((callback) => pending.push(callback));
     element
@@ -478,7 +443,7 @@ describe("sidebar attention refresh ownership", () => {
     for (const callback of pending.splice(0)) {
       callback();
     }
-    expect(document.activeElement).toBe(element.querySelector(".sidebar-issues-panel__list"));
+    expect(document.activeElement).toBe(issues(element, "panel__list"));
     element.dismissPanel();
     flush();
     const nextControl = document.body.appendChild(document.createElement("button"));
@@ -494,27 +459,14 @@ describe("sidebar attention refresh ownership", () => {
     { name: "reopened panel", reopen: true },
   ])("restores approval focus only within the initiating panel ($name)", async ({ reopen }) => {
     const resolution = deferred<unknown>();
-    const request = vi.fn((method: string) => {
-      if (method === "exec.approval.resolve") {
-        return resolution.promise;
-      }
-      if (method === "update.status") {
-        return Promise.resolve({ sentinel: null, updateAvailable: null });
-      }
-      if (method === "cron.list") {
-        return Promise.resolve(cronListResponse([]));
-      }
-      if (method === "cron.status") {
-        return Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 0 });
-      }
-      if (
-        method === "exec.approval.list" ||
-        method === "plugin.approval.list" ||
-        method === "openclaw.approval.list"
-      ) {
-        return Promise.resolve([]);
-      }
-      throw new Error(`Unexpected request: ${method}`);
+    const request = respond({
+      "exec.approval.resolve": () => resolution.promise,
+      "update.status": { sentinel: null, updateAvailable: null },
+      "cron.list": cronListResponse([]),
+      "cron.status": { enabled: true, triggersEnabled: true, jobs: 0 },
+      "exec.approval.list": [],
+      "plugin.approval.list": [],
+      "openclaw.approval.list": [],
     });
     const harness = createGatewayHarness(mockClient(request));
     harness.update({ selfUser: { id: "alice", name: "Alice" } });
@@ -539,7 +491,7 @@ describe("sidebar attention refresh ownership", () => {
         flush();
         trigger.click();
         await waitForFast(() =>
-          expect(document.activeElement).toBe(element.querySelector(".sidebar-issues-panel__list")),
+          expect(document.activeElement).toBe(issues(element, "panel__list")),
         );
       }
       const tab = element.querySelector<HTMLElement>("#sidebar-issues-tab-all")!;
@@ -776,39 +728,10 @@ describe("sidebar attention refresh ownership", () => {
       snapshot: { approvalQueue: [] },
       subscribe: () => () => undefined,
     } as unknown as ApplicationContext["overlays"];
-    const agentSelection = {
-      state: { selectedId: "main", scopeId: "main" },
-      subscribe: () => () => undefined,
-    } as unknown as ApplicationContext["agentSelection"];
+    const agentSelection = selection("main");
     vi.stubGlobal("localStorage", createTestStorageMock());
 
-    const context = {
-      gateway,
-      overlays,
-      agentSelection,
-      scopeUpgrade: hiddenScopeUpgradeCapability,
-      agents: {
-        state: { agentsList: null },
-        subscribe: () => () => undefined,
-      },
-    } as unknown as ApplicationContext;
-    const store = createSidebarAttentionStore({
-      gateway,
-      agentSelection,
-      agents: context.agents,
-      overlays,
-      scopeUpgrade: context.scopeUpgrade,
-    });
-    store.activate(SidebarAttentionStoreController);
-    stores.add(store);
-    const provider = createApplicationContextProvider({ ...context, sidebarAttention: store });
-    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
-    provider.append(element);
-    document.body.append(provider);
-    await waitForFast(() =>
-      expect(element.querySelector<HTMLButtonElement>(".sidebar-issues-button")).not.toBeNull(),
-    );
-    const trigger = element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!;
+    const { element, trigger } = await mountAttention({ gateway, overlays, agentSelection });
     vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
       x: 20,
       y: 10,
@@ -824,7 +747,7 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() =>
       expect(element.querySelector('[data-attention-kind="cronFailed"]')).not.toBeNull(),
     );
-    const panel = element.querySelector<HTMLElement>(".sidebar-issues-panel")!;
+    const panel = issues<HTMLElement>(element, "panel")!;
     expect(panel.style.top).toBe("50px");
     expect(panel.style.bottom).toBe("");
     expect(panel.style.getPropertyValue("--sidebar-issues-panel-top")).toBe("50px");
@@ -849,12 +772,12 @@ describe("sidebar attention refresh ownership", () => {
         ),
       );
       expect(custodianAlertStore.alert?.id).toBe("modelAuthExpired:agent:main\nopenai");
-      expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
+      expect(issues(element, "panel")).toBeNull();
     } finally {
       custodianAlertStore.dismiss();
     }
     trigger.click();
-    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
+    await waitForFast(() => expect(issues(element, "panel")).not.toBeNull());
 
     eventListener?.({ type: "event", event: "cron", payload: {} });
     await waitForFast(() =>
