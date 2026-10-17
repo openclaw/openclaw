@@ -9,10 +9,12 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
+  createSessionContext,
   createTestChatPane,
   nativeHistoryMessage,
 } from "./chat-pane.test-support.ts";
 import { projectChatSessionPresentation } from "./chat-session-presentation-projection.ts";
+import { createPageState } from "./chat-state-page.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -86,6 +88,32 @@ function fixture() {
 }
 
 describe("chat pane session presentation", () => {
+  it.each([undefined, { agentId: "research" }])(
+    "initializes projected page state from an empty or partial session fixture (%s)",
+    (stateOverride) => {
+      const sessions = createSessionCapabilityFixture({ state: stateOverride });
+      const context = createSessionContext(createGatewayBrowserClientFixture(), sessions);
+      const state = createPageState(
+        context,
+        { invalidate: () => {}, afterCommit: () => () => {} },
+        { dispatchEvent: () => true, querySelector: () => null },
+      );
+      const rendered = vi.fn();
+      const view = mountSolid(() => {
+        createEffect(() => state.sessionsResult?.sessions[0]?.label, rendered);
+        return null;
+      });
+      rendered.mockClear();
+      state.sessionsResult = sessionsResult(
+        [{ key: state.sessionKey, kind: "direct", label: "Projected page title" }],
+        1,
+      );
+      flush();
+      expect(rendered).toHaveBeenCalledWith("Projected page title", undefined);
+      view.unmount();
+    },
+  );
+
   it.each([
     "selected",
     "parent",

@@ -409,14 +409,26 @@ type SessionCapabilityFixtureOverrides = Omit<Partial<SessionCapability>, "patch
 export function createSessionCapabilityFixture(
   overrides: SessionCapabilityFixtureOverrides = {},
 ): SessionCapability {
+  const state: SessionCapability["state"] = {
+    result: null,
+    agentId: null,
+    modelOverrides: {},
+    loading: false,
+    error: null,
+    deletedSessions: [],
+    groups: [],
+    groupSettings: [],
+    sectionOrder: [],
+    ...overrides.state,
+  };
   const archiveState = createSessionArchiveState(
-    (key) => overrides.state?.result?.sessions.find((row) => row.key === key),
+    (key) => state.result?.sessions.find((row) => row.key === key),
     () => {},
     createSessionRowProvenance(),
   );
   return {
     get presentation() {
-      return { result: overrides.state?.result ?? null, agentId: overrides.state?.agentId ?? null };
+      return { result: state.result, agentId: state.agentId };
     },
     captureConnectionScope: () => null,
     isConnectionScopeCurrent: () => false,
@@ -427,6 +439,7 @@ export function createSessionCapabilityFixture(
     archiveVisibility: archiveState.visibility,
     beginArchive: archiveState.beginPending,
     ...overrides,
+    state,
   } as typeof overrides & SessionCapability;
 }
 
