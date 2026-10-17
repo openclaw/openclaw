@@ -1,4 +1,3 @@
-// Covers core TUI state transitions and backend event rendering.
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -95,22 +94,15 @@ describe("resolveTuiToolsToggleActivityStatus", () => {
 });
 
 it("resolveTuiSessionKey uses global only as the default when scope is global", () => {
-  expect(
+  const resolve = (raw: string) =>
     resolveTuiSessionKey({
-      raw: "",
+      raw,
       sessionScope: "global",
       currentAgentId: "main",
       sessionMainKey: "agent:main:main",
-    }),
-  ).toBe("global");
-  expect(
-    resolveTuiSessionKey({
-      raw: "test123",
-      sessionScope: "global",
-      currentAgentId: "main",
-      sessionMainKey: "agent:main:main",
-    }),
-  ).toBe("agent:main:test123");
+    });
+  expect(resolve("")).toBe("global");
+  expect(resolve("test123")).toBe("agent:main:test123");
 });
 
 describe("resolveInitialTuiAgentId", () => {
@@ -278,10 +270,10 @@ describe("resolveGatewayDisconnectState", () => {
 });
 
 describe("createBackspaceDeduper", () => {
-  function withLegacyBackspaceEnv<T>(fn: () => T): T {
+  function withBackspaceEnv<T>(fn: () => T, windowsTerminal?: string): T {
     return withEnv(
       {
-        WT_SESSION: undefined,
+        WT_SESSION: windowsTerminal,
         SSH_CONNECTION: undefined,
         SSH_CLIENT: undefined,
         SSH_TTY: undefined,
@@ -305,35 +297,13 @@ describe("createBackspaceDeduper", () => {
   }
 
   it.each([
-    {
-      name: "ASCII BS as the first event",
-      input: ["\x08", "\x7f"],
-      expected: ["\x08", ""],
-      interval: 1,
-    },
-    {
-      name: "complementary events outside the dedupe window",
-      input: ["\x7f", "\x08"],
-      expected: ["\x7f", "\x08"],
-      interval: 10,
-    },
-    {
-      name: "consecutive DEL events",
-      input: ["\x7f", "\x7f"],
-      expected: ["\x7f", "\x7f"],
-    },
-    {
-      name: "an intervening printable key",
-      input: ["\x7f", "a", "\x08"],
-      expected: ["\x7f", "a", "\x08"],
-    },
-    {
-      name: "independently repeated complementary legacy pairs",
-      input: ["\x7f", "\x08", "\x7f", "\x08"],
-      expected: ["\x7f", "", "\x7f", ""],
-    },
-  ])("handles $name", ({ input, expected, interval = 0 }) => {
-    withLegacyBackspaceEnv(() => {
+    ["ASCII BS first", ["\x08", "\x7f"], ["\x08", ""], 1],
+    ["outside the dedupe window", ["\x7f", "\x08"], ["\x7f", "\x08"], 10],
+    ["consecutive DEL", ["\x7f", "\x7f"], ["\x7f", "\x7f"], 0],
+    ["intervening printable key", ["\x7f", "a", "\x08"], ["\x7f", "a", "\x08"], 0],
+    ["repeated pairs", ["\x7f", "\x08", "\x7f", "\x08"], ["\x7f", "", "\x7f", ""], 0],
+  ] as const)("handles %s", (_name, input, expected, interval) => {
+    withBackspaceEnv(() => {
       const { dedupe, advance } = createTimedDedupe();
       expect(
         input.map((data) => {
@@ -346,19 +316,10 @@ describe("createBackspaceDeduper", () => {
   });
 
   it("preserves Ctrl+Backspace in Windows Terminal", () => {
-    withEnv(
-      {
-        WT_SESSION: "openclaw-tui-test",
-        SSH_CONNECTION: undefined,
-        SSH_CLIENT: undefined,
-        SSH_TTY: undefined,
-      },
-      () => {
-        const { dedupe } = createTimedDedupe();
-
-        expect(["\x7f", "\x08", "\x7f"].map(dedupe)).toEqual(["\x7f", "\x08", "\x7f"]);
-      },
-    );
+    withBackspaceEnv(() => {
+      const { dedupe } = createTimedDedupe();
+      expect(["\x7f", "\x08", "\x7f"].map(dedupe)).toEqual(["\x7f", "\x08", "\x7f"]);
+    }, "openclaw-tui-test");
   });
 });
 
@@ -512,14 +473,8 @@ describe("TUI shutdown safety", () => {
   });
 
   it("requests exit once when the TUI terminal closes", () => {
-    const stdin = new EventEmitter() as EventEmitter & {
-      on(event: "close" | "end", listener: () => void): unknown;
-      off(event: "close" | "end", listener: () => void): unknown;
-    };
-    const stdout = new EventEmitter() as EventEmitter & {
-      on(event: "close" | "end", listener: () => void): unknown;
-      off(event: "close" | "end", listener: () => void): unknown;
-    };
+    const stdin = new EventEmitter();
+    const stdout = new EventEmitter();
     const requestExit = vi.fn();
 
     const cleanup = installTuiTerminalLossExitHandler(requestExit, { stdin, stdout });
@@ -567,14 +522,11 @@ describe("TUI shutdown safety", () => {
     vi.useFakeTimers();
     const calls: string[] = [];
     const transportError = new Error("transport stop failed");
-    let finishTuiStop: (() => void) | undefined;
-    const stopTui = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          calls.push("tui");
-          finishTuiStop = resolve;
-        }),
-    );
+    const terminal = createDeferredCore();
+    const stopTui = vi.fn(() => {
+      calls.push("tui");
+      return terminal.promise;
+    });
     const requestFinish = vi.fn(() => calls.push("finish"));
     const onError = vi.fn((error: unknown) => {
       calls.push("error");
@@ -596,7 +548,7 @@ describe("TUI shutdown safety", () => {
     expect(vi.getTimerCount()).toBe(0);
     expect(requestFinish).not.toHaveBeenCalled();
 
-    finishTuiStop?.();
+    terminal.resolve();
     await shutdown;
     expect(calls).toEqual(["client", "tui", "error", "finish"]);
     expect(stopTui).toHaveBeenCalledOnce();
@@ -723,34 +675,6 @@ function createGatewayLockOptions(stateDir: string): GatewayLockOptions {
   };
 }
 
-function createSignalProcess() {
-  type SignalName = "SIGINT" | "SIGTERM";
-  const listeners = new Map<SignalName, Set<() => void>>();
-  const processLike = {
-    on(signal: SignalName, handler: () => void) {
-      const current = listeners.get(signal) ?? new Set<() => void>();
-      current.add(handler);
-      listeners.set(signal, current);
-      return processLike;
-    },
-    off(signal: SignalName, handler: () => void) {
-      listeners.get(signal)?.delete(handler);
-      return processLike;
-    },
-  };
-  return {
-    processLike,
-    listenerCount(signal: SignalName) {
-      return listeners.get(signal)?.size ?? 0;
-    },
-    emit(signal: SignalName) {
-      for (const handler of listeners.get(signal) ?? []) {
-        handler();
-      }
-    },
-  };
-}
-
 describe("embedded TUI state ownership", () => {
   it.each([
     { outcome: "success", releaseFails: false },
@@ -771,7 +695,7 @@ describe("embedded TUI state ownership", () => {
       const acquire = vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockResolvedValue({
         release,
       });
-      const signals = createSignalProcess();
+      const signals = new EventEmitter();
       try {
         const run = withEmbeddedTuiStateLock(
           async () => {
@@ -785,7 +709,7 @@ describe("embedded TUI state ownership", () => {
             }
             return "complete";
           },
-          { process: signals.processLike },
+          { process: signals },
         );
         if (releaseFails || outcome === "error") {
           await expect(run).rejects.toThrow(
@@ -829,25 +753,22 @@ describe("embedded TUI state ownership", () => {
     await withTempDir("openclaw-tui-state-lock-", async (stateDir) => {
       const lockOptions = createGatewayLockOptions(stateDir);
       const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-      const signals = createSignalProcess();
-      let markStarted!: () => void;
-      const started = new Promise<void>((resolve) => {
-        markStarted = resolve;
-      });
+      const signals = new EventEmitter();
+      const started = createDeferredCore();
       const run = withEmbeddedTuiStateLock(
         async (signal) => {
           const payload: unknown = JSON.parse(await fs.readFile(stateLockPath, "utf8"));
           expect(payload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
-          markStarted();
+          started.resolve();
           return await new Promise<never>((_, reject) => {
             signal.addEventListener("abort", () => reject(new Error("local TUI interrupted")), {
               once: true,
             });
           });
         },
-        { gatewayLockOptions: lockOptions, process: signals.processLike },
+        { gatewayLockOptions: lockOptions, process: signals },
       );
-      await started;
+      await started.promise;
       signals.emit("SIGTERM");
 
       await expect(run).rejects.toThrow("local TUI interrupted");

@@ -49,30 +49,12 @@ export function registerEmbeddedModelCatalogTests({
             ...(agentId ? { work: { modelPolicy: { allow: ["openai/*"] } } } : {}),
           },
         },
-        models: {
-          mode: "replace",
-          providers: {
-            fixture: {
-              baseUrl: "https://fixture.invalid",
-              models: [
-                {
-                  id: "configured",
-                  name: "Configured",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  maxTokens: 1024,
-                },
-              ],
-            },
-          },
-        },
+        models: { mode: "replace" },
       };
       const models: TuiModelChoice[] = agentId
         ? []
         : [
             { id: "configured", name: "Configured", provider: "fixture", available: true },
-            { id: "discovered", name: "Discovered", provider: "fixture" },
             {
               id: "waiting",
               name: "Waiting",
@@ -88,8 +70,7 @@ export function registerEmbeddedModelCatalogTests({
         if (source.kind !== "published") {
           throw new Error("Expected published owner");
         }
-        expect(owner).toBe(agentId ?? "main");
-        expect(source.owner.agentId).toBe(owner);
+        expect([owner, source.owner.agentId]).toEqual([agentId ?? "main", agentId ?? "main"]);
         expect(source.owner.config).toBe(config);
         expect(params).toEqual({ includeDetails: true });
         return { models };

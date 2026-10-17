@@ -7,6 +7,7 @@ import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixt
 import { GatewayClient } from "../gateway/client.js";
 import { readImageMetadataFromHeader, resizeToJpeg } from "../media/image-ops.js";
 import { GatewayChatClient } from "./gateway-chat.js";
+import type { TuiImageData } from "./tui-backend.js";
 import { TUI_IMAGE_MAX_BYTES } from "./tui-image-data.js";
 
 const sessionKey = "agent:main:images";
@@ -14,6 +15,13 @@ const attachmentId = "11111111-1111-4111-8111-111111111111";
 const artifactId = `artifact_managed_image_${attachmentId}`;
 const managedSource = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
 const request = (source: string) => ({ sessionKey, source, signal: new AbortController().signal });
+const photo = "media://inbound/photo.jpg";
+const artifact = { id: artifactId, type: "image", sessionKey, download: { mode: "url" } };
+
+function expectPng(image: TuiImageData, width: number, height: number) {
+  expect(image.mimeType).toBe("image/png");
+  expect(readImageMetadataFromHeader(Buffer.from(image.data, "base64"))).toEqual({ width, height });
+}
 
 describe("GatewayChatClient image previews", () => {
   const requests: Array<{ url?: string; authorization?: string; edge?: string }> = [];
@@ -85,15 +93,7 @@ describe("GatewayChatClient image previews", () => {
       password: "image-password",
       edgeAuthHeaders: { "x-image-proof": "bound-edge-header" },
     });
-    const result = await client.loadImage({
-      ...request("media://inbound/photo.jpg"),
-      agentId: "main",
-    });
-    expect(result.mimeType).toBe("image/png");
-    expect(readImageMetadataFromHeader(Buffer.from(result.data, "base64"))).toEqual({
-      width: 300,
-      height: 150,
-    });
+    expectPng(await client.loadImage({ ...request(photo), agentId: "main" }), 300, 150);
     expect(requests).toHaveLength(2);
     expect(requests.map((entry) => entry.authorization)).toEqual([
       "Bearer stale-image-token",
@@ -102,7 +102,7 @@ describe("GatewayChatClient image previews", () => {
     const url = new URL(requests[1]!.url!, "http://localhost");
     expect(url.pathname).toBe("/gateway/__openclaw__/assistant-media");
     expect(Object.fromEntries(url.searchParams)).toEqual({
-      source: "media://inbound/photo.jpg",
+      source: photo,
       sessionKey,
       agentId: "main",
     });
@@ -118,9 +118,7 @@ describe("GatewayChatClient image previews", () => {
       const gatewayUrl = new URL(origin);
       gatewayUrl.pathname = wsPath;
       const client = new GatewayChatClient({ url: gatewayUrl.href, token: "media-token" });
-      expect((await client.loadImage(request("media://inbound/photo.jpg"))).mimeType).toBe(
-        "image/png",
-      );
+      expect((await client.loadImage(request(photo))).mimeType).toBe("image/png");
       expect(rpc).toHaveBeenCalledExactlyOnceWith(
         "config.get",
         {},
@@ -135,7 +133,7 @@ describe("GatewayChatClient image previews", () => {
 
   it("resolves generated images through the selected session and uses only the ticket for HTTP", async () => {
     const rpc = vi.spyOn(GatewayClient.prototype, "request").mockResolvedValue({
-      artifact: { id: artifactId, type: "image", sessionKey, download: { mode: "url" } },
+      artifact,
       url: `${managedSource}?mediaTicket=synthetic-ticket`,
     });
     const client = new GatewayChatClient({ url: origin, token: "gateway-secret" });
@@ -162,7 +160,7 @@ describe("GatewayChatClient image previews", () => {
   it("never follows a redirect carrying Gateway credentials", async () => {
     handler = (_req, res) => res.writeHead(302, { location: "/stolen-credentials" }).end();
     const client = new GatewayChatClient({ url: origin, token: "gateway-secret" });
-    await expect(client.loadImage(request("media://inbound/photo.jpg"))).rejects.toThrow("302");
+    await expect(client.loadImage(request(photo))).rejects.toThrow("302");
     expect(requests).toHaveLength(1);
   });
 
@@ -171,12 +169,7 @@ describe("GatewayChatClient image previews", () => {
     const png = createSolidPngBuffer(4, 2, { r: 24, g: 64, b: 128 });
     const inlineRequest = (buffer: Buffer) =>
       request(`data:image/png;base64,${buffer.toString("base64")}`);
-    const image = await client.loadImage(inlineRequest(png));
-    expect(image.mimeType).toBe("image/png");
-    expect(readImageMetadataFromHeader(Buffer.from(image.data, "base64"))).toEqual({
-      width: 4,
-      height: 2,
-    });
+    expectPng(await client.loadImage(inlineRequest(png)), 4, 2);
     const oversizedHeader = Buffer.from(png);
     oversizedHeader.writeUInt32BE(100_000, 16);
     oversizedHeader.writeUInt32BE(100_000, 20);
@@ -204,7 +197,7 @@ describe("GatewayChatClient image previews", () => {
       ),
     ]) {
       rpc.mockResolvedValue({
-        artifact: { id: artifactId, type: "image", sessionKey, download: { mode: "url" } },
+        artifact,
         url,
       });
       await expect(client.loadImage(request(managedSource))).rejects.toThrow("unavailable");
@@ -218,13 +211,11 @@ describe("GatewayChatClient image previews", () => {
       res.flushHeaders();
     };
     const client = new GatewayChatClient({ url: origin });
-    await expect(client.loadImage(request("media://inbound/photo.jpg"))).rejects.toThrow(
-      "byte limit",
-    );
+    await expect(client.loadImage(request(photo))).rejects.toThrow("byte limit");
     const controller = new AbortController();
     controller.abort();
     await expect(
-      client.loadImage({ ...request("media://inbound/photo.jpg"), signal: controller.signal }),
+      client.loadImage({ ...request(photo), signal: controller.signal }),
     ).rejects.toThrow();
     expect(requests).toHaveLength(1);
   });
@@ -235,18 +226,14 @@ describe("GatewayChatClient image previews", () => {
       token: "tls-image-token",
       tlsFingerprint: new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256,
     });
-    expect((await valid.loadImage(request("media://inbound/photo.jpg"))).mimeType).toBe(
-      "image/png",
-    );
+    expect((await valid.loadImage(request(photo))).mimeType).toBe("image/png");
     expect(requests[0]?.authorization).toBe("Bearer tls-image-token");
     const invalid = new GatewayChatClient({
       url: tlsOrigin,
       token: "must-not-be-sent",
       tlsFingerprint: "ab".repeat(32),
     });
-    await expect(invalid.loadImage(request("media://inbound/photo.jpg"))).rejects.toThrow(
-      "fingerprint mismatch",
-    );
+    await expect(invalid.loadImage(request(photo))).rejects.toThrow("fingerprint mismatch");
     expect(requests).toHaveLength(1);
   });
 });

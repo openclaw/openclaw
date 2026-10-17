@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
 
 export function createPreparedProjectionMethods(read: () => unknown) {
-  const methods = {
+  return {
     present: vi.fn((record: { entry: { sessionId?: unknown }; target: { key: string } }) => ({
       key: record.target.key,
       sessionId: record.entry.sessionId,
@@ -14,12 +14,20 @@ export function createPreparedProjectionMethods(read: () => unknown) {
       consume(read()),
     ),
   };
-  return methods;
 }
 
-export function registerEmbeddedSessionReaderTests<
-  Projection extends { dispose: () => void },
->(params: {
+export function registerEmbeddedSessionReaderTests<Projection extends { dispose: () => void }>({
+  createBackend,
+  sessionProjection,
+  createSessionRowProjectionMock,
+  listProjectedSessionsMock,
+  runSessionStartupMigrationMock,
+  getRuntimeConfigMock,
+  refreshPreparedModelRuntimeSnapshotsMock,
+  agentCommandFromIngressMock,
+  unregisterConfigWriteListenerMock,
+  flushMicrotasks,
+}: {
   createBackend: () => EmbeddedTuiBackend;
   sessionProjection: Projection;
   createSessionRowProjectionMock: Mock<(_options?: unknown) => Promise<Projection>>;
@@ -33,19 +41,6 @@ export function registerEmbeddedSessionReaderTests<
   unregisterConfigWriteListenerMock: Mock;
   flushMicrotasks: () => Promise<void>;
 }) {
-  const {
-    createBackend,
-    sessionProjection,
-    createSessionRowProjectionMock,
-    listProjectedSessionsMock,
-    runSessionStartupMigrationMock,
-    getRuntimeConfigMock,
-    refreshPreparedModelRuntimeSnapshotsMock,
-    agentCommandFromIngressMock,
-    unregisterConfigWriteListenerMock,
-    flushMicrotasks,
-  } = params;
-
   it("publishes the current runtime after startup maintenance and before the first local turn", async () => {
     const initialConfig = { agents: { entries: { main: {} } } };
     const nextConfig = { agents: { entries: { main: {} }, defaults: { model: "openai/next" } } };
@@ -98,15 +93,10 @@ export function registerEmbeddedSessionReaderTests<
       await backend.listSessions(opts);
       await createEmbeddedCallGateway()({ method: "sessions.list", params: opts });
       expect(createSessionRowProjectionMock).toHaveBeenCalledOnce();
-      expect(listProjectedSessionsMock).toHaveBeenCalledTimes(2);
-      expect(listProjectedSessionsMock).toHaveBeenNthCalledWith(1, {
-        projection: sessionProjection,
-        opts,
-      });
-      expect(listProjectedSessionsMock).toHaveBeenNthCalledWith(2, {
-        projection: sessionProjection,
-        opts,
-      });
+      expect(listProjectedSessionsMock.mock.calls).toEqual([
+        [{ projection: sessionProjection, opts }],
+        [{ projection: sessionProjection, opts }],
+      ]);
       for (const sessionKey of ["agent:work:notes", "global", "unknown"]) {
         await backend.describeSession({ sessionKey, agentId: "work" });
         expect(listProjectedSessionsMock).toHaveBeenLastCalledWith({
@@ -150,11 +140,8 @@ export function registerEmbeddedSessionReaderTests<
   });
 
   it("gates session reads on the startup migration so legacy keys are never observed early", async () => {
-    let resolveMigration: () => void = () => {};
-    const migrationDone = new Promise<void>((resolve) => {
-      resolveMigration = resolve;
-    });
-    runSessionStartupMigrationMock.mockReturnValueOnce(migrationDone);
+    const migration = deferred();
+    runSessionStartupMigrationMock.mockReturnValueOnce(migration.promise);
 
     const backend = createBackend();
     backend.start();
@@ -164,7 +151,7 @@ export function registerEmbeddedSessionReaderTests<
     expect(createSessionRowProjectionMock).not.toHaveBeenCalled();
     expect(listProjectedSessionsMock).not.toHaveBeenCalled();
 
-    resolveMigration();
+    migration.resolve();
     await listed;
     expect(runSessionStartupMigrationMock).toHaveBeenCalledWith({
       cfg: {},

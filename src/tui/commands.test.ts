@@ -1,11 +1,15 @@
-// Verifies TUI command definitions and parser metadata.
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   getSlashCommands,
   helpText,
   parseCommand,
   shouldSubmitExactArgumentCompletion,
 } from "./commands.js";
+
+const levels = (...values: string[]) => values.map((value) => ({ id: value, label: value }));
+const choices = (...values: string[]) => values.map((value) => ({ value, label: value }));
+const findCommand = (name: string, options?: Parameters<typeof getSlashCommands>[0]) =>
+  getSlashCommands(options).find((entry) => entry.name === name);
 
 describe("parseCommand", () => {
   it("normalizes aliases and keeps command args", () => {
@@ -23,8 +27,7 @@ describe("parseCommand", () => {
   });
 
   it("accepts the hidden retired-name alias", () => {
-    const retiredCommand = "/crestodian repair gateway"; // hidden alias
-    expect(parseCommand(retiredCommand)).toEqual({
+    expect(parseCommand("/crestodian repair gateway")).toEqual({
       name: "openclaw",
       args: "repair gateway",
     });
@@ -39,39 +42,19 @@ describe("parseCommand", () => {
 
 describe("getSlashCommands", () => {
   it.each([false, true])("exposes host-local Chrome setup in local=%s mode", (local) => {
-    const command = getSlashCommands({ local }).find((entry) => entry.name === "browser-setup");
-    expect(command?.description).toContain("TUI process host (not the Gateway)");
-    expect(command?.getArgumentCompletions?.("")).toEqual([
-      { value: "inspect", label: "inspect" },
-      { value: "install", label: "install" },
-      { value: "verify", label: "verify" },
-    ]);
+    const setup = findCommand("browser-setup", { local });
+    expect(setup?.description).toContain("TUI process host (not the Gateway)");
+    expect(setup?.getArgumentCompletions?.("")).toEqual(choices("inspect", "install", "verify"));
     expect(helpText({ local })).toContain("/browser-setup [inspect|install|verify]");
-  });
-  beforeAll(() => {
-    // Provider thinking policies are process-stable; warm the fallback before timing assertions.
-    getSlashCommands({ provider: "minimax", model: "MiniMax-M3", thinkingLevels: [] });
   });
 
   it("provides level completions for built-in toggles", () => {
-    const commands = getSlashCommands();
-    const verbose = commands.find((command) => command.name === "verbose");
-    const activation = commands.find((command) => command.name === "activation");
-    expect(verbose?.getArgumentCompletions?.("o")).toEqual([
-      { value: "on", label: "on" },
-      { value: "off", label: "off" },
-    ]);
-    expect(activation?.getArgumentCompletions?.("a")).toEqual([
-      { value: "always", label: "always" },
-    ]);
+    expect(findCommand("verbose")?.getArgumentCompletions?.("o")).toEqual(choices("on", "off"));
+    expect(findCommand("activation")?.getArgumentCompletions?.("a")).toEqual(choices("always"));
   });
 
   it.each(["think", "fast"])("offers /%s default to clear the session override", (name) => {
-    const command = getSlashCommands().find((candidate) => candidate.name === name);
-
-    expect(command?.getArgumentCompletions?.("default")).toEqual([
-      { value: "default", label: "default" },
-    ]);
+    expect(findCommand(name)?.getArgumentCompletions?.("default")).toEqual(choices("default"));
   });
 
   it.each([
@@ -82,7 +65,7 @@ describe("getSlashCommands", () => {
     for (const local of [false, true]) {
       const commands = getSlashCommands({
         local,
-        thinkingLevels: [{ id: "max", label: "max" }],
+        thinkingLevels: levels("max"),
       });
       const canonical = commands.find((candidate) => candidate.name === command);
       const alternate = commands.find((candidate) => candidate.name === alias);
@@ -99,7 +82,7 @@ describe("getSlashCommands", () => {
     const usage = commands.find((command) => command.name === "usage");
 
     expect(usage?.description).toContain("cost summary");
-    expect(usage?.getArgumentCompletions?.("co")).toEqual([{ value: "cost", label: "cost" }]);
+    expect(usage?.getArgumentCompletions?.("co")).toEqual(choices("cost"));
     expect(shouldSubmitExactArgumentCompletion("/usage cost", commands)).toBe(true);
     expect(helpText({ local: true })).toContain("/usage <off|tokens|full|cost|reset|");
   });
@@ -114,46 +97,27 @@ describe("getSlashCommands", () => {
       const command = commands.find((candidate) => candidate.name === commandName);
 
       expect(command?.description).toBe(description);
-      expect(command?.getArgumentCompletions?.(level)).toEqual([{ value: level, label: level }]);
+      expect(command?.getArgumentCompletions?.(level)).toEqual(choices(level));
       expect(shouldSubmitExactArgumentCompletion(`/${commandName} ${level}`, commands)).toBe(true);
     },
   );
 
   it("uses session-provided thinking levels for completions", () => {
-    const commands = getSlashCommands({
+    const think = findCommand("think", {
       provider: "ollama",
       model: "qwen3:0.6b",
-      thinkingLevels: [
-        { id: "off", label: "off" },
-        { id: "medium", label: "medium" },
-        { id: "max", label: "max" },
-      ],
+      thinkingLevels: levels("off", "medium", "max"),
     });
-    const think = commands.find((command) => command.name === "think");
-    expect(think?.getArgumentCompletions?.("m")).toEqual([
-      { value: "medium", label: "medium" },
-      { value: "max", label: "max" },
-    ]);
+    expect(think?.getArgumentCompletions?.("m")).toEqual(choices("medium", "max"));
   });
 
   it("falls back to provider-resolved levels when thinkingLevels is empty (#76482)", () => {
-    const commands = getSlashCommands({
+    const think = findCommand("think", {
       provider: "minimax",
       model: "MiniMax-M3",
       thinkingLevels: [], // empty from lightweight session row
     });
-    const think = commands.find((command) => command.name === "think");
-    // Should fall back to listThinkingLevelLabels, not return empty completions
-    const completions = think?.getArgumentCompletions?.("");
-    expect(Array.isArray(completions)).toBe(true);
-    if (!Array.isArray(completions)) {
-      throw new Error("expected synchronous thinking-level completions");
-    }
-    expect(completions).toEqual([
-      { value: "off", label: "off" },
-      { value: "adaptive", label: "adaptive" },
-      { value: "default", label: "default" },
-    ]);
+    expect(think?.getArgumentCompletions?.("")).toEqual(choices("off", "adaptive", "default"));
   });
 
   it.each([
@@ -164,12 +128,12 @@ describe("getSlashCommands", () => {
   ])(
     "uses the $agentRuntime profile for openai/$model thinking completions",
     ({ model, agentRuntime, supportsUltra }) => {
-      const think = getSlashCommands({
+      const think = findCommand("think", {
         provider: "openai",
         model,
         agentRuntime,
         thinkingLevels: [],
-      }).find((command) => command.name === "think");
+      });
       const completions = think?.getArgumentCompletions?.("");
       if (!Array.isArray(completions)) {
         throw new Error("expected synchronous thinking-level completions");
@@ -218,15 +182,9 @@ describe("helpText", () => {
   it("uses session-supported thinking levels in help before the provider fallback", () => {
     const model = { provider: "minimax", model: "MiniMax-M3" };
 
-    expect(
-      helpText({
-        ...model,
-        thinkingLevels: [
-          { id: "off", label: "off" },
-          { id: "max", label: "max" },
-        ],
-      }),
-    ).toContain("/think <off|max|default>");
+    expect(helpText({ ...model, thinkingLevels: levels("off", "max") })).toContain(
+      "/think <off|max|default>",
+    );
     expect(helpText({ ...model, thinkingLevels: [] })).toContain("/think <off|adaptive|default>");
   });
 

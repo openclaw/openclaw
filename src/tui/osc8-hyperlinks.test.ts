@@ -1,7 +1,8 @@
-// Verifies OSC8 hyperlink formatting for TUI terminal output.
 import { getOsc8LinkAtColumn } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { addOsc8Hyperlinks, extractUrls } from "./osc8-hyperlinks.js";
+
+const link = (url: string, text = url) => `\x1b]8;;${url}\x07${text}\x1b]8;;\x07`;
 
 describe("extractUrls", () => {
   it.each([".", ".?!"])("excludes trailing GFM punctuation %s from bare URLs", (punctuation) => {
@@ -111,7 +112,7 @@ describe("addOsc8Hyperlinks", () => {
     { prefix: "\ud800 ", url: "https://example.com/\udfff", suffix: " \udc00" },
   ])("wraps a single-line URL with OSC 8 ($url)", ({ prefix, url, suffix }) => {
     expect(addOsc8Hyperlinks([`${prefix}${url}${suffix}`], new Set([url]))).toEqual([
-      `${prefix}\x1b]8;;${url}\x07${url}\x1b]8;;\x07${suffix}`,
+      `${prefix}${link(url)}${suffix}`,
     ]);
   });
 
@@ -122,7 +123,7 @@ describe("addOsc8Hyperlinks", () => {
       const line = `Visit ${url}${punctuation}`;
 
       expect(addOsc8Hyperlinks([line], extractUrls(line))).toEqual([
-        `Visit \x1b]8;;${url}\x07${url}\x1b]8;;\x07${punctuation}`,
+        `Visit ${link(url)}${punctuation}`,
       ]);
     },
   );
@@ -132,7 +133,7 @@ describe("addOsc8Hyperlinks", () => {
     const line = `Docs (${url})`;
 
     expect(addOsc8Hyperlinks([line], extractUrls(`[Docs](${url})`))).toEqual([
-      `Docs (\x1b]8;;${url}\x07${url}\x1b]8;;\x07)`,
+      `Docs (${link(url)})`,
     ]);
   });
 
@@ -144,14 +145,14 @@ describe("addOsc8Hyperlinks", () => {
     const rendered = `Docs (${authoredUrl}) and ${bareUrl}${punctuation}`;
 
     expect(addOsc8Hyperlinks([rendered], extractUrls(markdown))).toEqual([
-      `Docs (\x1b]8;;${authoredUrl}\x07${authoredUrl}\x1b]8;;\x07) and \x1b]8;;${bareUrl}\x07${bareUrl}\x1b]8;;\x07${punctuation}`,
+      `Docs (${link(authoredUrl)}) and ${link(bareUrl)}${punctuation}`,
     ]);
   });
 
   it("keeps bidi isolation outside the exact OSC 8 target", () => {
     const url = "https://example.com/path";
     expect(addOsc8Hyperlinks([`\u2067مرحبا ${url}\u2069`], new Set([url]))).toEqual([
-      `\u2067مرحبا \x1b]8;;${url}\x07${url}\x1b]8;;\x07\u2069`,
+      `\u2067مرحبا ${link(url)}\u2069`,
     ]);
   });
 
@@ -160,24 +161,21 @@ describe("addOsc8Hyperlinks", () => {
     const url = `${prefix}😀/path`;
 
     expect(addOsc8Hyperlinks([prefix, "😁 next"], new Set([url]))).toEqual([
-      `\x1b]8;;${url}\x07${prefix}\x1b]8;;\x07`,
-      `\x1b]8;;${url}\x07😁\x1b]8;;\x07 next`,
+      link(url, prefix),
+      `${link(url, "😁")} next`,
     ]);
   });
 
   it("wraps a URL with a bracketed IPv6 authority", () => {
     const url = "http://[::1]:8080/path";
-    expect(addOsc8Hyperlinks([url], new Set([url]))).toEqual([
-      `\x1b]8;;${url}\x07${url}\x1b]8;;\x07`,
-    ]);
+    expect(addOsc8Hyperlinks([url], new Set([url]))).toEqual([link(url)]);
   });
 
   it("wraps a URL broken immediately after its scheme", () => {
     const fullUrl = "https://example.com/path";
     const result = addOsc8Hyperlinks(["https://", "example.com/path"], new Set([fullUrl]));
 
-    expect(result[0]).toBe(`\x1b]8;;${fullUrl}\x07https://\x1b]8;;\x07`);
-    expect(result[1]).toBe(`\x1b]8;;${fullUrl}\x07example.com/path\x1b]8;;\x07`);
+    expect(result).toEqual([link(fullUrl, "https://"), link(fullUrl, "example.com/path")]);
   });
 
   it("does not cross-link a scheme-only fragment to a partial domain match", () => {
@@ -201,11 +199,9 @@ describe("addOsc8Hyperlinks", () => {
 
   it("handles URL with ANSI styling codes", () => {
     const url = "https://example.com";
-    // Simulate styled text: green URL
     const styledLine = `\x1b[32m${url}\x1b[0m`;
     const result = addOsc8Hyperlinks([styledLine], new Set([url]));
 
-    // Should preserve ANSI codes and add OSC 8 around the visible URL
     expect(result[0]).toContain("\x1b[32m");
     expect(result[0]).toContain("\x1b[0m");
     expect(result[0]).toContain(`\x1b]8;;${url}\x07`);
@@ -221,27 +217,13 @@ describe("addOsc8Hyperlinks", () => {
   });
 
   it.each([
-    {
-      name: "longest prefix",
-      known: ["https://example.test/a", "https://example.test/ab"],
-      fragment: "https://example.test/",
-      expected: "https://example.test/ab",
-    },
-    {
-      name: "exact match before longer prefix",
-      known: ["https://example.test/ab", "https://example.test/a"],
-      fragment: "https://example.test/a",
-      expected: "https://example.test/a",
-    },
-    {
-      name: "first equal-length prefix",
-      known: ["https://example.test/ab", "https://example.test/aa"],
-      fragment: "https://example.test/a",
-      expected: "https://example.test/ab",
-    },
-  ])("resolves a rendered fragment by $name", ({ known, fragment, expected }) => {
-    expect(addOsc8Hyperlinks([fragment], new Set(known))).toEqual([
-      `\x1b]8;;${expected}\x07${fragment}\x1b]8;;\x07`,
+    ["longest prefix", ["a", "ab"], "", "ab"],
+    ["exact match before longer prefix", ["ab", "a"], "a", "a"],
+    ["first equal-length prefix", ["ab", "aa"], "a", "ab"],
+  ] as const)("resolves a rendered fragment by %s", (_name, known, fragment, expected) => {
+    const url = (suffix: string) => `https://example.test/${suffix}`;
+    expect(addOsc8Hyperlinks([url(fragment)], new Set(known.map(url)))).toEqual([
+      link(url(expected), url(fragment)),
     ]);
   });
 
@@ -249,14 +231,14 @@ describe("addOsc8Hyperlinks", () => {
     const url = "https://en.wikipedia.org/wiki/URL_(disambiguation)";
     const line = `Wikipedia (${url})`;
     const result = addOsc8Hyperlinks([line], new Set([url]));
-    expect(result[0]).toBe(`Wikipedia (\x1b]8;;${url}\x07${url}\x1b]8;;\x07)`);
+    expect(result[0]).toBe(`Wikipedia (${link(url)})`);
   });
 
   it("does not resolve an incomplete URL to another known URL", () => {
     const url = "https://example.com";
     const result = addOsc8Hyperlinks(["broken (https://)", url], new Set([url]));
     expect(result[0]).toBe("broken (https://)");
-    expect(result[1]).toContain(`\x1b]8;;${url}\x07${url}\x1b]8;;\x07`);
+    expect(result[1]).toContain(link(url));
   });
 
   it("handles URL split across three lines", () => {
@@ -264,7 +246,6 @@ describe("addOsc8Hyperlinks", () => {
     const lines = ["https://example.com/a/very/lon", "g/path/that/keeps/going/and/g", "oing"];
     const result = addOsc8Hyperlinks(lines, new Set([fullUrl]));
 
-    // All three lines should have OSC 8 wrapping
     for (const line of result) {
       expect(line).toContain(`\x1b]8;;${fullUrl}\x07`);
       expect(line).toContain(`\x1b]8;;\x07`);

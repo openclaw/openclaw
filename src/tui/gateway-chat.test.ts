@@ -30,13 +30,19 @@ import type { ChatEvent, TuiHistoryLoadResult } from "./tui-types.js";
 
 const { GatewayChatClient } = await import("./gateway-chat.js");
 const { GatewayClient, GatewayClientRequestError } = await import("../gateway/client.js");
+const connection = { url: "ws://127.0.0.1:18789", token: "test-token" };
+const model = (id: string, name = id) => ({ provider: "fixture", id, name });
 
 function createClient() {
-  return new GatewayChatClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+  return new GatewayChatClient(connection);
 }
 
 function mockRequest(response?: unknown) {
   return vi.spyOn(GatewayClient.prototype, "request").mockResolvedValue(response);
+}
+
+function expectRequests(request: { mock: { calls: unknown[][] } }, ...calls: unknown[][]) {
+  expect(request.mock.calls).toEqual(calls);
 }
 
 function hello(
@@ -89,21 +95,10 @@ describe("GatewayChatClient", () => {
   });
 
   it("isolates session-scoped catalogs only when the Gateway advertises them", async () => {
+    const first = { ...model("first", "First"), available: false, unavailableReason: "cooldown" };
     const request = mockRequest()
-      .mockResolvedValueOnce({
-        models: [
-          {
-            provider: "fixture",
-            id: "first",
-            name: "First",
-            available: false,
-            unavailableReason: "cooldown",
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        models: [{ provider: "fixture", id: "second", name: "Second" }],
-      });
+      .mockResolvedValueOnce({ models: [{ ...first }] })
+      .mockResolvedValueOnce({ models: [model("second", "Second")] });
     const client = createClient();
     client.hello = hello(["models.list"], undefined, [
       GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,
@@ -113,24 +108,13 @@ describe("GatewayChatClient", () => {
     await client.listModels({ agentId: "work", sessionKey: "agent:work:first" });
     await client.listModels({ agentId: "work", sessionKey: "agent:work:second" });
 
-    expect(request).toHaveBeenNthCalledWith(1, "models.list", {
-      agentId: "work",
-      sessionKey: "agent:work:first",
-      includeDetails: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
-      agentId: "work",
-      sessionKey: "agent:work:second",
-      includeDetails: true,
-    });
+    expectRequests(
+      request,
+      ["models.list", { agentId: "work", sessionKey: "agent:work:first", includeDetails: true }],
+      ["models.list", { agentId: "work", sessionKey: "agent:work:second", includeDetails: true }],
+    );
     expect(client.getKnownModels({ agentId: "work", sessionKey: "agent:work:first" })?.[0]).toEqual(
-      {
-        provider: "fixture",
-        id: "first",
-        name: "First",
-        available: false,
-        unavailableReason: "cooldown",
-      },
+      first,
     );
     expect(
       client.getKnownModels({ agentId: "work", sessionKey: "agent:work:second" })?.[0]?.id,
@@ -138,9 +122,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("keeps session keys off requests to older Gateways", async () => {
-    const request = mockRequest({
-      models: [{ provider: "fixture", id: "shared", name: "Shared" }],
-    });
+    const request = mockRequest({ models: [model("shared", "Shared")] });
     const client = createClient();
     client.hello = hello(["models.list"], undefined, [GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG]);
 
@@ -156,7 +138,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("retains agent-scoped choices during a held refresh but cannot republish after stop", async () => {
-    const models = [{ provider: "fixture", id: "known", name: "Known" }];
+    const models = [model("known", "Known")];
     const held = createDeferred<{ models: typeof models }>();
     mockRequest().mockResolvedValueOnce({ models }).mockReturnValueOnce(held.promise);
     const client = createClient();
@@ -167,7 +149,7 @@ describe("GatewayChatClient", () => {
       expect(client.getKnownModels({ agentId: "work" })).toEqual(models);
       expect(client.getKnownModels({ agentId: "main" })).toBeUndefined();
       await client.stop();
-      held.resolve({ models: [{ provider: "fixture", id: "obsolete", name: "Obsolete" }] });
+      held.resolve({ models: [model("obsolete", "Obsolete")] });
       await Promise.all([refresh, sharedRefresh]);
       expect(client.getKnownModels({ agentId: "work" })).toBeUndefined();
     } finally {
@@ -176,15 +158,11 @@ describe("GatewayChatClient", () => {
   });
 
   it("keeps rows through sign-in and restores the highlighted model after policy retirement", async () => {
-    const models = ["first", "current", "highlighted"].map((id) => ({
-      provider: "fixture",
-      id,
-      name: id,
-    }));
+    const models = ["first", "current", "highlighted"].map((id) => model(id));
     const held = createDeferred<{ models: typeof models }>();
     const request = vi.fn().mockResolvedValueOnce({ models }).mockReturnValue(held.promise);
     const { Client, callbacks } = await captureClient(request);
-    const client = new Client({ url: "ws://127.0.0.1:18789", token: "test-token" });
+    const client = new Client(connection);
     const onEvent = callbacks[0]?.onEvent;
     assert(onEvent);
     try {
@@ -430,26 +408,24 @@ describe("GatewayChatClient", () => {
     await client.abortChat({ sessionKey: "global", agentId: "work", runId: "run-global-work" });
     await client.listModels({ agentId: "work" });
 
-    expect(request).toHaveBeenNthCalledWith(1, "chat.send", {
-      sessionKey: "global",
-      agentId: "work",
-      message: "hello",
-      thinking: undefined,
-      deliver: undefined,
-      timeoutMs: undefined,
-      idempotencyKey: "run-global-work",
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
-      sessionKey: "global",
-      agentId: "work",
-      limit: 50,
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "chat.abort", {
-      sessionKey: "global",
-      agentId: "work",
-      runId: "run-global-work",
-    });
-    expect(request).toHaveBeenNthCalledWith(4, "models.list", { agentId: "work" });
+    expectRequests(
+      request,
+      [
+        "chat.send",
+        {
+          sessionKey: "global",
+          agentId: "work",
+          message: "hello",
+          thinking: undefined,
+          deliver: undefined,
+          timeoutMs: undefined,
+          idempotencyKey: "run-global-work",
+        },
+      ],
+      ["chat.history", { sessionKey: "global", agentId: "work", limit: 50 }],
+      ["chat.abort", { sessionKey: "global", agentId: "work", runId: "run-global-work" }],
+      ["models.list", { agentId: "work" }],
+    );
   });
 
   it("retries session aborts without side-run preservation on older Gateways", async () => {
@@ -463,11 +439,11 @@ describe("GatewayChatClient", () => {
       aborted: true,
       runIds: ["run-main"],
     });
-    expect(request).toHaveBeenNthCalledWith(1, "chat.abort", {
-      sessionKey: "main",
-      preserveSideRuns: true,
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "chat.abort", { sessionKey: "main" });
+    expectRequests(
+      request,
+      ["chat.abort", { sessionKey: "main", preserveSideRuns: true }],
+      ["chat.abort", { sessionKey: "main" }],
+    );
   });
 
   it.each([true, false])(
@@ -543,11 +519,11 @@ describe("GatewayChatClient", () => {
       ok: true,
     });
 
-    expect(request).toHaveBeenNthCalledWith(1, "plugin.approval.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "plugin.approval.resolve", {
-      id: "plugin:skill-1",
-      decision: "allow-once",
-    });
+    expectRequests(
+      request,
+      ["plugin.approval.list", {}],
+      ["plugin.approval.resolve", { id: "plugin:skill-1", decision: "allow-once" }],
+    );
   });
 
   it("requests a new non-worktree session even without mode capabilities", async () => {
@@ -582,13 +558,12 @@ describe("GatewayChatClient", () => {
       dismissed: true,
     });
 
-    expect(request).toHaveBeenNthCalledWith(1, "taskSuggestions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "taskSuggestions.accept", {
-      taskId: "task_1",
-      mode: "local",
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "taskSuggestions.dismiss", { taskId: "task_2" });
-    expect(request).toHaveBeenCalledTimes(3);
+    expectRequests(
+      request,
+      ["taskSuggestions.list", {}],
+      ["taskSuggestions.accept", { taskId: "task_1", mode: "local" }],
+      ["taskSuggestions.dismiss", { taskId: "task_2" }],
+    );
   });
 
   it("derives task suggestion actions from negotiated methods and scopes", () => {
@@ -654,7 +629,7 @@ describe("GatewayChatClient session description", () => {
         throw new Error(`Unexpected request: ${method}`);
       });
     try {
-      const client = new GatewayChatClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+      const client = createClient();
       const state = createBaseState({ currentSessionKey: sessionKey, currentAgentId: "work" });
       const { refreshSessionInfo } = createTestSessionActions({ client, state });
 
@@ -686,7 +661,7 @@ describe("GatewayChatClient session description", () => {
         throw new Error(`Unexpected request: ${method}`);
       });
     try {
-      const client = new GatewayChatClient({ url: "ws://127.0.0.1:18789", token: "test-token" });
+      const client = createClient();
       await expect(client.describeSession({ sessionKey: session.key })).resolves.toEqual({
         session: null,
         defaults,
@@ -720,34 +695,26 @@ const currentDescription = {
   },
   defaults: { model: "current-default-model", contextTokens: 32768 },
 } satisfies TuiSessionDescription;
-const oldListing: TuiSessionList = {
+const oldListing = makeTuiSessionList({
   ts: 1,
   path: "old-store",
-  count: 0,
-  sessions: [],
   defaults: oldDescription.defaults,
-};
-const currentListing: TuiSessionList = {
+});
+const currentListing = makeTuiSessionList({
   ts: 2,
   path: "current-store",
-  count: 0,
-  sessions: [],
   defaults: currentDescription.defaults,
-};
+});
 
 function metadataHello(connId: string): HelloOk {
   return {
-    type: "hello-ok",
+    ...hello(
+      ["chat.history", "sessions.describe", "sessions.list"],
+      ["operator.read", "operator.write"],
+      [],
+    ),
     protocol: 4,
     server: { version: "2026.9.4", connId },
-    features: {
-      methods: ["chat.history", "sessions.describe", "sessions.list"],
-      events: [],
-      capabilities: [],
-    },
-    snapshot: { presence: [], health: {}, stateVersion: { presence: 0, health: 0 }, uptimeMs: 0 },
-    auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
-    policy: { maxPayload: 1024, maxBufferedBytes: 1024, tickIntervalMs: 1000 },
   };
 }
 
