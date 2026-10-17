@@ -51,9 +51,8 @@ export async function writePrivateTempFile(
       throw error;
     }
   }
-  const { capturePathRemovalGuard, removePathWithinRoot } = await import(
-    "../../../infra/fs-safe-remove.js"
-  );
+  const { capturePathRemovalGuard, removePathWithinRoot } =
+    await import("../../../infra/fs-safe-remove.js");
   options?.signal?.throwIfAborted();
   options?.assertCurrent?.();
   const filePath = createPrivateTempFilePath(prefix);
