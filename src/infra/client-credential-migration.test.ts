@@ -560,13 +560,51 @@ describe("local client credential extraction", () => {
     }
   });
 
-  it("retains shared credentials and socket material when source verification fails", async () => {
+  it("copies invalid canonical identity bytes exactly and keeps ordinary reads fail-closed", async () => {
     const f = await fixture();
     try {
       const differentIdentity = generateStoredDeviceIdentity(21);
       f.source
         .prepare("UPDATE device_identities SET private_key_pem=?")
         .run(differentIdentity.privateKeyPem);
+      const sourceRow = f.source.prepare("SELECT * FROM device_identities").get();
+      f.maintenance.run(() =>
+        runSqliteImmediateTransactionSync(f.source, () =>
+          prepareClientCredentialMigration(f.source, {
+            path: f.sourcePath,
+            env: f.env,
+            fromVersion: 25,
+            capture: f.maintenance.capture,
+          }),
+        ),
+      );
+      {
+        using local = openClientCredentialCustody(f.env, {
+          createIfMissing: false,
+          migration: true,
+        })!;
+        expect(local.database.prepare("SELECT * FROM device_identities").get()).toEqual(sourceRow);
+        expect(readClientCredentialReceipt(local.database)).toMatchObject({
+          phase: "complete",
+          receipt: { legacyImports: { "identity:primary": { sha256: null } } },
+        });
+      }
+      expect(
+        f.source.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
+      ).toBeUndefined();
+      expect(() =>
+        runClientCredentialOperation(f.env, { kind: "identity.read", identity_key: "primary" }),
+      ).toThrow(/invalid persisted device identity/);
+    } finally {
+      f.source.close();
+      await f.maintenance.close();
+    }
+  });
+
+  it("retains shared credentials and socket material when token scope validation fails", async () => {
+    const f = await fixture();
+    try {
+      f.source.prepare("UPDATE device_auth_tokens SET scopes_json='{}'").run();
       expect(() =>
         f.maintenance.run(() =>
           runSqliteImmediateTransactionSync(f.source, () =>
@@ -578,7 +616,7 @@ describe("local client credential extraction", () => {
             }),
           ),
         ),
-      ).toThrow(/invalid persisted device identity/);
+      ).toThrow("invalid token record");
       expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
       expect(f.source.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
         token: "token-original",

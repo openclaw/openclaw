@@ -15,6 +15,7 @@ import type { MutableUpdateExecutionParams } from "../cli/update-cli/update-comm
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { restoreDoctorMigrationBackup } from "../commands/doctor-migration-backup-restore.js";
 import { prepareDoctorDatabaseMigrations } from "../commands/doctor-schema-migrations.js";
+import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { readBackupEngine, verifyMatchedPostgresBackup } from "../snapshot/database-backup.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { stateEngineSchema } from "../state/openclaw-state-db-engine.js";
@@ -44,6 +45,7 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection.js";
 import { inspectScopedMigrationSnapshot } from "./sqlite-migration-scoped-snapshot.js";
+import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
@@ -426,6 +428,102 @@ async function rollback(f: Fixture, captured: Awaited<ReturnType<typeof capture>
 }
 
 describe("client credential public update custody", () => {
+  it.each(["metadata", "key material"] as const)(
+    "keeps Doctor repair reachable for predecessor identity %s without reimporting retained JSON",
+    async (damage) => {
+      const f = await fixture("sqlite", false, 26);
+      const retainedIdentity = generateStoredDeviceIdentity(19);
+      const legacyPath = path.join(f.env.OPENCLAW_STATE_DIR, "identity", "device.json");
+      fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+      const legacyBytes = Buffer.from(`${JSON.stringify({ version: 1, ...retainedIdentity })}\n`);
+      fs.writeFileSync(legacyPath, legacyBytes);
+      {
+        using source = openNodeSqliteDatabase(f.pathname);
+        if (damage === "metadata") {
+          source
+            .prepare("UPDATE device_identities SET device_id=?,created_at_ms=-1,updated_at_ms=-1")
+            .run("0".repeat(64));
+        } else {
+          source
+            .prepare("UPDATE device_identities SET private_key_pem=?")
+            .run(retainedIdentity.privateKeyPem);
+        }
+      }
+      const maintenance = await beginDoctorMaintenance({
+        root: null,
+        options: { repair: true, nonInteractive: true },
+        runtime: { log() {}, error() {}, exit() {} },
+      });
+      expect(maintenance).toBeDefined();
+      try {
+        const result = await maintenance!.run(() =>
+          autoMigrateLegacyState({
+            cfg: {},
+            env: f.env,
+            homedir: () => f.root,
+            doctorOnlyStateMigrations: true,
+            legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+          }),
+        );
+        expect(result.warnings).toEqual([]);
+        expect(result.stepReceipts?.find((receipt) => receipt.id === "state-schema")).toMatchObject(
+          {
+            outcome: "completed",
+          },
+        );
+        expect(
+          result.stepReceipts?.find((receipt) => receipt.id === "device-identity"),
+        ).toMatchObject({ outcome: "completed" });
+        const repaired = runClientCredentialOperation(f.env, {
+          kind: "identity.read",
+          identity_key: "primary",
+        });
+        if (repaired.kind !== "identity" || !repaired.identity) {
+          throw new Error("Doctor did not leave a readable primary identity.");
+        }
+        if (damage === "metadata") {
+          expect(result.changes).toContain(
+            "Repaired invalid primary device identity metadata in SQLite.",
+          );
+          expect(repaired.identity).toMatchObject({
+            device_id: identity.deviceId,
+            public_key_pem: identity.publicKeyPem,
+            private_key_pem: identity.privateKeyPem,
+          });
+          expect(result.notices ?? []).not.toContain(
+            "The repaired device has a new identity and must be approved again.",
+          );
+        } else {
+          expect(result.changes).toContain("Replaced invalid primary device identity in SQLite.");
+          expect(result.notices).toContain(
+            "The repaired device has a new identity and must be approved again.",
+          );
+          expect(repaired.identity.device_id).not.toBe(identity.deviceId);
+        }
+        expect(repaired.identity.device_id).not.toBe(retainedIdentity.deviceId);
+        expect(fs.readFileSync(legacyPath)).toEqual(legacyBytes);
+        {
+          using local = openClientCredentialCustody(f.env, { migration: true })!;
+          expect(readClientCredentialReceipt(local.database)).toMatchObject({
+            phase: "complete",
+            receipt: { legacyImports: { "identity:primary": { sha256: null } } },
+          });
+          expect(local.database.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
+            token: "synthetic-original-token",
+          });
+        }
+        expect(
+          fs
+            .readdirSync(path.dirname(f.pathname))
+            .some((name) => name.startsWith("openclaw.sqlite.pre-startup-migration-")),
+        ).toBe(true);
+      } finally {
+        await maintenance!.release();
+        await closeOpenClawStateDatabaseAsync();
+      }
+    },
+  );
+
   it("captures SQLite before cutover, restores exact shared credentials, and rebuilds an orphan through Doctor", async () => {
     const f = await fixture("sqlite");
     const captured = await capture(f);

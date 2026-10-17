@@ -67,19 +67,24 @@ export function sourceRows(database: EngineConnection, nativeBootstrap: boolean)
   });
 }
 
-export function validateSource(rows: ReturnType<typeof sourceRows>): void {
-  for (const row of rows.identities) {
-    validateStoredDeviceIdentity(
-      {
-        deviceId: row.device_id,
-        publicKeyPem: row.public_key_pem,
-        privateKeyPem: row.private_key_pem,
-        createdAtMs: row.created_at_ms,
-      },
-      row.identity_key,
-    );
-    if (!Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms < 0) {
-      throw new Error("Client credential migration found an invalid identity timestamp.");
+export function validateSource(
+  rows: ReturnType<typeof sourceRows>,
+  identityPolicy: "require-valid" | "preserve-for-doctor" = "require-valid",
+): void {
+  if (identityPolicy === "require-valid") {
+    for (const row of rows.identities) {
+      validateStoredDeviceIdentity(
+        {
+          deviceId: row.device_id,
+          publicKeyPem: row.public_key_pem,
+          privateKeyPem: row.private_key_pem,
+          createdAtMs: row.created_at_ms,
+        },
+        row.identity_key,
+      );
+      if (!Number.isSafeInteger(row.updated_at_ms) || row.updated_at_ms < 0) {
+        throw new Error("Client credential migration found an invalid identity timestamp.");
+      }
     }
   }
   for (const row of [...rows.tokens, ...rows.origins]) {

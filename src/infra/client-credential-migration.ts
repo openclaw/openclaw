@@ -234,7 +234,8 @@ export function prepareClientCredentialMigration(
     nativeBootstrap || options.fromVersion < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION - 1,
   );
   const authTablePresent = !nativeBootstrap || tableExists(source, "device_auth_tokens");
-  validateSource(rows);
+  // Move canonical identities exactly; explicit local Doctor repair owns invalid material.
+  validateSource(rows, nativeBootstrap ? "require-valid" : "preserve-for-doctor");
   const extracted = extractSocket(rows.approvals[0]);
   const file = readClientCredentialFileIdentity(options.path);
   if (!file) {
