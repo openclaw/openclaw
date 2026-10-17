@@ -104,6 +104,56 @@ function doctorOptions(
   };
 }
 
+function executionContext(runId: string, executorFence: UpdateRecoveryFence) {
+  const opts: UpdateCommandOptions = {
+    run: {
+      runId,
+      env,
+      executorFence,
+      requesterAuthority: {
+        requester: { channel: "test", senderId: "owner" },
+        isCurrent: () => true,
+      },
+    },
+  };
+  return { opts, guards: createUpdateCommandExecutionGuards(opts, root) };
+}
+
+async function expectChildExited(pid: number | undefined) {
+  expect(pid).toBeTypeOf("number");
+  if (pid !== undefined) {
+    expect(await waitForPidToExit(pid)).toBe(true);
+  }
+}
+
+function expectUnchangedInput() {
+  expect(fs.existsSync(received)).toBe(false);
+  expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
+}
+
+function expectSettlement(steps: UpdateStepResult[], writerPid?: number) {
+  expect(steps).toContainEqual(
+    expect.objectContaining({
+      name: "doctor process settlement",
+      exitCode: writerPid === undefined ? 0 : 1,
+      ...(writerPid === undefined
+        ? {
+            advisory: expect.objectContaining({
+              message: expect.stringContaining("openclaw update repair"),
+            }),
+          }
+        : {
+            failureFacts: [
+              expect.objectContaining({
+                code: "doctor-processes-unsettled",
+                message: expect.stringContaining(String(writerPid)),
+              }),
+            ],
+          }),
+    }),
+  );
+}
+
 function readHandoffClaims() {
   const read = createManagedHandoffLeaseDatabase(
     path.join(root, "tmp", "managed-update-handoffs.sqlite"),
@@ -144,15 +194,9 @@ it.each(["recovery-pending", "A-revoked", "B-revoked"] as const)(
     const runId = randomUUID();
     const runUtf8 = processRunner.runUtf8CommandWithTimeout;
     let childPid: number | undefined;
-    const requesterAuthority = {
-      requester: { channel: "test", senderId: "owner" },
-      isCurrent: () => true,
-    };
     const work = withUpdateCommandExecutor(runId, async (executor) => {
       const fence = await executor.enter(root, { serviceRoot });
-      const run = { runId, env, executorFence: fence, requesterAuthority };
-      const opts: UpdateCommandOptions = { run };
-      const guards = createUpdateCommandExecutionGuards(opts, root);
+      const { opts, guards } = executionContext(runId, fence);
       vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
         async (_argv, options) => {
           assert(typeof options !== "number", "Doctor supplies input-admission options");
@@ -192,12 +236,8 @@ it.each(["recovery-pending", "A-revoked", "B-revoked"] as const)(
       await runPackageUpdateDoctor(doctorOptions(runId, fence, guards));
     });
     await expect(work).rejects.toThrow();
-    expect(childPid).toBeTypeOf("number");
-    if (childPid !== undefined) {
-      expect(await waitForPidToExit(childPid)).toBe(true);
-    }
-    expect(fs.existsSync(received)).toBe(false);
-    expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
+    await expectChildExited(childPid);
+    expectUnchangedInput();
   },
 );
 
@@ -207,24 +247,15 @@ it("retains the settled Doctor failure outcome", async () => {
   const runUtf8 = processRunner.runUtf8CommandWithTimeout;
   let childPid: number | undefined;
   let resultPath: string | undefined;
-  const receipt: UpdatePostInstallDoctorResult = { status: "error" };
-  receipt.configChanges = [{ kind: "migration", message: "Moved model allowlist." }];
+  const receipt: UpdatePostInstallDoctorResult = {
+    status: "error",
+    configChanges: [{ kind: "migration", message: "Moved model allowlist." }],
+  };
   const steps: UpdateStepResult[] = [];
   const onStepComplete = vi.fn();
   await withUpdateCommandExecutor(runId, async (executor) => {
     const fence = await executor.enter(root, { serviceRoot });
-    const opts: UpdateCommandOptions = {
-      run: {
-        runId,
-        env,
-        executorFence: fence,
-        requesterAuthority: {
-          requester: { channel: "test", senderId: "owner" },
-          isCurrent: () => true,
-        },
-      },
-    };
-    const guards = createUpdateCommandExecutionGuards(opts, root);
+    const { guards } = executionContext(runId, fence);
     vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
       async (_argv, options) => {
         assert(typeof options !== "number", "Doctor supplies input-admission options");
@@ -243,8 +274,7 @@ it("retains the settled Doctor failure outcome", async () => {
             },
           },
         );
-        expect(result.cleanup).toBe("normal");
-        expect(result.code).toBe(exitCode);
+        expect(result).toMatchObject({ cleanup: "normal", code: exitCode });
         expect(onStepComplete).not.toHaveBeenCalled();
         resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
         assert(resultPath);
@@ -259,10 +289,7 @@ it("retains the settled Doctor failure outcome", async () => {
     }).catch((cause: unknown) => cause);
     expect(result).toMatchObject({ exitCode: 23 });
     guards.assertCurrent();
-    expect(childPid).toBeTypeOf("number");
-    if (childPid !== undefined) {
-      expect(await waitForPidToExit(childPid)).toBe(true);
-    }
+    await expectChildExited(childPid);
     fence.assertCurrent();
     assert(resultPath);
     expect(fs.existsSync(resultPath)).toBe(false);
@@ -309,12 +336,8 @@ it("preserves before-input failure after proving the delegated grant was withhel
     cleanup: process.platform === "win32" ? "forced" : "cooperative",
   });
   expect(steps.filter((step) => step.name === "doctor process settlement")).toEqual([]);
-  expect(childPid).toBeTypeOf("number");
-  if (childPid !== undefined) {
-    expect(await waitForPidToExit(childPid)).toBe(true);
-  }
-  expect(fs.existsSync(received)).toBe(false);
-  expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
+  await expectChildExited(childPid);
+  expectUnchangedInput();
 });
 
 it("does not treat standalone input withholding as a delegated no-writer proof", async () => {
@@ -346,21 +369,9 @@ it("does not treat standalone input withholding as a delegated no-writer proof",
   assert(pid);
   expect(hasCommandProcessCleanupError(failure)).toBe(true);
   expect(failure).toMatchObject({ cause: original });
-  expect(steps).toContainEqual(
-    expect.objectContaining({
-      name: "doctor process settlement",
-      exitCode: 1,
-      failureFacts: [
-        expect.objectContaining({
-          code: "doctor-processes-unsettled",
-          message: expect.stringContaining(String(pid)),
-        }),
-      ],
-    }),
-  );
+  expectSettlement(steps, pid);
   expect(await waitForPidToExit(pid)).toBe(true);
-  expect(fs.existsSync(received)).toBe(false);
-  expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
+  expectUnchangedInput();
 });
 
 it.skipIf(process.platform === "win32").for([true, false])(
@@ -449,15 +460,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         expect(isChildProcessTreeAlive({ pid: childPid })).toBe(false);
         assert(writer);
         expect(isChildProcessTreeAlive(writer)).toBe(false);
-        expect(steps).toContainEqual(
-          expect.objectContaining({
-            name: "doctor process settlement",
-            exitCode: 0,
-            advisory: expect.objectContaining({
-              message: expect.stringContaining("openclaw update repair"),
-            }),
-          }),
-        );
+        expectSettlement(steps);
         fence.assertCurrent();
       });
       await withinTest(
@@ -487,18 +490,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         assert(writer);
         expect(isChildProcessTreeAlive(writer)).toBe(true);
         expectRetainedCommandClaims(writer.pid, [root, serviceRoot]);
-        expect(steps).toContainEqual(
-          expect.objectContaining({
-            name: "doctor process settlement",
-            exitCode: 1,
-            failureFacts: [
-              expect.objectContaining({
-                code: "doctor-processes-unsettled",
-                message: expect.stringContaining(String(writer.pid)),
-              }),
-            ],
-          }),
-        );
+        expectSettlement(steps, writer.pid);
       }
       assert(doctorResult);
       expect(doctorResult, doctorResult.stderr).toMatchObject({
@@ -593,29 +585,10 @@ it.skipIf(process.platform === "win32").for([
         } else {
           expect(error).toBe(original);
         }
-        expect(steps).toContainEqual(
-          expect.objectContaining({
-            name: "doctor process settlement",
-            exitCode: 0,
-            advisory: expect.objectContaining({
-              message: expect.stringContaining("openclaw update repair"),
-            }),
-          }),
-        );
+        expectSettlement(steps);
       } else {
         expect(error).toMatchObject({ cause: original });
-        expect(steps).toContainEqual(
-          expect.objectContaining({
-            name: "doctor process settlement",
-            exitCode: 1,
-            failureFacts: [
-              expect.objectContaining({
-                code: "doctor-processes-unsettled",
-                message: expect.stringContaining(String(writer.pid)),
-              }),
-            ],
-          }),
-        );
+        expectSettlement(steps, writer.pid);
       }
       const restore = vi.fn(async () => {});
       await settleUpdateDoctorMaintenance(

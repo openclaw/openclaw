@@ -146,9 +146,7 @@ export function registerCurrentCoreServiceReceiptTests({
               coreAlreadyCurrent: true,
               mutationStarted: false,
               downgradeRisk: false,
-              requestedChannel: null,
               storedChannel: "stable",
-              shouldRestart: true,
               preManagedServiceStop: before,
               result: {
                 status: "skipped",

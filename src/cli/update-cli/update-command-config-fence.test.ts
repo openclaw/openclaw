@@ -65,6 +65,30 @@ afterEach(async () => {
   dirs.cleanup();
 });
 
+function configEnv(home: string, stateDir = home) {
+  return {
+    HOME: home,
+    USERPROFILE: home,
+    OPENCLAW_HOME: undefined,
+    OPENCLAW_PROFILE: undefined,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+  };
+}
+
+function revokeExecutor(control: string, root: string) {
+  const db = openNodeSqliteDatabase(path.join(control, "managed-update-handoffs.sqlite"));
+  try {
+    db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
+      "replacement",
+      root,
+    );
+  } finally {
+    db.close();
+  }
+}
+
 it("preserves deferred Canvas inputs through update preparation and a channel write", async () => {
   const home = channelDirs.make("update-deferred-canvas-config-");
   const configPath = path.join(home, "openclaw.json");
@@ -72,46 +96,34 @@ it("preserves deferred Canvas inputs through update preparation and a channel wr
   const authored = { gateway: { mode: "local" }, update: { channel: "stable" }, canvasHost };
   const original = JSON.stringify(authored);
   await fs.writeFile(configPath, original);
-  await withEnvAsync(
-    {
-      HOME: home,
-      USERPROFILE: home,
-      OPENCLAW_HOME: undefined,
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_STATE_DIR: home,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
-    async () => {
-      const pending: DeferredPluginMigration = {
-        pluginId: "canvas",
-        reason: "Canvas document migration is unfinished.",
-        command: "openclaw doctor --fix",
-        requiresStateMigration: true,
-        configPaths: [["canvasHost"]],
-        validationExcludedPaths: [["canvasHost"]],
-      };
-      await recordDeferredPluginMigrations({ pending: [pending] });
-      await closeOpenClawStateDatabaseAsync();
+  await withEnvAsync(configEnv(home), async () => {
+    const pending: DeferredPluginMigration = {
+      pluginId: "canvas",
+      reason: "Canvas document migration is unfinished.",
+      command: "openclaw doctor --fix",
+      requiresStateMigration: true,
+      configPaths: [["canvasHost"]],
+      validationExcludedPaths: [["canvasHost"]],
+    };
+    await recordDeferredPluginMigrations({ pending: [pending] });
+    await closeOpenClawStateDatabaseAsync();
 
-      const before = await readUpdateChannelConfig(false);
-      expect(before.configSnapshot.valid).toBe(true);
-      expect(before.storedChannel).toBe("stable");
-      expect(await fs.readFile(configPath, "utf8")).toBe(original);
-      const prepared = await preparePostCorePluginConfig({
-        requestedChannel: "beta",
-        observe: false,
-      });
+    const before = await readUpdateChannelConfig(false);
+    expect(before).toMatchObject({ configSnapshot: { valid: true }, storedChannel: "stable" });
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+    const prepared = await preparePostCorePluginConfig({
+      requestedChannel: "beta",
+      observe: false,
+    });
 
-      expect(prepared.configSnapshot.valid).toBe(true);
-      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toMatchObject({
-        canvasHost,
-        update: { channel: "beta" },
-      });
-      expect(readDeferredPluginMigrations()).toEqual([pending]);
-      expect((await config.readConfigFileSnapshot({ observe: false })).valid).toBe(false);
-    },
-  );
+    expect(prepared.configSnapshot.valid).toBe(true);
+    expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toMatchObject({
+      canvasHost,
+      update: { channel: "beta" },
+    });
+    expect(readDeferredPluginMigrations()).toEqual([pending]);
+    expect((await config.readConfigFileSnapshot({ observe: false })).valid).toBe(false);
+  });
 });
 
 it("retains the stored channel during tolerant invalid config reads without rewriting source", async () => {
@@ -120,28 +132,15 @@ it("retains the stored channel during tolerant invalid config reads without rewr
   const configPath = path.join(home, "openclaw.json");
   const original = `{\n  // Keep the authored channel while another field needs repair.\n  update: { channel: '${channel}' },\n  gateway: { port: 'invalid' },\n}\n`;
   await fs.writeFile(configPath, original);
-  await withEnvAsync(
-    {
-      HOME: home,
-      USERPROFILE: home,
-      OPENCLAW_HOME: undefined,
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_STATE_DIR: home,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
-    async () => {
-      const ordinary = await readUpdateChannelConfig(false);
-      expect(ordinary.configSnapshot.valid).toBe(false);
-      expect(ordinary.storedChannel).toBeNull();
+  await withEnvAsync(configEnv(home), async () => {
+    const ordinary = await readUpdateChannelConfig(false);
+    expect(ordinary).toMatchObject({ configSnapshot: { valid: false }, storedChannel: null });
 
-      const tolerant = await readUpdateChannelConfig(false, { tolerateReadFailure: true });
-      expect(tolerant.configSnapshot.valid).toBe(false);
-      expect(tolerant.storedChannel).toBe(channel);
-      expect(await fs.readFile(configPath, "utf8")).toBe(original);
-      expect(await fs.readdir(home)).toEqual(["openclaw.json"]);
-    },
-  );
+    const tolerant = await readUpdateChannelConfig(false, { tolerateReadFailure: true });
+    expect(tolerant).toMatchObject({ configSnapshot: { valid: false }, storedChannel: channel });
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+    expect(await fs.readdir(home)).toEqual(["openclaw.json"]);
+  });
 });
 
 it.each([
@@ -175,15 +174,9 @@ it.each([
     vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
     await withEnvAsync(
       {
-        HOME: home,
-        USERPROFILE: home,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_PROFILE: undefined,
+        ...configEnv(home, stateDir),
         OPENCLAW_CONFIG_READONLY: undefined,
         OPENCLAW_NIX_MODE: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
         [POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV]: undefined,
         [POST_CORE_UPDATE_STARTED_AT_ENV]: String(Date.now()),
@@ -302,15 +295,7 @@ it.each([
         const revoke = () => {
           preparedBeforeRevocation = true;
           const lockGuard = captureConfigWriteLockGuard(configPath);
-          const db = openNodeSqliteDatabase(path.join(control, "managed-update-handoffs.sqlite"));
-          try {
-            db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
-              "replacement",
-              root,
-            );
-          } finally {
-            db.close();
-          }
+          revokeExecutor(control, root);
           if (!preparationFlow && !freshCheckFlow) {
             expect(lockGuard).toBeTypeOf("function");
             expect(lockGuard).toThrow(/executor|ownership/i);
@@ -532,13 +517,7 @@ it.each([
     vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
     const env = {
       ...process.env,
-      HOME: home,
-      USERPROFILE: home,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_HOME: undefined,
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      ...configEnv(home, stateDir),
     };
     const options = { env };
     const run = createUpdateRun({ trigger: "cli" }, options);
@@ -589,17 +568,7 @@ it.each([
     let revokedDuringSync = false;
     const owned = withUpdateCommandExecutor(run.runId, async (executor) => {
       const fence = await executor.enter(home);
-      const revoke = () => {
-        const db = openNodeSqliteDatabase(path.join(control, "managed-update-handoffs.sqlite"));
-        try {
-          db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
-            "replacement",
-            home,
-          );
-        } finally {
-          db.close();
-        }
-      };
+      const revoke = () => revokeExecutor(control, home);
       if (late) {
         const fsync = syncFs.fsyncSync;
         vi.spyOn(syncFs, "fsyncSync").mockImplementation((fd) => {
