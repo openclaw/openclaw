@@ -33,18 +33,15 @@ function createRepoWithPrChangelogDiff(entry: string): string {
   const git = (args: string[]) =>
     run(repo, "git", ["-c", "user.email=test@example.com", "-c", "user.name=Test User", ...args]);
   git(["init", "-q", "--initial-branch=main"]);
-  writeFileSync(repo + "/CHANGELOG.md", "# Changelog\n\n## Unreleased\n\n### Fixes\n\n", "utf8");
+  const header = "# Changelog\n\n## Unreleased\n\n### Fixes\n\n";
+  writeFileSync(repo + "/CHANGELOG.md", header, "utf8");
   git(["add", "CHANGELOG.md"]);
   git(["commit", "-qm", "seed"]);
   const baseSha = git(["rev-parse", "HEAD"]);
   // Direct helper callers capture this base as the operation's main snapshot.
   git(["update-ref", "refs/remotes/origin/main", baseSha]);
   git(["checkout", "-qb", "feature"]);
-  writeFileSync(
-    repo + "/CHANGELOG.md",
-    `# Changelog\n\n## Unreleased\n\n### Fixes\n\n${entry}\n`,
-    "utf8",
-  );
+  writeFileSync(repo + "/CHANGELOG.md", `${header}${entry}\n`, "utf8");
   git(["add", "CHANGELOG.md"]);
   git(["commit", "-qm", "add changelog entry"]);
   return repo;
@@ -107,7 +104,7 @@ prepare_gates 123
 
 describe("check-changelog-attributions", () => {
   it("flags forbidden bot, org, and maintainer thanks attributions", () => {
-    const content = [
+    const lines = [
       "- Internal cleanup. Thanks @codex.",
       "- Org-owned fix. Thanks @openclaw.",
       "- Maintainer-owned fix. Thanks @steipete.",
@@ -115,17 +112,14 @@ describe("check-changelog-attributions", () => {
       "- Bot repair. Thanks @clawsweeper[bot].",
       "- Dependency bump. Thanks @dependabot[bot].",
       "- App repair. Thanks @app/clawsweeper.",
-    ].join("\n");
-
-    expect(findForbiddenChangelogThanks(content)).toEqual([
-      { line: 1, handle: "codex", text: "- Internal cleanup. Thanks @codex." },
-      { line: 2, handle: "openclaw", text: "- Org-owned fix. Thanks @openclaw." },
-      { line: 3, handle: "steipete", text: "- Maintainer-owned fix. Thanks @steipete." },
-      { line: 4, handle: "openclaw", text: "- Mixed credit. Thanks @contributor and @OpenClaw." },
-      { line: 5, handle: "clawsweeper[bot]", text: "- Bot repair. Thanks @clawsweeper[bot]." },
-      { line: 6, handle: "dependabot[bot]", text: "- Dependency bump. Thanks @dependabot[bot]." },
-      { line: 7, handle: "app/clawsweeper", text: "- App repair. Thanks @app/clawsweeper." },
-    ]);
+    ];
+    const handles =
+      "codex openclaw steipete openclaw clawsweeper[bot] dependabot[bot] app/clawsweeper".split(
+        " ",
+      );
+    expect(findForbiddenChangelogThanks(lines.join("\n"))).toEqual(
+      handles.map((handle, index) => ({ line: index + 1, handle, text: lines[index] })),
+    );
   });
 
   it("allows external contributor thanks attributions", () => {
@@ -137,34 +131,25 @@ describe("check-changelog-attributions", () => {
   });
 
   it("uses one attribution predicate for scanner and shell checks", () => {
-    expect(isForbiddenChangelogThanksHandle("")).toBe(true);
-    expect(isForbiddenChangelogThanksHandle("null")).toBe(true);
-    expect(isForbiddenChangelogThanksHandle("app/any-bot")).toBe(true);
-    expect(isForbiddenChangelogThanksHandle("codex")).toBe(true);
-    expect(isForbiddenChangelogThanksHandle("openclaw")).toBe(true);
-    expect(isForbiddenChangelogThanksHandle("steipete")).toBe(true);
-    expect(isForbiddenChangelogThanksHandle("app/clawsweeper")).toBe(true);
-    expect(isForbiddenChangelogThanksHandle("clawsweeper")).toBe(true);
-    expect(isForbiddenChangelogThanksHandle("clawsweeper[bot]")).toBe(true);
-    expect(isForbiddenChangelogThanksHandle("openclaw-clawsweeper")).toBe(true);
-    expect(isForbiddenChangelogThanksHandle("openclaw-clawsweeper[bot]")).toBe(true);
-    expect(isForbiddenChangelogThanksHandle("dependabot[bot]")).toBe(true);
+    function check(handles: string, forbidden: boolean, humanRequired: boolean) {
+      for (const handle of handles.split("|")) {
+        expect(isForbiddenChangelogThanksHandle(handle), handle).toBe(forbidden);
+        expect(requiresExplicitHumanChangelogThanks(handle), handle).toBe(humanRequired);
+      }
+    }
+    check("|null|codex|openclaw|steipete", true, false);
+    check(
+      "app/any-bot|app/clawsweeper|clawsweeper|clawsweeper[bot]|openclaw-clawsweeper|openclaw-clawsweeper[bot]|dependabot[bot]",
+      true,
+      true,
+    );
+    check("alice|human-clawsweeper-fan", false, false);
     expect(isForbiddenChangelogThanksHandle("dependabot[bot]", { strictBotHandle: true })).toBe(
       true,
     );
-    expect(isForbiddenChangelogThanksHandle("alice")).toBe(false);
-    expect(isForbiddenChangelogThanksHandle("human-clawsweeper-fan")).toBe(false);
     expect(
       isForbiddenChangelogThanksHandle("human-clawsweeper-fan", { strictBotHandle: true }),
     ).toBe(false);
-
-    expect(requiresExplicitHumanChangelogThanks("clawsweeper")).toBe(true);
-    expect(requiresExplicitHumanChangelogThanks("clawsweeper[bot]")).toBe(true);
-    expect(requiresExplicitHumanChangelogThanks("dependabot[bot]")).toBe(true);
-    expect(requiresExplicitHumanChangelogThanks("app/clawsweeper")).toBe(true);
-    expect(requiresExplicitHumanChangelogThanks("human-clawsweeper-fan")).toBe(false);
-    expect(requiresExplicitHumanChangelogThanks("steipete")).toBe(false);
-    expect(requiresExplicitHumanChangelogThanks("")).toBe(false);
   });
 
   it("requires explicit human thanks for bot PR changelog entries", () => {

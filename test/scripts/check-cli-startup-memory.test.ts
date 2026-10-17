@@ -1,4 +1,3 @@
-// Check Cli Startup Memory tests cover check cli startup memory script behavior.
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -31,6 +30,29 @@ const successSpawn = () => ({
   stdout: "",
 });
 
+function reportFixture() {
+  const tempRoot = tempRoots.make("openclaw-startup-memory-");
+  return {
+    tempRoot,
+    jsonPath: path.join(tempRoot, "startup-memory.json"),
+    summaryPath: path.join(tempRoot, "summary.md"),
+  };
+}
+
+function reportArgs(tempRoot: string) {
+  return [
+    "--json",
+    path.join(tempRoot, "startup-memory.json"),
+    "--summary",
+    path.join(tempRoot, "summary.md"),
+  ];
+}
+
+function expectAdmissionFailure(run: ReturnType<typeof captureReportRun>, failure: object) {
+  expect(run.failure).toMatchObject(failure);
+  expect(run.probes).toBe(0);
+}
+
 beforeEach(() => {
   vi.stubEnv("GITHUB_ACTIONS", "");
   vi.stubEnv("GITHUB_STEP_SUMMARY", "");
@@ -45,29 +67,21 @@ function runStartupMemoryCheckWithHelpSamples(
   tempRoot = tempRoots.make("openclaw-startup-memory-test-"),
 ) {
   let sampleIndex = 0;
-  return testing.runStartupMemoryCheck(
-    [
-      "--json",
-      path.join(tempRoot, "startup-memory.json"),
-      "--summary",
-      path.join(tempRoot, "summary.md"),
-    ],
-    {
-      platform: "linux",
-      spawnSync: () => {
-        const caseIndex = Math.floor(sampleIndex / testing.sampleCount);
-        const caseSampleIndex = sampleIndex % testing.sampleCount;
-        sampleIndex += 1;
-        const rssMb = caseIndex === 0 ? (helpSamplesMb[caseSampleIndex] ?? 1) : 1;
-        return {
-          signal: null,
-          status: 0,
-          stderr: `__OPENCLAW_MAX_RSS_KB__=${rssMb * 1024}\n`,
-          stdout: "",
-        };
-      },
+  return testing.runStartupMemoryCheck(reportArgs(tempRoot), {
+    platform: "linux",
+    spawnSync: () => {
+      const caseIndex = Math.floor(sampleIndex / testing.sampleCount);
+      const caseSampleIndex = sampleIndex % testing.sampleCount;
+      sampleIndex += 1;
+      const rssMb = caseIndex === 0 ? (helpSamplesMb[caseSampleIndex] ?? 1) : 1;
+      return {
+        signal: null,
+        status: 0,
+        stderr: `__OPENCLAW_MAX_RSS_KB__=${rssMb * 1024}\n`,
+        stdout: "",
+      };
     },
-  );
+  });
 }
 
 function captureReportRun(
@@ -175,54 +189,22 @@ describe("check-cli-startup-memory", () => {
   });
 
   it("keeps invalid startup memory env values from bypassing budgets", () => {
-    expect(() =>
-      testing.readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", 100, {
-        OPENCLAW_STARTUP_MEMORY_HELP_MB: "abc",
-      }),
-    ).toThrow("OPENCLAW_STARTUP_MEMORY_HELP_MB must be a positive number");
-    expect(() =>
-      testing.readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", 100, {
-        OPENCLAW_STARTUP_MEMORY_HELP_MB: "1e3",
-      }),
-    ).toThrow("OPENCLAW_STARTUP_MEMORY_HELP_MB must be a positive number");
-    expect(() =>
-      testing.readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", 100, {
-        OPENCLAW_STARTUP_MEMORY_HELP_MB: "0x10",
-      }),
-    ).toThrow("OPENCLAW_STARTUP_MEMORY_HELP_MB must be a positive number");
-    expect(() =>
-      testing.readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", 100, {
-        OPENCLAW_STARTUP_MEMORY_HELP_MB: "0",
-      }),
-    ).toThrow("OPENCLAW_STARTUP_MEMORY_HELP_MB must be a positive number");
-    expect(
-      testing.readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", 100, {
-        OPENCLAW_STARTUP_MEMORY_HELP_MB: "125.5",
-      }),
-    ).toBe(125.5);
+    const name = "OPENCLAW_STARTUP_MEMORY_HELP_MB";
+    const read = (value: string) => testing.readPositiveNumberEnv(name, 100, { [name]: value });
+    for (const value of ["abc", "1e3", "0x10", "0"]) {
+      expect(() => read(value)).toThrow(`${name} must be a positive number`);
+    }
+    expect(read("125.5")).toBe(125.5);
   });
 
   it("keeps invalid startup memory timeout env values from parsing loosely", () => {
-    expect(() =>
-      testing.readPositiveIntEnv("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS", 60_000, {
-        OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: "1e3",
-      }),
-    ).toThrow("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS must be a positive number");
-    expect(() =>
-      testing.readPositiveIntEnv("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS", 60_000, {
-        OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: "1000.5",
-      }),
-    ).toThrow("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS must be a positive integer");
-    expect(() =>
-      testing.readPositiveIntEnv("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS", 60_000, {
-        OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER + 1),
-      }),
-    ).toThrow("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS must be a positive integer");
-    expect(
-      testing.readPositiveIntEnv("OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS", 60_000, {
-        OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS: "1000",
-      }),
-    ).toBe(1000);
+    const name = "OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS";
+    const read = (value: string) => testing.readPositiveIntEnv(name, 60_000, { [name]: value });
+    expect(() => read("1e3")).toThrow(`${name} must be a positive number`);
+    for (const value of ["1000.5", String(Number.MAX_SAFE_INTEGER + 1)]) {
+      expect(() => read(value)).toThrow(`${name} must be a positive integer`);
+    }
+    expect(read("1000")).toBe(1000);
   });
 
   it("rejects missing startup memory artifact paths", () => {
@@ -320,8 +302,7 @@ describe("check-cli-startup-memory", () => {
         const reportPath = path.join(reportsRoot, "nested", "report");
         const run = captureReportRun(tempRoot, reportPath, reportPath);
 
-        expect(run.failure).toMatchObject({ message: aliasError });
-        expect(run.probes).toBe(0);
+        expectAdmissionFailure(run, { message: aliasError });
         expect(existsSync(reportPath)).toBe(false);
         expect(existsSync(reportsRoot)).toBe(false);
         expect(readdirSync(run.homeRoot)).toEqual([]);
@@ -338,17 +319,14 @@ describe("check-cli-startup-memory", () => {
         writeFileSync(summaryPath, sentinel);
         const run = captureReportRun(tempRoot, first, summaryPath);
 
-        expect(run.failure).toMatchObject({ code: "ELOOP" });
-        expect(run.probes).toBe(0);
+        expectAdmissionFailure(run, { code: "ELOOP" });
         expect(readFileSync(summaryPath, "utf8")).toBe(sentinel);
         expect(readlinkSync(first)).toBe("second");
         expect(readlinkSync(second)).toBe("first");
       });
 
       it("rejects dangling targets ending in /.. for the summary output", () => {
-        const tempRoot = tempRoots.make("openclaw-startup-memory-terminal-");
-        const jsonPath = path.join(tempRoot, "startup-memory.json");
-        const summaryPath = path.join(tempRoot, "summary.md");
+        const { tempRoot, jsonPath, summaryPath } = reportFixture();
         const target = `missing${path.sep}..`;
         const blockedHome = path.join(tempRoot, "blocked-home");
         writeFileSync(blockedHome, "unchanged\n");
@@ -375,9 +353,7 @@ describe("check-cli-startup-memory", () => {
       });
 
       it("preserves raw traversal in dangling symlink targets", () => {
-        const tempRoot = tempRoots.make("openclaw-startup-memory-traversal-");
-        const jsonPath = path.join(tempRoot, "startup-memory.json");
-        const summaryPath = path.join(tempRoot, "summary.md");
+        const { tempRoot, jsonPath, summaryPath } = reportFixture();
         const victimPath = path.join(tempRoot, "victim");
         const target = `missing${path.sep}..${path.sep}victim`;
         const sentinel = "victim survives\n";
@@ -385,26 +361,20 @@ describe("check-cli-startup-memory", () => {
         writeFileSync(victimPath, sentinel);
         const run = captureReportRun(tempRoot, jsonPath, summaryPath);
 
-        expect(run.failure).toMatchObject({ code: "ENOENT" });
-        expect(run.probes).toBe(0);
+        expectAdmissionFailure(run, { code: "ENOENT" });
         expect(readFileSync(victimPath, "utf8")).toBe(sentinel);
         expect(readlinkSync(jsonPath)).toBe(target);
         expect(existsSync(summaryPath)).toBe(false);
       });
 
       it("rejects a replaced summary path before truncating either held report", () => {
-        const output = "summary";
-        const tempRoot = tempRoots.make("openclaw-startup-memory-replacement-");
-        const jsonPath = path.join(tempRoot, "startup-memory.json");
-        const summaryPath = path.join(tempRoot, "summary.md");
-        const changedPath = summaryPath;
-        const otherPath = jsonPath;
-        const displacedPath = path.join(tempRoot, `reserved-${output}`);
+        const { tempRoot, jsonPath, summaryPath } = reportFixture();
+        const displacedPath = path.join(tempRoot, "reserved-summary");
         const sentinel = "replacement survives\n";
         const run = captureReportRun(tempRoot, jsonPath, summaryPath, (probe) => {
           if (probe === 1) {
-            renameSync(changedPath, displacedPath);
-            writeFileSync(changedPath, sentinel);
+            renameSync(summaryPath, displacedPath);
+            writeFileSync(summaryPath, sentinel);
           }
           return successSpawn();
         });
@@ -413,18 +383,16 @@ describe("check-cli-startup-memory", () => {
           message: "--json or --summary changed during startup benchmarks",
         });
         expect(run.probes).toBe(testing.cases.length * testing.sampleCount);
-        expect(readFileSync(changedPath, "utf8")).toBe(sentinel);
+        expect(readFileSync(summaryPath, "utf8")).toBe(sentinel);
         expect(readFileSync(displacedPath, "utf8")).toBe("");
-        expect(existsSync(otherPath)).toBe(false);
+        expect(existsSync(jsonPath)).toBe(false);
       });
 
       it.each([
         ["summary after the json write", "summary", 1],
         ["json during the summary write", "json", 2],
       ] as const)("rejects a replaced %s", (_label, replacedOutput, replacementWrite) => {
-        const tempRoot = tempRoots.make("openclaw-startup-memory-publication-race-");
-        const jsonPath = path.join(tempRoot, "startup-memory.json");
-        const summaryPath = path.join(tempRoot, "summary.md");
+        const { tempRoot, jsonPath, summaryPath } = reportFixture();
         const replacedPath = replacedOutput === "json" ? jsonPath : summaryPath;
         const otherPath = replacedOutput === "json" ? summaryPath : jsonPath;
         const displacedPath = path.join(tempRoot, `reserved-${replacedOutput}`);
@@ -508,9 +476,7 @@ describe("check-cli-startup-memory", () => {
       });
 
       it("publishes failure reports before surfacing a benchmark failure", () => {
-        const tempRoot = tempRoots.make("openclaw-startup-memory-failure-");
-        const jsonPath = path.join(tempRoot, "startup-memory.json");
-        const summaryPath = path.join(tempRoot, "summary.md");
+        const { tempRoot, jsonPath, summaryPath } = reportFixture();
         const run = captureReportRun(tempRoot, jsonPath, summaryPath, () => ({
           signal: null,
           status: 1,
@@ -541,33 +507,25 @@ describe("check-cli-startup-memory", () => {
     vi.stubEnv("GITHUB_ACTIONS", "true");
 
     expect(() =>
-      testing.runStartupMemoryCheck(
-        [
-          "--json",
-          path.join(tempRoot, "startup-memory.json"),
-          "--summary",
-          path.join(tempRoot, "summary.md"),
-        ],
-        {
-          platform: "linux",
-          timeoutMs: 1234,
-          spawnSync: (
-            _command: string,
-            _args: string[],
-            options: { killSignal?: string; timeout?: number },
-          ) => {
-            seenTimeouts.push(options.timeout);
-            seenKillSignals.push(options.killSignal);
-            return {
-              error: timeoutError,
-              signal: "SIGKILL",
-              status: null,
-              stderr: "",
-              stdout: "",
-            };
-          },
+      testing.runStartupMemoryCheck(reportArgs(tempRoot), {
+        platform: "linux",
+        timeoutMs: 1234,
+        spawnSync: (
+          _command: string,
+          _args: string[],
+          options: { killSignal?: string; timeout?: number },
+        ) => {
+          seenTimeouts.push(options.timeout);
+          seenKillSignals.push(options.killSignal);
+          return {
+            error: timeoutError,
+            signal: "SIGKILL",
+            status: null,
+            stderr: "",
+            stdout: "",
+          };
         },
-      ),
+      }),
     ).toThrow("--help timed out after 1234ms");
     expect(seenTimeouts).toEqual(testing.cases.map(() => 1234));
     expect(seenKillSignals).toEqual(testing.cases.map(() => "SIGKILL"));
@@ -580,23 +538,15 @@ describe("check-cli-startup-memory", () => {
 
     const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
     expect(() =>
-      testing.runStartupMemoryCheck(
-        [
-          "--json",
-          path.join(tempRoot, "startup-memory.json"),
-          "--summary",
-          path.join(tempRoot, "summary.md"),
-        ],
-        {
-          platform: "darwin",
-          spawnSync: () => ({
-            signal: null,
-            status: 0,
-            stderr: "__OPENCLAW_MAX_RSS_KB__=0\n",
-            stdout: "",
-          }),
-        },
-      ),
+      testing.runStartupMemoryCheck(reportArgs(tempRoot), {
+        platform: "darwin",
+        spawnSync: () => ({
+          signal: null,
+          status: 0,
+          stderr: "__OPENCLAW_MAX_RSS_KB__=0\n",
+          stdout: "",
+        }),
+      }),
     ).toThrow("--help did not report max RSS");
   });
 
@@ -609,32 +559,18 @@ describe("check-cli-startup-memory", () => {
     const seenArgs: string[][] = [];
     const seenHomes: string[] = [];
 
-    const result = testing.runStartupMemoryCheck(
-      [
-        "--json",
-        path.join(tempRoot, "startup-memory.json"),
-        "--summary",
-        path.join(tempRoot, "summary.md"),
-      ],
-      {
-        platform: "linux",
-        spawnSync: (_command: string, args: string[], options: { env: Record<string, string> }) => {
-          seenArgs.push(args);
-          const home = options.env.HOME;
-          if (!home) {
-            throw new Error("benchmark HOME was not set");
-          }
-          seenHomes.push(home);
-          return {
-            error: null,
-            signal: null,
-            status: 0,
-            stderr: "__OPENCLAW_MAX_RSS_KB__=1024\n",
-            stdout: "",
-          };
-        },
+    const result = testing.runStartupMemoryCheck(reportArgs(tempRoot), {
+      platform: "linux",
+      spawnSync: (_command: string, args: string[], options: { env: Record<string, string> }) => {
+        seenArgs.push(args);
+        const home = options.env.HOME;
+        if (!home) {
+          throw new Error("benchmark HOME was not set");
+        }
+        seenHomes.push(home);
+        return { error: null, ...successSpawn() };
       },
-    );
+    });
 
     expect(result!.skipped).toBe(false);
     expect(seenArgs).toHaveLength(testing.cases.length * testing.sampleCount);
