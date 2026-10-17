@@ -11,17 +11,12 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 describe("frozen-target test exclusions", () => {
-  it("accepts exact paths in their declared lane", () => {
-    expect(parseTestExclusions("[]", "plugins")).toEqual([]);
-    expect(parseTestExclusions('["src/plugins/nested/retry.test.ts"]', "plugins")).toEqual([
-      "src/plugins/nested/retry.test.ts",
-    ]);
-    expect(
-      parseTestExclusions(
-        '["extensions/example/retry.test.ts","extensions/example/view.test.tsx"]',
-        "extensions",
-      ),
-    ).toEqual(["extensions/example/retry.test.ts", "extensions/example/view.test.tsx"]);
+  it.each([
+    ["plugins", []],
+    ["plugins", ["src/plugins/nested/retry.test.ts"]],
+    ["extensions", ["extensions/example/retry.test.ts", "extensions/example/view.test.tsx"]],
+  ] satisfies Array<[string, string[]]>)("accepts exact paths in %s: %j", (scope, paths) => {
+    expect(parseTestExclusions(JSON.stringify(paths), scope)).toEqual(paths);
   });
 
   it.each([
@@ -79,19 +74,18 @@ describe("frozen-target test exclusions", () => {
       extends: false,
       test: { ...common, name, ...filters },
     });
+    const plugins = {
+      test: {
+        ...common,
+        projects: [
+          project("plugins", { exclude: [...common.exclude, "native-loader.test.ts"] }),
+          project("plugins-native-loader", { include: ["native-loader.test.ts"] }),
+        ],
+      },
+    };
     write(
       pluginConfig,
-      `// Preserve candidate bytes, including CRLF.\r\nexport const nativeFiles = [${JSON.stringify(native)}];\r\nexport default ${JSON.stringify(
-        {
-          test: {
-            ...common,
-            projects: [
-              project("plugins", { exclude: [...common.exclude, "native-loader.test.ts"] }),
-              project("plugins-native-loader", { include: ["native-loader.test.ts"] }),
-            ],
-          },
-        },
-      )};\r\n`,
+      `// Preserve candidate bytes, including CRLF.\r\nexport const nativeFiles = [${JSON.stringify(native)}];\r\nexport default ${JSON.stringify(plugins)};\r\n`,
     );
     write(
       extensionConfig,

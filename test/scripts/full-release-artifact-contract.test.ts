@@ -10,9 +10,9 @@ import { afterEach, assert, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
 import {
-  createPublicationAdmission,
-  createPublicationObservations,
-  createPublicationSourceFact,
+  createPublicationAdmission as createAdmission,
+  createPublicationObservations as createObservations,
+  createPublicationSourceFact as createSource,
   normalizePublicationIntent,
   publicationAdmissionContract,
   publicationDispatchEnvelope,
@@ -20,20 +20,21 @@ import {
   publicationObservationJson,
   publicationSourceJson,
   publicationSourceRequest,
-  validatePublicationAdmissionBinding,
-  validatePublicationSourceBinding,
+  validatePublicationAdmissionBinding as validateAdmission,
+  validatePublicationSourceBinding as validateSource,
 } from "../../scripts/full-release-publication-contract.mjs";
 import { tryReadReleaseDecision } from "../../scripts/full-release-validation-at-sha.mts";
 import {
-  assertReleasePublicationKnownBudget,
+  assertReleasePublicationKnownBudget as assertBudget,
   buildReleaseExecutionPlan,
-  buildReleaseExecutionPlanArtifact,
+  buildReleaseExecutionPlanArtifact as buildPlanArtifact,
   buildReleaseStateArtifact,
-  buildReleaseValidationManifest,
+  buildReleaseValidationManifest as buildManifest,
   composeReleaseAttemptJobs,
   MAX_RELEASE_ARTIFACT_BYTES,
-  serializeReleaseArtifact,
+  serializeReleaseArtifact as serializeArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { describeNpmBundle } from "../../scripts/npm-prepared-bundle.mjs";
 import { createPluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import { tryReadReleaseDecisionArtifact } from "../../scripts/release-ci-summary.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -61,6 +62,49 @@ const releaseWorkflow = () =>
   parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
 const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 const inventory = { packages: [], platforms: [] };
+const pluginPackage = { name: "@openclaw/test", version: "2026.9.9" };
+const absentNpmState = () => ({
+  packageExists: false,
+  hasVersionHistory: false,
+  selectedVersionExists: false,
+  latestVersion: null,
+});
+const pendingNpmAuthority = (
+  name: string,
+): ReturnType<typeof registryEvidence>["observations"]["pendingAuthority"] => [
+  {
+    registry: "npm",
+    name,
+    action: "owner-preparation-and-access",
+    status: "unresolved",
+  },
+];
+
+function expectPublication(
+  manifest: Record<string, unknown>,
+  targetSha: string,
+  workflowSha: string,
+) {
+  expect(manifest).toMatchObject({
+    publicationArtifacts: {
+      npmPreflight: {
+        source: { sha: targetSha },
+        producer: { workflowSha, runId: "81", runAttempt: "1" },
+      },
+    },
+    publishInputs: {
+      targetSha,
+      pluginSdkApiAcknowledgement: "",
+      npmDecisions: [{ packageName: "openclaw", packageVersion: "2026.9.9", decision: "plan" }],
+    },
+  });
+}
+
+function refreshSource({ source, observations }: ReturnType<typeof registryEvidence>) {
+  const { digest: _digest, ...unsigned } = source;
+  source.digest = digest(publicationSourceJson(unsigned));
+  observations.sourceDigest = source.digest;
+}
 function sourceProjection() {
   return {
     version: "2026.9.9",
@@ -106,8 +150,8 @@ function manifestWriterFixture(plan: unknown, drain: unknown = { children: {} })
   const directory = directories.make("release-manifest-");
   const planPath = join(directory, "plan.json");
   const drainPath = join(directory, "drain.json");
-  writeFileSync(planPath, serializeReleaseArtifact(plan));
-  writeFileSync(drainPath, serializeReleaseArtifact(drain));
+  writeFileSync(planPath, serializeArtifact(plan));
+  writeFileSync(drainPath, serializeArtifact(drain));
   return {
     writer,
     directory,
@@ -186,6 +230,7 @@ async function publicationWriterFixture(
     corePackageTarballs: [],
   };
   const packageBytes = JSON.stringify(packageManifest);
+  writeFileSync(join(directory, "package-bundle.json"), packageBytes);
   const packageZip = new JSZip();
   packageZip.file("package-bundle.json", packageBytes);
   packageZip.file(packageManifest.tarballName, tarball);
@@ -194,10 +239,8 @@ async function publicationWriterFixture(
     compression: "STORE",
     platform: "UNIX",
   });
-  const preparedBundle = {
-    schema: "openclaw.prepared-npm-bundle/v1",
-    source: { sha: identity.sourceSha },
-    producer: preparedProducer,
+  const preparedBundle = describeNpmBundle({
+    directory,
     artifact: {
       id: "554",
       name: "openclaw-npm-package-81-1",
@@ -205,16 +248,7 @@ async function publicationWriterFixture(
       runId: "81",
       runAttempt: "1",
     },
-    package: {
-      name: "openclaw",
-      version: "2026.9.9",
-      fileName: packageManifest.tarballName,
-      sha256: hash(tarball),
-      sourceSha: identity.sourceSha,
-    },
-    corePackages: [],
-    manifestSha256: hash(packageBytes),
-  };
+  });
   const npmManifest = {
     version: 3,
     releaseSha: identity.sourceSha,
@@ -231,6 +265,7 @@ async function publicationWriterFixture(
     }),
   };
   const manifestBytes = JSON.stringify(npmManifest);
+  writeFileSync(join(directory, "preflight-manifest.json"), manifestBytes);
   const zip = new JSZip();
   zip.file("preflight-manifest.json", manifestBytes);
   zip.file(npmManifest.tarballName, tarball);
@@ -241,12 +276,9 @@ async function publicationWriterFixture(
   });
   const archivePath = join(directory, "qualified-npm.zip");
   writeFileSync(archivePath, archive);
-  const qualified = {
-    schema: "openclaw.qualified-npm-preflight/v1",
-    source: { sha: identity.sourceSha },
-    producer,
-    preparedBundle,
-    manifestSha256: hash(manifestBytes),
+  const qualified = describeNpmBundle({
+    directory,
+    qualified: true,
     artifact: {
       id: "555",
       name: `openclaw-npm-preflight-${identity.sourceSha}`,
@@ -254,7 +286,7 @@ async function publicationWriterFixture(
       runId: producer.runId,
       runAttempt: producer.runAttempt,
     },
-  };
+  });
   const run = {
     id: 81,
     run_attempt: 1,
@@ -346,13 +378,13 @@ function registryEvidence(
   warningCount = 0,
   validationInputs: Record<string, string> = {},
 ) {
-  const source = createPublicationSourceFact(
+  const source = createSource(
     sourceRequest(validationInputs, { GITHUB_RUN_ID: runId }),
     inventory,
     sourceProjection(),
   );
   const started = "2026-09-13T14:00:00.000Z";
-  const observations = createPublicationObservations(source, {
+  const observations = createObservations(source, {
     sourceDigest: source.digest,
     prerequisitesCompletedAt: started,
     collectionStartedAt: started,
@@ -397,12 +429,7 @@ function registryEvidence(
     digest: `sha256:${"c".repeat(64)}`,
     sizeInBytes: 2048,
   };
-  const admission = createPublicationAdmission(
-    source,
-    observations,
-    descriptor,
-    "2026-09-13T14:00:02.000Z",
-  );
+  const admission = createAdmission(source, observations, descriptor, "2026-09-13T14:00:02.000Z");
   return {
     source,
     observations,
@@ -446,7 +473,7 @@ function registryBudgetFixture(warningCount = 0, validationInputs: Record<string
     resolveTargetResult: "success",
   };
   const built = buildReleaseExecutionPlan(inputs);
-  const plan = buildReleaseExecutionPlanArtifact({
+  const plan = buildPlanArtifact({
     ...record,
     ...inputs,
     attemptEvidenceVersion: 3,
@@ -533,30 +560,24 @@ describe("retained publication admission", () => {
           })),
         }),
       );
-      expect(manifest.releaseProfile).toBe(releaseProfile);
-      expect(manifest.controls).toMatchObject({
-        stableSoakRequired: releaseProfile !== "beta",
-        performanceBlocking: releaseProfile !== "beta",
-        performanceReportPublication: "artifact-only",
-      });
-      expect(manifest.childRuns.productPerformance.blocking).toBe(releaseProfile !== "beta");
-      expect(manifest.validationInputs).toMatchObject({
-        npmTelegramPackageSpec: "openclaw@2026.9.9",
-        npmTelegramProviderMode: "live-frontier",
-        npmTelegramScenario: "telegram-status-command",
-        skipPackageTelegramE2e: "true",
-        allowUnreleasedChangelog: "true",
+      expect(manifest).toMatchObject({
+        releaseProfile,
+        controls: {
+          stableSoakRequired: releaseProfile !== "beta",
+          performanceBlocking: releaseProfile !== "beta",
+          performanceReportPublication: "artifact-only",
+        },
+        childRuns: { productPerformance: { blocking: releaseProfile !== "beta" } },
+        validationInputs: {
+          npmTelegramPackageSpec: "openclaw@2026.9.9",
+          npmTelegramProviderMode: "live-frontier",
+          npmTelegramScenario: "telegram-status-command",
+          skipPackageTelegramE2e: "true",
+          allowUnreleasedChangelog: "true",
+        },
       });
       expect(manifest.publicationAdmission).toEqual(plan.publicationAdmission);
-      expect(manifest.publicationArtifacts.npmPreflight).toMatchObject({
-        source: { sha: context.targetRef },
-        producer: { workflowSha: context.workflowSha, runId: "81", runAttempt: "1" },
-      });
-      expect(manifest.publishInputs).toMatchObject({
-        targetSha: context.targetRef,
-        pluginSdkApiAcknowledgement: "",
-        npmDecisions: [{ packageName: "openclaw", packageVersion: "2026.9.9", decision: "plan" }],
-      });
+      expectPublication(manifest, context.targetRef, context.workflowSha);
     },
   );
 
@@ -569,9 +590,9 @@ describe("retained publication admission", () => {
       `sha256:${createHash("sha256").update(publicationObservationJson(observations)).digest("hex")}`,
     );
     expect(admission.binding.observationsDigest).not.toBe(admission.binding.artifact.digest);
-    expect(validatePublicationAdmissionBinding(record)).toEqual(admission);
+    expect(validateAdmission(record)).toEqual(admission);
     // Validation years later does not substitute a new clock or registry sweep.
-    expect(validatePublicationAdmissionBinding(structuredClone(record))).toEqual(admission);
+    expect(validateAdmission(structuredClone(record))).toEqual(admission);
   });
 
   it.each([
@@ -580,7 +601,7 @@ describe("retained publication admission", () => {
     ["2026-09-13T13:59:59.999Z", false],
   ])("checks actual post-upload admission time %s (accepted=%s)", (time, accepted) => {
     const { source, observations, descriptor } = registryEvidence();
-    const finalize = () => createPublicationAdmission(source, observations, descriptor, time);
+    const finalize = () => createAdmission(source, observations, descriptor, time);
     if (accepted) {
       expect(finalize().binding.admittedAt).toBe(time);
     } else {
@@ -627,9 +648,9 @@ describe("retained publication admission", () => {
       "deleted-contract": () => Reflect.deleteProperty(record, "publicationAdmissionContract"),
     };
     mutations[fault]!();
-    expect(() =>
-      validatePublicationAdmissionBinding(record, { publicationAdmissionContract: "1" }),
-    ).toThrow(/publication|observation|registry/u);
+    expect(() => validateAdmission(record, { publicationAdmissionContract: "1" })).toThrow(
+      /publication|observation|registry/u,
+    );
   });
 
   it("requires exact-source B capability without upgrading A or historical evidence", () => {
@@ -645,10 +666,10 @@ describe("retained publication admission", () => {
     const { record } = registryEvidence();
     Reflect.deleteProperty(record, "publicationAdmissionContract");
     Reflect.deleteProperty(record, "publicationAdmission");
-    expect(validatePublicationAdmissionBinding(record)).toBeUndefined();
-    expect(() =>
-      validatePublicationAdmissionBinding(record, { publicationAdmissionContract: "1" }),
-    ).toThrow(/contract/u);
+    expect(validateAdmission(record)).toBeUndefined();
+    expect(() => validateAdmission(record, { publicationAdmissionContract: "1" })).toThrow(
+      /contract/u,
+    );
   });
 
   it.each([
@@ -664,7 +685,8 @@ describe("retained publication admission", () => {
     "configure-as-repair",
     "repair-as-configure",
   ])("rejects self-consistent unsupported receipt semantics: %s", (fault) => {
-    const { source, observations, descriptor, record } = registryEvidence();
+    const evidence = registryEvidence();
+    const { source, observations, descriptor, record } = evidence;
     const root = observations.npm[0]!;
     assert(root.outcome === "observed");
     if (fault === "core-companion-absent") {
@@ -672,46 +694,26 @@ describe("retained publication admission", () => {
       source.projection.packages = [
         { name: "@openclaw/gateway-client", version: "2026.9.9", targets: ["npm"] },
       ];
-      const { digest: _digest, ...unsigned } = source;
-      source.digest = createHash("sha256").update(publicationSourceJson(unsigned)).digest("hex");
-      observations.sourceDigest = source.digest;
+      refreshSource(evidence);
       root.name = "@openclaw/gateway-client";
     }
     if (fault === "root-absent" || fault === "core-companion-absent") {
-      root.state = {
-        packageExists: false,
-        hasVersionHistory: false,
-        selectedVersionExists: false,
-        latestVersion: null,
-      };
+      root.state = absentNpmState();
     }
     if (
       fault === "root-absent" ||
       fault === "core-companion-absent" ||
       fault === "healthy-with-pending"
     ) {
-      observations.pendingAuthority = [
-        {
-          registry: "npm",
-          name: root.name,
-          action: "owner-preparation-and-access",
-          status: "unresolved",
-        },
-      ];
+      observations.pendingAuthority = pendingNpmAuthority(root.name);
     } else {
       assert(source.projection && source.publicationSelection);
-      source.projection.packages.push({
-        name: "@openclaw/test",
-        version: "2026.9.9",
-        targets: ["clawhub"],
-      });
+      source.projection.packages.push({ ...pluginPackage, targets: ["clawhub"] });
       source.projection.packages.reverse();
       if (fault.startsWith("prepared-")) {
         source.publicationSelection.route = "prepared";
       }
-      const { digest: _digest, ...unsigned } = source;
-      source.digest = createHash("sha256").update(publicationSourceJson(unsigned)).digest("hex");
-      observations.sourceDigest = source.digest;
+      refreshSource(evidence);
       const present = fault !== "prepared-package-absent";
       const published = fault === "configure-as-repair";
       const trusted =
@@ -729,8 +731,7 @@ describe("retained publication admission", () => {
           : null;
       observations.clawhub = [
         {
-          name: "@openclaw/test",
-          version: "2026.9.9",
+          ...pluginPackage,
           observedAt: observations.collectionStartedAt,
           state: {
             packageExists: present,
@@ -741,7 +742,7 @@ describe("retained publication admission", () => {
         },
       ];
       observations.plans.clawhub = {
-        all: [{ name: "@openclaw/test", version: "2026.9.9", alreadyPublished: published }],
+        all: [{ ...pluginPackage, alreadyPublished: published }],
         candidates: present && trusted && !published ? ["@openclaw/test"] : [],
         skippedPublished: published ? ["@openclaw/test"] : [],
         bootstrapCandidates: present ? [] : ["@openclaw/test"],
@@ -766,16 +767,14 @@ describe("retained publication admission", () => {
     record.publicationAdmission.binding.sourceDigest = source.digest;
     record.publicationAdmission.binding.observationsDigest = `sha256:${createHash("sha256").update(publicationObservationJson(observations)).digest("hex")}`;
     expect(() =>
-      createPublicationAdmission(
+      createAdmission(
         source,
         observations,
         descriptor,
         record.publicationAdmission.binding.admittedAt,
       ),
     ).toThrow(/publication|bootstrap|prepared|authority/u);
-    expect(() => validatePublicationAdmissionBinding(record)).toThrow(
-      /publication|bootstrap|prepared|authority/u,
-    );
+    expect(() => validateAdmission(record)).toThrow(/publication|bootstrap|prepared|authority/u);
   });
 
   it.each([
@@ -791,7 +790,8 @@ describe("retained publication admission", () => {
   ] as const)(
     "retains only supported plugin absence on %s/%s/%s (accepted=%s)",
     (route, npmDistTag, version, accepted) => {
-      const { source, observations, descriptor, admission } = registryEvidence();
+      const evidence = registryEvidence();
+      const { source, observations, descriptor, admission } = evidence;
       assert(source.publicationSelection && source.projection);
       source.publicationSelection = {
         ...source.publicationSelection,
@@ -804,9 +804,7 @@ describe("retained publication admission", () => {
         { name: "@openclaw/test", version, targets: ["npm"] },
         { name: "openclaw", version: rootVersion, targets: ["npm"] },
       ];
-      const { digest: _digest, ...unsigned } = source;
-      source.digest = createHash("sha256").update(publicationSourceJson(unsigned)).digest("hex");
-      observations.sourceDigest = source.digest;
+      refreshSource(evidence);
       const root = observations.npm[0]!;
       observations.npm = [
         {
@@ -815,12 +813,7 @@ describe("retained publication admission", () => {
           required: true,
           outcome: "observed",
           observedAt: observations.collectionStartedAt,
-          state: {
-            packageExists: false,
-            hasVersionHistory: false,
-            selectedVersionExists: false,
-            latestVersion: null,
-          },
+          state: absentNpmState(),
         },
         { ...root, version: rootVersion },
       ];
@@ -830,16 +823,9 @@ describe("retained publication admission", () => {
         skippedPublished: [],
         warnings: [],
       };
-      observations.pendingAuthority = [
-        {
-          registry: "npm",
-          name: "@openclaw/test",
-          action: "owner-preparation-and-access",
-          status: "unresolved",
-        },
-      ];
+      observations.pendingAuthority = pendingNpmAuthority("@openclaw/test");
       const create = () =>
-        createPublicationAdmission(source, observations, descriptor, admission.binding.admittedAt);
+        createAdmission(source, observations, descriptor, admission.binding.admittedAt);
       if (accepted) {
         expect(create().observations.pendingAuthority).toEqual(observations.pendingAuthority);
       } else {
@@ -855,7 +841,7 @@ describe("retained publication admission", () => {
     root.observations.collectionStartedAt = "2026-09-13T13:00:00.000Z";
     root.observations.collectionCompletedAt = "2026-09-13T13:00:01.000Z";
     root.observations.npm[0]!.observedAt = "2026-09-13T13:00:00.000Z";
-    root.record.publicationAdmission = createPublicationAdmission(
+    root.record.publicationAdmission = createAdmission(
       root.source,
       root.observations,
       root.descriptor,
@@ -878,7 +864,7 @@ describe("retained publication admission", () => {
     expect.soft(manifest.evidenceReuse.publication).toEqual(root.record);
     expect(manifest.publicationAdmission).toEqual(plan.publicationAdmission);
     expect(JSON.stringify(sourceManifest)).toBe(originalRoot);
-    expect(() => assertReleasePublicationKnownBudget(carried, context)).not.toThrow();
+    expect(() => assertBudget(carried, context)).not.toThrow();
     const current = registryEvidence("123", 132);
     const largeRoot = registryEvidence("99", 132);
     const combined = {
@@ -891,31 +877,29 @@ describe("retained publication admission", () => {
     };
     // Each receipt fits; the actual root/current enclosing writer must not drop
     // the older one to appear under the cap.
-    expect(() => serializeReleaseArtifact(largeRoot.record)).not.toThrow();
-    expect(() => serializeReleaseArtifact(current.record)).not.toThrow();
-    expect(() => buildReleaseValidationManifest({ plan: combined, context })).toThrow(
-      /size limit/u,
-    );
-    expect(() => assertReleasePublicationKnownBudget(combined, context)).toThrow(/size limit/u);
+    expect(() => serializeArtifact(largeRoot.record)).not.toThrow();
+    expect(() => serializeArtifact(current.record)).not.toThrow();
+    expect(() => buildManifest({ plan: combined, context })).toThrow(/size limit/u);
+    expect(() => assertBudget(combined, context)).toThrow(/size limit/u);
   });
 
   it("reserves JSON escaping of pending bounded fields without truncating later job evidence", () => {
     const { plan, context } = registryBudgetFixture();
-    expect(() => assertReleasePublicationKnownBudget(plan, context)).not.toThrow();
+    expect(() => assertBudget(plan, context)).not.toThrow();
     // These are actual carried bytes, not assumed headroom for unknown future jobs.
     const root = {
       ...registryEvidence("99").record,
       retainedDiagnostic: "\0".repeat(65_000),
     };
     const carried = { ...plan, evidenceReuse: { ...plan.evidenceReuse, sourceManifest: root } };
-    expect(() => serializeReleaseArtifact(carried)).not.toThrow();
+    expect(() => serializeArtifact(carried)).not.toThrow();
     expect(Buffer.byteLength(JSON.stringify(root))).toBeGreaterThan(
       root.retainedDiagnostic.length * 5,
     );
-    expect(() => assertReleasePublicationKnownBudget(carried, context)).toThrow(/size limit/u);
+    expect(() => assertBudget(carried, context)).toThrow(/size limit/u);
 
     const drain = fullMatrixDecision();
-    const manifest = buildReleaseValidationManifest({ plan, drain, context });
+    const manifest = buildManifest({ plan, drain, context });
     const firstChild = Object.values(drain.children)[0]!;
     assert(isRecord(firstChild.timing) && Array.isArray(firstChild.timing.jobs));
     const firstJob = firstChild.timing.jobs[0]!;
@@ -924,8 +908,7 @@ describe("retained publication admission", () => {
     assert(Array.isArray(manifest.childEvidence.normalCi.jobs));
     const projectedJob = manifest.childEvidence.normalCi.jobs[0];
     assert(isRecord(projectedJob));
-    const remaining =
-      MAX_RELEASE_ARTIFACT_BYTES - Buffer.byteLength(serializeReleaseArtifact(manifest));
+    const remaining = MAX_RELEASE_ARTIFACT_BYTES - Buffer.byteLength(serializeArtifact(manifest));
     const extraJob = { ...firstJob, name: "later child job 000000" };
     const jobBytes =
       Buffer.byteLength(
@@ -942,17 +925,15 @@ describe("retained publication admission", () => {
       })),
     );
     const grownBytes = Buffer.byteLength(
-      serializeReleaseArtifact(buildReleaseValidationManifest({ plan, drain, context })),
+      serializeArtifact(buildManifest({ plan, drain, context })),
     );
     firstJob.url += "x".repeat(MAX_RELEASE_ARTIFACT_BYTES - grownBytes);
     expect(firstJob.url.length).toBeLessThanOrEqual(1024);
-    expect(
-      Buffer.byteLength(
-        serializeReleaseArtifact(buildReleaseValidationManifest({ plan, drain, context })),
-      ),
-    ).toBe(MAX_RELEASE_ARTIFACT_BYTES);
+    expect(Buffer.byteLength(serializeArtifact(buildManifest({ plan, drain, context })))).toBe(
+      MAX_RELEASE_ARTIFACT_BYTES,
+    );
     firstJob.url += "x";
-    expect(() => buildReleaseValidationManifest({ plan, drain, context })).toThrow(/size limit/u);
+    expect(() => buildManifest({ plan, drain, context })).toThrow(/size limit/u);
     expect(firstChild.timing.jobs).toHaveLength(186 + count);
     expect(plan.publicationAdmission).toEqual(registryEvidence().admission);
   });
@@ -962,13 +943,13 @@ describe("retained publication admission", () => {
     (oversize) => {
       const { record, source, candidateRequest } = registryBudgetFixture(oversize ? 140 : 0);
       const root = registryEvidence("99", oversize ? 140 : 0).record;
-      expect(() => serializeReleaseArtifact(record)).not.toThrow();
-      expect(() => serializeReleaseArtifact(root)).not.toThrow();
+      expect(() => serializeArtifact(record)).not.toThrow();
+      expect(() => serializeArtifact(root)).not.toThrow();
       const directory = directories.make("publication-reuse-budget-");
       mkdirSync(join(directory, "full-release-publication-admission"));
       writeFileSync(
         join(directory, "full-release-publication-admission/publication-admission.json"),
-        serializeReleaseArtifact(record),
+        serializeArtifact(record),
       );
       const reuseOutputs = {
         reuse: "true",
@@ -1368,8 +1349,8 @@ describe("full release artifact contract", () => {
         },
       );
       const projection = sourceProjection();
-      const sourceAdmission = createPublicationSourceFact(request, inventory, projection);
-      const oldSource = createPublicationSourceFact(
+      const sourceAdmission = createSource(request, inventory, projection);
+      const oldSource = createSource(
         {
           ...request,
           runId: "98",
@@ -1452,21 +1433,11 @@ describe("full release artifact contract", () => {
       expect(Buffer.byteLength(bytes)).toBeLessThan(MAX_RELEASE_ARTIFACT_BYTES);
       const manifest = JSON.parse(bytes);
       if (source) {
-        expect(manifest.publicationArtifacts.npmPreflight).toMatchObject({
-          source: { sha: SHA },
-          producer: { workflowSha: "d".repeat(40), runId: "81", runAttempt: "1" },
-        });
+        expectPublication(manifest, SHA, "d".repeat(40));
         expect(manifest.publicationArtifacts.pluginNpm).toEqual({
           descriptor: "prepared-plugin-npm",
         });
-        expect(manifest.publishInputs).toMatchObject({
-          targetSha: SHA,
-          pluginSdkApiAcknowledgement: "",
-          npmDecisions: [{ packageName: "openclaw", packageVersion: "2026.9.9", decision: "plan" }],
-        });
-        expect(
-          validatePublicationSourceBinding(manifest, { sourceAdmissionContract: "1" }),
-        ).toEqual(sourceAdmission);
+        expect(validateSource(manifest, { sourceAdmissionContract: "1" })).toEqual(sourceAdmission);
         expect(manifest.sourceAdmission).not.toEqual(oldSource);
         expect(sourceManifest.sourceAdmission).toEqual(oldSource);
         expect(manifest.validationInputs.publicationSelectionJson).toBe(
@@ -1512,17 +1483,17 @@ describe("full release artifact contract", () => {
 
   it("compacts the full matrix without dropping job evidence and bounds UTF-8 bytes", () => {
     const payload = fullMatrixDecision();
-    const compact = serializeReleaseArtifact(payload);
+    const compact = serializeArtifact(payload);
     expect(JSON.parse(compact)).toEqual(payload);
     expect(Buffer.byteLength(compact)).toBeGreaterThan(128 * 1024);
     expect(Buffer.byteLength(compact)).toBeLessThan(MAX_RELEASE_ARTIFACT_BYTES);
     expect(compact.split("\n")).toHaveLength(2);
 
     const value = "x".repeat(
-      MAX_RELEASE_ARTIFACT_BYTES - Buffer.byteLength(serializeReleaseArtifact({ value: "" })),
+      MAX_RELEASE_ARTIFACT_BYTES - Buffer.byteLength(serializeArtifact({ value: "" })),
     );
-    expect(Buffer.byteLength(serializeReleaseArtifact({ value }))).toBe(MAX_RELEASE_ARTIFACT_BYTES);
-    expect(() => serializeReleaseArtifact({ value: `${value}é` })).toThrow("size limit");
+    expect(Buffer.byteLength(serializeArtifact({ value }))).toBe(MAX_RELEASE_ARTIFACT_BYTES);
+    expect(() => serializeArtifact({ value: `${value}é` })).toThrow("size limit");
   });
 
   it.each(["ci.yml", "plugin-prerelease.yml"])(
@@ -1539,22 +1510,21 @@ describe("full release artifact contract", () => {
     },
   );
 
-  it.each(["dispatch helper", "summary watcher"])(
-    "%s reads every job in the full release matrix",
-    (reader) => {
+  it.each([
+    ["dispatch helper", false],
+    ["summary watcher", false],
+    ["dispatch helper", true],
+    ["summary watcher", true],
+  ] as const)("%s reads complete evidence or rejects oversize=%s", (reader, oversized) => {
+    if (oversized) {
+      expect(() => readDecision(reader, " ".repeat(MAX_RELEASE_ARTIFACT_BYTES + 1))).toThrow(
+        "size limit",
+      );
+    } else {
       const payload = fullMatrixDecision();
       const serialized = JSON.stringify(payload, null, 2);
       expect(Buffer.byteLength(serialized)).toBeGreaterThan(128 * 1024);
       expect(readDecision(reader, serialized)).toEqual(payload);
-    },
-  );
-
-  it.each(["dispatch helper", "summary watcher"])(
-    "%s rejects oversized evidence before parsing it",
-    (reader) => {
-      expect(() => readDecision(reader, " ".repeat(MAX_RELEASE_ARTIFACT_BYTES + 1))).toThrow(
-        "size limit",
-      );
-    },
-  );
+    }
+  });
 });

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDirAsync } = createScriptTestHarness();
@@ -47,7 +47,7 @@ async function createFixture() {
     exports: {
       ".": "./copy.js",
       "./package.json": "./package.json",
-      "./config": "./config.js",
+      "./config": "./copy.js",
       "./copy": "./copy.js",
     },
     optionalDependencies: {
@@ -57,18 +57,12 @@ async function createFixture() {
     },
   });
   await fs.writeFile(
-    path.join(fsSafeRoot, "config.js"),
-    `
-    let mode = process.env.FS_SAFE_NATIVE_MODE ?? "auto";
-    export function configureFsSafeNative(config) { mode = config.mode; }
-    export function getFsSafeNativeConfig() { return { mode }; }
-  `,
-  );
-  await fs.writeFile(
     path.join(fsSafeRoot, "copy.js"),
     `
     import { createRequire } from "node:module";
-    import { getFsSafeNativeConfig } from "./config.js";
+    let mode = process.env.FS_SAFE_NATIVE_MODE ?? "auto";
+    export function configureFsSafeNative(config) { mode = config.mode; }
+    export function getFsSafeNativeConfig() { return { mode }; }
     const require = createRequire(import.meta.url);
     export async function readCloneFileMetadata(paths) {
       if (getFsSafeNativeConfig().mode !== "require" || paths.length !== 0) {
@@ -116,18 +110,26 @@ async function createFixture() {
     npm_config_prefix: path.join(packageRoot, "other-install"),
     FIXTURE_CALLS: callsPath,
   };
-  const run = (overrides: NodeJS.ProcessEnv = {}) =>
-    spawnSync(process.execPath, [script], {
+  const run = async (overrides: NodeJS.ProcessEnv = {}, completed = true) => {
+    const result = spawnSync(process.execPath, [script], {
       cwd: packageRoot,
       env: { ...env, ...overrides },
       encoding: "utf8",
       timeout: 30_000,
     });
+    expect(result.status, result.stderr).toBe(0);
+    if (completed) {
+      await expectAbsent(path.join(packageRoot, ".openclaw-lifecycle-pending"));
+      expect(
+        (await fs.readdir(packageRoot)).filter((entry) => entry.startsWith(".openclaw-prebuild-")),
+      ).toEqual([]);
+    }
+    return result;
+  };
   const nativeRoot = path.join(fsSafeRoot, "node_modules", NATIVE_NAME);
   const calls = async () => (await fs.readFile(callsPath, "utf8")).trim().split("\n");
-  const restore = (overrides: NodeJS.ProcessEnv = {}) => {
-    const result = run(overrides);
-    expect(result.status, result.stderr).toBe(0);
+  const restore = async (overrides: NodeJS.ProcessEnv = {}) => {
+    const result = await run(overrides);
     expect(result.stdout, result.stderr).toContain(`restored ${NATIVE_NAME}@${NATIVE_VERSION}`);
     return result;
   };
@@ -143,21 +145,15 @@ async function createFixture() {
   };
 }
 
-async function expectCompleted(fixture: Awaited<ReturnType<typeof createFixture>>) {
-  await expectAbsent(path.join(fixture.packageRoot, ".openclaw-lifecycle-pending"));
-  expect(
-    (await fs.readdir(fixture.packageRoot)).filter((entry) =>
-      entry.startsWith(".openclaw-prebuild-"),
-    ),
-  ).toEqual([]);
-}
-
 describe("packaged fs-safe prebuild restoration", () => {
+  let fixture: Awaited<ReturnType<typeof createFixture>>;
+  beforeEach(async () => {
+    fixture = await createFixture();
+  });
   it("restores only the exact loader-selected prebuild without reifying installed manifests", async () => {
-    const fixture = await createFixture();
     const manifestPath = path.join(fixture.fsSafeRoot, "package.json");
     const before = await fs.readFile(manifestPath);
-    fixture.restore();
+    await fixture.restore();
     expect(
       JSON.parse(await fs.readFile(path.join(fixture.nativeRoot, "package.json"), "utf8")),
     ).toMatchObject({ name: NATIVE_NAME, version: NATIVE_VERSION });
@@ -179,9 +175,7 @@ describe("packaged fs-safe prebuild restoration", () => {
       `${NATIVE_NAME}@${NATIVE_VERSION}`,
     ]);
     await expectAbsent(path.join(fixture.packageRoot, "other-install"));
-    await expectCompleted(fixture);
-    const healthy = fixture.run({ FIXTURE_NPM_FAIL: "1" });
-    expect(healthy.status, healthy.stderr).toBe(0);
+    const healthy = await fixture.run({ FIXTURE_NPM_FAIL: "1" });
     expect(healthy.stderr).toBe("");
     expect(await fixture.calls()).toHaveLength(1);
   });
@@ -193,13 +187,10 @@ describe("packaged fs-safe prebuild restoration", () => {
   ] satisfies Array<[string, NodeJS.ProcessEnv, string]>)(
     "warns and completes lifecycle after %s",
     async (_name, env, warning) => {
-      const fixture = await createFixture();
-      const result = fixture.run(env);
-      expect(result.status, result.stderr).toBe(0);
+      const result = await fixture.run(env);
       expect(result.stderr).toContain(warning);
       expect(result.stdout).not.toContain("restored");
       await expectAbsent(fixture.nativeRoot);
-      await expectCompleted(fixture);
     },
   );
 
@@ -211,27 +202,22 @@ describe("packaged fs-safe prebuild restoration", () => {
   ] satisfies Array<[string, NodeJS.ProcessEnv, boolean, boolean]>)(
     "makes no npm request for %s",
     async (_name, env, warning, source) => {
-      const fixture = await createFixture();
       if (source) {
         for (const directory of [".git", "src", "extensions"]) {
           await fs.mkdir(path.join(fixture.packageRoot, directory));
         }
       }
-      const result = fixture.run(env);
-      expect(result.status, result.stderr).toBe(0);
+      const result = await fixture.run(env, !source);
       expect(Boolean(result.stderr)).toBe(warning);
       await expectAbsent(fixture.callsPath);
       if (source) {
         expect(result.stderr).toBe("");
         await expectAbsent(fixture.nativeRoot);
-      } else {
-        await expectCompleted(fixture);
       }
     },
   );
 
   it("runs the PATH-selected npm CLI directly when deferred lifecycle has no npm_execpath", async () => {
-    const fixture = await createFixture();
     const bin = path.join(fixture.packageRoot, "selected-npm");
     await fs.mkdir(bin);
     const directCli =
@@ -246,14 +232,12 @@ describe("packaged fs-safe prebuild restoration", () => {
     } else {
       await fs.symlink(directCli, path.join(bin, "npm"));
     }
-    fixture.restore({ npm_execpath: undefined, PATH: bin });
-    await expectCompleted(fixture);
+    await fixture.restore({ npm_execpath: undefined, PATH: bin });
   });
 
   it.skipIf(process.platform === "win32")(
     "follows the selected manager shim without initializing npm during discovery",
     async () => {
-      const fixture = await createFixture();
       const bin = path.join(fixture.packageRoot, "manager-bin");
       const npmRoot = path.join(fixture.packageRoot, "manager-npm");
       const cli = path.join(npmRoot, "bin", "npm-cli.js");
@@ -275,9 +259,8 @@ describe("packaged fs-safe prebuild restoration", () => {
         `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(cli)} "$@"\n`,
         { mode: 0o755 },
       );
-      fixture.restore({ npm_execpath: undefined, PATH: bin });
+      await fixture.restore({ npm_execpath: undefined, PATH: bin });
       expect(await fixture.calls()).toHaveLength(1);
-      await expectCompleted(fixture);
     },
   );
 
@@ -288,7 +271,6 @@ describe("packaged fs-safe prebuild restoration", () => {
     "warns without starting an install when a shim $name",
     { timeout: 20_000 },
     async ({ body, warning }) => {
-      const fixture = await createFixture();
       const bin = path.join(fixture.packageRoot, "manager-bin");
       const pidFile = path.join(fixture.packageRoot, "discovery-pid.json");
       await fs.mkdir(bin);
@@ -297,8 +279,7 @@ describe("packaged fs-safe prebuild restoration", () => {
         `#!${process.execPath}\nimport fs from 'node:fs';\nfs.writeFileSync(${JSON.stringify(pidFile)}, JSON.stringify({ pid: process.pid, args: process.argv.slice(2) }));\n${body}\n`,
         { mode: 0o755 },
       );
-      const result = fixture.run({ npm_execpath: undefined, PATH: bin });
-      expect(result.status, result.stderr).toBe(0);
+      const result = await fixture.run({ npm_execpath: undefined, PATH: bin });
       expect(result.stderr).toContain(warning);
       const discovery = JSON.parse(await fs.readFile(pidFile, "utf8")) as {
         pid: number;
@@ -308,14 +289,12 @@ describe("packaged fs-safe prebuild restoration", () => {
       expect(() => process.kill(discovery.pid, 0)).toThrow();
       await expectAbsent(fixture.callsPath);
       await expectAbsent(fixture.nativeRoot);
-      await expectCompleted(fixture);
     },
   );
 
   it.each(["dependency", "node_modules"])(
     "does not repair through a symlinked %s owner",
     async (owner) => {
-      const fixture = await createFixture();
       const externalRoot = await createTempDirAsync("openclaw-prebuild-other-owner-");
       const externalDependency = path.join(externalRoot, "fs-safe");
       const linkPath =
@@ -329,11 +308,9 @@ describe("packaged fs-safe prebuild restoration", () => {
         process.platform === "win32" ? "junction" : "dir",
       );
       const before = await fs.readdir(externalRoot);
-      const result = fixture.run();
-      expect(result.status, result.stderr).toBe(0);
+      const result = await fixture.run();
       expect(result.stderr).toContain("native support is unavailable");
       expect(await fs.readdir(externalRoot)).toEqual(before);
-      await expectCompleted(fixture);
     },
   );
 
@@ -353,7 +330,6 @@ describe("packaged fs-safe prebuild restoration", () => {
   ])(
     "preserves an installed package after %s without retrying through npm",
     async (_name, main, code) => {
-      const fixture = await createFixture();
       await fs.mkdir(fixture.nativeRoot, { recursive: true });
       await writeJson(path.join(fixture.nativeRoot, "package.json"), {
         name: NATIVE_NAME,
@@ -361,12 +337,10 @@ describe("packaged fs-safe prebuild restoration", () => {
         main,
       });
       await fs.writeFile(path.join(fixture.nativeRoot, main), code);
-      const result = fixture.run();
-      expect(result.status, result.stderr).toBe(0);
+      const result = await fixture.run();
       expect(result.stderr).toContain("could not be loaded or used");
       await expectAbsent(fixture.callsPath);
       expect(await fs.readFile(path.join(fixture.nativeRoot, main), "utf8")).toBe(code);
-      await expectCompleted(fixture);
     },
   );
 });
