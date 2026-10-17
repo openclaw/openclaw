@@ -21,58 +21,49 @@ import {
   SESSION_MCP_MAX_LIVE_RUNTIMES,
   SESSION_MCP_RUNTIME_MANAGER_KEY,
 } from "./agent-bundle-mcp-runtime-shared.js";
-import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
-
-const readAuthorization = vi.hoisted(() =>
-  vi.fn(async (identities: readonly McpOAuthIdentity[]) =>
-    identities.map(() => ({ state: "unauthenticated" })),
-  ),
-);
+const readAuthorization = vi.hoisted(() => vi.fn(async () => [{ state: "unauthenticated" }]));
 vi.mock("./mcp-oauth.js", () => ({
   readMcpOAuthCredentialsStatuses: readAuthorization,
   startMcpOAuthAuthorization: async () => ({ status: "authorized" }),
 }));
 
 const tempDirs: string[] = [];
-const releases: Array<() => void> = [];
-const unauthenticated = async (identities: readonly McpOAuthIdentity[]) =>
-  identities.map(() => ({ state: "unauthenticated" }));
+let oauthRelease: ReturnType<typeof createDeferred<void>>;
+let fixture: Awaited<ReturnType<typeof createMcpProbeFixture>>;
 
-async function requesterFixture() {
-  const { params, config } = await createMcpProbeFixture(tempDirs);
-  const cfg = config();
+function requesterFixture() {
+  const cfg = fixture.config();
   cfg.mcp!.servers!.calendar = {
     transport: "streamable-http",
     url: "https://mcp.example.test",
     auth: "oauth",
     oauth: { identity: "per-requester" },
   };
-  return { ...params, cfg, requesterSenderId: "alice" };
+  return { ...fixture.params, cfg, requesterSenderId: "alice" };
 }
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 let manager: ReturnType<typeof getManager>;
 beforeEach(async () => {
   await disposeAllSessionMcpRuntimes();
+  oauthRelease = createDeferred();
   // The process singleton's lazy factory must not retain another test file's OAuth mock.
   Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
   scheduler = createTestGatewayScheduler();
   await setSessionMcpRuntimeScheduler(scheduler);
   manager = getManager();
+  fixture = await createMcpProbeFixture(tempDirs);
 });
 afterEach(async () => {
-  for (const unblock of releases.splice(0)) {
-    unblock();
-  }
+  oauthRelease.resolve();
   await disposeAllSessionMcpRuntimes();
   await scheduler.stop();
   Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
   cleanupTempDirs(tempDirs);
-  readAuthorization.mockReset().mockImplementation(unauthenticated);
+  readAuthorization.mockReset().mockResolvedValue([{ state: "unauthenticated" }]);
 });
 
 it.each([false, true])("retires excluded servers after final release (%s)", async (shared) => {
-  const { params, config } = await createMcpProbeFixture(tempDirs);
-  const input = { ...params, cfg: config() };
+  const input = { ...fixture.params, cfg: fixture.config() };
   const discovery = await acquire(input);
   const active = shared ? await acquire(input) : discovery;
   const healthy = await probe(active.runtime, "healthy");
@@ -90,11 +81,10 @@ it.each([false, true])("retires excluded servers after final release (%s)", asyn
 });
 
 it("does not let stale discovery prune servers transferred to a replacement", async () => {
-  const { params, config } = await createMcpProbeFixture(tempDirs);
-  const original = await acquire({ ...params, cfg: config() });
+  const original = await acquire({ ...fixture.params, cfg: fixture.config() });
   const healthy = await probe(original.runtime, "healthy");
   const previous = await probe(original.runtime, "changed");
-  const replacement = await acquire({ ...params, cfg: config("replacement") });
+  const replacement = await acquire({ ...fixture.params, cfg: fixture.config("replacement") });
   const changed = await probe(replacement.runtime, "changed");
   expect(changed.label).toBe("replacement");
   expect(changed.pid).not.toBe(previous.pid);
@@ -107,8 +97,7 @@ it("does not let stale discovery prune servers transferred to a replacement", as
 });
 
 it("releases capacity when every configured server is excluded before connection", async () => {
-  const { params, config } = await createMcpProbeFixture(tempDirs);
-  const input = { ...params, cfg: config() };
+  const input = { ...fixture.params, cfg: fixture.config() };
   for (let index = 0; index <= SESSION_MCP_MAX_LIVE_RUNTIMES; index += 1) {
     const sessionKey = `agent:main:excluded-${index}`;
     const acquired = await acquire({ ...input, sessionId: `excluded-${index}`, sessionKey });
@@ -119,18 +108,16 @@ it("releases capacity when every configured server is excluded before connection
 });
 
 it.each(["exported", "harness"])("admits requester leases through %s", async (surface) => {
-  const input = await requesterFixture();
+  const input = requesterFixture();
   input.cfg.gateway = { publicOrigin: "https://gateway.example.test" };
   const acquired = await acquire(input);
   const original = await materialize(acquired);
   const healthy = await probe(acquired.runtime, "healthy");
   const started = createDeferred();
-  const released = createDeferred();
-  releases.push(() => released.resolve());
-  readAuthorization.mockImplementationOnce(async (identities) => {
+  readAuthorization.mockImplementationOnce(async () => {
     started.resolve();
-    await released.promise;
-    return unauthenticated(identities);
+    await oauthRelease.promise;
+    return [{ state: "unauthenticated" }];
   });
   const pending =
     surface === "exported"
@@ -141,7 +128,7 @@ it.each(["exported", "harness"])("admits requester leases through %s", async (su
   manager.deferRetirement(input.sessionId, { retainAcrossReuse: true });
   const retiring = original.dispose();
   await expect.poll(() => manager.totalActiveLeasesForSession(input.sessionId)).toBe(0);
-  released.resolve();
+  oauthRelease.resolve();
   const nextAcquired = expectDefined(await pending, "requester acquisition");
   await retiring;
   expect(manager.totalActiveLeasesForSession(input.sessionId)).toBeGreaterThan(0);
@@ -154,7 +141,7 @@ it.each(["exported", "harness"])("admits requester leases through %s", async (su
 });
 
 it("releases static admission when requester resolution fails during required retirement", async () => {
-  const input = await requesterFixture();
+  const input = requesterFixture();
   const original = await acquire(input);
   const healthy = await probe(original.runtime, "healthy");
   original.releaseLease();
@@ -168,10 +155,9 @@ it("releases static admission when requester resolution fails during required re
 });
 
 it.each(["empty", "catalog failure"])("releases admission on %s catalog", async (result) => {
-  const { params } = await createMcpProbeFixture(tempDirs);
-  const acquired = await acquire({ ...params, cfg: { plugins: { enabled: false } } });
+  const acquired = await acquire({ ...fixture.params, cfg: { plugins: { enabled: false } } });
   expect(acquired.runtime.activeLeases).toBe(1);
-  manager.deferRetirement(params.sessionId, { retainAcrossReuse: true });
+  manager.deferRetirement(fixture.params.sessionId, { retainAcrossReuse: true });
   if (result === "catalog failure") {
     const failure = new Error("catalog unavailable");
     vi.spyOn(acquired.runtime, "getCatalog").mockRejectedValueOnce(failure);
