@@ -10,7 +10,6 @@ const enAgentsHome = {
     openChat: "Open chat",
     createNewSession: "Create new session",
     viewSessions: "View sessions",
-    deletingAgent: "Deleting…",
     deleteAgentConfirm: "Delete {agent}?",
     deleteAgentDetails:
       "Its workspace, agent state, and session transcripts move to Trash. Its channel accounts remain configured.",

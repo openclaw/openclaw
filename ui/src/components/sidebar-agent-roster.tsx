@@ -118,8 +118,15 @@ export function SidebarAgentRoster(props: RosterProps) {
     () => new Set(navigation().read().pinnedAgentIds),
     presented,
   );
-  const pinnedCards = () => roster.cards().filter((card) => pinnedIds().has(card.id));
-  const unpinnedCards = () => roster.cards().filter((card) => !pinnedIds().has(card.id));
+  // Admit deletes synchronously while Solid removes their rows optimistically.
+  const pendingDeletes = new Set<string>();
+  const [deletingIds, publishDeletingIds] = createSignal<ReadonlySet<string>>(pendingDeletes, {
+    equals: false,
+  });
+  const deleting = (id: string) => deletingIds().has(id);
+  const visibleCards = () => roster.cards().filter((card) => !deleting(card.id));
+  const pinnedCards = () => visibleCards().filter((card) => pinnedIds().has(card.id));
+  const unpinnedCards = () => visibleCards().filter((card) => !pinnedIds().has(card.id));
   const settingsScope = createMemo(() => gatewaySnapshot().connection.gatewayUrl);
   // Restore saved choices only when the Gateway scope changes, retaining local toggles otherwise.
   const [collapsed, setCollapsed] = createSignal<ReadonlySet<string>>(() => {
@@ -179,16 +186,13 @@ export function SidebarAgentRoster(props: RosterProps) {
     }
     setCollapsedAgents(next);
   };
-  // Admit deletes synchronously while Solid publishes their pending presentation.
-  const pendingDeletes = new Set<string>();
-  const [deletingIds, publishDeletingIds] = createSignal<ReadonlySet<string>>(pendingDeletes, {
-    equals: false,
-  });
-  const deleting = (id: string) => deletingIds().has(id);
   const canDeleteAgent = (id: string) =>
     !pendingDeletes.has(id) &&
-    (roster.context().agents.state.agentsList?.agents.filter((agent) => agent.kind !== "system")
-      .length ?? 0) > 1 &&
+    (roster
+      .context()
+      .agents.state.agentsList?.agents.filter(
+        (agent) => agent.kind !== "system" && !pendingDeletes.has(agent.id),
+      ).length ?? 0) > 1 &&
     canCallGatewayMethod(roster.context().gateway.snapshot, "agents.delete", "operator.admin") &&
     roster.cards().some((agent) => agent.id === id);
   const deleteAgent = async (agent: { id: string; name: string }) => {
@@ -211,12 +215,15 @@ export function SidebarAgentRoster(props: RosterProps) {
     try {
       await client.request("agents.delete", { agentId: agent.id, deleteFiles: true });
     } catch (error) {
-      showToast({ message: formatUiError(error) });
-    } finally {
-      await context.agents.refreshList();
       pendingDeletes.delete(agent.id);
       publishDeletingIds(pendingDeletes);
+      showToast({ message: formatUiError(error) });
+      void context.agents.refreshList();
+      return;
     }
+    await context.agents.refreshList();
+    pendingDeletes.delete(agent.id);
+    publishDeletingIds(pendingDeletes);
   };
   const agentMenu = (card: () => { id: string; name: string }) => (
     <Menu
@@ -295,7 +302,7 @@ export function SidebarAgentRoster(props: RosterProps) {
         },
         {
           id: "delete",
-          label: t(deleting(card().id) ? "agentsHome.deletingAgent" : "common.delete"),
+          label: t("common.delete"),
           class: "sidebar-customize-menu__item",
           icon: <Icon name="trash" />,
           variant: "danger",
@@ -329,7 +336,6 @@ export function SidebarAgentRoster(props: RosterProps) {
                     agent={card()}
                     href={card().target.href}
                     loading={roster.snapshot().loading}
-                    deleting={deleting(card().id)}
                     active={
                       isSessionRouteId(roster.host().activeRouteId) &&
                       areUiSessionKeysEquivalent(roster.host().getRouteSessionKey(), card().mainKey)
@@ -398,7 +404,6 @@ export function SidebarAgentRoster(props: RosterProps) {
                   class="sidebar-agent-roster__group"
                   data-agent-group={card().id}
                   aria-label={card().name}
-                  aria-busy={deleting(card().id) ? "true" : undefined}
                 >
                   <div
                     class={[
@@ -447,14 +452,9 @@ export function SidebarAgentRoster(props: RosterProps) {
                     >
                       <span class="sidebar-agent-roster__copy">
                         <span class="sidebar-agent-roster__name">{card().name}</span>
-                        <Show when={deleting(card().id) || card().assistantPreview}>
-                          <span
-                            class="sidebar-agent-roster__preview"
-                            role={deleting(card().id) ? "status" : undefined}
-                          >
-                            {deleting(card().id)
-                              ? t("agentsHome.deletingAgent")
-                              : card().assistantPreview}
+                        <Show when={card().assistantPreview}>
+                          <span class="sidebar-agent-roster__preview">
+                            {card().assistantPreview}
                           </span>
                         </Show>
                       </span>

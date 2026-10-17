@@ -26,8 +26,10 @@ it.each([
   { outcome: "success", pinned: false },
   { outcome: "error", pinned: false },
   { outcome: "success", pinned: true },
+  { outcome: "error", pinned: true },
+  { outcome: "retry", pinned: false },
 ] as const)(
-  "shows pending deletion until a slow request finishes with $outcome (pinned: $pinned)",
+  "removes an agent immediately and reconciles slow $outcome (pinned: $pinned)",
   async ({ outcome, pinned }) => {
     useNodeFakeTimers();
     onTestFinished(() => {
@@ -50,6 +52,8 @@ it.each([
       sessions: [],
       defaults: { model: null, modelProvider: null, contextTokens: null },
     };
+    let deletionSettled = false;
+    let deleteRequests = 0;
     const hello = gatewayHelloForMethods([...SESSION_MUTATION_TEST_METHODS, "agents.delete"]);
     class DeletionSocket extends MockWebSocket {
       override send(data: string) {
@@ -59,8 +63,10 @@ it.each([
         const respond = (payload: unknown) =>
           this.emitMessage({ type: "res", id: frame.id, ok: true, payload });
         if (frame.method === "agents.delete") {
+          deleteRequests += 1;
           setTimeout(() => {
-            if (outcome === "success") {
+            deletionSettled = true;
+            if (outcome === "success" || deleteRequests > 1) {
               agentsList = { ...agentsList, agents: [{ id: "main", name: "Harbor" }] };
               respond({ ok: true, agentId: "research", removedBindings: 0 });
             } else {
@@ -84,7 +90,11 @@ it.each([
                 : frame.method === "sessions.subscribe"
                   ? { subscribed: true }
                   : {};
-        queueMicrotask(() => respond(payload));
+        if (frame.method === "agents.list" && deletionSettled) {
+          setTimeout(() => respond(payload), 10_000);
+        } else {
+          queueMicrotask(() => respond(payload));
+        }
       }
     }
     vi.stubGlobal("WebSocket", DeletionSocket);
@@ -114,6 +124,10 @@ it.each([
     };
     context.navigation.update({ pinnedAgentIds: pinned ? ["research"] : [] });
     const { sidebar } = await mountSidebarContext(context);
+    const deleteOption = (agent: string) =>
+      sidebar.querySelector<HTMLElement>(
+        `[role="menu"][aria-label="Options for ${agent}"] [data-value="delete"]`,
+      );
     document.body.append(document.createElement("openclaw-toast-host"));
     sidebar.connected = true;
     sidebar.sidebarAgentsMode = "roster";
@@ -124,8 +138,8 @@ it.each([
     sidebar
       .querySelector<HTMLButtonElement>('button[aria-label="Options for Research briefing 8"]')!
       .click();
-    await vi.waitFor(() => expect(sidebar.querySelector('[data-value="delete"]')).not.toBeNull());
-    sidebar.querySelector<HTMLElement>('[data-value="delete"]')!.click();
+    await vi.waitFor(() => expect(deleteOption("Research briefing 8")).not.toBeNull());
+    deleteOption("Research briefing 8")!.click();
     await vi.waitFor(() =>
       expect(document.querySelector("openclaw-modal-dialog")?.textContent).toContain(
         "Delete Research briefing 8?",
@@ -137,35 +151,61 @@ it.each([
     confirm.click();
     await vi.advanceTimersByTimeAsync(0);
     await settleRoster(sidebar);
-    const deletingRow = sidebar.querySelector<HTMLElement>(
-      pinned ? '[data-pinned-agent="research"]' : '[data-agent-group="research"]',
+    expect(sidebar.querySelector('[data-agent-id="research"]')).toBeNull();
+    expect(agentIds(sidebar)).toEqual(["main"]);
+    // An unrelated roster refresh must not bring back the pending deletion.
+    await agents.refreshList();
+    await settleRoster(sidebar);
+    expect(agentIds(sidebar)).toEqual(["main"]);
+    const remainingOptions = sidebar.querySelector<HTMLButtonElement>(
+      'button[aria-label="Options for Harbor"]',
     )!;
-    expect(deletingRow.textContent).toContain("Deleting");
-    expect(deletingRow.getAttribute("aria-busy")).toBe("true");
-    deletingRow
-      .querySelector<HTMLButtonElement>('button[aria-label="Options for Research briefing 8"]')!
-      .click();
-    await vi.waitFor(() => expect(sidebar.querySelector('[data-value="delete"]')).not.toBeNull());
-    expect(sidebar.querySelector('[data-value="delete"]')?.getAttribute("aria-disabled")).toBe(
-      "true",
-    );
-    sidebar.querySelector<HTMLElement>('[data-value="delete"]')!.click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+    remainingOptions.click();
+    await vi.waitFor(() => expect(deleteOption("Harbor")).not.toBeNull());
+    expect(deleteOption("Harbor")?.getAttribute("aria-disabled")).toBe("true");
+    remainingOptions.click();
     await vi.advanceTimersByTimeAsync(67_048);
+    expect(deleteRequests).toBe(1);
     if (outcome === "success") {
       await vi.waitFor(() =>
         expect(sidebar.querySelector('[data-agent-id="research"]')).toBeNull(),
       );
       expect(agentIds(sidebar)).toEqual(["main"]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(sidebar.querySelector('[data-agent-id="research"]')).toBeNull();
     } else {
-      await vi.waitFor(() => expect(deletingRow.hasAttribute("aria-busy")).toBe(false));
-      expect(agentIds(sidebar)).toEqual(["main", "research"]);
-      expect(deletingRow.textContent).not.toContain("Deleting");
-      expect(
-        sidebar.querySelector('[data-value="delete"]')?.getAttribute("aria-disabled"),
-      ).not.toBe("true");
+      await vi.waitFor(() =>
+        expect(sidebar.querySelector('[data-agent-id="research"]')).not.toBeNull(),
+      );
+      expect(sidebar.querySelector('[data-pinned-agent="research"]') !== null).toBe(pinned);
+      expect(agentIds(sidebar)).toEqual(pinned ? ["main"] : ["main", "research"]);
+      sidebar
+        .querySelector<HTMLButtonElement>('button[aria-label="Options for Research briefing 8"]')!
+        .click();
+      await vi.waitFor(() => expect(deleteOption("Research briefing 8")).not.toBeNull());
+      expect(deleteOption("Research briefing 8")?.getAttribute("aria-disabled")).not.toBe("true");
       await vi.waitFor(() => expect(document.body.textContent).toContain("Agent cleanup failed"));
+      if (outcome === "retry") {
+        deleteOption("Research briefing 8")!.click();
+        await vi.waitFor(() =>
+          expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull(),
+        );
+        [...document.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
+          .find((button) => button.textContent === "Delete")!
+          .click();
+        await vi.advanceTimersByTimeAsync(0);
+        await settleRoster(sidebar);
+        expect(sidebar.querySelector('[data-agent-id="research"]')).toBeNull();
+        // The failed attempt's refresh must not undo the newer pending deletion.
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(sidebar.querySelector('[data-agent-id="research"]')).toBeNull();
+        await vi.advanceTimersByTimeAsync(67_048);
+        expect(sidebar.querySelector('[data-agent-id="research"]')).toBeNull();
+        expect(deleteRequests).toBe(2);
+      } else {
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(sidebar.querySelector('[data-agent-id="research"]')).not.toBeNull();
+      }
     }
   },
 );

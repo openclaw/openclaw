@@ -1,5 +1,4 @@
 import type { JSX } from "@solidjs/web";
-import { Show } from "solid-js";
 import type { agentRosterCards } from "../lib/agents/roster-activity.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -15,16 +14,11 @@ export function SidebarPinnedAgent(props: {
   href: string;
   active: boolean;
   loading: boolean;
-  deleting?: boolean;
   onOpen: () => void;
   menu: JSX.Element;
 }) {
   return (
-    <div
-      class="sidebar-pinned-agent"
-      data-pinned-agent={props.agent.id}
-      aria-busy={props.deleting ? "true" : undefined}
-    >
+    <div class="sidebar-pinned-agent" data-pinned-agent={props.agent.id}>
       <Tooltip class="sidebar-pinned-agent__tooltip" placement="right-start">
         <a
           class="sidebar-pinned-agent__link"
@@ -43,11 +37,6 @@ export function SidebarPinnedAgent(props: {
             <AgentIdentityAvatar agent={props.agent} />
           </span>
           <span class="sidebar-pinned-agent__name">{props.agent.name}</span>
-          <Show when={props.deleting}>
-            <span class="sidebar-pinned-agent__name" role="status">
-              {t("agentsHome.deletingAgent")}
-            </span>
-          </Show>
         </a>
         <span slot="content" class="sidebar-pinned-agent__card">
           <span class="sidebar-pinned-agent__card-header">
