@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -28,13 +28,13 @@ import type { PluginRegistry } from "./registry-types.js";
 describe("plugin host cleanup session stores", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-host-cleanup-noop-");
-  afterEach(() => envSnapshot.restore());
-
-  function makeStateDir() {
-    const stateDir = sessionDirs.make();
+  const updatedAt = 100;
+  let stateDir: string;
+  beforeEach(() => {
+    stateDir = sessionDirs.make();
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    return stateDir;
-  }
+  });
+  afterEach(() => envSnapshot.restore());
 
   function cleanup(overrides: Partial<Parameters<typeof runPluginHostCleanup>[0]>) {
     return runPluginHostCleanup({
@@ -45,19 +45,19 @@ describe("plugin host cleanup session stores", () => {
     });
   }
 
-  function store(storePath = path.join(makeStateDir(), "sessions.json"), agentId?: string) {
+  function store(storePath = path.join(stateDir, "sessions.json"), agentId?: string) {
     const scope = (sessionKey: string) => ({ storePath, sessionKey, agentId });
     return {
       storePath,
       read: (key: string) => loadSessionEntry(scope(key)),
       write: (key: string, sessionId: string, overrides: Partial<SessionEntry> = {}) =>
-        replaceSessionEntry(scope(key), { sessionId, updatedAt: 100, ...overrides }),
+        replaceSessionEntry(scope(key), { sessionId, updatedAt, ...overrides }),
     };
   }
 
   const preserved = { other: { state: { preserved: true } } };
   const cleanupState = { cleanup: { state: { active: true } } };
-  function injections(id: string, createdAt = 100): SessionEntry["pluginNextTurnInjections"] {
+  function injections(id: string, createdAt = updatedAt): SessionEntry["pluginNextTurnInjections"] {
     return {
       cleanup: [{ id, pluginId: "cleanup", text: id, placement: "append_context", createdAt }],
     };
@@ -96,7 +96,6 @@ describe("plugin host cleanup session stores", () => {
   });
 
   it("cleans healthy agent state without opening a refused agent store", async () => {
-    const stateDir = makeStateDir();
     const storePath = path.join(stateDir, "sessions.json");
     const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
     await replaceSessionEntry(scope, {
@@ -135,7 +134,6 @@ describe("plugin host cleanup session stores", () => {
   it.each(["retained", "snapshot-rejected", "shared", "unfinished"] as const)(
     "preserves deleted-agent state during cleanup (%s)",
     async (mode) => {
-      const stateDir = makeStateDir();
       const shared = mode === "shared";
       const completed = mode !== "unfinished";
       const scope = (agentId: string) => ({
@@ -215,7 +213,6 @@ describe("plugin host cleanup session stores", () => {
   it.each(["cancelled", "already-cleared", "locked", "revoked", "committed"] as const)(
     "revalidates queued cleanup and counts only committed changes (%s)",
     async (mode) => {
-      const stateDir = makeStateDir();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:cleanup-target",
@@ -231,21 +228,19 @@ describe("plugin host cleanup session stores", () => {
       registry.agentHarnesses.push(harnessRegistration("fixture", "fixture-harness"));
       const entered = createDeferredCore();
       const release = createDeferredCore();
+      const remainingState = { other: { state: true } };
+      const concurrentPatch =
+        mode === "already-cleared"
+          ? { pluginExtensions: remainingState }
+          : mode === "locked"
+            ? { modelSelectionLocked: true, agentHarnessId: "fixture-harness" }
+            : null;
       const blocker = patchSessionEntryCore(
         scope,
         async (entry) => {
           entered.resolve();
           await release.promise;
-          if (mode === "already-cleared") {
-            entry.pluginExtensions = { other: { state: true } };
-            return entry;
-          }
-          if (mode === "locked") {
-            entry.modelSelectionLocked = true;
-            entry.agentHarnessId = "fixture-harness";
-            return entry;
-          }
-          return null;
+          return concurrentPatch ? Object.assign(entry, concurrentPatch) : null;
         },
         { replaceEntry: true, skipMaintenance: true },
       );
@@ -305,18 +300,10 @@ describe("plugin host cleanup session stores", () => {
         );
         const after = loadSessionEntry(scope);
         if (mode === "committed") {
-          expect(after?.pluginExtensions).toEqual({ other: { state: true } });
+          expect(after?.pluginExtensions).toEqual(remainingState);
           expect(after?.updatedAt).toBeGreaterThan(100);
-        } else if (mode === "already-cleared") {
-          expect(after).toEqual({ ...before, pluginExtensions: { other: { state: true } } });
-        } else if (mode === "locked") {
-          expect(after).toEqual({
-            ...before,
-            modelSelectionLocked: true,
-            agentHarnessId: "fixture-harness",
-          });
         } else {
-          expect(after).toEqual(before);
+          expect(after).toEqual(concurrentPatch ? { ...before, ...concurrentPatch } : before);
         }
       } finally {
         admission.mockRestore();
@@ -343,33 +330,22 @@ describe("plugin host cleanup session stores", () => {
   });
 
   it.each([
-    [
-      "Matrix group",
-      "agent:main:matrix:group:!Room:server",
-      "agent:main:matrix:group:!room:server",
-      "AGENT:MAIN:MATRIX:GROUP:!Room:server",
-    ],
-    [
-      "Matrix channel",
-      "agent:main:matrix:channel:!Room:server",
-      "agent:main:matrix:channel:!room:server",
-      "agent:main:matrix:channel:!Room:server",
-    ],
-    [
-      "Matrix thread",
-      "agent:main:matrix:group:!Room:server:thread:$Event",
-      "agent:main:matrix:group:!Room:server:thread:$event",
-      "agent:main:matrix:group:!Room:server:THREAD:$Event",
-    ],
-    [
-      "Signal group",
-      "agent:main:signal:group:AbCdEf==",
-      "agent:main:signal:group:abcdef==",
-      "AGENT:MAIN:SIGNAL:GROUP:AbCdEf==",
-    ],
+    ["matrix:group", "!Room:server", "!room:server", "upper"],
+    ["matrix:channel", "!Room:server", "!room:server", "same"],
+    ["matrix:group", "!Room:server:thread:$Event", "!Room:server:thread:$event", "thread"],
+    ["signal:group", "AbCdEf==", "abcdef==", "upper"],
   ])(
-    "clears only the selected %s session's plugin state",
-    async (_, targetKey, siblingKey, filter) => {
+    "clears only the selected %s/%s session's plugin state",
+    async (kind, target, sibling, filterMode) => {
+      const prefix = `agent:main:${kind}:`;
+      const targetKey = prefix + target;
+      const siblingKey = prefix + sibling;
+      const filter =
+        filterMode === "upper"
+          ? prefix.toUpperCase() + target
+          : filterMode === "thread"
+            ? targetKey.replace(":thread:", ":THREAD:")
+            : targetKey;
       const { storePath, read, write } = store();
       for (const [sessionKey, sessionId] of [
         [targetKey, "target"],
@@ -392,31 +368,29 @@ describe("plugin host cleanup session stores", () => {
 
       expect(result).toEqual({ cleanupCount: 1, failures: [] });
       await closeOpenClawAgentDatabasesAsync();
-      const target = read(targetKey);
-      expect(target?.pluginExtensions).toEqual(preserved);
-      expect(target?.pluginNextTurnInjections).toBeUndefined();
+      const after = read(targetKey);
+      expect(after?.pluginExtensions).toEqual(preserved);
+      expect(after?.pluginNextTurnInjections).toBeUndefined();
       expect(read(siblingKey)).toEqual(siblingBefore);
     },
   );
 
   it("matches a key-like runtime session ID case-insensitively without interpreting it as a key", async () => {
     const runtimeSessionId = "signal:group: Opaque";
-    const stateDir = makeStateDir();
     const first = store(path.join(stateDir, "agents", "a", "sessions", "sessions.json"));
     const second = store(path.join(stateDir, "agents", "b", "sessions", "sessions.json"));
     const targetKey = "agent:a:telegram:group:shared-room";
     const unrelatedKey = "agent:a:telegram:group:unrelated-room";
     const secondKey = "agent:b:telegram:group:shared-room";
-    const beforeUpdatedAt = 100;
     const unrelatedEntry: SessionEntry = {
       sessionId: "unrelated-session",
-      updatedAt: 100,
+      updatedAt,
       delivery: { kind: "none" },
       pluginExtensions: { cleanup: { state: { keep: true } } },
     };
     await first.write(targetKey, runtimeSessionId, {
       pluginExtensions: { ...cleanupState, ...preserved },
-      pluginNextTurnInjections: injections("remove", beforeUpdatedAt),
+      pluginNextTurnInjections: injections("remove"),
     });
     await first.write(unrelatedKey, unrelatedEntry.sessionId, unrelatedEntry);
     await second.write(secondKey, runtimeSessionId, { pluginExtensions: cleanupState });
@@ -436,18 +410,16 @@ describe("plugin host cleanup session stores", () => {
     const secondOther = second.read(secondKey);
     expect(firstMain?.pluginExtensions).toEqual(preserved);
     expect(firstMain?.pluginNextTurnInjections).toBeUndefined();
-    expect(firstMain?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
+    expect(firstMain?.updatedAt).toBeGreaterThan(updatedAt);
     expect(first.read(unrelatedKey)).toEqual(unrelatedEntry);
     expect(secondOther?.pluginExtensions).toBeUndefined();
-    expect(secondOther?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
+    expect(secondOther?.updatedAt).toBeGreaterThan(updatedAt);
   });
 
   it("clears shared custom SQLite stores for each resolved agent", async () => {
-    const stateDir = makeStateDir();
     const sharedStorePath = path.join(stateDir, "custom", "sessions.json");
     const main = store(sharedStorePath, "main");
     const work = store(sharedStorePath, "work");
-    const beforeUpdatedAt = 100;
     await main.write("agent:main:main", "shared-session", { pluginExtensions: cleanupState });
     await work.write("agent:work:main", "shared-session", { pluginExtensions: cleanupState });
 
@@ -469,13 +441,12 @@ describe("plugin host cleanup session stores", () => {
     ] as const) {
       const after = target.read(key);
       expect(after?.pluginExtensions).toBeUndefined();
-      expect(after?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
+      expect(after?.updatedAt).toBeGreaterThan(updatedAt);
     }
   });
 
   it("preserves locked sessions for every harness owned by a disabled plugin", async () => {
     const { storePath, read, write } = store();
-    const updatedAt = 100;
     const registry = createEmptyPluginRegistry();
     registry.agentHarnesses.push(
       ...["fixture-harness-a", "fixture-harness-b"].map((id) =>

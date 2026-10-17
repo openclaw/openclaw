@@ -10,22 +10,35 @@ import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 
-async function importHookRunnerGlobalModule() {
-  return import("./hook-runner-global.js");
+const importGlobal = () => import("./hook-runner-global.js");
+type Global = typeof import("./hook-runner-global.js");
+const runnerOf = (mod: Global): HookRunner => expectDefined(mod.getGlobalHookRunner(), "runner");
+function runPolicy(runner: HookRunner, hookName: "before_tool_call" | "before_install") {
+  return hookName === "before_tool_call"
+    ? runner.runBeforeToolCall({ toolName: "read", params: {} }, { toolName: "read" })
+    : runner.runBeforeInstall(
+        {
+          targetName: "demo",
+          targetType: "plugin",
+          sourcePath: "/tmp/demo",
+          sourcePathKind: "directory",
+          origin: "local",
+          request: { kind: "plugin-dir", mode: "install" },
+          builtinScan: {
+            status: "ok",
+            scannedFiles: 0,
+            critical: 0,
+            warn: 0,
+            info: 0,
+            findings: [],
+          },
+        },
+        { origin: "local", targetType: "plugin", requestKind: "plugin-dir" },
+      );
 }
 
-type HookRunnerGlobalModule = Awaited<ReturnType<typeof importHookRunnerGlobalModule>>;
-
-function expectGlobalHookRunner(
-  runner: ReturnType<HookRunnerGlobalModule["getGlobalHookRunner"]>,
-): HookRunner {
-  return expectDefined(runner, "global hook runner");
-}
-
-async function initialize(
-  registry: Parameters<HookRunnerGlobalModule["initializeGlobalHookRunner"]>[0],
-) {
-  const mod = await importHookRunnerGlobalModule();
+async function initialize(registry: Parameters<Global["initializeGlobalHookRunner"]>[0]) {
+  const mod = await importGlobal();
   setActivePluginRegistry(registry);
   mod.initializeGlobalHookRunner(registry);
   return mod;
@@ -42,47 +55,31 @@ async function hangingHook(
   return { mod, release: () => release.resolve() };
 }
 
-async function expectGlobalRunnerState(expected: { hasRunner: boolean; registry?: unknown }) {
-  const mod = await importHookRunnerGlobalModule();
-  expect(mod.getGlobalHookRunner() === null).toBe(!expected.hasRunner);
-  if ("registry" in expected) {
-    expect(mod.getGlobalPluginRegistry()).toBe(expected.registry ?? null);
-  }
-  return mod;
-}
-
 afterEach(async () => {
   vi.useRealTimers();
-  const mod = await importHookRunnerGlobalModule();
+  const mod = await importGlobal();
   mod.resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
 });
 
 describe("hook-runner-global", () => {
-  async function createInitializedModule() {
+  it("clears the shared state across module reloads", async () => {
     resetPluginRuntimeStateForTest();
-    const modA = await importHookRunnerGlobalModule();
+    const modA = await importGlobal();
     const registry = createMockPluginRegistry([{ hookName: "message_received", handler: vi.fn() }]);
     modA.initializeGlobalHookRunner(registry);
-    return { modA, registry };
-  }
-
-  it("clears the shared state across module reloads", async () => {
-    const { registry } = await createInitializedModule();
-
     vi.resetModules();
 
-    const modB = await expectGlobalRunnerState({ hasRunner: true, registry });
-    expect(expectGlobalHookRunner(modB.getGlobalHookRunner()).hasHooks("message_received")).toBe(
-      true,
-    );
+    const modB = await importGlobal();
+    expect(modB.getGlobalPluginRegistry()).toBe(registry);
+    expect(runnerOf(modB).hasHooks("message_received")).toBe(true);
     modB.resetGlobalHookRunner();
     expect(modB.getGlobalHookRunner()).toBeNull();
     expect(modB.getGlobalPluginRegistry()).toBeNull();
 
     vi.resetModules();
 
-    await expectGlobalRunnerState({ hasRunner: false });
+    expect((await importGlobal()).getGlobalHookRunner()).toBeNull();
   });
 
   it("checks scoped reply dispatch with only the host dispatch kind", async () => {
@@ -121,10 +118,7 @@ describe("hook-runner-global", () => {
       async () => {
         markPluginRegistryRetired(retiredRegistry);
         await expect(
-          expectGlobalHookRunner(mod.getGlobalHookRunner()).runBeforeToolCall(
-            { toolName: "read", params: {} },
-            { toolName: "read" },
-          ),
+          runnerOf(mod).runBeforeToolCall({ toolName: "read", params: {} }, { toolName: "read" }),
         ).resolves.toBeUndefined();
       },
     );
@@ -133,52 +127,26 @@ describe("hook-runner-global", () => {
     expect(currentHandler).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    {
-      hookName: "before_tool_call" as const,
-      run: (runner: HookRunner) =>
-        runner.runBeforeToolCall({ toolName: "read", params: {} }, { toolName: "read" }),
-    },
-    {
-      hookName: "before_install" as const,
-      run: (runner: HookRunner) =>
-        runner.runBeforeInstall(
-          {
-            targetName: "demo",
-            targetType: "plugin",
-            sourcePath: "/tmp/demo",
-            sourcePathKind: "directory",
-            origin: "local",
-            request: { kind: "plugin-dir", mode: "install" },
-            builtinScan: {
-              status: "ok",
-              scannedFiles: 0,
-              critical: 0,
-              warn: 0,
-              info: 0,
-              findings: [],
-            },
-          },
-          { origin: "local", targetType: "plugin", requestKind: "plugin-dir" },
-        ),
-    },
-  ])("fails closed when a default-bounded $hookName handler hangs", async ({ hookName, run }) => {
-    vi.useFakeTimers();
-    const { mod, release } = await hangingHook(hookName, "hanging-policy");
-    const pending = run(expectGlobalHookRunner(mod.getGlobalHookRunner()));
+  it.each(["before_tool_call", "before_install"] as const)(
+    "fails closed when a default-bounded %s handler hangs",
+    async (hookName) => {
+      vi.useFakeTimers();
+      const { mod, release } = await hangingHook(hookName, "hanging-policy");
+      const pending = runPolicy(runnerOf(mod), hookName);
 
-    try {
-      expect(vi.getTimerCount()).toBeGreaterThan(0);
-      const rejection = expect(pending).rejects.toThrow(
-        `${hookName} handler from hanging-policy failed: timed out after 15000ms`,
-      );
-      await vi.advanceTimersByTimeAsync(15_000);
-      await rejection;
-    } finally {
-      release();
-      await pending.catch(() => undefined);
-    }
-  });
+      try {
+        expect(vi.getTimerCount()).toBeGreaterThan(0);
+        const rejection = expect(pending).rejects.toThrow(
+          `${hookName} handler from hanging-policy failed: timed out after 15000ms`,
+        );
+        await vi.advanceTimersByTimeAsync(15_000);
+        await rejection;
+      } finally {
+        release();
+        await pending.catch(() => undefined);
+      }
+    },
+  );
 
   it("bounds gateway_stop handlers and lets shutdown continue", async () => {
     vi.useFakeTimers();

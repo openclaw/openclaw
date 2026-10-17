@@ -1,8 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
 import { createHookRunner } from "./hooks.js";
 import {
@@ -41,13 +40,16 @@ function promptRunner(hooks: PromptHook[], options?: Parameters<typeof createHoo
   );
   return createHookRunner(registry, options);
 }
-const mockRunner = (hooks: Parameters<typeof createMockPluginRegistry>[0]) =>
-  createHookRunner(createMockPluginRegistry(hooks));
+const mockRunner = (
+  hooks: Parameters<typeof createMockPluginRegistry>[0],
+  options?: Parameters<typeof createHookRunner>[1],
+) => createHookRunner(createMockPluginRegistry(hooks), options);
 const authority = {
   toolAuthorityFingerprint: "turn-authority",
   activeToolNames: ["message"],
   assertHostActive: () => undefined,
 };
+afterEach(() => vi.useRealTimers());
 
 describe("prompt phase hooks", () => {
   it("merges context in priority order while keeping the first system prompt", async () => {
@@ -180,33 +182,25 @@ function isActive(invocation: Invocation): boolean | undefined {
   }
 }
 
-function createRunner(
+function phaseDispatch(
   phase: PromptPhase,
   hooks: PromptHook[],
   logger: { warn: (message: string) => void; error: (message: string) => void },
 ) {
-  return promptRunner(
+  const runner = promptRunner(
     hooks.map((hook) => ({
       ...hook,
       ...(phase === "authorized" ? { requiresToolAuthority: true as const } : {}),
     })),
     { logger, modifyingHookTimeoutMsByHook: { before_prompt_build: 100 } },
   );
-}
-
-function dispatch(
-  runner: ReturnType<typeof createHookRunner>,
-  phase: PromptPhase,
-  context: PluginHookAgentContext,
-) {
-  const event = { prompt: "synthetic prompt", messages: [] };
-  return phase === "ordinary"
-    ? runner.runBeforePromptBuild(event, context)
-    : runner.runAuthorizedPromptBuild(event, context, {
-        toolAuthorityFingerprint: "synthetic-turn-authority",
-        activeToolNames: ["memory_search"],
-        assertHostActive: () => undefined,
-      });
+  return (context: PluginHookAgentContext) =>
+    phase === "ordinary"
+      ? runner.runBeforePromptBuild(phaseEvent, context)
+      : runner.runAuthorizedPromptBuild(phaseEvent, context, {
+          ...authority,
+          activeToolNames: ["memory_search"],
+        });
 }
 
 describe("prompt hook invocation", () => {
@@ -228,33 +222,25 @@ describe("prompt hook invocation", () => {
           activeAtError.push(isActive(handlerContext.hookInvocation));
         }),
       };
-      const runner = createRunner(
-        phase,
-        [
-          {
-            pluginId: "settling-handler",
-            handler: (_event, ctx) => {
-              handlerContext = ctx;
-              activeOnEntry = isActive(ctx.hookInvocation);
-              const failure = new Error("synthetic handler failure");
-              if (outcome === "threw") {
-                throw failure;
-              }
-              if (outcome === "rejected") {
-                return Promise.reject(failure);
-              }
-              return {
-                get prependContext() {
-                  activeAtMerge.push(isActive(ctx.hookInvocation));
-                  return "timely context";
-                },
-              };
-            },
+      const handler: PromptHook["handler"] = (_event, ctx) => {
+        handlerContext = ctx;
+        activeOnEntry = isActive(ctx.hookInvocation);
+        const failure = new Error("synthetic handler failure");
+        if (outcome === "threw") {
+          throw failure;
+        }
+        if (outcome === "rejected") {
+          return Promise.reject(failure);
+        }
+        return {
+          get prependContext() {
+            activeAtMerge.push(isActive(ctx.hookInvocation));
+            return "timely context";
           },
-        ],
-        logger,
-      );
-      expect(await dispatch(runner, phase, context)).toEqual(
+        };
+      };
+      const dispatch = phaseDispatch(phase, [{ pluginId: "settling-handler", handler }], logger);
+      expect(await dispatch(context)).toEqual(
         outcome === "returned" ? { prependContext: "timely context" } : undefined,
       );
       expect(activeOnEntry).toBe(true);
@@ -277,21 +263,25 @@ describe("prompt hook invocation", () => {
     "expires only the timed-out %s handler while its next sibling is still active",
     async (phase) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const firstGate = createDeferredCore();
-      const secondGate = createDeferredCore();
-      const pending: Promise<unknown>[] = [];
+      const firstGate = createDeferred();
+      const secondGate = createDeferred();
       const contexts: PluginHookAgentContext[] = [];
       const context = Object.freeze({ agentId: "test-agent" });
       let firstResumed = false;
       let firstActiveAtSecondEntry: boolean | undefined;
       const activeAtTimeout: Array<boolean | undefined> = [];
+      const firstWork = firstGate.promise.then(() => {
+        firstResumed = true;
+        return { prependContext: "discarded late context" };
+      });
+      const secondWork = secondGate.promise.then(() => ({ prependContext: "live context" }));
       const logger = {
         warn: vi.fn(),
         error: vi.fn(() => {
           activeAtTimeout.push(isActive(contexts[0]?.hookInvocation));
         }),
       };
-      const runner = createRunner(
+      const dispatch = phaseDispatch(
         phase,
         [
           {
@@ -299,12 +289,7 @@ describe("prompt hook invocation", () => {
             timeoutMs: 5,
             handler: (_event, ctx) => {
               contexts.push(ctx);
-              const work = firstGate.promise.then(() => {
-                firstResumed = true;
-                return { prependContext: "discarded late context" };
-              });
-              pending.push(work);
-              return work;
+              return firstWork;
             },
           },
           {
@@ -312,15 +297,13 @@ describe("prompt hook invocation", () => {
             handler: (_event, ctx) => {
               firstActiveAtSecondEntry = isActive(contexts[0]?.hookInvocation);
               contexts.push(ctx);
-              const work = secondGate.promise.then(() => ({ prependContext: "live context" }));
-              pending.push(work);
-              return work;
+              return secondWork;
             },
           },
         ],
         logger,
       );
-      const run = dispatch(runner, phase, context);
+      const run = dispatch(context);
       try {
         expect(contexts).toHaveLength(1);
         expect(isActive(contexts[0]?.hookInvocation)).toBe(true);
@@ -335,7 +318,7 @@ describe("prompt hook invocation", () => {
         expect(firstResumed).toBe(false);
 
         firstGate.resolve();
-        await Promise.allSettled(pending.slice(0, 1));
+        await Promise.allSettled([firstWork]);
         expect(firstResumed).toBe(true);
         expect(isActive(contexts[0]?.hookInvocation)).toBe(false);
         expect(isActive(contexts[1]?.hookInvocation)).toBe(true);
@@ -345,11 +328,7 @@ describe("prompt hook invocation", () => {
       } finally {
         firstGate.resolve();
         secondGate.resolve();
-        try {
-          await Promise.allSettled([...pending, run]);
-        } finally {
-          vi.useRealTimers();
-        }
+        await Promise.allSettled([firstWork, secondWork, run]);
       }
     },
   );
@@ -406,11 +385,8 @@ describe("before_prompt_build dispatch", () => {
 
     await runner.runBeforePromptBuild(promptEvent("outer"), TEST_PLUGIN_AGENT_CTX);
     detachedGate.resolve();
-    const pendingDetachedDispatch = detachedDispatch;
-    if (!pendingDetachedDispatch) {
-      throw new Error("detached prompt dispatch was not created");
-    }
-    await expect(pendingDetachedDispatch).resolves.toEqual({
+    expect(detachedDispatch).toBeDefined();
+    await expect(detachedDispatch).resolves.toEqual({
       ...emptyPrompt,
       prependContext: "detached",
     });
@@ -470,21 +446,15 @@ describe("before_agent_finalize", () => {
 
   it("bounds hung handlers so the original final answer can proceed", async () => {
     vi.useFakeTimers();
-    try {
-      const logger = { error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
-      const runner = createHookRunner(
-        createMockPluginRegistry([
-          { hookName: "before_agent_finalize", handler: () => new Promise(() => {}) },
-        ]),
-        { logger },
-      );
-      const run = runner.runBeforeAgentFinalize(finalizeEvent, TEST_PLUGIN_AGENT_CTX);
-      await vi.advanceTimersByTimeAsync(15_000);
-      await expect(run).resolves.toBeUndefined();
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("timed out after 15000ms"));
-    } finally {
-      vi.useRealTimers();
-    }
+    const logger = { error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+    const runner = mockRunner(
+      [{ hookName: "before_agent_finalize", handler: () => new Promise(() => {}) }],
+      { logger },
+    );
+    const run = runner.runBeforeAgentFinalize(finalizeEvent, TEST_PLUGIN_AGENT_CTX);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(run).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("timed out after 15000ms"));
   });
 });
 
