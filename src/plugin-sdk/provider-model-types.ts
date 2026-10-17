@@ -37,6 +37,8 @@ export type ProviderModelAuthPolicyContext = {
   provider: string;
   mode?: string;
   authFlow?: string;
+  /** Subscription plan recorded on the credential, when known (for example, a ChatGPT plan). */
+  planType?: string;
   /** Requested non-chat operation (for example, image-generation or embedding). */
   capability?: string;
   api?: string;

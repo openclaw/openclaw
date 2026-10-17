@@ -127,6 +127,30 @@ describe("OAuth inference grants", () => {
       }),
     ).rejects.toThrow(/does not support this operation with Sign in with ChatGPT/);
   });
+
+  it("skips a Free ChatGPT plan for image generation so an API key can serve it", async () => {
+    await prepareSharedAuthStoreOwnership();
+    const store = createAuthProfileStoreFixture({
+      "openai:chatgpt": createOAuthRefreshCredential({
+        chatgptPlanType: "free",
+        expires: Date.now() + 3_600_000,
+      }),
+    });
+    await withEnvAsync({ OPENAI_API_KEY: "platform-env-key" }, async () => {
+      await expect(
+        resolveApiKeyForProviderCore({ provider: "openai", capability: "image-generation", store }),
+      ).resolves.toMatchObject({ apiKey: "platform-env-key", mode: "api-key" });
+    });
+    await expect(
+      resolveApiKeyForProviderCore({
+        provider: "openai",
+        capability: "image-generation",
+        profileId: "openai:chatgpt",
+        lockedProfile: true,
+        store,
+      }),
+    ).rejects.toThrow(/not included in the Free ChatGPT plan/);
+  });
 });
 
 describe("OpenAI Decision credentials", () => {

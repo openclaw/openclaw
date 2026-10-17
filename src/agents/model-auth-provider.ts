@@ -330,6 +330,8 @@ export async function resolveApiKeyForProviderCore(input: {
         mode: authConfig.profileTypeToAuthMode(configuredProfileType),
         authFlow:
           configuredCredential?.type === "oauth" ? configuredCredential.authFlow : undefined,
+        planType:
+          configuredCredential?.type === "oauth" ? configuredCredential.chatgptPlanType : undefined,
       });
     }
     const resolved = await resolveApiKeyForProfile({
@@ -427,11 +429,12 @@ export async function resolveApiKeyForProviderCore(input: {
     return authConfig.resolveAwsSdkAuthInfo();
   }
 
-  const modeAllowed = (mode: ResolvedProviderAuth["mode"], authFlow?: string) =>
+  const modeAllowed = (mode: ResolvedProviderAuth["mode"], authFlow?: string, planType?: string) =>
     isAuthModeAllowedForModel({
       ...modelPolicy,
       mode,
       authFlow,
+      planType,
     });
   const assertInlineSourceUsable = async (source: string) => {
     const store = await getScopedStore();
@@ -550,10 +553,12 @@ export async function resolveApiKeyForProviderCore(input: {
     const candidateType = candidateCredential?.type;
     const candidateAuthFlow =
       candidateCredential?.type === "oauth" ? candidateCredential.authFlow : undefined;
+    const candidatePlanType =
+      candidateCredential?.type === "oauth" ? candidateCredential.chatgptPlanType : undefined;
     const candidateMode = candidateType
       ? authConfig.profileTypeToAuthMode(candidateType)
       : undefined;
-    if (candidateMode && !modeAllowed(candidateMode, candidateAuthFlow)) {
+    if (candidateMode && !modeAllowed(candidateMode, candidateAuthFlow, candidatePlanType)) {
       continue;
     }
     if (getDeprecatedProfileIds().has(candidate)) {

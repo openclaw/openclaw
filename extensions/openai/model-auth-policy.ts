@@ -46,6 +46,17 @@ export function resolveModelAuthPolicy(
         "requires the public OpenAI Responses endpoint for ChatGPT token sharing",
     };
   }
+  // Free ChatGPT plans get no image tool through Codex sign-in, and the Codex client
+  // withholds it from them (openai/codex#34850). Filtering here keeps the tool hidden
+  // and lets an independently authorized credential serve images instead.
+  if (ctx.capability === "image-generation" && ctx.planType?.trim().toLowerCase() === "free") {
+    return {
+      authRequirement: "subscription",
+      compatible: false,
+      incompatibilityReason:
+        "is not included in the Free ChatGPT plan. Upgrade the plan, or configure an OpenAI API key",
+    };
+  }
   const subscription = ctx.mode === "oauth" || ctx.mode === "token";
   const apiKey = ctx.mode === "api-key" || ctx.mode === "api_key";
   const codex = api === "openai-chatgpt-responses";
