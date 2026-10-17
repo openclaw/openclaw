@@ -203,7 +203,7 @@ describe("doctor runtime tool schema checks", () => {
   });
 
   it("releases its metadata scope when inspection preparation returns early", async () => {
-    const tools = await import("../plugins/tools.js");
+    const tools = await import("../plugins/plugin-tool-registries.js");
     const acquire = vi.spyOn(tools, "acquirePluginToolInspectionRegistry");
     const failure = new Error("Inspection preparation failed");
     await acquire.withImplementation(

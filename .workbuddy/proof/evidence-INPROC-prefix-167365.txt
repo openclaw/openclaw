@@ -1,0 +1,12 @@
+=== in-process scoped-generation proof (build=prefix) ===
+resolver module: /Users/hope/ai-project/openclaw/src/plugins/tools.ts
+mock model server on http://127.0.0.1:53097/v1/v1
+fixture root: /var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-e2e-inproc167365-prefix-s3hUO8
+plugins.load.paths: ["/var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-e2e-inproc167365-prefix-s3hUO8/e2e-provider-plugin","/var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-e2e-inproc167365-prefix-s3hUO8/e2e-tools-plugin"]
+tools.alsoAllow: ["e2e_ping","e2e_echo"]
+[2] scoped generation plugins: ["e2e-provider-plugin"]
+[3] runtime-owner registry (real loader): ["e2e-provider-plugin"]
+[4] resolved plugin tools (0): []
+[ok] PRE-FIX (defect #167365): e2e_ping OMITTED from resolved tools
+[ok] PRE-FIX (defect #167365): e2e_echo OMITTED from resolved tools
+=== verdict: PASS (build=prefix) ===

@@ -24,9 +24,9 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { acquireStandalonePluginToolRegistry } from "../plugins/plugin-tool-registries.js";
 import { markPluginRegistryActive } from "../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import { acquireStandalonePluginToolRegistry } from "../plugins/tools.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,

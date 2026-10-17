@@ -1,0 +1,21 @@
+mock model server on http://127.0.0.1:61002/v1
+fixture root: /var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-e2e-gws167365-w4wguB
+worker workspace: /var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-e2e-gws167365-w4wguB/ws-worker
+starting shipped gateway on port 20088 ...
+[ok] gateway became ready — 127.0.0.1:20088
+priming worker agent session via Gateway-first turn ...
+[ok] [1] priming worker turn exit 0 — exit=0
+    prime status=ok final: 
+    toolSummary: null
+    completions requests: 2 [{"turn":0,"toolCount":41,"e2eTools":["e2e_echo","e2e_ping"],"hasMarkerInConversation":false},{"turn":1,"toolCount":41,"e2eTools":["e2e_echo","e2e_ping"],"hasMarkerInConversation":true}]
+[ok] [2] AFTER: worker turn tool table includes e2e_ping — turn0 tools=41
+[FAIL] [3] AFTER: e2e_ping executed, marker flowed back
+running: openclaw gateway call tools.effective (worker session) ...
+[ok] [4] gateway call exit 0 — exit=0 stderr=
+[ok] [5] tools.effective returned a payload — agentId=worker
+    inventory tools (38)
+[ok] [6] AFTER: inventory includes e2e_ping
+[ok] [7] AFTER: inventory includes e2e_echo
+[ok] [8] AFTER: no false "unknown entries" warning — clean
+
+=== 8/9 checks passed (EXPECT=after) ===

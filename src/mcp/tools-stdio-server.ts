@@ -14,8 +14,8 @@ import {
   getBoundLegacyPluginSdkResourceHost,
   LegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
+import type { PluginToolRegistryAcquisition } from "../plugins/plugin-tool-registries.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import type { PluginToolRegistryAcquisition } from "../plugins/tools.js";
 import { AsyncWorkScope, runWithTrackedCancellation } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";

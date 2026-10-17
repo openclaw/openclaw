@@ -1,0 +1,15 @@
+=== in-process scoped-generation proof (build=prefix) ===
+resolver module: /Users/hope/ai-project/openclaw/src/plugins/tools.ts
+mock model server on http://127.0.0.1:49744/v1/v1
+fixture root: /var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-e2e-inproc167365-prefix-uDIYMw
+plugins.load.paths: ["/var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-e2e-inproc167365-prefix-uDIYMw/e2e-provider-plugin","/var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-e2e-inproc167365-prefix-uDIYMw/e2e-tools-plugin"]
+tools.alsoAllow: ["e2e_ping","e2e_echo"]
+[1] full metadata snapshot plugins (166): ["e2e-provider-plugin","e2e-tools-plugin","a2a","acpx","active-memory","admin-http-rpc","agentsapi","alibaba","amazon-bedrock","amazon-bedrock-mantle","anthropic","anthropic-vertex","apple-fm","arcee","azure-speech","baseten","beam","bonjour","brave","browser","buzz","byteplus","canvas","cerebras","chutes","clawrouter","clickclack","cloudflare","cloudflare-ai-gateway","code-mode-quickjs","codex","cohere","comfy","copilot","copilot-proxy","crabbox","cua-computer","deepgram","deepinfra","deepseek","device-pair","diagnostics-otel","diagnostics-prometheus","diffs","diffs-language-pack","discord","document-extract","duckduckgo","elevenlabs","exa","facetime","fal","featherless","feishu","file-transfer","firecrawl","fireworks","fish-audio-speech","geolocation","github","github-copilot","gmi","google","google-meet","googlechat","gradium","groq","huggingface","imap","imessage","inworld","irc","kie","kilocode","kimi","line","linux-node","litellm","llama-cpp","llm-task","lmstudio","lobster","logbook","longcat","matrix","mattermost","memory-core","memory-lancedb","memory-wiki","meta","microsoft","microsoft-foundry","migrate-claude","migrate-hermes","minimax","mistral","moonshot","msteams","mxc","nextcloud-talk","nostr","novita","nvidia","oc-path","ollama","onepassword","onnx","openai","opencode","opencode-go","openrouter","openshell","parallel","perplexity","pixverse","policy","qa-channel","qa-lab","qianfan","qwen","radius","raft","reef","runway","searxng","senseaudio","session-share","sglang","signal","slack","slack-huddles","sms","stepfun","synology-chat","synthetic","talk-voice","tavily","team-reports","teams-meetings","telegram","tencent","tlon","together","tokenjuice","tts-local-cli","twitch","typesafe","vault","venice","vercel-ai-gateway","visitor-access","vllm","voice-call","volcengine","voyage","vydra","web-readability","whatsapp","workboard","x","xai","xiaomi","zai","zalo","zalouser","zoom-meetings"]
+[2] scoped generation plugins: ["e2e-provider-plugin"]
+[logger.debug] [plugins] loading e2e-provider-plugin from /private/var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-e2e-inproc167365-prefix-uDIYMw/e2e-provider-plugin/index.cjs
+[logger.debug] [plugins] loaded 1 plugin(s) (1 attempted) in 56.6ms
+[3] runtime-owner registry (real loader): ["e2e-provider-plugin"]
+[4] resolved plugin tools (0): []
+[ok] PRE-FIX (defect #167365): e2e_ping OMITTED from resolved tools
+[ok] PRE-FIX (defect #167365): e2e_echo OMITTED from resolved tools
+=== verdict: PASS (build=prefix) ===

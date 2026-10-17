@@ -24,11 +24,11 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import type { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
-import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   acquireStandalonePluginToolRegistry,
   type PluginToolRegistryAcquisition,
-} from "../plugins/tools.js";
+} from "../plugins/plugin-tool-registries.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveToolsMcpAgentId, resolveToolsMcpSessionContext } from "./agent-session-env.js";
 import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-stdio-server.js";
 

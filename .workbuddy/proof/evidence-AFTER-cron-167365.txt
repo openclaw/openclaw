@@ -1,0 +1,16 @@
+mock model server on http://127.0.0.1:63683/v1
+fixture root: /var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-e2e-cron167365-GDvrkt
+starting shipped gateway on port 19885 ...
+[ok] gateway became ready — 127.0.0.1:19885
+adding isolated agent cron job ...
+[ok] [1] cron add accepted — jobId=157180cb-e283-4a82-a89b-654b6e0f1fc8
+running cron job now (--wait --expect-final) ...
+[FAIL] [2] cron run exit 0 — exit=1
+    run status: error summary: E2E-167365-PROOF tool result marker received: pong-e2e-167365
+    mock requests: 3; turn0 tools(41): agents_wait,apply_patch,ask_user,automations,conversations_list,conversations_send,conversations_turn,create_goal,dashboard,e2e_echo,e2e_ping,edit ...
+[ok] [3] AFTER: turn#1 tool table e2e_ping ADVERTISED (fix) — tools(41): e2e=[e2e_echo,e2e_ping]
+[ok] [4] AFTER: tool executed, marker flowed back — found pong-e2e-167365
+[ok] [5] AFTER: final reply carries proof marker — E2E-167365-PROOF tool result marker received: pong-e2e-167365
+[ok] [5] AFTER: no false "unknown entries" warning — clean
+
+=== 6/7 checks passed ===

@@ -28,7 +28,9 @@ const createToolsMcpServerMock = vi.hoisted(() =>
 );
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({ plugins: { enabled: true } })));
 const acquireStandalonePluginToolRegistryMock = vi.hoisted(() =>
-  vi.fn<typeof import("../plugins/tools.js").acquireStandalonePluginToolRegistry>(),
+  vi.fn<
+    typeof import("../plugins/plugin-tool-registries.js").acquireStandalonePluginToolRegistry
+  >(),
 );
 const releasePluginToolsMock = vi.hoisted(() => vi.fn(async () => {}));
 const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
@@ -52,8 +54,8 @@ vi.mock("../logging/console.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/tools.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/tools.js")>();
+vi.mock("../plugins/plugin-tool-registries.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-tool-registries.js")>();
   return {
     ...actual,
     acquireStandalonePluginToolRegistry: acquireStandalonePluginToolRegistryMock,

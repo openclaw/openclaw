@@ -9,7 +9,9 @@ import {
 } from "./codex-supervision-tools-serve.js";
 
 const acquireStandalonePluginToolRegistryMock = vi.hoisted(() =>
-  vi.fn<typeof import("../plugins/tools.js").acquireStandalonePluginToolRegistry>(),
+  vi.fn<
+    typeof import("../plugins/plugin-tool-registries.js").acquireStandalonePluginToolRegistry
+  >(),
 );
 const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
 const getRuntimeConfigMock = vi.hoisted(() =>
@@ -21,8 +23,8 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
   captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfigMock(),
 }));
-vi.mock("../plugins/tools.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/tools.js")>();
+vi.mock("../plugins/plugin-tool-registries.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-tool-registries.js")>();
   return {
     ...actual,
     acquireStandalonePluginToolRegistry: acquireStandalonePluginToolRegistryMock,

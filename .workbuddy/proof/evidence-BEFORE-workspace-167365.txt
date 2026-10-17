@@ -1,0 +1,24 @@
+mock model server on http://127.0.0.1:65228/v1
+fixture root: /var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-e2e-gws167365-B3T7GT
+worker workspace: /var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-e2e-gws167365-B3T7GT/ws-worker
+starting shipped gateway on port 19989 ...
+[ok] gateway became ready — 127.0.0.1:19989
+priming worker agent session via Gateway-first turn ...
+[ok] [1] priming worker turn exit 0 — exit=0
+    prime status=ok final: 
+    toolSummary: null
+restarting gateway (cold lending window for the worker workspace) ...
+[ok] [1b] restarted gateway became ready
+    lease window: cold restart (startup registry = main workspace)
+    completions requests: 2 [{"turn":0,"toolCount":41,"e2eTools":["e2e_echo","e2e_ping"],"hasMarkerInConversation":false},{"turn":1,"toolCount":41,"e2eTools":["e2e_echo","e2e_ping"],"hasMarkerInConversation":true}]
+[FAIL] [2] BEFORE: worker turn tool table OMITS e2e_ping (scoped narrowing reached a shipped turn) — unexpectedly advertised
+[FAIL] [3] BEFORE: e2e_ping tool call REJECTED (marker never reached conversation) — unexpectedly executed
+running: openclaw gateway call tools.effective (worker session) ...
+[ok] [4] gateway call exit 0 — exit=0 stderr=
+[ok] [5] tools.effective returned a payload — agentId=worker
+    inventory tools (38)
+[FAIL] [6] BEFORE: inventory OMITS e2e_ping (defect reproduced, workspace-mismatch lease) — unexpectedly present
+[FAIL] [7] BEFORE: inventory OMITS e2e_echo — unexpectedly present
+[FAIL] [8] BEFORE: false "unknown entries" warning logged — no matching warning
+
+=== 5/10 checks passed (EXPECT=before) ===

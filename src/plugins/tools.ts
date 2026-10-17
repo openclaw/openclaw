@@ -6,38 +6,28 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { captureAgentWorkspaceReadiness } from "../agents/workspace-readiness.js";
 import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  getLoadedRuntimePluginRegistry,
-  createRuntimePluginManifestLookup,
-} from "./active-runtime-registry.js";
+import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
   isBundledConversationReadToolRegistration,
   isHostRestrictedConversationReadTool,
   registrationIncludesHostRestrictedConversationReadTool,
 } from "./compat/conversation-read-tools.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
-import type { PluginMetadataSnapshotScopeRunner } from "./current-plugin-metadata-snapshot.js";
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
-import {
-  acquirePluginRegistryForInspection,
-  loadPluginRegistryHandle,
-  type PluginLoadOptions,
-} from "./loader.js";
+import { loadPluginRegistryHandle, type PluginLoadOptions } from "./loader.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestContractSnapshot,
 } from "./manifest-contract-eligibility.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
-import { getPluginInstance } from "./plugin-instance-scope.js";
-import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
-import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
+import { completePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import type {
+  PluginMetadataManifestView,
+  PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.types.js";
+import { collectRetainedToolOwners } from "./plugin-tool-owners.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
-import {
-  buildPluginRuntimeLoadOptions,
-  setPluginRuntimeLoadContext,
-  type PluginRuntimeLoadContext,
-} from "./runtime/load-context.js";
+import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import {
   createPluginToolFactoryContext,
@@ -48,11 +38,7 @@ import {
   createPluginToolFactoryResolver,
 } from "./tool-factory-runtime.js";
 import { createPluginToolAllowlist, type PluginToolAllowlist } from "./tool-grant-allowlist.js";
-import {
-  createPluginToolInspection,
-  inspectionToolOwners,
-  samePluginToolSource,
-} from "./tool-inspection-state.js";
+import { inspectionToolOwners, samePluginToolSource } from "./tool-inspection-state.js";
 import { setPluginToolMeta } from "./tool-metadata.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
@@ -192,7 +178,7 @@ type PreparedPluginToolRuntime = {
   registry?: PluginRegistry;
 };
 
-function resolvePluginToolLoadState(params: {
+export function resolvePluginToolLoadState(params: {
   context: OpenClawPluginToolContext;
   toolAllowlist?: string[];
   toolDenylist?: string[];
@@ -230,14 +216,41 @@ function resolvePluginToolLoadState(params: {
   const runtimeOptions = params.allowGatewaySubagentBinding
     ? { allowGatewaySubagentBinding: true as const }
     : undefined;
-  const snapshot =
+  const preparedSnapshot =
     usePreparedRuntime && params.preparedRuntime
-      ? params.preparedRuntime.metadataSnapshot
-      : loadManifestContractSnapshot({
-          config: context.config,
-          workspaceDir: context.workspaceDir,
-          env,
-        });
+      ? (params.preparedRuntime.metadataSnapshot as PluginMetadataSnapshot) // SAFETY: The prepared runtime owns a full PluginMetadataSnapshot at runtime; the shared prepared-runtime type only narrows its static view to the manifest contract.
+      : undefined;
+  let snapshot: PluginMetadataManifestView;
+  let promotedSnapshot: PluginMetadataSnapshot | undefined;
+  if (preparedSnapshot && preparedSnapshot.pluginIds === undefined) {
+    // An unscoped prepared generation already owns every manifest contract.
+    snapshot = preparedSnapshot;
+  } else if (preparedSnapshot) {
+    // Tool discovery needs every enabled plugin's manifest contracts, while the
+    // prepared generation may be scoped to selected runtime owners (the
+    // tools.effective inventory lease). Promoting an unscoped view here keeps
+    // the narrowed lease authoritative for model and runtime facts only; missing
+    // owners still load through the activate-free path below, and a failed
+    // promotion never blocks tool resolution.
+    try {
+      promotedSnapshot = completePluginMetadataSnapshot({
+        snapshot: preparedSnapshot,
+        config: context.config,
+        env,
+        workspaceDir: context.workspaceDir,
+      });
+      snapshot = promotedSnapshot ?? preparedSnapshot;
+    } catch (error) {
+      context.logger.warn?.(`plugin tool snapshot promotion failed (${formatErrorMessage(error)})`);
+      snapshot = preparedSnapshot;
+    }
+  } else {
+    snapshot = loadManifestContractSnapshot({
+      config: context.config,
+      workspaceDir: context.workspaceDir,
+      env,
+    });
+  }
   const allowlist = createPluginToolAllowlist(params.toolAllowlist);
   const onlyPluginIds = resolvePluginToolPluginIds({
     config: context.config,
@@ -248,12 +261,24 @@ function resolvePluginToolLoadState(params: {
     hasAuthForProvider: params.hasAuthForProvider,
     snapshot,
   });
-  const loadOptions = buildPluginRuntimeLoadOptions(context, {
-    activate: false,
-    toolDiscovery: true,
-    onlyPluginIds,
-    runtimeOptions,
-  });
+  // A promoted snapshot owns the full manifest registry, while the prepared load
+  // context still carries the narrowed generation's registry. Tool-only owners
+  // outside that scope cannot resolve manifests from the narrowed view, so the
+  // missing-owner cold load must discover them through the promoted registry.
+  // Identity comparison keeps a scoped snapshot (unchanged promotion) out.
+  const promotedManifestRegistry =
+    promotedSnapshot && snapshot !== preparedSnapshot
+      ? promotedSnapshot.manifestRegistry
+      : undefined;
+  const loadOptions = buildPluginRuntimeLoadOptions(
+    promotedManifestRegistry ? { ...context, manifestRegistry: promotedManifestRegistry } : context,
+    {
+      activate: false,
+      toolDiscovery: true,
+      onlyPluginIds,
+      runtimeOptions,
+    },
+  );
   return {
     context,
     env,
@@ -279,7 +304,7 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
   return loadPluginRegistryHandle(loadState.loadOptions);
 }
 
-type PluginToolResolutionParams = {
+export type PluginToolResolutionParams = {
   context: OpenClawPluginToolContext;
   /** Host-owned turn fence for factories and retained tool callbacks. */
   assertInvocationCurrent?: () => void;
@@ -318,106 +343,13 @@ function recordToolDiagnostic(
   }
 }
 
-export type PluginToolInspectionScope = Omit<
-  Parameters<typeof resolvePluginToolLoadState>[0],
-  "preparedRuntime"
->;
-
-/** One inspection owns registration; each selected agent still invokes its own tool factories. */
-export async function acquirePluginToolInspectionRegistry(params: {
-  loadContext: PluginRuntimeLoadContext;
-  scopes: readonly PluginToolInspectionScope[];
-  runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
-}): Promise<{ registry?: PluginRegistry; release: () => Promise<void> }> {
-  const inventory = new Map(
-    (params.loadContext.manifestRegistry?.plugins ?? []).map((plugin) => [plugin.id, plugin]),
-  );
-  const selected = new Map<string, PluginManifestRecord>();
-  for (const scope of params.scopes) {
-    const select = () => resolvePluginToolLoadState({ ...scope, env: params.loadContext.env });
-    const state = params.runWithPluginMetadataSnapshot
-      ? params.runWithPluginMetadataSnapshot(
-          {
-            config: scope.context.config ?? params.loadContext.rawConfig,
-            workspaceDir: scope.context.workspaceDir,
-          },
-          select,
-        )
-      : select();
-    for (const id of state?.onlyPluginIds ?? []) {
-      const manifest = inventory.get(id);
-      if (!manifest || !samePluginToolSource(manifest, state?.snapshot.byPluginId.get(id))) {
-        throw new Error(`Plugin tool inspection has conflicting source ownership for ${id}`);
-      }
-      selected.set(id, manifest);
-    }
-  }
-  const acquisition = await acquirePluginRegistryForInspection(
-    buildPluginRuntimeLoadOptions(params.loadContext, {
-      onlyPluginIds: [...selected.keys()].toSorted(),
-      toolDiscovery: true,
-      runtimeSideEffects: false,
-      ...(params.scopes.some((scope) => scope.allowGatewaySubagentBinding)
-        ? { runtimeOptions: { allowGatewaySubagentBinding: true } }
-        : {}),
-    }),
-  );
-  try {
-    setPluginRuntimeLoadContext(acquisition.registry, params.loadContext);
-    return createPluginToolInspection(acquisition, selected);
-  } catch (error) {
-    try {
-      await acquisition.release();
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [error, cleanupError],
-        "Plugin tool inspection setup and cleanup failed",
-        { cause: cleanupError },
-      );
-    }
-    throw error;
-  }
-}
-
-export type PluginToolRegistryAcquisition = {
-  registry?: PluginRegistry;
-  resolveTools: () => AnyAgentTool[];
-  release: () => Promise<void>;
-};
-
-/** The serving owner retains this view before invoking factories or applying tool policy. */
-export async function acquireStandalonePluginToolRegistry(
-  params: Omit<PluginToolResolutionParams, "runtimeRegistry" | "preparedRuntime">,
-): Promise<PluginToolRegistryAcquisition> {
-  const loadState = resolvePluginToolLoadState(params);
-  if (!loadState || loadState.onlyPluginIds.length === 0) {
-    return { resolveTools: () => [], release: async () => {} };
-  }
-  const acquisition = await acquirePluginRegistryForInspection(loadState.loadOptions);
-  const hasAuthority = capturePluginLifecycleAuthority(acquisition.registry, undefined, {
-    scopedRuntime: true,
-  });
-  return {
-    ...acquisition,
-    resolveTools: () => {
-      if (!hasAuthority?.()) {
-        throw new Error("Plugin tool registry has been released");
-      }
-      return resolvePluginToolsSynchronously(
-        resolvePluginToolsFromRegistry(
-          { ...params, runtimeRegistry: acquisition.registry },
-          loadState,
-        ),
-      );
-    },
-  };
-}
-
 export function resolvePluginTools(params: PluginToolResolutionParams): AnyAgentTool[] {
   return resolvePluginToolsSynchronously(resolvePluginToolsSteps(params));
 }
 
-function resolvePluginToolsSynchronously(steps: Generator<Promise<void>, AnyAgentTool[], void>) {
+export function resolvePluginToolsSynchronously(
+  steps: Generator<Promise<void>, AnyAgentTool[], void>,
+) {
   const step = steps.next();
   if (!step.done) {
     void step.value.catch(() => {});
@@ -435,7 +367,7 @@ export function* resolvePluginToolsSteps(
     : [];
 }
 
-function* resolvePluginToolsFromRegistry(
+export function* resolvePluginToolsFromRegistry(
   params: PluginToolResolutionParams,
   loadState: PluginToolLoadState,
 ): Generator<Promise<void>, AnyAgentTool[], void> {
@@ -463,23 +395,9 @@ function* resolvePluginToolsFromRegistry(
     string,
     { registry: PluginRegistry; tools: PluginToolRegistration[] }
   >();
-  const findRuntimeOwner = runtimeRegistry
-    ? createRuntimePluginManifestLookup(runtimeRegistry, snapshot.plugins)
-    : undefined;
-  for (const pluginId of onlyPluginIds) {
-    const record = findRuntimeOwner?.(pluginId);
-    const instance = record && getPluginInstance(record);
-    if (
-      runtimeRegistry &&
-      instance &&
-      (instance.toolRegistrationComplete ||
-        runtimeRegistry.tools.some((entry) => entry.pluginId === pluginId))
-    ) {
-      toolOwners.set(pluginId, { registry: runtimeRegistry, tools: [] });
-    }
-  }
   // A prepared generation already decided disabled and failed owners; reloading them would only
-  // repeat that outcome synchronously on the caller's thread.
+  // repeat that outcome synchronously on the caller's thread. The settled set also guards the
+  // retained-registry reuse below so those decisions are never overridden.
   const settledPreparedOutcomes = new Set(
     preparedRegistry?.plugins
       .filter((record) => {
@@ -494,6 +412,18 @@ function* resolvePluginToolsFromRegistry(
       })
       .map((record) => record.id),
   );
+  // Metadata completion can surface owners the supplied generation never
+  // admitted; retained host registrations serve them without a cold reload.
+  for (const [pluginId, owner] of collectRetainedToolOwners({
+    onlyPluginIds,
+    snapshotPlugins: snapshot.plugins,
+    runtimeRegistry,
+    preparedRegistry,
+    settledPreparedPluginIds: settledPreparedOutcomes,
+    workspaceDir: context.workspaceDir,
+  })) {
+    toolOwners.set(pluginId, { ...owner, tools: [] });
+  }
   // Failed registrations are settled facts of this inspection, not new cold-load requests.
   const missingPluginIds = onlyPluginIds.filter(
     (pluginId) =>
@@ -522,6 +452,8 @@ function* resolvePluginToolsFromRegistry(
   const factories = createPluginToolFactoryResolver((message) => context.logger.error(message));
 
   // Loader manifest order owns duplicate precedence, independent of retained instances.
+  // Promoted load options own the full enabled manifest order; the prepared
+  // generation's narrowed registry would omit tool-only owners entirely.
   const orderedManifests = loadState.loadOptions.manifestRegistry?.plugins ?? snapshot.plugins;
   for (const { id: pluginId } of orderedManifests) {
     const owner = toolOwners.get(pluginId);

@@ -1,0 +1,15 @@
+mock model server on http://127.0.0.1:63786/v1
+fixture root: /var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-e2e-ginv167365-q8N23F
+starting shipped gateway on port 19763 ...
+[ok] gateway became ready — 127.0.0.1:19763
+priming agent session via Gateway-first turn ...
+[ok] [0] priming agent turn exit 0 — exit=0
+running: openclaw gateway call tools.effective ...
+[ok] [1] gateway call exit 0 — exit=0
+[ok] [2] tools.effective returned a payload — profile=coding agentId=main
+    inventory tools (38): core/apply_patch, core/ask_user, core/automations, core/conversations_send, core/conversations_turn, core/conversations_list, core/create_goal, core/dashboard, core/edit, core/exec, core/gateway, core/get_goal, core/ls, core/plugins, core/portal, core/presence, core/process, core/progress_card, core/read, core/secrets, core/sessions_history, core/sessions_send, core/sessions, core/session_status, core/sessions_list, core/sessions_spawn, core/sessions_search, core/skill_workshop, core/subagents, core/terminal, core/theme, core/update_goal, core/agents_wait, core/web_fetch, core/write, core/sessions_yield, plugin/e2e_echo, plugin/e2e_ping
+[ok] [3] AFTER: e2e_ping present in effective inventory
+[ok] [4] AFTER: e2e_echo present in effective inventory
+[ok] [5] AFTER: no false "unknown entries" warning for e2e tools — clean
+
+=== 7/7 checks passed ===

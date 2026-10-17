@@ -1,0 +1,15 @@
+mock model server on http://127.0.0.1:62580/v1
+fixture root: /var/folders/04/6_rbcysj61500dtbhchm5c280000gn/T/openclaw-e2e-cron167365-7WRQ7m
+starting shipped gateway on port 19837 ...
+[ok] gateway became ready — 127.0.0.1:19837
+adding isolated agent cron job ...
+[ok] [1] cron add accepted — jobId=f5ea2c6d-bb02-4421-8114-bdfaa9e5ca7e
+running cron job now (--wait --expect-final) ...
+[FAIL] [2] cron run exit 0 — exit=1
+    run status: error final: 
+    mock requests: 3; turn0 tools(0): 
+[ok] [3] BEFORE: turn#1 tool table e2e_ping OMITTED (defect) — tools(0): e2e=[none]
+[ok] [4] BEFORE: tool call rejected (no marker in conversation) — rejected as expected
+[FAIL] [5] BEFORE: false "unknown entries" warning logged — no matching warning
+
+=== 4/6 checks passed ===

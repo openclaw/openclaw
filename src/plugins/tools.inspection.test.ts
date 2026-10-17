@@ -11,11 +11,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { acquirePluginToolInspectionRegistry } from "./plugin-tool-registries.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationRegistryScope } from "./runtime/generation-state.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
-import { acquirePluginToolInspectionRegistry } from "./tools.js";
 import { resolveRuntimeWebSearchProviders } from "./web-search-providers.runtime.js";
 
 afterEach(() => {

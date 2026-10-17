@@ -16,7 +16,7 @@ import type { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource
 import {
   acquireStandalonePluginToolRegistry,
   type PluginToolRegistryAcquisition,
-} from "../plugins/tools.js";
+} from "../plugins/plugin-tool-registries.js";
 import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-stdio-server.js";
 
 const LEGACY_TOOL_NAMES = [

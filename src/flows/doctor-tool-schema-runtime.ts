@@ -219,14 +219,18 @@ export async function collectRuntimeToolSchemaFindings(
   const reportedBundleRuntimeLoadErrors = new Set<string>();
   const reportedRequesterScopedServers = new Set<string>();
   let inspection:
-    | Awaited<ReturnType<typeof import("../plugins/tools.js").acquirePluginToolInspectionRegistry>>
+    | Awaited<
+        ReturnType<
+          typeof import("../plugins/plugin-tool-registries.js").acquirePluginToolInspectionRegistry
+        >
+      >
     | undefined;
   try {
     if (frames.length > 0) {
       try {
         const [{ acquirePluginToolInspectionRegistry }, { resolvePluginRuntimeLoadContext }] =
           await Promise.all([
-            import("../plugins/tools.js"),
+            import("../plugins/plugin-tool-registries.js"),
             import("../plugins/runtime/load-context.resolve.js"),
           ]);
         inspection = await runWithPluginMetadataSnapshot({ config: cfg }, () =>
