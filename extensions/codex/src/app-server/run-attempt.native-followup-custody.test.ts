@@ -35,6 +35,63 @@ import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 setupRunAttemptTestHooks();
 vi.mock("openclaw/plugin-sdk/node-selection-runtime", { spy: true });
 
+function childNotifications(
+  harness: ReturnType<typeof createStartedThreadHarness>,
+  parentTurn = () => "turn-1",
+) {
+  const notify = (method: string, params: JsonObject) =>
+    harness.notify({ method, params } as CodexServerNotification);
+  const parentItem = (item: JsonObject, method = "item/completed") =>
+    notify(method, { threadId: "thread-1", turnId: parentTurn(), item });
+  const collab = (id: string, tool: string, threadId: string, extra: JsonObject = {}) =>
+    parentItem({
+      id,
+      type: "collabAgentToolCall",
+      tool,
+      status: "completed",
+      senderThreadId: "thread-1",
+      receiverThreadIds: [threadId],
+      ...extra,
+    });
+  const spawn = async (threadId: string) => {
+    await notify("thread/started", {
+      thread: {
+        id: threadId,
+        parentThreadId: "thread-1",
+        source: { subAgent: { thread_spawn: { parent_thread_id: "thread-1", depth: 1 } } },
+      },
+    });
+    await collab(`spawn-${threadId}`, "spawnAgent", threadId);
+  };
+  const turn = (threadId: string, id: string, result?: string, itemId = `result-${id}`) =>
+    notify(result === undefined ? "turn/started" : "turn/completed", {
+      threadId,
+      turn: {
+        id,
+        status: result === undefined ? "inProgress" : "completed",
+        error: null,
+        items:
+          result === undefined
+            ? []
+            : [{ type: "agentMessage", id: itemId, phase: "final_answer", text: result }],
+      },
+    });
+  return { notify, parentItem, collab, spawn, turn };
+}
+
+async function admitHost(params: ReturnType<typeof createTestParams>, sessionId: string) {
+  await attachSqliteSessionTarget(params, path.join(tempDir, "sessions.json"), sessionId);
+  params.runtimePlan = createCodexRuntimePlanFixture();
+  setCodexTestModelSupportsTools(params, true);
+  const host = await createAdmittedHostCapabilityTestFixture(params, {
+    nativeModelPolicySupport: "exact",
+  });
+  assert(host.agentHarnessCompletionScope, "Expected an admitted completion scope");
+  params.hostCapabilities = host.hostCapabilities;
+  params.agentHarnessCompletionScope = host.agentHarnessCompletionScope;
+  return host;
+}
+
 it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-receipt"] as const)(
   "preserves accepted follow-up through sessions_yield (%s)",
   async (scenario) => {
@@ -61,18 +118,10 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
     const lifetime = new AbortController();
     const params = createTestParams();
     params.abortSignal = lifetime.signal;
-    await attachSqliteSessionTarget(params, path.join(tempDir, "sessions.json"), "custody-session");
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    setCodexTestModelSupportsTools(params, true);
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: async () => undefined }]),
     );
-    const host = await createAdmittedHostCapabilityTestFixture(params, {
-      nativeModelPolicySupport: "exact",
-    });
-    assert(host.agentHarnessCompletionScope, "Expected an admitted completion scope");
-    params.hostCapabilities = host.hostCapabilities;
-    params.agentHarnessCompletionScope = host.agentHarnessCompletionScope;
+    const host = await admitHost(params, "custody-session");
     const delivery = vi
       .spyOn(defaultNativeSubagentMonitorRuntime, "deliverAgentHarnessCompletion")
       .mockResolvedValue({ delivered: true, path: "direct" });
@@ -101,43 +150,7 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
         await Promise.all(pending);
       }
     };
-    const notify = (method: string, notificationParams: JsonObject) =>
-      harness.notify({ method, params: notificationParams } as CodexServerNotification);
-    const parentItem = (item: JsonObject, method = "item/completed") =>
-      notify(method, { threadId: "thread-1", turnId: "turn-1", item });
-    const collab = (id: string, tool: string, threadId: string, extra: JsonObject = {}) =>
-      parentItem({
-        id,
-        type: "collabAgentToolCall",
-        tool,
-        status: "completed",
-        senderThreadId: "thread-1",
-        receiverThreadIds: [threadId],
-        ...extra,
-      });
-    const spawn = async (threadId: string) => {
-      await notify("thread/started", {
-        thread: {
-          id: threadId,
-          parentThreadId: "thread-1",
-          source: { subAgent: { thread_spawn: { parent_thread_id: "thread-1", depth: 1 } } },
-        },
-      });
-      await collab(`spawn-${threadId}`, "spawnAgent", threadId);
-    };
-    const turn = (threadId: string, id: string, result?: string) =>
-      notify(result === undefined ? "turn/started" : "turn/completed", {
-        threadId,
-        turn: {
-          id,
-          status: result === undefined ? "inProgress" : "completed",
-          error: null,
-          items:
-            result === undefined
-              ? []
-              : [{ type: "agentMessage", id: `result-${id}`, phase: "final_answer", text: result }],
-        },
-      });
+    const { notify, parentItem, collab, spawn, turn } = childNotifications(harness);
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
     });
@@ -315,64 +328,19 @@ it("reports an earlier turn's unsettled native child to a later turn's sessions_
     }
     return undefined;
   });
-  const notify = (method: string, params: JsonObject) =>
-    harness.notify({ method, params } as CodexServerNotification);
+  const child = childNotifications(harness, () => turns.at(-1)!);
   const childTurn = (threadId: string, result?: string) =>
-    notify(result === undefined ? "turn/started" : "turn/completed", {
-      threadId,
-      turn: {
-        id: `${threadId}-turn`,
-        status: result === undefined ? "inProgress" : "completed",
-        error: null,
-        items:
-          result === undefined
-            ? []
-            : [
-                {
-                  type: "agentMessage",
-                  id: `${threadId}-result`,
-                  phase: "final_answer",
-                  text: result,
-                },
-              ],
-      },
-    });
+    child.turn(threadId, `${threadId}-turn`, result, `${threadId}-result`);
   const spawn = async (threadId: string) => {
-    await notify("thread/started", {
-      thread: {
-        id: threadId,
-        parentThreadId: "thread-1",
-        source: { subAgent: { thread_spawn: { parent_thread_id: "thread-1", depth: 1 } } },
-      },
-    });
-    await notify("item/completed", {
-      threadId: "thread-1",
-      turnId: turns.at(-1)!,
-      item: {
-        id: `spawn-${threadId}`,
-        type: "collabAgentToolCall",
-        tool: "spawnAgent",
-        status: "completed",
-        senderThreadId: "thread-1",
-        receiverThreadIds: [threadId],
-      },
-    });
+    await child.spawn(threadId);
     await childTurn(threadId);
   };
   const hosts: Array<Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>> = [];
   const startTurn = async (runId: string) => {
     const params = createTestParams();
     params.runId = runId;
-    await attachSqliteSessionTarget(params, path.join(tempDir, "sessions.json"), "yield-session");
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    setCodexTestModelSupportsTools(params, true);
-    const host = await createAdmittedHostCapabilityTestFixture(params, {
-      nativeModelPolicySupport: "exact",
-    });
+    const host = await admitHost(params, "yield-session");
     hosts.push(host);
-    assert(host.agentHarnessCompletionScope, "Expected an admitted completion scope");
-    params.hostCapabilities = host.hostCapabilities;
-    params.agentHarnessCompletionScope = host.agentHarnessCompletionScope;
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
     });

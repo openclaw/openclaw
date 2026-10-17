@@ -17,6 +17,7 @@ import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
+import { turnCompleted } from "./protocol.test-helpers.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createTestParams,
@@ -47,6 +48,26 @@ function callTool(
       arguments: args,
     },
   });
+}
+
+async function prepareTool(
+  tool: ReturnType<typeof createRuntimeDynamicTool>,
+  overrides: Partial<ReturnType<typeof createTestParams>> = {},
+) {
+  const params = createTestParams();
+  params.runtimePlan = createCodexRuntimePlanFixture();
+  setCodexTestToolFactory(params, () => [tool]);
+  setCodexTestModelSupportsTools(params, true);
+  Object.assign(params, overrides);
+  return { params, closeHost: await bindProductionHarnessHostCapabilitiesForTest(params) };
+}
+
+async function completeRun(
+  harness: ReturnType<typeof createStartedThreadHarness>,
+  run: ReturnType<typeof runCodexAppServerAttempt>,
+) {
+  await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+  expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
 }
 
 setupRunAttemptTestHooks();
@@ -104,26 +125,16 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       async (method) => {
         if (method === "turn/interrupt") {
           queueMicrotask(
-            () =>
-              void harness.notify({
-                method: "turn/completed",
-                params: {
-                  threadId: "thread-1",
-                  turn: { id: "turn-1", status: "interrupted", items: [] },
-                },
-              }),
+            () => void harness.notify(turnCompleted({ id: "turn-1", status: "interrupted" })),
           );
         }
       },
       { persistedThreads: [] },
     );
-    const params = createTestParams();
-    params.timeoutMs = parentMs;
-    params.abortSignal = upstream.signal;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    setCodexTestToolFactory(params, () => [tool]);
-    setCodexTestModelSupportsTools(params, true);
-    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    const { params, closeHost } = await prepareTool(tool, {
+      timeoutMs: parentMs,
+      abortSignal: upstream.signal,
+    });
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params);
     try {
@@ -178,11 +189,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
   it("retains a required command as one native pending call until terminal collection", async () => {
     const command = createRequiredExecRuntimeContract();
     const harness = createStartedThreadHarness();
-    const params = createTestParams();
-    setCodexTestToolFactory(params, () => [{ ...command.tool, name: "sandbox_exec" }]);
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    setCodexTestModelSupportsTools(params, true);
-    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    const { params, closeHost } = await prepareTool({ ...command.tool, name: "sandbox_exec" });
     // Keep fixture I/O from spending the attempt clock before the command starts.
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params);
@@ -210,8 +217,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
           { type: "inputText", text: expect.stringContaining("REQUIRED_NATIVE_RESULT") },
         ],
       });
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+      await completeRun(harness, run);
     } finally {
       vi.useRealTimers();
       command.finish();
@@ -229,11 +235,10 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         turnStarted.resolve();
       }
     });
-    const params = createTestParams();
-    setCodexTestToolFactory(params, () => [{ ...process.tool, name: "sandbox_process" }]);
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    setCodexTestModelSupportsTools(params, true);
-    const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+    const { params, closeHost: closeHostCapabilities } = await prepareTool({
+      ...process.tool,
+      name: "sandbox_process",
+    });
     // Protocol acceptance owns this test; host I/O must not spend the execution watchdog.
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const run = runCodexAppServerAttempt(params);
@@ -280,8 +285,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       expect(process.pendingNotifications()).toEqual(["unrelated event"]);
     } finally {
       try {
-        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-        expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+        await completeRun(harness, run);
       } finally {
         vi.useRealTimers();
         closeHostCapabilities();
@@ -315,12 +319,9 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     });
 
     const harness = createStartedThreadHarness();
-    const params = createTestParams();
-    setCodexTestToolFactory(params, () => [tool]);
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.timeoutMs = waitMs + 120_000;
-    setCodexTestModelSupportsTools(params, true);
-    const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+    const { params, closeHost: closeHostCapabilities } = await prepareTool(tool, {
+      timeoutMs: waitMs + 120_000,
+    });
     const run = runCodexAppServerAttempt(params);
     try {
       await harness.waitForMethod("turn/start");
@@ -344,8 +345,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         success: true,
         contentItems: [{ type: "inputText", text: expect.stringContaining("no_answer") }],
       });
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+      await completeRun(harness, run);
     } finally {
       finish?.();
       vi.useRealTimers();
@@ -382,10 +382,9 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       }
     });
     try {
-      const params = createTestParams();
-      setCodexTestToolFactory(params, () => [tool]);
-      setCodexTestModelSupportsTools(params, true);
-      closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+      const prepared = await prepareTool(tool);
+      const { params } = prepared;
+      closeHostCapabilities = prepared.closeHost;
       const runtimePlan = createCodexRuntimePlanFixture();
       params.runtimePlan = {
         ...runtimePlan,
@@ -516,16 +515,16 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
     );
 
-    const params = createTestParams();
-    params.messageChannel = "telegram";
-    params.messageProvider = "telegram";
-    params.currentChannelId = "telegram:-100123";
-    params.sandboxSessionKey = "agent:main:policy";
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    setCodexTestModelSupportsTools(params, true);
-    setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("echo")]);
+    const { params, closeHost: closeHostCapabilities } = await prepareTool(
+      createRuntimeDynamicTool("echo"),
+      {
+        messageChannel: "telegram",
+        messageProvider: "telegram",
+        currentChannelId: "telegram:-100123",
+        sandboxSessionKey: "agent:main:policy",
+      },
+    );
     const harness = createStartedThreadHarness();
-    const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
     const run = runCodexAppServerAttempt(params);
     try {
       await harness.waitForMethod("turn/start");

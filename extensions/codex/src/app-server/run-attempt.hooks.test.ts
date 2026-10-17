@@ -1,4 +1,3 @@
-import path from "node:path";
 import {
   abortAgentHarnessRun,
   resolveActiveEmbeddedRunSessionId,
@@ -19,6 +18,7 @@ import {
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
   assistantMessage,
   createCodexRuntimePlanFixture,
@@ -29,7 +29,6 @@ import {
   mockCall,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
-  tempDir,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
 
@@ -59,6 +58,28 @@ function holdAgentEnd() {
   return { agentEnd, releaseAgentEnd: deferred.resolve };
 }
 
+function diagnosticParams(captureContent = false) {
+  const params = createTestParams();
+  params.config = {
+    diagnostics: { enabled: true, otel: { enabled: true, traces: true, captureContent } },
+  };
+  setRuntimeConfigSnapshot(params.config);
+  return params;
+}
+
+function attachReplyBackend(params: ReturnType<typeof createTestParams>) {
+  let backend: ReplyBackend | undefined;
+  const freezeAbort = vi.fn();
+  params.replyOperation = {
+    attachBackend: (value: ReplyBackend) => {
+      backend = value;
+    },
+    detachBackend: vi.fn(),
+    freezeAbort,
+  } as unknown as NonNullable<typeof params.replyOperation>;
+  return { read: () => backend, freezeAbort };
+}
+
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
@@ -67,11 +88,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const unsubscribe = onTrustedInternalDiagnosticEvent((event) => events.push(event));
     try {
       const harness = createStartedThreadHarness();
-      const params = createTestParams();
-      params.config = {
-        diagnostics: { enabled: true, otel: { enabled: true, traces: true } },
-      };
-      setRuntimeConfigSnapshot(params.config);
+      const params = diagnosticParams();
       const run = runCodexAppServerAttempt(params, { nativeHookRelay: { enabled: false } });
       await run.waitForTurnAccepted();
       const response = {
@@ -164,8 +181,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       }
     });
     try {
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
       const harness = createStartedThreadHarness(async (method) => {
         if (method === "turn/start") {
           return {
@@ -184,23 +199,12 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
         }
         return undefined;
       });
-      const params = createParams(sessionFile, workspaceDir);
-      const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
+      const params = diagnosticParams(true);
+      const sessionManager = openFileBackedSessionManagerForTest(params.sessionFile, {
         sessionId: "diagnostic-session-1",
       });
       sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
       params.runtimePlan = createCodexRuntimePlanFixture();
-      params.config = {
-        diagnostics: {
-          enabled: true,
-          otel: {
-            enabled: true,
-            traces: true,
-            captureContent: true,
-          },
-        },
-      } as never;
-      setRuntimeConfigSnapshot(params.config);
       params.sessionId = "diagnostic-session-1";
       params.sessionKey = "agent:diagnostic:diagnostic-session-1";
       params.runId = "diagnostic-run-1";
@@ -262,11 +266,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     });
     try {
       createStartedThreadHarness();
-      const params = createTestParams();
-      params.config = {
-        diagnostics: { enabled: true, otel: { enabled: true, traces: true } },
-      } as never;
-      setRuntimeConfigSnapshot(params.config);
+      const params = diagnosticParams();
       params.timeoutMs = 60_000;
 
       const run = runCodexAppServerAttempt(params);
@@ -277,9 +277,11 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
 
       const errorEvent = diagnosticEvents.find((event) => event.type === "model.call.error");
       expect(readAttemptTerminal(result).timedOut).toBe(true);
-      expect(errorEvent?.failureKind).toBe("timeout");
-      expect(errorEvent?.errorCategory).toBe("timeout");
-      expect(errorEvent?.agentId).toBe("main");
+      expect(errorEvent).toMatchObject({
+        failureKind: "timeout",
+        errorCategory: "timeout",
+        agentId: "main",
+      });
     } finally {
       stopDiagnostics();
     }
@@ -306,19 +308,14 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     });
 
     await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        item: {
-          id: "msg-final-1",
-          type: "agentMessage",
-          text: "Done.",
-          status: "completed",
-        },
-      },
-    });
+    await harness.notify(
+      itemNotification("item/completed", {
+        id: "msg-final-1",
+        type: "agentMessage",
+        text: "Done.",
+        status: "completed",
+      }),
+    );
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
     expect(settled).toBe(false);
@@ -356,17 +353,9 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
   it("keeps replay-safe client-close recovery cancellable during agent_end", async () => {
     const { agentEnd, releaseAgentEnd } = holdAgentEnd();
     const onAttemptAbort = vi.fn();
-    let replyBackend: Pick<ReplyBackend, "cancel" | "isAbortable"> | undefined;
     const params = createTestParams();
     params.onAttemptAbort = onAttemptAbort;
-    const freezeAbort = vi.fn();
-    params.replyOperation = {
-      attachBackend: (backend: ReplyBackend) => {
-        replyBackend = backend;
-      },
-      detachBackend: vi.fn(),
-      freezeAbort,
-    } as unknown as NonNullable<typeof params.replyOperation>;
+    const backend = attachReplyBackend(params);
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
 
@@ -374,8 +363,8 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     harness.close();
     await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
 
-    expect(replyBackend?.isAbortable?.()).toBe(true);
-    replyBackend?.cancel("user_abort");
+    expect(backend.read()?.isAbortable?.()).toBe(true);
+    backend.read()?.cancel("user_abort");
     expect(onAttemptAbort).toHaveBeenCalledTimes(1);
 
     releaseAgentEnd();
@@ -388,46 +377,33 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       kind: "client_closed_before_turn_completed",
       replaySafe: true,
     });
-    expect(freezeAbort).not.toHaveBeenCalled();
+    expect(backend.freezeAbort).not.toHaveBeenCalled();
   });
 
   it("keeps ordinary failed turns cancellable until the orchestrator settles", async () => {
     const { agentEnd, releaseAgentEnd } = holdAgentEnd();
     const onAttemptAbort = vi.fn();
     const onRunAgentEvent = vi.fn<NonNullable<ReturnType<typeof createParams>["onAgentEvent"]>>();
-    let replyBackend: Pick<ReplyBackend, "cancel" | "isAbortable"> | undefined;
     const params = createTestParams();
     params.onAttemptAbort = onAttemptAbort;
     params.onAgentEvent = onRunAgentEvent;
-    const freezeAbort = vi.fn();
-    params.replyOperation = {
-      attachBackend: (backend: ReplyBackend) => {
-        replyBackend = backend;
-      },
-      detachBackend: vi.fn(),
-      freezeAbort,
-    } as unknown as NonNullable<typeof params.replyOperation>;
+    const backend = attachReplyBackend(params);
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
 
     await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: {
-          id: "turn-1",
-          status: "failed",
-          items: [],
-          error: { message: "codex exploded" },
-        },
-      },
-    });
+    await harness.notify(
+      turnCompleted({
+        id: "turn-1",
+        status: "failed",
+        items: [],
+        error: { message: "codex exploded" },
+      }),
+    );
     await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
 
-    expect(replyBackend?.isAbortable?.()).toBe(true);
-    replyBackend?.cancel("user_abort");
+    expect(backend.read()?.isAbortable?.()).toBe(true);
+    backend.read()?.cancel("user_abort");
     expect(onAttemptAbort).toHaveBeenCalledTimes(1);
 
     releaseAgentEnd();
@@ -437,7 +413,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       promptError: "codex exploded",
     });
     expect(result.agentHarnessResultClassification).toBeUndefined();
-    expect(freezeAbort).not.toHaveBeenCalled();
+    expect(backend.freezeAbort).not.toHaveBeenCalled();
     const events = onRunAgentEvent.mock.calls.map(([event]) => event);
     expect(
       events.find((event) => event.stream === "lifecycle" && event.data.phase === "start"),

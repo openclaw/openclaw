@@ -23,18 +23,8 @@ vi.unmock("node:child_process");
 const NATIVE_FIRST_CATALOG =
   "<available_skills><skill><name>alpha-native</name><description>Creation-time catalog.</description></skill></available_skills>";
 
-/**
- * Serves the Responses wire for the real Codex binary and records every request
- * body. `usage.tokens` is mutable so a turn can report the context pressure that
- * drives Codex's own pre-sampling auto-compaction (codex-rs/core/src/session/turn.rs
- * run_pre_sampling_compact).
- */
-async function startResponsesFixture(): Promise<{
-  requests: JsonObject[];
-  port: number;
-  usage: { tokens: number };
-  close: () => Promise<void>;
-}> {
+// Mutable usage triggers native pre-sampling compaction on the next turn.
+async function startResponsesFixture() {
   const requests: JsonObject[] = [];
   const usage = { tokens: 10 };
   const server = http.createServer((request, response) => {
@@ -94,11 +84,7 @@ async function startResponsesFixture(): Promise<{
   };
 }
 
-/**
- * Writes the synthetic model catalog and provider config. `contextWindow` sets
- * the auto-compaction budget: ModelInfo::auto_compact_token_limit is
- * `context_window * 9 / 10` (codex-rs/protocol/src/openai_models.rs).
- */
+// Native auto-compaction starts at context_window * 9 / 10.
 async function writeCodexFixtureConfig(options: {
   root: string;
   codexHome: string;
@@ -153,13 +139,15 @@ async function writeCodexFixtureConfig(options: {
   );
 }
 
-function developerMessageText(request: JsonObject | undefined): string {
+function developerMessages(request: JsonObject | undefined) {
   const input = request?.input;
-  if (!Array.isArray(input)) {
-    return "";
-  }
-  return JSON.stringify(input.filter((item) => isJsonObject(item) && item.role === "developer"));
+  return Array.isArray(input)
+    ? input.filter((item) => isJsonObject(item) && item.role === "developer")
+    : [];
 }
+
+const developerMessageText = (request: JsonObject | undefined) =>
+  JSON.stringify(developerMessages(request));
 
 async function createNativeFixture(modelId: string, contextWindow = 200_000) {
   const root = await fs.realpath(tempDir);
@@ -228,10 +216,7 @@ describe("native Codex skill delivery", () => {
       expect(fixture.requests).toHaveLength(1);
       const input = fixture.requests[0]?.input;
       expect(Array.isArray(input)).toBe(true);
-      const developerMessages = Array.isArray(input)
-        ? input.filter((item) => isJsonObject(item) && item.role === "developer")
-        : [];
-      const developerText = JSON.stringify(developerMessages);
+      const developerText = developerMessageText(fixture.requests[0]);
       expect(developerText).toContain("Synthetic model-owned Default policy.");
       expect(developerText).toContain(params.skillsSnapshot.prompt);
     } finally {
@@ -350,14 +335,9 @@ describe("native Codex skill delivery", () => {
           // contain old text, so inspect the latest policy handoff.
           const latestDeveloper = fixture.requests.at(-1)?.input;
           expect(Array.isArray(latestDeveloper)).toBe(true);
-          const handoffs = Array.isArray(latestDeveloper)
-            ? latestDeveloper.filter(
-                (item) =>
-                  isJsonObject(item) &&
-                  item.role === "developer" &&
-                  JSON.stringify(item).includes("complete current OpenClaw"),
-              )
-            : [];
+          const handoffs = developerMessages(fixture.requests.at(-1)).filter((item) =>
+            JSON.stringify(item).includes("complete current OpenClaw"),
+          );
           expect(handoffs.length).toBeGreaterThan(0);
           expect(JSON.stringify(handoffs.at(-1))).not.toContain(editedSoul);
           expect(JSON.stringify(handoffs.at(-1))).not.toContain(firstSoul);
@@ -377,85 +357,76 @@ describe("native Codex skill delivery", () => {
     }
   }, 90_000);
 
-  it.each([
-    {
-      label: "a withdrawn catalog",
-      refreshed: undefined,
-      current: "refreshable thread instructions are empty",
-    },
-  ])(
-    "keeps $label visible to the model after native compaction rebuilds the incognito thread",
-    async ({ refreshed, current }) => {
-      // auto_compact_token_limit resolves to 900, so a turn reporting 5_000
-      // tokens forces the next turn to compact before it samples.
-      const { fixture, attemptOptions, createParams } = await createNativeFixture(
-        "skill-carrier-model",
-        1_000,
+  it("keeps a withdrawn catalog visible to the model after native compaction rebuilds the incognito thread", async () => {
+    const current = "refreshable thread instructions are empty";
+    // auto_compact_token_limit resolves to 900, so a turn reporting 5_000
+    // tokens forces the next turn to compact before it samples.
+    const { fixture, attemptOptions, createParams } = await createNativeFixture(
+      "skill-carrier-model",
+      1_000,
+    );
+    const overAutoCompactLimitTokens = 5_000;
+    const sessionKey = "agent:main:dashboard:incognito-native-compaction-removal";
+    await seedRunSessionOwnerForTest("session-1", sessionKey);
+    let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
+    try {
+      const runTurn = async (runId: string, catalog: string | undefined, prompt: string) => {
+        const before = fixture.requests.length;
+        const params = createParams("incognito-compaction-session.jsonl", sessionKey);
+        // A native-tool-restricted turn always starts a transient thread, which
+        // would replace the live incognito thread this regression depends on.
+        params.disableTools = false;
+        params.runId = runId;
+        params.prompt = prompt;
+        params.timeoutMs = 60_000;
+        params.skillsSnapshot = catalog ? { prompt: catalog, skills: [] } : undefined;
+        const result = await runCodexAppServerAttempt(params, {
+          ...attemptOptions,
+          clientFactory: async (options) => {
+            // One physical client across turns: an ephemeral thread has no
+            // resume source, so reuse depends on this live subscription.
+            client ??= await createIsolatedCodexAppServerClient(options);
+            return client;
+          },
+        });
+        expect(result.terminal).toEqual({ kind: "ok" });
+        return fixture.requests.slice(before);
+      };
+
+      const [creationRequest] = await runTurn("run-1", NATIVE_FIRST_CATALOG, "first");
+      expect(developerMessageText(creationRequest)).toContain(NATIVE_FIRST_CATALOG);
+
+      fixture.usage.tokens = overAutoCompactLimitTokens;
+      const [refreshRequest] = await runTurn("run-2", undefined, "second");
+      expect(developerMessageText(refreshRequest)).toContain(current);
+
+      fixture.usage.tokens = 10;
+      const compactionTurn = await runTurn("run-3", undefined, "third");
+      // Codex summarizes, then resumes the same turn against the rebuilt context.
+      const summarizationIndex = compactionTurn.findIndex((request) =>
+        JSON.stringify(request).includes("You are performing a CONTEXT CHECKPOINT COMPACTION."),
       );
-      const overAutoCompactLimitTokens = 5_000;
-      const sessionKey = `agent:main:dashboard:incognito-native-compaction-${refreshed ? "edit" : "removal"}`;
-      await seedRunSessionOwnerForTest("session-1", sessionKey);
-      let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
-      try {
-        const runTurn = async (runId: string, catalog: string | undefined, prompt: string) => {
-          const before = fixture.requests.length;
-          const params = createParams("incognito-compaction-session.jsonl", sessionKey);
-          // A native-tool-restricted turn always starts a transient thread, which
-          // would replace the live incognito thread this regression depends on.
-          params.disableTools = false;
-          params.runId = runId;
-          params.prompt = prompt;
-          params.timeoutMs = 60_000;
-          params.skillsSnapshot = catalog ? { prompt: catalog, skills: [] } : undefined;
-          const result = await runCodexAppServerAttempt(params, {
-            ...attemptOptions,
-            clientFactory: async (options) => {
-              // One physical client across turns: an ephemeral thread has no
-              // resume source, so reuse depends on this live subscription.
-              client ??= await createIsolatedCodexAppServerClient(options);
-              return client;
-            },
-          });
-          expect(result.terminal).toEqual({ kind: "ok" });
-          return fixture.requests.slice(before);
-        };
+      expect(summarizationIndex).toBeGreaterThanOrEqual(0);
+      const continuationRequest = compactionTurn[summarizationIndex + 1];
+      expect(continuationRequest).toBeDefined();
+      // The rebuilt context restores the creation-time carrier and drops the
+      // client-authored refresh, which is exactly the reversion under test.
+      expect(developerMessageText(continuationRequest)).toContain(NATIVE_FIRST_CATALOG);
+      expect(developerMessageText(continuationRequest)).not.toContain(current);
 
-        const [creationRequest] = await runTurn("run-1", NATIVE_FIRST_CATALOG, "first");
-        expect(developerMessageText(creationRequest)).toContain(NATIVE_FIRST_CATALOG);
-
-        fixture.usage.tokens = overAutoCompactLimitTokens;
-        const [refreshRequest] = await runTurn("run-2", refreshed, "second");
-        expect(developerMessageText(refreshRequest)).toContain(current);
-
-        fixture.usage.tokens = 10;
-        const compactionTurn = await runTurn("run-3", refreshed, "third");
-        // Codex summarizes, then resumes the same turn against the rebuilt context.
-        const summarizationIndex = compactionTurn.findIndex((request) =>
-          JSON.stringify(request).includes("You are performing a CONTEXT CHECKPOINT COMPACTION."),
-        );
-        expect(summarizationIndex).toBeGreaterThanOrEqual(0);
-        const continuationRequest = compactionTurn[summarizationIndex + 1];
-        expect(continuationRequest).toBeDefined();
-        // The rebuilt context restores the creation-time carrier and drops the
-        // client-authored refresh, which is exactly the reversion under test.
-        expect(developerMessageText(continuationRequest)).toContain(NATIVE_FIRST_CATALOG);
-        expect(developerMessageText(continuationRequest)).not.toContain(current);
-
-        const [restoredRequest] = await runTurn("run-4", refreshed, "fourth");
-        const restored = developerMessageText(restoredRequest);
-        expect(restored).toContain(current);
-        // The creation-time catalog is immutable on an ephemeral thread, so the
-        // proof is that the current catalog is the model's latest instruction.
-        expect(restored.lastIndexOf(current)).toBeGreaterThan(
-          restored.lastIndexOf(NATIVE_FIRST_CATALOG),
-        );
-      } finally {
-        if (client) {
-          await client.closeAndWait();
-        }
-        await fixture.close();
+      const [restoredRequest] = await runTurn("run-4", undefined, "fourth");
+      const restored = developerMessageText(restoredRequest);
+      expect(restored).toContain(current);
+      // The creation-time catalog is immutable on an ephemeral thread, so the
+      // proof is that the current catalog is the model's latest instruction.
+      expect(restored.lastIndexOf(current)).toBeGreaterThan(
+        restored.lastIndexOf(NATIVE_FIRST_CATALOG),
+      );
+    } finally {
+      if (client) {
+        await client.closeAndWait();
       }
-    },
-    180_000,
-  );
+      await fixture.close();
+    }
+  }, 180_000);
 });

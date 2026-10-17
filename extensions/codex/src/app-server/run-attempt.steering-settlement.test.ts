@@ -109,6 +109,10 @@ async function createFixture() {
     run,
     accepted,
     closeHost,
+    readMessages: async () =>
+      (await readSessionTranscriptEvents(target)).flatMap((event) =>
+        isJsonObject(event) && isJsonObject(event.message) ? [event.message] : [],
+      ),
     completePrefix: async () => {
       await harness.notify(itemNotification("item/started", { ...prefix, text: "" }));
       await harness.notify({
@@ -132,6 +136,16 @@ async function createFixture() {
   };
 }
 
+function holdTranscript(target: Parameters<typeof withSessionTranscriptWriteLock>[0]) {
+  const acquired = createDeferred<void>();
+  const release = createDeferred<void>();
+  const writer = withSessionTranscriptWriteLock(target, async () => {
+    acquired.resolve();
+    await release.promise;
+  });
+  return { acquired: acquired.promise, release: release.resolve, writer };
+}
+
 function messageText(message: JsonObject): string {
   if (typeof message.content === "string") {
     return message.content;
@@ -149,18 +163,13 @@ function messageText(message: JsonObject): string {
 
 it("seals native steering when terminal receipt arrives behind its queued prefix write", async () => {
   const fixture = await createFixture();
-  const release = createDeferred<void>();
-  const acquired = createDeferred<void>();
-  let writer: Promise<unknown> | undefined;
+  let lock: ReturnType<typeof holdTranscript> | undefined;
   let terminal: Promise<unknown> | undefined;
   try {
     await fixture.started.promise;
     await fixture.completePrefix();
-    writer = withSessionTranscriptWriteLock(fixture.target, async () => {
-      acquired.resolve();
-      await release.promise;
-    });
-    await acquired.promise;
+    lock = holdTranscript(fixture.target);
+    await lock.acquired;
     const mirror = vi.spyOn(codexTranscriptMirrorRuntime, "mirror");
     expect(fixture.queue()).toBe(true);
     await vi.waitFor(() => expect(mirror).toHaveBeenCalledOnce(), fastWait);
@@ -174,8 +183,8 @@ it("seals native steering when terminal receipt arrives behind its queued prefix
       () => expect(fixture.accepted).toHaveBeenCalledExactlyOnceWith(false),
       fastWait,
     );
-    release.resolve();
-    await writer;
+    lock.release();
+    await lock.writer;
     await terminal;
     const result = await fixture.run;
 
@@ -186,17 +195,15 @@ it("seals native steering when terminal receipt arrives behind its queued prefix
       timedOut: false,
       promptError: null,
     });
-    const messages = (await readSessionTranscriptEvents(fixture.target)).flatMap((event) =>
-      isJsonObject(event) && isJsonObject(event.message) ? [event.message] : [],
-    );
+    const messages = await fixture.readMessages();
     expect(messages.filter((message) => messageText(message) === steerText)).toEqual([]);
     expect(messages.filter((message) => messageText(message) === prefixText)).toHaveLength(1);
   } finally {
-    release.resolve();
+    lock?.release();
     fixture.abort.abort("test cleanup");
     await Promise.allSettled([
       fixture.run,
-      ...(writer ? [writer] : []),
+      ...(lock ? [lock.writer] : []),
       ...(terminal ? [terminal] : []),
     ]);
     fixture.closeHost();
@@ -205,9 +212,7 @@ it("seals native steering when terminal receipt arrives behind its queued prefix
 
 it("keeps one steering prefix and source through degraded tainted native completion", async () => {
   const fixture = await createFixture();
-  const release = createDeferred<void>();
-  const acquired = createDeferred<void>();
-  let writer: Promise<unknown> | undefined;
+  let lock: ReturnType<typeof holdTranscript> | undefined;
   const notifications: Promise<unknown>[] = [];
   try {
     await fixture.started.promise;
@@ -240,19 +245,14 @@ it("keeps one steering prefix and source through degraded tainted native complet
         clientId,
       }),
     );
-    const before = (await readSessionTranscriptEvents(fixture.target)).flatMap((event) =>
-      isJsonObject(event) && isJsonObject(event.message) ? [messageText(event.message)] : [],
-    );
+    const before = (await fixture.readMessages()).map(messageText);
     expect(before.filter((text) => text === prefixText || text === steerText)).toEqual([
       prefixText,
       steerText,
     ]);
 
-    writer = withSessionTranscriptWriteLock(fixture.target, async () => {
-      acquired.resolve();
-      await release.promise;
-    });
-    await acquired.promise;
+    lock = holdTranscript(fixture.target);
+    await lock.acquired;
     const mirror = vi.spyOn(codexTranscriptMirrorRuntime, "mirror");
     vi.useFakeTimers();
     notifications.push(
@@ -301,8 +301,8 @@ it("keeps one steering prefix and source through degraded tainted native complet
       receivedAt + TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS - Date.now(),
     );
     await vi.advanceTimersByTimeAsync(1);
-    release.resolve();
-    await writer;
+    lock.release();
+    await lock.writer;
     // Keep the deadline clock fixed while the accepted SQLite work settles.
     const result = await fixture.run;
     vi.useRealTimers();
@@ -326,9 +326,7 @@ it("keeps one steering prefix and source through degraded tainted native complet
     expect(
       fixture.harness.requests.filter((request) => request.method === "turn/steer"),
     ).toHaveLength(1);
-    const messages = (await readSessionTranscriptEvents(fixture.target)).flatMap((event) =>
-      isJsonObject(event) && isJsonObject(event.message) ? [event.message] : [],
-    );
+    const messages = await fixture.readMessages();
     expect(
       messages.map(messageText).filter((text) => [prefixText, steerText, codaText].includes(text)),
     ).toEqual([prefixText, steerText, codaText]);
@@ -338,10 +336,10 @@ it("keeps one steering prefix and source through degraded tainted native complet
     });
     expect(resolveActiveEmbeddedRunSessionId(fixture.target.sessionKey)).toBeUndefined();
   } finally {
-    release.resolve();
+    lock?.release();
     fixture.abort.abort("test cleanup");
     vi.useRealTimers();
-    await Promise.allSettled([fixture.run, ...notifications, ...(writer ? [writer] : [])]);
+    await Promise.allSettled([fixture.run, ...notifications, ...(lock ? [lock.writer] : [])]);
     fixture.closeHost();
   }
 });

@@ -40,6 +40,21 @@ import { getSharedCodexAppServerClient } from "./shared-client.js";
 
 setupRunAttemptTestHooks();
 
+const webSearchThreadConfigFingerprint = JSON.stringify({
+  "features.standalone_web_search": false,
+  web_search: "disabled",
+});
+
+function existingBinding(cwd: string) {
+  return {
+    threadId: "thread-existing",
+    cwd,
+    dynamicToolsFingerprint: "[]",
+    webSearchThreadConfigFingerprint,
+    historyCoveredThrough: new Date(1).toISOString(),
+  };
+}
+
 async function prepareGenerationAttempt(params: ReturnType<typeof createParams>) {
   await resolveBootstrapFilesForPreparation({
     workspaceDir: params.workspaceDir,
@@ -79,10 +94,7 @@ describe("Codex generation admission", () => {
       threadId: "thread-existing",
       cwd: workspaceDir,
       historyCoveredThrough: new Date().toISOString(),
-      webSearchThreadConfigFingerprint: JSON.stringify({
-        "features.standalone_web_search": false,
-        web_search: "disabled",
-      }),
+      webSearchThreadConfigFingerprint,
       appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
         resolveCodexSupervisionAppServerRuntimeOptions({
           pluginConfig: { supervision: { enabled: true } },
@@ -240,16 +252,7 @@ describe("Codex finalization generation ownership", () => {
         },
         {
           kind: "set",
-          binding: {
-            threadId: "thread-existing",
-            cwd: params.workspaceDir,
-            dynamicToolsFingerprint: "[]",
-            webSearchThreadConfigFingerprint: JSON.stringify({
-              "features.standalone_web_search": false,
-              web_search: "disabled",
-            }),
-            historyCoveredThrough: new Date(1).toISOString(),
-          },
+          binding: existingBinding(params.workspaceDir),
         },
       );
       // Authority assertions do not spend their attempt budget on worker preparation.
@@ -360,16 +363,7 @@ describe("Codex finalization generation ownership", () => {
     const baseStore = createCodexTestBindingStore();
     await baseStore.mutate(previous, {
       kind: "set",
-      binding: {
-        threadId: "thread-existing",
-        cwd: workspaceDir,
-        dynamicToolsFingerprint: "[]",
-        webSearchThreadConfigFingerprint: JSON.stringify({
-          "features.standalone_web_search": false,
-          web_search: "disabled",
-        }),
-        historyCoveredThrough: new Date(1).toISOString(),
-      },
+      binding: existingBinding(workspaceDir),
     });
     const enteredAgentEnd = createDeferred<void>();
     const releaseAgentEnd = createDeferred<void>();

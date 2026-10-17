@@ -48,6 +48,20 @@ import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 setupRunAttemptTestHooks();
 
+async function beforeResult<T>(signal: Promise<void>, run: Promise<T>, stage: string) {
+  await Promise.race([
+    signal,
+    run.then((result) => {
+      throw new Error(`Attempt ended before ${stage}`, { cause: result });
+    }),
+  ]);
+}
+
+const modelEvent = (model: string) => ({
+  stream: "lifecycle",
+  data: { phase: "model", provider: "openai", model },
+});
+
 describe("registered Codex harness model attribution", () => {
   it("attributes completed models and refreshes their selection on warm reuse", async () => {
     // Protocol events own completion; host load must not spend the attempt watchdog.
@@ -197,6 +211,14 @@ describe("registered Codex harness model attribution", () => {
         send({ id: message.id, result });
       },
     });
+    const complete = (id: string, text: string) =>
+      transport.send({
+        method: "turn/completed",
+        params: {
+          threadId: "native-thread",
+          turn: { id: "turn-1", status: "completed", items: [{ type: "agentMessage", id, text }] },
+        },
+      });
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(transport.client);
     const runtime = createPluginRuntimeMock({
       modelAuth: {
@@ -235,23 +257,12 @@ describe("registered Codex harness model attribution", () => {
     };
     const modelEvents = () =>
       events.filter((event) => event.stream === "lifecycle" && event.data.phase === "model");
-    const readyModelEvent = {
-      stream: "lifecycle",
-      data: { phase: "model", provider: "openai", model: "ready-native-model" },
-    };
-    const reroutedModelEvent = {
-      stream: "lifecycle",
-      data: { phase: "model", provider: "openai", model: "rerouted-model" },
-    };
+    const readyModelEvent = modelEvent("ready-native-model");
+    const reroutedModelEvent = modelEvent("rerouted-model");
     const run = registered.runAttempt(params);
     let next: typeof run | undefined;
     try {
-      await Promise.race([
-        modelPublished.promise,
-        run.then((result) => {
-          throw new Error("Attempt ended before model attribution", { cause: result });
-        }),
-      ]);
+      await beforeResult(modelPublished.promise, run, "model attribution");
       expect(modelEvents()).toEqual([readyModelEvent]);
       expect(
         events.some((event) => event.stream === "lifecycle" && event.data.phase === "end"),
@@ -267,12 +278,7 @@ describe("registered Codex harness model attribution", () => {
           params: { threadId, turnId, fromModel: "ready-native-model", toModel, reason: "other" },
         });
       }
-      await Promise.race([
-        modelPublished.promise,
-        run.then((result) => {
-          throw new Error("Attempt ended before rerouted model attribution", { cause: result });
-        }),
-      ]);
+      await beforeResult(modelPublished.promise, run, "rerouted model attribution");
       expect(modelEvents()).toEqual([readyModelEvent, reroutedModelEvent]);
       expect(events.filter((event) => event.stream === "fallback")).toEqual([
         {
@@ -280,17 +286,7 @@ describe("registered Codex harness model attribution", () => {
           data: { fromModel: "ready-native-model", toModel: "rerouted-model", reason: "other" },
         },
       ]);
-      transport.send({
-        method: "turn/completed",
-        params: {
-          threadId: "native-thread",
-          turn: {
-            id: "turn-1",
-            status: "completed",
-            items: [{ type: "agentMessage", id: "answer", text: "Native answer." }],
-          },
-        },
-      });
+      complete("answer", "Native answer.");
       const result = await run;
       expect(result).toHaveProperty("terminal", { kind: "ok" });
       expect(result.runtimeModelSelection).toEqual({
@@ -314,23 +310,8 @@ describe("registered Codex harness model attribution", () => {
       nativeModel = "changed-native-model";
       turnStarted = createDeferred<void>();
       next = registered.runAttempt({ ...params, runId: "native-second-turn" });
-      await Promise.race([
-        turnStarted.promise,
-        next.then((earlyResult) => {
-          throw new Error("Second attempt ended before turn/start", { cause: earlyResult });
-        }),
-      ]);
-      transport.send({
-        method: "turn/completed",
-        params: {
-          threadId: "native-thread",
-          turn: {
-            id: "turn-1",
-            status: "completed",
-            items: [{ type: "agentMessage", id: "second-answer", text: "Second native answer." }],
-          },
-        },
-      });
+      await beforeResult(turnStarted.promise, next, "second turn/start");
+      complete("second-answer", "Second native answer.");
       const second = await next;
       expect(second).toHaveProperty("terminal", { kind: "ok" });
       expect(second.assistantTexts).toEqual(["Second native answer."]);
