@@ -4,6 +4,7 @@ import {
   CHAT_TRANSCRIPT_END_THRESHOLD_PX,
   cancelChatScroll,
   canAutoFollowChat,
+  type ChatScrollHost,
   type ChatScrollToEndOptions,
   getChatSessionScrollPosition,
   handleChatScroll,
@@ -16,14 +17,9 @@ import {
 } from "./scroll.ts";
 
 function createScrollHost(
-  overrides: {
-    scrollHeight?: number;
-    scrollTop?: number;
-    clientHeight?: number;
-  } = {},
+  { scrollHeight = 2000, scrollTop = 1500, clientHeight = 500 } = {},
+  deferred = false,
 ) {
-  const { scrollHeight = 2000, scrollTop = 1500, clientHeight = 500 } = overrides;
-
   const container = document.createElement("div");
   Object.defineProperties(container, {
     scrollHeight: { configurable: true, writable: true, value: scrollHeight },
@@ -31,17 +27,28 @@ function createScrollHost(
   });
   container.scrollTop = scrollTop;
 
+  let commit = () => {};
+  let cancel = () => {};
+  const cancelCommit = vi.fn();
   const renderLifecycle: RenderLifecycle = {
     invalidate: vi.fn(),
-    afterCommit: vi.fn((effect) => {
+    afterCommit: vi.fn((effect, onCancel) => {
       renderLifecycle.invalidate();
-      effect(() => undefined);
-      return vi.fn();
+      cancel = () => onCancel?.();
+      commit = () => {
+        cancel =
+          effect(() => {
+            cancel = () => {};
+          }) ?? (() => {});
+      };
+      if (!deferred) {
+        commit();
+      }
+      return cancelCommit;
     }),
   };
   const host = {
     renderLifecycle,
-    updateComplete: Promise.resolve(),
     chatScrollElement: vi.fn<() => HTMLElement | null>().mockReturnValue(container),
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
@@ -61,15 +68,16 @@ function createScrollHost(
     }),
   };
 
-  return { host, container };
+  return { host, container, commit: () => commit(), cancel: () => cancel(), cancelCommit };
 }
 
-function createScrollEvent(scrollHeight: number, scrollTop: number, clientHeight: number) {
-  const event = new Event("scroll");
-  Object.defineProperty(event, "currentTarget", {
-    value: { scrollHeight, scrollTop, clientHeight },
-  });
-  return event;
+function scroll(host: ChatScrollHost, scrollTop: number, clientHeight = 400) {
+  handleChatScroll(
+    host,
+    Object.defineProperty(new Event("scroll"), "currentTarget", {
+      value: { scrollHeight: 2000, scrollTop, clientHeight },
+    }),
+  );
 }
 
 function installAnimationFrameQueue() {
@@ -116,25 +124,19 @@ describe("handleChatScroll", () => {
   it("shows the scroll-to-bottom affordance only beyond the shared end boundary", () => {
     const { host } = createScrollHost();
     host.chatLastScrollTop = 1600;
-    handleChatScroll(
-      host,
-      createScrollEvent(2000, 1600 - CHAT_TRANSCRIPT_END_THRESHOLD_PX + 0.5, 400),
-    );
+    scroll(host, 1600 - CHAT_TRANSCRIPT_END_THRESHOLD_PX + 0.5);
     expect(host.chatNewMessagesBelow).toBe(false);
-    handleChatScroll(
-      host,
-      createScrollEvent(2000, 1600 - CHAT_TRANSCRIPT_END_THRESHOLD_PX - 0.5, 400),
-    );
+    scroll(host, 1600 - CHAT_TRANSCRIPT_END_THRESHOLD_PX - 0.5);
     expect(host.chatNewMessagesBelow).toBe(true);
   });
 
   it("keeps reader control when a shrinking dock clamps the viewport to its new end", () => {
     const { host, container } = createScrollHost({ scrollTop: 1600, clientHeight: 400 });
     host.chatLastScrollTop = 1600;
-    handleChatScroll(host, createScrollEvent(2000, 1568, 400));
+    scroll(host, 1568);
     expect(host.chatFollowLocked).toBe(true);
-    handleChatScroll(host, createScrollEvent(2000, 1400, 600));
-    handleChatScroll(host, createScrollEvent(2000, 1400, 600));
+    scroll(host, 1400, 600);
+    scroll(host, 1400, 600);
     expect(host).toMatchObject({ chatFollowLocked: true, chatUserNearBottom: false });
     Object.defineProperty(container, "clientHeight", { value: 600 });
     container.scrollTop = 1400;
@@ -152,16 +154,10 @@ describe("scheduleChatScroll", () => {
   beforeEach(immediateFrames);
 
   it.each([false, true])("guards DOM access until commit (cancelled: %s)", (cancelled) => {
-    const { host, container } = createScrollHost({ scrollTop: 1600, clientHeight: 400 });
-    let commit = () => {};
-    const cancelCommit = vi.fn();
-    host.renderLifecycle.afterCommit = vi.fn((effect) => {
-      host.renderLifecycle.invalidate();
-      commit = () => {
-        effect(() => undefined);
-      };
-      return cancelCommit;
-    });
+    const { host, container, commit, cancelCommit } = createScrollHost(
+      { scrollTop: 1600, clientHeight: 400 },
+      true,
+    );
     scheduleChatScroll(host);
     expect(host.chatScrollElement).not.toHaveBeenCalled();
     expect(container.scrollTop).toBe(1600);
@@ -181,19 +177,7 @@ describe("scheduleChatScroll", () => {
     "releases a cancelled render's manual jump %s",
     (phase) => {
       const frames = installAnimationFrameQueue();
-      const { host } = createScrollHost();
-      let commit = () => {};
-      let cancel = () => {};
-      host.renderLifecycle.afterCommit = (effect, onCancel) => {
-        cancel = () => onCancel?.();
-        commit = () => {
-          const cleanup = effect(() => {
-            cancel = () => {};
-          });
-          cancel = cleanup ?? (() => {});
-        };
-        return () => cancel();
-      };
+      const { host, commit, cancel } = createScrollHost({}, true);
       scheduleChatScroll(host, true, false, { source: "manual" });
       if (phase === "after commit") {
         commit();
@@ -211,18 +195,13 @@ describe("scheduleChatScroll", () => {
   );
 
   it("keeps only the newest equivalent session-key scroll position", () => {
+    const latest = { scrollTop: 200, anchorToEnd: false };
     saveChatSessionScrollPosition("alias-pane", "main", { scrollTop: 100, anchorToEnd: false });
-    saveChatSessionScrollPosition("alias-pane", "agent:main:main", {
-      scrollTop: 200,
-      anchorToEnd: false,
-    });
-    expect(getChatSessionScrollPosition("alias-pane", "main")).toEqual({
-      scrollTop: 200,
-      anchorToEnd: false,
-    });
+    saveChatSessionScrollPosition("alias-pane", "agent:main:main", latest);
+    expect(getChatSessionScrollPosition("alias-pane", "main")).toEqual(latest);
   });
 
-  it("preserves a locked viewport across the same resize", async () => {
+  it("preserves a locked viewport across the same resize", () => {
     const { host, container } = createScrollHost({ scrollTop: 1100, clientHeight: 900 });
     host.chatHasAutoScrolled = true;
     host.chatUserNearBottom = false;
@@ -230,28 +209,25 @@ describe("scheduleChatScroll", () => {
     host.chatLastScrollHeight = 2000;
     Object.defineProperty(container, "clientHeight", { value: 400 });
     scheduleChatScroll(host, false, false, { source: "resize" });
-    await host.updateComplete;
     expect(container.scrollTop).toBe(1100);
-    expect(host.chatFollowLocked).toBe(true);
-    expect(host.chatNewMessagesBelow).toBe(false);
+    expect(host).toMatchObject({ chatFollowLocked: true, chatNewMessagesBelow: false });
   });
 
-  it("does not re-stick streaming after a user scrolls slightly up near the bottom", async () => {
+  it("does not re-stick streaming after a user scrolls slightly up near the bottom", () => {
     const { host, container } = createScrollHost({ scrollTop: 1589, clientHeight: 400 });
     host.chatHasAutoScrolled = true;
     host.chatUserNearBottom = true;
     host.chatIsProgrammaticScroll = () => true;
     host.chatLastScrollTop = 1600;
-    handleChatScroll(host, createScrollEvent(2000, 1589, 400));
+    scroll(host, 1589);
     expect(host).toMatchObject({ chatFollowLocked: true, chatUserNearBottom: false });
     Object.defineProperty(container, "scrollHeight", { value: 2050 });
     scheduleChatScroll(host);
-    await host.updateComplete;
     expect(container.scrollTop).toBe(1589);
     expect(host.chatNewMessagesBelow).toBe(true);
     host.chatIsProgrammaticScroll = () => false;
     container.scrollTop = 1600;
-    handleChatScroll(host, createScrollEvent(2000, 1600, 400));
+    scroll(host, 1600);
     expect(host).toMatchObject({
       chatFollowLocked: false,
       chatUserNearBottom: true,
@@ -275,31 +251,29 @@ describe("scheduleChatScroll", () => {
     expect(host).toMatchObject({ chatFollowLocked: false, chatReadingHistory: scrollTop < 1600 });
     if (scrollTop < 1600) {
       container.scrollTop = 1400;
-      handleChatScroll(host, createScrollEvent(2000, 1400, 400));
+      scroll(host, 1400);
       expect(host.chatReadingHistory).toBe(true);
       container.scrollTop = 1600;
-      handleChatScroll(host, createScrollEvent(2000, 1600, 400));
+      scroll(host, 1600);
       expect(host.chatReadingHistory).toBe(false);
     }
   });
 });
 
-describe("resetChatScroll", () => {
-  it("resets state for new chat session", () => {
-    const { host } = createScrollHost();
-    host.chatHasAutoScrolled = true;
-    host.chatUserNearBottom = false;
-    host.chatFollowLocked = true;
-    host.chatLastScrollTop = 300;
-    resetChatScroll(host);
-    expect(host).toMatchObject({
-      chatHasAutoScrolled: false,
-      chatUserNearBottom: true,
-      chatFollowLocked: false,
-      chatLastScrollTop: 0,
-    });
-    expect(host.chatIsProgrammaticScroll()).toBe(false);
+it("resets state for new chat session", () => {
+  const { host } = createScrollHost();
+  host.chatHasAutoScrolled = true;
+  host.chatUserNearBottom = false;
+  host.chatFollowLocked = true;
+  host.chatLastScrollTop = 300;
+  resetChatScroll(host);
+  expect(host).toMatchObject({
+    chatHasAutoScrolled: false,
+    chatUserNearBottom: true,
+    chatFollowLocked: false,
+    chatLastScrollTop: 0,
   });
+  expect(host.chatIsProgrammaticScroll()).toBe(false);
 });
 
 describe("programmatic scroll ownership", () => {
@@ -313,11 +287,10 @@ describe("programmatic scroll ownership", () => {
     scheduleChatScroll(host, true);
     expect(host.chatScrollToEnd).toHaveBeenCalledWith({ behavior: "auto", source: "auto" });
     expect(container.scrollTop).toBe(420);
-    expect(host.chatHasAutoScrolled).toBe(false);
-    expect(host.chatNewMessagesBelow).toBe(true);
+    expect(host).toMatchObject({ chatHasAutoScrolled: false, chatNewMessagesBelow: true });
   });
 
-  it("keeps the affordance hidden while the owner reports an active command", async () => {
+  it("keeps the affordance hidden while the owner reports an active command", () => {
     const frames = installAnimationFrameQueue();
     const { host } = createScrollHost({ scrollTop: 500 });
     host.chatScrollToEnd = vi.fn(() => true);
@@ -325,7 +298,6 @@ describe("programmatic scroll ownership", () => {
     host.chatNewMessagesBelow = true;
     host.chatLastScrollTop = 500;
     scheduleChatScroll(host, true, true, { source: "manual" });
-    await host.updateComplete;
     expect(canAutoFollowChat(host)).toBe(false);
     frames.runNext();
     expect(canAutoFollowChat(host)).toBe(false);
@@ -335,19 +307,17 @@ describe("programmatic scroll ownership", () => {
     expect(canAutoFollowChat(host)).toBe(true);
     expect(host.chatScrollToEnd).toHaveBeenCalledWith({ behavior: "smooth", source: "manual" });
     expect(frames.callbacks).toHaveLength(0);
-    handleChatScroll(host, createScrollEvent(2000, 900, 400));
-    expect(host.chatLastScrollTop).toBe(900);
-    expect(host.chatNewMessagesBelow).toBe(false);
+    scroll(host, 900);
+    expect(host).toMatchObject({ chatLastScrollTop: 900, chatNewMessagesBelow: false });
   });
 
-  it("uses auto under reduced motion without adding a page scroll guard", async () => {
+  it("uses auto under reduced motion without adding a page scroll guard", () => {
     const frames = installAnimationFrameQueue();
     const { host } = createScrollHost({ scrollTop: 500 });
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
     host.chatHasAutoScrolled = true;
     host.chatUserNearBottom = false;
     scheduleChatScroll(host, true, true, { source: "manual" });
-    await host.updateComplete;
     frames.runNext();
     expect(host.chatScrollToEnd).toHaveBeenCalledWith({ behavior: "auto", source: "manual" });
     expect(frames.callbacks).toHaveLength(0);
@@ -358,16 +328,18 @@ describe("programmatic scroll ownership", () => {
     const { host, container } = createScrollHost({ scrollTop: 600 });
     host.chatLastScrollTop = 500;
     scheduleChatScroll(host, true, true, { source: "manual" });
-    // Reader input can arrive while the command waits for measured layout.
     frames.runNext();
     expect(canAutoFollowChat(host)).toBe(false);
     handleChatScrollTakeover(host);
     expect(frames.callbacks).toHaveLength(0);
     expect(host.chatScrollToEnd).not.toHaveBeenCalled();
     expect(container.scrollTop).toBe(600);
-    expect(host.chatHasAutoScrolled).toBe(true);
-    expect(host).toMatchObject({ chatFollowLocked: true, chatUserNearBottom: false });
-    expect(host.chatNewMessagesBelow).toBe(true);
+    expect(host).toMatchObject({
+      chatHasAutoScrolled: true,
+      chatFollowLocked: true,
+      chatUserNearBottom: false,
+      chatNewMessagesBelow: true,
+    });
   });
 });
 
@@ -381,12 +353,14 @@ it("retires pending follow at the physical end and publishes the locked state on
   invalidate.mockClear();
   lockChatScroll(host);
   expect(frames.callbacks).toHaveLength(0);
-  expect(host).toMatchObject({ chatFollowLocked: true, chatUserNearBottom: false });
-  expect(host.chatHasAutoScrolled).toBe(true);
+  expect(host).toMatchObject({
+    chatFollowLocked: true,
+    chatUserNearBottom: false,
+    chatHasAutoScrolled: true,
+  });
   expect(invalidate).toHaveBeenCalledTimes(1);
   lockChatScroll(host);
   expect(invalidate).toHaveBeenCalledTimes(1);
   handleChatScrollTakeover(host, true);
-  expect(host.chatFollowLocked).toBe(false);
-  expect(host.chatUserNearBottom).toBe(true);
+  expect(host).toMatchObject({ chatFollowLocked: false, chatUserNearBottom: true });
 });
