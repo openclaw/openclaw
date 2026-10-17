@@ -292,18 +292,21 @@ _openclaw_root_completion
   });
 
   itWithPowerShell.each([
-    ["apostrophes", "Jane's", "Ja"],
+    ["ordinary values", "alpha", "al", "alpha"],
+    ["apostrophes", "Jane's", "Ja", "'Jane''s'"],
+    ["left typographic apostrophes", "Jane‘s", "Ja", "'Jane‘‘s'"],
+    ["right typographic apostrophes", "Jane’s", "Ja", "'Jane’’s'"],
+    ["low typographic apostrophes", "Jane‚s", "Ja", "'Jane‚‚s'"],
+    ["reversed typographic apostrophes", "Jane‛s", "Ja", "'Jane‛‛s'"],
     [
       "literal command substitution",
       "literal $(Write-Error OPENCLAW_COMPLETION_VALUE_EXECUTED)",
       "literal",
+      "'literal $(Write-Error OPENCLAW_COMPLETION_VALUE_EXECUTED)'",
     ],
-  ])("inserts PowerShell %s as one safe argument", async (_name, value, prefix) => {
+  ])("inserts PowerShell %s as one safe argument", async (_name, value, prefix, safeValue) => {
     const program = new Command().name("openclaw");
     program.addOption(new Option("--value <value>", "Value").choices([value]));
-    const safeValue = /^[A-Za-z0-9_./:+-]+$/.test(value)
-      ? value
-      : `'${value.replaceAll("'", "''")}'`;
 
     expect(await powerShellCompletion.complete(program, `openclaw --value ${prefix}`)).toEqual([
       safeValue,
@@ -311,6 +314,18 @@ _openclaw_root_completion
     expect(await powerShellCompletion.complete(program, `openclaw --value=${prefix}`)).toEqual([
       `--value=${safeValue}`,
     ]);
+  });
+
+  itWithPowerShell.each([
+    ["apostrophes", "Jane's"],
+    ["typographic apostrophes", "Jane’s"],
+  ])("keeps PowerShell scripts valid with %s in nested command paths", async (_name, name) => {
+    const program = new Command().name("openclaw");
+    program.addOption(new Option("--value <value>").choices(["alpha"]));
+    const command = program.command("group").command(name).alias(`alias-${name}`);
+    command.addOption(new Option("--mode <mode>").choices(["local"]));
+
+    expect(await powerShellCompletion.complete(program, "openclaw --value al")).toEqual(["alpha"]);
   });
 
   itWithFish.each([
