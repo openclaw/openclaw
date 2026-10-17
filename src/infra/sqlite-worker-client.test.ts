@@ -62,8 +62,11 @@ it("attributes queued commands without changing wire bytes or exposing private c
   const cases = [
     ["audit.writer.process", "audit.writer.process"],
     ["audit.writer.prune", "audit.writer.prune"],
-    ["database.inspectIdle", "database.inspectIdle"],
     ["stateLease.renew", "stateLease.renew"],
+    ["worktrees.get", "worktrees.get"],
+    ["worktrees.insert", "worktrees.insert"],
+    ["worktrees.templates.has", "worktrees.templates.has"],
+    ["worktrees.private-customer-123", "worktrees"],
     ["capture.recordEventWithPayload", "capture"],
     ["workerInference.complete", "workerInference"],
     ["session.entry.read", "session.entry.read"],

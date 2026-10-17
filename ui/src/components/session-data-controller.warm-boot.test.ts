@@ -10,8 +10,8 @@ import * as snapshotPrewarm from "../pages/chat/session-snapshot-prewarm.ts";
 import { createContext, createGatewayHarness, TWO_AGENTS } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
-import type { SessionDataControllerHost } from "./session-data-controller-catalog.ts";
-import { SessionDataController } from "./session-data-controller.ts";
+import type { SessionDataInputs } from "./session-data-catalog.ts";
+import { SessionDataOwner } from "./session-data.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -119,10 +119,6 @@ describe("sidebar live roster publication", () => {
         getRouteSessionKey: () => context.gateway.snapshot.sessionKey.trim(),
         childSessionParents: () => new Set(),
         sessionDataContext: context,
-        addController: () => undefined,
-        removeController: () => undefined,
-        requestUpdate: () => undefined,
-        updateComplete: Promise.resolve(true),
         dismissTransientMenus: () => false,
         expandedAgentId: () => "main",
         promoteCreatedSession: () => undefined,
@@ -130,13 +126,13 @@ describe("sidebar live roster publication", () => {
         sidebarSessionStatusFilter: () => statusFilter,
         sidebarSessionOwnerFilter: () => ({ ownerId: null, involvingMe: false }),
         sessionCatalogIdsWithoutVisibleRows: () => [],
-        querySelector: () => null,
         samePresence: () => false,
-      } satisfies SessionDataControllerHost;
-      const controller = new SessionDataController(host);
+      } satisfies SessionDataInputs;
+      const controller = new SessionDataOwner(host, () => undefined);
+      let stop = () => {};
       try {
         if (cacheTiming === "after") {
-          controller.hostConnected();
+          stop = controller.connect();
         }
         cachedRoster.resolve({
           agentId: "main",
@@ -147,7 +143,7 @@ describe("sidebar live roster publication", () => {
         });
         await sessions.whenCachedRosterSettled();
         if (cacheTiming === "before") {
-          controller.hostConnected();
+          stop = controller.connect();
         }
 
         expect(sessions.canonicalListRevision).toBe(0);
@@ -201,7 +197,7 @@ describe("sidebar live roster publication", () => {
         await vi.waitFor(() => expect(sessions.canonicalListRevision).toBe(2));
         expect(controller.sessionsResult?.sessions).toEqual(refreshed.sessions);
       } finally {
-        controller.hostDisconnected();
+        stop();
         sessions.dispose();
       }
     },

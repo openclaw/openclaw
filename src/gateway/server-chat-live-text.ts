@@ -5,9 +5,11 @@ import {
   type ChatStatusEvent,
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { AgentEventPayload, AgentEventRuntimePayload } from "../infra/agent-events.js";
+import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { resolveAssistantTextInput } from "./agent-event-assistant-text.js";
 import {
+  appendChatCanvasBlocks,
   appendChatCanvasBlocksToMessage,
   type ChatCanvasBlock,
 } from "./chat-display-projection.canvas.js";
@@ -18,6 +20,10 @@ type ChatRunRecord = ReturnType<ChatRunState["getOrCreate"]>;
 type LiveTextStream = "chat" | "agent";
 
 type LiveTextDelivery = NonNullable<GatewayBroadcastOpts["liveText"]>;
+
+const CHAT_RETRY_REASONS = new Set<string>(
+  ChatStatusEventSchema.properties.retry.properties.reason.anyOf.map((reason) => reason.const),
+);
 
 export function projectChatStatusEvent(
   event: Pick<AgentEventPayload, "seq" | "data">,
@@ -33,9 +39,7 @@ export function projectChatStatusEvent(
     ...(event.data.phase === "retrying"
       ? {
           phase: "starting_model",
-          ...(["rate_limit", "overloaded", "server_error", "timeout", "output_limit"].includes(
-            String(event.data.reason),
-          )
+          ...(CHAT_RETRY_REASONS.has(String(event.data.reason))
             ? {
                 retry: {
                   attempt: event.data.attempt,
@@ -116,6 +120,34 @@ export function chatWireProjection(params: {
         ),
       ),
   };
+}
+
+export function projectChatTerminalMessage(params: {
+  runId: string;
+  text: string;
+  displayText?: string;
+  timestamp: number;
+  canvasBlocks: ChatCanvasBlock[];
+  idempotencyKey?: string;
+}) {
+  const { text, displayText, timestamp, canvasBlocks, runId, idempotencyKey } = params;
+  return appendChatCanvasBlocksToMessage(
+    {
+      role: "assistant",
+      content: text ? [{ type: "text", text }] : [],
+      timestamp,
+      ...(displayText === undefined
+        ? {}
+        : {
+            [ASSISTANT_DISPLAY_CONTENT_FIELD]: appendChatCanvasBlocks(
+              displayText ? [{ type: "text", text: displayText }] : [],
+              canvasBlocks,
+            ),
+          }),
+      ...(idempotencyKey ? { __openclaw: { runId, idempotencyKey } } : {}),
+    },
+    canvasBlocks,
+  );
 }
 
 export function assistantWireProjection(

@@ -52,10 +52,10 @@ export function createGitHubReadGroup() {
 /** Session reads pin the admitted host, endpoint and credential across every auxiliary request. */
 export function prepareSessionPullRequestGitHubRead(
   host: string,
-  fetchImpl: typeof fetch,
   assertAccess: () => void,
   options: { optionalAuth?: boolean; signal?: AbortSignal } = {},
 ) {
+  const fetchRequest = fetch;
   const optionalAuth = options.optionalAuth !== false;
   const selected = gitHubPublicApi.resolveGitHubApiCredentialScope(undefined, host);
   const assertCurrent = () => {
@@ -92,7 +92,7 @@ export function prepareSessionPullRequestGitHubRead(
         gitHubPublicApi.readGitHubJsonResponse(
           await gitHubPublicApi.fetchGitHubApi(
             url,
-            fetchImpl,
+            fetchRequest,
             token,
             beforeRedirect,
             identity,

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js";
@@ -76,6 +76,53 @@ describe("createAgentLifecycleTerminalBackstop", () => {
     expect(data.assistantTranscriptIdempotencyKey).toBe(retry ? undefined : "saved-A");
     expect(data.error).toBe(retry ? "preparation failed" : "first failure");
     expect(data.executionSettled).toBe(true);
+  });
+
+  it.each([false, true])("replaces pending or captured attempt facts (captured=%s)", (captured) => {
+    emitAgentEvent.mockClear();
+    const terminal = createAgentLifecycleTerminalBackstop({
+      runId: "recovered",
+      startedAt: 100,
+      getLifecycleGeneration: () => "generation",
+      resolveTerminationFields: () => ({}),
+    });
+    terminal.note({
+      stream: "lifecycle",
+      data: {
+        phase: "finishing",
+        error: "old capacity error",
+        stopReason: "error",
+        errorObservation: { httpStatus: 503 },
+        timeoutPhase: "provider",
+        providerStarted: true,
+        aborted: true,
+        livenessState: "blocked",
+        replayInvalid: true,
+        suppressErrorNotice: true,
+        assistantTranscriptIdempotencyKey: "old-receipt",
+      },
+    });
+    if (captured) {
+      terminal.capture("error", new Error("old capacity error"));
+    }
+    terminal.replaceAttemptTerminal();
+    expect(terminal.getDeferredError()).toBeUndefined();
+    terminal.emit("end", {
+      meta: { stopReason: "stop", assistantTranscriptIdempotencyKey: "selected" },
+    });
+    terminal.replaceAttemptTerminal();
+    terminal.emit("error", new Error("must not reopen"));
+    expect(emitAgentEvent).toHaveBeenCalledOnce();
+    const event = emitAgentEvent.mock.calls[0]?.[0];
+    assert.isDefined(event);
+    expect(event.data).toEqual({
+      phase: "end",
+      startedAt: 100,
+      endedAt: expect.any(Number),
+      stopReason: "stop",
+      assistantTranscriptIdempotencyKey: "selected",
+      executionSettled: true,
+    });
   });
 
   it("publishes the provider-owned OAuth summary instead of the wrapped diagnostic", () => {

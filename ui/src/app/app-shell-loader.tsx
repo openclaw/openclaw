@@ -20,6 +20,7 @@ export function ShellLoader(props: ShellLoaderProps): SolidJSX.Element {
           runtime={props.runtime}
           getReadiness={props.getReadiness}
           onboarding={props.onboarding}
+          onShell={props.onShell}
         />
       </Loading>
     </Errored>

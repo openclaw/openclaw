@@ -19,15 +19,12 @@ vi.mock("./agent-runner-memory-transcript-context.js", () => ({
 vi.mock("./session-updates.js", () => ({ incrementCompactionCount: account }));
 
 it.each([
-  { runtime: "codex", ok: false, compacted: false },
-  { runtime: "codex", ok: true, compacted: false },
-  { runtime: "codex", ok: true, compacted: false, reason: "already under target" },
   { runtime: "openclaw", ok: false, compacted: false },
   { runtime: "openclaw", ok: true, compacted: true },
 ])(
-  "continues byte preflight with bounded context after $runtime compaction (ok=$ok, compacted=$compacted)",
-  async ({ runtime, ok, compacted, reason = "fixture declines compaction" }) => {
-    compact.mockReset().mockResolvedValue({ ok, compacted, reason });
+  "continues built-in byte preflight with bounded context (ok=$ok, compacted=$compacted)",
+  async ({ runtime, ok, compacted }) => {
+    compact.mockReset().mockResolvedValue({ ok, compacted, reason: "fixture declines compaction" });
     account
       .mockReset()
       .mockImplementation(

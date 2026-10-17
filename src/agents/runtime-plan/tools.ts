@@ -147,7 +147,7 @@ export function normalizeAgentRuntimeTools<
         }));
   // Provider collection views wrap the results of map, including host-owned tool wrappers.
   // Own the assembly array so later wrapping keeps its metadata; retain fenced tool elements.
-  const normalizedTools = Array.isArray(normalized) ? Array.from(normalized) : normalizableTools;
+  const normalizedTools = Array.from(normalized);
   return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
 }
 

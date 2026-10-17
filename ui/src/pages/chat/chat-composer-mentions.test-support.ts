@@ -11,7 +11,7 @@ import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 import {
   createNewSessionComposerTextarea,
   type NewSessionComposerTextarea,
-} from "../new-session/composer-controller.ts";
+} from "../new-session/composer-textarea.ts";
 import { composerContext, mountNewSessionComposer } from "../new-session/composer.test-support.ts";
 import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
@@ -31,10 +31,10 @@ export const people: UsersMentionableResult = {
   ],
   truncated: false,
 };
-const controllers: NewSessionComposerTextarea[] = [];
+const composerTextareas: NewSessionComposerTextarea[] = [];
 
 export async function resetMentionComposerFixture() {
-  controllers.splice(0).forEach((controller) => controller.disconnect());
+  composerTextareas.splice(0).forEach((composerTextarea) => composerTextarea.disconnect());
   await resetComposerFixture();
 }
 
@@ -55,8 +55,8 @@ export function composerFixture(
   const client = createTestGatewayClient((method, params, options) =>
     method === "commands.list" ? { commands: [] } : request(method, params, options),
   );
-  const controller = createNewSessionComposerTextarea();
-  controllers.push(controller);
+  const composerTextarea = createNewSessionComposerTextarea();
+  composerTextareas.push(composerTextarea);
   const context = composerContext({
     client,
     phase: "connected",
@@ -109,7 +109,6 @@ export function composerFixture(
         mentionDirectory: unsupported ? undefined : directory,
         mentionsUnsupported: unsupported,
         onDraftChange: onInput,
-        onRequestUpdate: renderCurrent,
         onSlashCommand: slashCommand,
         canAbort: true,
         onAbort: abort,
@@ -130,7 +129,7 @@ export function composerFixture(
         requiresModifier: false,
         onChange: renderCurrent,
         submitting: false,
-        textareaController: controller,
+        composerTextarea,
         onInput: (next, selected) => {
           onInput(next, selected);
           renderCurrent();

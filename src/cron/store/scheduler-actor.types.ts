@@ -22,8 +22,7 @@ export type CronSchedulerConfig = {
   startupDeferredMissedAgentJobDelayMs?: number;
 };
 
-/** Versions order pushed config only; they never authorize a run. */
-export type CronSchedulerSnapshot = { version: number; config: CronSchedulerConfig };
+export type CronSchedulerSnapshot = { config: CronSchedulerConfig };
 
 export type CronSchedulerResult = CronRunQueueOperations["cron.requestRuns"]["output"] &
   CronRunQueueOperations["cron.drainQueue"]["output"] & {

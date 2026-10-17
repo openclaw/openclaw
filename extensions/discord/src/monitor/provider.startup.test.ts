@@ -104,7 +104,6 @@ describe("Discord provider startup", () => {
       voiceEnabled: false,
       discordConfig: {},
       runtime: createRuntimeSpies(),
-      createClient: (options, handlers, plugins) => new Client(options, handlers, plugins),
       isDisallowedIntentsError: () => false,
       ...overrides,
     });
@@ -183,20 +182,14 @@ describe("Discord provider startup", () => {
     const fetchUser = vi.fn(async () => {
       throw new Error("network should not be used");
     });
-    const logStartupPhase = vi.fn();
     const botId = "1477179610322964541";
     await expect(
       fetchDiscordBotIdentity({
         client: { fetchUser } as never,
         token: `${Buffer.from(botId).toString("base64")}.GhIiP9.vU1xEpJ6NjFm`,
         runtime: createRuntimeSpies(),
-        logStartupPhase,
       }),
     ).resolves.toEqual({ botUserId: botId, botUserName: undefined });
     expect(fetchUser).not.toHaveBeenCalled();
-    expect(logStartupPhase).toHaveBeenCalledWith(
-      "fetch-bot-identity:done",
-      `botUserId=${botId} botUserName=<missing> source=token`,
-    );
   });
 });

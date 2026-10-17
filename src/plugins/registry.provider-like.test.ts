@@ -1,8 +1,7 @@
-/** Verifies provider-like plugin registry entries across capability families. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { registryContainsRuntimePluginIds } from "./active-runtime-registry.js";
-import { createPluginRecord } from "./loader-records.js";
+import { createOwnershipRecord } from "./registry-ownership.test-support.js";
 import { createTestPluginRegistry as createTestRegistry } from "./registry-runtime.test-helpers.js";
 import type {
   OpenClawPluginApi,
@@ -10,38 +9,36 @@ import type {
   UnifiedModelCatalogProviderContext,
 } from "./types.js";
 
-describe("plugin registry provider-like registrations", () => {
-  it("combines same-plugin overlapping model catalog hooks", async () => {
-    const builder = createTestRegistry();
-    const { record } = createCatalogOwner(builder, "catalog-owner");
-    const rows = ["tts-model", "realtime-model"].map((model) => ({
-      kind: "voice" as const,
+it("combines same-plugin overlapping model catalog hooks", async () => {
+  const builder = createTestRegistry();
+  const { record } = createCatalogOwner(builder, "catalog-owner");
+  const rows = ["tts-model", "realtime-model"].map((model) => ({
+    kind: "voice" as const,
+    provider: "catalog-provider",
+    model,
+    source: "static" as const,
+  }));
+  for (const row of rows) {
+    builder.registerModelCatalogProvider(record, {
       provider: "catalog-provider",
-      model,
-      source: "static" as const,
-    }));
-    for (const row of rows) {
-      builder.registerModelCatalogProvider(record, {
-        provider: "catalog-provider",
-        kinds: ["voice"],
-        staticCatalog: () => [row],
-      });
-    }
-    expect(builder.registry.modelCatalogProviders).toHaveLength(1);
-    await expect(
-      builder.registry.modelCatalogProviders[0]?.provider.staticCatalog?.(catalogContext),
-    ).resolves.toEqual(rows);
-  });
+      kinds: ["voice"],
+      staticCatalog: () => [row],
+    });
+  }
+  expect(builder.registry.modelCatalogProviders).toHaveLength(1);
+  await expect(
+    builder.registry.modelCatalogProviders[0]?.provider.staticCatalog?.(catalogContext),
+  ).resolves.toEqual(rows);
 });
 
 const reservationCases = [
-  ["text", "providers", "text"],
-  ["speech", "speechProviders", "voice"],
-  ["transcription", "realtimeTranscriptionProviders", "voice"],
-  ["realtime", "realtimeVoiceProviders", "voice"],
-  ["image", "imageGenerationProviders", "image_generation"],
-  ["video", "videoGenerationProviders", "video_generation"],
-  ["music", "musicGenerationProviders", "music_generation"],
+  ["text", "providers"],
+  ["speech", "speechProviders"],
+  ["transcription", "realtimeTranscriptionProviders"],
+  ["realtime", "realtimeVoiceProviders"],
+  ["image", "imageGenerationProviders"],
+  ["video", "videoGenerationProviders"],
+  ["music", "musicGenerationProviders"],
 ] as const;
 
 function registerReservedProvider(
@@ -54,6 +51,7 @@ function registerReservedProvider(
   const unused = () => {
     throw new Error("registration must not invoke provider operations");
   };
+  const voice = { ...provider, isConfigured: unused };
   switch (family) {
     case "text":
       return api.registerProvider({
@@ -63,19 +61,11 @@ function registerReservedProvider(
         staticCatalog: { run },
       });
     case "speech":
-      return api.registerSpeechProvider({ ...provider, isConfigured: unused, synthesize: unused });
+      return api.registerSpeechProvider({ ...voice, synthesize: unused });
     case "transcription":
-      return api.registerRealtimeTranscriptionProvider({
-        ...provider,
-        isConfigured: unused,
-        createSession: unused,
-      });
+      return api.registerRealtimeTranscriptionProvider({ ...voice, createSession: unused });
     case "realtime":
-      return api.registerRealtimeVoiceProvider({
-        ...provider,
-        isConfigured: unused,
-        createBridge: unused,
-      });
+      return api.registerRealtimeVoiceProvider({ ...voice, createBridge: unused });
     case "image":
       return api.registerImageGenerationProvider({
         ...provider,
@@ -97,29 +87,22 @@ function registerReservedProvider(
   }
 }
 
-function createCatalogOwner(
-  builder: ReturnType<typeof createTestRegistry>,
-  id: string,
-  fields: Partial<Parameters<typeof createPluginRecord>[0]> = {},
-) {
-  const record = createPluginRecord({
-    id,
-    name: id,
-    source: `/plugins/${id}/index.ts`,
-    origin: "global",
-    enabled: true,
-    configSchema: false,
-    ...fields,
-  });
+function createCatalogOwner(builder: ReturnType<typeof createTestRegistry>, id: string) {
+  const record = createOwnershipRecord(id, { source: `/plugins/${id}/index.ts` });
   return { record, api: builder.createApi(record, { config: {} }) };
 }
 
 function catalogOwners(builder: ReturnType<typeof createTestRegistry>) {
-  return builder.registry.modelCatalogProviders.map(({ pluginId, provider }) => ({
+  return builder.registry.modelCatalogProviders.map(({ pluginId, provider }) => [
     pluginId,
-    provider: provider.provider,
-    kinds: provider.kinds,
-  }));
+    provider.provider,
+    provider.kinds,
+  ]);
+}
+
+function registrationErrors(record: { id: string; source: string }, ...messages: string[]) {
+  const { id: pluginId, source } = record;
+  return messages.map((message) => ({ level: "error", pluginId, source, message }));
 }
 
 const catalogContext: UnifiedModelCatalogProviderContext = {
@@ -129,49 +112,36 @@ const catalogContext: UnifiedModelCatalogProviderContext = {
   resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
 };
 
-describe("text catalog ownership", () => {
-  it("rejects blank provider IDs without executing catalog hooks", () => {
-    const builder = createTestRegistry();
-    const { api, record } = createCatalogOwner(builder, "owner");
-    const run = vi.fn(async () => null);
-    expect(registerReservedProvider(api, "text", "   ", run)).toBeUndefined();
-    expect(run).not.toHaveBeenCalled();
-    expect(builder.registry.providers).toEqual([]);
-    expect(record.providerIds).toEqual([]);
-    expect(catalogOwners(builder)).toEqual([]);
-    expect(builder.registry.diagnostics).toEqual([
-      {
-        level: "error",
-        pluginId: "owner",
-        source: record.source,
-        message: "provider registration missing id",
-      },
-    ]);
-  });
+it("rejects blank text provider IDs without executing catalog hooks", () => {
+  const builder = createTestRegistry();
+  const { api, record } = createCatalogOwner(builder, "owner");
+  const run = vi.fn(async () => null);
+  expect(registerReservedProvider(api, "text", "   ", run)).toBeUndefined();
+  expect(run).not.toHaveBeenCalled();
+  expect(builder.registry.providers).toEqual([]);
+  expect(record.providerIds).toEqual([]);
+  expect(catalogOwners(builder)).toEqual([]);
+  expect(builder.registry.diagnostics).toEqual(
+    registrationErrors(record, "provider registration missing id"),
+  );
 });
 
 describe("text catalog composition", () => {
-  const family = "text";
-  const kind = "text";
   it("preserves foreign catalog ownership while accepting the provider registration", () => {
     const builder = createTestRegistry();
     const alpha = createCatalogOwner(builder, "alpha");
     const beta = createCatalogOwner(builder, "beta");
     const run = vi.fn(async () => null);
     alpha.api.registerModelCatalogProvider({ provider: "catalog-provider", kinds: ["text"] });
-    registerReservedProvider(beta.api, family, "catalog-provider", run);
-    expect(catalogOwners(builder)).toEqual([
-      { pluginId: "alpha", provider: "catalog-provider", kinds: ["text"] },
-    ]);
+    registerReservedProvider(beta.api, "text", "catalog-provider", run);
+    expect(catalogOwners(builder)).toEqual([["alpha", "catalog-provider", ["text"]]]);
     expect(builder.registry.providers.map(({ pluginId }) => pluginId)).toEqual(["beta"]);
-    expect(builder.registry.diagnostics).toEqual([
-      {
-        level: "error",
-        pluginId: "beta",
-        source: beta.record.source,
-        message: "model catalog provider already registered: catalog-provider (alpha)",
-      },
-    ]);
+    expect(builder.registry.diagnostics).toEqual(
+      registrationErrors(
+        beta.record,
+        "model catalog provider already registered: catalog-provider (alpha)",
+      ),
+    );
     expect(run).not.toHaveBeenCalled();
   });
 
@@ -181,27 +151,23 @@ describe("text catalog composition", () => {
       const builder = createTestRegistry();
       const { api } = createCatalogOwner(builder, "owner");
       const run = vi.fn(async () => null);
-      const row = { kind, provider: "catalog-provider", model: "explicit-model" } as const;
+      const row = { kind: "text", provider: "catalog-provider", model: "explicit-model" } as const;
       const staticCatalog = vi.fn(() => [{ ...row, source: "static" as const }]);
       const liveCatalog = vi.fn(() => [{ ...row, source: "live" as const }]);
-      const automatic = () => registerReservedProvider(api, family, "catalog-provider", run);
+      const automatic = () => registerReservedProvider(api, "text", "catalog-provider", run);
       const explicit = () =>
         api.registerModelCatalogProvider({
           provider: "catalog-provider",
-          kinds: [kind],
+          kinds: ["text"],
           staticCatalog,
           liveCatalog,
         });
-      if (order === "automatic-first") {
-        automatic();
-        explicit();
-      } else {
-        explicit();
-        automatic();
+      for (const register of order === "automatic-first"
+        ? [automatic, explicit]
+        : [explicit, automatic]) {
+        register();
       }
-      expect(catalogOwners(builder)).toEqual([
-        { pluginId: "owner", provider: "catalog-provider", kinds: [kind] },
-      ]);
+      expect(catalogOwners(builder)).toEqual([["owner", "catalog-provider", ["text"]]]);
       expect(run).not.toHaveBeenCalled();
       expect(staticCatalog).not.toHaveBeenCalled();
       expect(liveCatalog).not.toHaveBeenCalled();
@@ -209,17 +175,14 @@ describe("text catalog composition", () => {
         builder.registry.modelCatalogProviders[0],
         "catalog reservation",
       ).provider;
-      const staticRows = await provider.staticCatalog?.(catalogContext);
-      const liveRows = await provider.liveCatalog?.(catalogContext);
       // Automatic rows are intentionally not an oracle; the explicit API contribution is.
-      expect(staticRows?.filter((entry) => entry.model === row.model)).toEqual([
-        { ...row, source: "static" },
-      ]);
-      expect(liveRows?.filter((entry) => entry.model === row.model)).toEqual([
-        { ...row, source: "live" },
-      ]);
-      expect(staticCatalog).toHaveBeenCalledExactlyOnceWith(catalogContext);
-      expect(liveCatalog).toHaveBeenCalledExactlyOnceWith(catalogContext);
+      for (const [source, rows, hook] of [
+        ["static", await provider.staticCatalog?.(catalogContext), staticCatalog],
+        ["live", await provider.liveCatalog?.(catalogContext), liveCatalog],
+      ] as const) {
+        expect(rows?.filter((entry) => entry.model === row.model)).toEqual([{ ...row, source }]);
+        expect(hook).toHaveBeenCalledExactlyOnceWith(catalogContext);
+      }
       expect(builder.registry.diagnostics).toEqual([]);
     },
   );
@@ -239,7 +202,7 @@ describe("catalog reservation lifecycle", () => {
     });
     expect(builder.registry.providers).toHaveLength(1);
     expect(catalogOwners(builder)).toEqual(
-      mode === "none" ? [] : [{ pluginId: "owner", provider: "text-provider", kinds: ["text"] }],
+      mode === "none" ? [] : [["owner", "text-provider", ["text"]]],
     );
     expect(run).not.toHaveBeenCalled();
   });
@@ -263,12 +226,12 @@ describe("catalog reservation lifecycle", () => {
       staticCatalog: explicit,
     });
     expect(catalogOwners(builder)).toEqual([
-      { pluginId: "alpha", provider: "catalog-provider", kinds: ["text", "voice"] },
-      { pluginId: "alpha", provider: "catalog-provider", kinds: ["voice"] },
-      { pluginId: "alpha", provider: "catalog-provider", kinds: ["image_generation"] },
-      { pluginId: "alpha", provider: "catalog-provider", kinds: ["video_generation"] },
-      { pluginId: "alpha", provider: "catalog-provider", kinds: ["music_generation"] },
-      { pluginId: "beta", provider: "other-provider", kinds: ["voice"] },
+      ["alpha", "catalog-provider", ["text", "voice"]],
+      ["alpha", "catalog-provider", ["voice"]],
+      ["alpha", "catalog-provider", ["image_generation"]],
+      ["alpha", "catalog-provider", ["video_generation"]],
+      ["alpha", "catalog-provider", ["music_generation"]],
+      ["beta", "other-provider", ["voice"]],
     ]);
     expect(registryContainsRuntimePluginIds(builder.registry, ["alpha", "beta"])).toBe(true);
     expect(registryContainsRuntimePluginIds(builder.registry, [])).toBe(false);
@@ -276,9 +239,7 @@ describe("catalog reservation lifecycle", () => {
     expect(registryContainsRuntimePluginIds(builder.registry, ["alpha"])).toBe(false);
     builder.registry.plugins.pop();
     builder.rollbackPluginGlobalSideEffects(alpha.record.id, alpha.record);
-    expect(catalogOwners(builder)).toEqual([
-      { pluginId: "beta", provider: "other-provider", kinds: ["voice"] },
-    ]);
+    expect(catalogOwners(builder)).toEqual([["beta", "other-provider", ["voice"]]]);
     for (const [, registryKey] of reservationCases) {
       expect(builder.registry[registryKey]).toEqual([]);
     }
@@ -295,19 +256,12 @@ describe("catalog reservation lifecycle", () => {
     api.registerModelCatalogProvider({ provider: " ", kinds: ["text"] });
     api.registerModelCatalogProvider({ provider: "catalog-provider", kinds: [] });
     expect(catalogOwners(builder)).toEqual([]);
-    expect(builder.registry.diagnostics).toEqual([
-      {
-        level: "error",
-        pluginId: "owner",
-        source: record.source,
-        message: "model catalog provider registration missing provider",
-      },
-      {
-        level: "error",
-        pluginId: "owner",
-        source: record.source,
-        message: 'model catalog provider "catalog-provider" registration missing kinds',
-      },
-    ]);
+    expect(builder.registry.diagnostics).toEqual(
+      registrationErrors(
+        record,
+        "model catalog provider registration missing provider",
+        'model catalog provider "catalog-provider" registration missing kinds',
+      ),
+    );
   });
 });

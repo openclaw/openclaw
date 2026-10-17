@@ -61,10 +61,12 @@ before the next turn; transient per-turn restrictions use a temporary
 restricted thread and preserve the existing binding for later resume.
 
 `sessions_yield`, `sessions_spawn`, and message-tool-only source replies stay
-direct because they are turn-control or delegation contracts. Guidance still
-prefers Codex's native `spawn_agent` as the primary Codex subagent surface,
-while explicit OpenClaw or ACP delegation remains directly callable through
-`sessions_spawn`. In Codex Code Mode, generic OpenClaw
+direct because they are turn-control or delegation contracts. Guidance uses
+Codex's native `spawn_agent` for work using only Codex-native tools. New work
+requiring OpenClaw tools goes through the available managed `sessions_spawn`
+route from the start; existing native children stay with native collaboration.
+See [dynamic tools](/plugins/codex-harness-reference/dynamic-tools) for runtime
+selection. In Codex Code Mode, generic OpenClaw
 dynamic-tool results are JSON text rather than JavaScript objects, so parse
 JSON-looking results before reading fields. Codex also serializes nested
 dynamic calls; submit several `sessions_spawn` calls in a bounded loop rather
@@ -180,8 +182,11 @@ to the app-server normally.
 Failed app-server startup waits for child shutdown before returning its error.
 If startup times out or is canceled during process registration, cleanup joins
 that registration and closes any late child. Cleanup can extend beyond the
-startup deadline. A canceled caller leaves startup running when another caller
-still owns it.
+startup deadline. A registration failure keeps its specific error when it settles
+during that cleanup, instead of becoming a generic initialization timeout.
+Canceling a shared-client waiter leaves service-owned startup running even if it
+was the only waiter. Later callers can join it; once ready, an unused client
+retires after the idle grace. Isolated startup remains caller-owned.
 
 OpenClaw preserves assistant text supplied with the initial native item and
 reasoning supplied with a completed item, even when Codex sends no text deltas.

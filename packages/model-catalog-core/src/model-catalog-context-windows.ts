@@ -1,13 +1,10 @@
+import { asPositiveInteger as normalizePositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   MODEL_CATALOG_MAX_CONTEXT_WINDOWS,
   type ModelCatalogContextWindowOption,
 } from "./model-catalog-types.js";
-
-function normalizePositiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
-}
 
 function normalizeModelCatalogContextWindows(
   value: unknown,

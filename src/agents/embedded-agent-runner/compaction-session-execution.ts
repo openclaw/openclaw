@@ -113,8 +113,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const accountingRecorder = readCompactionAccountingRecorder(params.contextEngineRuntimeContext);
     const memoryTranscript = accountingRecorder?.memoryTranscript;
+    const preparedSession = accountingRecorder?.preparedSession;
     const sessionTarget =
       memoryTranscript?.sessionTarget ??
+      preparedSession?.sessionTarget ??
       (await resolveAgentRunSessionTarget({
         agentId: sessionAgentId,
         config: params.config,
@@ -133,6 +135,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
     const preparedSessionManager =
       memoryTranscript?.sessionManager ??
+      preparedSession?.sessionManager ??
       (await SessionManager.openAsync(sessionTarget, undefined, undefined, params.abortSignal));
     assertActive();
     const responsesApi =
@@ -148,8 +151,8 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
       missingToolResultText: responsesApi ? "aborted" : undefined,
       allowedToolNames,
-      withCompactionPersistence: params.transcriptByteCompactionPersistence,
-      withCompactionPersistenceAsync: params.transcriptByteCompactionPersistenceAsync,
+      withCompactionPersistenceAsync:
+        params.seedCompaction ?? accountingRecorder?.withCompactionPersistenceAsync,
     });
     compactionSessionManager = sessionManager;
     const recordUsage = accountingRecorder?.recordUsage
@@ -343,7 +346,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         session.agent.state.messages = dedupedValidated;
         // "Original" compaction metrics should describe the validated transcript that enters
         // limiting/compaction, not the raw on-disk session snapshot.
-        const originalMessages = session.messages.slice();
+        const originalMessages = session.messages;
         const truncated = preserveCompactionReplayWindow(
           originalMessages,
           limitHistoryTurns(
@@ -370,7 +373,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         if (limited.length > 0) {
           session.agent.state.messages = limited;
         }
-        const hookRunner = getGlobalHookRunner();
+        const hookRunner = accountingRecorder?.hostOwnsCompactionLifecycle
+          ? null
+          : getGlobalHookRunner();
         const observedTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
         const beforeHookMetrics = buildBeforeCompactionHookMetrics({
           originalMessages,
@@ -450,7 +455,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             compactionKind: "server-endpoint",
           });
         };
-        const serverResult = params.transcriptBytePreflightAuthority
+        const serverResult = params.seedCompaction
           ? undefined
           : await attemptServerEndpointCompaction({
               trigger,
@@ -576,7 +581,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             });
         const messageCountAfter = session.messages.length;
         const compactedCount = Math.max(0, messageCountOriginal - messageCountAfter);
-        if (!memoryTranscript) {
+        if (!memoryTranscript && !accountingRecorder?.hostOwnsCompactionLifecycle) {
           await runPostCompactionSideEffects({
             config: params.config,
             sessionKey: params.sessionKey,

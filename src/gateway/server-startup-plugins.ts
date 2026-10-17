@@ -61,12 +61,12 @@ export async function runGatewayPostReadyStartupMaintenance(params: {
         if (params.pluginMetadataSnapshot?.registrySource !== "derived") {
           return;
         }
-        const [{ withPluginLifecycleLease }, { refreshPluginRegistryAfterConfigMutation }] =
+        const [{ withPluginLifecycleLeaseAsync }, { refreshPluginRegistryAfterConfigMutation }] =
           await Promise.all([
             import("../plugins/plugin-lifecycle-lease.js"),
             import("../plugins/registry-refresh.js"),
           ]);
-        await withPluginLifecycleLease(
+        await withPluginLifecycleLeaseAsync(
           {
             signal: params.signal,
             assertCurrent: () => params.signal.throwIfAborted(),
@@ -342,7 +342,11 @@ export async function loadGatewayStartupPluginRuntime(params: {
 }) {
   // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
   // planning without importing plugin package runtimes.
+  const beforeBootstrapImport = performance.now();
   const { prepareGatewayPluginLoad } = await import("./server-plugin-bootstrap.js");
+  params.startupTrace?.detail("plugins.gateway-bootstrap-import", [
+    ["durationMs", performance.now() - beforeBootstrapImport],
+  ]);
   await params.pluginRuntimeClaim?.waitForUnblocked();
   if (params.pluginRuntimeClaim && !params.pluginRuntimeClaim.isCurrent()) {
     const currentPluginRegistry = params.getCurrentPluginRegistry?.();

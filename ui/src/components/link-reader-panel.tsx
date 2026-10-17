@@ -1,21 +1,16 @@
 import { insert } from "@solidjs/web";
-import {
-  createEffect,
-  createMemo,
-  createRenderEffect,
-  createSignal,
-  For,
-  onCleanup,
-  onSettled,
-} from "solid-js";
+import { createEffect, createMemo, For, Repeat, onCleanup, onSettled, untrack } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { DockResizer } from "./dock-layout-solid.tsx";
 import { LinkReaderContent } from "./link-reader-content.tsx";
 import {
   LINK_READER_TAB_LIMIT,
-  LinkReaderPanelOwner,
+  createLinkReaderPanel,
+  type LinkReaderPanelOwner,
   type LinkReaderPanelProps,
 } from "./link-reader-panel-owner.ts";
 import {
@@ -23,30 +18,30 @@ import {
   tabTarget,
   tabLabel,
   type ReaderTab,
+  type ReaderSection,
 } from "./link-reader-panel-view.ts";
 import { EMPTY_LINK_READERS } from "./link-reader-target.ts";
 import type { PanelHostedTabsElement } from "./panel-hosted-tabs.ts";
 import { PanelTabStrip } from "./panel-tab-strip-solid.tsx";
+import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { Icon } from "./solid/icon.tsx";
 import { PanelIconButton } from "./solid/panel-icon-button.tsx";
 
 const panelStyles = `@scope (openclaw-link-reader-panel) { ${linkReaderViewStyles.map((style) => style.replace(/:host\(([^)]+)\)/gu, ":scope$1").replaceAll(":host", ":scope")).join("\n")} }`;
 
-function HostedAction(props: { owner: LinkReaderPanelOwner; revision: number }) {
-  const activate = nativeListener("click", () => props.owner.createTab());
+function HostedAction(props: { view: () => LinkReaderPanelOwner }) {
   const label = () => t("linkReader.newTab");
   return (
     <button
-      ref={activate}
+      ref={nativeListener("click", () => props.view().createTab())}
       class="rail-header__action bp-icon"
       type="button"
       aria-label={label()}
       title={label()}
       disabled={
-        (void props.revision,
-        props.owner.tabs.length >= LINK_READER_TAB_LIMIT ||
-          !props.owner.available ||
-          !props.owner.readers.length)
+        props.view().state.tabs.length >= LINK_READER_TAB_LIMIT ||
+        !props.view().props.available ||
+        !props.view().props.readers.length
       }
     >
       <Icon name="plus" />
@@ -54,7 +49,36 @@ function HostedAction(props: { owner: LinkReaderPanelOwner; revision: number }) 
   );
 }
 
-function PanelContent(props: { tab: ReaderTab; available: boolean; refresh: () => void }) {
+function ReaderLoading(props: { url: string }) {
+  return (
+    <div class="lr-loading" role="status">
+      <div class="lr-eyebrow">{new URL(props.url).hostname + new URL(props.url).pathname}</div>
+      <p class="lr-loading-label">{t("linkReader.loadingPreview")}</p>
+      <div class="lr-skeleton" aria-hidden="true">
+        <div class="lr-skeleton-title" />
+        <div class="lr-skeleton-title lr-skeleton-short" />
+        <div class="lr-skeleton-meta" />
+        <div class="lr-skeleton-nav" />
+        <Repeat count={2}>
+          {() => (
+            <div class="lr-skeleton-paragraph">
+              <div />
+              <div />
+              <div class="lr-skeleton-short" />
+            </div>
+          )}
+        </Repeat>
+      </div>
+    </div>
+  );
+}
+
+function PanelContent(props: {
+  tab: ReaderTab;
+  available: boolean;
+  refresh: () => void;
+  loadSection: (section: ReaderSection) => void;
+}) {
   const target = () => tabTarget(props.tab);
   return (
     <>
@@ -88,15 +112,31 @@ function PanelContent(props: { tab: ReaderTab; available: boolean; refresh: () =
           </a>
         </div>
       ) : props.tab.view.status !== "ready" ? (
-        <p class="lr-status" role="status">
-          {t("linkReader.loadingPreview")}
-        </p>
+        <ReaderLoading url={target()!.href} />
       ) : (
-        <LinkReaderContent
-          detail={props.tab.view.detail}
-          target={target()!}
-          loadImage={props.tab.view.images?.load}
-        />
+        <>
+          {(props.tab.view.refreshing || props.tab.view.message) && (
+            <div class="lr-refresh-note" role="status">
+              <span>
+                {props.tab.view.refreshing
+                  ? t("linkReader.refreshingSaved")
+                  : props.tab.view.message}
+                {!props.tab.view.refreshing && (
+                  <button type="button" onClick={() => props.refresh()}>
+                    {t("linkReader.refresh")}
+                  </button>
+                )}
+              </span>
+            </div>
+          )}
+          <LinkReaderContent
+            detail={props.tab.view.detail}
+            target={target()!}
+            loadImage={props.tab.view.images?.load}
+            sections={props.tab.view.sections}
+            onLoadSection={(section) => props.loadSection(section)}
+          />
+        </>
       )}
     </>
   );
@@ -114,26 +154,27 @@ function PanelView(
   props: LinkReaderPanelProps,
   host: SolidBridgeElement<LinkReaderPanelProps, Methods>,
 ) {
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const owner = new LinkReaderPanelOwner(host, host, () => setRevision((value) => value + 1));
+  const owner = createLinkReaderPanel(host, host);
+  const projection = projectOwner(owner, (current) => current);
+  const view = projection.read;
+  let address: HTMLInputElement | undefined;
+  const content = new Map<string, HTMLElement>();
   owners.set(host, owner);
   // The panel owns this action while the sidebar hosts its DOM.
   const hostedActions = document.createElement("span");
   hostedActions.style.display = "contents";
-  insert(hostedActions, <HostedAction owner={owner} revision={revision()} />);
+  insert(hostedActions, <HostedAction view={view} />);
   Object.defineProperties(host, {
-    hostedTabs: { configurable: true, get: () => owner.hostedTabs },
-    activeHostedTabId: { configurable: true, get: () => owner.activeHostedTabId },
+    hostedTabs: { configurable: true, get: () => owner.hostedTabs() },
+    activeHostedTabId: { configurable: true, get: () => owner.state.activeId },
     hostedActions: {
       configurable: true,
       get: () => hostedActions,
     },
   });
-  owner.connect();
-  let previous: LinkReaderPanelProps | undefined;
-  createRenderEffect(
+  createEffect(
     () => {
-      revision();
+      projection.revision();
       return {
         client: props.client,
         available: props.available,
@@ -147,40 +188,50 @@ function PanelView(
         onClose: props.onClose,
       };
     },
-    (current) => {
-      owner.sync(previous);
-      previous = current;
-    },
+    (_current, previous) => owner.sync(previous),
   );
   onSettled(() => {
-    owner.sync(previous);
+    owner.dockLayout.connect();
+    owner.resume();
+    return () => owner.dispose();
   });
+  // One window listener follows this mounted owner; embedded panels never claim it.
+  onSettled(() =>
+    listen(window, LINK_READER_PANEL_TOGGLE_EVENT, (event) => {
+      if (!host.embedded) {
+        owner.handleToggleRequest(event);
+      }
+    }),
+  );
   createEffect(
-    () => revision(),
-    () => owner.afterRender(),
+    () => projection.revision(),
+    () => owner.afterRender(address, content.get(owner.state.activeId ?? "")),
   );
   onCleanup(() => {
     hostedActions.remove();
-    owner.dispose();
     owners.delete(host);
   });
-  const view = () => {
-    revision();
-    return owner;
+  const tab = () => view().activeTab();
+  const target = () => view().target();
+  const loading = () => {
+    const current = tab()?.view;
+    return (
+      current?.status === "loading" || (current?.status === "ready" && current.refreshing === true)
+    );
   };
-  const tab = () => view().activeTab;
-  const target = () => view().target;
   const tabStripTabs = createMemo(() =>
-    view().hostedTabs.map((item) => ({
-      id: item.id,
-      label: item.label,
-      url: item.url,
-      title: item.title,
-      icon: item.icon,
-      className: item.className,
-      domId: item.id + "-label",
-      closeLabel: t("linkReader.closeTab", { title: item.label }),
-    })),
+    view()
+      .hostedTabs()
+      .map((item) => ({
+        id: item.id,
+        label: item.label,
+        url: item.url,
+        title: item.title,
+        icon: item.icon,
+        className: item.className,
+        domId: item.id + "-label",
+        closeLabel: t("linkReader.closeTab", { title: item.label }),
+      })),
   );
   const action = (
     name: "chevronLeft" | "chevronRight" | "refresh" | "x",
@@ -224,13 +275,13 @@ function PanelView(
               <openclaw-panel-tab-strip style={{ display: "contents" }}>
                 <PanelTabStrip
                   tabs={tabStripTabs()}
-                  activeId={view().activeId}
+                  activeId={view().state.activeId}
                   ariaControls="link-reader-tab-panel"
                   onSelect={(id) => owner.selectHostedTab(id)}
                   onClose={(id) => owner.closeTab(id)}
                   onNew={() => owner.createTab()}
                   newLabel={t("linkReader.newTab")}
-                  newDisabled={view().tabs.length >= 10}
+                  newDisabled={view().state.tabs.length >= 10}
                 />
               </openclaw-panel-tab-strip>
               {!props.embedded && action("x", t("linkReader.close"), () => owner.closePanel())}
@@ -253,28 +304,27 @@ function PanelView(
               "refresh",
               t("linkReader.refresh"),
               () => owner.refresh(),
-              !target() || !props.available || !props.client || tab()!.view.status === "loading",
+              !target() || !props.available || !props.client || loading(),
             )}
             <input
+              ref={(element) => {
+                address = element;
+              }}
               class="lr-url"
               type="text"
               spellcheck="false"
               autocomplete="off"
-              value={view().urlDraft}
+              value={view().state.urlDraft}
               placeholder={t("linkReader.urlPlaceholder")}
               aria-label={t("linkReader.urlPlaceholder")}
-              aria-invalid={view().invalidUrl ? "true" : "false"}
+              aria-invalid={view().state.invalidUrl ? "true" : "false"}
               onInput={(event) => {
-                owner.urlDraft = event.currentTarget.value;
-                owner.invalidUrl = false;
-                owner.requestUpdate();
+                owner.editUrl(event.currentTarget.value);
               }}
               onKeyDown={(event) => {
                 if (event.key === "Escape") {
                   event.preventDefault();
-                  owner.urlDraft = target()?.href ?? "";
-                  owner.invalidUrl = false;
-                  owner.requestUpdate();
+                  owner.editUrl(target()?.href ?? "");
                 }
               }}
             />
@@ -299,16 +349,16 @@ function PanelView(
               </a>
             )}
           </form>
-          {view().invalidUrl && (
+          {view().state.invalidUrl && (
             <p class="lr-note" role="alert">
               {t("linkReader.invalidUrl")}
             </p>
           )}
-          {view().tabLimitUrl && (
+          {view().state.tabLimitUrl && (
             <p class="lr-note" role="alert">
               {t("linkReader.tabLimit")}
               <a
-                href={view().tabLimitUrl!}
+                href={view().state.tabLimitUrl!}
                 target="_blank"
                 rel="noopener noreferrer"
                 data-link-reader-external
@@ -326,21 +376,30 @@ function PanelView(
             }
             aria-label={props.embedded && props.tabsInHeader ? tabLabel(tab()!) : undefined}
           >
-            <For each={[...view().tabs]} keyed={(item) => item.id}>
-              {(item) => (
-                <div
-                  class="lr-content"
-                  tabindex={-1}
-                  hidden={item().id !== view().activeId}
-                  aria-busy={item().view.status === "loading" ? "true" : "false"}
-                >
-                  <PanelContent
-                    tab={(revision(), item())}
-                    available={props.available && Boolean(props.client)}
-                    refresh={() => owner.refresh()}
-                  />
-                </div>
-              )}
+            <For each={[...view().state.tabs]} keyed={(item) => item.id}>
+              {(item) => {
+                // The keyed row keeps this id for its mounted lifetime.
+                const id = untrack(() => item().id);
+                onCleanup(() => content.delete(id));
+                return (
+                  <div
+                    ref={(element) => {
+                      content.set(id, element);
+                    }}
+                    class="lr-content"
+                    tabindex={-1}
+                    hidden={item().id !== view().state.activeId}
+                    aria-busy={item().view.status === "loading" ? "true" : "false"}
+                  >
+                    <PanelContent
+                      tab={(projection.revision(), item())}
+                      available={props.available && Boolean(props.client)}
+                      refresh={() => owner.refresh()}
+                      loadSection={(section) => owner.requestSection(section)}
+                    />
+                  </div>
+                );
+              }}
             </For>
           </div>
         </section>

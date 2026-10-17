@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createStore, onCleanup, untrack } from "solid-js";
+import { createEffect, createMemo, createStore, onCleanup } from "solid-js";
 import type {
   McpAppDiscoverResult,
   McpAppDiscoveredServer,
@@ -54,17 +54,12 @@ export function createMcpAppCatalog(
       value.sessionKey,
     ]);
   });
+  // Synchronize the discovery RPC and its presentation cache with the current target.
   createEffect(discoveryIdentity, (value) => {
     identity = value;
     generation++;
-    setState((draft) => {
-      draft.servers = [];
-      draft.onboarding = [];
-      draft.error = null;
-      draft.loading = false;
-    });
-    // The identity memo owns reactivity; each request snapshots target and live authority.
-    untrack(() => void refresh());
+    setState(() => ({ servers: [], onboarding: [], error: null, loading: false }));
+    void refresh();
   });
   const unsubscribe = context.gateway.subscribeEvents((event) => {
     if (event.event === "config.changed") {

@@ -27,16 +27,43 @@ export const SqliteDatabaseGenerationSlot = {
 } as const;
 const SQLITE_DATABASE_GENERATION_LENGTH = Object.keys(SqliteDatabaseGenerationSlot).length;
 
-export type AdmissionFact = {
+const decodedValue = Symbol.for("openclaw.sqliteDatabaseAdmission.decodedValue");
+
+export type AdmissionFactValue = {
   value: unknown;
+  // Structured cloning drops symbol properties, so each receiver admits the wire value once.
+  [decodedValue]?: { value: unknown };
+};
+
+export function readSqliteDatabaseAdmissionFact<T>(
+  fact: AdmissionFactValue,
+  key: SqliteDatabaseAdmissionKey<T>,
+): T | undefined {
+  fact[decodedValue] ??= { value: key.read(fact.value) };
+  // SAFETY: A private key name identifies one value type, decoded by that key at admission.
+  return fact[decodedValue].value as T | undefined;
+}
+
+export function admitSqliteDatabaseFactValue<T>(
+  key: SqliteDatabaseAdmissionKey<T>,
+  value: T,
+): AdmissionFactValue {
+  const fact: AdmissionFactValue = { value };
+  readSqliteDatabaseAdmissionFact(fact, key);
+  return fact;
+}
+
+export type AdmissionFact = AdmissionFactValue & {
   revision: number;
   schemaDependent: boolean;
+  lifetime?: "process";
   publication: string;
   current: SharedArrayBuffer;
 };
-export type StagedAdmissionFact = Pick<AdmissionFact, "value" | "revision" | "schemaDependent"> & {
-  ddlRevision: number;
-};
+export type StagedAdmissionFact = AdmissionFactValue &
+  Pick<AdmissionFact, "revision" | "schemaDependent"> & {
+    ddlRevision: number;
+  };
 export type ScopedWriteRevision = {
   identity: string;
   // The revision and retirement flag share custody across all admission snapshots.
@@ -64,6 +91,8 @@ export type SqliteDatabaseAdmissionKey<T> = {
   name: string;
   read(this: void, value: unknown): T | undefined;
   schemaDependent?: boolean;
+  /** Physical validation and owner-published decisions survive ordinary native close. */
+  lifetime?: "process";
   writer?: "host";
 };
 export type SqliteDatabaseAdmissionExchange = (
@@ -118,12 +147,15 @@ export function advanceSqliteDatabaseGeneration(
 }
 export function publishSqliteDatabaseFact(
   record: Admission,
-  key: { name: string; schemaDependent?: boolean; writer?: "host" },
-  value: unknown,
+  key: { name: string; schemaDependent?: boolean; lifetime?: "process"; writer?: "host" },
+  value: AdmissionFactValue,
   revision: number,
   publication: string,
 ): boolean {
-  if (revision !== readSqliteDatabaseFactRevision(record, key.schemaDependent)) {
+  if (
+    isSqliteDatabaseAdmissionRetired(record) ||
+    revision !== readSqliteDatabaseFactRevision(record, key.schemaDependent)
+  ) {
     return false;
   }
   if (key.writer === "host") {
@@ -137,14 +169,27 @@ export function publishSqliteDatabaseFact(
   const current = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
   Atomics.store(new Int32Array(current), 0, 1);
   record.facts.set(key.name, {
-    value,
+    ...value,
     revision,
     schemaDependent: key.schemaDependent === true,
+    lifetime: key.lifetime,
     publication,
     current,
   });
   advanceSqliteDatabaseGeneration(record, "publicationRevision");
   return true;
+}
+
+export function revokeSqliteDatabaseAdmissionFacts(record: Admission | undefined): void {
+  if (!record) {
+    return;
+  }
+  // Corruption can follow native close; shared cells also revoke retained physical facts.
+  for (const fact of record.facts.values()) {
+    Atomics.store(new Int32Array(fact.current), 0, 0);
+  }
+  advanceSqliteDatabaseGeneration(record, "schemaRevision");
+  advanceSqliteDatabaseGeneration(record, "factRevision");
 }
 
 // Bucket snapshots bound copy-on-write work without retaining a history of revisions.
@@ -162,9 +207,10 @@ type PublishedAdmission = {
 function snapshotWriteScopes(
   current: Admission["writeScopes"],
   previous: WriteScopeBuckets = EMPTY_WRITE_SCOPE_BUCKETS,
+  keys?: readonly string[],
 ): WriteScopeBuckets {
   let buckets = previous;
-  current.forEach((value, key) => {
+  const visit = (value: ScopedWriteRevision, key: string) => {
     let hash = 0;
     for (let index = 0; index < key.length; index++) {
       hash = (hash * 31 + key.charCodeAt(index)) | 0;
@@ -188,7 +234,17 @@ function snapshotWriteScopes(
     } else {
       buckets[index]!.set(key, value);
     }
-  });
+  };
+  if (keys) {
+    for (const key of keys) {
+      const value = current.get(key);
+      if (value) {
+        visit(value, key);
+      }
+    }
+  } else {
+    current.forEach(visit);
+  }
   return buckets;
 }
 
@@ -236,8 +292,16 @@ export class SqliteDatabaseAdmissionRegistry {
   private exchangeCursor = createSqliteDatabaseAdmissionCursor();
   private readonly locations = new Map<string, string>();
   private readonly published = new Map<string, PublishedAdmission>();
-  readonly descriptors = new Map<string, number>();
+  readonly descriptors = new Map<
+    string,
+    { descriptor: number; facts: Map<string, AdmissionFact> }
+  >();
   private revision = 0;
+  private retainProcessFacts = true;
+
+  useConnectionScopedFacts(): void {
+    this.retainProcessFacts = false;
+  }
 
   changeReferences(record: Admission, change: 1 | -1): boolean {
     let references = record.references.get(threadId);
@@ -259,20 +323,33 @@ export class SqliteDatabaseAdmissionRegistry {
   private retireUnreferenced(record: Admission): void {
     if (
       threadId !== 0 ||
+      isSqliteDatabaseAdmissionRetired(record) ||
       [...record.references.values()].some(
         (references) => Atomics.load(new Int32Array(references), 0) > 0,
       )
     ) {
       return;
     }
-    // Closed metadata releases its payloads; only explicit retirement closes descriptor custody.
+    for (const [name, fact] of record.facts) {
+      if (
+        !this.retainProcessFacts ||
+        fact.lifetime !== "process" ||
+        !isSqliteDatabaseAdmissionFactCurrent(record, fact)
+      ) {
+        record.facts.delete(name);
+      }
+    }
+    const custody = this.descriptors.get(record.identity);
+    if (custody) {
+      custody.facts = record.facts;
+    }
+    // Row facts and receipts retire; shared-owner physical facts can stay with descriptor custody.
     Atomics.compareExchange(
       new Int32Array(record.generation),
       SqliteDatabaseGenerationSlot.retired,
       0,
       2,
     );
-    record.facts.clear();
     record.writeScopes.clear();
   }
 
@@ -318,6 +395,7 @@ export class SqliteDatabaseAdmissionRegistry {
   }
 
   retainDescriptor(location: string, descriptor: number, opened: BigIntStats): Admission {
+    const retained = this.descriptors.get(readSqliteDatabaseAdmissionIdentity(opened));
     const record: Admission = {
       identity: readSqliteDatabaseAdmissionIdentity(opened),
       physicalIdentity: {
@@ -334,10 +412,17 @@ export class SqliteDatabaseAdmissionRegistry {
       writeScopes: new Map(),
       writeScopeRevision: 0,
       references: new Map(),
-      facts: new Map(),
+      facts: new Map(
+        [...(retained?.facts ?? [])]
+          .filter(([, fact]) => Atomics.load(new Int32Array(fact.current), 0) === 1)
+          .map(([name, fact]) => [name, { ...fact, revision: 0 }]),
+      ),
     };
     this.records.set(record.identity, record);
-    this.descriptors.set(record.identity, descriptor);
+    this.descriptors.set(record.identity, {
+      descriptor,
+      facts: new Map(),
+    });
     this.observeLocation(location, record.identity);
     this.publish(record);
     return record;
@@ -346,7 +431,7 @@ export class SqliteDatabaseAdmissionRegistry {
   /** Only the joined lifecycle owner may release a retained descriptor. */
   retireDescriptor(identity: string, options: { requireSoleDescriptor?: boolean }): boolean {
     const record = this.records.get(identity);
-    const descriptor = this.descriptors.get(identity) ?? record?.descriptor;
+    const descriptor = this.descriptors.get(identity)?.descriptor ?? record?.descriptor;
     if (descriptor === undefined) {
       return false;
     }
@@ -367,7 +452,7 @@ export class SqliteDatabaseAdmissionRegistry {
     return true;
   }
 
-  publish(selected?: Admission | Set<Admission>): void {
+  publish(selected?: Admission | Set<Admission>, scopeKeys?: readonly string[]): void {
     if (
       selected &&
       !(selected instanceof Set) &&
@@ -395,7 +480,12 @@ export class SqliteDatabaseAdmissionRegistry {
         }
       }
       const previous = this.published.get(current.identity);
-      const writeScopes = snapshotWriteScopes(current.writeScopes, previous?.writeScopes);
+      // Discovery already knows its keys; general publication also sweeps remote retirements.
+      const writeScopes = snapshotWriteScopes(
+        current.writeScopes,
+        previous?.writeScopes,
+        previous && selected === current ? scopeKeys : undefined,
+      );
       changed ||= writeScopes !== previous?.writeScopes;
       if (!changed) {
         continue;

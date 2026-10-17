@@ -323,8 +323,8 @@ export async function retainSharedCodexAppServerClientByInstanceId(
   return undefined;
 }
 
-// Cold initialization measured 1–5 seconds; keep adjacent discovery/status requests warm.
-const CODEX_APP_SERVER_CLIENT_IDLE_GRACE_MS = 30_000;
+// Keep minute-scale discovery and background work warm without retaining unused homes forever.
+const CODEX_APP_SERVER_CLIENT_IDLE_GRACE_MS = 5 * 60_000;
 
 function cancelSharedClientIdleRetirement(entry: SharedCodexAppServerClientEntry): void {
   clearTimeout(entry.idleTimer);

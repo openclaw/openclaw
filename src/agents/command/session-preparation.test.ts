@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import {
   buildSourceConversationContext,
@@ -7,6 +8,11 @@ import {
 import { buildInboundMetaSystemPrompt } from "../../auto-reply/reply/inbound-meta.js";
 import type { TemplateContext } from "../../auto-reply/templating.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { deleteSessionEntryLifecycle } from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveVisibleActiveSessionRunState } from "../../gateway/server-methods/session-active-runs.js";
 import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
@@ -20,10 +26,10 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
-import { persistAgentSession } from "./attempt-execution.shared.js";
 import { prepareCommandConversationContext } from "./conversation-context.js";
 import {
   prepareCommandSessionRecoveryEntry,
@@ -43,7 +49,6 @@ vi.mock("../../sessions/session-state-events.js", () => ({
 vi.mock("../../skills/discovery/agent-filter.js", () => ({
   resolveEffectiveAgentSkillFilter: () => undefined,
 }));
-vi.mock("./attempt-execution.shared.js", () => ({ persistAgentSession: vi.fn() }));
 // mock-isolation: Session-preparation tests own their skill snapshot and exec eligibility without host storage.
 vi.mock("./runtime-loaders.js", () => ({
   loadSkillsRuntime: async () => ({
@@ -63,67 +68,118 @@ const { skillSnapshot } = vi.hoisted(() => ({
 }));
 
 it.each([
-  { refresh: true, skipTouch: false },
-  { refresh: true, skipTouch: true },
-  { refresh: false, skipTouch: false },
-  { refresh: false, skipTouch: true },
+  { refresh: true, skipTouch: false, current: "original" },
+  { refresh: true, skipTouch: true, current: "original" },
+  { refresh: false, skipTouch: false, current: "original" },
+  { refresh: false, skipTouch: true, current: "original" },
+  { refresh: true, skipTouch: false, current: "policy-cleared" },
+  { refresh: true, skipTouch: false, current: "deleted" },
+  { refresh: true, skipTouch: false, current: "replaced" },
 ])(
-  "prepares session metadata together (refresh=$refresh, skipTouch=$skipTouch)",
+  "prepares session metadata against the current row (refresh=$refresh, skipTouch=$skipTouch, current=$current)",
   async (testCase) => {
-    const sessionKey = "agent:main:prepare-metadata";
-    const runId = "prepare-metadata";
-    const initial: SessionEntry = {
-      sessionId: "metadata-session",
-      updatedAt: 1,
-      lastInteractionAt: 1,
-      agentStatus: { note: "busy", expiresAt: 10 },
-    };
-    const snapshot = { prompt: "skill instructions", skills: [], version: 1 };
-    const store = { [sessionKey]: initial };
-    const persist = vi.mocked(persistAgentSession);
-    persist.mockImplementation(async ({ entry }) => {
-      store[sessionKey] = entry;
-      return entry;
-    });
-    skillSnapshot.mockReturnValue({
-      snapshot: testCase.refresh ? snapshot : undefined,
-      shouldRefresh: testCase.refresh,
-    });
-    try {
-      const prepared = await prepareEmbeddedSessionState({
-        cfg: {},
-        opts: { message: "hello", skipInitialSessionTouch: testCase.skipTouch },
-        sessionEntry: initial,
-        sessionStore: store,
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionKey = "agent:main:prepare-metadata";
+      const runId = "prepare-metadata";
+      const scope = {
+        agentId: "main",
         sessionKey,
-        sessionId: initial.sessionId,
-        storePath: "/unused/command.sqlite",
-        sessionAgentId: "main",
-        lifecycleGeneration: getAgentRunLifecycleGeneration(),
-        runId,
-        executionWorkspaceDir: "/workspace",
-        watchSkills: false,
-        isNewSession: false,
-        isSubagentLaneTurn: true,
-        suppressVisibleSessionEffects: false,
-        sessionStateActor: { actorType: "human" },
-      });
-      expect(prepared.sessionEntry).toMatchObject({
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+      };
+      const initial = (await replaceSessionEntry(scope, {
         sessionId: "metadata-session",
-        lastInteractionAt: testCase.skipTouch ? 1 : expect.any(Number),
+        updatedAt: 1,
+        sessionStartedAt: 1,
+        lastInteractionAt: 1,
+        agentStatus: { note: "busy", expiresAt: 10 },
+        elevatedLevel: "full",
+        inheritedToolAllow: ["exec"],
+        sendPolicy: "allow",
+      }))!;
+      const snapshot = { prompt: "skill instructions", skills: [], version: 1 };
+      const store: Record<string, SessionEntry> = { [sessionKey]: initial };
+      if (testCase.current === "policy-cleared") {
+        await replaceSessionEntry(scope, {
+          sessionId: initial.sessionId,
+          updatedAt: 2,
+          sessionStartedAt: 1,
+          label: "Renamed while preparing",
+          sendPolicy: "deny",
+        });
+      } else if (testCase.current === "replaced") {
+        await replaceSessionEntry(scope, {
+          sessionId: "replacement-session",
+          updatedAt: 2,
+          label: "Replacement",
+        });
+      } else if (testCase.current === "deleted") {
+        await deleteSessionEntryLifecycle({
+          ...scope,
+          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+          archiveTranscript: false,
+          deleteTranscriptWithoutArchive: true,
+        });
+      }
+      const before = loadSessionEntry({ ...scope, readConsistency: "latest" });
+      if (testCase.current === "deleted") {
+        expect(before).toBeUndefined();
+      } else if (testCase.current === "replaced") {
+        expect(before?.sessionId).toBe("replacement-session");
+      }
+      skillSnapshot.mockReturnValue({
+        snapshot: testCase.refresh ? snapshot : undefined,
+        shouldRefresh: testCase.refresh,
       });
-      expect(prepared.sessionEntry?.skillsSnapshot).toEqual(
-        testCase.refresh ? snapshot : undefined,
-      );
-      expect(prepared.sessionEntry?.agentStatus).toEqual(
-        testCase.skipTouch ? { note: "busy", expiresAt: 10 } : undefined,
-      );
-      expect(persist).toHaveBeenCalledTimes(testCase.refresh || !testCase.skipTouch ? 1 : 0);
-    } finally {
-      persist.mockReset();
-      skillSnapshot.mockReturnValue({ snapshot: undefined, shouldRefresh: false });
-      clearAgentRunContext(runId);
-    }
+      try {
+        const prepared = await prepareEmbeddedSessionState({
+          cfg: {},
+          opts: { message: "hello", skipInitialSessionTouch: testCase.skipTouch },
+          sessionEntry: initial,
+          sessionStore: store,
+          sessionKey,
+          sessionId: initial.sessionId,
+          storePath: scope.storePath,
+          sessionAgentId: "main",
+          lifecycleGeneration: getAgentRunLifecycleGeneration(),
+          runId,
+          executionWorkspaceDir: state.workspaceDir,
+          watchSkills: false,
+          isNewSession: false,
+          isSubagentLaneTurn: true,
+          suppressVisibleSessionEffects: false,
+          sessionStateActor: { actorType: "human" },
+        });
+        const persisted = loadSessionEntry({ ...scope, readConsistency: "latest" });
+        expect(persisted).toEqual(prepared.sessionEntry);
+        expect(store[sessionKey]).toEqual(prepared.sessionEntry);
+        if (testCase.current === "deleted" || testCase.current === "replaced") {
+          expect(prepared.sessionEntry).toEqual(before);
+          return;
+        }
+        expect(prepared.sessionEntry).toMatchObject({
+          sessionId: "metadata-session",
+          sessionStartedAt: 1,
+          lastInteractionAt: testCase.skipTouch ? 1 : expect.any(Number),
+        });
+        expect(prepared.sessionEntry?.skillsSnapshot).toEqual(
+          testCase.refresh ? snapshot : undefined,
+        );
+        expect(prepared.sessionEntry?.agentStatus).toEqual(
+          testCase.skipTouch ? { note: "busy", expiresAt: 10 } : undefined,
+        );
+        if (testCase.current === "policy-cleared") {
+          expect(prepared.sessionEntry).toMatchObject({
+            label: "Renamed while preparing",
+            sendPolicy: "deny",
+          });
+          expect(prepared.sessionEntry?.elevatedLevel).toBeUndefined();
+          expect(prepared.sessionEntry?.inheritedToolAllow).toBeUndefined();
+        }
+      } finally {
+        skillSnapshot.mockReturnValue({ snapshot: undefined, shouldRefresh: false });
+        clearAgentRunContext(runId);
+      }
+    });
   },
 );
 

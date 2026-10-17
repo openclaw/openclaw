@@ -127,7 +127,7 @@ it("rereads native model ownership after its harness plugin config changes", asy
   });
 });
 
-it.for(["once", "continued", "failure"] as const)(
+it.for(["change", "failure"] as const)(
   "keeps native ownership changes local to one listed row: %s",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -153,7 +153,6 @@ it.for(["once", "continued", "failure"] as const)(
       const previousRegistry = captureActivePluginRegistrySnapshot();
       const registry = createEmptyPluginRegistry();
       const failure = new AgentHarnessPreflightError("Synthetic native read failure");
-      let changed = false;
       let reads = 0;
       let changing = false;
       registry.agentHarnesses.push({
@@ -171,8 +170,7 @@ it.for(["once", "continued", "failure"] as const)(
             if (changing && change === "failure") {
               throw failure;
             }
-            if (changing && (!changed || change === "continued")) {
-              changed = true;
+            if (changing) {
               const registration = registry.agentHarnesses[0]!;
               registration.harness = { ...registration.harness };
               params.assertCurrent?.();
@@ -191,18 +189,34 @@ it.for(["once", "continued", "failure"] as const)(
       try {
         projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
         await projection.ensureMaterialized();
+        expect(projection.needsMaterialization).toBe(false);
+        const initialReads = reads;
+        const sql = observeHostDataSql();
+        try {
+          expect(projection.snapshot({ agentId: "main", key })).toEqual({ row: null });
+          expect(sql.queries).toEqual([]);
+          expect(reads).toBe(initialReads);
+        } finally {
+          sql.restore();
+        }
+        expect((await listProjectedSessions({ projection, opts: {} })).sessions[0]).toMatchObject({
+          sessionId: "changing",
+          model: "gpt-5.6-sol",
+        });
         changing = true;
         reads = 0;
         sessionChanges.emit({ agentId: "main", sessionKey: key, factsInvalidated: true });
         const respond = vi.fn();
-        const request = sessionReadHandlers["sessions.list"]!({
-          req: { type: "req", id: "ownership-change-list", method: "sessions.list" },
-          params: {},
-          client: null,
-          context: bindSessionRowProjection(requestContext(cfg), () => projection!),
-          isWebchatConnect: () => false,
-          respond,
-        });
+        const list = (id: string) =>
+          sessionReadHandlers["sessions.list"]!({
+            req: { type: "req", id, method: "sessions.list" },
+            params: {},
+            client: null,
+            context: bindSessionRowProjection(requestContext(cfg), () => projection!),
+            isWebchatConnect: () => false,
+            respond,
+          });
+        const request = list("ownership-change-list");
         if (change === "failure") {
           await expect(request).rejects.toBe(failure);
           expect(respond).not.toHaveBeenCalled();
@@ -214,35 +228,40 @@ it.for(["once", "continued", "failure"] as const)(
               sessions: [
                 expect.objectContaining({
                   sessionId: "changing",
-                  model: change === "continued" ? "gpt-5.5" : "gpt-5.6-sol",
+                  model: "gpt-5.5",
                 }),
                 expect.objectContaining({ sessionId: "unaffected" }),
               ],
             }),
           );
+          expect(reads).toBe(1);
+          changing = false;
+          respond.mockClear();
+          await list("ownership-stable-list");
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({
+              sessions: [
+                expect.objectContaining({ sessionId: "changing", model: "gpt-5.5" }),
+                expect.objectContaining({ sessionId: "unaffected" }),
+              ],
+            }),
+          );
+          expect(reads).toBe(1);
+
+          sessionChanges.emit({ agentId: "main", sessionKey: key, factsInvalidated: true });
+          respond.mockClear();
+          await list("ownership-invalidated-list");
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({
+              sessions: [
+                expect.objectContaining({ sessionId: "changing", model: "gpt-5.6-sol" }),
+                expect.objectContaining({ sessionId: "unaffected" }),
+              ],
+            }),
+          );
           expect(reads).toBe(2);
-          if (change === "continued") {
-            changing = false;
-            respond.mockClear();
-            await sessionReadHandlers["sessions.list"]!({
-              req: { type: "req", id: "ownership-stable-list", method: "sessions.list" },
-              params: {},
-              client: null,
-              context: bindSessionRowProjection(requestContext(cfg), () => projection!),
-              isWebchatConnect: () => false,
-              respond,
-            });
-            expect(respond).toHaveBeenCalledWith(
-              true,
-              expect.objectContaining({
-                sessions: [
-                  expect.objectContaining({ sessionId: "changing", model: "gpt-5.6-sol" }),
-                  expect.objectContaining({ sessionId: "unaffected" }),
-                ],
-              }),
-            );
-            expect(reads).toBe(3);
-          }
         }
       } finally {
         projection?.dispose();
@@ -312,6 +331,7 @@ it("prepares native model ownership in workers and invalidates only its committe
       });
       await projection.ensureMaterialized();
       const snapshot = () => projection!.snapshot({ agentId: "main", key }).row;
+      snapshot();
       const sql = observeHostDataSql();
       try {
         expect(snapshot()).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-sol" });

@@ -71,11 +71,6 @@ const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 const CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES = 3;
 const CODEX_APP_SERVER_OVERLOAD_RETRY_BASE_MS = 50;
 
-export {
-  getCodexAppServerClientInstanceId,
-  resolveCodexAppServerClientInstanceId,
-} from "./client-diagnostics.js";
-
 type RequestOptions = {
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -195,7 +190,6 @@ export class CodexAppServerClient {
     observeCodexAppServerStderr(child.stderr, (chunk) => {
       const text = this.redactPrivateStderr(chunk);
       this.stderrTail = appendBoundedTail(this.stderrTail, text, CODEX_APP_SERVER_STDERR_TAIL_MAX);
-      return text;
     });
     child.once("error", (error) => this.closeWithError(toStringifiedError(error)));
     child.once("exit", (code, signal) => {
@@ -455,6 +449,7 @@ export class CodexAppServerClient {
       attempt.catalogProjection = {
         preview: options.catalogPreviewCache,
         remainingRows: options.catalogRows,
+        singleThread: method === "thread/list" && isJsonObject(params) && params.limit === 1,
       };
     }
     // Stateful ownership assertions remain pre-write checks.
@@ -521,12 +516,21 @@ export class CodexAppServerClient {
   }): Promise<CodexAppServerCloseResult> {
     this.markClosed(new Error("codex app-server client is closed"));
     const [result] = await Promise.all([
-      closeCodexAppServerTransportAndWait(this.child, options),
+      closeCodexAppServerTransportAndWait(this.child, {
+        ...options,
+        gracefulExit: Boolean(this.child.pid) && !this.nativeExecutionObserved,
+      }),
       this.waitForCloseWork(),
     ]);
     // Codex can discard terminal handles before OS cleanup. Later ancestry
     // containment cannot discharge a command whose descendants already reparented.
-    return this.nativeExecutionObserved ? { ...result, cleanup: "uncertain" } : result;
+    if (this.nativeExecutionObserved) {
+      return { ...result, cleanup: "uncertain" };
+    }
+    if (result.cleanup === "terminated") {
+      embeddedAgentLog.warn("Codex app-server required forced shutdown; process cleanup confirmed");
+    }
+    return result;
   }
 
   /** Joins local settlement already started by close without changing transport policy. */
@@ -613,7 +617,7 @@ export class CodexAppServerClient {
       return;
     }
     for (const failure of decoded.failures) {
-      logCodexAppServerParseFailure(failure.value, failure.error, failure.fragmentCount);
+      logCodexAppServerParseFailure(failure);
     }
     if (decoded.projectionError) {
       this.pending.get(decoded.projectionError.id)?.reject(decoded.projectionError.error, false);
@@ -650,6 +654,7 @@ export class CodexAppServerClient {
     if (this.markClosed(error)) {
       closeCodexAppServerTransport(this.child, {
         drainStdio: !this.initialized && this.child.startupFailure !== undefined,
+        gracefulExit: Boolean(this.child.pid) && !this.nativeExecutionObserved,
       });
     }
   }

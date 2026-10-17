@@ -146,6 +146,17 @@ const statePostgresSchema = {
     };
   }),
 };
+// v24-v26 share a PostgreSQL catalog; preserve their exact index definitions for admission.
+const statePostgresSchemaV26 = {
+  postgres:
+    runtime.eagerSql.replace(
+      /CREATE INDEX "idx_state_leases_owner"[^;]*;/u,
+      runtime.preWriteIndexesV27Sql.state_leases,
+    ) +
+    runtime.preWriteIndexesV27Sql.skill_usage +
+    runtime.preWriteIndexesV27Sql.acp_replay_events,
+  postgresFragments: statePostgresSchema.postgresFragments,
+};
 
 export const stateEngineSchema: StoreSchema = {
   id: "state",
@@ -156,8 +167,40 @@ export const stateEngineSchema: StoreSchema = {
     {
       version: 25,
       sql: runtime.operatorRecoveryV25Sql,
-      fromSchema: statePostgresSchema,
+      fromSchema: statePostgresSchemaV26,
+      schema: statePostgresSchemaV26,
+    },
+    {
+      version: 26,
+      // WITHOUT ROWID only changes SQLite storage; PostgreSQL keeps the same catalog.
+      fromSchema: statePostgresSchemaV26,
+      schema: statePostgresSchemaV26,
+      sql: `UPDATE schema_meta
+        SET schema_version = 26,
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+        VALUES ('state.schema.contentVersion', '26',
+          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
+        ON CONFLICT (state_key) DO UPDATE
+          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+    },
+    {
+      version: 27,
+      fromSchema: statePostgresSchemaV26,
       schema: statePostgresSchema,
+      sql: `${runtime.writeIndexesV27Sql}
+        UPDATE schema_meta
+        SET schema_version = 27,
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+        VALUES ('state.schema.contentVersion', '27',
+          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
+        ON CONFLICT (state_key) DO UPDATE
+          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
     },
   ],
 };
@@ -216,7 +259,7 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
   admitStatePostgres(db, false);
 }
 
-export function openStatePostgresReadConnection(pathname: string, expectedIdentity?: string) {
+export function openExistingStatePostgresConnection(pathname: string, expectedIdentity?: string) {
   const input = stateEngineInput();
   if (!input) {
     return undefined;
@@ -233,6 +276,7 @@ export function openStatePostgresReadConnection(pathname: string, expectedIdenti
       prepareAnchor: () => {},
       openSqlite: () => {},
       existingOnly: true,
+      reusePostgresConnection: true,
       existingVersion: true,
       admitPostgres: admitStatePostgres,
       closeOnFailure: (connection, error) => {
@@ -252,7 +296,7 @@ export function openStatePostgresReadConnection(pathname: string, expectedIdenti
             db: selected,
             path: pathname,
           }),
-          "PostgreSQL state reader cleanup failed.",
+          "PostgreSQL state connection cleanup failed.",
         );
         return !selected.isOpen && !anchor.isOpen;
       },
@@ -265,7 +309,7 @@ export function openStatePostgresReadConnection(pathname: string, expectedIdenti
     if (errors.length) {
       throw createSqliteLifecycleAggregateError(
         [error, ...errors],
-        "PostgreSQL state reader acquisition and cleanup failed.",
+        "PostgreSQL state connection acquisition and cleanup failed.",
         error,
       );
     }

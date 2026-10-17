@@ -1,18 +1,19 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
   createMattermostClient,
   fetchMattermostChannel,
+  parseMattermostApiStatus,
   sendMattermostTyping,
   type MattermostChannel,
 } from "./client.js";
@@ -78,19 +79,9 @@ type CommandValidationRateLimitEntry = {
 const commandLookupInflight = new Map<string, CommandLookupInflightEntry>();
 const commandValidationFailureCache = new Map<string, { accountId: string; expiresAt: number }>();
 const commandValidationLookupRateLimit = new Map<string, CommandValidationRateLimitEntry>();
-const SECRET_LOG_KEYS = new Set([
-  "access_token",
-  "authorization",
-  "bottoken",
-  "client_secret",
-  "refresh_token",
-  "token",
-]);
 
 export function sendSlashCommandResponse(res: ServerResponse, status: number, text: string) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify({ response_type: "ephemeral", text }));
+  sendJson(res, status, { response_type: "ephemeral", text });
 }
 
 export async function readSlashCommandBody(
@@ -127,39 +118,6 @@ function findRegisteredCommandForPayload(params: {
 
 function isDeletedMattermostCommand(command: { delete_at?: number }): boolean {
   return typeof command.delete_at === "number" && command.delete_at > 0;
-}
-
-function sanitizeCommandLookupError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  const sanitized = raw
-    .replace(/[\r\n\t]/gu, " ")
-    .replace(/https?:\/\/[^\s)\]}]+/giu, (urlText) => {
-      try {
-        const url = new URL(urlText);
-        if (url.username || url.password) {
-          url.username = "redacted";
-          url.password = "redacted";
-        }
-        for (const key of url.searchParams.keys()) {
-          if (SECRET_LOG_KEYS.has(key.toLowerCase())) {
-            url.searchParams.set(key, "redacted");
-          }
-        }
-        return url.toString();
-      } catch {
-        return urlText;
-      }
-    })
-    .replace(/(^|[^\w-])(Bearer|Token)\s+[A-Za-z0-9._~+/=-]+/giu, "$1$2 [redacted]")
-    .replace(
-      /\b(token|authorization|access_token|refresh_token|client_secret|botToken)\b(\s*["']?\s*(?:=|:)\s*["']?)[^"',\s;}]+/giu,
-      "$1$2[redacted]",
-    );
-  return truncateUtf16Safe(sanitized, 300);
-}
-
-function sanitizeMattermostLogValue(value: string): string {
-  return truncateUtf16Safe(value.replace(/[\r\n\t]/gu, " "), 200);
 }
 
 async function withCommandLookupTimeout<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -303,7 +261,7 @@ async function fetchCurrentMattermostCommandUncached(params: {
     if (!isDeletedMattermostCommand(commandLookupResult)) {
       return commandLookupResult;
     }
-    commandLookupFallbackDetail = `command lookup by id returned deleted command ${sanitizeMattermostLogValue(commandLookupResult.id)}`;
+    commandLookupFallbackDetail = "command lookup by id returned deleted command";
   } catch (err) {
     commandLookupError = err;
     // Older Mattermost servers may not expose GET /commands/{id}; fall back to
@@ -316,22 +274,22 @@ async function fetchCurrentMattermostCommandUncached(params: {
     );
     if (commandLookupError) {
       params.log?.(
-        `mattermost: slash command lookup by id failed for /${sanitizeMattermostLogValue(params.registered.trigger)}; using team list fallback: ${sanitizeCommandLookupError(commandLookupError)}`,
+        `mattermost: slash command lookup by id failed for /${params.registered.trigger}; using team list fallback (status=${parseMattermostApiStatus(commandLookupError) ?? "unknown"})`,
       );
     } else if (commandLookupFallbackDetail) {
       params.log?.(
-        `mattermost: slash ${commandLookupFallbackDetail} for /${sanitizeMattermostLogValue(params.registered.trigger)}; using team list fallback`,
+        `mattermost: slash ${commandLookupFallbackDetail} for /${params.registered.trigger}; using team list fallback`,
       );
     }
     return currentCommands.find((cmd) => cmd.id === params.registered.id) ?? commandLookupResult;
   } catch (err) {
     const primaryDetail = commandLookupError
-      ? `; command lookup: ${sanitizeCommandLookupError(commandLookupError)}`
+      ? `; command lookup status=${parseMattermostApiStatus(commandLookupError) ?? "unknown"}`
       : commandLookupFallbackDetail
         ? `; command lookup: ${commandLookupFallbackDetail}`
         : "";
     params.log?.(
-      `mattermost: slash command registration check failed for /${sanitizeMattermostLogValue(params.registered.trigger)}: ${sanitizeCommandLookupError(err)}${primaryDetail}`,
+      `mattermost: slash command registration check failed for /${params.registered.trigger} (status=${parseMattermostApiStatus(err) ?? "unknown"})${primaryDetail}`,
     );
     return null;
   }
@@ -375,7 +333,7 @@ async function validateMattermostSlashCommandToken(params: {
     if (!reservation.allowed) {
       if (reservation.shouldLog) {
         params.log?.(
-          `mattermost: slash command validation lookup rate-limited for /${sanitizeMattermostLogValue(params.registeredCommand.trigger)}`,
+          `mattermost: slash command validation lookup rate-limited for /${params.registeredCommand.trigger}`,
         );
       }
       return false;
@@ -431,7 +389,7 @@ async function authorizeSlashInvocation(params: {
     channelInfo = await fetchMattermostChannel(client, channelId);
   } catch (err) {
     log?.(
-      `mattermost: slash channel lookup failed for ${sanitizeMattermostLogValue(channelId)}: ${sanitizeCommandLookupError(err)}`,
+      `mattermost: slash channel lookup failed (status=${parseMattermostApiStatus(err) ?? "unknown"})`,
     );
   }
 
@@ -585,10 +543,6 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
 
-    log?.(
-      `mattermost: slash command /${sanitizeMattermostLogValue(trigger)} from ${sanitizeMattermostLogValue(senderName)} in ${sanitizeMattermostLogValue(channelId)}`,
-    );
-
     // Acknowledge immediately — we'll send the actual reply asynchronously
     sendSlashCommandResponse(res, 200, "Processing...");
 
@@ -612,7 +566,9 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         log,
       });
     } catch (err) {
-      log?.(`mattermost: slash command handler error: ${sanitizeCommandLookupError(err)}`);
+      log?.(
+        `mattermost: slash command handler error (status=${parseMattermostApiStatus(err) ?? "unknown"})`,
+      );
       try {
         const to = `channel:${channelId}`;
         await sendMessageMattermost(to, "Sorry, something went wrong processing that command.", {
@@ -774,7 +730,7 @@ async function handleSlashCommandAsync(params: {
       },
       onError: (err, info) => {
         runtime.error?.(
-          `mattermost slash ${info.kind} reply failed: ${sanitizeCommandLookupError(err)}`,
+          `mattermost slash ${info.kind} reply failed (status=${parseMattermostApiStatus(err) ?? "unknown"})`,
         );
       },
     },
@@ -798,4 +754,3 @@ async function handleSlashCommandAsync(params: {
     },
   });
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

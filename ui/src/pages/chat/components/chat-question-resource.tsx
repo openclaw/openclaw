@@ -1,5 +1,5 @@
 import type { Question } from "@openclaw/gateway-protocol";
-import { createEffect, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createSignal, For, onSettled, Show, untrack } from "solid-js";
 import { isQuestionThumbnail } from "../../../../../packages/gateway-protocol/src/question-media.js";
 import type {
   QuestionResourceAction,
@@ -56,7 +56,9 @@ export function ChatQuestionResource(props: ResourceProps) {
       props.agentId,
       context ? gatewayPresentationScope(context.gateway).key : -1,
     ]);
+  // The initial request identifies local results until the first scope transition.
   let identity = untrack(key);
+  // Retire transport work and its local results when the question loses authority.
   createEffect(
     () => {
       gateway?.read();
@@ -77,7 +79,7 @@ export function ChatQuestionResource(props: ResourceProps) {
       }
     },
   );
-  onCleanup(() => {
+  onSettled(() => () => {
     live = false;
     operationAbort?.abort();
     generation++;
@@ -200,7 +202,7 @@ export function ChatQuestionResource(props: ResourceProps) {
       const limits = resolveChatAttachmentLimits(context?.gateway.snapshot.hello?.policy);
       if (
         !limits ||
-        files.length + untrack(uploaded).length > 64 ||
+        files.length + uploaded().length > 64 ||
         admitAttachmentFiles(files, limits, 0).length !== files.length
       ) {
         throw new Error(t("chat.questions.resourceUploadTooLarge"));

@@ -1,3 +1,5 @@
+import type { Static } from "typebox";
+import type { GatewayCompletionRouteSchema } from "../../packages/gateway-protocol/src/schema/model-runtime-options.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { formatAgentRuntimeName } from "../status/agent-runtime-label.js";
 import { assertOperatorModelAllowed } from "./admitted-run-context.js";
@@ -141,11 +143,7 @@ export async function prepareUtilityCompletionForAgent(
 }
 
 /** Provider-neutral route of a utility completion, as the Gateway reports it. */
-export type UtilityCompletionRuntime = {
-  id: string;
-  kind: "api" | "cli" | "harness";
-  label: string;
-};
+export type UtilityCompletionRuntime = Static<typeof GatewayCompletionRouteSchema>;
 
 export type UtilityCompletionRuntimeParams = Pick<
   ModelCatalogDecisionParams,

@@ -6,7 +6,7 @@ import {
   createNativeDeviceSettingsCapability,
   type NativeDeviceSettingsCapability,
 } from "../../../app/native-device-settings.ts";
-import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createNativeDeviceSettingsSnapshot } from "../../../test-helpers/native-device-settings.ts";

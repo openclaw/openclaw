@@ -170,9 +170,6 @@ export function bindSqliteWorkerBackend(
           SessionMetadataWorkerOperations["session.transcript.appendMessage"]["output"]
         >(
           (database) => {
-            if (database.db !== context.database) {
-              throw new Error("Session message lost its borrowed canonical connection");
-            }
             admit("transaction");
             const value = applySessionDirectMessageInTransaction(database, {
               ...command.input,
@@ -207,9 +204,6 @@ export function bindSqliteWorkerBackend(
             | "session.metadata.append"]["output"]
         >(
           (database) => {
-            if (database.db !== context.database) {
-              throw new Error("Session metadata lost its borrowed canonical connection");
-            }
             admit("transaction");
             if (command.type === "session.metadata.initialize") {
               const initialized = ensureSessionEntryInTransaction(

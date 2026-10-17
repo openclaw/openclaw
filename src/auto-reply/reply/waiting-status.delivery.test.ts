@@ -77,7 +77,6 @@ function createContext(): FinalizeReplyAgentRunInput {
       resolved: { provider: followupRun.run.provider, model: followupRun.run.model },
       fallback: { exhausted: false, attempts: [] },
       autoCompactionCount: 0,
-      didLogHeartbeatStrip: false,
     },
     runId,
     runStartedAt: Date.now(),

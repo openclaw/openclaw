@@ -298,11 +298,13 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
         : invalid || bundleInstallFailure || capacityFailure
           ? error.message
           : "node worker supervisor command failed";
-    if (workspaceCommand) {
-      logWarn(
-        `node workspace command failed (${params.command}, ${code}): ${boundedWorkerError(message, WORKSPACE_DIAGNOSTIC_MAX_CHARS)}`,
-      );
-    }
+    // Supervisor replies stay generic so node-local details never reach the Gateway; the
+    // node log keeps the redacted, bounded cause for every command.
+    logWarn(
+      workspaceCommand
+        ? `node workspace command failed (${params.command}, ${code}): ${boundedWorkerError(message, WORKSPACE_DIAGNOSTIC_MAX_CHARS)}`
+        : `node worker supervisor command failed (${params.command}, ${code}): ${boundedWorkerError(error, WORKSPACE_DIAGNOSTIC_MAX_CHARS)}`,
+    );
     return { handled: true as const, ok: false as const, code, message };
   }
 }

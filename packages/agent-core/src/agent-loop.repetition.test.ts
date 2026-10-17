@@ -22,6 +22,7 @@ async function runResponse(
   enabled = true,
   terminalOnly = false,
   initialText?: string,
+  incrementalText = false,
 ) {
   const events: AgentEvent[] = [];
   let aborted = false;
@@ -60,12 +61,22 @@ async function runResponse(
       if (!terminalOnly) {
         content.forEach((block, contentIndex) => {
           if (block.type === "text") {
-            response.push({
-              type: "text_delta",
-              contentIndex,
-              delta: block.text,
-              partial: message,
-            });
+            if (incrementalText) {
+              for (let offset = 0; offset < block.text.length; offset += 1024) {
+                response.push({
+                  type: "text_delta",
+                  contentIndex,
+                  delta: block.text.slice(offset, offset + 1024),
+                });
+              }
+            } else {
+              response.push({
+                type: "text_delta",
+                contentIndex,
+                delta: block.text,
+                partial: message,
+              });
+            }
           } else if (block.type === "thinking") {
             response.push({
               type: "thinking_delta",
@@ -106,14 +117,20 @@ describe("repetition stop at the stream owner", () => {
     });
   });
 
-  it.each(["text", "thinking", "terminal"])(
+  it.each(["text", "incremental text", "thinking", "terminal"])(
     "quarantines a repetitive %s block before persistence and replay",
     async (kind) => {
       const content: AssistantMessage["content"] = [
         { type: "text", text: "Earlier answer stays intact." },
         kind === "thinking" ? { type: "thinking", thinking: loop } : { type: "text", text: loop },
       ];
-      const { result, events, requests } = await runResponse(content, true, kind === "terminal");
+      const { result, events, requests } = await runResponse(
+        content,
+        true,
+        kind === "terminal",
+        undefined,
+        kind === "incremental text",
+      );
       const expected = [content[0], { type: "text", text: marker }];
       expect(result.at(-1)).toMatchObject({
         stopReason: "error",

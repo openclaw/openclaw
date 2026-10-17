@@ -26,12 +26,13 @@ import type {
 } from "./app-sidebar-session-render-types.ts";
 import {
   renderChildSessionLoadError,
+  renderPendingSessionCreateRow,
   renderRecentSession as RecentSession,
 } from "./app-sidebar-session-row-render.tsx";
 import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "./app-sidebar-session-types.ts";
-import { areSessionCatalogsSettled } from "./session-data-controller-catalog.ts";
+import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
 registerEnglishCatalog(registerSessionOrganizationEnglish);
 type SessionCatalogRenderSnapshot = {
@@ -178,7 +179,7 @@ function renderSessionCatalog(params: {
       onCatalogMenuTriggerRendered={(key, element) =>
         host().sidebarMenus.catalogMenu.retargetTrigger(key, element)
       }
-      isMenuOpen={(key) => host().sidebarMenus.catalogMenu.isOpenFor(key)}
+      isMenuOpen={(key) => host().sidebarMenus.catalogMenuView.isOpenFor(key)}
     />
   );
 }
@@ -270,6 +271,7 @@ export function renderSessionList(params: {
   return renderSessionListFrame(
     untrack(host),
     <div class="sidebar-recent-sessions">
+      {renderPendingSessionCreateRow(host)}
       {renderSessionListBody(params)}
       {renderRosterLoadMore(
         host(),
@@ -311,7 +313,10 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: JSX.E
   });
   return (
     <section
-      class={`sidebar-sessions ${host.sessionOrganizer.sessionListRemovalDrop ? "sidebar-sessions--removal-drop" : ""}`}
+      class={[
+        "sidebar-sessions",
+        host.sessionOrganizer.sessionListRemovalDrop && "sidebar-sessions--removal-drop",
+      ]}
       onDragOver={(event: DragEvent) => host.sessionOrganizer.handleSessionListDragOver(event)}
       onDragLeave={(event: DragEvent) => host.sessionOrganizer.handleSessionListDragLeave(event)}
       onDrop={(event: DragEvent) => host.sessionOrganizer.handleSessionListDrop(event)}
@@ -336,4 +341,3 @@ export function renderSessionListFrame(host: SidebarSessionListHost, body: JSX.E
   );
 }
 const SessionCatalog = renderSessionCatalog;
-export { SessionSection as renderSessionSection };

@@ -151,7 +151,7 @@ it.each([false, true])(
         return snapshot;
       });
     let pane: ChatPaneRuntime | undefined;
-    const connected = vi.spyOn(ChatPaneRuntime.prototype, "connectedCallback");
+    const connected = vi.spyOn(ChatPaneRuntime.prototype, "start");
     const provider = createSolidApplicationContextProvider(context);
     const container = document.body.appendChild(createApplicationContextProvider(context));
     let view: ReturnType<typeof mountSolid> | undefined;

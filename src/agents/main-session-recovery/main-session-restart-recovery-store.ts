@@ -472,8 +472,13 @@ export async function recoverStore(params: {
         continue;
       }
 
+      // An admitted parent owns its input and operator source independently of
+      // the child wake, whose membership and retry state may already have changed.
+      // Gateway dispatch restores that exact source under current policy. Only
+      // historical inputs without it still need the cohort failure settlement.
       if (
         !harnessCompletion &&
+        !entry.restartRecoveryOperatorSource &&
         entry.restartRecoverySourceIngress === "internal" &&
         expectedRecoverySourceRunId?.startsWith("announce:requester-settle:")
       ) {

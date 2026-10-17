@@ -1,5 +1,5 @@
 import "../../styles/logs.css";
-import { createEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
   beginPanelRefresh,
@@ -16,6 +16,7 @@ import {
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import {
   DEFAULT_LOG_LEVEL_FILTERS,
   parseLogLine,
@@ -98,7 +99,7 @@ export function LogsPage() {
     invalidateRequests: cancelRequest,
     onSnapshot: updatePolling,
     ensureInitialData: (change) => {
-      const quiet = !change.identityChanged && untrack(status).hasLoaded;
+      const quiet = !change.identityChanged && status().hasLoaded;
       // A same-Gateway reconnect resumes the cursor; a full window costs a busy Gateway one
       // file read and redaction pass per reconnect.
       void loadLogs({ reset: !quiet || cursor === null, quiet }).then((current) => {
@@ -123,7 +124,7 @@ export function LogsPage() {
     const bootId = gateway.snapshot?.hello?.server?.bootId;
     const resetCursor = options.reset || bootId !== cursorBootId;
     const previousCursor = resetCursor ? null : cursor;
-    const previousFile = untrack(file);
+    const previousFile = file();
     const isCurrent = () =>
       !disposed && request === current && context.gateway === source && gateway.isCurrent(scope);
     try {
@@ -205,34 +206,30 @@ export function LogsPage() {
         return;
       }
       const distance = stream.scrollHeight - stream.scrollTop - stream.clientHeight;
-      if (!force && (!untrack(autoFollow) || (!atBottom && distance >= 120))) {
+      if (!force && (!autoFollow() || (!atBottom && distance >= 120))) {
         return;
       }
       stream.scrollTop = stream.scrollHeight;
       atBottom = true;
     });
   };
-  createEffect(entries, () => {
-    if (untrack(autoFollow) && atBottom) {
-      scheduleFollow();
-    }
-  });
-  createEffect(autoFollow, (enabled) => {
-    if (enabled) {
-      scheduleFollow(true);
-    }
-  });
-  createEffect(forceFollow, (revision) => {
-    if (revision > 0) {
-      scheduleFollow(true);
-    }
-  });
+  // One DOM follow operation owns appends, operator opt-in, and explicit refreshes.
+  createEffect(
+    () => ({ entries: entries(), enabled: autoFollow(), revision: forceFollow() }),
+    ({ enabled, revision }, previous) => {
+      const force =
+        (revision > 0 && revision !== previous?.revision) || (enabled && !previous?.enabled);
+      if (force || (enabled && atBottom)) {
+        scheduleFollow(force);
+      }
+    },
+  );
   const visibilityChanged = () => {
     if (updatePolling()) {
       void loadLogs({ quiet: true });
     }
   };
-  document.addEventListener("visibilitychange", visibilityChanged);
+  const stopVisibility = listen(document, "visibilitychange", visibilityChanged);
   onCleanup(() => {
     disposed = true;
     cancelRequest();
@@ -242,7 +239,7 @@ export function LogsPage() {
     if (followFrame !== undefined) {
       cancelAnimationFrame(followFrame);
     }
-    document.removeEventListener("visibilitychange", visibilityChanged);
+    stopVisibility();
   });
   onSettled(() => {
     const resetContentScroll = () => {

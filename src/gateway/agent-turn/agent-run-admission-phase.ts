@@ -85,8 +85,9 @@ export async function prepareAgentRunDispatch(
     inputProvenance: params.inputProvenance,
   });
   assertRequesterCurrent?.();
-  const coordination = isSubagentCoordinationInputProvenance(params.inputProvenance);
-  const controlUiVisible = !params.suppressVisibleSessionEffects && !coordination;
+  const privateConversationWork =
+    params.privateCompletion || isSubagentCoordinationInputProvenance(params.inputProvenance);
+  const controlUiVisible = !params.suppressVisibleSessionEffects && !privateConversationWork;
   const parentResume = readInProcessSubagentResume(params.client?.internal);
   const preRegistrationAbort = readGatewayDedupeEntry({
     dedupe: params.context.dedupe,
@@ -108,14 +109,6 @@ export async function prepareAgentRunDispatch(
     });
     return undefined;
   }
-  if (
-    params.abortForLifecycleRotation({
-      sessionKey: params.resolvedSessionKey,
-      agentId: params.activeSessionAgentId,
-    })
-  ) {
-    return undefined;
-  }
   if (params.restoredCronContinuationIdentity && !params.restoredCronContinuation) {
     params.io.emitAcceptance([
       false,
@@ -125,14 +118,8 @@ export async function prepareAgentRunDispatch(
     return undefined;
   }
 
-  const {
-    effectiveProviderOverride,
-    effectiveModelOverride,
-    effectiveThinking,
-    effectiveAllowModelOverride,
-    resolvedRuntime,
-    lifecycleStorePath,
-  } = resolveAgentRunAdmissionModel(params);
+  const { resolvedRuntime, ...modelSelection } = resolveAgentRunAdmissionModel(params);
+  const { lifecycleStorePath } = modelSelection;
   let timeoutSeconds: number | undefined;
   let operationalRunInstance: OperationalRunInstanceRef | undefined;
   try {
@@ -247,7 +234,11 @@ export async function prepareAgentRunDispatch(
         ...(params.suppressVisibleSessionEffects ? {} : { sessionKey: params.resolvedSessionKey }),
         agentId: activeRunAbort.entry.agentId,
         isControlUiVisible: controlUiVisible,
-        ...(coordination ? { projectSessionMessages: false, projectSessionActive: false } : {}),
+        // Retained watchdog and tool completions must not add delivery to private intake.
+        ...(params.privateCompletion ? { sessionEventDelivery: false } : {}),
+        ...(privateConversationWork
+          ? { projectSessionMessages: false, projectSessionActive: false }
+          : {}),
         lifecycleGeneration: params.lifecycleGeneration,
         mainSessionRestartRecovery: params.isRestartRecoveryResumeRun ? true : undefined,
       });
@@ -327,7 +318,6 @@ export async function prepareAgentRunDispatch(
         if (restoreAdmittedRestartRecoveryInterrupted) {
           pendingRecovery = await repairMainSessionRecoveryMutation({
             mutation: restoreAdmittedRestartRecoveryInterrupted,
-            onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
             onError: (error) =>
               params.context.logGateway.warn(
                 `failed to restore unaccepted restart recovery: ${formatForLog(error)}`,
@@ -503,12 +493,10 @@ export async function prepareAgentRunDispatch(
     assertInputAdmissionCurrent?.();
     assertRequesterCurrent?.();
     followupCompletion?.assertCurrent();
-    if (followupSuccessor) {
-      if (!resumedTaskAdopted) {
-        followupSuccessor.assertCurrent();
-      } else if (!followupSuccessor.owner.ownsExecution(params.runId)) {
-        throw new Error("Follow-up input no longer owns its admitted execution.");
-      }
+    if (!resumedTaskAdopted) {
+      followupSuccessor?.assertCurrent();
+    } else if (followupSuccessor && !followupSuccessor.owner.ownsExecution(params.runId)) {
+      throw new Error("Follow-up input no longer owns its admitted execution.");
     }
     if (parentResume && resumedTaskAdopted && !terminal) {
       assertParentSubagentResumeSuccessorCurrent(parentResume, params.runId);
@@ -537,6 +525,7 @@ export async function prepareAgentRunDispatch(
       getAbortStopReason: () => activeRunAbort.entry?.abortStopReason ?? "rpc",
       deferTimeoutCompletion: activeRunAbort.deferTimeoutCompletion,
       admittedSessionId: params.getAdmittedSessionId(),
+      freshChildStorePath: params.freshChild ? lifecycleStorePath : undefined,
       resolvedThreadId,
     });
     if (userTurn.recorder) {
@@ -703,13 +692,10 @@ export async function prepareAgentRunDispatch(
       ...(capturedOperator.authority ? { operatorAuthority: capturedOperator.authority } : {}),
       operationalRunInstance,
       timeoutSeconds,
-      effectiveProviderOverride,
-      effectiveModelOverride,
-      effectiveThinking,
-      effectiveAllowModelOverride,
+      ...modelSelection,
+      imageUnderstandingModel: params.needsImageUnderstanding ? resolvedRuntime : undefined,
       trustedInternalHandoff,
       restoredCronContinuationLifecycleRevision: params.restoredCronContinuation?.lifecycleRevision,
-      lifecycleStorePath,
       resolvedThreadId,
       reactivateSubagent,
       followupCompletion,

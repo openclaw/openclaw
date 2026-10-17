@@ -31,12 +31,12 @@ export function DashboardsPage(props: DashboardsPageProps) {
       : dashboardsRouteData(context, snapshot);
   });
   createEffect(
-    () => ({ projection: list(), scope: query() }),
-    ({ projection, scope }) => {
+    () => ({ projection: list(), scope: query(), sessions: context.sessions }),
+    ({ projection, scope, sessions }) => {
       const apply = () => {
-        const snapshot = untrack(projection.read);
+        const snapshot = sessions.listSnapshot(scope);
         if (snapshot.pagination?.hasMore && !snapshot.loading && !snapshot.error) {
-          void context.sessions.refreshList({
+          void sessions.refreshList({
             ...scope,
             append: true,
             offset: snapshot.pagination.nextOffset ?? snapshot.pagination.count,
@@ -47,7 +47,7 @@ export function DashboardsPage(props: DashboardsPageProps) {
           !snapshot.error &&
           context.gateway.snapshot.phase === "connected"
         ) {
-          void context.sessions.refreshList(scope);
+          void sessions.refreshList(scope);
         }
       };
       // Append during the owner's completion notification, before its request drain settles.

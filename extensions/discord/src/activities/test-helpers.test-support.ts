@@ -110,7 +110,6 @@ export function createActivityTestConfig(params?: {
 
 export function createActivityTestRuntime(
   cfg = createActivityTestConfig(),
-  env: NodeJS.ProcessEnv = {},
 ): DiscordActivitiesRuntime {
-  return new DiscordActivitiesRuntime(createMemoryActivityStore(), () => cfg, env);
+  return new DiscordActivitiesRuntime(createMemoryActivityStore(), () => cfg, {});
 }

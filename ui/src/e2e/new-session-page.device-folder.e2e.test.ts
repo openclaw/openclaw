@@ -161,6 +161,118 @@ suite.define(() => {
       });
     });
   });
+  it("browses folders on the selected device and creates the session in the chosen one", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const sessionKey = "agent:main:browsed-device-folder";
+      const environment = {
+        id: "node:paired-runner",
+        type: "node",
+        label: "Paired runner",
+        status: "available",
+        sessionHost: true,
+        workerSlots: { total: 2, available: 1 },
+        workerHost: { deviceFolders: true },
+        invocableCommands: ["fs.listDir"],
+      };
+      const home = { path: "/Users/dev", home: "/Users/dev", parent: "/Users" };
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+        featureMethods: [
+          "agent.wait",
+          "chat.metadata",
+          "chat.startup",
+          "fs.listDir",
+          "sessions.create",
+          "sessions.dispatch",
+          "worktrees.branches",
+        ],
+        workspace: "/srv/gateway-workspace",
+        workspaceGit: false,
+        agentModel: "example/worker",
+        models: DEVICE_FOLDER_MODELS,
+        methodResponses: {
+          "environments.list": { environments: [environment], profiles: [] },
+          "fs.listDir": { ...home, entries: [{ name: "src", path: "/Users/dev/src" }] },
+          "sessions.create": { key: sessionKey },
+          "sessions.list": createdSessionListResult(sessionKey),
+          "sessions.dispatch": { placement: { state: "active", generation: 1 } },
+          "sessions.send": { runId: "run-browsed-folder", status: "started" },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      await page.locator("#new-session-where-trigger").click();
+      await page.locator('[data-value="device:paired-runner"]').click();
+      await page.locator("#new-session-project-trigger").click();
+      await page.getByRole("button", { name: "Browse folders on Paired runner" }).click();
+      expect((await gateway.waitForRequest("fs.listDir")).params).toEqual({
+        nodeId: "paired-runner",
+      });
+      await expect
+        .poll(() => page.locator(".new-session-page__browser-path").getAttribute("placeholder"))
+        .toBe("Paired runner");
+      const src = page.getByRole("option", { name: "src" });
+      await src.waitFor();
+      await gateway.setMethodResponse("fs.listDir", {
+        path: "/Users/dev/src",
+        home: "/Users/dev",
+        parent: "/Users/dev",
+        entries: [],
+      });
+      const listed = (await gateway.getRequests("fs.listDir")).length;
+      await src.click();
+      expect((await gateway.waitForRequest("fs.listDir", { after: listed })).params).toEqual({
+        nodeId: "paired-runner",
+        path: "/Users/dev/src",
+      });
+      await page.getByRole("button", { name: "Use this folder" }).click();
+      await expect
+        .poll(() => page.getByRole("textbox", { name: "Absolute path on device" }).inputValue())
+        .toBe("/Users/dev/src");
+      // Gateway checkout probes never run against a path that exists only on the device.
+      expect(await gateway.getRequests("worktrees.branches")).toHaveLength(0);
+      await page.locator(".new-session-page__message").fill("Work in the browsed folder");
+      await page.getByRole("button", { name: "Start session" }).click();
+      expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
+        deviceFolder: { deviceId: "paired-runner", path: "/Users/dev/src" },
+      });
+    });
+  });
+  it("offers device browsing only to admins", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        operatorScopes: ["operator.read", "operator.write"],
+        workspace: "/srv/gateway-workspace",
+        workspaceGit: false,
+        agentModel: "example/worker",
+        models: DEVICE_FOLDER_MODELS,
+        methodResponses: {
+          "environments.list": {
+            environments: [
+              {
+                id: "node:paired-runner",
+                type: "node",
+                label: "Paired runner",
+                status: "available",
+                sessionHost: true,
+                workerSlots: { total: 2, available: 1 },
+                workerHost: { deviceFolders: true },
+                invocableCommands: ["fs.listDir"],
+              },
+            ],
+            profiles: [],
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("environments.list");
+      await page.locator("#new-session-where-trigger").click();
+      await page.locator('[data-value="device:paired-runner"]').click();
+      await page.locator("#new-session-project-trigger").click();
+      await page.locator('[data-value="device-folder"]').waitFor();
+      expect(await page.locator('[data-value="browse-device"]').count()).toBe(0);
+    });
+  });
   it("restores a pending device-folder create without changing its device or path", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const deviceFolder = { deviceId: "paired-runner", path: "/srv/existing" };

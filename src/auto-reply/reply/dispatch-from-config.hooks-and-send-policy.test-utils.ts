@@ -418,7 +418,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.sendPolicyDenied).toBe(true);
   });
 
-  it("logs suppressed reply metadata without private reply text", async () => {
+  it("suppresses private reply delivery without logging its text", async () => {
     setNoAbort();
     globalMocks.logVerbose.mockClear();
     sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
@@ -432,11 +432,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver: async () => ({ text }),
     });
 
-    const suppressedLog = globalMocks.logVerbose.mock.calls.find(([message]) =>
-      message.includes("final reply suppressed"),
-    )?.[0];
-    expect(suppressedLog).toContain("textChars=17 media=0 rich=none");
-    expect(suppressedLog).not.toMatch(/PRIVATE_REPLY_123|textPreview/);
+    expect(JSON.stringify(globalMocks.logVerbose.mock.calls)).not.toMatch(
+      /PRIVATE_REPLY_123|textPreview/,
+    );
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 

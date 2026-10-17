@@ -36,25 +36,6 @@ export type InstalledAppsResult =
   | { status: "ok"; apps: InstalledApp[] }
   | { status: "unsupported"; platform: NodeJS.Platform; apps: [] };
 
-type InstalledAppRoots = {
-  applications: string;
-  userApplications: string;
-  systemApplications: string;
-};
-
-type ScanInstalledAppsOptions = {
-  platform?: NodeJS.Platform;
-  roots?: InstalledAppRoots;
-};
-
-function defaultRoots(): InstalledAppRoots {
-  return {
-    applications: "/Applications",
-    userApplications: path.join(os.homedir(), "Applications"),
-    systemApplications: "/System/Applications",
-  };
-}
-
 function isBackupishBundle(label: string): boolean {
   return (
     /(?:^|[\s._-])(?:backup|previous|rollback)(?:[\s._-]|$)/i.test(label) ||
@@ -94,20 +75,17 @@ async function readBundleIdWithPlutil(appPath: string): Promise<string | undefin
   }
 }
 
-export async function scanInstalledApps(
-  options: ScanInstalledAppsOptions = {},
-): Promise<InstalledAppsResult> {
-  const platform = options.platform ?? process.platform;
+export async function scanInstalledApps(): Promise<InstalledAppsResult> {
+  const platform = process.platform;
   if (platform !== "darwin") {
     return { status: "unsupported", platform, apps: [] };
   }
 
-  const roots = options.roots ?? defaultRoots();
   const appPaths = (
     await Promise.all([
-      listAppPaths(roots.applications, false),
-      listAppPaths(roots.userApplications, false),
-      listAppPaths(roots.systemApplications, true),
+      listAppPaths("/Applications", false),
+      listAppPaths(path.join(os.homedir(), "Applications"), false),
+      listAppPaths("/System/Applications", true),
     ])
   ).flat();
   const limit = pLimit(PLIST_READ_CONCURRENCY);

@@ -69,7 +69,7 @@ function resolveMinimaxDirectTtsApiKey(configApiKey?: string): string | undefine
 
 function normalizeMinimaxProviderConfig(rawConfig: Record<string, unknown>, cfg?: OpenClawConfig) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw = asOptionalRecord(providers?.minimax) ?? asOptionalRecord(rawConfig.minimax);
+  const raw = asOptionalRecord(providers?.minimax);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -110,7 +110,7 @@ function normalizeMinimaxPitch(value: unknown): number | undefined {
 
 function readMinimaxProviderConfig(config: SpeechProviderConfig, cfg?: OpenClawConfig) {
   return normalizeMinimaxProviderConfig(
-    { minimax: { ...config, apiKey: trimToUndefined(config.apiKey) } },
+    { providers: { minimax: { ...config, apiKey: trimToUndefined(config.apiKey) } } },
     cfg,
   );
 }

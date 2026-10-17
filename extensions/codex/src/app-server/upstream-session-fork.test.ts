@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexSessionCatalogControl } from "../session-catalog-control.js";
 import { CodexAppServerClient } from "./client.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config-runtime.js";
+import type { CodexPluginConfig } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
@@ -139,7 +140,7 @@ describe("forkCodexUpstreamSession", () => {
           authToken: "synthetic-fork-lifetime-token",
           requestTimeoutMs: 200,
         },
-      };
+      } satisfies CodexPluginConfig;
       const controlFactory = createCodexSessionCatalogControl({
         getPluginConfig: () => pluginConfig,
         getRuntimeConfig: () => config,

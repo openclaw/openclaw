@@ -102,17 +102,15 @@ describe("CodexAppServerClient message decoding", () => {
     'first","bad": @ "unfinished',
   ])("drops malformed frames without consuming the next valid frame: %s", (delta) => {
     const harness = createHarness();
-    harness.process.stdout.write(
-      `{"method":"item/commandExecution/outputDelta","params":{"token":"synthetic-secret","delta":"${delta}\n`,
-    );
+    const malformed = `{"method":"item/commandExecution/outputDelta","params":{"token":"synthetic-secret","delta":"${delta}`;
+    harness.process.stdout.write(`${malformed}\n`);
     harness.send(following);
 
     expect(harness.notifications).toEqual([following]);
     expect(harness.warn).toHaveBeenCalledExactlyOnceWith(
       "failed to parse codex app-server message",
-      expect.objectContaining({ error: expect.any(SyntaxError), fragmentCount: 1 }),
+      { byteCount: Buffer.byteLength(malformed), charCount: malformed.length, fragmentCount: 1 },
     );
     expect(JSON.stringify(harness.warn.mock.calls)).not.toContain("synthetic-secret");
-    expect(JSON.stringify(harness.warn.mock.calls)).toContain("<redacted>");
   });
 });

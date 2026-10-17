@@ -154,10 +154,23 @@ describe("LiteLLM image URL responses", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("enforces the configured byte cap", async () => {
-    await expect(
-      generate({ ...config, agents: { defaults: { mediaMaxMb: 1 / (1024 * 1024) } } }),
-    ).rejects.toThrow(/exceeds|too large/i);
+  it("keeps downloads above the configured media cap", async () => {
+    const result = await generate({
+      ...config,
+      agents: { defaults: { mediaMaxMb: 1 / (1024 * 1024) } },
+    });
+    expect(result.images[0]?.buffer).toEqual(png);
+  });
+
+  it("rejects downloads above the generated image download ceiling", async () => {
+    fetchMock.mockImplementation(async (_url, init) =>
+      init?.method === "POST"
+        ? Response.json(payload)
+        : new Response(new Uint8Array(65 * 1024 * 1024), {
+            headers: { "Content-Type": "image/png" },
+          }),
+    );
+    await expect(generate()).rejects.toThrow(/exceeds|too large/i);
   });
 
   it("keeps all downloads within the default operation deadline", async () => {

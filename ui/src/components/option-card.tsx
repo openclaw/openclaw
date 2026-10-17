@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import "../styles/option-card.css";
 
@@ -36,6 +36,7 @@ export function OptionCard(input: { props?: OptionCardProps }) {
     requestKey();
     return untrack(() => options().find((option) => option.recommended)?.value ?? "");
   });
+  const choices = new Set<HTMLButtonElement>();
   let focusPreselection = false;
   createEffect(
     () => ({ key: requestKey(), disabled: input.props?.disabled, selected: selected() }),
@@ -51,7 +52,7 @@ export function OptionCard(input: { props?: OptionCardProps }) {
       if (active && active !== host.ownerDocument.body && !host.contains(active)) {
         return;
       }
-      [...host.querySelectorAll<HTMLButtonElement>(".option-card__choice")]
+      [...choices]
         .find((button) => button.dataset.optionValue === current.selected)
         ?.focus({ preventScroll: true });
     },
@@ -88,33 +89,38 @@ export function OptionCard(input: { props?: OptionCardProps }) {
             <div class="option-card__question">{props().question}</div>
             <div class="option-card__choices" role="radiogroup">
               <For each={options()} keyed={(option) => option.value}>
-                {(option, index) => (
-                  <button
-                    class={[
-                      "option-card__choice",
-                      {
-                        "option-card__choice--recommended": index() === recommendedIndex(),
-                        "option-card__choice--selected": option().value === selected(),
-                      },
-                    ]}
-                    type="button"
-                    role="radio"
-                    aria-checked={option().value === selected() ? "true" : "false"}
-                    data-option-value={option().value}
-                    disabled={props().disabled}
-                    onClick={() => select(option().value)}
-                  >
-                    <span class="option-card__choice-copy">
-                      <strong>{option().label}</strong>
-                      <Show when={option().description}>
-                        <span class="option-card__description">{option().description}</span>
+                {(option, index) => {
+                  let button: HTMLButtonElement;
+                  onCleanup(() => choices.delete(button));
+                  return (
+                    <button
+                      ref={(element) => choices.add((button = element))}
+                      class={[
+                        "option-card__choice",
+                        {
+                          "option-card__choice--recommended": index() === recommendedIndex(),
+                          "option-card__choice--selected": option().value === selected(),
+                        },
+                      ]}
+                      type="button"
+                      role="radio"
+                      aria-checked={option().value === selected() ? "true" : "false"}
+                      data-option-value={option().value}
+                      disabled={props().disabled}
+                      onClick={() => select(option().value)}
+                    >
+                      <span class="option-card__choice-copy">
+                        <strong>{option().label}</strong>
+                        <Show when={option().description}>
+                          <span class="option-card__description">{option().description}</span>
+                        </Show>
+                      </span>
+                      <Show when={index() === recommendedIndex()}>
+                        <span class="option-card__recommended">{t("optionCard.recommended")}</span>
                       </Show>
-                    </span>
-                    <Show when={index() === recommendedIndex()}>
-                      <span class="option-card__recommended">{t("optionCard.recommended")}</span>
-                    </Show>
-                  </button>
-                )}
+                    </button>
+                  );
+                }}
               </For>
             </div>
             <button

@@ -1,5 +1,6 @@
 // Trusted channel catalog helpers that hide unenabled workspace-shadowed entries.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   getChannelPluginCatalogEntry,
   listRawChannelPluginCatalogEntries,
@@ -11,11 +12,39 @@ import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "../../plugins/config-state.js";
+import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import {
   hasExplicitManifestOwnerTrust,
   resolveManifestOwnerBasePolicyBlock,
 } from "../../plugins/manifest-owner-policy.js";
 import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
+import { listPluginContributionIds } from "../../plugins/plugin-registry.js";
+import type { ChannelChoice } from "../onboard-types.js";
+
+/** List channel ids contributed by currently installed manifest-backed plugins. */
+export function listManifestInstalledChannelIds(params: {
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  index?: InstalledPluginIndex;
+}): Set<ChannelChoice> {
+  const resolvedConfig = applyPluginAutoEnable({
+    config: params.cfg,
+    env: params.env ?? process.env,
+  }).config;
+  const workspaceDir =
+    params.workspaceDir ??
+    resolveAgentWorkspaceDir(resolvedConfig, resolveDefaultAgentId(resolvedConfig));
+  return new Set(
+    listPluginContributionIds({
+      contribution: "channels",
+      config: resolvedConfig,
+      workspaceDir,
+      env: params.env ?? process.env,
+      ...(params.index ? { index: params.index } : {}),
+    }),
+  );
+}
 
 type TrustedChannelCatalogOptions = Pick<
   NonNullable<Parameters<typeof getChannelPluginCatalogEntry>[1]>,

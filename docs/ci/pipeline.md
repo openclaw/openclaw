@@ -142,40 +142,42 @@ and scene readiness; it does not compare pixels against a baseline.
 
 ### Test runtime selection
 
-Local development and tests now default to the pinned Bun fork; CI keeps its
-planner-selected runtime. Main-only Node lanes, including Control UI tests, are
-a known Bun coverage gap: a change can pass main CI while breaking local Bun
-execution. PR and dual-runtime validation provide the current Bun coverage.
+Pull requests and automatic main CI use the pinned Bun fork. The planner
+selects `bun-all` for every Linux test lane routed through
+`scripts/lib/ci-test-runtime.mts`, including Control UI Chromium unit shards and
+plugin prerelease extension batches. Full Release Validation uses `dual-all`:
+the complete Node selection runs first, followed by its Bun portion in the same
+runner slots. Either runtime failing fails the job.
 
-Manual CI dispatches expose an optional `test_runtime_policy` trial switch.
-Leaving it empty preserves every existing default: PRs use `bun-compatible`,
-main uses Node, and full release validation uses `dual`. Selecting `bun-all`
-runs every selected Linux test on Bun except the explicitly named Node-only
-contracts and confirmed fork defects in `scripts/lib/ci-test-runtime.mts`. Fork
-exclusions retain their API failure reason until a pinned fix is verified. Selecting `dual-all` runs the
-complete Node selection, then its Bun portion in the same runner slots. Both
-trials cover Control UI Chromium unit shards and extension batches, including
-runtime-build selections. They do not change macOS or Windows runtimes, shard
-counts, or worker limits, and are never selected by automatic events.
-`dual-all` doubles each selected Linux test matrix row's deadline (including the
-default 60-minute budget); `bun-all` keeps the original deadline. Automatic CI and
-ordinary `dual` validation keep their existing deadlines and silence watchdogs.
+Manual dispatches retain the optional `test_runtime_policy` override: `node`,
+`bun-all`, or `dual-all`. Leaving it empty uses the event default: Bun for daily
+CI and main-shaped validation, both runtimes for full validation. To force Node
+for an existing ref:
 
-Unlike qualified `bun-compatible` and `dual` routing, these trials send unknown
-configs, include patterns, and extra Vitest arguments to Bun too. Exact Node-only
-files are filtered out of the Bun portion and retain Node coverage. Native Bun
-test-runner qualification still applies only to its existing verified inventory;
-other files use Vitest on Bun. This intentionally exposes unqualified Bun failures
-so maintainers can compare results before changing daily CI defaults.
-Every selected Bun process in CI checks its revision against
+```bash
+gh workflow run ci.yml -f target_ref=<ref> -f test_runtime_policy=node
+```
+
+`bun-all` sends all selected configs, include patterns, and extra Vitest arguments
+to Bun except the exact Node-only contracts and confirmed fork defects recorded
+with their reasons in the runtime owner. Those files retain Node coverage.
+Native Bun test-runner qualification remains limited to its verified inventory;
+other files use Vitest on Bun.
+
+Every selected Bun process checks its revision against
 `scripts/lib/openclaw-bun.json` before launch. Missing or upstream Bun fails with
-the job identity and setup instruction; the test must not silently use a stock
-installation. Trial matrix rows always install the pinned test runtime.
+the job identity and setup instruction. The existing `setup-test-bun` action
+installs the pinned fork for jobs that need it.
 
-Phase 1 covers the shared shard runner, Control UI Chromium unit shards, and
-plugin prerelease extension batches. These Linux lanes still retain their
-existing Node runtime; setting the trial policy does not migrate their direct
-entrypoints:
+The workflows retain their job definitions, matrix shapes, runner classes, and
+concurrency caps. Both runtime passes reuse the selected runner; there are no
+per-runtime duplicate jobs. Runtime-specific timing estimates can repack selected
+tests within the existing planner caps. `dual-all` doubles
+each selected Linux test row's deadline, including the default 60-minute budget,
+to cover its sequential runtime passes. `bun-all` keeps the original deadline.
+macOS and Windows runtime policies remain unchanged.
+
+The following direct-entrypoint lanes still use Node and remain follow-up work:
 
 | Remaining Node lane                                          | Work needed before a Bun trial                                                                                                   |
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -192,12 +194,27 @@ entrypoints:
 | `node-runtime-compat` / `node-runtime-conformance`           | Preserve the intentional Node/Rust compatibility matrix; define separate Bun proof rather than replacing it.                     |
 | `openclaw-performance`                                       | Add runtime identity to benchmark artifacts, isolate runs, and compare matching workloads before changing performance baselines. |
 
-The protected cache warmer continues to publish its existing qualified Node/Bun
-inventory. Trial runs are excluded from timing refit and shard-refresh inputs,
-so partial failures or Bun-only samples cannot prune or overwrite the current
-Node timing model. Phase 2 needs runtime-matching timing keys, per-runtime
-pruning, and separate browser/runtime measurements before trials can become
-defaults.
+The protected cache warmer continues to publish its existing Node/Bun inventory.
+Timing learning, refit, and refresh keep separate identities for Node,
+`bun-all`, and `dual-all`. A `bun-all` measurement covers its complete envelope:
+Bun/Vitest, native Bun, and any named Node companions. A `dual-all` measurement
+records the combined wall time of its sequential runtime passes. Old `bun:`
+timings from qualified partial selections are not reused. Per-runtime pruning
+cannot remove the other policies' samples, and failed or incomplete measurements
+never become timing samples.
+Until matching policy measurements exist, scheduling retains historical Node or
+release-envelope estimates. Measured runtime-placement observations never fall
+back across policies.
+
+Five paired main trials established the switch: runs
+[38870726251](https://github.com/openclaw/openclaw/actions/runs/38870726251),
+[38902779924](https://github.com/openclaw/openclaw/actions/runs/38902779924),
+[38989076752](https://github.com/openclaw/openclaw/actions/runs/38989076752),
+[39034539771](https://github.com/openclaw/openclaw/actions/runs/39034539771), and
+[39042099307](https://github.com/openclaw/openclaw/actions/runs/39042099307).
+Bun/Node aggregate wall-time ratios ranged from 0.727 to 0.752 across roughly
+400 paired Linux shards; the fifth trial had no incomplete shards. Individual
+families can still be slower on Bun, so comparisons retain per-shard results.
 
 Compare an existing run without dispatching another one:
 
@@ -206,8 +223,8 @@ node scripts/ci-compare-test-runtimes.mjs <run-id>
 ```
 
 The comparison downloads logs once and reports each shard's Node and Bun wall
-time, failures, and incomplete measurements. Dual trials add no jobs or runner
-registrations. The explicit `dual-all` deadline multiplier budgets both serial
+time, failures, and incomplete measurements. Dual validation reuses the selected
+jobs and their runner registrations. The `dual-all` deadline multiplier budgets both serial
 runs; a silence-watchdog failure or exhausted budget remains failed or incomplete
 evidence and is never treated as a timing sample.
 
@@ -244,7 +261,7 @@ completion callback. Tests that register a pending promise
 assertion before settling it retain Vitest: native Bun waits inside that matcher.
 The same runtime owner intersects their qualification data with the
 standard inventory and each existing stripe's include patterns. The remaining
-compatible files keep Vitest on Bun. Native admission checks test, setup, and
+files keep Vitest on Bun. Native admission checks test, setup, and
 fixture-helper bytes; changed or unreadable inputs return the affected tests to
 Vitest without dropping coverage. Production sources remain free to change and
 are still exercised. Extra Vitest arguments, including cache-warming collection,
@@ -265,128 +282,25 @@ the repository tsconfig, and the shared test deadline. It disables automatic env
 file loading and runs one test process inside the existing plan and worker budget.
 The shared process owner retains output watchdogs, interruption handling, and
 joined descendant cleanup. Release validation runs the complete Node selection
-before the compatible Bun/Vitest and native Bun portions in that same slot;
+before the Bun/Vitest and native Bun portions in that same slot;
 every result remains required. Native execution adds no CI jobs or worker fanout.
 
-The process lane defaults to Bun. Node retains the transferable pipe-handle
-broker contracts, including mixed suites with broker assertions, and the
-Node-specific subreaper and two-process relay retirement cases. Existing config
-exclusions still keep unit-fast and database-worker files with their owners.
-The broker event-order and group-custody tests exercise inherited `NODE_OPTIONS`
-preloads; their Windows exclusions remain. The pinned fork supports `Bun.Terminal.pause()` and `resume()`,
-so its native real-PTY cases run on Linux. macOS and Linux select the native PTY
-without Node on builds with that capability, including the pinned fork's macOS
-child-exit fix. Other Bun
-releases keep the Node helper, which requires an installed Node runtime and
-skips Bun's `node` shim when selecting it. Windows keeps `node-pty`.
-The qualified TypeScript compiler analysis files and `src/library.test.ts` run
-on Bun. The pinned fork exposes the child-process pipe handles and stream
-reference controls used by TypeScript's synchronous native API. Compiler
-assertions in mixed runtime suites remain enabled.
-The src-only unit owner also defaults to Bun. The state-lease retention test
-keeps its separate infra owner on Node: the completed worker-heartbeat case still
-retains its caller's async context. The aggregate unit owner shares the Bun
-admission for src-only files and retains Node for the separate ACP, security,
-and package inventories, apart from the previously qualified normalization-core
-grapheme test.
-The Code Mode executor runs with Vitest on Bun using the fork's
-copy-on-write diagnostics-channel subscriber handling. Markdown render-aware
-chunking runs on the pinned fork as part of unit-fast.
-The complete fake-timer lane, plugin and proxy retention tests, and other
-Control UI tests support Bun. Control UI WeakRef-collection proofs in
-`desktop-mobile-keyboard.test.ts`, `chat-pane-retention.test.ts`,
-`chat-thread-retention.test.ts`, `session-snapshot-store.test.ts`, and
-`usage-page-retention.test.ts` stay on Node because JavaScriptCore's
-conservative stack scanning can keep an unreachable target alive after a forced
-collection. Unqualified V8-specific heap and worker-limit assertions and the
-remaining Node-only selections still run on Node.
-The missing-Docker test also runs on Bun, using an empty executable directory
-instead of an empty `PATH`, which Bun resolves through its default search path.
-Other families retain Node until they pass on the pinned fork within their
-existing CI resource budgets. Precise PR targets use the existing
-test-project planner to find their owners. The runtime owner admits only qualified
-configs, exact files, and partitions; ambiguous selections retain Node. No tests
-are removed from the selected inventory.
+The runtime owner's named Node routes cover documented Node/V8 contracts and
+confirmed fork defects. They remain exact-file exceptions even for broad or
+mixed selections; new configs and include patterns use Bun without adding an
+allowlist entry. The owner preserves config exclusions, selected files, pools,
+and worker budgets. The shared Vitest config resolves `ws` to the installed
+package so imports and mocks use the same module identity on both runtimes.
 
-The complete agents-support, CLI, commands, embedded-agent-run, and gateway-methods leaf
-configs also support Bun. Their existing pools, exclusions, and worker limits
-remain in effect. CLI-process and other agent and Gateway owners keep their
-separate qualification policies. Agents-support, commands, and gateway-methods include
-overrides use Bun only for registered owner patterns or literal files proven to
-belong to that owner; broad or uncertain patterns keep the complete Node
-selection. Dual validation runs each complete selected owner on Node before Bun
-in the same worker slot.
-Commands keeps commands-light, database-worker, and unit-fast files in their
-existing owners; its admission does not change their runtime policies.
-
-OpenAI realtime worker messaging (`extensions/openai/realtime-quicksilver-peer-worker.test.ts`),
-plugin CommonJS interoperability (`src/plugins/plugin-module-generation.interop.test.ts`),
-plugin SDK alias boundaries (`src/plugins/sdk-alias.test.ts`),
-oxlint configuration (`test/scripts/oxlint-config.test.ts`), and update timeout
-diagnostics (`test/scripts/upgrade-survivor-timeout-diagnostics.test.ts`) also
-support Bun when qualified files make up the entire exact selection in their
-existing scoped owner. Mixed and broad PR selections retain their original Node
-invocation. Dual-runtime validation keeps that complete Node selection and adds
-only the qualified files selected by the original include patterns.
-The pinned hooks-capable fork extends that whole-file qualification to proven
-tooling, update, Doctor, handoff, QA, and workspace-hash fixtures. The Crabbox
-wrapper suite retains Node because its retained-allocation and source-capsule
-short-write cases still fail on Bun.
-Whole-file qualification also covers test-project discovery, worker memory
-accounting, Gateway and native Codex session-catalog sampling, and diagnostic
-memory logging in their existing scoped owners. The native allocation-attribution
-case in `diagnostic-heap-profile.test.ts` still skips on Bun, so that file retains
-Node ownership.
-Five exact UI E2E selections also support Bun: boot module boundaries, device
-platform identity, new-session cloud startup recovery, phone stale-build recovery,
-and service-worker updates. They retain the ordinary E2E config's resource
-projects, pools, bundle ownership and exclusions. This qualification does not
-change the dedicated broad or sharded UI E2E jobs or the separate prebuilt config;
-those jobs retain their existing Node execution.
-
-The gateway-client leaf config also supports Bun. Its existing ordered
-gateway-core/gateway-client stripes use the core leaf's exact-file qualification
-and run the client portion on Bun, sequentially in the original worker slot.
-Broad and mixed core selections retain Node. Both leaves retain their selected
-include patterns and worker limits. Explicit project-parallel overrides other
-than one retain the complete Node stripe. Dual-runtime validation keeps the
-complete original stripe on Node and adds the qualified core files and client
-portion on Bun. The shared
-Vitest config resolves `ws` to the installed package so its imports and mocks use
-the same module identity on both runtimes.
-
-The complete memory plugin config (`memory-lancedb` and `memory-wiki`) also
-supports Bun, with its existing isolated workers and database-worker exclusions.
-A paired Linux Testbox comparison on the preceding Bun `ddfce5d01` / WebKit
-`4429d113` build with two workers passed the same 53 files,
-474 tests, and one platform skip on each runtime. Bun reduced complete test-command
-wall time from 58.72s to 52.79s cold and from 43.51s to 38.68s with warm caches
-and reversed runtime order: 10–11% faster, with warm aggregate RSS near 3.94 GiB
-on both. PR selections use Bun. Full Release Validation's plugin prerelease
-batch retains its complete Node inventory and adds Bun after each qualified
-memory group in the same worker slot. Unqualified database-worker tests remain
-on Node. Both runtimes preserve the selected files, exclusions, and worker caps;
-either failing fails the job. Historical targets without dual batch support
-retain their original Node execution.
-
-Pull requests and their release-gate fallback run compatible selections on Bun.
-Ordinary manual CI, including Full Release Validation's `normal_ci` child, runs
-the complete original selection on Node and its compatible portion on Bun
-within the same job and worker slot. Other selections run on Node. Main pushes retain Node. Historical targets
-without the runtime-selection capability keep their original Node behavior.
-The UI job checks its actual config and arguments through the target's runtime
-owner, so older unit-only helpers, helpers requiring the retired global FTL flag,
-and legacy compatibility targets retain Node.
-Current-runner targets use three native shards and three workers per row,
-including exact-target Full Release Validation dispatches. Historical
-compatibility targets retain their unsharded package command.
-The UI runtime partition is applied after Vitest selects each native shard, so
-files keep their original shard ownership. Compatible PR selections run the
-complete shard on Bun. Dual validation runs the complete UI selection on Node
-and then on Bun, including the six retention assertions. Partial runtime
-partitions still require the original shard inventory before omitting Node work.
+Control UI uses three native shards and three workers per row, including
+exact-target Full Release Validation dispatches. The runtime partition applies
+after Vitest selects a shard, preserving original file ownership. Files with
+Node-only heap or WeakRef contracts keep Node coverage; the remaining selection
+uses Bun. `dual-all` runs the original shard on Node before its Bun portion.
 Partitions without browser files retain browser discovery for native sharding
 but omit Chromium version checking and Playwright's speculative browser startup.
+Historical targets without runtime-selection support retain their original Node
+behavior and unsharded browser package command.
 
 On both runtimes, non-isolated UI projects without cached test results group
 files by environment and options after native sharding. The sequencer targets
@@ -417,9 +331,17 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `c45839085e6ceaf9e4d217507c5e0ddbb6132147` with WebKit
+The pinned build pairs Bun `b76e4b4e6725dfc84eadc67059753a389e4b1c54` with WebKit
 `01f208ae7a87661e7503f514c946a37bc76ad1d1` in prerelease
-`openclaw-v1.4.3-20261015-c45839085e-webkit-01f208ae7a`.
+`openclaw-v1.4.3-20261017-b76e4b4e67-webkit-01f208ae7a`.
+This build preserves `DONT_CONTEXTIFY` global receiver identity for jsdom, keeps
+`availableParallelism()` independent of `navigator`, and fixes `SourceMap.findOrigin()`
+coordinates. It registers `fs.watch` callbacks on the returned watcher, treats
+`ENOTDIR` as no entry for non-throwing stat calls, settles IPC send callbacks after
+peer disconnect, and binds `FileHandle.close()` to its handle. Exiting Workers close
+their owned file handles and tracked descriptors. A per-Worker hash set avoids
+quadratic descriptor tracking during file open/close workloads. Corked HTTP responses
+use the socket's Writable queue; the uncorked fast path is unchanged.
 This build sends TLS SNI only for an explicit, nonempty `servername`, completes
 missing cached function bytecode in place, and uses GreedyDual-Size eviction at
 the same 256 MiB per-VM cache budget. Completed Workers release user listeners
@@ -486,15 +408,13 @@ The shared provider-catalog retention test is qualified on this build and runs
 on Bun; unqualified tests that assert V8 heap behavior continue to run on Node.
 UI retention tests use the local inspector's `HeapProfiler.collectGarbage` on
 both runtimes. Only an unavailable inspector method permits the older Bun GC
-fallback. The qualified UI inventory has no Node-only subset, so each native
-UI shard runs once under `bun-compatible`; `dual` still runs both runtimes.
+fallback. The runtime owner retains exact Node-only retention routes where
+JavaScriptCore conservative stack scanning prevents forced WeakRef collection.
 The fork keeps the lifecycle-script `node` shim in a per-user directory, with a
 private fallback when that directory is unusable. `NODE` and `npm_node_execpath`
 point to the executable in either location. This lets several accounts on one
 host run Bun installs without Node. The same build retains the tsconfig,
-diagnostics-channel, and inspector/GC fixes. The render-aware chunking exception
-above preserves coverage for the missing WebKit segmentation fix.
-Its prerelease tag includes both source revisions because `Bun.revision` alone
+diagnostics-channel, and inspector/GC fixes. Its prerelease tag includes both source revisions because `Bun.revision` alone
 does not distinguish builds linked against different WebKit revisions.
 
 Node continues to own orchestration, builds, compiler preparation, and cleanup.
@@ -502,7 +422,7 @@ Vitest and its workers use the selected runtime; qualified native selections use
 `bun test` and skip Vitest compilation and transform caching. Bun/Vitest, native
 Bun, and Node have separate timing identities, and the two Vitest runtimes keep
 separate transform-cache directories. Any test engine failing fails the job.
-This adds no matrix rows or runner registrations.
+Both runtimes reuse the selected matrix rows and runner registrations.
 
 `NODE_OPTIONS`, where configured, limits Node heaps; the UI lane retains Node's
 default heap limit. Bun does not use that V8 limit. Compare observed memory use alongside elapsed time before admitting more
@@ -1159,6 +1079,13 @@ remains the explicit operator override for attempting a different budget.
 sizes. Budget violations do not prevent artifact generation. The separate
 `control-ui-performance` job enforces the budgets without blocking other jobs
 from building or testing the same source.
+
+Every production UI build checks generated protocol validators before building
+or reusing cached output. After changing a schema used by the Control UI, run
+`pnpm ui:validators:gen` and commit the generated
+JavaScript and declarations. The generator compiles the canonical Gateway schemas
+without shipping their compiler or schema builders to the browser;
+`pnpm ui:validators:check` verifies that the output is current.
 
 Startup CSS has a 45 KiB advisory target and a 50 KiB hard ceiling. Growth below
 1 KiB passes; an increase of 1 KiB or more in either startup CSS or the largest

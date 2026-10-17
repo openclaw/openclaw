@@ -1,19 +1,39 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush } from "solid-js";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-lifetime.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { WIDGET_PROMPT_EVENT } from "../mcp-app-security.ts";
 import { boardWidget, gatewayContext } from "./board-view.test-support.ts";
-import { BoardWidgetFrameOwner } from "./board-widget-frame.tsx";
+import {
+  BoardWidgetFrame,
+  createBoardWidgetFrame,
+  type BoardWidgetFrameOwner,
+} from "./board-widget-frame.tsx";
 
 const disposers: Array<() => void> = [];
 function mountFrame(lifecycle: BoardWidgetFrameOwner, widget: BoardWidget, root: HTMLElement) {
   const [revision, setRevision] = createSignal(0);
-  disposers.push(mountSolid(() => lifecycle.render(widget, revision), { container: root }).unmount);
+  disposers.push(
+    mountSolid(
+      () => {
+        const state = projectOwner(lifecycle, (current) => current);
+        return createComponent(BoardWidgetFrame, {
+          state: state.read,
+          current: () => {
+            revision();
+            return widget;
+          },
+        });
+      },
+      { container: root },
+    ).unmount,
+  );
   flush();
   return () => {
     setRevision((value) => value + 1);
@@ -25,16 +45,14 @@ function createTicketRefreshLifecycle(
   widget: BoardWidget,
   refreshFrame: (name: string) => Promise<void>,
 ): BoardWidgetFrameOwner {
-  const lifecycle = new BoardWidgetFrameOwner({
+  const lifecycle = createBoardWidgetFrame({
     active: () => true,
     connected: () => true,
     context: () => undefined,
     refreshFrame: () => refreshFrame,
     reportContentHeight: () => {},
     scrollBy: () => {},
-    requestUpdate: () => {},
     resolveFrameUrl: () => () => "",
-
     widget: () => widget,
   });
   lifecycle.connect();
@@ -68,14 +86,13 @@ function terminalFailureError(params: {
   context.gateway.connection.gatewayUrl = gatewayUrl.href;
   const root = document.createElement("div");
   document.body.append(root);
-  const owner = new BoardWidgetFrameOwner({
+  const owner = createBoardWidgetFrame({
     active: () => true,
     connected: () => root.isConnected,
     context: () => context,
     refreshFrame: () => async () => {},
     reportContentHeight: () => {},
     scrollBy: () => {},
-    requestUpdate: () => {},
     resolveFrameUrl: () => () => "/widget?bt=ticket",
     widget: () => widget,
   });
@@ -136,14 +153,13 @@ describe("board widget frame scroll handoff", () => {
       const context = gatewayContext(null);
       const container = document.createElement("div");
       document.body.append(container);
-      const lifecycle = new BoardWidgetFrameOwner({
+      const lifecycle = createBoardWidgetFrame({
         active: () => active,
         connected: () => true,
         context: () => context,
         refreshFrame: () => undefined,
         reportContentHeight: () => {},
         scrollBy,
-        requestUpdate: () => {},
         resolveFrameUrl: () => () => "/__openclaw__/board/long-dashboard?bt=ticket",
         widget: () => widget,
       });
@@ -203,14 +219,13 @@ describe("board widget frame scroll handoff", () => {
   it("accepts a finite vertical remainder only from its rendered iframe and nonce", () => {
     const widget = { name: "long-dashboard", revision: 1 } as BoardWidget;
     const scrollBy = vi.fn();
-    const lifecycle = new BoardWidgetFrameOwner({
+    const lifecycle = createBoardWidgetFrame({
       active: () => true,
       connected: () => true,
       context: () => undefined,
       refreshFrame: () => undefined,
       reportContentHeight: () => {},
       scrollBy,
-      requestUpdate: () => {},
       resolveFrameUrl: () => () => "",
       widget: () => widget,
     });
@@ -287,27 +302,19 @@ describe("board widget frame message confirmation", () => {
     const context = gatewayContext({ request });
     const root = document.createElement("div");
     document.body.append(root);
-    let confirmationRendered: ReturnType<typeof createDeferred<void>> | undefined;
     let active = true;
-    let updateView = () => {};
-    const lifecycle = new BoardWidgetFrameOwner({
+    const lifecycle = createBoardWidgetFrame({
       active: () => active,
       connected: () => root.isConnected,
       context: () => context,
       refreshFrame: () => undefined,
       reportContentHeight: () => {},
       scrollBy: () => {},
-      requestUpdate: () => {
-        updateView();
-        if (root.querySelector('[role="alertdialog"]')) {
-          confirmationRendered?.resolve();
-        }
-      },
       resolveFrameUrl: () => () => "/__openclaw__/board/confirm-parts?bt=ticket",
       widget: () => widget,
     });
     lifecycle.connect();
-    updateView = mountFrame(lifecycle, widget, root);
+    mountFrame(lifecycle, widget, root);
     lifecycle.update();
     const frame = root.querySelector<HTMLIFrameElement>("iframe")!;
     frame.checkVisibility = () => true;
@@ -368,9 +375,11 @@ describe("board widget frame message confirmation", () => {
       notify({ type: "openclaw:widget-bridge-port-offer" }, [channel.port1]);
       await initialized.promise;
       frame.focus();
-      confirmationRendered = createDeferred();
       const cancelled = send("cancelled", "Compare these parts");
-      await Promise.race([confirmationRendered.promise, cancelled]);
+      await Promise.race([
+        waitForSolid(() => expect(root.querySelector('[role="alertdialog"]')).not.toBeNull()),
+        cancelled,
+      ]);
       const dialog = root.querySelector<HTMLElement>('[role="alertdialog"]');
       expect(dialog).not.toBeNull();
       expect(dialog!.textContent).toContain("Parts dashboard");
@@ -385,9 +394,11 @@ describe("board widget frame message confirmation", () => {
       expect(root.querySelector('[role="alertdialog"]')).toBeNull();
       expect(document.activeElement).toBe(frame);
 
-      confirmationRendered = createDeferred();
       const accepted = send("accepted", "Order the selected parts");
-      await Promise.race([confirmationRendered.promise, accepted]);
+      await Promise.race([
+        waitForSolid(() => expect(root.querySelector('[role="alertdialog"]')).not.toBeNull()),
+        accepted,
+      ]);
       [...root.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
         .find((button) => button.textContent?.trim() === "Send")!
         .click();
@@ -397,9 +408,11 @@ describe("board widget frame message confirmation", () => {
       expect(nativeConfirm).not.toHaveBeenCalled();
       expect(root.querySelector('[role="alertdialog"]')).toBeNull();
 
-      confirmationRendered = createDeferred();
       const suspended = send("suspended", "This request loses its active widget");
-      await Promise.race([confirmationRendered.promise, suspended]);
+      await Promise.race([
+        waitForSolid(() => expect(root.querySelector('[role="alertdialog"]')).not.toBeNull()),
+        suspended,
+      ]);
       const staleSend = [
         ...root.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button'),
       ].find((button) => button.textContent?.trim() === "Send")!;
@@ -422,6 +435,7 @@ describe("board widget frame ticket refresh", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<p>Retained board</p>"));
     let active = true;
     const refreshFrame = vi.fn(async () => undefined);
+    const reportContentHeight = vi.fn();
     const widget = boardWidget({
       name: "clock",
       sandboxUrl: "/mcp-app-sandbox",
@@ -434,25 +448,32 @@ describe("board widget frame ticket refresh", () => {
     const root = document.createElement("div");
     document.body.append(root);
     const context = gatewayContext(null);
-    const owner = new BoardWidgetFrameOwner({
+    const owner = createBoardWidgetFrame({
       active: () => active,
       connected: () => root.isConnected,
       context: () => context,
       refreshFrame: () => refreshFrame,
-      reportContentHeight: () => {},
+      reportContentHeight,
       scrollBy: () => {},
-      requestUpdate: () => {},
       resolveFrameUrl: () => () => "/widget?bt=ticket",
       widget: () => widget,
     });
-    const removeWindowListener = vi.spyOn(window, "removeEventListener");
     mountFrame(owner, widget, root);
     owner.update();
     const frame = root.querySelector("iframe")!;
+    const reportHeight = () =>
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          origin: "https://sandbox.example",
+          data: { type: "openclaw:widget-size", height: 720 },
+        }),
+      );
     active = false;
     owner.activityChanged();
     owner.update();
-    expect(removeWindowListener).not.toHaveBeenCalledWith("message", expect.any(Function));
+    reportHeight();
+    expect(reportContentHeight).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(refreshFrame).not.toHaveBeenCalled();
 
@@ -460,12 +481,15 @@ describe("board widget frame ticket refresh", () => {
     owner.activityChanged();
     owner.update();
     expect(root.querySelector("iframe")).toBe(frame);
+    reportHeight();
+    expect(reportContentHeight).toHaveBeenCalledExactlyOnceWith("clock", 720);
     await vi.advanceTimersByTimeAsync(999);
     expect(refreshFrame).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(refreshFrame).toHaveBeenCalledOnce();
     owner.disconnect();
-    expect(removeWindowListener).toHaveBeenCalledWith("message", expect.any(Function));
+    reportHeight();
+    expect(reportContentHeight).toHaveBeenCalledOnce();
   });
 
   it("pauses while hidden and re-arms when the document becomes visible", async () => {

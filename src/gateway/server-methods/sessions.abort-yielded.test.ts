@@ -2,6 +2,7 @@
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { writeFile } from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import {
   clearActiveEmbeddedRun,
@@ -13,10 +14,8 @@ import { markStartupOrphanedMainSessionsForRecovery } from "../../agents/main-se
 import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
 import {
   cancelSubagentRequesterSettleWake,
-  markRequesterTurnYielded,
   markSubagentRunTerminated,
   registerSubagentRun,
-  settleRequesterAfterSessionSpawns,
 } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -35,8 +34,14 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
-import { createChatAbortContext } from "./chat.abort.test-helpers.js";
-import { sessionAbortHandlers } from "./sessions-abort.js";
+import {
+  abortContext,
+  expectAbortFailure,
+  expectStopResult,
+  registerYieldedChild,
+  seedYieldedSession,
+  stopSession,
+} from "./sessions.abort-lifecycle.test-support.js";
 import type { RespondFn } from "./types.js";
 
 const fixture = useChatAbortRegistryFixture();
@@ -46,78 +51,29 @@ const parentRunId = "yielded-parent-run";
 const childKey = "agent:main:subagent:yielded-child";
 const childId = "yielded-child-session";
 const childRunId = "yielded-child-run";
+const target = { agentId: "main", sessionKey: parentKey };
+const markStartupRecovery = () =>
+  markStartupOrphanedMainSessionsForRecovery({
+    cfg: getRuntimeConfig(),
+    stateDir: fixture.stateDir,
+  });
 
 async function seedYieldedParent() {
-  for (const [sessionKey, sessionId] of [
-    [parentKey, parentId],
-    [childKey, childId],
-  ] as const) {
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey,
-      defaultSessionId: sessionId,
-      lifecycleRevision: "original-incarnation",
-    });
-  }
-  const startedAt = Date.now() - 100;
-  const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  for (const data of [
-    { phase: "start", startedAt },
-    {
-      phase: "end",
-      startedAt,
-      endedAt: startedAt + 50,
-      yielded: true,
-      livenessState: "paused",
-      stopReason: "end_turn",
-    },
-  ]) {
-    await persistGatewaySessionLifecycleEvent({
-      sessionKey: parentKey,
-      agentId: "main",
-      event: { runId: parentRunId, sessionId: parentId, lifecycleGeneration, ts: Date.now(), data },
-    });
-  }
-  await registerSubagentRun({
-    runId: childRunId,
-    childSessionKey: childKey,
-    childAgentId: "main",
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: childKey,
+    defaultSessionId: childId,
+    lifecycleRevision: "original-incarnation",
+  });
+  const startedAt = await seedYieldedSession(fixture.stateDir, parentKey, parentId, parentRunId);
+  await registerYieldedChild({
+    parentKey,
+    parentRunId,
+    childKey,
+    childRunId,
+    startedAt,
     sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childKey }),
-    requesterSessionKey: parentKey,
-    requesterAgentId: "main",
-    requesterDisplayKey: parentKey,
-    requesterTurnRunId: parentRunId,
-    task: "Cancellation proof",
-    cleanup: "keep",
-    expectsCompletionMessage: true,
-  });
-  expect(
-    await markRequesterTurnYielded({
-      requesterSessionKey: parentKey,
-      requesterAgentId: "main",
-      requesterTurnRunId: parentRunId,
-    }),
-  ).toBe(1);
-  expect(
-    await settleRequesterAfterSessionSpawns({
-      requesterSessionKey: parentKey,
-      requesterAgentId: "main",
-      requesterTurnRunId: parentRunId,
-      requesterYielded: true,
-      acceptedSessionSpawns: [
-        { runId: childRunId, childSessionKey: childKey, expectsCompletionMessage: true },
-      ],
-    }),
-  ).toBe(true);
-  expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toMatchObject({
-    lifecycleRunId: parentRunId,
-    endedAt: startedAt + 50,
-    abortedLastRun: false,
-  });
-  expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })?.status).toBeUndefined();
-  expect((await getSubagentRunByChildSessionKey(childKey))?.requesterSettleWake).toMatchObject({
-    requesterYieldBatch: true,
   });
 }
 
@@ -146,46 +102,29 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
         cleanup: "keep",
         expectsCompletionMessage: false,
       });
-      const database = listOpenClawAgentDatabasesForTest().find(
-        (item) => item.agentId === "broken" && isPathInside(fixture.stateDir, item.path),
+      const database = expectDefined(
+        listOpenClawAgentDatabasesForTest().find(
+          (item) => item.agentId === "broken" && isPathInside(fixture.stateDir, item.path),
+        ),
+        "sibling database",
       );
-      if (!database) {
-        throw new Error("Missing sibling database");
-      }
       expect(await closeOpenClawAgentDatabaseByPathAsync(database.path, "broken")).toBe(true);
       await writeFile(database.path, "not a SQLite database");
       expect(() =>
         loadExactSessionEntryReadOnly({ storePath: brokenStore, sessionKey: brokenKey }),
       ).toThrow();
     }
-    const context = createChatAbortContext({
-      getRuntimeConfig,
-      getSessionEventSubscriberConnIds: () => new Set(),
-    });
+    const context = abortContext();
     expect(context.chatAbortControllers.size).toBe(0);
     expect(resolveActiveEmbeddedRunOwner(parentId)).toBeUndefined();
-    const captured = loadSessionEntry({ agentId: "main", sessionKey: parentKey });
-    if (!captured) {
-      throw new Error("Missing seeded parent");
-    }
-    const replacement = {
-      ...captured,
-      ...(race === "new turn"
-        ? {
-            lifecycleRunId: "new-parent-run",
-            activeWriterRunId: "new-parent-run",
-            endedAt: undefined,
-            startedAt: Date.now(),
-          }
-        : { lifecycleRevision: "new-incarnation" }),
-    };
+    const captured = expectDefined(loadSessionEntry(target), "seeded parent");
+    const replacement = { ...captured, lifecycleRevision: "new-incarnation" };
     let replacementPersistence: Promise<void> | undefined;
     const childAbort = vi.fn(() => {
       // The child signal follows the parent snapshot; replace it before Stop can persist.
       if (race === "new turn") {
         replacementPersistence = persistGatewaySessionLifecycleEvent({
-          agentId: "main",
-          sessionKey: parentKey,
+          ...target,
           event: {
             runId: "new-parent-run",
             sessionId: parentId,
@@ -195,7 +134,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
           },
         });
       } else if (race === "reset incarnation") {
-        replaceSessionEntrySync({ agentId: "main", sessionKey: parentKey }, replacement);
+        replaceSessionEntrySync(target, replacement);
       }
       emitAgentEvent({
         runId: childRunId,
@@ -209,34 +148,17 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
     setActiveEmbeddedRun(childId, child, childKey);
     const acknowledgment: { entry: ReturnType<typeof loadSessionEntry> } = { entry: undefined };
     const respond = vi.fn<RespondFn>(() => {
-      acknowledgment.entry = loadSessionEntry({ agentId: "main", sessionKey: parentKey });
+      acknowledgment.entry = loadSessionEntry(target);
     });
     try {
-      await sessionAbortHandlers["sessions.abort"]!({
-        req: { type: "req", id: "stop", method: "sessions.abort" },
-        params: { key: parentKey, clearQueued: true },
-        respond,
-        context: context as never,
-        client: {
-          connId: "operator",
-          connect: { scopes: ["operator.read", "operator.write"] },
-        } as never,
-        isWebchatConnect: () => false,
-      });
+      await stopSession(parentKey, respond, context, { clearQueued: true });
       if (race === "partial cancellation") {
-        expect(respond.mock.calls[0]?.slice(0, 3)).toEqual([
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "UNAVAILABLE",
-            message: expect.stringContaining("descendant cancellation was incomplete"),
-          }),
-        ]);
+        expectAbortFailure(
+          respond,
+          expect.stringContaining("descendant cancellation was incomplete"),
+        );
       } else {
-        expect(respond.mock.calls[0]?.slice(0, 2), JSON.stringify(respond.mock.calls[0])).toEqual([
-          true,
-          { ok: true, abortedRunId: null, status: "aborted" },
-        ]);
+        expectStopResult(respond);
       }
       expect(childAbort).toHaveBeenCalledOnce();
       if (race === "new turn") {
@@ -262,13 +184,8 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
       expect((await getSubagentRunByChildSessionKey(childKey))?.killReconciliation).toMatchObject({
         suppressTaskDelivery: true,
       });
-      expect(
-        await markStartupOrphanedMainSessionsForRecovery({
-          cfg: getRuntimeConfig(),
-          stateDir: fixture.stateDir,
-        }),
-      ).toMatchObject({ marked: 0 });
-      expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toMatchObject({
+      expect(await markStartupRecovery()).toMatchObject({ marked: 0 });
+      expect(loadSessionEntry(target)).toMatchObject({
         status: "killed",
         abortedLastRun: true,
       });
@@ -282,110 +199,66 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
 it("leaves an ownerless session without yielded work unchanged", async () => {
   await writeSubagentSessionEntry({
     stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: parentKey,
+    ...target,
     defaultSessionId: parentId,
   });
-  const before = loadSessionEntry({ agentId: "main", sessionKey: parentKey });
+  const before = loadSessionEntry(target);
   const respond = vi.fn();
-  const context = createChatAbortContext({
-    getRuntimeConfig,
-    getSessionEventSubscriberConnIds: () => new Set(),
-  });
-  await sessionAbortHandlers["sessions.abort"]!({
-    req: { type: "req", id: "stop", method: "sessions.abort" },
-    params: { key: parentKey, clearQueued: true },
-    respond,
-    context: context as never,
-    client: {
-      connId: "operator",
-      connect: { scopes: ["operator.read", "operator.write"] },
-    } as never,
-    isWebchatConnect: () => false,
-  });
-  expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
-    true,
-    { ok: true, abortedRunId: null, status: "no-active-run" },
-  ]);
-  expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(before);
+  await stopSession(parentKey, respond, abortContext(), { clearQueued: true });
+  expectStopResult(respond, "no-active-run");
+  expect(loadSessionEntry(target)).toEqual(before);
 });
 
-it.each([
-  {
-    name: "does not cancel a yielded parent when Stop only clears a queued follow-up",
-    pendingWake: false,
-  },
-  {
-    name: "cancels a yielded parent when Stop clears a queued follow-up and retires its child's wake",
-    pendingWake: true,
-  },
-])("$name", async ({ pendingWake }) => {
-  await seedYieldedParent();
-  expect(await markSubagentRunTerminated({ runId: childRunId, reason: "killed" })).toBe(1);
-  const completedChild = await getSubagentRunByChildSessionKey(childKey);
-  if (!completedChild) {
-    throw new Error("Missing completed child");
-  }
-  expect(completedChild.requesterSettleWake).toBeDefined();
-  const childOutcome = structuredClone(completedChild.execution.outcome);
-  if (!pendingWake) {
-    // Isolate queue clearing from a still-pending child continuation.
-    await cancelSubagentRequesterSettleWake(completedChild, () => {});
-    expect((await getSubagentRunByChildSessionKey(childKey))?.requesterSettleWake).toBeUndefined();
-  }
-  const before = loadSessionEntry({ agentId: "main", sessionKey: parentKey });
-  const followup = createQueueTestRun({ prompt: "Queued follow-up" });
-  followup.run = { ...followup.run, agentId: "main", sessionId: parentId, sessionKey: parentKey };
-  expect(
-    enqueueFollowupRun(parentKey, followup, { mode: "followup" }, "none", undefined, false),
-  ).toBe(true);
-  expect(getFollowupQueueDepth(parentKey)).toBe(1);
-  const respond = vi.fn();
-  const context = createChatAbortContext({
-    getRuntimeConfig,
-    getSessionEventSubscriberConnIds: () => new Set(),
-  });
-  try {
-    await sessionAbortHandlers["sessions.abort"]!({
-      req: { type: "req", id: "stop", method: "sessions.abort" },
-      params: { key: parentKey, clearQueued: true },
-      respond,
-      context: context as never,
-      client: {
-        connId: "operator",
-        connect: { scopes: ["operator.read", "operator.write"] },
-      } as never,
-      isWebchatConnect: () => false,
-    });
-    expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
-      true,
-      { ok: true, abortedRunId: null, status: "aborted" },
-    ]);
-    expect(getFollowupQueueDepth(parentKey)).toBe(0);
-    if (pendingWake) {
-      expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toMatchObject({
-        status: "killed",
-        abortedLastRun: true,
-        lastRunId: parentRunId,
-      });
-      await fixture.settle();
+it.each([false, true])(
+  "cancels a yielded parent only when queue clearing retires a child wake (pending=%s)",
+  async (pendingWake) => {
+    await seedYieldedParent();
+    expect(await markSubagentRunTerminated({ runId: childRunId, reason: "killed" })).toBe(1);
+    const completedChild = expectDefined(
+      await getSubagentRunByChildSessionKey(childKey),
+      "completed child",
+    );
+    expect(completedChild.requesterSettleWake).toBeDefined();
+    const childOutcome = structuredClone(completedChild.execution.outcome);
+    if (!pendingWake) {
+      // Isolate queue clearing from a still-pending child continuation.
+      await cancelSubagentRequesterSettleWake(completedChild, () => {});
       expect(
-        await markStartupOrphanedMainSessionsForRecovery({
-          cfg: getRuntimeConfig(),
-          stateDir: fixture.stateDir,
-        }),
-      ).toMatchObject({ marked: 0 });
-    } else {
-      expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(before);
+        (await getSubagentRunByChildSessionKey(childKey))?.requesterSettleWake,
+      ).toBeUndefined();
     }
-    const retiredChild = await getSubagentRunByChildSessionKey(childKey);
-    expect(retiredChild?.requesterSettleWake).toBeUndefined();
-    expect(retiredChild?.execution.outcome).toEqual(childOutcome);
-  } finally {
-    for (const key of [parentKey, parentId]) {
-      clearFollowupQueue(key);
-      clearFollowupDrainCallback(key);
-      expect(getFollowupQueueDepth(key)).toBe(0);
+    const before = loadSessionEntry(target);
+    const followup = createQueueTestRun({ prompt: "Queued follow-up" });
+    followup.run = { ...followup.run, agentId: "main", sessionId: parentId, sessionKey: parentKey };
+    expect(
+      enqueueFollowupRun(parentKey, followup, { mode: "followup" }, "none", undefined, false),
+    ).toBe(true);
+    expect(getFollowupQueueDepth(parentKey)).toBe(1);
+    const respond = vi.fn();
+    try {
+      await stopSession(parentKey, respond, abortContext(), { clearQueued: true });
+      expectStopResult(respond);
+      expect(getFollowupQueueDepth(parentKey)).toBe(0);
+      if (pendingWake) {
+        expect(loadSessionEntry(target)).toMatchObject({
+          status: "killed",
+          abortedLastRun: true,
+          lastRunId: parentRunId,
+        });
+        await fixture.settle();
+        expect(await markStartupRecovery()).toMatchObject({ marked: 0 });
+      } else {
+        expect(loadSessionEntry(target)).toEqual(before);
+      }
+      const retiredChild = await getSubagentRunByChildSessionKey(childKey);
+      expect(retiredChild?.requesterSettleWake).toBeUndefined();
+      expect(retiredChild?.execution.outcome).toEqual(childOutcome);
+    } finally {
+      for (const key of [parentKey, parentId]) {
+        clearFollowupQueue(key);
+        clearFollowupDrainCallback(key);
+        expect(getFollowupQueueDepth(key)).toBe(0);
+      }
     }
-  }
-});
+  },
+);

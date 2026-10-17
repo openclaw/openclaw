@@ -29,6 +29,7 @@ export function createModelProviderDiscovery(options: DiscoveryOptions) {
     setPhase("closed");
   }
 
+  // Retire the lazy setup request when its selected-agent owner changes.
   createEffect(
     () => options.getOwner().agentId,
     (agentId) => {

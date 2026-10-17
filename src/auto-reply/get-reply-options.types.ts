@@ -207,7 +207,7 @@ export type GetReplyOptions = {
   /** Return "reply-dispatch" synchronously to accept the offered completion ownership. */
   onPreparedAgentRunStart?: (start: PreparedAgentRunStart) => unknown;
   /**
-   * @deprecated Use onPreparedAgentRunStart with a prepared transcript boundary. Supported through 2026-12-31.
+   * @deprecated Use onPreparedAgentRunStart with a prepared transcript boundary. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    * Notifies when an agent run starts. Return "reply-dispatch" synchronously to accept
    * completion ownership offered in options; all other legacy callback results are ignored.
    */
@@ -302,7 +302,7 @@ export type GetReplyOptions = {
    * commentary progress inside an ephemeral streaming draft should yield those
    * draft lines while the getter returns true, so progress is not rendered in
    * both lanes at once.
-   * @deprecated Use onVerboseProgressVisibilityAsync. Supported through 2026-12-31.
+   * @deprecated Use onVerboseProgressVisibilityAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   /** Registers awaited visibility before dispatch; preferred over the deprecated callback. */

@@ -35,7 +35,6 @@ type EvaluateAttemptDecisionToolPrefilterParams = {
 export type DecisionPrefilterResult = {
   shouldPruneTools: boolean;
   restrictionApplied?: boolean;
-  isCurrent?: () => boolean;
   status: "proposed" | "retained" | "skipped" | "unavailable";
   reason: string;
   context?: DecisionContextFacts;
@@ -133,6 +132,7 @@ export async function evaluateAttemptDecisionToolPrefilter(
     {
       agentId: params.agentId,
       purpose: "tool-prefilter.semantic-gate",
+      priority: "optional",
       rubricVersion: "9",
       timeoutMs: 500,
       signal: params.signal,
@@ -143,12 +143,11 @@ export async function evaluateAttemptDecisionToolPrefilter(
     isCurrent,
     () => isDecisionAssistanceEligible(readConfig(), params.agentId),
   );
+  params.signal.throwIfAborted();
+  params.assertActive();
   const facts = {
     context: context.facts,
   };
-  if (!isCurrent()) {
-    return { shouldPruneTools: false, status: "retained", reason: "selection-changed", ...facts };
-  }
   if (outcome.status === "unavailable") {
     return { shouldPruneTools: false, status: "unavailable", reason: outcome.reason, ...facts };
   }
@@ -166,6 +165,6 @@ export async function evaluateAttemptDecisionToolPrefilter(
     };
   }
   return needsTools?.type === "boolean" && needsTools.probabilityTrue < 0.35
-    ? { shouldPruneTools: true, isCurrent, status: "proposed", reason: "conversational", ...facts }
+    ? { shouldPruneTools: true, status: "proposed", reason: "conversational", ...facts }
     : { shouldPruneTools: false, status: "retained", reason: "action-or-uncertain", ...facts };
 }

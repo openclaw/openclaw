@@ -110,6 +110,11 @@ function legacyFixture(
 
 function mockModernPlugin(overrides: Record<string, unknown>, configRepair = false) {
   const root = makeTempDir();
+  const detectLegacyState = vi.fn(() => ({ preview: ["alpha state"] }));
+  const migrateLegacyState = vi.fn(() => ({
+    changes: configRepair ? ["migrated alpha state"] : [],
+    warnings: [],
+  }));
   fs.writeFileSync(path.join(root, "doctor-contract-api.ts"), "export {};\n", "utf8");
   mocks.createJiti.mockImplementation(() => () => ({
     legacyConfigRules: configRepair
@@ -119,15 +124,13 @@ function mockModernPlugin(overrides: Record<string, unknown>, configRepair = fal
       {
         id: "alpha-state",
         label: "Alpha state",
-        detectLegacyState: () => ({ preview: ["alpha state"] }),
-        migrateLegacyState: () => ({
-          changes: configRepair ? ["migrated alpha state"] : [],
-          warnings: [],
-        }),
+        detectLegacyState,
+        migrateLegacyState,
       },
     ],
   }));
   mockDoctorPlugins(pluginRecord(root, overrides));
+  return { detectLegacyState, migrateLegacyState };
 }
 
 function modernLegacyFixture(source = directDetector) {
@@ -332,7 +335,7 @@ describe("doctor-contract-registry state migrations", () => {
       config: { channels: { alpha: { enabled: false }, "alpha-alias": { enabled: false } } },
     },
   ])("never loads state migrations for an $name, but still repairs its config", ({ config }) => {
-    mockModernPlugin(
+    const { detectLegacyState, migrateLegacyState } = mockModernPlugin(
       {
         origin: "global",
         channels: ["alpha", "alpha-alias"],
@@ -347,6 +350,9 @@ describe("doctor-contract-registry state migrations", () => {
       { path: ["channels", "alpha", "legacy"], message: "repair disabled alpha" },
     ]);
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+    expect(migrationIds({ config, includeDisabled: true })).toEqual(["alpha-state"]);
+    expect(detectLegacyState).not.toHaveBeenCalled();
+    expect(migrateLegacyState).not.toHaveBeenCalled();
   });
 
   it.each([

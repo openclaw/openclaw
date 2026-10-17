@@ -4,7 +4,7 @@ import "../../../styles/chat.ts";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { SessionDiffPanel } from "./session-diff-panel.ts";
+import { SessionDiffPanel } from "./session-diff-panel.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 const branch = "openclaw/investigating-why-a-pr-was-not-merged";

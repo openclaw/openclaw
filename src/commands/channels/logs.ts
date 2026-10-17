@@ -83,7 +83,7 @@ export async function channelsLogsCommand(
 ) {
   const filter = parseChannelFilter(opts.channel);
   const { channel } = filter;
-  const limit = parseLogsPositiveInt(opts.lines ?? undefined, DEFAULT_LIMIT, "--lines");
+  const limit = parseLogsPositiveInt(opts.lines, DEFAULT_LIMIT, "--lines");
 
   const tail = await readConfiguredParsedLogTail({
     limit,

@@ -35,7 +35,8 @@ import "./theme-brand-icon.tsx";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
-  readonly people: import("./sidebar-people-controller.ts").SidebarPeopleController;
+  readonly people: import("./sidebar-people.ts").SidebarPeoplePreferences;
+  readonly peopleView?: ReturnType<typeof import("./sidebar-people.ts").createSidebarPeople>;
   renderPinnedSidebarSession(session: () => SidebarRecentSession): JSX.Element;
   toggleSection(sectionId: string): void;
 };
@@ -120,13 +121,11 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element 
             host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)
           }
           onMenuPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
-          onContextMenu={(event) => {
+          onContextMenu={(trigger, event) => {
             event.preventDefault();
             if (host.sidebarMenus.agentMenuPosition !== null) {
               return;
             }
-            const card = event.currentTarget;
-            const trigger = card.querySelector<HTMLElement>(".sidebar-agent-card__main") ?? card;
             host.sidebarMenus.toggleAgentMenu(trigger);
           }}
         />
@@ -322,12 +321,10 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
                       ),
                     }).leadingIndicator
                   }
-                  {
-                    <SessionRowBadges
-                      outboxAttentionCount={session().outboxAttentionCount}
-                      hasComposerDraft={session().hasComposerDraft}
-                    />
-                  }
+                  <SessionRowBadges
+                    outboxAttentionCount={session().outboxAttentionCount}
+                    hasComposerDraft={session().hasComposerDraft}
+                  />
                 </>
               )}
             </Show>
@@ -398,7 +395,7 @@ export function renderAppSidebarPageEntry(
   const pinnedSession = () => (entry.type === "session" ? sessionRows().get(entry.key) : undefined);
   const content =
     entry.type === "route" ? (
-      host.sidebarMenus.renderRoute(entry.route)
+      host.sidebarMenus.renderRoute(entry.route, host)
     ) : entry.type === "plugin" ? (
       <Show
         when={pluginTab()}
@@ -478,7 +475,7 @@ export function renderAppSidebarPluginTab(
   );
   return (
     <Show when={routeId()} fallback={link}>
-      {(route) => host.sidebarMenus.renderRoute(route())}
+      {(route) => host.sidebarMenus.renderRoute(route(), host)}
     </Show>
   );
 }

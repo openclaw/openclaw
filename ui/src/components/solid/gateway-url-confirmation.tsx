@@ -7,7 +7,7 @@ import {
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { Icon } from "./icon.tsx";
 import { LazyElementStateView } from "./lazy-view-error.tsx";
 

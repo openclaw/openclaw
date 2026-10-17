@@ -8,6 +8,8 @@ import {
   stateEngineSchema,
 } from "../../state/openclaw-state-db-engine.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-db-maintenance.js";
+import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
+import { withLegacyStateWriteIndexes } from "../../state/openclaw-state-db-schema-v27-indexes.js";
 import { listOpenClawStateFeatureSchemas } from "../../state/openclaw-state-feature-schema.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import manifest from "../../state/postgres-schema.generated/manifest.json" with { type: "json" };
@@ -27,12 +29,20 @@ export async function loadStatePortDescriptor(
     const backup = stateEngineSchema.postgresMigrations?.find(
       (step) => step.version === sourceVersion + 1,
     )?.backup;
-    if (!backup || backup.version !== sourceVersion || backup.id !== "state") {
+    if (backup?.version === sourceVersion && backup.id === "state") {
+      return backup;
+    }
+    // v24→27 preserves columns; only metadata, SQLite head storage and indexes change.
+    // Pin this shared catalog so future column changes need their own predecessor.
+    if (
+      backup ||
+      OPENCLAW_STATE_SCHEMA_VERSION !== 27 ||
+      (sourceVersion !== 24 && sourceVersion !== 25 && sourceVersion !== 26)
+    ) {
       throw new DatabasePortDataError(
         `Missing shared-state PostgreSQL backup descriptor for version ${sourceVersion}`,
       );
     }
-    return backup;
   }
   const catalog = statePostgresRuntime.expectedCatalog;
   // The generated catalog owns these tagged facts; project only the copy fields.
@@ -69,9 +79,9 @@ export async function loadStatePortDescriptor(
   for (const table of DOCTOR_OWNED_STATE_TABLES) {
     sqliteFragments.set(table, extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table));
   }
-  return {
+  const descriptor: PortDescriptor = {
     id: "state",
-    version: OPENCLAW_STATE_SCHEMA_VERSION,
+    version: sourceVersion,
     minimumPostgresVersion: manifest.minimumPostgresVersion,
     ...schema(
       metadata,
@@ -89,13 +99,13 @@ export async function loadStatePortDescriptor(
     }),
     inspectSqliteSource(db) {
       admitSqliteSchema(db);
-      assertOpenClawStateDatabaseForMaintenance(db, { pathname: "shared-state port source" });
       const version = getAdmittedSqliteSchemaFacts(db)!.userVersion;
       if (version !== OPENCLAW_STATE_SCHEMA_VERSION) {
         throw new DatabasePortDataError(
           "Shared-state port requires the current schema; run openclaw doctor --fix with the matching version first.",
         );
       }
+      assertOpenClawStateDatabaseForMaintenance(db, { pathname: "shared-state port source" });
       return { version, migrationRequired: false, pendingColumns: {} };
     },
     async admit(file, input) {
@@ -117,4 +127,27 @@ export async function loadStatePortDescriptor(
       });
     },
   };
+  const historicalSqlite = withLegacyStateWriteIndexes(descriptor.sqlite);
+  const legacyIndexes = statePostgresRuntime.preWriteIndexesV27Sql;
+  return sourceVersion === OPENCLAW_STATE_SCHEMA_VERSION
+    ? descriptor
+    : {
+        ...descriptor,
+        sqlite: sourceVersion < 26 ? withLegacyStateHeadLayout(historicalSqlite) : historicalSqlite,
+        postData:
+          descriptor.postData.replace(
+            /CREATE INDEX "idx_state_leases_owner"[^;]+;/u,
+            legacyIndexes.state_leases,
+          ) +
+          legacyIndexes.skill_usage +
+          legacyIndexes.acp_replay_events,
+        expectedCatalog: descriptor.expectedCatalog.map((fact) =>
+          fact.kind === "indexes" &&
+          (fact.table === "skill_usage" || fact.table === "acp_replay_events")
+            ? { table: fact.table, kind: fact.kind, value: Number(fact.value) + 1 }
+            : fact,
+        ),
+        inspectSqliteSource: undefined,
+        admit: undefined,
+      };
 }

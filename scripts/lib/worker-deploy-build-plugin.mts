@@ -2,7 +2,15 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { WORKER_BUNDLE_CHUNK_PATH_PATTERN } from "../../src/shared/worker-bundle-hash.ts";
+import {
+  WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+  WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
+} from "../../src/shared/worker-bundle-hash.ts";
+import {
+  createFsSafeWindowsHelperAssetPlugin,
+  resolveFsSafePackageManifest,
+  resolveFsSafeWindowsHelper,
+} from "./fs-safe-windows-helper-asset.mts";
 
 const WORKER_DEPLOY_BUILD_PLUGIN_NAME = "openclaw:worker-deploy";
 export const WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID = `${path.resolve("src/worker/worker-deploy-runtime.ts")}?optional-native`;
@@ -56,11 +64,13 @@ export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
   return [
     path.join(playwrightRoot, "package.json"),
     path.join(playwrightRoot, "browsers.json"),
+    resolveFsSafeWindowsHelper(rootDir),
     fs.realpathSync(path.resolve(rootDir, "node_modules/web-tree-sitter/web-tree-sitter.wasm")),
     fs.realpathSync(path.resolve(rootDir, "node_modules/tree-sitter-bash/tree-sitter-bash.wasm")),
     fs.realpathSync(
       path.resolve(rootDir, "node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm"),
     ),
+    resolveFsSafePackageManifest(rootDir),
   ] as const;
 }
 
@@ -72,8 +82,9 @@ export function isUnstagedWorkerDeployRuntimeArtifact(
   const relative = fileName.startsWith("worker/") ? fileName.slice("worker/".length) : fileName;
   return (
     !entrypoints.has(fileName) &&
+    relative !== WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH &&
     !WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(relative) &&
-    /\.(?:mjs|node|wasm)$/u.test(fileName)
+    /\.(?:mjs|node|wasm|exe)$/u.test(fileName)
   );
 }
 
@@ -114,7 +125,7 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
       "dist/windows-security-command.js",
     ),
   );
-  const [packageJsonPath, browsersJsonPath, treeSitterWasmPath, bashWasmPath, photonWasmPath] =
+  const [packageJsonPath, browsersJsonPath, , treeSitterWasmPath, bashWasmPath, photonWasmPath] =
     resolveWorkerDeployGeneratorInputs(rootDir);
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
     name: string;
@@ -125,7 +136,12 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
     packageJSON = ${JSON.stringify({ name: packageJson.name, version: packageJson.version })};
     binPath = packageRoot;`;
 
+  const fsSafeAssets = createFsSafeWindowsHelperAssetPlugin(
+    rootDir,
+    `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}`,
+  );
   return {
+    ...fsSafeAssets,
     name: WORKER_DEPLOY_BUILD_PLUGIN_NAME,
     generateBundle(
       this: { error(message: string): never },
@@ -152,6 +168,10 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         : null;
     },
     transform(this: { error(message: string): never }, code: string, id: string) {
+      const fsSafeTransform = fsSafeAssets.transform.call(this, code, id);
+      if (fsSafeTransform !== null) {
+        return fsSafeTransform;
+      }
       let resolvedId: string;
       try {
         resolvedId = fs.realpathSync(path.resolve(id));

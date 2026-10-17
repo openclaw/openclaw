@@ -4,6 +4,7 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
@@ -35,6 +36,7 @@ it.each(["legacy", "local-aware"] as const)(
     const shared = path.join(stateDir, "state", "openclaw.sqlite");
     const agent = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     const local = path.join(stateDir, "control", "services.sqlite");
+    const client = path.join(stateDir, "client", "credentials.sqlite");
     for (const [file, version] of [
       [shared, 7],
       [agent, 3],
@@ -44,6 +46,18 @@ it.each(["legacy", "local-aware"] as const)(
       db.exec(`PRAGMA user_version = ${version}; CREATE TABLE evidence(value TEXT);`);
     }
     const env = { OPENCLAW_STATE_DIR: stateDir };
+    await fs.mkdir(path.dirname(client), { recursive: true, mode: 0o700 });
+    {
+      using db = openNodeSqliteDatabase(client);
+      db.exec(CLIENT_CREDENTIAL_SCHEMA_SQL);
+      db.exec("PRAGMA user_version = 1");
+      db.prepare("INSERT INTO native_exec_socket_credentials VALUES (?, ?, ?, ?)").run(
+        "current",
+        "/synthetic/native.sock",
+        "synthetic-socket-token",
+        456,
+      );
+    }
     const intent = {
       state_key: "daemon-runtime-pin:raw",
       value_json: "{ malformed",
@@ -66,6 +80,7 @@ it.each(["legacy", "local-aware"] as const)(
     };
     const admitted = await inventoryUpdateCandidateStateWorker(input);
     expect(admitted.databaseInventory).toContain(local);
+    expect(admitted.databaseInventory).toContain(client);
     const versions = UpdateCandidateStateSnapshotSchema.shape.versions.parse(
       await runWorker({ ...input, mode: "versions" }),
     );
@@ -74,6 +89,7 @@ it.each(["legacy", "local-aware"] as const)(
     );
     const expected = [
       { path: agent, userVersion: 3 },
+      ...(caller === "local-aware" ? [{ path: client, userVersion: 1 }] : []),
       ...(caller === "local-aware" ? [{ path: local, userVersion: 1 }] : []),
       { path: shared, userVersion: 7, contentVersion: 7 },
     ];
@@ -83,5 +99,17 @@ it.each(["legacy", "local-aware"] as const)(
       readOnly: true,
     });
     expect(copied.prepare("SELECT * FROM daemon_runtime_pins").all()).toEqual([intent]);
+    using copiedClient = openNodeSqliteDatabase(
+      path.join(targetStateDir, "client", "credentials.sqlite"),
+      { readOnly: true },
+    );
+    expect(copiedClient.prepare("SELECT * FROM native_exec_socket_credentials").all()).toEqual([
+      {
+        socket_key: "current",
+        socket_path: "/synthetic/native.sock",
+        socket_token: "synthetic-socket-token",
+        updated_at_ms: 456,
+      },
+    ]);
   },
 );

@@ -1,4 +1,5 @@
 import type {
+  WorkerInferenceCancelParams,
   WorkerInferenceCancelResult,
   WorkerInferenceErrorReason,
   WorkerInferenceEventFrame,
@@ -35,10 +36,7 @@ export type WorkerInferenceCancelApplicationResult =
   | { ok: true; result: WorkerInferenceCancelResult }
   | { ok: false; reason: WorkerInferenceErrorReason };
 
-export type InferenceTurnIdentity = Pick<
-  WorkerInferenceTurnInput,
-  "sessionId" | "runEpoch" | "runId" | "turnId"
->;
+export type InferenceTurnIdentity = WorkerInferenceCancelParams;
 
 export type ActiveInference = {
   claimKey: string;

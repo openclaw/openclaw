@@ -16,11 +16,11 @@ const moduleUrl = (entry: Parameters<typeof resolveRuntimeWorkerUrl>[0]) =>
 
 const childScript = `
   import fs from "node:fs";
+  import fsPromises from "node:fs/promises";
   import http from "node:http";
   import { runGatewayLoop } from ${moduleUrl(gatewayDirectStopEntrypoints.runLoop)};
   import { setGatewayRestartPolicy } from ${moduleUrl(gatewayDirectStopEntrypoints.restartPolicy)};
-  import { fileLogTransport } from ${moduleUrl(gatewayDirectStopEntrypoints.fileLogTransport)};
-  const [faultPath, closeFailure] = process.argv.slice(1);
+  const [faultPath, closeFailure, logFile] = process.argv.slice(1);
   setGatewayRestartPolicy({ allowExternal: true });
   let starts = 0;
   try {
@@ -45,10 +45,14 @@ const childScript = `
           startupSettled: Promise.resolve(),
           close: async () => {
             if (closeFailure === "pending") {
-              fileLogTransport.setAppenderForTests(() => {
-                process.stdout.write("append:pending\\n");
-                return new Promise(() => {});
-              });
+              const openFile = fsPromises.open.bind(fsPromises);
+              fsPromises.open = (...args) => {
+                if (args[0] === logFile) {
+                  process.stdout.write("append:pending\\n");
+                  return new Promise(() => {});
+                }
+                return openFile(...args);
+              };
               process.stdout.write("close:pending\\n");
               return new Promise(() => {});
             }
@@ -98,7 +102,7 @@ function startFixture(initialFailure = false, closeFailure = "", executable = pr
   const moduleArgs = ["--import", "tsx", "--input-type=module", "--eval"];
   const child = spawn(
     executable,
-    ["--inspect-port=127.0.0.1:0", ...moduleArgs, childScript, faultPath, closeFailure],
+    ["--inspect-port=127.0.0.1:0", ...moduleArgs, childScript, faultPath, closeFailure, logFile],
     {
       env: {
         PATH: pendingClose ? `${bin}${path.delimiter}${process.env.PATH ?? ""}` : process.env.PATH,

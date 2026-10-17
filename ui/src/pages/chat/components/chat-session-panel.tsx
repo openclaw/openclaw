@@ -21,6 +21,7 @@ export function useSessionPanel<Data extends SessionPanelData>(
   const [revision, setRevision] = createSignal(0);
   const data = new DataType(useApplication(), () => setRevision((value) => value + 1));
   let identity = "";
+  // The synchronous data owner handles scoped subscriptions and polling outside Solid.
   createEffect(
     () => [props.sessionKey, props.agentId, props.presented] as const,
     ([sessionKey, agentId, presented]) => {
@@ -51,7 +52,7 @@ export function SessionPanelGroups<Row>(props: {
 }) {
   return (
     <>
-      <section class={`chat-${props.kind}__running`}>
+      <section class={[`chat-${props.kind}__running`]}>
         <h3 class={{ "chat-subagents__section-title": props.kind === "subagents" }}>
           {t(`chat.${props.kind}Panel.running`, { count: String(props.running.length) })}
         </h3>
@@ -61,12 +62,12 @@ export function SessionPanelGroups<Row>(props: {
           </For>
         </div>
         {!props.running.length && (
-          <div class={`chat-${props.kind}__empty`}>{t(`chat.${props.kind}Panel.noRunning`)}</div>
+          <div class={[`chat-${props.kind}__empty`]}>{t(`chat.${props.kind}Panel.noRunning`)}</div>
         )}
       </section>
-      <section class={`chat-${props.kind}__finished`}>
+      <section class={[`chat-${props.kind}__finished`]}>
         <button
-          class={`chat-${props.kind}__finished-toggle`}
+          class={[`chat-${props.kind}__finished-toggle`]}
           type="button"
           aria-expanded={props.finishedOpen ? "true" : "false"}
           aria-controls={props.finishedId}

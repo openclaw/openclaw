@@ -161,7 +161,10 @@ beforeAll(async () => {
 
 const looseBudgets = {
   startupJsRequests: 10,
-  routeBootJsRequests: 35,
+  chatBootJsRequests: 35,
+  newBootJsRequests: 35,
+  chatBootJsGzipBytes: 100_000,
+  newBootJsGzipBytes: 100_000,
   startupCssRequests: 10,
   startupJsGzipBytes: 100_000,
   startupCssGzipBytes: 100_000,
@@ -262,7 +265,10 @@ describe("Control UI performance budgets", () => {
     const metrics = collectControlUiPerformanceMetrics(distDir);
     const budgets = {
       startupJsRequests: 0,
-      routeBootJsRequests: 35,
+      chatBootJsRequests: 35,
+      newBootJsRequests: 35,
+      chatBootJsGzipBytes: 100_000,
+      newBootJsGzipBytes: 100_000,
       startupCssRequests: 1,
       startupJsGzipBytes: 30,
       startupCssGzipBytes: 20,
@@ -402,9 +408,10 @@ describe("Control UI performance budgets", () => {
     },
   );
 
-  it.each(["chat", "new"])("enforces the %s boot request limit in Actions", (route) => {
+  it.each(["chat", "new"] as const)("enforces the %s boot request limit in Actions", (route) => {
     const { rootDir, scriptPath, distDir } = createCliFixture();
-    const links = Array.from({ length: 35 }, (_, index) => {
+    const limit = CONTROL_UI_PERFORMANCE_BUDGETS[`${route}BootJsRequests`];
+    const links = Array.from({ length: limit }, (_, index) => {
       const file = `route-${index}.js`;
       for (const suffix of ["", ".gz", ".br"]) {
         fs.writeFileSync(path.join(distDir, "assets", `${file}${suffix}`), "x");
@@ -418,11 +425,11 @@ describe("Control UI performance budgets", () => {
         indexPath,
         `${initial}<template data-openclaw-route-preloads="${route}">${links.slice(0, count).join("")}</template>`,
       );
-    writeRoute(35);
+    writeRoute(limit);
     const actions = { GITHUB_ACTIONS: "true" };
     const over = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, actions);
     expect(JSON.parse(over.stdout).violations).toEqual([
-      expect.objectContaining({ metric: `${route} boot JS requests`, actual: 36, limit: 35 }),
+      expect.objectContaining({ metric: `${route} boot JS requests`, actual: limit + 1, limit }),
     ]);
     expect(over.status, over.stderr).toBe(1);
     const reported = runControlUiPerformanceCli(
@@ -432,10 +439,50 @@ describe("Control UI performance budgets", () => {
       actions,
     );
     expect(reported.status, reported.stderr).toBe(0);
-    writeRoute(34);
+    writeRoute(limit - 1);
     const atLimit = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, actions);
     expect(atLimit.status, atLimit.stderr).toBe(0);
     expect(JSON.parse(atLimit.stdout).violations).toEqual([]);
+  });
+
+  it.each(["chat", "new"] as const)("enforces the %s boot byte limit in Actions", (route) => {
+    const { rootDir, scriptPath, distDir } = createCliFixture();
+    const limit = CONTROL_UI_PERFORMANCE_BUDGETS[`${route}BootJsGzipBytes`];
+    const initialBytes = collectControlUiPerformanceMetrics(distDir).startup.js.gzipBytes;
+    const links: string[] = [];
+    let remaining = limit - initialBytes;
+    for (let index = 0; remaining > 0; index++) {
+      const file = `route-${index}.js`;
+      const bytes = Math.min(200_000, remaining);
+      remaining -= bytes;
+      for (const suffix of ["", ".gz", ".br"]) {
+        fs.writeFileSync(path.join(distDir, "assets", `${file}${suffix}`), Buffer.alloc(bytes));
+      }
+      links.push(`<link rel="modulepreload" href="./assets/${file}">`);
+    }
+    const indexPath = path.join(distDir, "index.html");
+    fs.appendFileSync(
+      indexPath,
+      `<template data-openclaw-route-preloads="${route}">${links.join("")}</template>`,
+    );
+    const actions = { GITHUB_ACTIONS: "true" };
+    const atLimit = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, actions);
+    expect(atLimit.status, atLimit.stderr).toBe(0);
+    expect(JSON.parse(atLimit.stdout).violations).toEqual([]);
+
+    fs.appendFileSync(path.join(distDir, "assets/route-0.js.gz"), "x");
+    const over = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, actions);
+    expect(over.status, over.stderr).toBe(1);
+    expect(JSON.parse(over.stdout).violations).toEqual([
+      expect.objectContaining({ metric: `${route} boot JS gzip`, actual: limit + 1, limit }),
+    ]);
+    const reported = runControlUiPerformanceCli(
+      scriptPath,
+      ["--json", "--report-only"],
+      rootDir,
+      actions,
+    );
+    expect(reported.status, reported.stderr).toBe(0);
   });
 
   it("fails closed when the startup baseline is malformed", () => {

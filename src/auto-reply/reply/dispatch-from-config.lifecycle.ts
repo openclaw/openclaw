@@ -521,11 +521,6 @@ export function createDispatchReplyOperationCoordinator(params: {
           dispatchLifecycleAbortController = lifecycleOnlyAbortController;
         }
         armPreDispatchLifecycleAbortRelease();
-        if (!allowActiveResolution) {
-          logVerbose(
-            `dispatch-from-config: allowing Slack routed thread ${params.routeThreadId} while ${dispatchOperationSessionKey} has an active reply operation in another Slack thread`,
-          );
-        }
         return { status: "ready" };
       }
       admission.lifecycleAdmission?.release();

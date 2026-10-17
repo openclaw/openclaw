@@ -608,12 +608,12 @@ does not replace the existing asynchronous preparation callback.
 **External plugins:** publish to [ClawHub](/clawhub), then install:
 
 <Tabs>
-  <Tab title="npm">
+  <Tab title="ClawHub (default)">
     ```bash
     openclaw plugins install @myorg/openclaw-my-plugin
     ```
 
-    Bare package specs install from npm, unless the name matches a bundled or official plugin id, in which case OpenClaw uses that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or `npm-pack:` to select the source explicitly — see [Manage plugins](/plugins/manage-plugins).
+    Package specs, including `@openclaw/*`, install from ClawHub by default. Only bare plugin ids without a version or tag can select a bundled copy or official catalog entry. Use `clawhub:`, `npm:`, `git:`, or `npm-pack:` to select the source explicitly — see [Manage plugins](/plugins/manage-plugins).
 
   </Tab>
   <Tab title="ClawHub only">

@@ -35,11 +35,76 @@ backup.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
+Before replacing a Git checkout's build or an installed package, the updater
+retains its running runtime. Late module imports and background workers keep
+using that generation through finalization, rollback, and CLI cleanup, even when
+the new build has different chunk filenames. The new Gateway starts from the
+activated build.
+
+If the retained verifier cannot authenticate to the restarted Gateway, it stops
+retrying that rejection. Local HTTP readiness and runtime version/build identity
+can verify activation instead, with an RPC authentication warning recorded in
+the update result. This does not change Gateway authentication or pairing.
+
+After a Doctor child settles, the updater drains its retained handles for the
+affected shared-state database and revokes their schema admission, even when
+Doctor exits unsuccessfully. The next parent access admits the resulting schema
+again and refuses a version newer than the running updater supports.
+
+After Doctor backs up and admits shared-state maintenance reads, native Codex
+assignment detection reads one database transaction snapshot. Lease renewals and
+other maintenance writes can continue without requiring the database files to
+stop changing for a private copy. Inspection without that admission still uses
+an artifact-preserving copy and refuses an inconsistent source. This is
+candidate-side behavior; the installed updater runs first with its shipped checks.
+
+### Migration integrity checks
+
+SQLite upgrades default to a whole-database `quick_check`, a full
+`integrity_check` of the tables the migration rewrites or re-indexes, and the
+existing foreign-key checks. This avoids checking every unrelated index against
+its table during a routine upgrade. Structural corruption anywhere in the
+database and corruption in the migration's affected tables still refuse the
+migration; quarantine and rollback behavior are unchanged.
+Historical upgrades use the same default even when recovery requires a full-file
+backup. Automatic original-state captures and disposable update rehearsals also
+honor the requested check, including same-version Doctor repairs. Automatic rollback
+images, restore validation, explicit Doctor recovery, and legacy transformed recovery
+archives retain full integrity checks.
+
+To request full integrity checking across every table and index during migration:
+
+```bash
+openclaw update --full-integrity-check
+openclaw doctor --fix --full-integrity-check
+```
+
+The default can miss an index/table mismatch in an untouched table. Use the full
+check when you need that coverage; it can take considerably longer on large
+databases. A successful quick check is never recorded as a full verification.
+Later runtime admission still performs a full check when no reusable
+full-verification seal exists, and can detect that mismatch before activation.
+The flag selects migration checks; it does not turn an already-current database
+into a separate verification job. Explicit database verification, backup
+verification, Doctor recovery, and compaction retain their existing checks.
+
+The installed updater runs first. Its own captures and checks keep their shipped
+behavior; the more efficient default begins when the candidate runs its
+migrations. An older installed CLI does not recognize the new flag. For that
+first upgrade, update normally to receive the candidate's new default, or run
+the candidate's `doctor --fix --full-integrity-check` through your manual upgrade
+workflow.
+
 Post-activation schema verification preserves agent databases Doctor holds after
 deletion. These stores may keep an older schema without failing the update;
-Doctor's held-store warning remains visible. Active databases and pending
-deletions still require the candidate schema, and held stores remain part of
-rollback verification.
+Doctor's held-store warning remains visible. Configured agents required by the
+Gateway must still pass runtime admission: Doctor fails if a recovery hold
+leaves a required store unusable. Active databases and pending deletions require
+the candidate schema, and held stores remain part of rollback verification.
+Retained plugin databases, including plugin shared-state stores, are not checked
+against the agent schema. Their plugin owns migration; they remain in the
+snapshot and rollback inventory even when the plugin is disabled. The primary
+shared-state database is checked against the shared-state schema.
 
 OpenClaw.app runs plugin convergence through the selected runtime's Doctor while
 the app owns Gateway activation. This aligns managed official npm plugins with the new
@@ -69,12 +134,19 @@ changing images or restoring an older OpenClaw version.
 
 ## Upgrading very old versions
 
+Current Doctor can migrate pre-July cron jobs, Voice Wake settings, conversation
+bindings, and OAuth credentials directly. It archives obsolete delivery queues,
+plugin indexes, sandbox registries, and runtime notifications, preserving original
+bytes and reporting recovery instructions. Run `openclaw doctor --fix`; these JSON
+formats do not require an intermediate release. See [Doctor state migrations](/cli/doctor/state-migrations).
+
+The following bridge instructions apply to other retired formats and config keys.
+
 For installations older than July 2026, upgrade to **`2026.9.5` first**, run its
 Doctor migrations, and then upgrade to `latest`. The bridge release still
 imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
-`plugin-state/state.sqlite` databases, imports the JSON plugin install index,
-pre-June plugin JSON state, and
-`credentials/oauth.json`, repairs retired agent and channel config keys, and
+`plugin-state/state.sqlite` databases and pre-June plugin JSON state, repairs retired agent and channel
+config keys, and
 includes the old runtime aliases. The retired plugin imports cover Telegram,
 iMessage, Active Memory, Nostr, and Microsoft Teams; see
 [legacy state migration](/cli/doctor/state-migrations). Current releases leave
@@ -544,8 +616,12 @@ its `--timeout` option cannot increase this cap.
 Plugin rehearsal copies are temporary and rebuilt after interruption. Copying
 uses up to four concurrent file copies and avoids a disk flush for every file.
 If a copy fails, active copies finish before cleanup; link publication and
-verification run only after all file copies succeed. Stored state and recovery backups
-retain their existing durability guarantees. An older installed updater keeps
+verification run only after all file copies succeed. Each private copy or inspection
+uses one generous absolute allowance derived from its inventoried size, with the
+caller's larger allowance preserved. Progress remains diagnostic and does not renew
+the allowance. Exceptionally slow storage may require another update attempt after
+a visible timeout. Stored state and recovery backups retain their existing
+durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
 Runtime retention looks for hoisted dependencies within the package manager's
@@ -613,6 +689,18 @@ directory. `status` reads the operation, `repair` resumes only its recorded
 package publication, and `retire` removes only its recorded obsolete objects.
 These commands do not replace post-update plugin, migration or service recovery.
 Keep other package managers stopped while recovering the operation.
+
+If an updater-owned recovery directory, helper, or journal gains group or other
+permissions, the updater restores owner-only access and warns with the path,
+observed mode, and link count. On Linux, this also clears the effective POSIX ACL
+mask; named ACL entries can remain but no longer grant access. When `getfacl` is
+available, the warning identifies detected ACL entries. Foreign ownership,
+symlinks, unexpected object types, multiply linked files, and permissions that
+cannot be repaired still require intervention. Repairing these private objects
+does not change package-content fingerprints or authorize recovery of modified
+package files.
+If recovery still refuses, automatic update and managed-service handoff reports
+retain its reason code and diagnostic message in the failed phase.
 
 On FreeBSD, `repair` and `retire` read process identity through the recorded
 installation's own `@openclaw/proc-safe` dependency and its FreeBSD platform

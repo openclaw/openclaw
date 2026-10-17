@@ -41,7 +41,6 @@ type McpLoopbackToolCallObservers = {
 type McpLoopbackToolCallCapture = McpLoopbackToolCallObservers & {
   generation: number;
   inFlight: number;
-  activityVersion: number;
   activityWaiters: Set<() => void>;
 };
 
@@ -92,7 +91,6 @@ function deleteMcpLoopbackToolCallCapture(captureKey: string): void {
 }
 
 function notifyMcpLoopbackToolCallCaptureActivity(capture: McpLoopbackToolCallCapture): void {
-  capture.activityVersion += 1;
   for (const resolve of capture.activityWaiters) {
     resolve();
   }
@@ -113,7 +111,6 @@ export function beginMcpLoopbackToolCallCapture({
     ...observers,
     generation: nextToolCallCaptureGeneration,
     inFlight: 0,
-    activityVersion: 0,
     activityWaiters: new Set(),
   });
 }
@@ -284,12 +281,11 @@ async function waitForMcpLoopbackToolCallCaptureActivity(
   }
 }
 
-/** Wait for admitted calls to settle and for a quiet request-admission grace. */
+/** Wait for admitted requests and tool calls to settle before closing their grant. */
 export async function waitForMcpLoopbackToolCallCaptureIdle(
   captureKey: string,
   options: {
     timeoutMs: number;
-    admissionGraceMs: number;
   },
 ): Promise<boolean> {
   const normalizedKey = captureKey.trim();
@@ -307,21 +303,7 @@ export async function waitForMcpLoopbackToolCallCaptureIdle(
       await waitForMcpLoopbackToolCallCaptureActivity(capture, remainingMs);
       continue;
     }
-    const admissionGraceMs = Math.max(0, options.admissionGraceMs);
-    if (admissionGraceMs === 0) {
-      return true;
-    }
-    const activityVersion = capture.activityVersion;
-    const quietWaitMs = Math.min(admissionGraceMs, remainingMs);
-    const sawActivity = await waitForMcpLoopbackToolCallCaptureActivity(capture, quietWaitMs);
-    if (
-      !sawActivity &&
-      quietWaitMs === admissionGraceMs &&
-      capture.inFlight === 0 &&
-      capture.activityVersion === activityVersion
-    ) {
-      return true;
-    }
+    return true;
   }
   return true;
 }

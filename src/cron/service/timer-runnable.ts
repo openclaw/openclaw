@@ -53,11 +53,7 @@ export function hasMissedCronSlotSinceLastRun(job: CronJob, nowMs: number): bool
   } catch {
     return false;
   }
-  if (
-    typeof previousRunAtMs !== "number" ||
-    !Number.isFinite(previousRunAtMs) ||
-    previousRunAtMs <= lastRunAtMs
-  ) {
+  if (previousRunAtMs === undefined || previousRunAtMs <= lastRunAtMs) {
     return false;
   }
   // Slots computed from freshly edited scheduling inputs never existed before
@@ -161,7 +157,7 @@ export function isRunnableJob(params: {
       return false;
     }
     const lastEndedAtMs = resolveJobLastRunEndedAtMs(job) ?? lastRunAtMs;
-    return typeof latestRunAtMs === "number" && latestRunAtMs > lastEndedAtMs;
+    return latestRunAtMs !== undefined && latestRunAtMs > lastEndedAtMs;
   }
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
     return false;

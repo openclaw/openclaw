@@ -109,6 +109,7 @@ it("retains the open card's recent selection and focused link while fresh roster
   expect(openSession).toHaveBeenCalledWith(
     expect.objectContaining({ key: "agent:main:two", label: "two updated" }),
     "main",
+    { pathname: "/ui/chat/main/two" },
   );
   expect(links().some((link) => link.textContent?.includes("four"))).toBe(false);
 });

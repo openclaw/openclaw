@@ -58,23 +58,6 @@ vi.mock("./bash-tools.exec-approval-request.js", () => ({
   resolveRegisteredExecApprovalDecision: vi.fn(),
 }));
 
-// Gateway unit coverage owns quiet-admission timing. These spawn cases only
-// need to drain calls already in flight, so skip the repeated 250 ms quiet window.
-vi.mock("../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../gateway/mcp-http.loopback-runtime.js")>();
-  return {
-    ...actual,
-    waitForMcpLoopbackToolCallCaptureIdle: (
-      captureKey: string,
-      options: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[1],
-    ) =>
-      actual.waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
-        ...options,
-        admissionGraceMs: 0,
-      }),
-  };
-});
-
 beforeEach(() => {
   setDiagnosticsEnabledForProcess(true);
   resetAgentEventsForTest();

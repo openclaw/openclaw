@@ -114,7 +114,6 @@ export async function buildReplyPayloads(params: {
   /** Exact prompt bytes from this turn's finalized inbound owner. */
   conversationContext?: string;
   isHeartbeat: boolean;
-  didLogHeartbeatStrip: boolean;
   silentExpected?: boolean;
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
@@ -137,18 +136,13 @@ export async function buildReplyPayloads(params: {
   accountId?: string;
   extractMarkdownImages?: boolean;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
-}): Promise<{ replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean }> {
-  let didLogHeartbeatStrip = params.didLogHeartbeatStrip;
+}): Promise<{ replyPayloads: ReplyPayload[] }> {
   const sanitizedPayloads: ReplyPayload[] = [];
   for (const payload of params.payloads) {
     let text = payload.text;
     if (params.isHeartbeat) {
       if (text) {
-        const withoutLegacyBlocks = stripLegacyBracketToolCallBlocks(text);
-        if (withoutLegacyBlocks !== text) {
-          logVerbose("Stripped legacy tool-call block from heartbeat reply");
-        }
-        text = withoutLegacyBlocks;
+        text = stripLegacyBracketToolCallBlocks(text);
       }
     } else {
       if (payload.isError && text && BUN_FETCH_SOCKET_ERROR_RE.test(text)) {
@@ -158,10 +152,6 @@ export async function buildReplyPayloads(params: {
 
       if (text?.includes("HEARTBEAT_OK")) {
         const stripped = stripHeartbeatToken(text, { mode: "message" });
-        if (stripped.didStrip && !didLogHeartbeatStrip) {
-          didLogHeartbeatStrip = true;
-          logVerbose("Stripped stray HEARTBEAT_OK token from reply");
-        }
         if (stripped.shouldSkip && !resolveSendableOutboundReplyParts(payload).hasMedia) {
           continue;
         }
@@ -418,6 +408,5 @@ export async function buildReplyPayloads(params: {
           conversationContext: params.conversationContext,
         }) ?? [],
     ),
-    didLogHeartbeatStrip,
   };
 }

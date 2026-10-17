@@ -18,13 +18,13 @@ import {
   resolveApiKeyForProvider,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
+  fetchWithProviderHttpGuard,
   readProviderJsonObjectResponse,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   classifyOpenAIBaseUrl,
   OPENAI_API_BASE_URL,
@@ -322,7 +322,7 @@ export async function evaluateOpenAIDecision(
         }),
       },
     };
-    const { response, release } = await fetchWithSsrFGuard(
+    const { response, release } = await fetchWithProviderHttpGuard(
       !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url)
         ? withTrustedEnvProxyGuardedFetchMode(request)
         : request,

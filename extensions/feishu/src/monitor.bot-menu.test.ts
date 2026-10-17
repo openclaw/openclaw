@@ -113,11 +113,10 @@ describe("Feishu bot menu handler", () => {
     handleFeishuMessageMock.mockRejectedValueOnce(new Error("fallback failed"));
 
     await onBotMenu(createBotMenuEvent({ eventKey: "quick-actions", timestamp: "1700000000004" }));
-    await vi.waitFor(() => {
-      expect(runtime.error).toHaveBeenCalledWith(
-        "feishu[default]: error handling bot menu event: Error: fallback failed",
-      );
-    });
+    await Promise.allSettled(pendingTasks);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "feishu[default]: error handling bot menu event: Error: fallback failed",
+    );
     await onBotMenu(createBotMenuEvent({ eventKey: "quick-actions", timestamp: "1700000000004" }));
 
     expect(sendCardFeishuMock).toHaveBeenCalledOnce();

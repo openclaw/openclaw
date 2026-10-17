@@ -20,6 +20,7 @@ function createPresentation(
     onPartialReply?: GetReplyOptions["onPartialReply"];
     normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
     replyOperation?: AgentTurnParams["replyOperation"];
+    typingSignals?: AgentTurnParams["typingSignals"];
     delivery?: Pick<
       AgentTurnParams,
       "opts" | "typingSignals" | "blockStreamingEnabled" | "blockReplyPipeline" | "applyReplyToMode"
@@ -31,11 +32,13 @@ function createPresentation(
     isHeartbeat: options.isHeartbeat === true,
     sessionCtx: { agentText: options.conversationContext },
     opts: { onPartialReply: options.onPartialReply },
-    typingSignals: createTypingSignaler({
-      typing: createTypingController({}),
-      mode: "never",
-      isHeartbeat: options.isHeartbeat === true,
-    }),
+    typingSignals:
+      options.typingSignals ??
+      createTypingSignaler({
+        typing: createTypingController({}),
+        mode: "never",
+        isHeartbeat: options.isHeartbeat === true,
+      }),
     replyOperation: options.replyOperation,
     ...options.delivery,
   } as unknown as AgentTurnParams;
@@ -45,11 +48,54 @@ function createPresentation(
       normalizePayload: options.normalizeMediaPaths ?? (async (payload) => payload),
     },
     directBlockDeliveries: [],
-    heartbeatState: { didLogStrip: false },
   });
 }
 
 describe("agent runner streaming presentation", () => {
+  it("refreshes typing for whitespace appended while typing sends are failing", async () => {
+    vi.useFakeTimers();
+    const onCleanup = vi.fn();
+    const onReplyStart = vi
+      .fn<() => Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValue(new Error("temporary typing send failure"));
+    const typing = createTypingController({ onReplyStart, onCleanup });
+    const presentation = createPresentation({
+      typingSignals: createTypingSignaler({ typing, mode: "message", isHeartbeat: false }),
+    });
+    try {
+      await presentation.presentPartialReply({ text: "answer", delta: "answer" }, "embedded");
+      await vi.advanceTimersByTimeAsync(119_000);
+      await presentation.presentPartialReply({ text: "answer ", delta: " " }, "embedded");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(typing.isActive()).toBe(true);
+      expect(onCleanup).not.toHaveBeenCalled();
+    } finally {
+      typing.cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("strips split heartbeat tokens and preserves replacement partials", async () => {
+    const texts: Array<string | undefined> = [];
+    const presentation = createPresentation({
+      onPartialReply: (payload) => {
+        texts.push(payload.text);
+      },
+    });
+    await presentation.presentPartialReply({ text: "HEARTBEAT_", delta: "HEARTBEAT_" }, "embedded");
+    await presentation.presentPartialReply({ text: "HEARTBEAT_OK", delta: "OK" }, "embedded");
+    await presentation.presentPartialReply(
+      { text: "HEARTBEAT_OK details", delta: " details" },
+      "embedded",
+    );
+    await presentation.presentPartialReply(
+      { text: "replacement", delta: "", replace: true },
+      "embedded",
+    );
+    expect(texts).toEqual(["HEARTBEAT_", "details", "replacement"]);
+  });
+
   it.each([
     { name: "recorded silent caption", caption: "NO_REPLY", silent: true },
     { name: "JSON action caption", caption: '{"action":"NO_REPLY"}', silent: false },

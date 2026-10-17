@@ -608,12 +608,6 @@ export async function mutateSubagentRunForKill(
         return await settleTargetCancellation();
       }
       try {
-        if (!ownsSessionIncarnation()) {
-          return releaseChangedSessionKill(claimedKill);
-        }
-        if (!killOwnerCurrent()) {
-          return { killed: false, superseded: true };
-        }
         if (readFailure || declined || acceptance.callerFailure) {
           // Missing caller facts or revocation fence new effects, but the accepted
           // interruption's exact claim still owns settlement.
@@ -657,7 +651,7 @@ export async function mutateSubagentRunForKill(
         if (!killOwnerCurrent()) {
           return { killed: false, superseded: true };
         }
-        const cleared = runtime.clearSessionLifecycleQueues({
+        runtime.clearSessionLifecycleQueues({
           keys: [childSessionKey, sessionId],
           agentId: resolved.agentId,
           sessionKey: childSessionKey,
@@ -670,11 +664,6 @@ export async function mutateSubagentRunForKill(
             }
           },
         });
-        if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-          logVerbose(
-            `subagents control kill: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
-          );
-        }
         if (active && !stopAcceptance.accepted) {
           return stillActive();
         }

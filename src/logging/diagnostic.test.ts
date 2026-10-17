@@ -12,6 +12,7 @@ import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../infra/net/undici-global-dispatcher.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   beginDiagnosticBackendActivity,
@@ -51,11 +52,10 @@ import {
   logMessageQueued,
   logSessionStateChange,
   markDiagnosticSessionProgress,
+  startGatewayDiagnosticHeartbeat,
 } from "./diagnostic.js";
 import {
   resetDiagnosticStateForTest,
-  resolveStuckSessionAbortMs,
-  resolveStuckSessionWarnMs,
   startDiagnosticHeartbeatForTest as startDiagnosticHeartbeat,
   startEnabledDiagnosticHeartbeatForTest as startEnabledDiagnosticHeartbeat,
 } from "./diagnostic.test-support.js";
@@ -347,16 +347,14 @@ describe("stuck session diagnostics threshold", () => {
     ).toEqual([60_000, 90_000, 120_000]);
   });
 
-  it("aborts and drains embedded runs after an extended no-progress stall", () => {
+  it("aborts and drains embedded runs after the default no-progress stall", () => {
     const recoverStuckSession = vi.fn();
-    const stuckSessionWarnMs = resolveStuckSessionWarnMs() / 4;
-    const stuckSessionAbortMs = resolveStuckSessionAbortMs(stuckSessionWarnMs);
-    expect(stuckSessionWarnMs).toBe(30_000);
-    expect(stuckSessionAbortMs).toBe(300_000);
-    startEnabledDiagnosticHeartbeat({
-      recoverStuckSession,
-      testTimings: { stuckSessionWarnMs, stuckSessionAbortMs },
-    });
+    const stuckSessionAbortMs = 360_000;
+    startGatewayDiagnosticHeartbeat(
+      createTestGatewayScheduler("fake-timers"),
+      { diagnostics: { enabled: true } },
+      { recoverStuckSession },
+    );
     logSessionStateChange({ ...session, state: "processing" });
     markDiagnosticEmbeddedRunStarted(session);
 

@@ -7,7 +7,7 @@ import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/can
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { ToolPreview } from "./widget-card.ts";
+import { ToolPreview } from "./widget-card-view.tsx";
 
 const canvasPreview = {
   kind: "canvas",

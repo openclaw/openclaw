@@ -134,15 +134,11 @@ it("installs every commit receipt even if a prior owner cannot fence its failed 
   transaction(() => {
     write("committed");
     stageSqliteTransactionState(database, {
-      stage() {},
-      rollback() {},
       commit() {
         throw new Error("legacy installer failed");
       },
     });
     stageSqliteTransactionState(database, {
-      stage() {},
-      rollback() {},
       commit() {
         receipt = rows();
       },

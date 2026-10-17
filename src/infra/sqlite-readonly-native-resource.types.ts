@@ -5,7 +5,7 @@ export const SQLITE_NATIVE_RESOURCE_PORT = "sqliteSnapshotNativeResource";
 
 export type SqliteNativeOwnerRequest = { id: number; directory: string } & (
   | { type: "allocated"; preparationId: number }
-  | { type: "retire" | "removed" }
+  | { type: "retire" }
 );
 export type SqliteNativeOwnerReply =
   | { id: number; ok: true }

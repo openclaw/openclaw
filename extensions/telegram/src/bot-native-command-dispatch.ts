@@ -4,19 +4,16 @@ import type {
   OpenClawConfig,
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramDmAllow } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramResolvedGroupConfig } from "./bot-handlers.types.js";
 import { resolveTelegramMessageTurnSettings } from "./bot-message.js";
-import {
-  defaultTelegramNativeCommandDeps,
-  type TelegramNativeCommandDeps,
-} from "./bot-native-command-deps.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import {
   buildTelegramThreadParams,
@@ -86,7 +83,6 @@ export type TelegramCommandExecutorParams = {
     messageThreadId: number | undefined,
     cfg: OpenClawConfig,
   ) => TelegramResolvedGroupConfig;
-  telegramDeps?: TelegramNativeCommandDeps;
   opts: Pick<
     TelegramBotOptions,
     | "token"
@@ -105,7 +101,6 @@ type TelegramCommandAuthResult = NonNullable<
 
 export type TelegramCommandDispatch = TelegramCommandExecutorParams &
   TelegramCommandAuthResult & {
-    telegramDeps: TelegramNativeCommandDeps;
     runtimeCfg: OpenClawConfig;
     runtimeTelegramCfg: TelegramAccountConfig;
     nativeCommandRuntime: TelegramNativeCommandRuntime;
@@ -152,7 +147,6 @@ async function resolveTelegramCommandAuth(params: {
   cfg: OpenClawConfig;
   accountId: string;
   telegramCfg: TelegramAccountConfig;
-  readChannelAllowFromStore: TelegramBotDeps["readChannelAllowFromStore"];
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   resolveGroupPolicy: TelegramCommandExecutorParams["resolveGroupPolicy"];
@@ -214,7 +208,7 @@ async function resolveTelegramCommandAuth(params: {
     threadSpec,
     groupAllowFrom: params.groupAllowFrom,
     skipPairingStoreRead: preContextCommandAccess.authorizedByConfig,
-    readChannelAllowFromStore: params.readChannelAllowFromStore,
+    readChannelAllowFromStore,
     resolveTelegramGroupConfig: () => scopedConfig,
   });
   const {
@@ -340,8 +334,7 @@ async function resolveTelegramCommandAuth(params: {
 export async function prepareTelegramCommandDispatch(
   params: TelegramCommandExecutorParams & { requireAuth: boolean },
 ): Promise<TelegramCommandDispatch | null> {
-  const telegramDeps = params.telegramDeps ?? defaultTelegramNativeCommandDeps;
-  const runtimeCfg = telegramDeps.getRuntimeConfig();
+  const runtimeCfg = getRuntimeConfig();
   const runtimeTelegramCfg = resolveTelegramAccount({
     cfg: runtimeCfg,
     accountId: params.accountId,
@@ -356,7 +349,6 @@ export async function prepareTelegramCommandDispatch(
     ...params,
     cfg: runtimeCfg,
     telegramCfg: runtimeTelegramCfg,
-    readChannelAllowFromStore: telegramDeps.readChannelAllowFromStore,
     allowFrom: turnSettings.allowFrom,
     groupAllowFrom: turnSettings.groupAllowFrom,
   });
@@ -438,7 +430,6 @@ export async function prepareTelegramCommandDispatch(
   )?.sessionId;
   return {
     ...params,
-    telegramDeps,
     runtimeCfg,
     runtimeTelegramCfg,
     ...auth,

@@ -52,7 +52,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 }));
 vi.mock("openclaw/plugin-sdk/provider-catalog-live-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-catalog-live-runtime")>()),
-  getCachedLiveProviderModelRows: async () => [
+  fetchLiveProviderModelRows: async () => [
     {
       slug: "gpt-5.6-luna",
       supported_reasoning_levels: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],

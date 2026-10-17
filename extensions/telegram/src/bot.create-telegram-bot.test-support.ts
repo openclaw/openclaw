@@ -19,12 +19,6 @@ export const telegramBotInfoForTest = {
   allows_users_to_create_topics: false,
 } satisfies TelegramBotInfo;
 
-export type TelegramMentionPolicyForTest = {
-  mode: "allow" | "deny";
-  allowIn?: string[];
-  denyIn?: string[];
-};
-
 export function createChannelPostContext(params: {
   messageId: number;
   date: number;

@@ -1,9 +1,6 @@
 // Ollama tests cover provider models plugin behavior.
-import { once } from "node:events";
-import { createServer } from "node:http";
-import type { Socket } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
-import { jsonResponse, requestUrl } from "openclaw/plugin-sdk/test-env";
+import { jsonResponse, requestUrl, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOllamaProvider,
@@ -18,6 +15,15 @@ import {
   type OllamaTagModel,
 } from "./provider-models.js";
 
+function stubDiscovery(models: OllamaTagModel[], show: unknown = {}) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL | Request) =>
+      jsonResponse(requestUrl(input).endsWith("/api/tags") ? { models } : show),
+    ),
+  );
+}
+
 describe("ollama provider models", () => {
   it.each([
     { tagSize: "1.5B", expected: 1_500_000_000 },
@@ -29,20 +35,11 @@ describe("ollama provider models", () => {
   ])(
     "keeps total parameter metadata through discovery: %j",
     async ({ tagSize, showCount, showSize, expected }) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (input: string | URL | Request) =>
-          requestUrl(input).endsWith("/api/tags")
-            ? jsonResponse({
-                models: [{ name: "custom-model", details: { parameter_size: tagSize } }],
-              })
-            : jsonResponse({
-                capabilities: ["completion"],
-                model_info: { "general.parameter_count": showCount },
-                details: { parameter_size: showSize },
-              }),
-        ),
-      );
+      stubDiscovery([{ name: "custom-model", details: { parameter_size: tagSize } }], {
+        capabilities: ["completion"],
+        model_info: { "general.parameter_count": showCount },
+        details: { parameter_size: showSize },
+      });
       const provider = await buildOllamaProvider("http://127.0.0.1:11434");
       const model = expectDefined(provider.models[0], "discovered model");
       expect(model.parameterCount).toBe(expected);
@@ -58,30 +55,19 @@ describe("ollama provider models", () => {
   });
 
   it("keeps incomplete cloud metadata discoverable with remote host metadata", async () => {
-    const { listed, reasoning } = {
-      listed: {
-        name: "deepseek-r1:671b",
-        remote_host: "https://ollama.example",
-        capabilities: ["vision"],
-      },
-      reasoning: true,
+    const listed = {
+      name: "deepseek-r1:671b",
+      remote_host: "https://ollama.example",
+      capabilities: ["vision"],
     };
-
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL | Request) =>
-        requestUrl(input).endsWith("/api/tags")
-          ? jsonResponse({ models: [listed] })
-          : jsonResponse({}),
-      ),
-    );
+    stubDiscovery([listed]);
 
     await expect(buildOllamaProvider("http://127.0.0.1:11434")).resolves.toMatchObject({
       models: [
         {
           id: listed.name,
           input: ["text", "image"],
-          reasoning,
+          reasoning: true,
           compat: { supportsTools: true },
         },
       ],
@@ -197,17 +183,10 @@ describe("ollama provider models", () => {
   ])(
     "discovers $name output limits at $baseUrl",
     async ({ name, baseUrl, remote_host, remote_model, maxTokens }) => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (input: string | URL | Request) =>
-          requestUrl(input).endsWith("/api/tags")
-            ? jsonResponse({ models: [{ name, remote_host, remote_model }] })
-            : jsonResponse({
-                capabilities: ["completion"],
-                model_info: { "test.context_length": 262_144 },
-              }),
-        ),
-      );
+      stubDiscovery([{ name, remote_host, remote_model }], {
+        capabilities: ["completion"],
+        model_info: { "test.context_length": 262_144 },
+      });
       const provider = await buildOllamaProvider(baseUrl);
       const model = expectDefined(provider.models[0], "discovered model");
       expect(
@@ -242,11 +221,10 @@ describe("ollama provider models", () => {
   });
 
   it("closes real failed discovery sockets while preserving successful discovery", async () => {
-    const sockets = new Set<Socket>();
     const socketClosures = new Map<string, Promise<void>>();
     let mode: "failure" | "success" = "failure";
 
-    const server = createServer((request, response) => {
+    const handleRequest: Parameters<typeof withServer>[0] = (request, response) => {
       const path = request.url;
       if (path !== "/api/tags" && path !== "/api/show") {
         response.writeHead(404);
@@ -278,12 +256,7 @@ describe("ollama provider models", () => {
           capabilities: ["completion", "tools"],
         }),
       );
-    });
-
-    server.on("connection", (socket) => {
-      sockets.add(socket);
-      socket.once("close", () => sockets.delete(socket));
-    });
+    };
 
     const waitForSocketClose = async (path: string): Promise<void> => {
       const closed = socketClosures.get(path);
@@ -308,17 +281,7 @@ describe("ollama provider models", () => {
       }
     };
 
-    const listening = once(server, "listening");
-    try {
-      server.listen(0, "127.0.0.1");
-      await listening;
-
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Ollama test server did not expose a TCP address");
-      }
-      const baseUrl = `http://127.0.0.1:${address.port}`;
-
+    await withServer(handleRequest, async (baseUrl) => {
       await expect(fetchOllamaModels(baseUrl)).resolves.toEqual({
         reachable: true,
         models: [],
@@ -339,78 +302,49 @@ describe("ollama provider models", () => {
         contextWindow: 32768,
         capabilities: ["completion", "tools"],
       });
-    } finally {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      if (server.listening) {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => {
-            if (error) {
-              reject(error);
-              return;
-            }
-            resolve();
-          });
-        });
-      }
-    }
+    });
   });
 
   it("preserves remote-model-only list capabilities after a live inspection failure", async () => {
-    const { listed, expected } = {
-      listed: {
-        name: "remote-chat:latest",
-        remote_model: "upstream-chat:latest",
-        digest: "sha256:remote-model-list-metadata",
-        details: { context_length: 32_768 },
-        capabilities: ["tools"],
-      },
-      expected: { contextWindow: 32_768, supportsTools: true },
+    const listed = {
+      name: "remote-chat:latest",
+      remote_model: "upstream-chat:latest",
+      digest: "sha256:remote-model-list-metadata",
+      details: { context_length: 32_768 },
+      capabilities: ["tools"],
     };
 
-    const server = createServer((request, response) => {
-      response.setHeader("Content-Type", "application/json");
-      if (request.url === "/api/tags") {
-        response.end(
-          JSON.stringify({
-            models: [listed],
-          }),
-        );
-        return;
-      }
-      if (request.url === "/api/show") {
-        response.statusCode = 500;
-        response.end(JSON.stringify({ error: "show failed" }));
-        return;
-      }
-      response.statusCode = 404;
-      response.end(JSON.stringify({ error: "not found" }));
-    });
+    await withServer(
+      (request, response) => {
+        response.setHeader("Content-Type", "application/json");
+        if (request.url === "/api/tags") {
+          response.end(
+            JSON.stringify({
+              models: [listed],
+            }),
+          );
+          return;
+        }
+        if (request.url === "/api/show") {
+          response.statusCode = 500;
+          response.end(JSON.stringify({ error: "show failed" }));
+          return;
+        }
+        response.statusCode = 404;
+        response.end(JSON.stringify({ error: "not found" }));
+      },
+      async (baseUrl) => {
+        const provider = await buildOllamaProvider(baseUrl);
+        const model = expectDefined(provider.models?.[0], "show-failed Ollama model");
 
-    const listening = once(server, "listening");
-    try {
-      server.listen(0, "127.0.0.1");
-      await listening;
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Ollama test server did not expose a TCP address");
-      }
-
-      const provider = await buildOllamaProvider(`http://127.0.0.1:${address.port}`);
-      const model = expectDefined(provider.models?.[0], "show-failed Ollama model");
-
-      expect(model.id).toBe(listed.name);
-      expect(model.contextWindow).toBe(expected.contextWindow);
-      expect(model.compat?.supportsTools).toBe(expected.supportsTools);
-      expect(model.reasoning).toBe(listed.name.startsWith("deepseek-r1"));
-    } finally {
-      if (server.listening) {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
+        expect(model).toMatchObject({
+          id: listed.name,
+          contextWindow: 32_768,
+          compat: { supportsTools: true },
+          reasoning: false,
         });
-      }
-    }
+      },
+    );
   });
 
   it("fails soft and stops reading when discovery streams exceed the JSON byte cap", async () => {

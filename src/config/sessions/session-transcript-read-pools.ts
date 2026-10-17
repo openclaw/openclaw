@@ -33,6 +33,11 @@ import type {
 } from "./session-transcript-worker.types.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
+// V8's default young generation lets each idle reader keep ~60 MiB of nursery.
+const SESSION_TRANSCRIPT_WORKER_LIMITS = {
+  maxOldGenerationSizeMb: 512,
+  maxYoungGenerationSizeMb: 32,
+};
 
 type RetainedStore = {
   revoked: boolean;
@@ -51,7 +56,7 @@ export function createSessionTranscriptReadPool<Input extends SessionTranscriptW
       ensureSqliteLibrarySelected();
       return { options: { workerData: { databaseEngineSelection: getDatabaseEngineSelection() } } };
     },
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+    workerOptions: { resourceLimits: SESSION_TRANSCRIPT_WORKER_LIMITS },
     maxWorkers,
     sharedCompute,
   });
@@ -158,7 +163,7 @@ export function createSessionTranscriptHistoryPool(
   >(
     {
       workerUrl,
-      workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+      workerOptions: { resourceLimits: SESSION_TRANSCRIPT_WORKER_LIMITS },
       maxWorkers,
       idleTimeoutMs: 0,
       burstIdleTimeoutMs: 30_000,
@@ -187,7 +192,7 @@ export function createSessionTranscriptHistoryPool(
 function createUsageCostPool(kind: "read" | "refresh") {
   return new WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>({
     workerUrl,
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+    workerOptions: { resourceLimits: SESSION_TRANSCRIPT_WORKER_LIMITS },
     // A retired task releases lane-wide database custody, which requires one native worker.
     workerClass: kind === "refresh" ? "writer" : "singleton",
     // Host writes can wait for a writer-held shared-compute reader; neither usage lane may hold its permit.

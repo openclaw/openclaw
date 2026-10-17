@@ -17,7 +17,7 @@ Status: production-ready via WhatsApp Web (Baileys). The gateway owns the linked
 openclaw plugins install @openclaw/whatsapp
 ```
 
-Use `npm:@openclaw/whatsapp` or `clawhub:@openclaw/whatsapp` to force a source; pin an exact version only for a reproducible install.
+The manual package install uses ClawHub by default. Use `npm:@openclaw/whatsapp` to install directly from npm; pin an exact version only for a reproducible install.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">

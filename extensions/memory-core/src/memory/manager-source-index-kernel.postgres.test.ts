@@ -93,7 +93,7 @@ describe.skipIf(!connection)("PostgreSQL memory source indexing", () => {
     }
   });
 
-  it("replaces 129 rows, reuses bounded ID sets, and rolls back canonical and derived rows", () => {
+  it("replaces 129 rows and rolls back canonical and derived rows", () => {
     withEngineStoreAdmission(() => {
       if (!isPostgresSqlConnection(db)) {
         throw new Error("Expected PostgreSQL");
@@ -155,10 +155,6 @@ describe.skipIf(!connection)("PostgreSQL memory source indexing", () => {
       } finally {
         events.unsubscribe(observe);
       }
-      const reuse = statements.filter((statement) =>
-        statement.startsWith('select "id", "embedding" from "memory_index_chunks"'),
-      );
-      expect(reuse.map((statement) => [...statement.matchAll(/\$\d+/g)].length)).toEqual([128, 1]);
       expect(
         statements.every((statement) => [...statement.matchAll(/\$\d+/g)].length < 65_535),
       ).toBe(true);

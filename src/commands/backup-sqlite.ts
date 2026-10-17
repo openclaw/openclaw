@@ -1,13 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
-import {
-  captureRuntimeConfigAsyncReader,
-  readConfigFileSnapshot,
-  resolveStateDir,
-} from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, resolveStateDir } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { assertHomogeneousDatabaseEngines } from "../infra/database-engine/registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
@@ -45,7 +40,6 @@ export async function backupSqliteCreateCommand(
     assertNotUpdateCapturePath(globalPath, resolveStateDir());
   }
   const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
-  assertHomogeneousDatabaseEngines(config, "backup");
   try {
     const database = await resolveSnapshotDatabase(options, config, globalPath);
     let postgres = false;
@@ -156,8 +150,6 @@ export async function backupSqliteRestoreCommand(
 ) {
   const resolved = resolveSnapshot(snapshot);
   const targetPath = resolveRequiredBackupPath(options.target, "--target");
-  const config = await readConfigFileSnapshot({ observe: false });
-  assertHomogeneousDatabaseEngines(config.config, "restore");
   const restored = await resolved.provider.restoreFresh(resolved.ref, targetPath);
   const report = {
     ok: true as const,

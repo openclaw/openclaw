@@ -187,6 +187,7 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     getHeader: vi.fn(() => ({ version: 3 })),
     getLeafId: vi.fn<() => string | null>(() => null),
     getLeafEntry: vi.fn(() => null),
+    hasLoadedTranscriptTail: () => true,
     getEntry: vi.fn(() => undefined),
     getEntries: vi.fn(() => []),
     getBranch,

@@ -32,6 +32,7 @@ import {
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCopilotCleanupTests } from "./attempt-cleanup.test-support.js";
+import { registerCopilotWorkspaceTests } from "./attempt-workspace.test-support.js";
 import { runCopilotAttempt } from "./attempt.js";
 import {
   makeAssistantMessageEvent,
@@ -2138,62 +2139,13 @@ describe("runCopilotAttempt", () => {
       } as unknown as SandboxContext;
     }
 
-    it.each(["unsandboxed", "rw", "ro"] as const)(
-      "uses the correct SDK and tool workspace in %s mode",
-      async (mode) => {
-        const sandboxDir = `${tmpdir()}/copilot-sandbox-${Date.now()}`;
-        const workspaceDir =
-          mode === "ro" ? `${tmpdir()}/copilot-orig-${Date.now()}` : "C:\\workspace";
-        const cwd = mode === "unsandboxed" ? "C:\\workspace\\task-repo" : undefined;
-        const sandbox =
-          mode === "unsandboxed"
-            ? null
-            : makeSandboxStub({
-                workspaceAccess: mode,
-                ...(mode === "ro" ? { workspaceDir: sandboxDir } : {}),
-              });
-        const sdk = makeFakeSdk();
-        const createToolBridge = vi.fn(async (_input: CopilotToolBridgeInput) =>
-          createStubToolBridge(),
-        );
-        try {
-          await runCopilotAttempt(makeParams({ workspaceDir, ...(cwd ? { cwd } : {}) }), {
-            createToolBridge,
-            pool: makeFakePool(sdk),
-            resolveSandboxContextOverride: async () => sandbox,
-          });
-          const bridgeArgs = expectDefined(createToolBridge.mock.calls[0]?.[0], "bridge input");
-          const effectiveWorkspaceDir = mode === "ro" ? sandboxDir : workspaceDir;
-          expect(bridgeArgs.workspaceDir).toBe(effectiveWorkspaceDir);
-          expect(requireCreateSessionConfig(sdk).workingDirectory).toBe(
-            cwd ?? effectiveWorkspaceDir,
-          );
-          if (mode === "unsandboxed") {
-            expect(bridgeArgs.cwd).toBe(cwd);
-            expect(requireCreateSessionConfig(sdk).instructionDirectories).toEqual([workspaceDir]);
-          } else {
-            expect(bridgeArgs.sandbox).toBe(sandbox);
-            expect(bridgeArgs.spawnWorkspaceDir).toBe(mode === "ro" ? workspaceDir : undefined);
-            if (mode === "ro") {
-              expect(
-                workspaceBootstrapMock.loadCopilotWorkspaceInstructions,
-              ).toHaveBeenLastCalledWith(
-                expect.objectContaining({
-                  effectiveWorkspaceDir: sandboxDir,
-                  attempt: expect.objectContaining({ workspaceDir }),
-                }),
-              );
-              await expect(fsp.stat(sandboxDir)).resolves.toBeTruthy();
-            }
-          }
-        } finally {
-          if (mode === "ro") {
-            await fsp.rm(sandboxDir, { recursive: true, force: true });
-            await fsp.rm(workspaceDir, { recursive: true, force: true });
-          }
-        }
-      },
-    );
+    registerCopilotWorkspaceTests({
+      makeParams,
+      makeSandboxStub,
+      createStubToolBridge,
+      requireCreateSessionConfig,
+      workspaceBootstrapMock,
+    });
 
     it("applies sandbox workspace-only guards when hydrating prompt image refs", async () => {
       const stateDir = await fsp.mkdtemp(path.join(tmpdir(), "copilot-sandbox-image-policy-"));

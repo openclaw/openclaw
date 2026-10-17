@@ -109,7 +109,6 @@ vi.mock("../src/config.js", async (importOriginal) => {
 });
 
 import { resolveFaceTimeConfig } from "../src/config.js";
-export { FaceTimeHelperActionError } from "../src/helper-results.js";
 import { createFaceTimeRuntime } from "../src/runtime.js";
 
 export function completeAction(owner: Record<string, unknown>) {

@@ -308,7 +308,6 @@ it.each(["success", "failed-write"])(
     const admissionParams = {
       cfg,
       runId,
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       agentDedupeKeys: [`agent:${runId}`],
       context,
       io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
@@ -521,7 +520,11 @@ it.each(["success", "failed-write"])(
         "sessions.changed",
         expect.objectContaining({ runId, status: "killed", hasActiveRun: false, runtimeMs: 1_000 }),
         new Set(["session-observer"]),
-        { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
+        {
+          dropIfSlow: true,
+          sessionEventSubscriptionKeys: [target.sessionKey],
+          prepareSessionProjection: expect.any(Function),
+        },
       );
       await closeOpenClawAgentDatabasesAsync(state.root);
       closeOpenClawAgentDatabasesForTest(state.root);

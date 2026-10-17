@@ -51,7 +51,7 @@ async function mountWithCatalog(
   gateway.publish({
     hello: {
       auth: { role: "operator", scopes: ["operator.admin"] },
-      features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+      features: { methods: ["sessions.catalog.list"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
   const { sidebar, context } = await mountSidebar(
@@ -275,7 +275,7 @@ describe("AppSidebar catalog deletion", () => {
     },
   );
 
-  it.each(["event", "page"] as const)(
+  it.each(["refresh", "page"] as const)(
     "keeps a pending delete hidden through an earlier %s response and requests fresh rows",
     async (source) => {
       vi.useFakeTimers();
@@ -311,7 +311,7 @@ describe("AppSidebar catalog deletion", () => {
             cursors: { "gateway:local": "page-2" },
           });
         } else {
-          gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+          document.dispatchEvent(new Event("visibilitychange"));
           await vi.advanceTimersByTimeAsync(5_000);
         }
         expect(request.mock.calls.map(([method]) => method)).toEqual(["sessions.catalog.list"]);

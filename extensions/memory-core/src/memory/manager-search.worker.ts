@@ -6,6 +6,8 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
   isPostgresSqlConnection,
+  getDatabaseEngineSelection,
+  DatabaseSearchCapabilityUnavailableError,
   readCuratedMemoryTriggerCandidates,
   readCuratedProjectMemoryCandidates,
   MEMORY_INDEX_FTS_TABLE,
@@ -20,6 +22,8 @@ import {
   getNodeSqliteKysely,
   getAdmittedSqliteSchemaFacts,
   runSqliteDeferredTransactionSync,
+  tableExists,
+  tableHasColumn,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { serveWorkerTasks } from "openclaw/plugin-sdk/worker-task-server";
 import { readMemoryOriginsInWorker } from "../memory-entry-origin-reads.js";
@@ -29,10 +33,6 @@ import type {
 } from "../memory-entry-origins-task.js";
 import { readMemoryForgetIndexInWorker } from "../memory-forget-index-read.js";
 import type { ForgetIndexPlan, ForgetIndexReadInput } from "../memory-forget-index-task.js";
-import {
-  requireMemorySearchCapability,
-  requireMemorySearchDatabase,
-} from "../memory-search-database.js";
 import type { MemoryDatabaseAdmission } from "./manager-database-admission.js";
 import { readMemoryIndex, type MemoryIndexReadCommand } from "./manager-index-read.js";
 import {
@@ -60,7 +60,7 @@ export type MemorySearchWorkerInput =
   | ForgetIndexReadInput
   | MemoryOriginReadInput
   | { kind: "prewarm" }
-  | { kind: "presence"; databasePath: string }
+  | { kind: "presence"; databasePath: string; agentId?: string }
   | ({ databasePath: string; agentId: string } & (
       | { kind: "keyword"; query: MemoryKeywordWorkerQuery; includeIndexState?: boolean }
       | { kind: "vector"; query: MemoryVectorWorkerQuery }
@@ -105,34 +105,35 @@ export type MemorySearchWorkerOutput =
       body: QueryResult<Awaited<ReturnType<typeof searchKeyword>>>;
       path: QueryResult<Awaited<ReturnType<typeof searchPathKeyword>>>;
     }
-  | { kind: "vector"; rows: Awaited<ReturnType<typeof searchChunksByEmbedding>> };
+  | {
+      kind: "vector";
+      rows: Awaited<ReturnType<typeof searchChunksByEmbedding>>;
+      capabilityError?: { capability: "fullText" | "vector"; message: string };
+    };
 
 export type MemoryKeywordWorkerResult = Extract<MemorySearchWorkerOutput, { kind: "keyword" }>;
 
-/** Internal query entry; public admission stays closed until the remaining memory lifecycle is ported. */
+/** Both engine paths consume the worker's admitted connection. */
 export function executeMemorySearchWorkerQuery(
   database: EngineConnection,
   request: { kind: "vector"; query: MemoryVectorWorkerQuery },
-  activation?: { postgres: "test-only" },
 ): Promise<Extract<MemorySearchWorkerOutput, { kind: "vector" }>>;
 export function executeMemorySearchWorkerQuery(
   database: EngineConnection,
   request: { kind: "keyword"; query: MemoryKeywordWorkerQuery },
-  activation?: { postgres: "test-only" },
 ): Promise<MemoryKeywordWorkerResult>;
 export async function executeMemorySearchWorkerQuery(
   database: EngineConnection,
   request:
     | { kind: "vector"; query: MemoryVectorWorkerQuery }
     | { kind: "keyword"; query: MemoryKeywordWorkerQuery },
-  activation?: { postgres: "test-only" },
 ): Promise<MemoryKeywordWorkerResult | Extract<MemorySearchWorkerOutput, { kind: "vector" }>> {
-  if (activation?.postgres === "test-only" && isPostgresSqlConnection(database)) {
+  if (isPostgresSqlConnection(database)) {
     return request.kind === "vector"
       ? { kind: "vector", rows: await searchPostgresMemoryVector(database, request.query) }
       : { kind: "keyword", ...(await searchPostgresMemoryKeyword(database, request.query)) };
   }
-  const db = requireMemorySearchDatabase(database);
+  const db = database;
   return request.kind === "vector"
     ? { kind: "vector", rows: await searchChunksByEmbedding({ ...request.query, db }) }
     : { kind: "keyword", ...(await searchKeywordWithFallback({ ...request.query, db })) };
@@ -145,8 +146,24 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
     // A reply confirms module evaluation without opening an index or loading a provider.
     return { kind: "prewarm" };
   }
-  requireMemorySearchCapability();
   if (request.kind === "presence") {
+    if (getDatabaseEngineSelection()?.effectiveEngines.agent === "postgres") {
+      const result = withOpenClawAgentDatabaseReadOnly(
+        ({ db }) => {
+          if (!tableExists(db, MEMORY_INDEX_STATE_TABLE)) {
+            return false;
+          }
+          const facts = readMemoryDatabaseFacts(db);
+          return (
+            facts.meta !== null ||
+            facts.hasIndexedChunks ||
+            Boolean(db.prepare("SELECT 1 FROM memory_index_sources LIMIT 1").get())
+          );
+        },
+        { agentId: request.agentId ?? "main", path: request.databasePath },
+      );
+      return { kind: "presence", present: result.found && result.value };
+    }
     // This pre-manager probe also recognizes shipped memory-only databases.
     return { kind: "presence", present: inspectMemoryIndexPresenceInWorker(request.databasePath) };
   }
@@ -158,7 +175,7 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
   }
   if (request.kind === "recall-metadata") {
     const result = withOpenClawAgentDatabaseReadOnly(
-      ({ db }) => readMemoryRecallData(requireMemorySearchDatabase(db), request),
+      ({ db }) => readMemoryRecallData(db, request),
       { agentId: request.agentId, path: request.databasePath },
     );
     if (!result.found) {
@@ -198,22 +215,28 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
     throw new Error(`Memory search database unavailable: ${opened.reason}`);
   }
   try {
-    const db = requireMemorySearchDatabase(opened.database.db);
+    const db = opened.database.db;
     if (request.kind === "admission" || request.kind === "status") {
       const schema = getAdmittedSqliteSchemaFacts(db);
-      if (!schema) {
+      const postgres = isPostgresSqlConnection(db);
+      if (!schema && !postgres) {
         throw new Error("Memory reader requires admitted schema facts");
       }
-      const hasIndex = schema.tables.has(MEMORY_INDEX_STATE_TABLE);
+      const hasIndex = tableExists(db, MEMORY_INDEX_STATE_TABLE);
       if (request.kind === "admission") {
         return {
           kind: "admission",
           admission: {
             hasIndex,
-            ftsAvailable: hasIndex && schema.tables.has(MEMORY_INDEX_FTS_TABLE),
+            ...(postgres ? { engine: "postgres" as const } : {}),
+            ftsAvailable:
+              hasIndex &&
+              (postgres
+                ? tableHasColumn(db, "memory_index_chunks", "openclaw_search")
+                : schema!.tables.has(MEMORY_INDEX_FTS_TABLE)),
             facts: hasIndex ? readMemoryDatabaseFacts(db) : undefined,
             identity: readOpenClawAgentDatabaseIdentity(opened.database),
-            schemaVersion: schema.userVersion,
+            schemaVersion: schema?.userVersion,
           },
         };
       }
@@ -227,6 +250,9 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
       };
     }
     if (request.kind === "vector-load") {
+      if (isPostgresSqlConnection(db)) {
+        return { kind: "vector-load", result: { ok: true } };
+      }
       return {
         kind: "vector-load",
         result: await loadSqliteVecExtension({ db, extensionPath: request.extensionPath }),
@@ -269,7 +295,18 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
       };
     }
     if (request.kind === "vector") {
-      return await executeMemorySearchWorkerQuery(db, request);
+      try {
+        return await executeMemorySearchWorkerQuery(db, request);
+      } catch (error) {
+        if (error instanceof DatabaseSearchCapabilityUnavailableError) {
+          return {
+            kind: "vector",
+            rows: [],
+            capabilityError: { capability: error.capability, message: error.message },
+          };
+        }
+        throw error;
+      }
     }
     const indexState = request.includeIndexState ? readMemoryRetrievalIndexState(db) : undefined;
     const { body, path } = await executeMemorySearchWorkerQuery(db, request);

@@ -1,7 +1,6 @@
 import { kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-// DashScope-compatible video provider adapts DashScope-style generation APIs.
 import { toImageDataUrl } from "../image-generation/image-assets.js";
 import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import {
@@ -31,8 +30,6 @@ import type {
   VideoGenerationSourceAsset,
 } from "./types.js";
 
-// DashScope-compatible video helper for Wan-style async task APIs: submit JSON,
-// poll task status, then download generated video URLs with byte limits.
 export {
   DASHSCOPE_WAN_VIDEO_CAPABILITIES,
   DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,

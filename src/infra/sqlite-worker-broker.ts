@@ -168,6 +168,7 @@ export class SqliteWorkerBroker {
         },
         snapshot.signal,
         reusable ? () => this.openAdmitted<Operations>(snapshot, client, reusable) : undefined,
+        snapshot.sharedState,
       )
       .catch((error: unknown) => {
         this.clients.delete(client);
@@ -249,6 +250,12 @@ export class SqliteWorkerBroker {
       try {
         options.assertCurrent?.();
         options.signal?.throwIfAborted();
+        if (this.actors.has(key)) {
+          throw new SqliteWorkerError(
+            "SQLite database owner was admitted while acquiring a worker; retry open",
+            "overloaded",
+          );
+        }
       } catch (error) {
         return this.lifecycle.rejectSlotAdmission(slot, error);
       }
@@ -343,40 +350,7 @@ export class SqliteWorkerBroker {
       }
     } catch (error) {
       resumeScheduledMaintenance?.();
-      this.lifecycle.releaseActorReference(actor);
-      if (!actor.references) {
-        const errors = [error];
-        try {
-          if (actor.initialized) {
-            await this.lifecycle.closeActor(actor, options.maintenanceScope);
-          } else {
-            const nativeOpenMayHaveEntered =
-              actor.openDispatch.custody.postAttempted &&
-              !actor.openDispatch.openNotEntered &&
-              !actor.openDispatch.openRefused;
-            if (!nativeOpenMayHaveEntered && !actor.slot.failed) {
-              actor.backendClosed = true;
-              actor.markNativeStopped();
-              actor.cleanupState = "pending";
-            }
-            if (nativeOpenMayHaveEntered) {
-              // A throwing factory cannot prove that all partially opened native handles closed.
-              this.fail(actor.slot, error);
-              await actor.slot.exit;
-            }
-            this.lifecycle.forget(actor);
-            await this.lifecycle.retireEmpty(actor.slot);
-          }
-        } catch (cleanupError) {
-          errors.push(cleanupError);
-        }
-        if (errors.length > 1) {
-          throw new AggregateError(errors, "SQLite worker admission and cleanup failed", {
-            cause: error,
-          });
-        }
-      }
-      throw error;
+      return this.lifecycle.rejectActorAdmission(actor, error, options.maintenanceScope);
     }
     const releasePaths = retainSqliteWorkerAdmissionPathReferences(owned, admittedPaths);
     let referenceReleased = false;

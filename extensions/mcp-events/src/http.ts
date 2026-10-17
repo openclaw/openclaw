@@ -1,3 +1,4 @@
+import { sendJsonWithoutCharset } from "openclaw/plugin-sdk/http-response-runtime";
 import type { OpenClawPluginHttpRouteHandler } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createWebhookInFlightLimiter,
@@ -49,10 +50,8 @@ export function createCallbackHandler(
         destroyOnLimit: false,
       });
       const result = await service.receive(id, req.headers, Buffer.from(raw, "base64"));
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json");
       res.setHeader("Cache-Control", "no-store");
-      res.end(JSON.stringify(result));
+      sendJsonWithoutCharset(res, 200, result);
     } catch (error) {
       const status =
         error instanceof CallbackError

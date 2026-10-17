@@ -4,9 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIDecisionProvider } from "./decision-provider.js";
 
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), release: vi.fn() }));
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
-  fetchWithSsrFGuard: async (request: {
+vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
+  fetchWithProviderHttpGuard: async (request: {
     beforeRequest: () => void;
     url: string;
     init: RequestInit;

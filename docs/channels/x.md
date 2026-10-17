@@ -134,7 +134,21 @@ or another bot mention in the same X conversation. The host does not yet expose
 user-turn provenance to this adapter, so the approval rule is enforced through
 the session's instructions rather than a user-turn check at send time.
 
-The X front-door agent continues to reply directly to incoming mentions.
+The X front-door agent continues to receive incoming mentions in the original
+conversation session. Maintainer turns include bounded references to recent
+visible work sessions previously started by that front door for the same X
+account and conversation. References contain only a native session key and the
+origin post URL, not work-session titles or transcripts. Deleted, archived,
+incognito, draft, and inaccessible sessions are omitted. Guest turns never
+receive these references.
+
+Before starting new work, the agent should distinguish a continuation from an
+unrelated task in the same thread. Continuations use available, authorized
+session tools; a reference is not a message delivery or an access grant. If the
+current tool policy does not provide a continuation tool, the agent must not
+claim it resumed work or start a duplicate as a workaround. Normal failure
+reporting applies. This context does not automatically route follow-ups, change
+session visibility, or waive manual approval for X replies.
 
 ## Reply outcomes and failures
 

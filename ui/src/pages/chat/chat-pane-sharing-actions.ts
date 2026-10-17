@@ -56,7 +56,10 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
   };
 
   protected setSessionSharingState(cacheKey: string, state: ChatSessionSharingState): void {
-    this.sessionSharingStates = new Map(this.sessionSharingStates).set(cacheKey, state);
+    this.collaboration.sharingStates = new Map(this.collaboration.sharingStates).set(
+      cacheKey,
+      state,
+    );
   }
 
   protected sessionSharingAgentId(sessionKey: string): string | undefined {
@@ -106,7 +109,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       return;
     }
     const cacheKey = this.sessionSharingCacheKey(currentRow.key);
-    const current = this.sessionSharingStates.get(cacheKey);
+    const current = this.collaboration.sharingStates.get(cacheKey);
     if (current?.loading && !force) {
       return;
     }
@@ -117,7 +120,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     // Object identity also owns this key's request slot: same-key session
     // replacement or a forced reload must not let an older request win.
     const loadingState = { ...current, loading: true, error: undefined };
-    const ownsLoadingState = () => this.sessionSharingStates.get(cacheKey) === loadingState;
+    const ownsLoadingState = () => this.collaboration.sharingStates.get(cacheKey) === loadingState;
     this.setSessionSharingState(cacheKey, loadingState);
     let next: ChatSessionSharingState;
     try {
@@ -133,9 +136,9 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     }
     if (!this.ownsSessionSharing(scope, currentRow) || !ownsLoadingState()) {
       if (this.isConnectionScopeCurrent(scope) && ownsLoadingState()) {
-        const sharingStates = new Map(this.sessionSharingStates);
+        const sharingStates = new Map(this.collaboration.sharingStates);
         sharingStates.delete(cacheKey);
-        this.sessionSharingStates = sharingStates;
+        this.collaboration.sharingStates = sharingStates;
       }
       return;
     }
@@ -152,7 +155,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       return;
     }
     this.setSessionSharingState(key, {
-      ...(this.sessionSharingStates.get(key) ?? { loading: false }),
+      ...(this.collaboration.sharingStates.get(key) ?? { loading: false }),
       loading: false,
       error: formatUiError(error),
     });
@@ -179,7 +182,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       this.currentSessionSharingRow(scope, currentRow)?.sessionId === expectedSessionId &&
       areUiSessionKeysEquivalent(scope.state.sessionKey, currentRow.key);
     const cacheKey = this.sessionSharingCacheKey(currentRow.key);
-    const previous = this.sessionSharingStates.get(cacheKey);
+    const previous = this.collaboration.sharingStates.get(cacheKey);
     if (!access() || !isCurrent() || previous?.loading) {
       return;
     }
@@ -235,7 +238,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
         this.failSharing(scope, cacheKey, currentRow.key, error);
       }
     } finally {
-      if (this.sessionSharingStates.get(cacheKey) === pending) {
+      if (this.collaboration.sharingStates.get(cacheKey) === pending) {
         this.setSessionSharingState(cacheKey, { ...previous, loading: false });
       }
     }
@@ -247,7 +250,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     if (!scope || !currentRow) {
       return;
     }
-    const share = this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key))?.result
+    const share = this.collaboration.sharingStates.get(this.sessionSharingCacheKey(row.key))?.result
       ?.publicShare;
     const expectedSessionId = currentRow.sessionId;
     if (!share || !expectedSessionId) {

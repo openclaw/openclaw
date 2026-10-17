@@ -79,7 +79,6 @@ it("keeps MCP App raw details reachable from its widget menu", async () => {
   expect(expanded()).toBe("true");
   expect(rawAction()?.textContent).toContain("Hide raw details");
   expect(rawAction()?.getAttribute("aria-label")).toBe("Hide raw details");
-  expect(rawAction()?.getAttribute("aria-label")).toBe("Hide raw details");
   await selectRawDetails();
   expect(expanded()).toBe("false");
   await openMenu();

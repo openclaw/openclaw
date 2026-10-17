@@ -2,10 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
-import {
-  reconcileCodexComputerUseStartArtifacts,
-  resolveCodexAppServerHomeDir,
-} from "./auth-bridge.js";
+import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
+import { reconcileCodexComputerUseStartArtifacts } from "./computer-use-artifacts.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { resolveMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
 
@@ -94,10 +92,15 @@ it("review: keeps cache identity unchanged before effective native policy is ava
     await reconcileCodexComputerUseStartArtifacts({
       startOptions,
       agentDir,
+      desktopGeneration: { epoch: 7, fingerprint: "fixture-desktop" },
+      forceCacheRefresh: true,
       pluginConfig: {
         computerUse: { enabled: true, autoInstall: true, pluginCacheMode: "shared" },
       },
     });
+    expect(computerUseServiceMocks.ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith(
+      expect.objectContaining({ desktopFingerprint: "fixture-desktop", forceRefresh: true }),
+    );
     expect(computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache).toHaveBeenCalledWith(
       expect.objectContaining({
         config: expect.objectContaining({

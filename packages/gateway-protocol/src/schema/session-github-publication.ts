@@ -63,10 +63,46 @@ export const GitHubPublicationActionSchema = closedObject({
     Type.Union([Type.Literal("merge"), Type.Literal("squash"), Type.Literal("rebase")]),
   ),
 });
-export const SessionGitHubActionParamsSchema = closedObject({
-  ...GitHubPublicationActionSchema.properties,
-  sessionKey: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
+export const GitHubBaseRefreshSchema = closedObject({
+  action: Type.Literal("refresh_base"),
+  conflictsResolved: Type.Optional(Type.Boolean()),
+  // Equality check against the pending integration, never a ref selector.
+  baseCommit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}(?:[a-f0-9]{24})?$" })),
+});
+export const GitHubPublicationEditSchema = closedObject({
+  action: Type.Literal("edit"),
+  requestId: Type.Optional(PersonalGitHubGenerationSchema),
+  expectedHeadCommit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}$" })),
+  title: Type.Optional(GitHubPublicationTitleSchema),
+  body: Type.Optional(Type.String({ maxLength: 64 * 1024 })),
+  expectedTitle: Type.Optional(GitHubPublicationTitleSchema),
+  expectedBody: Type.Optional(Type.String({ maxLength: 64 * 1024 })),
+});
+export const SessionGitHubActionParamsSchema = Type.Union([
+  closedObject({
+    ...GitHubPublicationEditSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    ...GitHubPublicationActionSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    ...GitHubBaseRefreshSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
+]);
+export const SessionGitHubBaseRefreshResultSchema = closedObject({
+  status: stringLiteralUnion(["current", "refreshed", "conflicts"]),
+  repository: NonEmptyString,
+  baseBranch: NonEmptyString,
+  baseCommit: NonEmptyString,
+  changedPaths: Type.Array(Type.String()),
+  conflictPaths: Type.Array(Type.String()),
+  review: Type.Optional(closedObject({ mode: Type.Literal("local"), base: NonEmptyString })),
 });
 
 const SessionGitHubPublicationBaseSchema = {
@@ -114,6 +150,8 @@ export const SessionGitHubActionResultSchema = closedObject({
   mergeCommit: Type.Union([Type.String(), Type.Null()]),
   mergeable: Type.Union([Type.Boolean(), Type.Null()]),
   mergeState: Type.String(),
+  title: Type.Optional(Type.String()),
+  body: Type.Optional(Type.String()),
 });
 export const SessionGitHubPublicationFailedSchema = closedObject({
   ...SessionGitHubPublicationBaseSchema,
@@ -202,8 +240,10 @@ export const SessionGitHubOptionsResultSchema = closedObject({
   latestShared: Type.Union([SessionGitHubStatusResultSchema, Type.Null()]),
 });
 
+export type SessionGitHubBaseRefreshResult = Static<typeof SessionGitHubBaseRefreshResultSchema>;
 export type GitHubPublicationPublisher = Static<typeof GitHubPublicationPublisherSchema>;
 export type GitHubPublicationAction = Static<typeof GitHubPublicationActionSchema>;
+export type GitHubPublicationEdit = Static<typeof GitHubPublicationEditSchema>;
 export type SessionGitHubActionParams = Static<typeof SessionGitHubActionParamsSchema>;
 export type SessionGitHubActionResult = Static<typeof SessionGitHubActionResultSchema>;
 export type GitHubPublicationSelection = Static<typeof GitHubPublicationSelectionSchema>;

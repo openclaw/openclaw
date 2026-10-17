@@ -2,6 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, it, vi } from "vitest";
+import * as processRunner from "./crabbox-process.js";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import { resolveCrabboxProvisionProfile } from "./crabbox-worker-profile.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
@@ -34,47 +35,47 @@ function fixture(
   const calls: string[][] = [];
   let captures = 0;
   const warn = vi.fn();
+  vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(async (argv) => {
+    calls.push(argv);
+    const override = onCommand?.(argv);
+    if (override) {
+      return override;
+    }
+    if (failCreate && argv[2] === "create") {
+      return commandResult({ code: null, killed: true, termination: "timeout" });
+    }
+    if (argv[2] === "create") {
+      captures += 1;
+      return checkpointResult(
+        captures === 1 ? CHECKPOINT_ID : `${CHECKPOINT_ID}_${captures}`,
+        argv[argv.indexOf("--id") + 1]!,
+        "available",
+      );
+    }
+    if (argv[2] === "inspect") {
+      return jsonResult({
+        localState: "metadata_available",
+        providerState: "available",
+        nextAction: "fork_or_delete",
+      });
+    }
+    if (argv[2] === "fork") {
+      return jsonResult({
+        checkpointId: argv[3],
+        leaseId: argv[argv.indexOf("--lease-id") + 1],
+        slug: argv[argv.indexOf("--slug") + 1],
+        provider: "aws",
+        workdir: "/workspace",
+      });
+    }
+    return commandResult();
+  });
   const manager = () =>
     createCrabboxWarmImageManager({
       state: crabboxState,
       warn,
       policy,
       prepareCapture,
-      runCommand: async (argv) => {
-        calls.push(argv);
-        const override = onCommand?.(argv);
-        if (override) {
-          return override;
-        }
-        if (failCreate && argv[2] === "create") {
-          return commandResult({ code: null, killed: true, termination: "timeout" });
-        }
-        if (argv[2] === "create") {
-          captures += 1;
-          return checkpointResult(
-            captures === 1 ? CHECKPOINT_ID : `${CHECKPOINT_ID}_${captures}`,
-            argv[argv.indexOf("--id") + 1]!,
-            "available",
-          );
-        }
-        if (argv[2] === "inspect") {
-          return jsonResult({
-            localState: "metadata_available",
-            providerState: "available",
-            nextAction: "fork_or_delete",
-          });
-        }
-        if (argv[2] === "fork") {
-          return jsonResult({
-            checkpointId: argv[3],
-            leaseId: argv[argv.indexOf("--lease-id") + 1],
-            slug: argv[argv.indexOf("--slug") + 1],
-            provider: "aws",
-            workdir: "/workspace",
-          });
-        }
-        return commandResult();
-      },
     });
   const context = (id: string, projectKey?: string) => ({
     binary: "crabbox",
@@ -332,6 +333,53 @@ it("leaves unrelated expired generations for maintenance during allocation", asy
   ]);
   expect(store.lookup("unrelated")).toBeUndefined();
 });
+
+it.each([
+  { providerState: "missing", retired: true },
+  { providerState: "available", retired: false },
+])(
+  "after a failed fork, retires the image only when it is $providerState",
+  async ({ providerState, retired }) => {
+    let forkFails = false;
+    const { owner, context, calls } = fixture(false, (argv) => {
+      if (!forkFails) {
+        return undefined;
+      }
+      if (argv[2] === "fork") {
+        return commandResult({ code: 2, stderr: `checkpoint ${CHECKPOINT_ID} not found` });
+      }
+      return argv[2] === "inspect"
+        ? commandResult({
+            stdout: JSON.stringify({
+              localState: "metadata_available",
+              providerState,
+              nextAction: providerState === "missing" ? "forget" : "fork_or_delete",
+            }),
+          })
+        : undefined;
+    });
+    await publish(owner, context("cbx_source"));
+    forkFails = true;
+
+    const failed = context("cbx_failed");
+    await expect(owner.allocate(failed)).rejects.toThrow("not found");
+    expect(record()?.operation).toEqual(
+      retired ? { type: "retire", checkpointId: CHECKPOINT_ID } : undefined,
+    );
+
+    if (!retired) {
+      return;
+    }
+    calls.length = 0;
+    expect(await owner.allocate(context("cbx_next"))).toEqual({ kind: "cold" });
+    expect(calls.some((argv) => argv[2] === "fork")).toBe(false);
+    // The failed lease still holds the checkpoint, so deletion waits for its release.
+    expect(calls.some((argv) => argv[2] === "delete")).toBe(false);
+    await owner.release(failed);
+    expect(calls.some((argv) => argv[2] === "delete" && argv[3] === CHECKPOINT_ID)).toBe(true);
+    expect(record()?.image).toBeUndefined();
+  },
+);
 
 it("returns false and permits enrollment only after an unsupported capture receipt settles its claim", async () => {
   const { owner, context } = fixture(false, (argv) =>

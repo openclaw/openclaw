@@ -12,6 +12,7 @@ import type {
 } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { ChatPendingInputView } from "./chat-pending-inputs.types.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import type { ChatRunError, LocalTerminalReconcile } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
@@ -47,6 +48,7 @@ export type ChatState = StreamCausalBoundaryState & {
   chatLoading: boolean;
   chatHistoryPagination: ChatHistoryPagination;
   chatMessages: unknown[];
+  chatPendingInputs?: ChatPendingInputView;
   chatMessagesBySession?: ChatMessageCache;
   chatHistoryCursor?: ChatHistoryCursor;
   /** Active leaf of the history snapshot currently rendered by this pane. */
@@ -97,7 +99,6 @@ export type ChatState = StreamCausalBoundaryState & {
   chatBranches?: SessionBranch[];
   chatBranchesSessionKey?: string | null;
   chatBranchesConnectionEpoch?: number | null;
-  requestUpdate?: () => void;
   /** Reports transcript loading edges; see CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT. */
   transcriptLoadingChanged?: () => void;
   /** Reports transient read recovery to the shell connection indicator. */

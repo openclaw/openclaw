@@ -10,13 +10,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
 } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
-import { createToolsInvokeHttpTestServer } from "./tools-invoke-http.test-support.js";
+import {
+  createToolsInvokeHttpTestServer,
+  withToolsInvokeTestState,
+} from "./tools-invoke-http.test-support.js";
 import { invokeGatewayTool } from "./tools-invoke-shared.js";
 
 const runtime = vi.hoisted(() => {
@@ -85,7 +87,7 @@ const postToolsInvoke = async (params: {
   });
 
 it("refuses tool execution when its memory session closes during the before-tool hook", async () => {
-  await withOpenClawTestState({ label: "memory-tool-closure" }, async () => {
+  await withToolsInvokeTestState({ label: "memory-tool-closure" }, async () => {
     const sessionKey = "agent:main:dashboard:incognito-tool-closure";
     runtime.cfg = { agents: { entries: { main: {} } } };
     await upsertSessionEntryCore(
@@ -190,7 +192,7 @@ describe.each(["HTTP", "WebSocket"] as const)(
 
     it.each(cases)("$label", async (testCase) => {
       const stateOptions = { label: "standalone-tool-role", prepareProfileCatalog: true };
-      await withOpenClawTestState(stateOptions, async () => {
+      await withToolsInvokeTestState(stateOptions, async () => {
         const email = "standalone-operator@example.test";
         const profile = ensureProfileForEmail(email);
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -339,7 +341,7 @@ it.each([
 ] as const)(
   "keeps the result boundary for %s (%s, revoked=%s)",
   async (action, deliveryStatus, revokeCaller, expectedStatus) => {
-    await withOpenClawTestState({ label: "standalone-tool-creation" }, async () => {
+    await withToolsInvokeTestState({ label: "standalone-tool-creation" }, async () => {
       const sessionKey = "agent:main:outbound-first-contact";
       let callerCurrent = true;
       runtime.cfg = { agents: { entries: { main: {} } } };

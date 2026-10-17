@@ -12,10 +12,10 @@ import {
   sendZaloLink,
 } from "./zalo-js.js";
 
-vi.mock("./send.js", () => ({
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
   sendMessageZalouser: vi.fn(),
   sendImageZalouser: vi.fn(),
-  sendReactionZalouser: vi.fn(),
 }));
 
 vi.mock("./zalo-js.js", () => ({
@@ -58,7 +58,10 @@ describe("executeZalouserTool", () => {
   });
 
   it("defaults send routing from ambient deliveryContext target", async () => {
-    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-ambient" } as never);
+    mockSendMessage.mockResolvedValueOnce({
+      messageId: "m-ambient",
+      receipt: createZalouserSendReceipt({ messageId: "m-ambient" }),
+    });
     const tool = createZalouserTool({
       deliveryContext: {
         channel: "zalouser",
@@ -79,7 +82,10 @@ describe("executeZalouserTool", () => {
   });
 
   it("keeps explicit threadId over ambient delivery defaults", async () => {
-    mockSendMessage.mockResolvedValueOnce({ ok: true, messageId: "m-explicit" } as never);
+    mockSendMessage.mockResolvedValueOnce({
+      messageId: "m-explicit",
+      receipt: createZalouserSendReceipt({ messageId: "m-explicit" }),
+    });
     const tool = createZalouserTool({
       deliveryContext: {
         channel: "zalouser",
@@ -121,7 +127,7 @@ describe("executeZalouserTool", () => {
   });
 
   it("returns tool error when send action fails", async () => {
-    mockSendMessage.mockResolvedValueOnce({ ok: false, error: "blocked" } as never);
+    mockSendMessage.mockRejectedValueOnce(new Error("blocked"));
     const result = await executeZalouserTool("tool-1", {
       action: "send",
       threadId: "t-1",
@@ -156,7 +162,10 @@ describe("executeZalouserTool", () => {
   });
 
   it("routes image and link actions to correct helpers", async () => {
-    mockSendImage.mockResolvedValueOnce({ ok: true, messageId: "img-1" } as never);
+    mockSendImage.mockResolvedValueOnce({
+      messageId: "img-1",
+      receipt: createZalouserSendReceipt({ messageId: "img-1" }),
+    });
     const imageResult = await executeZalouserTool("tool-1", {
       action: "image",
       threadId: "g-1",
@@ -172,7 +181,10 @@ describe("executeZalouserTool", () => {
     });
     expect(extractDetails(imageResult)).toEqual({ success: true, messageId: "img-1" });
 
-    mockSendLink.mockResolvedValueOnce({ ok: true, messageId: "lnk-1" } as never);
+    mockSendLink.mockResolvedValueOnce({
+      messageId: "lnk-1",
+      receipt: createZalouserSendReceipt({ messageId: "lnk-1" }),
+    });
     const linkResult = await executeZalouserTool("tool-1", {
       action: "link",
       threadId: "t-2",
@@ -203,7 +215,10 @@ describe("executeZalouserTool", () => {
   ])(
     "uses only the authoritative matching media account: $name",
     async ({ deliveryContext, profile, bytes }) => {
-      mockSendImage.mockResolvedValueOnce({ ok: true, messageId: "cap" } as never);
+      mockSendImage.mockResolvedValueOnce({
+        messageId: "cap",
+        receipt: createZalouserSendReceipt({ messageId: "cap" }),
+      });
       const tool = createZalouserTool({
         runtimeConfig: {
           channels: {

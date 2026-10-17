@@ -180,7 +180,7 @@ function createBoundary(action: "update" | "triage" = "update") {
     ${MANAGED_HANDOFF_NATIVE_SCOPE_SOURCE}
     ${HANDOFF_OWNED_COMMAND_SCRIPT}
     ${diagnosticSource}
-    ${sourceBetween("function cleanupSensitiveFiles()", "function assertStateDatabaseWriteAllowed")}
+    ${sourceBetween("function cleanupSensitiveFiles()", "${MANAGED_HANDOFF_SQLITE_SOURCE}")}
     managedUpdateLease = initialLease;
     if (params.action === "update") {
       runLedger = {};

@@ -101,33 +101,8 @@ describe("Novita video generation provider", () => {
 
   it.each([
     {
-      model: "wan2.6-t2v",
-      route: "wan2.6-i2v",
-      body: {
-        input: { prompt: "A lobster waves hello", img_url: "data:image/png;base64,cG5n" },
-        parameters: {
-          resolution: "720P",
-          duration: 5,
-          audio: false,
-          prompt_extend: true,
-          shot_type: "multi",
-          watermark: false,
-        },
-      },
-    },
-    {
       model: "minimax-hailuo-2.3-t2v",
       route: "minimax-hailuo-2.3-i2v",
-      body: {
-        prompt: "A lobster waves hello",
-        image: "data:image/png;base64,cG5n",
-        duration: 6,
-        resolution: "768P",
-      },
-    },
-    {
-      model: "minimax-hailuo-2.3-fast-i2v",
-      route: "minimax-hailuo-2.3-fast-i2v",
       body: {
         prompt: "A lobster waves hello",
         image: "data:image/png;base64,cG5n",

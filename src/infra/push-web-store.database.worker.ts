@@ -1,6 +1,5 @@
 import type { WebPushDevicePreferences } from "../../packages/gateway-protocol/src/schema/push.js";
 import { updateConfigMachineState } from "../state/config-machine-state-write.js";
-import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -583,12 +582,6 @@ export function deleteWebPushSubscriptionIfCurrentInDatabase(params: {
     }
     return deleted;
   }, webPushDatabaseOptions(params.database));
-}
-
-export function readPersistedVapidKeyPairInDatabase(
-  options: OpenClawStateDatabaseOptions,
-): VapidKeyPair | null {
-  return readConfigMachineState<VapidKeyPair>(WEB_PUSH_VAPID_STATE_KEY, options) ?? null;
 }
 
 /** First committed keypair wins so concurrent gateway bootstraps share one signing identity. */

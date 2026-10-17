@@ -3,23 +3,13 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
-import {
-  activateSwarmRun,
-  bindSwarmRunReservation,
-  holdQueuedSwarmRun,
-  releaseSwarmRun,
-  reserveSwarmRun,
-} from "../agents/subagents/swarm/swarm-scheduler.js";
+import * as swarmScheduler from "../agents/subagents/swarm/swarm-scheduler.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.operation.js";
 import { markReplyOperationExecutionStarted } from "../auto-reply/reply/reply-run-registry.state.js";
 import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
-import {
-  claimAgentRunContext,
-  getAgentRunLifecycleGeneration,
-  releaseAgentRunContext,
-} from "../infra/agent-run-registry.js";
+import * as runRegistry from "../infra/agent-run-registry.js";
 import { setDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
@@ -33,18 +23,10 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
-import {
-  completeQueuedChatTurn,
-  registerQueuedChatTurn,
-  retireQueuedChatTurnCancellation,
-} from "./chat-queued-turns.js";
+import * as chatQueue from "./chat-queued-turns.js";
 import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
 import * as activeRuns from "./server-methods/session-active-runs.js";
-import {
-  initializeSessionReadContext,
-  listSessions,
-  requestContext,
-} from "./server-methods/sessions-read-cache.test-support.js";
+import * as sessionReads from "./server-methods/sessions-read-cache.test-support.js";
 import { startGatewayWorkMetrics } from "./server-work-metrics.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
@@ -57,8 +39,12 @@ afterEach(() => {
 
 it("bounds live projection over idle history through admission, progress, drain, and disposal", async (test) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const config = { agents: { entries: { main: {} } } };
-    const context = requestContext(config);
+    const context = sessionReads.requestContext({ agents: { entries: { main: {} } } });
+    const session = (sessionId: string) => ({
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+    });
     context.chatQueuedTurns = new Map();
     const names = ["chat", "reply", ...Array.from({ length: 512 }, (_, i) => `idle-${i}`)];
     const sessionKeys = names.map((name) => `agent:main:${name}`);
@@ -76,7 +62,7 @@ it("bounds live projection over idle history through admission, progress, drain,
         result: undefined,
       }),
     });
-    await initializeSessionReadContext(context);
+    await sessionReads.initializeSessionReadContext(context);
     const projection = getSessionRowProjection(context)!;
     expect(projection.selectEntries({ sortBy: null }, true)).toHaveLength(514);
     const prepareOriginal = projection.prepareSelection.bind(projection);
@@ -105,37 +91,26 @@ it("bounds live projection over idle history through admission, progress, drain,
     const chat = registerChatAbortController({
       chatAbortControllers: context.chatAbortControllers,
       runId: "chat-run",
-      sessionId: "chat",
-      sessionKey: "agent:main:chat",
-      agentId: "main",
+      ...session("chat"),
       timeoutMs: 60_000,
     });
-    const reply = createReplyOperation({
-      sessionKey: "agent:main:reply",
-      sessionId: "reply",
-      agentId: "main",
-      resetTriggered: false,
-    });
+    const reply = createReplyOperation({ ...session("reply"), resetTriggered: false });
     const queued = new AbortController();
-    registerQueuedChatTurn({
+    chatQueue.registerQueuedChatTurn({
       chatQueuedTurns: context.chatQueuedTurns,
       runId: "queued-turn",
       controller: queued,
-      sessionId: "reply",
-      sessionKey: "agent:main:reply",
-      agentId: "main",
+      ...session("reply"),
     });
-    let claim = claimAgentRunContext(
+    let claim = runRegistry.claimAgentRunContext(
       "agent-run",
-      {
-        agentId: "main",
-        sessionKey: "agent:main:reply",
-        sessionId: "reply",
-        projectSessionActive: true,
-      },
+      { ...session("reply"), projectSessionActive: true },
       { trackOwner: true, ownsContext: true },
     );
-    const releaseWait = registerAgentRunCapacityWait("agent-run", getAgentRunLifecycleGeneration());
+    const releaseWait = registerAgentRunCapacityWait(
+      "agent-run",
+      runRegistry.getAgentRunLifecycleGeneration(),
+    );
     await vi.runOnlyPendingTimersAsync();
     expect(prepare).not.toHaveBeenCalled();
     let latest: GatewayWorkMetricsSnapshot | undefined;
@@ -146,16 +121,18 @@ it("bounds live projection over idle history through admission, progress, drain,
         next.resolve(snapshot);
       }
     });
-    const read = async (expected: GatewayWorkMetricsSnapshot) => {
+    const read = async (
+      running: number,
+      queuedSessions: number,
+      work = { agentRuns: 0, chatRuns: 0, queuedTurns: 0 },
+    ) => {
       inspectedKeys.clear();
       await vi.runOnlyPendingTimersAsync();
       const snapshot = await withinTest(next.promise, test.signal);
       next = createDeferredCore<GatewayWorkMetricsSnapshot>();
-      expect(snapshot.sessions.running).toBe(expected.sessions.running);
-      expect(snapshot.sessions.queued).toBe(expected.sessions.queued);
-      expect(snapshot.work).toEqual(expected.work);
-      expect(inspectedKeys.size).toBe(expected.sessions.running + expected.sessions.queued);
-      const list = await listSessions({
+      expect(snapshot).toEqual({ sessions: { running, queued: queuedSessions }, work });
+      expect(inspectedKeys.size).toBe(running + queuedSessions);
+      const list = await sessionReads.listSessions({
         client,
         context,
         request: { activeOnly: true, includeGlobal: true, includeUnknown: true, limit: 100 },
@@ -164,9 +141,7 @@ it("bounds live projection over idle history through admission, progress, drain,
         running: list.sessions.filter((row) => row.status !== "queued").length,
         queued: list.sessions.filter((row) => row.status === "queued").length,
       });
-      const { agentRuns, chatRuns, queuedTurns } =
-        createGatewayActiveWorkSnapshot(inspectors).counts;
-      expect(snapshot.work).toEqual({ agentRuns, chatRuns, queuedTurns });
+      expect(createGatewayActiveWorkSnapshot(inspectors).counts).toMatchObject(snapshot.work);
     };
     try {
       setDiagnosticsEnabledForProcess(false);
@@ -176,30 +151,19 @@ it("bounds live projection over idle history through admission, progress, drain,
       expect(latest).toBeUndefined();
       setDiagnosticsEnabledForProcess(true);
       notifyGatewayWorkMetricsChanged();
-      await read({
-        sessions: { running: 1, queued: 1 },
-        work: { agentRuns: 1, chatRuns: 1, queuedTurns: 1 },
-      });
+      const liveWork = { agentRuns: 1, chatRuns: 1, queuedTurns: 1 };
+      await read(1, 1, liveWork);
       releaseWait?.();
       markReplyOperationExecutionStarted(reply);
-      await read({
-        sessions: { running: 2, queued: 0 },
-        work: { agentRuns: 1, chatRuns: 1, queuedTurns: 1 },
-      });
-      retireQueuedChatTurnCancellation(context.chatQueuedTurns, "queued-turn", queued);
+      await read(2, 0, liveWork);
+      chatQueue.retireQueuedChatTurnCancellation(context.chatQueuedTurns, "queued-turn", queued);
       queued.abort();
-      await read({
-        sessions: { running: 2, queued: 0 },
-        work: { agentRuns: 1, chatRuns: 1, queuedTurns: 0 },
-      });
+      await read(2, 0, { ...liveWork, queuedTurns: 0 });
       reply.complete();
       chat.cleanup();
-      releaseAgentRunContext("agent-run", claim!);
+      runRegistry.releaseAgentRunContext("agent-run", claim!);
       claim = undefined;
-      await read({
-        sessions: { running: 0, queued: 0 },
-        work: { agentRuns: 0, chatRuns: 0, queuedTurns: 0 },
-      });
+      await read(0, 0);
 
       const swarm = {
         runId: "swarm-run",
@@ -215,7 +179,7 @@ it("bounds live projection over idle history through admission, progress, drain,
       } satisfies SubagentRunRecord;
       subagentRuns.set(swarm.runId, swarm);
       expect(
-        reserveSwarmRun({
+        swarmScheduler.reserveSwarmRun({
           groupId: swarm.groupId,
           runId: swarm.runId,
           maxConcurrent: 1,
@@ -226,43 +190,31 @@ it("bounds live projection over idle history through admission, progress, drain,
       const stopChanges = sessionChanges.subscribe(changes);
       const removal = createDeferredCore();
       const launch = vi.fn(async () => {});
-      let hold: ReturnType<typeof holdQueuedSwarmRun>;
+      let hold: ReturnType<typeof swarmScheduler.holdQueuedSwarmRun>;
       try {
-        bindSwarmRunReservation(swarm.runId, getSubagentRunRuntimeKey(swarm));
-        await read({
-          sessions: { running: 1, queued: 0 },
-          work: { agentRuns: 0, chatRuns: 0, queuedTurns: 0 },
-        });
-        activateSwarmRun({
+        swarmScheduler.bindSwarmRunReservation(swarm.runId, getSubagentRunRuntimeKey(swarm));
+        await read(1, 0);
+        swarmScheduler.activateSwarmRun({
           groupId: swarm.groupId,
           runId: swarm.runId,
           start: launch,
           onStartFailure: () => true,
           onRemoved: () => removal.promise,
         });
-        await read({
-          sessions: { running: 0, queued: 1 },
-          work: { agentRuns: 0, chatRuns: 0, queuedTurns: 0 },
-        });
-        hold = holdQueuedSwarmRun(swarm.runId);
-        await read({
-          sessions: { running: 1, queued: 0 },
-          work: { agentRuns: 0, chatRuns: 0, queuedTurns: 0 },
-        });
+        await read(0, 1);
+        hold = swarmScheduler.holdQueuedSwarmRun(swarm.runId);
+        await read(1, 0);
         expect(hold?.withdraw()).toBe(true);
-        await read({
-          sessions: { running: 0, queued: 0 },
-          work: { agentRuns: 0, chatRuns: 0, queuedTurns: 0 },
-        });
+        await read(0, 0);
         expect(launch).not.toHaveBeenCalled();
         expect(changes).not.toHaveBeenCalled();
       } finally {
         stopChanges();
         removal.resolve();
-        hold ??= holdQueuedSwarmRun(swarm.runId);
+        hold ??= swarmScheduler.holdQueuedSwarmRun(swarm.runId);
         hold?.withdraw();
         await hold?.release();
-        releaseSwarmRun("occupied-slot");
+        swarmScheduler.releaseSwarmRun("occupied-slot");
         subagentRuns.delete(swarm.runId);
       }
 
@@ -271,7 +223,7 @@ it("bounds live projection over idle history through admission, progress, drain,
         await held.promise;
         await prepareOriginal(...args);
       });
-      completeQueuedChatTurn(context.chatQueuedTurns, "queued-turn", queued);
+      chatQueue.completeQueuedChatTurn(context.chatQueuedTurns, "queued-turn", queued);
       await vi.runOnlyPendingTimersAsync();
       const stopping = source.stop();
       expect(latest).toBeUndefined();
@@ -283,10 +235,10 @@ it("bounds live projection over idle history through admission, progress, drain,
       await source.stop();
       chat.cleanup();
       reply.complete();
-      completeQueuedChatTurn(context.chatQueuedTurns, "queued-turn", queued);
+      chatQueue.completeQueuedChatTurn(context.chatQueuedTurns, "queued-turn", queued);
       releaseWait?.();
       if (claim) {
-        releaseAgentRunContext("agent-run", claim);
+        runRegistry.releaseAgentRunContext("agent-run", claim);
       }
     }
   });

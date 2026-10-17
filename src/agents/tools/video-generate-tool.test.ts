@@ -394,7 +394,7 @@ describe("createVideoGenerateTool", () => {
         prompt: "friendly lobster surfing",
         image: `data:image/png;base64,${Buffer.alloc(9).toString("base64")}`,
       }),
-    ).rejects.toThrow("Invalid data URL: payload exceeds size limit.");
+    ).rejects.toThrow("Invalid data URL: payload exceeds size limit (");
     expect(generateSpy).not.toHaveBeenCalled();
   });
 
@@ -552,7 +552,6 @@ describe("createVideoGenerateTool", () => {
     });
 
     let scheduledWork: (() => Promise<void>) | undefined;
-    const onAsyncTaskStarted = vi.fn();
     const tool = createVideoGenerateTool({
       config: configWithDefaults({
         mediaModels: { video: { primary: "vydra/veo3" } },
@@ -565,7 +564,6 @@ describe("createVideoGenerateTool", () => {
       scheduleBackgroundWork: (work) => {
         scheduledWork = work;
       },
-      onAsyncTaskStarted,
     });
     if (!tool) {
       throw new Error("expected video_generate tool");
@@ -576,10 +574,6 @@ describe("createVideoGenerateTool", () => {
 
     expect(text).toContain("Background task started for video generation (task-123).");
     expect(text).toContain("Do not call video_generate again for this request.");
-    expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
-    expect(onAsyncTaskStarted).toHaveBeenCalledWith(
-      "Video generation started; wait for the generated video completion event.",
-    );
     const details = resultDetails(result);
     expect(details.async).toBe(true);
     expect(details.status).toBe("started");

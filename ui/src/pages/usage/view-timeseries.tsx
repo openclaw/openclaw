@@ -1,13 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { For, Show, createMemo, onCleanup } from "solid-js";
+import { For, Show, onCleanup } from "solid-js";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { createMsFormatter, formatTimeMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { formatIsoDate } from "./helpers.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import type { prepareUsageDateRange } from "./helpers.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.tsx";
-import type { UsageProps } from "./types.ts";
+import type { UsageProps, UsageSessionEntry } from "./types.ts";
 import { USAGE_TOKEN_CATEGORIES } from "./view-chart.tsx";
 
 const CHART_BAR_WIDTH_RATIO = 0.75; // Fraction of slot used for bar (rest is gap)
@@ -17,21 +18,17 @@ const HANDLE_WIDTH = 5; // Width of drag handle in SVG units
 const HANDLE_HEIGHT = 12;
 const HANDLE_GRIP_OFFSET = 0.7; // Offset of grip lines inside handle
 
-function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 1): number {
-  const year = Number(date.slice(0, 4));
-  const month = Number(date.slice(5, 7)) - 1;
-  const day = Number(date.slice(8, 10)) + dayOffset;
-  // Build the target date directly; advancing a normalized skipped midnight can retain 01:00.
-  return timeZone === "utc" ? Date.UTC(year, month, day) : new Date(year, month, day).getTime();
-}
-
 type TimeSeriesProps = {
   detail: UsageProps["detail"];
   callbacks: UsageProps["callbacks"]["details"];
-  range: Pick<UsageProps["filters"], "startDate" | "endDate" | "selectedDays" | "timeZone">;
+  view: ReturnType<typeof deriveTimeSeries>;
 };
 
-function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesProps["range"]) {
+export function deriveTimeSeries(
+  detail: UsageProps["detail"],
+  range: ReturnType<typeof prepareUsageDateRange>,
+  usage: UsageSessionEntry["usage"],
+) {
   const {
     timeSeries,
     timeSeriesLoading: loading,
@@ -41,15 +38,70 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
     timeSeriesCursorStart: cursorStart,
     timeSeriesCursorEnd: cursorEnd,
   } = detail;
-  const { startDate, endDate, selectedDays, timeZone } = range;
+  const { matches, timeZone } = range;
+  const allPoints = timeSeries?.points ?? [];
+  const rangePoints = matches ? allPoints.filter((point) => matches(point.timestamp)) : allPoints;
+  const hasSelection = cursorStart !== null && cursorEnd !== null;
+  const rangeStartTs = hasSelection ? Math.min(cursorStart, cursorEnd) : 0;
+  const rangeEndTs = hasSelection ? Math.max(cursorStart, cursorEnd) : Infinity;
+  let rangeStartIdx = 0;
+  let rangeEndIdx = rangePoints.length;
+  if (hasSelection) {
+    rangeStartIdx = rangePoints.findIndex((point) => point.timestamp >= rangeStartTs);
+    if (rangeStartIdx === -1) {
+      rangeStartIdx = rangePoints.length;
+    }
+    const endIdx = rangePoints.findIndex((point) => point.timestamp > rangeEndTs);
+    rangeEndIdx = endIdx === -1 ? rangePoints.length : endIdx;
+  }
+  const selectedPoints = hasSelection ? rangePoints.slice(rangeStartIdx, rangeEndIdx) : rangePoints;
+  const filteredTokens = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    totalCost: 0,
+  };
+  for (const point of selectedPoints) {
+    for (const key of ["input", "output", "cacheRead", "cacheWrite", "totalTokens"] as const) {
+      filteredTokens[key] += point[key];
+    }
+    filteredTokens.totalCost += point.cost;
+  }
+  const first = selectedPoints[0];
+  const last = selectedPoints.at(-1);
+  const filteredUsage =
+    hasSelection && usage && first && last && timeSeries?.usageReport?.state !== "unavailable"
+      ? {
+          ...usage,
+          ...filteredTokens,
+          durationMs: last.timestamp - first.timestamp,
+          firstActivity: first.timestamp,
+          lastActivity: last.timestamp,
+          messageCounts: undefined,
+        }
+      : undefined;
   if ((loading || status.awaitingGateway) && !status.hasLoaded) {
-    return { chart: null, emptyKey: "usage.loading.badge", showTitle: false, showStatus: false };
+    return {
+      chart: null,
+      emptyKey: "usage.loading.badge",
+      showTitle: false,
+      showStatus: false,
+      filteredUsage,
+    };
   }
   if (status.error && !status.hasLoaded) {
-    return { chart: null, emptyKey: null, showTitle: true, showStatus: true };
+    return { chart: null, emptyKey: null, showTitle: true, showStatus: true, filteredUsage };
   }
   if (timeSeries?.usageReport?.state === "unavailable") {
-    return { chart: null, emptyKey: "usage.unavailable", showTitle: true, showStatus: true };
+    return {
+      chart: null,
+      emptyKey: "usage.unavailable",
+      showTitle: true,
+      showStatus: true,
+      filteredUsage,
+    };
   }
   if (!timeSeries || timeSeries.points.length < 2) {
     return {
@@ -57,22 +109,8 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
       emptyKey: "usage.details.noTimeline",
       showTitle: false,
       showStatus: true,
+      filteredUsage,
     };
-  }
-  let rangePoints = timeSeries.points;
-  if (startDate || endDate || selectedDays.length > 0) {
-    const startTs = startDate ? dateBoundaryMs(startDate, timeZone, 0) : 0;
-    const endTs = endDate ? dateBoundaryMs(endDate, timeZone, 1) : Infinity;
-    const selectedDaySet = selectedDays.length ? new Set(selectedDays) : undefined;
-    rangePoints = timeSeries.points.filter((p) => {
-      if (p.timestamp < startTs || p.timestamp >= endTs) {
-        return false;
-      }
-      if (selectedDaySet) {
-        return selectedDaySet.has(formatIsoDate(new Date(p.timestamp), timeZone));
-      }
-      return true;
-    });
   }
   if (rangePoints.length < 2) {
     return {
@@ -80,6 +118,7 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
       emptyKey: "usage.details.noDataInRange",
       showTitle: false,
       showStatus: true,
+      filteredUsage,
     };
   }
   let cumTokens = 0,
@@ -104,29 +143,6 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
     };
   });
 
-  const hasSelection = cursorStart != null && cursorEnd != null;
-  const rangeStartTs = hasSelection ? Math.min(cursorStart, cursorEnd) : 0;
-  const rangeEndTs = hasSelection ? Math.max(cursorStart, cursorEnd) : Infinity;
-
-  let rangeStartIdx = 0;
-  let rangeEndIdx = points.length;
-  if (hasSelection) {
-    rangeStartIdx = points.findIndex((p) => p.timestamp >= rangeStartTs);
-    if (rangeStartIdx === -1) {
-      rangeStartIdx = points.length;
-    }
-    const endIdx = points.findIndex((p) => p.timestamp > rangeEndTs);
-    rangeEndIdx = endIdx === -1 ? points.length : endIdx;
-  }
-
-  const filteredPoints = hasSelection ? points.slice(rangeStartIdx, rangeEndIdx) : points;
-  const filteredTokens = { output: 0, input: 0, cacheRead: 0, cacheWrite: 0 };
-  for (const p of filteredPoints) {
-    for (const { key } of USAGE_TOKEN_CATEGORIES) {
-      filteredTokens[key] += p[key];
-    }
-  }
-
   const width = 400,
     height = 100;
   const padding = { top: 8, right: 4, bottom: 14, left: 30 };
@@ -140,8 +156,8 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
 
   const formatAxisTimestamp = (timestamp: number) =>
     formatTimeMs(timestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "");
-  const totalTypeTokens = Object.values(filteredTokens).reduce(
-    (total, tokens) => total + tokens,
+  const totalTypeTokens = USAGE_TOKEN_CATEGORIES.reduce(
+    (total, { key }) => total + filteredTokens[key],
     0,
   );
   const maxValue = Math.max(...points.map((p) => p.value), 1);
@@ -218,7 +234,7 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
       rangeStartTs,
       rangeEndTs,
       totalTypeTokens,
-      filteredPoints,
+      filteredCost: filteredTokens.totalCost,
       cumTokens,
       cumCost,
       filteredTokens,
@@ -226,11 +242,12 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
     emptyKey: null,
     showTitle: false,
     showStatus: true,
+    filteredUsage,
   };
 }
 
 export function TimeSeriesCompact(props: TimeSeriesProps) {
-  const view = createMemo(() => deriveTimeSeries(props.detail, props.range));
+  const view = () => props.view;
   return (
     <Show
       when={view().chart}
@@ -355,13 +372,13 @@ function TimeSeriesChart(props: {
     const handleUp = () => {
       stopDrag = undefined;
       document.body.style.cursor = previousCursor;
-      document.removeEventListener("mousemove", handleMove);
-      document.removeEventListener("mouseup", handleUp);
+      stopMove();
+      stopUp();
     };
 
     stopDrag = handleUp;
-    document.addEventListener("mousemove", handleMove);
-    document.addEventListener("mouseup", handleUp);
+    const stopMove = listen(document, "mousemove", { handleEvent: handleMove });
+    const stopUp = listen(document, "mouseup", handleUp);
   };
   return (
     <div class="session-timeseries-compact">
@@ -568,7 +585,7 @@ function TimeSeriesChart(props: {
             {" · "}
             {formatUsageTokens(model().totalTypeTokens)}
             {" · "}
-            {formatUsageCost(model().filteredPoints.reduce((s, p) => s + (p.cost || 0), 0))}
+            {formatUsageCost(model().filteredCost)}
           </>
         ) : (
           <>

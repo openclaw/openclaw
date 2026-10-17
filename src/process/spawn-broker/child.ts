@@ -233,6 +233,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
         this.connected = false;
         this.channel = undefined;
         this.emit("disconnect");
+        this.finishClose();
         break;
       case "ipc":
         this.emit("message", message.message);
@@ -275,7 +276,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
   }
 
   private finishClose(): void {
-    if (!this.exited || this.pipes.size > 0 || this.closed) {
+    if (!this.exited || this.channel || this.pipes.size > 0 || this.closed) {
       return;
     }
     this.closed = true;

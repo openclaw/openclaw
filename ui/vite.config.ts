@@ -750,7 +750,7 @@ export default function controlUiViteConfig(
       },
     },
     optimizeDeps: {
-      include: ["ipaddr.js", "lit/directives/repeat.js", ...commonJsOptimizeDeps],
+      include: ["ipaddr.js", ...commonJsOptimizeDeps],
     },
     resolve: {
       alias: [

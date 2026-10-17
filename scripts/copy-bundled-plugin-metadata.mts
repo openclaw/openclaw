@@ -38,7 +38,13 @@ const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
 const COPY_RETRY_DELAYS_MS = [10, 25, 50];
 
-type CopyMetadataParams = { cwd?: string; repoRoot?: string; env?: NodeJS.ProcessEnv };
+type CopyMetadataParams = {
+  cwd?: string;
+  repoRoot?: string;
+  env?: NodeJS.ProcessEnv;
+  /** Additive preparation: leave every unselected distribution untouched. */
+  pluginIds?: ReadonlySet<string>;
+};
 type SkillPathParams = {
   distPluginDir: string;
   manifest: Record<string, unknown>;
@@ -305,7 +311,7 @@ function copyMetadata(params: CopyMetadataParams): void {
   const generatedChannelConfigsByPlugin = readGeneratedBundledChannelConfigs(repoRoot);
   const sourcePluginDirs = new Set<string>(["node_modules"]);
   for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
-    if (!dirent.isDirectory()) {
+    if (!dirent.isDirectory() || (params.pluginIds && !params.pluginIds.has(dirent.name))) {
       continue;
     }
 
@@ -437,7 +443,7 @@ function copyMetadata(params: CopyMetadataParams): void {
     }
   }
 
-  if (!fs.existsSync(distExtensionsRoot)) {
+  if (params.pluginIds || !fs.existsSync(distExtensionsRoot)) {
     return;
   }
 

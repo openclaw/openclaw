@@ -387,17 +387,22 @@ describe("prepared model catalog access", () => {
     expect(mocks.refreshStaleCatalog).not.toHaveBeenCalled();
   });
 
-  it("rejects a standalone catalog owner built from another config", async () => {
-    mocks.prepareSnapshot.mockRejectedValue(new PreparedModelRuntimeOwnerNotPublishedError());
-    mocks.activateSnapshot.mockResolvedValue({
-      ...fullSnapshot,
-      config: { agents: { defaults: { model: "openai/old" } } },
-    });
-
-    await expect(loadPreparedModelCatalogSnapshot({ readOnly: false })).rejects.toThrow(
-      "requested config",
-    );
-  });
+  it.each(["activateSnapshot", "acquireSnapshot"] as const)(
+    "rejects a catalog owner built from another config by %s",
+    async (source) => {
+      mocks.prepareSnapshot.mockRejectedValue(new PreparedModelRuntimeOwnerNotPublishedError());
+      mocks[source].mockResolvedValue({
+        ...fullSnapshot,
+        config: { agents: { defaults: { model: "openai/old" } } },
+      });
+      await expect(loadPreparedModelCatalogSnapshot({ readOnly: false })).rejects.toThrow(
+        "requested config",
+      );
+      if (source === "acquireSnapshot") {
+        expect(mocks.releaseSnapshot).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("leases a full generation for a gateway preflight in a dynamic workspace", async () => {
     mocks.prepareSnapshot.mockRejectedValue(new PreparedModelRuntimeOwnerNotPublishedError());
@@ -412,20 +417,6 @@ describe("prepared model catalog access", () => {
       expect.objectContaining({ workspaceDir: "/tmp/spawned-workspace" }),
     );
     expect(mocks.acquireSnapshot.mock.calls[0]?.[0]).not.toHaveProperty("readOnly");
-    expect(mocks.releaseSnapshot).toHaveBeenCalledOnce();
-  });
-
-  it("rejects a full fallback lease built from another config", async () => {
-    mocks.prepareSnapshot.mockRejectedValue(new PreparedModelRuntimeOwnerNotPublishedError());
-    mocks.activateSnapshot.mockResolvedValue(undefined);
-    mocks.acquireSnapshot.mockResolvedValue({
-      ...fullSnapshot,
-      config: { agents: { defaults: { model: "openai/old" } } },
-    });
-
-    await expect(loadPreparedModelCatalogSnapshot({ readOnly: false })).rejects.toThrow(
-      "requested config",
-    );
     expect(mocks.releaseSnapshot).toHaveBeenCalledOnce();
   });
 });

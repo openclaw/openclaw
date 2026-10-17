@@ -15,17 +15,23 @@ import {
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
 
-const { note, readCommand, census, processMembers, ps, readProcessCommand } = vi.hoisted(() => ({
-  note: vi.fn(),
-  readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(),
-  census: vi.fn<typeof inspectOtherOpenClawProcesses>(),
-  processMembers: vi.fn(),
-  ps: vi.fn(),
-  readProcessCommand: vi.fn(),
-}));
+const { note, readCommand, census, processMembers, ps, nativeCensus, readProcessCommand } =
+  vi.hoisted(() => ({
+    note: vi.fn(),
+    readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(),
+    census: vi.fn<typeof inspectOtherOpenClawProcesses>(),
+    processMembers: vi.fn(),
+    ps: vi.fn(),
+    nativeCensus: vi.fn(),
+    readProcessCommand: vi.fn(),
+  }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawnSync: ps,
+}));
+// mock-isolation: Native Darwin census must use the same synthetic PIDs as ps.
+vi.mock("../process/supervisor/darwin-bun-process-census.js", () => ({
+  readDarwinBunProcessCensus: nativeCensus,
 }));
 vi.mock("@openclaw/proc-safe/inspect", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/proc-safe/inspect")>()),
@@ -102,6 +108,7 @@ afterEach(() => {
   census.mockReset();
   processMembers.mockReset();
   ps.mockReset();
+  nativeCensus.mockReset();
   readProcessCommand.mockReset();
 });
 
@@ -180,9 +187,20 @@ it.each([
       });
     }
     inspectAsLaterProcess();
+    const rows = [
+      { pid: process.pid, pgid: process.pid, state: "S", ppid: 0, uid },
+      { pid: peer, pgid: peer, state: "S", ppid: 0, uid: sameUid ? uid : uid + 1 },
+    ];
+    // Node uses ps; Bun uses libproc. Both must observe the same synthetic census.
+    nativeCensus.mockReturnValue(rows);
     ps.mockReturnValue({
       status: 0,
-      stdout: `${process.pid} ${process.pid} S 0 ${uid}\n${peer} ${peer} S 0 ${sameUid ? uid : uid + 1}\n`,
+      stdout: rows
+        .map(
+          ({ pid, pgid, state, ppid, uid: memberUid }) =>
+            `${pid} ${pgid} ${state} ${ppid} ${memberUid}\n`,
+        )
+        .join(""),
     });
     readProcessCommand.mockImplementation((pid: number) => {
       if (pid === peer) {

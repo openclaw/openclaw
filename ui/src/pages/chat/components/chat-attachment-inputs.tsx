@@ -33,7 +33,7 @@ export function ChatAttachmentInputs(props: ChatAttachmentControlsProps) {
             accept={kind === "file" ? undefined : "image/*"}
             multiple={kind !== "camera"}
             capture={kind === "camera" ? "environment" : undefined}
-            class={`agent-chat__${kind}-input`}
+            class={[`agent-chat__${kind}-input`]}
             disabled={props.disabled}
             onChange={(event) => {
               if (!props.disabled) {

@@ -87,8 +87,7 @@ openclaw-plugin-settings-groups {
   grid-row: 1;
   min-width: 0;
 }
-.plugin-editor__control > .settings-row,
-.plugin-editor__control > .lit-content > .settings-row {
+.plugin-editor__control > .settings-row {
   padding: 0;
   min-height: 0;
   background: transparent;

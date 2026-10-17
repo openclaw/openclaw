@@ -141,7 +141,10 @@ async function readConfigIdentity(configPath: string): Promise<Receipt["configId
 }
 
 /** The external supervisor owns drain/start; the candidate owns backup and schema repair. */
-export async function updateMigrateCommand(backupRoot: string): Promise<void> {
+export async function updateMigrateCommand(
+  backupRoot: string,
+  options: { fullIntegrityCheck?: boolean } = {},
+): Promise<void> {
   const file = receiptPath(backupRoot);
   if ((await readJsonIfExists(file)) !== null) {
     throw new Error(
@@ -251,6 +254,7 @@ export async function updateMigrateCommand(backupRoot: string): Promise<void> {
           repair: true,
           nonInteractive: true,
           workspaceSuggestions: false,
+          fullIntegrityCheck: options.fullIntegrityCheck,
         },
         undefined,
         preflight,

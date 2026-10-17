@@ -3,7 +3,9 @@ import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { streamSimple } from "../../../llm/stream.js";
+import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
+import type { StreamFn } from "../../runtime/index.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   textToolResult,
@@ -288,7 +290,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
 
 describe("resolveEmbeddedAgentStream", () => {
   it("injects authStorage api keys into provider-owned stream functions", async () => {
-    const providerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const providerStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
     const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: undefined,
       providerStreamFn,
@@ -300,16 +302,15 @@ describe("resolveEmbeddedAgentStream", () => {
       },
     });
 
-    const streamOptions = await streamFn(
-      { provider: "demo-provider", id: "demo-model" } as never,
-      {} as never,
+    await streamFn({ provider: "demo-provider", id: "demo-model" } as never, {} as never, {});
+    expect(providerStreamFn).toHaveBeenCalledExactlyOnceWith(
+      { provider: "demo-provider", id: "demo-model" },
       {},
+      expect.objectContaining({
+        apiKey: "demo-runtime-key",
+        authProfileId: "demo-provider:oauth",
+      }),
     );
-    expect(requireRecord(streamOptions, "stream options").apiKey).toBe("demo-runtime-key");
-    expect(requireRecord(streamOptions, "stream options").authProfileId).toBe(
-      "demo-provider:oauth",
-    );
-    expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
 
   it("keeps explicit custom currentStreamFn values unchanged", () => {

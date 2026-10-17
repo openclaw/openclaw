@@ -17,10 +17,10 @@ import {
   type SessionPullRequestSnapshotStore,
 } from "../lib/session-pull-requests.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { AppSidebarElement } from "./app-sidebar.tsx";
 import { personActivityRouting, type PersonActivityRouting } from "./person-activity-link.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 import { SessionHovercard, type SessionHovercardInput } from "./session-hovercard-solid.tsx";
 import { SessionLinkTitler } from "./session-link-titling.ts";
 import {
@@ -79,7 +79,7 @@ function createSessionProgressHovercard(props: SessionProgressHovercardProps, ho
   let skipDelayTimer: number | null = null;
   let lastProgressCard: ProgressCard | null = null;
   let renderedRevision: string | null = null;
-  const hovercard = new PortaledHovercardController(
+  const hovercard = createPortaledHovercardOwner(
     () => close(true),
     CLOSE_DELAY_MS,
     () => close(),

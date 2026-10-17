@@ -1,12 +1,14 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
 import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { renderProviderUsageDetails } from "../../components/solid/provider-usage.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -34,37 +36,42 @@ type UsageState =
 
 function AccountUsage(props: ModelAccountUsageProps, host: ModelAccountUsageElement) {
   const [state, setState] = createSignal<UsageState>({ phase: "idle" });
-  let request: AbortController | undefined;
+  let isCurrent = () => false;
+  const request = createPageRequest(() => {}, {
+    task: (
+      [client, agentId, profileId]: readonly [GatewayBrowserClient, string, string],
+      { signal },
+    ) =>
+      client.request<UsageSummary>(
+        "codex.accountUsage",
+        { agentId, profileId },
+        { signal, timeoutMs: 30_000 },
+      ),
+    onComplete: (summary) => {
+      if (isCurrent()) {
+        setState({ phase: "complete", summary });
+      }
+    },
+    onError: (error) => {
+      if (isCurrent()) {
+        setState({ phase: "error", error });
+      }
+    },
+  });
+  onCleanup(request.cancel);
 
   async function load(scope: ModelAccountUsageProps): Promise<void> {
-    request?.abort();
-    request = undefined;
+    request.cancel();
     if (!scope.client || !scope.agentId || !scope.profileId) {
       setState({ phase: "idle" });
       return;
     }
-    const current = new AbortController();
-    request = current;
-    const isCurrent = () =>
-      request === current &&
+    isCurrent = () =>
       props.client === scope.client &&
       props.agentId === scope.agentId &&
       props.profileId === scope.profileId;
     setState({ phase: "pending" });
-    try {
-      const summary = await scope.client.request<UsageSummary>(
-        "codex.accountUsage",
-        { agentId: scope.agentId, profileId: scope.profileId },
-        { signal: current.signal, timeoutMs: 30_000 },
-      );
-      if (isCurrent()) {
-        setState({ phase: "complete", summary });
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        setState({ phase: "error", error });
-      }
-    }
+    await request.run([scope.client, scope.agentId, scope.profileId]);
   }
 
   const scope = () => ({
@@ -73,13 +80,9 @@ function AccountUsage(props: ModelAccountUsageProps, host: ModelAccountUsageElem
     profileId: props.profileId,
   });
   const refresh = () => void load(scope());
+  // Fetch usage from the Gateway for the currently presented account.
   createEffect(scope, (current) => void load(current));
-  host.addEventListener("model-account-usage-refresh", refresh);
-  onCleanup(() => {
-    host.removeEventListener("model-account-usage-refresh", refresh);
-    request?.abort();
-    request = undefined;
-  });
+  onSettled(() => listen(host, "model-account-usage-refresh", refresh));
   const summary = createMemo(() => {
     const current = state();
     return current.phase === "complete" ? current.summary : undefined;

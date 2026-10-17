@@ -9,10 +9,10 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runtime.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { SessionDetailsOwner } from "../../components/session-details-controller.ts";
+import { createSessionDetails } from "../../components/session-details.ts";
 import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import "../../components/session-menu.ts";
+import "../../components/session-menu-solid.tsx";
 import { moveSessionFromMenu } from "../../components/session-placement-action.ts";
 import {
   formatBatchSessionRemovalError,
@@ -24,7 +24,7 @@ import { watchAgentScope } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccessRequest,
@@ -78,6 +78,7 @@ import {
   handleSessionManagementNavigationAction,
   type SessionsPageMenuProps,
 } from "./session-menu.tsx";
+import type { SessionsPageState } from "./sessions-page-state.types.ts";
 import type { SessionsProps } from "./view-types.ts";
 
 registerSessionOrganizationEnglish();
@@ -91,27 +92,6 @@ type SessionsPageListBinding = {
   query: ReturnType<typeof buildSessionsListQuery>;
   key: string;
   transcriptKey: string;
-};
-
-type SessionsPageState = Pick<
-  SessionsProps,
-  | "result"
-  | "loading"
-  | "refreshing"
-  | "error"
-  | "activeMinutes"
-  | "limit"
-  | "includeGlobal"
-  | "includeUnknown"
-  | "statusFilter"
-  | "searchQuery"
-  | "transcriptSearchQuery"
-  | "expandedSessionKey"
-  | "transcriptSearch"
-> & {
-  selectedSessions: Map<string, SessionDeleteRow>;
-  sessionMenu: SessionsPageMenuProps["menu"] | null;
-  sessionMenuWork: SessionsPageMenuProps["work"];
 };
 
 export type SessionsPageOwner = ReturnType<typeof createSessionsPage>;
@@ -194,7 +174,7 @@ export function createSessionsPage(
   let listRequest: Promise<void> | undefined;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let appliedListResult: SessionsListResult | null | undefined;
-  const details = new SessionDetailsOwner(() => publish(), {
+  const details = createSessionDetails({
     captureScope: captureRequestScope,
     isCurrent: isRequestScopeCurrent,
     row: () => state.result?.sessions.find((row) => row.key === state.expandedSessionKey),
@@ -1359,14 +1339,16 @@ export function createSessionsPage(
     };
   }
 
-  function viewProps(): Omit<SessionsProps, keyof typeof presentation> {
+  function viewProps(): SessionsProps {
     const context = application;
     const personGroupingAvailable = (state.result?.owners?.length ?? 0) > 1;
     return {
-      loading: state.loading || details.loading,
+      ...presentation,
+      loading: state.loading || details.loading(),
       refreshing: state.refreshing,
+      refreshDisabled: context.gateway.snapshot.phase !== "connected",
       result: state.result,
-      error: details.error ?? state.error,
+      error: details.error() ?? state.error,
       activeMinutes: state.activeMinutes,
       limit: state.limit,
       includeGlobal: state.includeGlobal,
@@ -1374,6 +1356,7 @@ export function createSessionsPage(
       statusFilter: state.statusFilter,
       basePath: context.basePath,
       agentId: resolveSessionNavigationAgentId(context),
+      allAgentsScope: context.agentSelection.state.scopeId === null,
       mainKey: resolveUiConfiguredMainKey({
         agentsList: context.agents.state.agentsList,
         hello: context.gateway.snapshot.hello,
@@ -1387,6 +1370,11 @@ export function createSessionsPage(
         (agentId) => context.agentIdentity.get(agentId) ?? undefined,
       ),
       personGroupingAvailable,
+      // Keep the stored Person preference while the owner roster is unavailable.
+      groupBy:
+        personGroupingAvailable || presentation.groupBy !== "person"
+          ? presentation.groupBy
+          : "none",
       knownCategories: knownCategories(),
       selectedKeys: new Set(state.selectedSessions.keys()),
       sessionMenu: state.sessionMenu,
@@ -1543,7 +1531,7 @@ export function createSessionsPage(
     archive: archiveActions.archive,
   };
   const projection = projectSource(application, {
-    read: () => viewProps(),
+    read: () => state,
     subscribe: (_source, notify) => {
       publish = notify;
       return () => {
@@ -1552,28 +1540,27 @@ export function createSessionsPage(
     },
     equality: "revision",
   });
+  const presentationSources = [
+    application.agentIdentity,
+    application.navigation,
+    application.runtimeConfig,
+    application.plugins,
+  ].map((owner) => projectOwner(owner, (source) => source));
+  const revision = () =>
+    presentationSources.reduce((sum, source) => sum + source.revision(), projection.revision());
   onSettled(() => {
-    const stops = [
-      application.agentIdentity.subscribe(() => publish()),
-      application.navigation.subscribe(() => publish()),
-      application.runtimeConfig.subscribe(() => publish()),
-      application.plugins.subscribe(() => publish()),
-      observeAgentScope(application.agentSelection),
-    ];
+    const stopScope = observeAgentScope(application.agentSelection);
     applyRouteData();
     gatewayLifecycle.connect();
     return () => {
       active = false;
       publish = () => {};
-      for (const stop of stops) {
-        stop();
-      }
+      stopScope();
       unsubscribeList?.();
       pluginActionLifetime.abort();
       transcriptSearchAbort?.abort();
       clearSearchTimer();
       inputDialog.abort();
-      details.reset();
       sessionPullRequestsForGateway(application.gateway).unwatch(menuOwner);
       gatewayLifecycle.dispose();
     };
@@ -1581,22 +1568,14 @@ export function createSessionsPage(
   return {
     actions,
     setRouteData,
-    revision: projection.revision,
+    revision,
     menu: () => {
-      projection.revision();
+      revision();
       return sessionMenuProps();
     },
     view: (): SessionsProps => {
-      const view = projection.read();
-      return {
-        ...view,
-        ...presentation,
-        // Keep the stored Person preference while the owner roster is unavailable.
-        groupBy:
-          view.personGroupingAvailable || presentation.groupBy !== "person"
-            ? presentation.groupBy
-            : "none",
-      };
+      revision();
+      return viewProps();
     },
   };
 }

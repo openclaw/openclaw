@@ -32,6 +32,7 @@ import {
 
 export function LabsPage() {
   const context = useApplication();
+  // The mounted projection and request lifecycle are seeded once; source replacement is bound below.
   const config = projectRuntimeConfig(untrack(() => context.runtimeConfig));
   const lifecycle = createGatewayConnectionLifecycle(untrack(() => context.gateway.snapshot));
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
@@ -46,7 +47,7 @@ export function LabsPage() {
     revision();
     return saveError;
   };
-
+  // Config and Gateway replacements retire pending saves before reloading and resubscribing.
   createEffect(
     () => context.runtimeConfig,
     (runtimeConfig) => {
@@ -61,11 +62,11 @@ export function LabsPage() {
     () => context.gateway,
     (gateway) => {
       lifecycle.transition(gateway.snapshot);
+      // A same-tick reconnect must retire a save before Solid's next flush.
       const unsubscribe = gateway.subscribe((snapshot) => {
         if (context.gateway !== gateway) {
           return;
         }
-        // A same-tick reconnect must retire a save before Solid's next flush.
         if (lifecycle.transition(snapshot)) {
           pending = null;
           saveError = null;

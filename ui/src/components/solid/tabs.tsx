@@ -5,7 +5,7 @@ import { bindShadowStyles } from "./shadow-styles.ts";
 import tabsStyles from "../../styles/tabs.css?inline";
 import "../../styles/tabs.css";
 
-export type TabOption = {
+type TabOption = {
   value: string;
   label: JSX.Element;
   id?: string;

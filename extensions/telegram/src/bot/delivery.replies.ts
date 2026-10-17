@@ -205,9 +205,6 @@ function createReplyDeliverer(
         if (config.thread?.id !== undefined) {
           await reportAcceptedPart(part);
         }
-        config.runtime.log?.(
-          `telegram text delivery ok chat=${config.chatId} message=${messageId}`,
-        );
         await recordMessageId(messageId);
         await replyProgress.promptContext?.accept({ messageId, text: plainText });
       },

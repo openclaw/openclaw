@@ -11,17 +11,19 @@ import {
   inventoryRequest,
   startAuthenticatedStore,
 } from "./sidebar-attention-store.test-support.ts";
-import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
+import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 
 describe("sidebar cron event publication", () => {
   let store: SidebarAttentionStore | undefined;
 
-  afterEach(() => {
+  afterEach(async () => {
     store?.dispose();
     store = undefined;
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    // Inbox startup also starts a nested composer-storage import.
+    await vi.dynamicImportSettled();
   });
 
   it("updates Inbox attention through a minute of cron publications without inventory rereads", async () => {
@@ -105,7 +107,7 @@ describe("sidebar cron event publication", () => {
         subscribe: () => () => undefined,
       } satisfies ApplicationContext["agentSelection"];
       store = createStore(harness.gateway, undefined, selection);
-      store.activate(SidebarAttentionStoreController);
+      store.activate(SidebarAttentionStoreOwner);
       await vi.advanceTimersByTimeAsync(0);
 
       harness.emitEvent("cron", {

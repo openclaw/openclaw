@@ -314,7 +314,7 @@ describe("createAgent", () => {
           },
         },
       }),
-    ).rejects.toThrow("config changed before first-agent creation");
+    ).rejects.toThrow("config changed before agent creation or restoration");
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   });
 

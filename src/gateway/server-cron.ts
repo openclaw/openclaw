@@ -29,12 +29,9 @@ import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
-import { toPublicCronJob } from "../cron/public-job.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService, type CronEvent } from "../cron/service.js";
-import { applyJobPatch } from "../cron/service/jobs.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
-import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
 import type { CronJob } from "../cron/types.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -325,7 +322,6 @@ export function buildGatewayCronService(params: {
     string,
     Parameters<CronService["updateWithPrecondition"]>[2]
   >();
-  let exitWatcherGeneration = 0;
   let exitWatcherMutationRevision = 0;
   let exitWatchersStopped = false;
   let exitWatcherHandoffReady: { result: Deferred<boolean>; settled: boolean } | undefined;
@@ -339,25 +335,19 @@ export function buildGatewayCronService(params: {
       exitWatcherHandoffReady = undefined;
     }
   };
-  let streamWatcherGeneration = 0;
   // Bumped when a direct watcher route begins; fences reconcile's async list
   // snapshot against mutations that commit inside the list await.
   let streamWatcherMutationRevision = 0;
   let streamWatchersStopped = false;
   const reconcileExitWatchers = async () => {
     const revision = ++exitWatcherMutationRevision;
-    const generation = exitWatcherGeneration;
     exitWatcherReconciliations += 1;
     try {
       if (!exitWatchers || exitWatchersStopped) {
         return;
       }
       const jobs = await cron.list({ includeDisabled: true });
-      if (
-        exitWatchersStopped ||
-        generation !== exitWatcherGeneration ||
-        revision !== exitWatcherMutationRevision
-      ) {
+      if (exitWatchersStopped || revision !== exitWatcherMutationRevision) {
         return;
       }
       if (cronEnabled) {
@@ -372,32 +362,19 @@ export function buildGatewayCronService(params: {
     }
   };
   const reconcileStreamWatchers = async () => {
-    const generation = streamWatcherGeneration;
     streamWatcherReconciliations += 1;
     try {
       const watchers = streamWatchers;
       if (!watchers || streamWatchersStopped) {
         return;
       }
-      // The list snapshot is captured across an await; a direct mutation route
-      // that commits inside that window makes it stale, and reconciling a
-      // stale snapshot could stop a just-added owner as "removed" and retire
-      // its durable identity. Re-list until no route interleaved. Bounded:
-      // under pathological mutation churn we skip this sweep (every mutation
-      // was already routed directly) rather than loop forever.
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        const revision = streamWatcherMutationRevision;
-        const jobs = await cron.list({ includeDisabled: true });
-        if (generation !== streamWatcherGeneration || streamWatchersStopped) {
-          return;
-        }
-        if (revision !== streamWatcherMutationRevision) {
-          continue;
-        }
-        await watchers.reconcile(jobs, cronEnabled && cronTriggersEnabled, cronTriggersEnabled);
+      const revision = streamWatcherMutationRevision;
+      const jobs = await cron.list({ includeDisabled: true });
+      // Mutations route their own exact job; do not let an older sweep retire it.
+      if (streamWatchersStopped || revision !== streamWatcherMutationRevision) {
         return;
       }
-      cronLogger.warn({}, "cron-stream: reconcile skipped after repeated concurrent mutations");
+      await watchers.reconcile(jobs, cronEnabled && cronTriggersEnabled, cronTriggersEnabled);
     } catch (err) {
       cronLogger.warn({ err: String(err) }, "cron-stream: reconcile failed");
     } finally {
@@ -745,7 +722,34 @@ export function buildGatewayCronService(params: {
         jobSnapshot?.sessionKey ??
         evt.sessionKey;
       const scopedAgentId = jobSnapshot?.owner?.agentId ?? jobSnapshot?.agentId;
-      params.broadcast("cron", evt.job ? { ...evt, job: toPublicCronJob(evt.job) } : evt, {
+      // Views fetch definitions and run details on demand; the sidebar only needs
+      // attention state. Keep the full event for hooks and notifications below.
+      const {
+        job: eventJob,
+        summary: _summary,
+        diagnostics: _diagnostics,
+        delivery: _delivery,
+        ...event
+      } = evt;
+      const payload = {
+        ...event,
+        ...(eventJob
+          ? {
+              job: {
+                ...pickDefined(eventJob, ["id", "name", "agentId", "enabled", "updatedAtMs"]),
+                state: pickDefined(eventJob.state, [
+                  "nextRunAtMs",
+                  "lastRunAtMs",
+                  "lastRunStatus",
+                  "lastStatus",
+                  "runningAtMs",
+                  "autoDisabled",
+                ]),
+              },
+            }
+          : {}),
+      };
+      params.broadcast("cron", payload, {
         dropIfSlow: true,
         ...(scopedSessionKey
           ? {
@@ -956,39 +960,6 @@ export function buildGatewayCronService(params: {
       ),
     logger: cronServiceLogger,
   });
-  const queueStreamStopAfterValidation = (
-    current: CronJob,
-    patch: Parameters<CronService["update"]>[1],
-    nowMs: number,
-  ): Promise<void> | undefined => {
-    if (
-      current.schedule.kind !== "stream" ||
-      (patch.enabled !== false && patch.schedule === undefined)
-    ) {
-      return undefined;
-    }
-    // Validate before fencing the owner. A rejected conditional or malformed
-    // update must leave the live source and its buffered events untouched.
-    const validated = structuredClone(current);
-    applyJobPatch(validated, patch, {
-      defaultAgentId: cron.getDefaultAgentId(),
-      scheduleValidationNowMs: nowMs,
-      cronConfig: params.cfg.cron,
-    });
-    if (
-      validated.enabled &&
-      validated.schedule.kind === "stream" &&
-      cronStreamScheduleKey(validated.schedule) === cronStreamScheduleKey(current.schedule)
-    ) {
-      return undefined;
-    }
-    // Close admission synchronously, but drain outside the cron store lock.
-    // The caller observes rejection now and joins it after mutation settlement.
-    return streamWatchers?.stop(
-      current.id,
-      patch.schedule !== undefined ? "schedule-update" : "disabled",
-    );
-  };
   const cancelDisabledExitWatcher = (job: CronJob) => {
     if (job.enabled || job.schedule.kind !== "on-exit") {
       return;
@@ -1045,7 +1016,7 @@ export function buildGatewayCronService(params: {
   ) => {
     let lifecycleStop: Promise<PromiseSettledResult<void>[]> | undefined;
     const routeAfterValidation = (current: CronJob, nowMs: number) => {
-      const stop = queueStreamStopAfterValidation(current, patch, nowMs);
+      const stop = streamWatchers.stopBeforeUpdate(current, patch, nowMs, params.cfg.cron);
       lifecycleStop = stop ? Promise.allSettled([stop]) : undefined;
     };
     const beforeUpdate = precondition
@@ -1097,6 +1068,7 @@ export function buildGatewayCronService(params: {
   const getCronSuspensionBlockerCount = cron.getSuspensionBlockerCount.bind(cron);
   cron.getSuspensionBlockerCount = () =>
     getCronSuspensionBlockerCount() +
+    Number(startPromise !== undefined) +
     exitWatcherReconciliations +
     streamWatcherReconciliations +
     (exitWatchers?.activeJobIds().length ?? 0) +
@@ -1108,7 +1080,7 @@ export function buildGatewayCronService(params: {
     // Late completion cleanup can request reconciliation after shutdown.
     // Fence new requests before cancellation so stopped children cannot respawn.
     exitWatchersStopped = true;
-    exitWatcherGeneration += 1;
+    exitWatcherMutationRevision += 1;
     if (!exitWatchersStopPromise) {
       exitWatchersStopPromise = exitWatchers?.cancelAll() ?? Promise.resolve();
       void exitWatchersStopPromise.catch((err: unknown) => {
@@ -1128,7 +1100,7 @@ export function buildGatewayCronService(params: {
       return streamWatchersStopPromise;
     }
     const stopPromise = (async () => {
-      streamWatcherGeneration += 1;
+      streamWatcherMutationRevision += 1;
       streamWatchersStopped = true;
       await streamWatchers?.stopAll("shutdown");
     })();
@@ -1147,7 +1119,16 @@ export function buildGatewayCronService(params: {
     getDefaultAgentId: () => cron.getDefaultAgentId(),
   };
   const stopCron = cron.stop.bind(cron);
+  let stopped = false;
+  let started = false;
+  let startPromise: Promise<void> | undefined;
+  let schedulingPaused = false;
+  let schedulingResume: Deferred | undefined;
   const stopCronLifecycle = (preserveExitWatchers = false) => {
+    stopped = true;
+    started = false;
+    schedulingResume?.resolve();
+    schedulingResume = undefined;
     settleExitWatcherHandoff(false);
     try {
       stopCron();
@@ -1155,7 +1136,7 @@ export function buildGatewayCronService(params: {
         // A committed replacement owns these children; fence this scheduler
         // without terminating the adopted manager.
         exitWatchersStopped = true;
-        exitWatcherGeneration += 1;
+        exitWatcherMutationRevision += 1;
       } else {
         stopExitWatchers();
       }
@@ -1180,6 +1161,7 @@ export function buildGatewayCronService(params: {
     await drainGatewayCron({
       settlements: [
         cron.waitForIdle(),
+        startPromise ?? Promise.resolve(),
         systemJobs.drain(),
         exitWatchersStopPromise ?? Promise.resolve(),
         stopStreamWatchers(),
@@ -1197,23 +1179,38 @@ export function buildGatewayCronService(params: {
     getRuntimeConfig,
     logger: cronServiceLogger,
   });
+  const pauseScheduling = cron.pauseScheduling.bind(cron);
+  const resumeScheduling = cron.resumeScheduling.bind(cron);
+  cron.pauseScheduling = () => {
+    schedulingPaused = true;
+    pauseScheduling();
+  };
+  cron.resumeScheduling = () => {
+    schedulingPaused = false;
+    schedulingResume?.resolve();
+    schedulingResume = undefined;
+    resumeScheduling();
+  };
   const startCron = cron.start.bind(cron);
-  cron.start = async () => {
+  const startCronLifecycle = async () => {
     if (exitWatcherHandoffReady?.settled) {
       exitWatcherHandoffReady = { result: createDeferredCore<boolean>(), settled: false };
     }
     // A failed start keeps observed exits parked for retry; stop cancels them.
     const handoff = exitWatcherHandoffReady;
-    const exitGeneration = exitWatcherGeneration;
-    const streamGeneration = streamWatcherGeneration;
-    const lifecycleChanged = () =>
-      exitGeneration !== exitWatcherGeneration || streamGeneration !== streamWatcherGeneration;
-    await exitWatchersStopPromise;
-    if (lifecycleChanged()) {
+    await Promise.all([exitWatchersStopPromise, streamWatchersStopPromise]);
+    if (stopped) {
+      return;
+    }
+    if (schedulingPaused) {
+      schedulingResume ??= createDeferredCore();
+      await schedulingResume.promise;
+    }
+    if (stopped) {
       return;
     }
     await startCron();
-    if (lifecycleChanged()) {
+    if (stopped) {
       return;
     }
     exitWatchersStopped = false;
@@ -1222,16 +1219,17 @@ export function buildGatewayCronService(params: {
     exitWatchersStopPromise = undefined;
     streamWatchersStopPromise = undefined;
     streamWatchers?.resume();
-    if (lifecycleChanged()) {
-      return;
-    }
-    await reconcileStreamWatchers();
-    if (lifecycleChanged()) {
+    // Persisted on-exit jobs have no change event to arm their children.
+    await Promise.all([
+      cronEnabled ? reconcileExitWatchers() : undefined,
+      reconcileStreamWatchers(),
+    ]);
+    if (stopped) {
       return;
     }
     systemJobs.resume();
     await systemJobs.reconcile();
-    if (lifecycleChanged()) {
+    if (stopped) {
       return;
     }
     registerSessionAutomationSource(automationSource);
@@ -1246,6 +1244,24 @@ export function buildGatewayCronService(params: {
     if (handoff) {
       settleExitWatcherHandoff(true, handoff);
     }
+    started = true;
+  };
+  cron.start = async () => {
+    if (started) {
+      return;
+    }
+    if (startPromise) {
+      // A stop cancels this operation; callers retry after its drain, rather
+      // than replaying a new lifecycle inside the cancelled startup.
+      return await startPromise;
+    }
+    stopped = false;
+    startPromise = startCronLifecycle();
+    try {
+      await startPromise;
+    } finally {
+      startPromise = undefined;
+    }
   };
 
   return {
@@ -1258,7 +1274,7 @@ export function buildGatewayCronService(params: {
         if (watchers !== exitWatchers) {
           settleExitWatcherHandoff(false);
           exitWatcherHandoffReady = { result: createDeferredCore<boolean>(), settled: false };
-          exitWatcherGeneration += 1;
+          exitWatcherMutationRevision += 1;
         }
         exitWatchers = watchers;
         return watchers.updateHandlers(exitWatcherHandlers);

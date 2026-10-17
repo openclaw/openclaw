@@ -7,7 +7,6 @@ import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import {
-  createClientToolNameConflictError,
   findClientToolNameConflicts,
   isClientToolNameConflictError,
   toClientToolDefinitions,
@@ -22,7 +21,6 @@ import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
-const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 const querySchema = () => ({ type: "object", properties: { query: { type: "string" } } });
 const receipt = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
 
@@ -381,9 +379,8 @@ describe("client tool name conflict checks", () => {
     ).toEqual(["Bash", "grep"]);
   });
 
-  it("wraps conflict errors with a stable prefix", () => {
-    const err = createClientToolNameConflictError(["exec", "Web_Search"]);
-    expect(err.message).toBe(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} exec, Web_Search`);
+  it("recognizes conflict errors by their stable prefix", () => {
+    const err = new Error("client tool name conflict: exec, Web_Search");
     expect(isClientToolNameConflictError(err)).toBe(true);
     expect(isClientToolNameConflictError(new Error("other failure"))).toBe(false);
   });

@@ -126,6 +126,33 @@ afterEach(() => {
 });
 
 describe("Details compact automations", () => {
+  it("keeps its initial inventory through unrelated Gateway snapshots", async () => {
+    const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
+    const current = source(
+      createGatewayRequestMock()
+        .mockImplementationOnce(() => pending.promise)
+        .mockResolvedValue(page([job()])),
+    );
+    const view = component(current.gateway);
+    const { element } = view;
+    flush();
+    current.publish({ ...current.gateway.snapshot });
+    expect(current.request).toHaveBeenCalledTimes(1);
+    pending.resolve(page([job()]));
+    await textReady(element, "Check the task");
+    current.publish({ ...current.gateway.snapshot });
+    expect(current.request).toHaveBeenCalledTimes(1);
+    view.update({ presented: false });
+    flush();
+    view.update({ presented: true });
+    flush();
+    await textReady(element, "Check the task");
+    expect(current.request).toHaveBeenCalledTimes(2);
+    current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
+    await textReady(element, "Check the task");
+    expect(current.request).toHaveBeenCalledTimes(3);
+  });
+
   it("admits only presented session-scoped reads and uses the existing automation destination", async () => {
     const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
     const current = source(createGatewayRequestMock(() => pending.promise));

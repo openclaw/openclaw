@@ -70,6 +70,7 @@ async function writePackage(root: string, version: string, body: string, schema 
     "node-sqlite.mjs",
     "node-runtime-update.mjs",
     "node-runtime-recovery.mjs",
+    "cli-parent-lifetime.mjs",
     "node-runtime-env.mjs",
     "cli-root-options.mjs",
     "gateway-run-argv.mjs",

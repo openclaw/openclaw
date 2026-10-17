@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import type { PostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -121,6 +122,8 @@ export function sessionSharingEntriesEqual(
 }
 
 export type SessionEntryPublicationSource = {
+  /** The anchor routes receipts; PostgreSQL facts belong to this admitted store lifetime. */
+  admission?: Pick<PostgresPhysicalFacts, "engine" | "namespace" | "storeId" | "admissionId">;
   identity: string | symbol;
   birthtime: string | undefined;
   incarnation: string;
@@ -147,6 +150,8 @@ export type SessionEntryProjectionFacts = {
 };
 
 export type SessionEntryReplacementPublication = {
+  /** Removed aliases preserved transcript contents, visibility, and logical-agent attribution. */
+  transcriptInventoryUnchanged?: true;
   maintenancePlans?: readonly SessionMaintenancePreservationPlan[];
   kind: "session-entry-replacements";
   transcriptPublication?: readonly import("./session-transcript-authority.types.js").SessionTranscriptAuthorityReceipt[];

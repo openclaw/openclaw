@@ -1,10 +1,16 @@
 /** Tests the built-in node-host MCP invocation command. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { handleInvoke } from "./invoke.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 
 const MEBIBYTE = 1024 * 1024;
+type McpPayload = {
+  content: Array<{ type: string; text?: string }>;
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+};
 
 async function invokeMcp(manager: NodeHostMcpManager, params: unknown) {
   const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
@@ -22,7 +28,7 @@ async function invokeMcp(manager: NodeHostMcpManager, params: unknown) {
   );
   return (request.mock.calls[0]?.[1] ?? {}) as {
     ok: boolean;
-    payload?: unknown;
+    payload?: McpPayload;
     payloadJSON?: string;
     error?: { code?: string; message?: string };
   };
@@ -38,7 +44,7 @@ function managerWith(callMcpTool: NodeHostMcpManager["callMcpTool"]): NodeHostMc
 
 describe("mcp.tools.call.v1", () => {
   it("dispatches validated params and preserves raw MCP content for one final projection", async () => {
-    const callMcpTool = vi.fn<NodeHostMcpManager["callMcpTool"]>().mockResolvedValue({
+    const payload = {
       content: [
         { type: "text", text: "pong" },
         { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
@@ -50,7 +56,10 @@ describe("mcp.tools.call.v1", () => {
         },
       ],
       structuredContent: { ok: true },
-    });
+    } satisfies Awaited<ReturnType<NodeHostMcpManager["callMcpTool"]>>;
+    const callMcpTool = vi
+      .fn<NodeHostMcpManager["callMcpTool"]>()
+      .mockResolvedValue(structuredClone(payload));
     const result = await invokeMcp(managerWith(callMcpTool), {
       server: "docs",
       tool: "search",
@@ -64,19 +73,7 @@ describe("mcp.tools.call.v1", () => {
       timeoutMs: 321,
     });
     expect(result.ok).toBe(true);
-    expect(result.payload).toEqual({
-      content: [
-        { type: "text", text: "pong" },
-        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-        {
-          type: "resource_link",
-          uri: "https://example.com/report",
-          name: "report",
-          title: "Report",
-        },
-      ],
-      structuredContent: { ok: true },
-    });
+    expect(result.payload).toEqual(payload);
   });
 
   it("returns MCP tool errors as results while thrown failures fail the invoke", async () => {
@@ -166,9 +163,7 @@ describe("mcp.tools.call.v1", () => {
       })),
       { server: "docs", tool: "large" },
     );
-    const payload = result.payload as {
-      content: Array<{ type: string; text: string }>;
-    };
+    const payload = expectDefined(result.payload, "MCP result payload");
     const text = payload.content.map((block) => block.text).join("");
     expect(Buffer.byteLength(text)).toBeLessThanOrEqual(MEBIBYTE);
     expect(text).toContain("truncated: MCP text content exceeded 1 MB");
@@ -183,10 +178,7 @@ describe("mcp.tools.call.v1", () => {
       })),
       { server: "docs", tool: "large-image" },
     );
-    const payload = result.payload as {
-      content: Array<{ type: string; text?: string }>;
-      structuredContent?: Record<string, unknown>;
-    };
+    const payload = expectDefined(result.payload, "MCP result payload");
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(20 * MEBIBYTE);
     expect(payload.content).toEqual([
       { type: "text", text: "[truncated: MCP result exceeded 20 MB]" },
@@ -215,11 +207,7 @@ describe("mcp.tools.call.v1", () => {
       })),
       { server: "docs", tool: "recover" },
     );
-    const payload = result.payload as {
-      content: Array<{ type: string; text?: string }>;
-      structuredContent?: Record<string, unknown>;
-      isError?: boolean;
-    };
+    const payload = expectDefined(result.payload, "MCP result payload");
     expect(payload.isError).toBe(true);
     expect(payload.structuredContent).toBeDefined();
     expect(payload.structuredContent?.oversized).toHaveLength(structuredContent.oversized.length);

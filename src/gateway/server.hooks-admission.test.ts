@@ -668,6 +668,27 @@ describe("gateway hook admission", () => {
     });
   });
 
+  test("does not admit an HTTP hook when only cron session preparation enters its lane", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
+        const callbacks = params as {
+          onLaneWait?: (info: { waiting: boolean; stage?: "session-preparation" }) => void;
+        };
+        callbacks.onLaneWait?.({ waiting: false, stage: "session-preparation" });
+        return { status: "error", error: "busy", admissionDisposition: "session-conflict" };
+      });
+      const response = await postHook(
+        port,
+        "/hooks/agent",
+        { message: "Dispatch" },
+        "session-preparation-before-execution-lane",
+      );
+      expect(response.status).toBe(409);
+    });
+  });
+
   test.for(["persistent", "mapped"])(
     "shares one pending %s dispatch across simultaneous duplicates",
     async (mode, { signal }) => {

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import JSZip from "jszip";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   downloadFullReleaseNpmPreflight,
   resolveFullReleaseNpmPreflight,
@@ -740,6 +740,9 @@ describe("npm qualification", () => {
       };
       const root = tempDirs.make("qualified-npm-preflight-");
       const outputDir = join(root, "qualified");
+      // Byte assertions must not consume the fixture's transfer deadline.
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      onTestFinished(() => clock.mockRestore());
       const downloadOptions = {
         ...resolutionInput,
         manifest: selected,
@@ -756,7 +759,7 @@ describe("npm qualification", () => {
           producer: { runId: RUN_ID, runAttempt: "1" },
         });
         for (const [name, bytes] of Object.entries(files)) {
-          expect(readFileSync(join(outputDir, name)), name).toEqual(bytes);
+          expect(readFileSync(join(outputDir, name)).equals(bytes), name).toBe(true);
         }
         const retriedDir = join(root, "retried");
         await downloadFullReleaseNpmPreflight({ ...downloadOptions, outputDir: retriedDir });

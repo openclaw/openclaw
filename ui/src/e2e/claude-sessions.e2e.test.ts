@@ -560,7 +560,7 @@ suite.define(() => {
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
     await page.clock.runFor(50);
     expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(catalogRequestCount);
-    await page.clock.fastForward(30_000);
+    await page.clock.fastForward(120_000);
     await page.clock.runFor(100);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)

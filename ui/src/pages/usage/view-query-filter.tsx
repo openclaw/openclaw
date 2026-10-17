@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Show, createMemo } from "solid-js";
-import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import type { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import { Menu, type MenuItem } from "../../components/solid/menu.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { setQueryTokensForKey } from "./query.ts";
@@ -10,11 +10,12 @@ export function UsageQueryFilter(props: {
   label: string;
   options: string[];
   queryDraft: string;
+  queryTerms: ReturnType<typeof extractQueryTerms>;
   onQueryDraftChange: (value: string) => void;
 }) {
   const selected = createMemo(() => {
     const normalized = normalizeLowercaseStringOrEmpty(props.filterKey);
-    return extractQueryTerms(props.queryDraft)
+    return props.queryTerms
       .filter((term) => normalizeLowercaseStringOrEmpty(term.key ?? "") === normalized)
       .map((term) => term.value)
       .filter(Boolean);

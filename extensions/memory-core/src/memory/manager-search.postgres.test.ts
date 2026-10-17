@@ -15,7 +15,7 @@ import {
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { mergeHybridResults } from "./hybrid.js";
 import { memoryPublicationInline } from "./manager-publication-transfer.js";
 import { bindSqliteWorkerBackend } from "./manager-publication.worker.js";
@@ -23,6 +23,7 @@ import { memoryTextSearchSchema } from "./manager-search-schema.js";
 import type { MemoryKeywordWorkerQuery, MemoryVectorWorkerQuery } from "./manager-search-types.js";
 import { executeMemorySearchWorkerQuery } from "./manager-search.worker.js";
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
+import { collectMemoryStatusSnapshot } from "./manager-status-state.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -194,23 +195,11 @@ function createFixture(
     },
     vector: (query = vectorQuery()) =>
       admitted(() => ({
-        pending: executeMemorySearchWorkerQuery(
-          database,
-          { kind: "vector", query },
-          { postgres: "test-only" },
-        ),
+        pending: executeMemorySearchWorkerQuery(database, { kind: "vector", query }),
       })).pending,
     keyword: (query: MemoryKeywordWorkerQuery) =>
       admitted(() => ({
-        pending: executeMemorySearchWorkerQuery(
-          database,
-          { kind: "keyword", query },
-          { postgres: "test-only" },
-        ),
-      })).pending,
-    publicQuery: () =>
-      admitted(() => ({
-        pending: executeMemorySearchWorkerQuery(database, { kind: "vector", query: vectorQuery() }),
+        pending: executeMemorySearchWorkerQuery(database, { kind: "keyword", query }),
       })).pending,
     restart() {
       backend.close();
@@ -279,12 +268,6 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       }
     }),
   );
-
-  it("keeps public memory search refused without explicit internal activation", async () => {
-    await expect(regular.publicQuery()).rejects.toThrow(
-      "PostgreSQL memory indexing is unavailable",
-    );
-  });
 
   it("applies model, source and candidate eligibility before exact nearest limit", async () => {
     const nearest = await regular.vector(vectorQuery({ limit: 1 }));
@@ -394,5 +377,36 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     const result = await regular.keyword(keywordQuery("cafe"));
     expect(result.body.error).toBeUndefined();
     expect(result.body.rows.map((row) => row.path)).toEqual(["memory/lexical.md"]);
+  });
+
+  it("reports PostgreSQL counts and storage without native or catalog probes", () => {
+    const db = regular.pg();
+    const query = db.query.bind(db);
+    const statements: string[] = [];
+    const capture = vi.spyOn(db, "query").mockImplementation((statement, bindings) => {
+      statements.push(statement);
+      return query(statement, bindings);
+    });
+    try {
+      const snapshot = admitted(() =>
+        collectMemoryStatusSnapshot(db, "unused-anchor", {
+          sources: ["memory", "sessions"],
+          cacheEnabled: true,
+          includeStorage: true,
+        }),
+      );
+      expect(snapshot.aggregate).toMatchObject({ files: 6, chunks: 6 });
+      expect(snapshot.storage).toMatchObject({
+        walBytes: 0,
+        reusableBytes: 0,
+        embeddingCacheEntries: 0,
+      });
+      expect(snapshot.storage!.databaseBytes).toBeGreaterThan(0);
+      expect(statements.join("\n")).not.toMatch(
+        /sqlite_master|PRAGMA|pg_catalog|information_schema/i,
+      );
+    } finally {
+      capture.mockRestore();
+    }
   });
 });

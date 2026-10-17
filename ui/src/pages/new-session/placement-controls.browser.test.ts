@@ -85,7 +85,7 @@ it.each([
       projectSearchLoading: false,
       projectSearchError: null,
       projectId: "",
-      gatewayLabel: "Gateway",
+      browserLabel: "Gateway",
       submitting: false,
       pendingPlacement: false,
       popoverOpen: false,

@@ -13,7 +13,7 @@ import { createGatewayCredentialPlan } from "./credential-planner.js";
 import { resolveGatewayCredentialsFromValues } from "./credentials.js";
 
 /** Authentication modes after config, override, and credential inputs are combined. */
-type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
+type ResolvedGatewayAuthMode = NonNullable<GatewayAuthConfig["mode"]>;
 
 /** Records which input selected the effective Gateway auth mode. */
 type ResolvedGatewayAuthModeSource = "override" | "config" | "password" | "token" | "default";

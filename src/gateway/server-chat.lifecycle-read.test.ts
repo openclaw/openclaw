@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadExactSessionEntryReadOnly,
   replaceSessionEntry,
@@ -101,6 +102,52 @@ it("reads lifecycle recovery in workers and retains tool/text order through clos
       await closing;
       await h.handler.dispose();
       sql.restore();
+      held.mockRestore();
+      h.chatRunState.clear();
+    }
+  });
+});
+
+it("reads queued recovery state once after the preceding event settles", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    setRuntimeConfigSnapshot(config);
+    const target = { agentId: "main", sessionKey, env };
+    replaceSessionEntrySync(target, { sessionId: "worker-lifecycle-session", updatedAt: 1 });
+    const entered = createDeferred();
+    const release = createDeferred();
+    const read = sessionReader.loadGatewaySessionEntryReadOnlyInWorker;
+    const held = vi
+      .spyOn(sessionReader, "loadGatewaySessionEntryReadOnlyInWorker")
+      .mockImplementationOnce(async (params) => {
+        const result = await read(params);
+        entered.resolve();
+        await release.promise;
+        return result;
+      });
+    const h = createAgentEventTestHarness();
+    h.nodeHasSessionSubscribers.mockReturnValue(false);
+    h.register("worker-lifecycle", sessionKey, "worker-lifecycle");
+    try {
+      const first = h.handler(event("start"));
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        Promise.resolve(first),
+        "recovery did not start",
+      );
+      const queued = h.handler({ ...event("start", 2), lifecycleGeneration: "pre-restart" });
+      await replaceSessionEntry(target, {
+        sessionId: "worker-lifecycle-session",
+        updatedAt: 2_000,
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "worker-lifecycle", lifecycleGeneration: "pre-restart" }],
+      });
+      release.resolve();
+      await Promise.all([first, queued]);
+      expect(h.agent().map(([, payload]) => payload.seq)).toEqual([1]);
+      expect(held).toHaveBeenCalledTimes(2);
+    } finally {
+      release.resolve();
+      await h.handler.dispose();
       held.mockRestore();
       h.chatRunState.clear();
     }

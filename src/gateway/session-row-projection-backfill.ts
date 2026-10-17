@@ -30,7 +30,7 @@ export function createSessionRowProjectionBackfill(params: {
   current: (row: Row) => boolean;
   publish: (
     row: Row,
-    fields: Awaited<ReturnType<typeof backfillSessionRowTranscriptFields>>,
+    fields: NonNullable<Awaited<ReturnType<typeof backfillSessionRowTranscriptFields>>>,
   ) => void;
 }) {
   const inOwnerContext = AsyncLocalStorage.snapshot();
@@ -81,14 +81,24 @@ export function createSessionRowProjectionBackfill(params: {
         // A replacement/private-session revocation must not publish another session's text.
         if (!disposed && live?.entry && params.current(row)) {
           const facts = live.retainedDatabaseFacts;
+          // A newer unknown assistant fact needs its queued read, not this older snapshot.
+          if (revisions.get(id) !== captured && facts?.transcriptAssistantMessage === "unknown") {
+            continue;
+          }
+          if (fields && facts?.transcriptAssistantMessage === "unknown") {
+            facts.transcriptAssistantMessage = fields.lastAssistantMessage ?? null;
+          }
           params.publish(
             live,
-            facts?.transcriptPreview !== undefined && facts.transcriptTerminalModel !== undefined
+            facts?.transcriptPreview !== undefined &&
+              facts.transcriptAssistantMessage !== "unknown" &&
+              facts.transcriptTerminalModel !== undefined
               ? presentSessionRowTranscriptFields(transcriptParams(live, live.entry), {
                   lastMessagePreview: facts.transcriptPreview,
+                  lastAssistantMessage: facts.transcriptAssistantMessage,
                   terminalModel: facts.transcriptTerminalModel,
                 })
-              : fields,
+              : (fields ?? {}),
           );
         }
       } catch {
@@ -121,16 +131,22 @@ export function createSessionRowProjectionBackfill(params: {
       const id = identity(row);
       const next = revision(row, facts);
       if (facts?.transcriptPreview !== undefined && facts.transcriptTerminalModel !== undefined) {
-        revisions.set(id, next);
-        queued.delete(id);
         params.publish(
           row,
           presentSessionRowTranscriptFields(transcriptParams(row, row.entry), {
             lastMessagePreview: facts.transcriptPreview,
+            lastAssistantMessage:
+              facts.transcriptAssistantMessage === "unknown"
+                ? (row.lastAssistantMessage ?? null)
+                : facts.transcriptAssistantMessage,
             terminalModel: facts.transcriptTerminalModel,
           }),
         );
-        return;
+        if (facts.transcriptAssistantMessage !== "unknown") {
+          revisions.set(id, next);
+          queued.delete(id);
+          return;
+        }
       }
       if (!isDeepStrictEqual(revisions.get(id), next)) {
         revisions.set(id, next);

@@ -79,15 +79,10 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite: boundary.maintain,
 }));
 vi.mock("./session-accessor.sqlite-normalize.js", () => ({}));
-vi.mock("./session-accessor.sqlite-scope.js", () => ({
-  resolveSqliteScope: (scope: ResolvedSqliteScope) => scope,
+vi.mock("./session-accessor.sqlite-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-accessor.sqlite-scope.js")>()),
   resolveSqliteTranscriptArchiveDirectory: () => "/synthetic/archive",
   runExclusiveSqliteSessionWrite: boundary.queue,
-  toDatabaseOptions: (scope: ResolvedSqliteScope) => ({
-    agentId: scope.agentId,
-    env: scope.env,
-    path: scope.path,
-  }),
 }));
 vi.mock("./session-accessor.sqlite-status.js", () => ({}));
 vi.mock("./session-canonical-key.js", () => ({ assertCanonicalSessionKeyWrite() {} }));
@@ -101,7 +96,6 @@ vi.mock("./session-history-eviction.js", () => ({
 vi.mock("./session-store-path.js", () => ({
   resolveSessionStorePathForScope: () => "/synthetic/store",
 }));
-vi.mock("./store-entry.js", () => ({}));
 vi.mock("./types.js", () => ({}));
 
 afterEach(() => {

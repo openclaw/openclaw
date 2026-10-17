@@ -392,7 +392,7 @@ export async function listWorkshopSkills(
       continue;
     }
     const skillDir = path.join(skillsRoot, entry.name);
-    const content = await readWorkspaceSkillFile(path.join(skillDir, SKILL_FILE)).catch(() => null);
+    const content = await readWorkspaceSkillFile(path.join(skillDir, SKILL_FILE));
     if (content === null) {
       continue;
     }

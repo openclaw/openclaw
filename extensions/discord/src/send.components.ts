@@ -12,13 +12,12 @@ import {
   type DiscordComponentBuildResult,
   type DiscordComponentMessageSpec,
 } from "./components.js";
+import { createChannelMessage, editChannelMessage } from "./internal/api.messages.js";
 import {
-  createChannelMessage,
-  editChannelMessage,
   serializePayload,
   type MessagePayloadFile,
   type MessagePayloadObject,
-} from "./internal/discord.js";
+} from "./internal/payload.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";

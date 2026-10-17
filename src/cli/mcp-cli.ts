@@ -1,5 +1,3 @@
-import { constants as fsConstants } from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
@@ -29,6 +27,7 @@ import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { executableFileExists, safeStat } from "../infra/path-existence.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
@@ -118,23 +117,15 @@ type McpServerControlOptions = {
   clientCert?: string;
   clientKey?: string;
   probe?: boolean;
+  clearTools?: boolean;
+  clearTimeouts?: boolean;
+  clearAuth?: boolean;
+  clearTls?: boolean;
 };
 
 function parseCsvList(value: string | undefined): string[] | undefined {
   const entries = normalizeCsvOrLooseStringList(value);
   return entries.length > 0 ? entries : undefined;
-}
-
-function applyMcpToolFilter(server: Record<string, unknown>, opts: McpServerControlOptions): void {
-  const include = parseCsvList(opts.include);
-  const exclude = parseCsvList(opts.exclude);
-  if (include || exclude) {
-    server.toolFilter = {
-      ...asRecord(server.toolFilter),
-      ...(include ? { include } : {}),
-      ...(exclude ? { exclude } : {}),
-    };
-  }
 }
 
 function parseKeyValueEntries(values: readonly string[] | undefined, label: string) {
@@ -173,10 +164,25 @@ function setOptionalField(target: Record<string, unknown>, key: string, value: u
   }
 }
 
-function applyMcpTimeoutOptions(
+function applyMcpServerControls(
   server: Record<string, unknown>,
   opts: McpServerControlOptions,
 ): void {
+  const include = parseCsvList(opts.include);
+  const exclude = parseCsvList(opts.exclude);
+  if (opts.clearTools) {
+    delete server.toolFilter;
+  } else if (include || exclude) {
+    server.toolFilter = {
+      ...asRecord(server.toolFilter),
+      ...(include ? { include } : {}),
+      ...(exclude ? { exclude } : {}),
+    };
+  }
+  if (opts.clearTimeouts) {
+    delete server.requestTimeoutMs;
+    delete server.connectionTimeoutMs;
+  }
   for (const [option, field, label] of [
     ["timeout", "requestTimeoutMs", "--timeout"],
     ["connectTimeout", "connectionTimeoutMs", "--connect-timeout"],
@@ -191,12 +197,26 @@ function applyMcpTimeoutOptions(
     }
     server[field] = seconds * 1_000;
   }
+  if (opts.parallel === true) {
+    server.supportsParallelToolCalls = true;
+  } else if (opts.parallel === false) {
+    delete server.supportsParallelToolCalls;
+    delete server.supports_parallel_tool_calls;
+  }
+  const approvalMode = parseMcpApprovalModeOption(opts.approval);
+  if (approvalMode) {
+    server.codex = { ...asRecord(server.codex), defaultToolsApprovalMode: approvalMode };
+  }
 }
 
-function applyMcpOAuthOptions(
+function applyMcpHttpControls(
   server: Record<string, unknown>,
   opts: McpServerControlOptions,
 ): void {
+  if (opts.clearAuth) {
+    delete server.auth;
+    delete server.oauth;
+  }
   const auth = normalizeLowercaseStringOrEmpty(normalizeStringifiedOptionalString(opts.auth) ?? "");
   if (auth && auth !== "oauth") {
     fail('Invalid --auth value. Use "oauth".');
@@ -218,9 +238,18 @@ function applyMcpOAuthOptions(
   if (Object.keys(oauth).length > 0) {
     server.oauth = { ...asRecord(server.oauth), ...oauth };
   }
-}
-
-function applyMcpTlsOptions(server: Record<string, unknown>, opts: McpServerControlOptions): void {
+  if (opts.clearTls) {
+    for (const field of [
+      "sslVerify",
+      "ssl_verify",
+      "clientCert",
+      "client_cert",
+      "clientKey",
+      "client_key",
+    ]) {
+      delete server[field];
+    }
+  }
   if (opts.sslVerify !== undefined) {
     const sslVerify = normalizeLowercaseStringOrEmpty(opts.sslVerify);
     if (sslVerify !== "true" && sslVerify !== "false") {
@@ -312,24 +341,6 @@ function resolveConfiguredPath(filePath: string, cwd: unknown): string {
   return path.resolve(base, filePath);
 }
 
-async function pathHasType(filePath: string, type: "isFile" | "isDirectory"): Promise<boolean> {
-  try {
-    return (await fs.stat(filePath))[type]();
-  } catch {
-    return false;
-  }
-}
-
-async function isExecutable(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath, process.platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
-    // X_OK also succeeds for searchable directories; follow symlinks to check the target type.
-    return (await fs.stat(filePath)).isFile();
-  } catch {
-    return false;
-  }
-}
-
 function executableCandidates(command: string): string[] {
   if (process.platform !== "win32") {
     return [command];
@@ -352,7 +363,7 @@ async function commandExists(
   const hasPathSeparator =
     path.isAbsolute(command) || command.includes("/") || command.includes("\\");
   if (hasPathSeparator) {
-    return isExecutable(resolveConfiguredPath(command, cwd));
+    return executableFileExists(resolveConfiguredPath(command, cwd));
   }
   const configuredPath =
     process.platform === "win32" ? resolveEnvironmentValue(env, "PATH") : env?.PATH;
@@ -364,7 +375,7 @@ async function commandExists(
       ? pathEntry
       : resolveConfiguredPath(pathEntry, cwd);
     for (const candidate of executableCandidates(command)) {
-      if (await isExecutable(path.join(resolvedPathEntry, candidate))) {
+      if (await executableFileExists(path.join(resolvedPathEntry, candidate))) {
         return true;
       }
     }
@@ -396,7 +407,7 @@ async function collectMcpDoctorIssues(params: {
           issue("error", `stdio command not found or not executable: ${resolved.command}`),
         );
       }
-      if (resolved.cwd && !(await pathHasType(resolved.cwd, "isDirectory"))) {
+      if (resolved.cwd && !(await safeStat(resolved.cwd))?.isDirectory()) {
         issues.push(issue("error", `stdio cwd does not exist: ${resolved.cwd}`));
       }
     }
@@ -433,7 +444,7 @@ async function collectMcpDoctorIssues(params: {
         [resolved.clientCert, "client certificate"],
         [resolved.clientKey, "client key"],
       ]) {
-        if (filePath && !(await pathHasType(resolveConfiguredPath(filePath, ""), "isFile"))) {
+        if (filePath && !(await safeStat(resolveConfiguredPath(filePath, "")))?.isFile()) {
           issues.push(issue("error", `${label} file does not exist: ${filePath}`));
         }
       }
@@ -1030,21 +1041,12 @@ export function registerMcpCli(program: Command) {
           server.url = url;
           setOptionalField(server, "transport", normalizeStringifiedOptionalString(opts.transport));
           setOptionalField(server, "headers", parseKeyValueEntries(opts.header, "--header"));
-          applyMcpOAuthOptions(server, opts);
-          applyMcpTlsOptions(server, opts);
+          applyMcpHttpControls(server, opts);
         }
         if (opts.disabled) {
           server.enabled = false;
         }
-        if (opts.parallel) {
-          server.supportsParallelToolCalls = true;
-        }
-        const approvalMode = parseMcpApprovalModeOption(opts.approval);
-        if (approvalMode) {
-          server.codex = { defaultToolsApprovalMode: approvalMode };
-        }
-        applyMcpTimeoutOptions(server, opts);
-        applyMcpToolFilter(server, opts);
+        applyMcpServerControls(server, opts);
 
         const loaded = await loadMcpConfig();
         const targetName = name.trim();
@@ -1150,10 +1152,6 @@ export function registerMcpCli(program: Command) {
         opts: McpServerControlOptions & {
           enable?: boolean;
           disable?: boolean;
-          clearTools?: boolean;
-          clearTimeouts?: boolean;
-          clearAuth?: boolean;
-          clearTls?: boolean;
         },
       ) => {
         if (opts.enable && opts.disable) {
@@ -1168,43 +1166,8 @@ export function registerMcpCli(program: Command) {
         if (opts.disable) {
           next.enabled = false;
         }
-        if (opts.clearTools) {
-          delete next.toolFilter;
-        } else {
-          applyMcpToolFilter(next, opts);
-        }
-        if (opts.clearTimeouts) {
-          delete next.requestTimeoutMs;
-          delete next.connectionTimeoutMs;
-        }
-        applyMcpTimeoutOptions(next, opts);
-        if (opts.parallel === true) {
-          next.supportsParallelToolCalls = true;
-        } else if (opts.parallel === false) {
-          delete next.supportsParallelToolCalls;
-          delete next.supports_parallel_tool_calls;
-        }
-        const approvalMode = parseMcpApprovalModeOption(opts.approval);
-        if (approvalMode) {
-          next.codex = {
-            ...asRecord(next.codex),
-            defaultToolsApprovalMode: approvalMode,
-          };
-        }
-        if (opts.clearAuth) {
-          delete next.auth;
-          delete next.oauth;
-        }
-        applyMcpOAuthOptions(next, opts);
-        if (opts.clearTls) {
-          delete next.sslVerify;
-          delete next.ssl_verify;
-          delete next.clientCert;
-          delete next.client_cert;
-          delete next.clientKey;
-          delete next.client_key;
-        }
-        applyMcpTlsOptions(next, opts);
+        applyMcpServerControls(next, opts);
+        applyMcpHttpControls(next, opts);
         if (opts.probe && next.enabled !== false && next.auth !== "oauth") {
           await probeMcpServersOrFail({
             config: loaded.config,

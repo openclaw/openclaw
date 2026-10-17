@@ -1,7 +1,6 @@
 import {
   isStrictOpenAIJsonSchemaCompatible,
   normalizeOpenAIStrictToolParameters,
-  prepareOpenAIFunctionTool,
   prepareAnthropicInputSchema,
   publishRuntimeToolInputSchema,
 } from "@openclaw/ai/internal/tool-schema";
@@ -41,7 +40,13 @@ type DescriptorSnapshot = {
 };
 
 const snapshots = new Map<string, DescriptorSnapshot>();
-registerPluginMetadataProcessMemoLifecycleClear(() => snapshots.clear());
+// Seeds a session's first attempt from the latest publication with the same inputs;
+// per-tool identity checks still gate every reuse.
+const latestByKey = new Map<string, DescriptorSnapshot>();
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  snapshots.clear();
+  latestByKey.clear();
+});
 
 function publishParameters(parameters: AnyAgentTool["parameters"], name: string) {
   const projected = publishRuntimeToolInputSchema(parameters, `${name}.parameters`, name);
@@ -51,7 +56,7 @@ function publishParameters(parameters: AnyAgentTool["parameters"], name: string)
     : undefined;
 }
 
-function prewarmOpenAIDescriptor(
+function prewarmOpenAISchema(
   descriptor: Readonly<ToolDescriptor & { parameters: Record<string, unknown> }>,
   compat?: ModelCompatConfig,
 ) {
@@ -59,11 +64,7 @@ function prewarmOpenAIDescriptor(
     if (strict && !isStrictOpenAIJsonSchemaCompatible(descriptor.parameters)) {
       continue;
     }
-    const parameters = normalizeOpenAIStrictToolParameters(descriptor.parameters, strict, compat);
-    prepareOpenAIFunctionTool(descriptor.name, descriptor.description, parameters, strict);
-    if (!strict) {
-      prepareOpenAIFunctionTool(descriptor.name, descriptor.description, parameters, undefined);
-    }
+    normalizeOpenAIStrictToolParameters(descriptor.parameters, strict, compat);
   }
 }
 
@@ -78,10 +79,11 @@ export function prepareAgentToolDescriptorSnapshot(inputs: SnapshotInputs) {
     inputs.modelCompat,
     inputs.tools.map((tool) => tool.name),
   ]);
-  const previous = inputs.sessionId ? snapshots.get(inputs.sessionId) : undefined;
+  const own = inputs.sessionId ? snapshots.get(inputs.sessionId) : undefined;
+  const previous = own?.key === key ? own : latestByKey.get(key);
   const entries =
-    previous?.key === key && previous.pluginMetadataSnapshot === inputs.pluginMetadataSnapshot
-      ? previous.entries
+    previous?.pluginMetadataSnapshot === inputs.pluginMetadataSnapshot
+      ? previous?.entries
       : undefined;
 
   return {
@@ -146,9 +148,28 @@ export function prepareAgentToolDescriptorSnapshot(inputs: SnapshotInputs) {
       }
       const sessionId = inputs.sessionId;
       const publish = () => {
+        // Concurrent cold sessions settle after one another; reuse what they already published.
+        const latest = latestByKey.get(key);
+        const published =
+          latest?.pluginMetadataSnapshot === inputs.pluginMetadataSnapshot
+            ? latest?.entries
+            : undefined;
         const prepared = pending.map((entry, index): PreparedDescriptor | undefined => {
           if (entry === entries?.[index]) {
             return entry;
+          }
+          const shared = published?.[index];
+          if (
+            shared &&
+            shared.descriptor.name === entry.descriptor.name &&
+            shared.source === entry.source &&
+            shared.outputSource === entry.outputSource &&
+            shared.descriptor.description === entry.descriptor.description &&
+            (entry.finalSource === entry.normalized
+              ? shared.finalSource === shared.normalized
+              : shared.finalSource === entry.finalSource)
+          ) {
+            return shared;
           }
           const normalizedSchema = publishParameters(entry.normalized, entry.descriptor.name);
           const parameters =
@@ -167,7 +188,7 @@ export function prepareAgentToolDescriptorSnapshot(inputs: SnapshotInputs) {
             inputs.modelApi === "openai-responses" ||
             inputs.modelApi === "openai-completions"
           ) {
-            prewarmOpenAIDescriptor(descriptor, inputs.modelCompat);
+            prewarmOpenAISchema(descriptor, inputs.modelCompat);
           } else if (inputs.modelApi === "anthropic-messages") {
             prepareAnthropicInputSchema(parameters);
           }
@@ -180,13 +201,17 @@ export function prepareAgentToolDescriptorSnapshot(inputs: SnapshotInputs) {
           });
         });
         // A late settlement may replace a newer entry; input matching makes that a cold miss.
-        snapshots.delete(sessionId);
-        snapshots.set(sessionId, {
+        const snapshot = {
           key,
           pluginMetadataSnapshot: inputs.pluginMetadataSnapshot,
           entries: Object.freeze(prepared),
-        });
+        };
+        snapshots.delete(sessionId);
+        snapshots.set(sessionId, snapshot);
         pruneMapToMaxSize(snapshots, 64);
+        latestByKey.delete(key);
+        latestByKey.set(key, snapshot);
+        pruneMapToMaxSize(latestByKey, 16);
       };
       if (registerCleanup) {
         registerCleanup(async () => publish());

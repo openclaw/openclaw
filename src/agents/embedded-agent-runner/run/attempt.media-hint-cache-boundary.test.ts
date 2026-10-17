@@ -109,6 +109,7 @@ async function createTurnFixture(systemPromptOverride?: string) {
       sessionAgentId: "main",
       runtimeModel: testModel.id,
       systemPromptText,
+      hasBaselineTools: () => true,
       applyPromptBuildToolsAllow: () => ["image_generate"],
       setActiveSessionSystemPrompt,
       setLeasedSteering: vi.fn(),

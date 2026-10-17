@@ -1,13 +1,3 @@
-.session-menu__compact-details {
-  display: inline-flex;
-  flex: 0 1 auto;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  max-width: 96px;
-  overflow: hidden;
-}
-
 .sidebar-session-sort-menu.oc-menu {
   box-sizing: border-box;
   width: min(220px, calc(100dvw - 16px));
@@ -165,11 +155,6 @@
   height: var(--settings-control-height);
 }
 
-.sidebar-session-menu-segmented::part(form-control-input) {
-  flex-wrap: nowrap;
-  gap: calc(var(--space-1) / 2);
-}
-
 .sidebar-session-menu-segmented > .settings-segmented__btn {
   flex: 1 1 auto;
   justify-content: center;
@@ -177,11 +162,6 @@
   min-height: calc(var(--settings-control-height) - var(--space-1) * 1.5);
   padding-inline: var(--space-1);
   font-size: var(--control-ui-text-xs);
-}
-
-.sidebar-session-menu-segmented > .settings-segmented__btn::part(label) {
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .sidebar-session-menu-row .picker-select__trigger {

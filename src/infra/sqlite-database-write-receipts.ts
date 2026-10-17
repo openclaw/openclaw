@@ -4,11 +4,7 @@ import { toUSVString } from "node:util";
 import { threadId } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
-import {
-  isPostgresSqlConnection,
-  sqlPublicationAnchor,
-  type EngineConnection,
-} from "./sql-connection.js";
+import { sqlPublicationAnchor, type EngineConnection } from "./sql-connection.js";
 import {
   isSqliteDatabaseAdmissionRetired as isRetired,
   readSqliteDatabaseGeneration,
@@ -40,7 +36,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   readRevision(this: void, database: DatabaseSync): number | undefined;
   writer(this: void, database: DatabaseSync): Admission | undefined;
   suspended(this: void, database: DatabaseSync): boolean;
-  publish(this: void, record: Admission): void;
+  publish(this: void, record: Admission, keys: readonly string[]): void;
 }) {
   /** Local sibling writers notify maintenance after publishing their shared write revision. */
   function onSqliteDatabaseWriteSettled(
@@ -137,7 +133,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     if (changed) {
       // Scope discovery is cold metadata, shared through the existing admission exchange.
       advanceSqliteDatabaseGeneration(record, "publicationRevision");
-      owner.publish(record);
+      owner.publish(record, keys);
     }
   }
 
@@ -177,14 +173,12 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       if (changed) {
         advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
         advanceSqliteDatabaseGeneration(record, "publicationRevision");
-        owner.publish(record);
+        owner.publish(record, keys);
       }
     };
     if (
       !stageSqliteTransactionState(database, {
-        stage() {},
         commit: retire,
-        rollback() {},
       }) &&
       !connection.isTransaction
     ) {
@@ -256,7 +250,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   function readScopedWriteToken(
     database: DatabaseSync,
     scope: string | readonly SqliteDatabaseWriteScope[],
-    includePending = false,
+    pending?: Set<string> | null,
   ): string | undefined {
     const keys = normalizedWriteScopes(scope);
     const record = owner.admission(database);
@@ -268,7 +262,6 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     if (owner.readRevision(database) === undefined) {
       return undefined;
     }
-    const pending = includePending ? state.pendingWriteScopes.get(database) : undefined;
     return record
       ? scopedWriteToken(record, keys, pending)
       : localScopedWriteToken(database, keys, pending);
@@ -314,11 +307,8 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     connection: EngineConnection,
     scope: string | readonly SqliteDatabaseWriteScope[],
   ): string | undefined {
-    // PG publishes broad invalidation at commit, without native pre-commit scope tracking.
-    if (isPostgresSqlConnection(connection)) {
-      return undefined;
-    }
-    return readScopedWriteToken(sqlPublicationAnchor(connection), scope, true);
+    const database = sqlPublicationAnchor(connection);
+    return readScopedWriteToken(database, scope, state.pendingWriteScopes.get(database));
   }
 
   /** Host row caches retain a physical identity and receipt without opening SQLite. */

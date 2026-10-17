@@ -72,6 +72,7 @@ Update instructions at owner; no competing rules here.
 - Do less work (Peter, 2026-10-14): validate/inspect untrusted input once at its trust boundary; trust internal data after that. No defensive deep copies, re-validation, re-reads of your own writes, or redundant integrity/assert passes on hot paths; delete such work instead of caching it.
 - Core owns shared message tools, action vocabulary, dispatch; channels own account, security, conversation, transport contracts. Keep typed command/approval/URL/action distinctions until encoding; never infer commands from raw strings.
 - Carry prepared facts through hot paths; reuse process-stable plugin metadata and lifecycle-owned caches; never repeatedly load registries or freshness-poll files. Preserve lazy module boundaries; verify relevant builds on authorized host.
+- Cache identity: key every cache, memo, in-flight join, and shared snapshot by every input that changes its answer: scope (agent, account, credential, session, workspace) and request shape (provider set, mode, options, deadline). Callers asking different questions get separate slots; volatile values stay out of keys. Prove sharing with a work-count test where differing callers interleave.
 - Narrow APIs, explicit valid states, strict ESM/types. Real types or `unknown`; no `@ts-nocheck`; suppressions need explained exception. Reuse schema/coercion owners; no duplicate guards, speculative helpers, naming-only wrappers.
 - Static-analysis fixes: strengthen real contract or remove unsafe operation; never hide with casts, widening, marker types, property probes. New lint rules need real invariant and clean owner scope.
 - Comments explain non-obvious ownership, lifecycle, ordering, cleanup, platform, dependency constraints, not syntax. Regenerate generated outputs; never hand-edit them or `node_modules`, or tweak formatter settings per expression.
@@ -90,6 +91,7 @@ Update instructions at owner; no competing rules here.
 - Proof selection/reuse/gaps: [policy](.agents/skills/openclaw-testing/SKILL.md#select-the-proof); docs-only: docs sanity + `git diff --check`.
 - **Visual changes** need inspected, sanitized before/after screenshots in chat and embedded in PR before merge or completion ([gate](.agents/skills/openclaw-pr-maintainer/references/media.md#screenshot-completion-gate)).
 - Before nontrivial code commit/landing: follow [fresh review](.agents/skills/openclaw-pr-maintainer/SKILL.md#review-and-publish).
+- ClawSweeper reviews each PR automatically once, when it opens or leaves draft. Later pushes get no review until someone comments `@clawsweeper re-review`; post it once branch, body, and proof are current ([review flow](docs/reference/pull-request-review-flow.md#clawsweeper)).
 
 ### Execution gotchas
 

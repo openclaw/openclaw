@@ -6,7 +6,7 @@ import {
   type APIMessageTopLevelComponent,
 } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Container, TextDisplay } from "./internal/discord.js";
+import { Container, TextDisplay } from "./internal/components.message.js";
 import {
   createDiscordLoopbackRest,
   discordWebMediaMockFactory,

@@ -20,7 +20,7 @@ import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
 import type { CiTestRuntimeSelection } from "./lib/ci-test-runtime.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -106,10 +106,6 @@ type RunShardOptions = {
   runChild?: typeof runChild;
   scratchDir?: string;
 };
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
-}
 
 function isShardGroupConfig(value: unknown): value is ShardGroupConfig {
   return isRecord(value) && isStringArray(value.configs);
@@ -318,10 +314,13 @@ export function clonePersistentCacheSlots(root: string | undefined, concurrency:
 
 const MAX_PENDING_LINE_CHARS = 1_000_000;
 
-function relayChildStream(stream: Readable, label: string) {
+function relayChildStream(stream: Readable, label: string, recordLine: (line: string) => void) {
   const decoder = new StringDecoder("utf8");
   let pending = "";
-  const writeLine = (line: string) => {
+  const writeLine = (rawLine: string) => {
+    // Test names can contain NUL; keep the job log searchable as text.
+    const line = rawLine.replaceAll("\0", "\\0");
+    recordLine(line);
     // Actions only parses workflow commands at the start of a line.
     const workflowCommand = /^::(?:error|warning|notice|group|endgroup)(?: .*?)?::/u.test(line);
     const output = workflowCommand ? line : `[shard:${label}] ${line}`;
@@ -470,6 +469,18 @@ async function runChild(
   let child: ChildProcess;
   let completion: Promise<number>;
   let teardown: (() => void) | undefined;
+  let terminationSignal: NodeJS.Signals | null = null;
+  let outputTail = "";
+  const recordLine = (line: string) => {
+    outputTail = `${outputTail}${line}\n`.slice(-16_384);
+  };
+  const reportFailure = (reason: string) => {
+    process.stdout.write(`[shard-failure:${label}] FAILED (${reason})\n`);
+    for (const line of (outputTail.trimEnd() || "(no child output)").split("\n")) {
+      // Prefix replayed workflow commands so Actions does not execute them twice.
+      process.stdout.write(`[shard-failure:${label}:tail] ${line}\n`);
+    }
+  };
   if (context) {
     const owned = context.spawn({
       command: childCommand.command,
@@ -490,6 +501,7 @@ async function runChild(
     completion = context.workerRun.borrow(
       child,
       owned.completion.then((result) => {
+        terminationSignal = result.signal;
         if (!result.groupJoined) {
           throw new Error("CI group descendant completion is unverified");
         }
@@ -505,10 +517,12 @@ async function runChild(
       stdio: ["ignore", "pipe", "pipe"],
     });
     completion = new Promise<number>((resolve) => {
-      child.once("close", (code, signal) =>
-        resolve(signal ? signalExitCode(signal) : (code ?? VITEST_INFRASTRUCTURE_EXIT_CODE)),
-      );
+      child.once("close", (code, signal) => {
+        terminationSignal = signal;
+        resolve(signal ? signalExitCode(signal) : (code ?? VITEST_INFRASTRUCTURE_EXIT_CODE));
+      });
       child.once("error", (error) => {
+        recordLine(`failed to spawn: ${error}`);
         process.stdout.write(`[shard:${label}] failed to spawn: ${error}\n`);
         resolve(VITEST_INFRASTRUCTURE_EXIT_CODE);
       });
@@ -519,18 +533,30 @@ async function runChild(
   // wrapper heap. Backpressure pauses the child stream while stdout drains,
   // and an oversized newline-free tail is force-flushed so the pending
   // partial line stays bounded too.
-  const flushers = [child.stdout!, child.stderr!].map((stream) => relayChildStream(stream, label));
+  const flushers = [child.stdout!, child.stderr!].map((stream) =>
+    relayChildStream(stream, label, recordLine),
+  );
   process.stdout.write(`[shard:${timingKey}] begin\n`);
   let code: number;
   try {
-    code = await completion;
-  } finally {
-    for (const flush of flushers) {
-      flush();
+    try {
+      code = await completion;
+    } finally {
+      for (const flush of flushers) {
+        flush();
+      }
+      teardown?.();
     }
-    teardown?.();
+  } catch (error) {
+    reportFailure(`error: ${String(error)}`);
+    throw error;
   }
   process.stdout.write(`[shard:${timingKey}] end (exit ${code})\n`);
+  if (code !== 0) {
+    reportFailure(
+      `exit ${code}${terminationSignal ? `, signal ${String(terminationSignal)}` : ""}`,
+    );
+  }
   return code;
 }
 

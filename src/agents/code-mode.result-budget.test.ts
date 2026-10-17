@@ -1,9 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createOpenClawReadTool,
   createSandboxedReadTool,
@@ -11,10 +11,13 @@ import {
 } from "./agent-tools.read.js";
 import {
   expectCodeModeSharedBudget,
+  expectCompleted,
+  expectFailure,
   expectOriginalCodeModeMarker,
   fakeTool,
   resetCodeModeTestState,
   resultDetails,
+  resultText as text,
 } from "./code-mode.test-support.js";
 import { submitEmbeddedAttemptPrompt } from "./embedded-agent-runner/run/attempt-prompt-submit.js";
 import {
@@ -33,33 +36,36 @@ import { SessionManager } from "./sessions/session-manager.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import type { ReadToolContinuation } from "./sessions/tools/tool-contracts.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { resolveLiveToolResultMaxChars } from "./tool-result-limits.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const sessionId = "result-budget-boundary";
-const model = {
+const contextWindow = 128_000;
+const model = makeProviderModelFixture({
   id: "budget-fixture",
   name: "Budget fixture",
   provider: "test-provider",
   api: "openai-responses",
   baseUrl: "https://example.test",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
+  contextWindow,
   maxTokens: 1_000,
   compat: {},
-} satisfies Model;
+});
 
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
+type BudgetOptions = { value?: { text: string }; fail?: boolean; context?: number };
+const jsonBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 
 function message(
-  result: AgentToolResult<unknown>,
+  result: AgentToolResult<unknown> | string,
   toolName: string,
   toolCallId = toolName,
 ): ToolResultMessage {
   return {
-    ...result,
+    ...(typeof result === "string"
+      ? { content: [{ type: "text" as const, text: result }], details: {} }
+      : result),
     role: "toolResult",
     toolName,
     toolCallId,
@@ -72,13 +78,6 @@ async function execute(tool: AnyAgentTool, id: string, args: unknown, callId = t
   return message(await tool.execute(id, args), tool.name, callId);
 }
 
-function text(result: { content: AgentToolResult<unknown>["content"] }): string {
-  return result.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n");
-}
-
 function toolResult(messages: AgentMessage[], index: number): ToolResultMessage {
   const result = messages[index];
   if (result?.role !== "toolResult") {
@@ -89,7 +88,7 @@ function toolResult(messages: AgentMessage[], index: number): ToolResultMessage 
 
 async function dispatch(
   messages: AgentMessage[],
-  contextWindowTokens = model.contextWindow,
+  contextWindowTokens = contextWindow,
 ): Promise<AgentMessage[]> {
   let sent: AgentMessage[] = [];
   const agent = new Agent({
@@ -99,10 +98,7 @@ async function dispatch(
       return createAssistantMessageEventStream();
     },
   });
-  const cleanup = installToolResultContextGuard({
-    agent,
-    contextWindowTokens,
-  });
+  const cleanup = installToolResultContextGuard({ agent, contextWindowTokens });
   const activeSession = {
     isCompacting: false,
     [agentSessionQueuePromptContext]: () => {
@@ -114,7 +110,6 @@ async function dispatch(
     },
   };
   using promptStateLease = retainEmbeddedSessionPromptState(sessionId);
-  const sessionPromptState = promptStateLease.state;
   try {
     await submitEmbeddedAttemptPrompt({
       attempt: { sessionId },
@@ -125,11 +120,9 @@ async function dispatch(
       transcriptPrompt: "",
       systemPrompt: "",
       runtimeOnly: true,
-      toolResultMaxChars: resolveLiveToolResultMaxChars({
-        contextWindowTokens,
-      }),
+      toolResultMaxChars: resolveLiveToolResultMaxChars({ contextWindowTokens }),
       toolResultAggregateMaxChars: 128_000,
-      toolResultPromptProjectionState: sessionPromptState.toolResults,
+      toolResultPromptProjectionState: promptStateLease.state.toolResults,
       trajectoryRecorder: null,
       transcriptLeafId: null,
       onFinalPromptText: () => {},
@@ -152,134 +145,106 @@ afterEach(async () => {
 });
 
 describe("fresh producer results through persistence and model guards", () => {
-  it.each([
-    {
-      name: "mixed encoded text",
-      first: '🦞中a\u0001"\\\n'.repeat(6000),
-      last: "é€".repeat(18000),
-    },
-    {
-      name: "large final value",
-      first: "é".repeat(15_000),
-      last: "",
-      value: { text: "🦞".repeat(12_000) },
-    },
-    { name: "long failure", first: "x".repeat(35_000), last: "é".repeat(9000), fail: true },
-    {
-      name: "effective raw-weight context",
-      first: "é".repeat(6000),
-      last: "é".repeat(6000),
-      context: 8000,
-    },
+  it.each<[string, string, string, BudgetOptions]>([
+    ["mixed encoded text", '🦞中a\u0001"\\\n'.repeat(6000), "é€".repeat(18000), {}],
+    ["large final value", "é".repeat(15_000), "", { value: { text: "🦞".repeat(12_000) } }],
+    ["long failure", "x".repeat(35_000), "é".repeat(9000), { fail: true }],
+    ["effective raw-weight context", "é".repeat(6000), "é".repeat(6000), { context: 8000 }],
   ])(
-    "keeps $name Code Mode output complete after yield and provider dispatch",
-    async (scenario) => {
-      const { first: firstText, last: lastText } = scenario;
-      const cap = 65536;
-      const context = "context" in scenario ? scenario.context! : model.contextWindow;
-      const fail = "fail" in scenario && scenario.fail;
-      const value = "value" in scenario ? (scenario.value ?? true) : true;
-      const state = await createOpenClawTestState({ label: "code-mode-result-budget" });
-      const runtime = createAgentHarnessToolSurfaceRuntimeCore({
-        config: { tools: { codeMode: { enabled: true, maxOutputBytes: cap } } },
-        model,
-        contextTokenBudget: context,
-        modelToolsEnabled: true,
-        sessionId,
-        executeTool: async () => {
-          throw new Error("This fixture has no catalog tools");
-        },
-      });
-      try {
-        const tools = runtime.compactTools([]).tools;
-        if (runtime.toolSearchCatalogRef?.current) {
-          runtime.toolSearchCatalogRef.current.counterScope = "result-budget";
-        }
-        const first = await execute(tools[0]!, "first", {
-          code: `text(${JSON.stringify(firstText)}); await yield_control(); await yield_control(); ${lastText ? `text(${JSON.stringify(lastText)});` : ""} ${fail ? 'throw new Error("DIAGNOSTIC" + "é".repeat(40000));' : `return ${JSON.stringify(value)};`}`,
-        });
-        const firstSent = text(toolResult(await dispatch([first], context), 0));
-        expect(JSON.parse(firstSent)).toMatchObject({
-          status: "waiting",
-          runId: resultDetails(first).runId,
-        });
-        const runId = resultDetails(first).runId;
-        const empty = await execute(tools[1]!, "empty", { runId }, "empty");
-        expect(resultDetails(empty)).toMatchObject({ status: "waiting", output: [] });
-        const final = await execute(tools[1]!, "second", { runId });
-        const sent = await dispatch([first, empty, final], context);
-        expect(text(toolResult(sent, 0))).toBe(firstSent);
-        const finalText = text(toolResult(sent, 2));
-        expect(JSON.parse(finalText)).toMatchObject({ status: fail ? "failed" : "completed" });
-        const original = [
-          { type: "text", text: firstText },
-          ...(lastText ? [{ type: "text", text: lastText }] : []),
-        ];
-        const details = resultDetails(final);
-        const output = details.output as unknown[];
-        if (output.length > 0) {
-          expectOriginalCodeModeMarker(output[0], original);
-        } else {
-          expect(lastText).toBe("");
-          expect(
-            Buffer.byteLength(JSON.stringify(original)) +
-              Buffer.byteLength(JSON.stringify(details.value)),
-          ).toBeLessThanOrEqual(cap);
-        }
-        if (fail) {
-          expect(details).toMatchObject({
-            code: "internal_error",
-            failurePhase: "guest",
-            bridgeDispatchStarted: true,
-            error: expect.stringMatching(/^Error: DIAGNOSTIC.*\[error truncated\]$/s),
-          });
-        } else if (value === true) {
-          expect(details.value).toEqual(value);
-        } else {
-          expect(details.value).toMatchObject({
-            truncated: true,
-            reference: { id: expect.any(String), bytes: Buffer.byteLength(JSON.stringify(value)) },
-          });
-          const reference = (details.value as { reference: { id: string } }).reference;
-          const loaded = resultDetails(
-            await tools[0]!.execute("retained", {
-              code: `return (await results.load(${JSON.stringify(reference.id)})).text.length;`,
-            }),
-          );
-          expect(loaded).toMatchObject({ status: "completed", value: value.text.length });
-        }
-
-        const scope = {
-          agentId: "main",
+    "keeps %s Code Mode output complete after yield and provider dispatch",
+    async (_name, firstText, lastText, options) =>
+      withOpenClawTestState({ label: "code-mode-result-budget" }, async (state) => {
+        const cap = 65536;
+        const { context = contextWindow, fail = false, value = true } = options;
+        const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+          config: { tools: { codeMode: { enabled: true, maxOutputBytes: cap } } },
+          model,
+          contextTokenBudget: context,
+          modelToolsEnabled: true,
           sessionId,
-          sessionKey: "agent:main:result-budget",
-          storePath: join(state.sessionsDir(), "sessions.json"),
-        };
-        await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
-        const manager = SessionManager.open(scope, state.workspaceDir);
-        const maxChars = resolveLiveToolResultMaxChars({ contextWindowTokens: context });
-        installSessionToolResultGuard(manager, { maxToolResultChars: maxChars });
-        for (const [index, frame] of [first, empty, final].entries()) {
-          const frameText = text(frame);
-          expect(text(toolResult(sent, index)), "fresh producer text must pass unchanged").toBe(
-            frameText,
-          );
-          expect(estimateToolResultTextChars(frameText)).toBeLessThanOrEqual(maxChars);
-          const rawWeight = estimateToolResultTextChars(frameText, { minimumRawWeight: 2 });
-          expect(rawWeight).toBeLessThanOrEqual(context);
-          expectCodeModeSharedBudget(resultDetails(frame), cap);
-          manager.appendMessage(frame);
+          executeTool: async () => {
+            throw new Error("This fixture has no catalog tools");
+          },
+        });
+        try {
+          const tools = runtime.compactTools([]).tools;
+          if (runtime.toolSearchCatalogRef?.current) {
+            runtime.toolSearchCatalogRef.current.counterScope = "result-budget";
+          }
+          const first = await execute(tools[0]!, "first", {
+            code: `text(${JSON.stringify(firstText)}); await yield_control(); await yield_control(); ${lastText ? `text(${JSON.stringify(lastText)});` : ""} ${fail ? 'throw new Error("DIAGNOSTIC" + "é".repeat(40000));' : `return ${JSON.stringify(value)};`}`,
+          });
+          const runId = resultDetails(first).runId;
+          const firstSent = text(toolResult(await dispatch([first], context), 0));
+          expect(JSON.parse(firstSent)).toMatchObject({ status: "waiting", runId });
+          const empty = await execute(tools[1]!, "empty", { runId }, "empty");
+          expect(resultDetails(empty)).toMatchObject({ status: "waiting", output: [] });
+          const final = await execute(tools[1]!, "second", { runId });
+          const sent = await dispatch([first, empty, final], context);
+          expect(text(toolResult(sent, 0))).toBe(firstSent);
+          const finalText = text(toolResult(sent, 2));
+          expect(JSON.parse(finalText)).toMatchObject({ status: fail ? "failed" : "completed" });
+          const original = [
+            { type: "text", text: firstText },
+            ...(lastText ? [{ type: "text", text: lastText }] : []),
+          ];
+          const details = resultDetails(final);
+          const output = details.output as unknown[];
+          if (output.length > 0) {
+            expectOriginalCodeModeMarker(output[0], original);
+          } else {
+            expect(lastText).toBe("");
+            expect(jsonBytes(original) + jsonBytes(details.value)).toBeLessThanOrEqual(cap);
+          }
+          if (fail) {
+            expectFailure(details, "guest", "internal_error", {
+              bridgeDispatchStarted: true,
+              error: expect.stringMatching(/^Error: DIAGNOSTIC.*\[error truncated\]$/s),
+            });
+          } else if (value === true) {
+            expect(details.value).toEqual(value);
+          } else {
+            expect(details.value).toMatchObject({
+              truncated: true,
+              reference: { id: expect.any(String), bytes: jsonBytes(value) },
+            });
+            const reference = (details.value as { reference: { id: string } }).reference;
+            const loaded = resultDetails(
+              await tools[0]!.execute("retained", {
+                code: `return (await results.load(${JSON.stringify(reference.id)})).text.length;`,
+              }),
+            );
+            expectCompleted(loaded, value.text.length);
+          }
+
+          const scope = {
+            agentId: "main",
+            sessionId,
+            sessionKey: "agent:main:result-budget",
+            storePath: join(state.sessionsDir(), "sessions.json"),
+          };
+          await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+          const manager = SessionManager.open(scope, state.workspaceDir);
+          const maxChars = resolveLiveToolResultMaxChars({ contextWindowTokens: context });
+          installSessionToolResultGuard(manager, { maxToolResultChars: maxChars });
+          for (const [index, frame] of [first, empty, final].entries()) {
+            const frameText = text(frame);
+            expect(text(toolResult(sent, index)), "unchanged producer text").toBe(frameText);
+            expect(estimateToolResultTextChars(frameText)).toBeLessThanOrEqual(maxChars);
+            const rawWeight = estimateToolResultTextChars(frameText, { minimumRawWeight: 2 });
+            expect(rawWeight).toBeLessThanOrEqual(context);
+            expectCodeModeSharedBudget(resultDetails(frame), cap);
+            manager.appendMessage(frame);
+          }
+          manager.flushPendingPersistence();
+          const reloaded = SessionManager.open(scope, state.workspaceDir).buildSessionContext()
+            .messages;
+          expect(text(toolResult(reloaded, 2))).toBe(finalText);
+          expect(text(toolResult(await dispatch(reloaded, context), 2))).toBe(finalText);
+        } finally {
+          runtime.cleanup();
         }
-        manager.flushPendingPersistence();
-        const reloaded = SessionManager.open(scope, state.workspaceDir).buildSessionContext()
-          .messages;
-        expect(text(toolResult(reloaded, 2))).toBe(finalText);
-        expect(text(toolResult(await dispatch(reloaded, context), 2))).toBe(finalText);
-      } finally {
-        runtime.cleanup();
-        await state.cleanup();
-      }
-    },
+      }),
   );
 
   it.each([
@@ -288,9 +253,8 @@ describe("fresh producer results through persistence and model guards", () => {
     ["effective raw-weight context", false, "é".repeat(16_000), 8000],
   ] as const)(
     "keeps the read owner's exact cursor through the downstream result guard: %s",
-    async (_name, sandbox, source, context) => {
-      const state = await createOpenClawTestState({ label: "read-result-budget" });
-      try {
+    async (_name, sandbox, source, context) =>
+      withOpenClawTestState({ label: "read-result-budget" }, async (state) => {
         const file = join(state.workspaceDir, sandbox ? "notes 3.04 PM.txt" : "long-line.txt");
         await writeFile(sandbox ? file.replace(" PM", "\u202fPM") : file, source);
         const read = sandbox
@@ -309,9 +273,7 @@ describe("fresh producer results through persistence and model guards", () => {
           const callId = `read-${index}`;
           const page = await execute(read, callId, { path: file, ...continuation }, callId);
           const sent = toolResult(await dispatch([page], context), 0);
-          expect(text(sent), "no later clipping may discard already-advanced read bytes").toBe(
-            text(page),
-          );
+          expect(text(sent), "read bytes must not be clipped").toBe(text(page));
           continuation = resultDetails(page).continuation as ReadToolContinuation | undefined;
           const pageText = sandbox ? text(sent).slice(text(sent).indexOf("\n") + 1) : text(sent);
           if (!continuation) {
@@ -326,10 +288,7 @@ describe("fresh producer results through persistence and model guards", () => {
           expect(collected).toBe(source.slice(0, collected.length));
         }
         expect(collected).toBe(source);
-      } finally {
-        await state.cleanup();
-      }
-    },
+      }),
   );
 
   it("preserves wrapped network result structure and terminal batches", async () => {
@@ -370,13 +329,7 @@ describe("fresh producer results through persistence and model guards", () => {
   });
 
   it("preserves conventional plain text and mixed MCP content without inferring JSON", async () => {
-    const plain = message(
-      {
-        content: [{ type: "text", text: '{"unfinished": shell output' }],
-        details: { kind: "text" },
-      },
-      "shell",
-    );
+    const plain = message('{"unfinished": shell output', "shell");
     const mcp = message(
       projectMcpCallToolResult({
         structuredContent: { ok: false },
@@ -397,15 +350,7 @@ describe("fresh producer results through persistence and model guards", () => {
 
   it("allows explicitly lossy aggregate reduction and smaller-context replay", () => {
     const original = message(
-      {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({ status: "completed", value: "x".repeat(20_000) }),
-          },
-        ],
-        details: {},
-      },
+      JSON.stringify({ status: "completed", value: "x".repeat(20_000) }),
       "exec",
     );
     const aggregate = truncateOversizedToolResultsInMessages(
@@ -427,7 +372,7 @@ describe("fresh producer results through persistence and model guards", () => {
     const read = wrapReadToolWithSkillContent(
       base,
       [{ filePath: locator, readContent: "INSTRUCTIONS" + "中".repeat(9000) }],
-      { modelContextWindowTokens: model.contextWindow },
+      { modelContextWindowTokens: contextWindow },
     );
     const result = await read.execute("skill", { path: locator, offset: 2, limit: 1 });
     expect(text(result)).toContain("cannot be partially served");

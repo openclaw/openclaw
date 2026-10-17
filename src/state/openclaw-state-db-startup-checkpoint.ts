@@ -86,7 +86,7 @@ const STARTUP_CHECKPOINT_SCHEMA = `
     ON state_leases(expires_at, scope, lease_key)
     WHERE expires_at IS NOT NULL;
   CREATE INDEX IF NOT EXISTS idx_state_leases_owner
-    ON state_leases(owner, updated_at DESC);
+    ON state_leases(owner);
 `;
 const checkpointAdmission = createStateSchemaAdmission("state.startup-checkpoint", (value) =>
   value === true ? true : undefined,
@@ -343,6 +343,11 @@ export function initializeNativeOpenClawStateConnection(
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
   withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () => {
+    const initialization = prepareStateDatabaseInitialization(
+      pathname,
+      env,
+      options.initializationAgentPaths,
+    );
     const db = openNodeSqliteDatabase(pathname);
     try {
       assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
@@ -351,7 +356,7 @@ export function initializeNativeOpenClawStateConnection(
         return;
       }
       assertStateDatabaseIntegrityOnce(db, pathname);
-      initializeCanonicalSchema(db, pathname, env, { kind: "existing" });
+      initializeCanonicalSchema(db, pathname, env, initialization);
     } finally {
       clearNodeSqliteKyselyCacheForDatabase(db);
       db.close();

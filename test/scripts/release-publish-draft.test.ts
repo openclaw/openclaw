@@ -66,6 +66,7 @@ function publicationFixture({
     "scripts/openclaw-npm-extended-stable-release.mjs",
     "scripts/plugin-sdk-api-release-evidence.mjs",
     "scripts/lib/release-changelog.mjs",
+    "scripts/lib/arg-utils.runtime.mjs",
     "scripts/lib/release-notes-compaction.mjs",
     "scripts/lib/release-version.mjs",
     "scripts/lib/release-publish-children.sh",

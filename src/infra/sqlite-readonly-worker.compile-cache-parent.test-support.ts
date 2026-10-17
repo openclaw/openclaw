@@ -4,12 +4,14 @@ import { getCompileCacheDir } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import { prepareAgentSessionStoreDeletionSafety } from "../agents/agent-delete-session-store-safety.targets.js";
 import { enableOpenClawCompileCache } from "../entry.compile-cache.js";
-import { runScopedSqliteReadOnlyOperation } from "./sqlite-readonly-worker.js";
 import {
-  prepareSqliteReadOnlyLocationSync,
-  withSqliteSnapshotWorker,
-} from "./sqlite-snapshot-source.js";
+  captureSqliteReadOnlyWorkerLaunch,
+  createScopedSqliteReadOnlyWorker,
+  runScopedSqliteReadOnlyOperation,
+} from "./sqlite-readonly-worker.js";
+import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 const [root] = process.argv.slice(2);
@@ -68,7 +70,10 @@ const cacheEntries = () =>
     .readdirSync(activeDirectory, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile()).length;
 let retainedLocation: string | undefined;
-await withSqliteSnapshotWorker(new AbortController().signal, async (worker, directory) => {
+const worker = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch());
+const directory = await worker.run(stagingRoot, { mode: "staging-create" });
+assert.ok(typeof directory === "string");
+try {
   const location = await worker.run(source, { mode: "sync", stagingRoot: directory });
   assert.ok(typeof location === "string");
   retainedLocation = location;
@@ -79,20 +84,26 @@ await withSqliteSnapshotWorker(new AbortController().signal, async (worker, dire
   const result = await runScopedSqliteReadOnlyOperation(
     worker,
     source,
-    { type: "pluginCatalog.read", input: { agentId: "main", pluginIds: [] } },
+    {
+      type: "agentRetirement.sessionStoreBlocker",
+      input: prepareAgentSessionStoreDeletionSafety({}, "main", process.env),
+    },
     {
       source: "snapshot",
       expectedIdentity: readDatabasePathIdentitySync(source).key,
       env: process.env,
     },
   );
-  assert.deepEqual(result, []);
+  assert.deepEqual(result, { blocker: undefined });
   assert.ok(
     cacheEntries() > startupEntries,
     "retained child must persist later operation bytecode before close",
   );
   assert.equal(worker.isRetired(), false);
-});
+} finally {
+  await worker.run(directory, { mode: "staging-retire" });
+  await worker.close();
+}
 assert.ok(retainedLocation);
 assert.equal(fs.existsSync(retainedLocation), false);
 

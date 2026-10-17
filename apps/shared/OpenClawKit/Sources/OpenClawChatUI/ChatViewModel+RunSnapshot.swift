@@ -80,8 +80,5 @@ extension OpenClawChatViewModel {
         if self.liveRunStateByRunID[runId]?.hasAgentAssistantText != true {
             self.updateStreamingAssistantText(bufferedText.isEmpty ? nil : bufferedText)
         }
-        self.logDiagnostic(
-            "chat.ui adopted in-flight run sessionKey=\(self.sessionKey) "
-                + "runId=\(runId) bufferedTextLen=\(bufferedText.count)")
     }
 }

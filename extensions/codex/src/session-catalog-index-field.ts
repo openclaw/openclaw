@@ -1,5 +1,4 @@
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
-import { boundedCatalogString, MAX_SESSION_ID_LENGTH } from "./session-catalog-parsing.js";
 import type { codexCatalogThreadStatus } from "./session-catalog-parsing.js";
 import type { CodexCatalogSource } from "./session-catalog-source.js";
 
@@ -9,7 +8,11 @@ export class CodexCatalogField<T> {
   private readonly entries = new Map<string, T>();
 
   update(threadId: string, value: T): void {
-    this.put(threadId, value);
+    this.entries.delete(threadId);
+    this.entries.set(threadId, value);
+    if (this.entries.size > CODEX_CATALOG_MAX_ROWS) {
+      this.entries.delete(this.entries.keys().next().value!);
+    }
   }
 
   get(threadId: string): T | undefined {
@@ -39,18 +42,6 @@ export class CodexCatalogField<T> {
 
   invalidate(): void {
     this.entries.clear();
-  }
-
-  private put(threadId: string, entry: T): void {
-    const id = boundedCatalogString(threadId, MAX_SESSION_ID_LENGTH);
-    if (!id) {
-      return;
-    }
-    this.entries.delete(id);
-    this.entries.set(id, entry);
-    if (this.entries.size > CODEX_CATALOG_MAX_ROWS) {
-      this.entries.delete(this.entries.keys().next().value!);
-    }
   }
 }
 

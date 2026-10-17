@@ -8,7 +8,6 @@ import { isPathInside } from "../infra/path-guards.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { getOrLoadSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
-import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import {
@@ -36,12 +35,12 @@ import type {
 import { agentEngineInput, openAgentEngineStore } from "./openclaw-agent-db-engine.js";
 import { findOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
-  assertAgentDatabaseMaintenanceAuthority,
   hasAgentDatabaseMaintenanceAuthority,
   readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim,
   releaseOpenClawAgentDatabaseLease,
   type OpenClawAgentDatabaseWorkerLeaseReceipt,
 } from "./openclaw-agent-db-lease.js";
+import { assertAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
 import { agentSchemaMetadataKey } from "./openclaw-agent-db-metadata.js";
 import {
   drainAgentDatabaseResources,
@@ -474,18 +473,11 @@ export function closeOpenClawAgentDatabases(rootPath?: string): void {
   }
 }
 
-/** Latch background verification damage so later opens fail without rescanning. */
-export function recordOpenClawAgentDatabaseOpenFailure(
-  pathname: string,
-  error: Error,
-  generation?: SqliteFileGeneration,
-): boolean {
-  const recorded = cache.terminal.record(pathname, error, generation);
-  if (recorded) {
-    // Quarantine revokes this process's trust because doctor may replace the file.
-    invalidateOpenClawAgentDatabaseValidation(pathname);
-  }
-  return recorded;
+/** Latch integrity refusals so later opens fail without rescanning. */
+export function recordOpenClawAgentDatabaseOpenFailure(pathname: string, error: Error): void {
+  cache.terminal.record(pathname, error);
+  // Quarantine revokes this process's trust because doctor may replace the file.
+  invalidateOpenClawAgentDatabaseValidation(pathname);
 }
 
 /** Release fixture handles and pathname trust before a test root is recreated. */

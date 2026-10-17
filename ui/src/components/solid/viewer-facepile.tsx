@@ -16,7 +16,7 @@ import {
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { projectAgentIdentity, projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { personActivityLink, type PersonActivityRouting } from "../person-activity-link.ts";
 import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
@@ -243,8 +243,8 @@ export function ParticipantAvatar(props: {
   );
 }
 
-export type ViewerAvatarElement = SolidBridgeElement<ViewerAvatarProps>;
-export type ViewerFacepileElement = SolidBridgeElement<ViewerFacepileProps>;
+type ViewerAvatarElement = SolidBridgeElement<ViewerAvatarProps>;
+type ViewerFacepileElement = SolidBridgeElement<ViewerFacepileProps>;
 
 export const ViewerAvatar = defineSolidBridge<ViewerAvatarProps>(
   "openclaw-viewer-avatar",

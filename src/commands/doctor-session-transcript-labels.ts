@@ -140,6 +140,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
+  integrityCheck?: "quick" | "full";
 }): Promise<void> {
   const env = params.env ?? process.env;
   let foundSessions = 0;
@@ -157,7 +158,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
     },
     ({ reader, target, databaseOptions, reportError, sessionId }) => {
       const { agentId } = target;
-      const readResult = reader.repairSnapshot(
+      const readResult = reader.labelRepairSnapshot(
         sessionId,
         normalizeLegacyInboundContextLabels,
         mayContainLegacyInboundContextLabels,
@@ -213,7 +214,10 @@ export async function noteSessionTranscriptLabelHealth(params: {
               updateSqliteTranscriptEventJsonInTransaction(writeDatabase, sessionId, updates);
             },
             databaseOptions,
-            { operationLabel: "doctor.session-transcript-labels" },
+            {
+              operationLabel: "doctor.session-transcript-labels",
+              repairAdmission: { integrityCheck: params.integrityCheck ?? "quick" },
+            },
           );
           repairedSessions += 1;
           repairedEvents += updates.length;

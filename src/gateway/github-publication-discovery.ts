@@ -34,8 +34,6 @@ export function readGitHubPublicationFact(session: PublicationSessionIdentity): 
 export function startGitHubPublicationDiscovery(params: {
   scheduler: GatewayScheduler;
   projection?: {
-    ensureMaterialized(): Promise<void>;
-    selectEntries(): WorkspaceRow[];
     onSelectionChange(
       listener: (change: { kind: "reset" } | { kind: "row"; row?: WorkspaceRow }) => void,
     ): void;
@@ -154,13 +152,22 @@ export function startGitHubPublicationDiscovery(params: {
     }
     const session = { agentId: row.agentId, sessionKey: row.key, sessionId: row.entry.sessionId };
     const key = keyOf(session);
+    // Only demand creates discovery work; roster hydration must not warm the whole corpus.
+    const previous = sessions.peek(key);
+    if (!previous) {
+      return;
+    }
+    if (!row.entry.repositoryWorkspaceId && !row.entry.worktree?.id) {
+      // Resident absence retires pending facts; explicit demand can still prepare an unknown target.
+      sessions.delete(key);
+      return;
+    }
     const binding = JSON.stringify([
       row.entry.lifecycleRevision,
       row.entry.worktree,
       row.entry.repositoryWorkspaceId,
     ]);
-    const previous = sessions.peek(key);
-    if (previous?.session.sessionId !== session.sessionId || previous.binding !== binding) {
+    if (previous.session.sessionId !== session.sessionId || previous.binding !== binding) {
       sessions.set(key, { session, binding, fact: unavailable, refreshAfterMs: 0 });
       refresh(key);
     }
@@ -169,16 +176,6 @@ export function startGitHubPublicationDiscovery(params: {
     if (change.kind === "row" && change.row) {
       observe(change.row);
     }
-  });
-  scheduler.schedule({
-    id: "github-publication-startup",
-    delayMs: 0,
-    run: async () => {
-      await params.projection?.ensureMaterialized();
-      for (const row of params.projection?.selectEntries() ?? []) {
-        observe(row);
-      }
-    },
   });
   return {
     stop: async () => {

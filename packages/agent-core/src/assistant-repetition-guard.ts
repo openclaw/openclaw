@@ -10,6 +10,7 @@ export class AssistantRepetitionGuard {
     message: AssistantMessage,
     committed: number,
     contentIndex?: number,
+    append?: { offset: number; delta: string },
   ): AssistantMessage | undefined {
     const end = contentIndex === undefined ? message.content.length : contentIndex + 1;
     for (let index = contentIndex ?? committed; index < end; index++) {
@@ -24,11 +25,12 @@ export class AssistantRepetitionGuard {
         continue;
       }
       let state = this.blocks.get(index);
-      if (!state || !text.startsWith(state.text)) {
+      const knownAppend = append && append.offset === (state?.text.length ?? 0);
+      if (!state || (!knownAppend && !text.startsWith(state.text))) {
         state = { watch: new RepetitionWatch(), text: "" };
         this.blocks.set(index, state);
       }
-      const stopped = state.watch.feed(text.slice(state.text.length));
+      const stopped = state.watch.feed(knownAppend ? append.delta : text.slice(state.text.length));
       state.text = text;
       if (stopped) {
         // A server-side checkpoint could replay the discarded block even with clean visible text.

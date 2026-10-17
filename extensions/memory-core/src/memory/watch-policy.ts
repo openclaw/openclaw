@@ -151,6 +151,16 @@ export class MemoryWatchPolicy {
     ];
   }
 
+  selectionKeys(group: MemoryObservation): string[] {
+    // Exclusion depends on selections and enabled file kinds, not indexing limits or globs.
+    const modalities = this.settings.multimodal.enabled ? this.settings.multimodal.modalities : [];
+    return group.selections.flatMap(({ scope, resolved, lexical, alias }) =>
+      ["text", ...modalities].map((modality) =>
+        JSON.stringify([scope, resolved, lexical, alias, modality]),
+      ),
+    );
+  }
+
   private ignored(relative: string, file: string, kind: WatchEntry["kind"]): boolean {
     if (relative.split(path.sep).some((part) => IGNORED.has(part.toLowerCase()))) {
       return true;

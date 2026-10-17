@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import type { CodexPluginConfig } from "./app-server/config-contracts.js";
 import type { JsonValue } from "./app-server/protocol.js";
 import { formatRelativeDuration } from "./app-server/rate-limit-time.js";
 import {
@@ -20,10 +21,7 @@ import {
   type CodexAccountUsageSummary,
 } from "./app-server/rate-limits.js";
 import { isLikelyEmailAddress } from "./command-account-email.js";
-import type {
-  SafeCodexControlRequestFn as SafeCodexControlRequest,
-  SafeValue,
-} from "./command-rpc.js";
+import { safeCodexControlRequest, type SafeValue } from "./command-rpc.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 
@@ -50,8 +48,7 @@ export async function readCodexAccountAuthOverview(params: {
   ctx: PluginCommandContext;
   agentDir: string;
   authProfileId: string | null | undefined;
-  pluginConfig: unknown;
-  safeCodexControlRequest: SafeCodexControlRequest;
+  pluginConfig: CodexPluginConfig | undefined;
   account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;
 }): Promise<CodexAccountAuthOverview | undefined> {
@@ -86,7 +83,7 @@ export async function readCodexAccountAuthOverview(params: {
       ? summarizeCodexAccountUsage(params.limits.value, now)
       : undefined;
   if (subscriptionProfileId && !activeIsSubscription) {
-    const limits = await params.safeCodexControlRequest(
+    const limits = await safeCodexControlRequest(
       params.pluginConfig,
       CODEX_CONTROL_METHODS.rateLimits,
       undefined,

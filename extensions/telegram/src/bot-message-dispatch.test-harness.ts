@@ -7,8 +7,8 @@ import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin
 import { afterEach, beforeAll, beforeEach, describe, expect, vi } from "vitest";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
 import { telegramDirectDeliveryDepsForTest } from "./bot-delivery-deps.test-support.js";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import { withTelegramTestSettledReceipt } from "./bot-message-dispatch-receipt.test-support.js";
+import type { TelegramBotFixtureMocks } from "./bot-module-mocks.test-support.js";
 import { createTestDraftStream } from "./draft-stream.test-helpers.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import {
@@ -17,7 +17,7 @@ import {
 } from "./runtime.test-support.js";
 
 export type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
-  TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
+  TelegramBotFixtureMocks["dispatchReplyWithBufferedBlockDispatcher"]
 >[0];
 
 type ReplyOptions = DispatchReplyWithBufferedBlockDispatcherArgs["replyOptions"];
@@ -140,8 +140,11 @@ const getAgentScopedMediaLocalRoots = getAgentScopedMediaLocalRootsHoisted;
 const resolveChunkMode = resolveChunkModeHoisted;
 const getGlobalHookRunner = getGlobalHookRunnerHoisted;
 
+// mock-isolation: Dispatch fixtures control previews without Telegram HTTP I/O.
 vi.mock("./draft-stream.js", () => ({
-  createTelegramDraftStream: createTelegramDraftStreamHoisted,
+  createTelegramDraftStream: (
+    ...args: Parameters<TelegramBotFixtureMocks["createTelegramDraftStream"]>
+  ) => telegramDepsForTest.createTelegramDraftStream(...args),
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
@@ -149,6 +152,9 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
   return {
     ...actual,
     deliverInboundReplyWithMessageSendContext: deliverInboundReplyWithMessageSendContextHoisted,
+    createChannelMessageReplyPipeline: (
+      ...args: Parameters<TelegramBotFixtureMocks["createChannelMessageReplyPipeline"]>
+    ) => telegramDepsForTest.createChannelMessageReplyPipeline(...args),
     deliverStructuredInboundReplyWithMessageSendContext: ({
       plan,
       ...params
@@ -257,10 +263,16 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   };
 });
 
+// mock-isolation: Dispatch fixtures choose direct/durable delivery outcomes explicitly.
 vi.mock("./bot/delivery.js", () => ({
-  deliverReplies: deliverRepliesHoisted,
-  deliverStructuredReplies: deliverRepliesHoisted,
-  emitTelegramMessageSentHooks: emitTelegramMessageSentHooksHoisted,
+  deliverReplies: (...args: Parameters<TelegramBotFixtureMocks["deliverReplies"]>) =>
+    telegramDepsForTest.deliverReplies(...args),
+  deliverStructuredReplies: (
+    ...args: Parameters<TelegramBotFixtureMocks["deliverStructuredReplies"]>
+  ) => telegramDepsForTest.deliverStructuredReplies(...args),
+  emitTelegramMessageSentHooks: (
+    ...args: Parameters<TelegramBotFixtureMocks["emitTelegramMessageSentHooks"]>
+  ) => telegramDepsForTest.emitTelegramMessageSentHooks(...args),
 }));
 
 vi.mock("./bot/delivery.replies.js", () => ({
@@ -303,7 +315,7 @@ function unexpectedInboundContextCall(): never {
   throw new Error("Dispatch fixtures do not construct inbound message context");
 }
 
-export const telegramDepsForTest: TelegramBotDeps = {
+export let telegramDepsForTest: TelegramBotFixtureMocks = {
   ...telegramDirectDeliveryDepsForTest,
   buildChannelInboundEventContext: unexpectedInboundContextCall,
   readAmbientTranscriptWatermarkAsync: unexpectedInboundContextCall,
@@ -312,40 +324,134 @@ export const telegramDepsForTest: TelegramBotDeps = {
   resolveAmbientTranscriptWatermarkKey: unexpectedInboundContextCall,
   resolveInboundLastRouteSessionKey: unexpectedInboundContextCall,
   resolvePinnedMainDmOwnerFromAllowlist: unexpectedInboundContextCall,
-  getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
-  resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
+  getRuntimeConfig: loadConfig as TelegramBotFixtureMocks["getRuntimeConfig"],
+  resolveStorePath: resolveStorePath as TelegramBotFixtureMocks["resolveStorePath"],
   getSessionEntryAsync: async (params) => getSessionEntry(params),
   readChannelAllowFromStore:
-    readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
+    readChannelAllowFromStore as TelegramBotFixtureMocks["readChannelAllowFromStore"],
   upsertChannelPairingRequest:
-    upsertChannelPairingRequest as TelegramBotDeps["upsertChannelPairingRequest"],
-  enqueueRoutedSystemEvent: enqueueSystemEvent as TelegramBotDeps["enqueueRoutedSystemEvent"],
+    upsertChannelPairingRequest as TelegramBotFixtureMocks["upsertChannelPairingRequest"],
+  enqueueRoutedSystemEvent:
+    enqueueSystemEvent as TelegramBotFixtureMocks["enqueueRoutedSystemEvent"],
   dispatchReplyWithBufferedBlockDispatcher:
-    dispatchReplyWithBufferedBlockDispatcher as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
-  buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
+    dispatchReplyWithBufferedBlockDispatcher as TelegramBotFixtureMocks["dispatchReplyWithBufferedBlockDispatcher"],
+  buildModelsProviderData:
+    buildModelsProviderData as TelegramBotFixtureMocks["buildModelsProviderData"],
   prepareSkillCommandsForAgents:
-    prepareSkillCommandsForAgents as TelegramBotDeps["prepareSkillCommandsForAgents"],
+    prepareSkillCommandsForAgents as TelegramBotFixtureMocks["prepareSkillCommandsForAgents"],
   createChannelMessageReplyPipeline:
-    createChannelMessageReplyPipeline as TelegramBotDeps["createChannelMessageReplyPipeline"],
-  wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
+    createChannelMessageReplyPipeline as TelegramBotFixtureMocks["createChannelMessageReplyPipeline"],
+  wasSentByBot: wasSentByBot as TelegramBotFixtureMocks["wasSentByBot"],
   createTelegramDraftStream:
-    createTelegramDraftStream as TelegramBotDeps["createTelegramDraftStream"],
-  deliverReplies: deliverReplies as TelegramBotDeps["deliverReplies"],
+    createTelegramDraftStream as TelegramBotFixtureMocks["createTelegramDraftStream"],
+  deliverReplies: deliverReplies as TelegramBotFixtureMocks["deliverReplies"],
   deliverStructuredReplies: deliverReplies,
   deliverStructuredInboundReplyWithMessageSendContext: ({ plan, ...params }) =>
     deliverInboundReplyWithMessageSendContext({ ...params, payload: plan.payload }),
   emitTelegramMessageSentHooks:
-    emitTelegramMessageSentHooks as TelegramBotDeps["emitTelegramMessageSentHooks"],
-  editMessageTelegram: editMessageTelegram as TelegramBotDeps["editMessageTelegram"],
+    emitTelegramMessageSentHooks as TelegramBotFixtureMocks["emitTelegramMessageSentHooks"],
+  editMessageTelegram: editMessageTelegram as TelegramBotFixtureMocks["editMessageTelegram"],
   recordOutboundMessageForPromptContext:
-    recordOutboundMessageForPromptContext as TelegramBotDeps["recordOutboundMessageForPromptContext"],
+    recordOutboundMessageForPromptContext as TelegramBotFixtureMocks["recordOutboundMessageForPromptContext"],
 };
 
+const defaultTelegramModuleMocks = telegramDepsForTest;
+
 export type TelegramMessageContext = Parameters<typeof dispatchTelegramMessage>[0]["context"];
+
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig: (...args: Parameters<TelegramBotFixtureMocks["getRuntimeConfig"]>) =>
+    telegramDepsForTest.getRuntimeConfig(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>()),
+  enqueueRoutedSystemEvent: (
+    ...args: Parameters<TelegramBotFixtureMocks["enqueueRoutedSystemEvent"]>
+  ) => telegramDepsForTest.enqueueRoutedSystemEvent(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>()),
+  buildPreparedModelsProviderData: (
+    ...args: Parameters<TelegramBotFixtureMocks["buildModelsProviderData"]>
+  ) => telegramDepsForTest.buildModelsProviderData(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/skill-commands-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/skill-commands-runtime")>()),
+  prepareSkillCommandsForAgents: (
+    ...args: Parameters<TelegramBotFixtureMocks["prepareSkillCommandsForAgents"]>
+  ) => telegramDepsForTest.prepareSkillCommandsForAgents(...args),
+}));
+
+vi.mock("./sent-message-cache.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sent-message-cache.js")>()),
+  wasSentByBot: (...args: Parameters<TelegramBotFixtureMocks["wasSentByBot"]>) =>
+    telegramDepsForTest.wasSentByBot(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
+  resolveStorePath: (...args: Parameters<TelegramBotFixtureMocks["resolveStorePath"]>) =>
+    telegramDepsForTest.resolveStorePath(...args),
+  getSessionEntryAsync: (...args: Parameters<TelegramBotFixtureMocks["getSessionEntryAsync"]>) =>
+    telegramDepsForTest.getSessionEntryAsync(...args),
+  readSessionUpdatedAtAsync: (
+    ...args: Parameters<TelegramBotFixtureMocks["readSessionUpdatedAtAsync"]>
+  ) => telegramDepsForTest.readSessionUpdatedAtAsync(...args),
+  readAmbientTranscriptWatermarkAsync: (
+    ...args: Parameters<TelegramBotFixtureMocks["readAmbientTranscriptWatermarkAsync"]>
+  ) => telegramDepsForTest.readAmbientTranscriptWatermarkAsync(...args),
+  resolveAmbientTranscriptWatermarkKey: (
+    ...args: Parameters<TelegramBotFixtureMocks["resolveAmbientTranscriptWatermarkKey"]>
+  ) => telegramDepsForTest.resolveAmbientTranscriptWatermarkKey(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
+  readChannelAllowFromStore: (
+    ...args: Parameters<TelegramBotFixtureMocks["readChannelAllowFromStore"]>
+  ) => telegramDepsForTest.readChannelAllowFromStore(...args),
+  upsertChannelPairingRequest: (
+    ...args: Parameters<TelegramBotFixtureMocks["upsertChannelPairingRequest"]>
+  ) => telegramDepsForTest.upsertChannelPairingRequest(...args),
+  recordInboundSession: (...args: Parameters<TelegramBotFixtureMocks["recordInboundSession"]>) =>
+    telegramDepsForTest.recordInboundSession(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-activity-runtime")>()),
+  recordChannelActivity: (...args: Parameters<TelegramBotFixtureMocks["recordChannelActivity"]>) =>
+    telegramDepsForTest.recordChannelActivity(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/routing")>()),
+  resolveInboundLastRouteSessionKey: (
+    ...args: Parameters<TelegramBotFixtureMocks["resolveInboundLastRouteSessionKey"]>
+  ) => telegramDepsForTest.resolveInboundLastRouteSessionKey(...args),
+}));
+
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>()),
+  resolvePinnedMainDmOwnerFromAllowlist: (
+    ...args: Parameters<TelegramBotFixtureMocks["resolvePinnedMainDmOwnerFromAllowlist"]>
+  ) => telegramDepsForTest.resolvePinnedMainDmOwnerFromAllowlist(...args),
+}));
+
+vi.mock("./outbound-message-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./outbound-message-context.js")>()),
+  recordOutboundMessageForPromptContext: (
+    ...args: Parameters<TelegramBotFixtureMocks["recordOutboundMessageForPromptContext"]>
+  ) => telegramDepsForTest.recordOutboundMessageForPromptContext(...args),
+}));
 
 let testState: OpenClawTestState;
 
 async function resetTelegramDispatchTestState() {
+  telegramDepsForTest = defaultTelegramModuleMocks;
   testState = await createOpenClawTestState({ label: "telegram-dispatch", layout: "state-only" });
   resetPluginStateStoreForTests({ closeDatabase: false });
   setTelegramPluginStateRuntimeForTests();
@@ -371,7 +477,7 @@ async function resetTelegramDispatchTestState() {
   deliverReplies
     .mockReset()
     .mockImplementation(
-      async (params: Parameters<NonNullable<TelegramBotDeps["deliverReplies"]>>[0]) => {
+      async (params: Parameters<NonNullable<TelegramBotFixtureMocks["deliverReplies"]>>[0]) => {
         params.onMediaAccepted?.(
           params.replies.flatMap((payload) => resolveSendableOutboundReplyParts(payload).mediaUrls),
         );
@@ -459,28 +565,20 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
   return actual;
 }
 
-function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const call = mock.mock.calls[callIndex];
+function mockCallArg(mock: ReturnType<typeof vi.fn>) {
+  const call = mock.mock.calls[0];
   if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
+    throw new Error("Expected mock call 0");
   }
-  return call[argIndex];
+  return call[0];
 }
 
 export function expectDraftStreamParams(expected: Record<string, unknown>) {
   return expectRecordFields(mockCallArg(createTelegramDraftStream), expected);
 }
 
-function expectDeliverRepliesParams(expected: Record<string, unknown>, callIndex = 0) {
-  return expectRecordFields(mockCallArg(deliverReplies, callIndex), expected);
-}
-
-export function expectDeliveredReply(
-  index: number,
-  expected: Record<string, unknown>,
-  callIndex = 0,
-) {
-  const params = expectDeliverRepliesParams({}, callIndex);
+export function expectDeliveredReply(index: number, expected: Record<string, unknown>) {
+  const params = expectRecordFields(mockCallArg(deliverReplies), {});
   const replies = params.replies as Array<unknown> | undefined;
   if (!Array.isArray(replies)) {
     throw new Error("Expected delivered replies array");
@@ -588,7 +686,7 @@ export async function dispatchWithContext(params: {
   cfg?: Parameters<typeof dispatchTelegramMessage>[0]["cfg"];
   telegramCfg?: Parameters<typeof dispatchTelegramMessage>[0]["telegramCfg"];
   streamMode?: Parameters<typeof dispatchTelegramMessage>[0]["streamMode"];
-  telegramDeps?: TelegramBotDeps;
+  moduleMocks?: TelegramBotFixtureMocks;
   bot?: Bot;
   replyToMode?: Parameters<typeof dispatchTelegramMessage>[0]["replyToMode"];
   retryDispatchErrors?: boolean;
@@ -599,6 +697,7 @@ export async function dispatchWithContext(params: {
   opts?: Parameters<typeof dispatchTelegramMessage>[0]["opts"];
 }) {
   const bot = params.bot ?? createBot();
+  telegramDepsForTest = params.moduleMocks ?? defaultTelegramModuleMocks;
   return await dispatchTelegramMessage({
     context: params.context,
     bot,
@@ -608,7 +707,6 @@ export async function dispatchWithContext(params: {
     streamMode: params.streamMode ?? "partial",
     textLimit: params.textLimit ?? 4096,
     telegramCfg: params.telegramCfg ?? {},
-    telegramDeps: params.telegramDeps ?? telegramDepsForTest,
     opts: params.opts ?? { token: "token" },
     retryDispatchErrors: params.retryDispatchErrors,
     suppressFailureFallback: params.suppressFailureFallback,
@@ -638,4 +736,4 @@ export function describeTelegramDispatch(name: string, registerTests: () => void
   });
 }
 
-export type { TelegramBotDeps };
+export type { TelegramBotFixtureMocks };

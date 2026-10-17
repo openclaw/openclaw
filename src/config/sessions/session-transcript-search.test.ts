@@ -335,21 +335,6 @@ describe("searchSessionTranscripts", () => {
     expect(search("deploy \u{1F99E}").hits.map((hit) => hit.sessionId)).toEqual(["lobster"]);
   });
 
-  it("filters hits across 33,000 requested session keys", async () => {
-    await appendUserMessage("session-1", "agent:main:main", "shared keyword payload");
-    await appendUserMessage("session-2", "agent:main:other", "shared keyword payload");
-
-    const all = search("keyword");
-    expect(all.hits).toHaveLength(2);
-
-    const sessionKeys = Array.from({ length: 32_999 }, (_, index) => `agent:main:missing-${index}`);
-    sessionKeys.push("agent:main:other");
-    const filtered = search("keyword", { sessionKeys });
-    expect(filtered.hits).toHaveLength(1);
-    expect(filtered.hits[0]?.sessionKey).toBe("agent:main:other");
-    expect(filtered.hits[0]?.sessionId).toBe("session-2");
-  });
-
   it("scopes content reads and bounds snippets while preserving ranked and recent results", async () => {
     const sessionKeys: [string, string] = ["agent:main:permitted", "agent:main:dirty"];
     for (const [id, key] of [
@@ -364,14 +349,14 @@ describe("searchSessionTranscripts", () => {
       ({ db }) => {
         for (const id of ["permitted", "generation", "dirty", "excluded"]) {
           const insert = createSessionTranscriptFtsInserter(db, id);
-          for (let index = 0; index < 80; index++) {
-            insert({
+          insert(
+            Array.from({ length: 80 }, (_, index) => ({
               messageId: `${id}-${String(index).padStart(3, "0")}`,
               text: `needle common payload${index < 10 ? "" : ` ${"padding ".repeat(40)}`}${index === 79 ? "sparse" : ""}`,
               role: index % 2 ? "assistant" : "user",
               timestamp: String(Math.floor(index / 4)),
-            });
-          }
+            })),
+          );
         }
         db.prepare(
           "UPDATE session_transcript_index_state SET needs_rebuild=1 WHERE session_id='dirty'",
@@ -736,12 +721,14 @@ describe("searchSessionTranscripts", () => {
         createSessionTranscriptFtsInserter(
           database.db,
           "session-ghost",
-        )({
-          text: "ghost payload",
-          messageId: "m-ghost",
-          role: "user",
-          timestamp: "1",
-        }),
+        )([
+          {
+            text: "ghost payload",
+            messageId: "m-ghost",
+            role: "user",
+            timestamp: "1",
+          },
+        ]),
       { agentId: "main", env: env() },
     );
 

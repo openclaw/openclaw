@@ -324,7 +324,7 @@ export function prepareSessionRowScopes(
   };
   return {
     select,
-    physicalPaths(locator: string, agentId?: string) {
+    physicalPaths(this: void, locator: string, agentId?: string) {
       // Resident physical locators were normalized when the topology was prepared.
       const normalized = filenames.has(locator) ? locator : residentPath(path.resolve(locator));
       const owners = aliases.get(normalized);
@@ -344,6 +344,7 @@ type SessionRowEntrySelection = {
   byParent: ReadonlyMap<string, ReadonlySet<string>>;
   rows: ReadonlyMap<string, records.Row>;
   dirty: ReadonlySet<string>;
+  hasUnresolvedCategories: boolean;
   matching: (query: records.Query, kind?: string) => records.Row[];
   acquire: (row: records.Row) => records.Row | undefined;
   referenced: (reference: string) => records.Row | undefined;
@@ -425,19 +426,20 @@ function selectSessionRowEntries(params: SessionRowEntrySelection, query: record
   const candidates = keys
     ? [...keys].flatMap((key) => matching({ ...query, key }))
     : matching(query);
-  const pending: records.Lookup[] = [];
-  for (const row of candidates) {
-    if (row.unresolvedDatabaseFacts === "category" && matches(row)) {
-      pending.push({ agentId: row.agentId, key: row.key, storePath: row.storeTarget.storePath });
-      if (pending.length === MAX_SESSION_ROW_FACTS_KEYS) {
-        break;
+  // The facts owner tracks category uncertainty even when display rows are evicted.
+  if (params.hasUnresolvedCategories) {
+    const pending: records.Lookup[] = [];
+    for (const row of candidates) {
+      if (row.unresolvedDatabaseFacts === "category" && matches(row)) {
+        pending.push({ agentId: row.agentId, key: row.key, storePath: row.storeTarget.storePath });
+        if (pending.length === MAX_SESSION_ROW_FACTS_KEYS) {
+          break;
+        }
       }
     }
-  }
-  // Synchronous selection cannot consume unresolved categories, even when a
-  // metadata-only caller omits dirty rows. Exact preparation remains bounded.
-  if (pending.length > 0) {
-    throw new SessionRowFactsPending(pending);
+    if (pending.length > 0) {
+      throw new SessionRowFactsPending(pending);
+    }
   }
   const acquired =
     sessionIdOrKey || dirty.size === 0

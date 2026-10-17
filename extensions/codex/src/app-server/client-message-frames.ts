@@ -51,7 +51,7 @@ export function listenCodexAppServerLines(
   onLine: (line: Buffer) => void | Promise<void>,
   onError: (error: unknown) => void,
 ): () => void {
-  let fragments: Buffer[] = [];
+  const fragments: Buffer[] = [];
   let length = 0;
   let remainder: Buffer | undefined;
   let waiting = false;
@@ -59,7 +59,7 @@ export function listenCodexAppServerLines(
   let closed = false;
   const close = () => {
     closed = true;
-    fragments = [];
+    fragments.length = 0;
     remainder = undefined;
     input.off("data", onData);
     input.off("end", onEnd);
@@ -69,7 +69,7 @@ export function listenCodexAppServerLines(
     const line = fragments.length
       ? Buffer.concat([...fragments, tail], length + tail.length)
       : tail;
-    fragments = [];
+    fragments.length = 0;
     length = 0;
     const completion = onLine(line);
     if (!completion) {
@@ -104,12 +104,11 @@ export function listenCodexAppServerLines(
           if (closed) {
             return;
           }
-          // Retain only this already-delivered transport chunk, never a page queue.
-          remainder = chunk.subarray(end + 1);
           if (!deliver(chunk.subarray(start, end))) {
+            // Retain this chunk only while an asynchronous decode pauses delivery.
+            remainder = closed ? undefined : chunk.subarray(end + 1);
             return;
           }
-          remainder = undefined;
           start = end + 1;
         }
         if (!closed && start < chunk.length) {

@@ -236,7 +236,7 @@ export function startBuzzDirectoryRelay(params: {
     if (closed || params.signal?.aborted) {
       return;
     }
-    queuedProfilePublicKeys = publicKeys.slice();
+    queuedProfilePublicKeys = publicKeys;
     applyQueuedProfilePublicKeys();
   };
 

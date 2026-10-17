@@ -24,10 +24,14 @@ import { SessionMutationAuthorizationChangedError } from "../session-sharing.js"
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { admitChatSend } from "./chat-send-admission.js";
+import {
+  prepareAuthorizedChatAdmission,
+  prepareChatAdmission,
+} from "./chat-send-admission.test-support.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
-import { prepareChatSendSession, qualifyChatSendSession } from "./chat-send-session.js";
+import { prepareChatSendSession } from "./chat-send-session.js";
 import type { SessionMutationAuthorization } from "./types.js";
 
 installGatewayTestHooks();
@@ -42,23 +46,8 @@ describe("chat admission authority", () => {
   ])(
     "keeps caller authority current through admission callbacks (revoked: $revokeInCallback, scoped: $scoped)",
     async ({ revokeInCallback, scoped }) => {
-      const fixture = await createBrowserFollowupFixture();
-      const request = await normalizeChatSendRequest({
-        params: fixture.params,
-        client: fixture.client,
-      });
-      if (!request.ok) {
-        throw new Error(request.error);
-      }
-      const prepared = await prepareChatSendSession({
-        request: request.value,
-        client: fixture.client,
-        context: fixture.context,
-      });
-      if (!prepared.ok) {
-        throw new Error("session preparation failed");
-      }
-      const session = await qualifyChatSendSession(prepared.value);
+      await using fixture = await createBrowserFollowupFixture();
+      const prepared = await prepareChatAdmission(fixture);
       let current = true;
       const assertCurrent = () => {
         if (!current) {
@@ -69,72 +58,37 @@ describe("chat admission authority", () => {
         assertCurrent();
         return consume();
       };
-      try {
-        const admitting = admitChatSend({
-          request: request.value,
-          session,
-          client: fixture.client,
-          context: fixture.context,
-          respond: vi.fn(),
-          ...(scoped ? { assertCurrent, withCurrent } : {}),
-          assertCurrentAsync: async () => {
-            await withCurrent(assertCurrent);
-          },
-          ...(revokeInCallback
-            ? {
-                onAdmissionOwned: async () => {
-                  current = false;
-                  return true;
-                },
-              }
-            : {}),
-        });
-        if (revokeInCallback) {
-          await expect(admitting).rejects.toThrow("caller revoked during admission");
-          expect(fixture.context.chatAbortControllers.size).toBe(0);
-        } else {
-          const admitted = await admitting;
-          expect(admitted.ok).toBe(true);
-          if (admitted.ok) {
-            admitted.value.cleanupAdmittedRun();
-          }
+      const admitting = admitChatSend({
+        ...prepared,
+        respond: vi.fn(),
+        ...(scoped ? { assertCurrent, withCurrent } : {}),
+        assertCurrentAsync: async () => {
+          await withCurrent(assertCurrent);
+        },
+        ...(revokeInCallback
+          ? {
+              onAdmissionOwned: async () => {
+                current = false;
+                return true;
+              },
+            }
+          : {}),
+      });
+      if (revokeInCallback) {
+        await expect(admitting).rejects.toThrow("caller revoked during admission");
+        expect(fixture.context.chatAbortControllers.size).toBe(0);
+      } else {
+        const admitted = await admitting;
+        expect(admitted.ok).toBe(true);
+        if (admitted.ok) {
+          admitted.value.cleanupAdmittedRun();
         }
-      } finally {
-        await fixture.cleanup();
       }
     },
   );
   it("clears a pending reservation when its retained reader is revoked after publication", async () => {
-    const fixture = await createBrowserFollowupFixture();
-    const prepare = async () => {
-      const request = await normalizeChatSendRequest({
-        params: fixture.params,
-        client: fixture.client,
-      });
-      if (!request.ok) {
-        throw new Error(request.error);
-      }
-      const loaded = await prepareChatSendSession({
-        request: request.value,
-        client: fixture.client,
-        context: fixture.context,
-      });
-      if (!loaded.ok) {
-        throw new Error("session preparation failed");
-      }
-      const session = await qualifyChatSendSession(loaded.value);
-      const resolved = await resolveSessionMutationAuthorizationAsync({
-        client: fixture.client,
-        method: "chat.send",
-        requestParams: fixture.params,
-        context: fixture.context,
-      });
-      const authorization = resolved.authorization;
-      if (resolved.error || !authorization?.withCurrent) {
-        throw new Error("Expected retained worker authorization");
-      }
-      return { request: request.value, session, authorization };
-    };
+    await using fixture = await createBrowserFollowupFixture();
+    const prepare = () => prepareAuthorizedChatAdmission(fixture);
     let closing: Promise<void> | undefined;
     let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
     try {
@@ -153,14 +107,9 @@ describe("chat admission authority", () => {
           return value;
         });
       const revoked = await admitChatSend({
-        request: first.request,
-        session: first.session,
-        client: fixture.client,
-        context: fixture.context,
+        ...first,
         respond: vi.fn(),
-        assertCurrent: first.authorization.assertCurrent,
         withCurrent,
-        withPreparedCurrent: first.authorization.withPreparedCurrent,
       }).then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
@@ -184,14 +133,8 @@ describe("chat admission authority", () => {
       fixture.params.message = "Corrected input after the failed reservation.";
       const retry = await prepare();
       admitted = await admitChatSend({
-        request: retry.request,
-        session: retry.session,
-        client: fixture.client,
-        context: fixture.context,
+        ...retry,
         respond: vi.fn(),
-        assertCurrent: retry.authorization.assertCurrent,
-        withCurrent: retry.authorization.withCurrent,
-        withPreparedCurrent: retry.authorization.withPreparedCurrent,
       });
       expect(admitted.ok).toBe(true);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
@@ -201,38 +144,13 @@ describe("chat admission authority", () => {
       }
       clearAgentRunContext(fixture.params.idempotencyKey);
       await closing;
-      await fixture.cleanup();
     }
   });
 
   it("retains callback custody during database closure", async () => {
-    const fixture = await createBrowserFollowupFixture();
-    const request = await normalizeChatSendRequest({
-      params: fixture.params,
-      client: fixture.client,
-    });
-    if (!request.ok) {
-      throw new Error(request.error);
-    }
-    const prepared = await prepareChatSendSession({
-      request: request.value,
-      client: fixture.client,
-      context: fixture.context,
-    });
-    if (!prepared.ok) {
-      throw new Error("session preparation failed");
-    }
-    const session = await qualifyChatSendSession(prepared.value);
-    const resolved = await resolveSessionMutationAuthorizationAsync({
-      client: fixture.client,
-      method: "chat.send",
-      requestParams: fixture.params,
-      context: fixture.context,
-    });
-    const authorization = resolved.authorization;
-    if (resolved.error || !authorization?.withCurrent) {
-      throw new Error("Expected retained worker authorization");
-    }
+    await using fixture = await createBrowserFollowupFixture();
+    const prepared = await prepareAuthorizedChatAdmission(fixture);
+    const { authorization } = prepared;
     let retainedRead: Promise<unknown> | undefined;
     const withCurrent: NonNullable<SessionMutationAuthorization["withCurrent"]> = (consume) => {
       const read = authorization.withCurrent!(consume);
@@ -263,15 +181,10 @@ describe("chat admission authority", () => {
     });
     const admitting = root.run(() =>
       admitChatSend({
-        request: request.value,
-        session,
-        client: fixture.client,
-        context: fixture.context,
+        ...prepared,
         respond: vi.fn(),
         hasCurrentClientAuthority: caller.isCurrent,
-        assertCurrent: authorization.assertCurrent,
         withCurrent,
-        withPreparedCurrent: authorization.withPreparedCurrent,
         onAdmissionOwned,
       }),
     );
@@ -323,12 +236,11 @@ describe("chat admission authority", () => {
       await closing;
       root.release();
       caller.release();
-      await fixture.cleanup();
     }
   });
 
   it("rejects membership revoked inside retained chat admission before dispatch", async () => {
-    const fixture = await createBrowserFollowupFixture({
+    await using fixture = await createBrowserFollowupFixture({
       createdActor: { type: "human", source: "profile", id: "another-profile" },
     });
     const cfg = { ...rolePolicyConfig(), session: { store: fixture.scope.storePath } };
@@ -343,54 +255,24 @@ describe("chat admission authority", () => {
       identityId: member.authenticatedUserProfile!.profileId,
       addedBy: "another-profile",
     });
-    const normalized = await normalizeChatSendRequest({
-      params: fixture.params,
-      client: fixture.client,
-    });
-    if (!normalized.ok) {
-      throw new Error(normalized.error);
-    }
-    const prepared = await prepareChatSendSession({
-      request: normalized.value,
-      client: fixture.client,
-      context: fixture.context,
-    });
-    if (!prepared.ok) {
-      throw new Error("session preparation failed");
-    }
-    const session = await qualifyChatSendSession(prepared.value);
-    const resolved = await resolveSessionMutationAuthorizationAsync({
-      client: fixture.client,
-      method: "chat.send",
-      requestParams: fixture.params,
-      context: fixture.context,
-    });
-    expect(resolved.error).toBeNull();
-    const authorization = resolved.authorization!;
+    const prepared = await prepareAuthorizedChatAdmission(fixture);
+    const { authorization, authorizationError } = prepared;
+    expect(authorizationError).toBeNull();
     const respond = vi.fn();
-    try {
-      await expect(
-        admitChatSend({
-          request: normalized.value,
-          session,
-          client: fixture.client,
-          context: fixture.context,
-          respond,
-          assertCurrent: authorization.assertCurrent,
-          withCurrent: authorization.withCurrent,
-          withPreparedCurrent: (facts, consume, assertSourceCurrent) => {
-            removeSessionMemberSync(fixture.scope, member.authenticatedUserProfile!.profileId);
-            return authorization.withPreparedCurrent!(facts, consume, assertSourceCurrent);
-          },
-        }),
-      ).resolves.toEqual({ ok: false });
-      expect(fixture.context.dedupe.size).toBe(0);
-      expect(fixture.context.chatAbortControllers.size).toBe(0);
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(false, undefined, expect.anything());
-    } finally {
-      await fixture.cleanup();
-    }
+    await expect(
+      admitChatSend({
+        ...prepared,
+        respond,
+        withPreparedCurrent: (facts, consume, assertSourceCurrent) => {
+          removeSessionMemberSync(fixture.scope, member.authenticatedUserProfile!.profileId);
+          return authorization.withPreparedCurrent!(facts, consume, assertSourceCurrent);
+        },
+      }),
+    ).resolves.toEqual({ ok: false });
+    expect(fixture.context.dedupe.size).toBe(0);
+    expect(fixture.context.chatAbortControllers.size).toBe(0);
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(false, undefined, expect.anything());
   });
 
   it("joins a session write still publishing when durable recovery reconciliation resumes", async () => {

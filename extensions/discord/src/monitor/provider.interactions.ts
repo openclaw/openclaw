@@ -58,9 +58,7 @@ export function createDiscordProviderInteractionSurface(params: {
   runtime: RuntimeEnv;
   channelRuntime?: PluginRuntime["channel"];
   abortSignal?: AbortSignal;
-  createNativeCommand?: typeof createDiscordNativeCommand;
 }) {
-  const createNativeCommand = params.createNativeCommand ?? createDiscordNativeCommand;
   const accountContext = {
     readPolicy: params.readPolicy,
     cfg: params.cfg,
@@ -87,7 +85,7 @@ export function createDiscordProviderInteractionSurface(params: {
         ephemeralDefault: params.ephemeralDefault,
       });
     }
-    return createNativeCommand({
+    return createDiscordNativeCommand({
       ...commandContext,
       command: spec,
       ephemeralDefault: params.ephemeralDefault,

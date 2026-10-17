@@ -17,7 +17,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
-import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { withSqliteDatabaseWriteScope } from "../infra/sqlite-database-admission.js";
 import { assertSqliteJsonlReadBudget } from "../infra/sqlite-jsonl-budget.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
@@ -26,6 +26,11 @@ import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-re
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES } from "./paths.js";
+import {
+  prepareTrajectoryPayload,
+  readTrajectoryPayload,
+  readTrajectoryStorageEncoding,
+} from "./runtime-payload.js";
 import { captureTrajectoryRuntimeRetentionMutation } from "./runtime-retention.sqlite.js";
 import type {
   SqliteTrajectoryRuntimeAppend,
@@ -43,7 +48,7 @@ export type {
 type SqliteTrajectoryRuntimeDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   "trajectory_runtime_events"
-> & { pragma_encoding: { encoding: string } };
+>;
 
 const TRAJECTORY_RUNTIME_INSERT_BATCH_SIZE = 32;
 
@@ -70,13 +75,15 @@ type TrajectoryRuntimeWriter = (
 
 export function appendSqliteTrajectoryRuntimeEventsWithWriter(
   input: SqliteTrajectoryRuntimeAppend,
+  sourceDatabase: OpenClawAgentDatabase,
   write: TrajectoryRuntimeWriter,
 ) {
   const { sessionId } = input;
+  const encoding = readTrajectoryStorageEncoding(sourceDatabase.db);
   const rows = input.events.map((event) => ({
     session_id: sessionId,
     run_id: event.runId ?? null,
-    event_json: event.line,
+    ...prepareTrajectoryPayload(sourceDatabase.db, event.line, encoding),
     created_at: parseDateStringTimestampMs(event.ts) ?? Date.now(),
     seq: 0,
   }));
@@ -87,7 +94,7 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
   let retainedBytes = 0;
   let expiredThroughIndex = -1;
   for (const [index, row] of rows.toReversed().entries()) {
-    const rowBytes = Buffer.byteLength(row.event_json, "utf8") + 1;
+    const rowBytes = (row.event_utf8_bytes ?? Buffer.byteLength(row.event_json, "utf8")) + 1;
     if (!(retainedBytes + rowBytes <= maxRuntimeBytes)) {
       expiredThroughIndex = rows.length - index - 1;
       break;
@@ -256,13 +263,14 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
           ) {
             assertSqliteJsonlReadBudget(
               database.db,
-              events.select("event_json").as("events"),
+              events.select(["event_json", "event_utf8_bytes"]).as("events"),
               Math.floor(scope.maxEventBytes),
               "Trajectory runtime store",
+              { hasExactUtf8Bytes: true },
             );
           }
           let query = events
-            .select(["seq", "event_json"])
+            .select(["seq", "event_json", "event_payload", "event_codec", "event_utf8_bytes"])
             .orderBy("seq", tailEvents === undefined ? "asc" : "desc");
           const normalizedMaxEvents =
             scope.maxEvents !== undefined && Number.isFinite(scope.maxEvents)
@@ -278,7 +286,7 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
             query = query.limit(maxEvents);
           }
           const rows = executeSqliteQuerySync(database.db, query).rows.map((row) => ({
-            event: JSON.parse(row.event_json) as TrajectoryEvent,
+            event: JSON.parse(readTrajectoryPayload(row)) as TrajectoryEvent,
             seq: row.seq,
           }));
           return tailEvents === undefined ? rows : rows.toReversed();
@@ -332,6 +340,7 @@ function prepareSqliteTrajectoryRuntimeWindow(
     };
   }
   const db = getTrajectoryKysely(database.db);
+  const utf8 = readTrajectoryStorageEncoding(database.db) === "UTF-8";
   const rows = iterateSqliteQuerySync(
     database.db,
     db
@@ -340,18 +349,12 @@ function prepareSqliteTrajectoryRuntimeWindow(
       .select((eb) => {
         // octet_length reads stored byte sizes without loading overflow pages. Only
         // UTF-8 stores match the capture budget; preserve text decoding for UTF-16.
-        const utf8 = isPostgresSqlConnection(database.db)
-          ? eb.lit(true)
-          : eb(eb.selectFrom("pragma_encoding").select("encoding"), "=", "UTF-8");
         return [
-          eb
-            .case()
-            .when(utf8)
-            .then(eb.fn<number>("octet_length", ["event_json"]))
-            .else(0)
-            .end()
-            .as("event_bytes"),
-          eb.case().when(utf8).then(null).else(eb.ref("event_json")).end().as("event_json"),
+          (utf8
+            ? eb.fn.coalesce("event_utf8_bytes", eb.fn<number>("octet_length", ["event_json"]))
+            : eb.val(0)
+          ).as("event_bytes"),
+          utf8 ? eb.val(null).as("event_json") : eb.ref("event_json").as("event_json"),
         ];
       })
       .where("session_id", "=", sessionId)

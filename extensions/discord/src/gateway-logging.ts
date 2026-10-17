@@ -10,23 +10,6 @@ const INFO_DEBUG_MARKERS = [
   "Gateway forcing fresh IDENTIFY after",
 ];
 
-const formatGatewayMetrics = (metrics: unknown) => {
-  if (
-    metrics == null ||
-    typeof metrics === "string" ||
-    typeof metrics === "number" ||
-    typeof metrics === "boolean" ||
-    typeof metrics === "bigint"
-  ) {
-    return String(metrics);
-  }
-  try {
-    return JSON.stringify(metrics);
-  } catch {
-    return "[unserializable metrics]";
-  }
-};
-
 export function attachDiscordGatewayLogging(params: {
   emitter?: GatewayEmitter;
   runtime: RuntimeEnv;
@@ -50,17 +33,11 @@ export function attachDiscordGatewayLogging(params: {
     runtime.log?.(warn(message));
   };
 
-  const onGatewayMetrics = (metrics: unknown) => {
-    logVerbose(`discord gateway metrics: ${formatGatewayMetrics(metrics)}`);
-  };
-
   emitter.on("debug", onGatewayDebug);
   emitter.on("warning", onGatewayWarning);
-  emitter.on("metrics", onGatewayMetrics);
 
   return () => {
     emitter.removeListener("debug", onGatewayDebug);
     emitter.removeListener("warning", onGatewayWarning);
-    emitter.removeListener("metrics", onGatewayMetrics);
   };
 }

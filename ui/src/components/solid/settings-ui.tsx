@@ -11,7 +11,6 @@ import {
   settingsSwitchChange,
   settingsSwitchClick,
   settingsSwitchKeyDown,
-  settingsToggleRowClick,
   type SettingsSegmentedProps,
   type SettingsToggleControl,
 } from "../settings-controls.ts";
@@ -81,10 +80,17 @@ export function SettingsPageHeader(props: {
   title: JSX.Element;
   subtitle?: JSX.Element;
   actions?: JSX.Element;
+  /** Keep title and subtitle together below floating shell chrome. */
+  stacked?: boolean;
 }) {
   return (
-    <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-      <section class="content-header content-header--settings">
+    <ShellLayoutBoundary traits={{ toolbarHeader: !props.stacked }}>
+      <section
+        class={[
+          "content-header content-header--settings",
+          { "content-header--stacked": props.stacked },
+        ]}
+      >
         <div>
           <h1 class="page-title">{props.title}</h1>
           <Show when={props.subtitle}>
@@ -248,12 +254,17 @@ export function SettingsNavRow(
 }
 
 function ToggleControl(
-  props: SettingsToggleControl & { label?: JSX.Element; labelledBy?: string },
+  props: SettingsToggleControl & {
+    label?: JSX.Element;
+    labelledBy?: string;
+    inputRef?: (element: HTMLInputElement) => void;
+  },
 ) {
   const labelId = nextSettingsRadioName();
   return (
     <span class="settings-toggle">
       <input
+        ref={(element) => props.inputRef?.(element)}
         class="settings-toggle__input"
         type="checkbox"
         role="switch"
@@ -289,10 +300,23 @@ export function SettingsToggleRow(
   },
 ) {
   const titleId = nextSettingsRadioName();
+  let input: HTMLInputElement | undefined;
   return (
     <div
       class="settings-row settings-row--toggle"
-      onClick={(event) => settingsToggleRowClick(event, props)}
+      onClick={(event) => {
+        // Links, buttons, and fields own their clicks; plain row areas toggle the input.
+        if (
+          event.target instanceof Element &&
+          event.target.closest(".settings-toggle, a, button, input, select, textarea")
+        ) {
+          return;
+        }
+        if (!input || input.matches(":disabled") || props.disabled) {
+          return;
+        }
+        input.click();
+      }}
     >
       {props.icon}
       <SettingsRowText id={titleId} title={props.title} description={props.description} />
@@ -300,6 +324,7 @@ export function SettingsToggleRow(
         {props.actions}
         <ToggleControl
           {...props}
+          inputRef={(element) => (input = element)}
           label={props.ariaLabel}
           labelledBy={props.ariaLabel == null ? titleId : undefined}
         />
@@ -338,6 +363,7 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
                 data-test-id={option().testId}
               >
                 <input
+                  ref={(element) => props.inputRef?.(option().value, element)}
                   class="settings-segmented__input"
                   type="radio"
                   name={name}

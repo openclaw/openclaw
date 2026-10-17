@@ -21,10 +21,6 @@ export function streamFragmentError(
     : cause;
 }
 
-export function redactSensitiveText(text: string): string {
-  return getAiTransportHost().redactToolPayloadText(text);
-}
-
 export function resolveModelHeaderSentinels<TModel extends Model>(model: TModel): TModel {
   if (!model.headers) {
     return model;

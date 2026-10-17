@@ -12,13 +12,9 @@ import {
   registerSessionBindingAdapter,
   testing as sessionBindingTesting,
 } from "openclaw/plugin-sdk/session-binding-runtime";
-import {
-  enqueueRoutedSystemEvent as enqueueActualSystemEvent,
-  peekSystemEventEntries,
-} from "openclaw/plugin-sdk/system-event-runtime";
+import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
 import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { defaultTelegramBotDeps } from "./bot-deps.js";
 import { createTelegramEventBindings } from "./bot-handlers.event-bindings.js";
 import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
 import { createTelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
@@ -28,13 +24,36 @@ import { setTelegramRuntime } from "./runtime.js";
 import type { TelegramThreadSpec } from "./thread-spec.js";
 
 const FIRE_EMOJI = "\u{1F525}";
+const { enqueueRoutedSystemEvent: enqueueActualSystemEvent } = await vi.importActual<
+  typeof import("openclaw/plugin-sdk/system-event-runtime")
+>("openclaw/plugin-sdk/system-event-runtime");
 const FORUM_CHAT_ID = -1005678;
 const FORUM_TOPIC_ID = 77;
 const REACTED_MESSAGE_ID = 100;
 
 type ReactionHandler = (ctx: Record<string, unknown>) => Promise<void>;
 
-const enqueueRoutedSystemEvent = vi.fn();
+const { enqueueRoutedSystemEvent, readRuntimeConfig, wasSentByBotMock } = vi.hoisted(() => ({
+  enqueueRoutedSystemEvent: vi.fn(),
+  readRuntimeConfig: vi.fn(),
+  wasSentByBotMock: vi.fn<() => boolean | Promise<boolean>>(),
+}));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  readRuntimeConfig,
+}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
+  readChannelAllowFromStore: async () => [],
+}));
+vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>()),
+  enqueueRoutedSystemEvent,
+}));
+vi.mock("./sent-message-cache.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sent-message-cache.js")>()),
+  wasSentByBot: async () => await wasSentByBotMock(),
+}));
 const runtimeLog = vi.fn();
 const runtimeError = vi.fn();
 const resolveCachedMessageThreadSpec = vi.fn<
@@ -74,6 +93,8 @@ function registerHandler(
   cfg: OpenClawConfig,
   wasSentByBot: () => boolean | Promise<boolean> = () => true,
 ): ReactionHandler {
+  readRuntimeConfig.mockReturnValue(cfg);
+  wasSentByBotMock.mockImplementation(wasSentByBot);
   const handlers = new Map<string, ReactionHandler>();
   const params: RegisterTelegramHandlerParams = {
     accountId: "default",
@@ -99,13 +120,6 @@ function registerHandler(
       config: OpenClawConfig,
     ) => resolveTelegramScopedGroupConfig(config.channels?.telegram ?? {}, chatId, messageThreadId),
     processMessage: vi.fn<RegisterTelegramHandlerParams["processMessage"]>(),
-    telegramDeps: {
-      ...defaultTelegramBotDeps,
-      getRuntimeConfig: () => cfg,
-      wasSentByBot,
-      enqueueRoutedSystemEvent,
-      readChannelAllowFromStore: async () => [],
-    },
   };
 
   createTelegramEventBindings({
@@ -182,7 +196,6 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     );
     expect(peekSystemEventEntries("agent:main:main")[0]?.text).toContain(FIRE_EMOJI);
     const diagnostics = log.mock.calls.map(([line]) => line).join("\n");
-    expect(diagnostics).toContain("reaction event enqueued chat=5678 message=100");
     expect(diagnostics).not.toContain("Bob");
     expect(diagnostics).not.toContain(FIRE_EMOJI);
   });

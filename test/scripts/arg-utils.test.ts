@@ -43,7 +43,7 @@ describe("scripts/lib/arg-utils required option arguments", () => {
     );
   });
 
-  it.each(["-h"])("rejects missing value %#", (value) => {
+  it.each([undefined, "", "-h", "--next"])("rejects missing value %#", (value) => {
     const argv = value === undefined ? ["--output"] : ["--output", value];
     expect(() => requireOptionArgument(argv, 0, "--output")).toThrow(
       new Error("--output requires a value"),

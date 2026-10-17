@@ -197,17 +197,7 @@ async function reconcileCurrentHarnessCompletionDelivery(
       { ...params, sessionId: entry.sessionId },
       `${params.sourceRunId}:user`,
     );
-    const current = await readCurrent(params);
-    return !current ||
-      current.sessionId !== entry.sessionId ||
-      current.lifecycleRevision !== entry.lifecycleRevision ||
-      current.restartRecoveryDeliverySourceRunId === params.sourceRunId ||
-      current.restartRecoveryHarnessCompletion?.sourceRunId === params.sourceRunId ||
-      hasRestartRecoveryTerminalRun(current, params.sourceRunId) ||
-      getRestartRecoveryTerminalDeliveryEvidence(current, params.sourceRunId)?.harnessCompletion ||
-      submitted
-      ? "blocked"
-      : "unowned";
+    return submitted ? "blocked" : "unowned";
   }
   const classified = classifyCompletionClaim(params, entry, claim);
   if (classified) {

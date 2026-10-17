@@ -129,8 +129,7 @@ function buildCliMcpChannelContext(
   senderId?: string | null,
 ): McpLoopbackRequestContext["channelContext"] {
   const resolvedSenderId =
-    normalizeOptionalString(senderId ?? undefined) ??
-    normalizeOptionalString(channelContext?.sender?.id);
+    normalizeOptionalString(senderId) ?? normalizeOptionalString(channelContext?.sender?.id);
   const chatId = normalizeOptionalString(channelContext?.chat?.id);
   if (!resolvedSenderId && !chatId) {
     return undefined;
@@ -177,13 +176,13 @@ export function buildCliMcpGrantContext(params: {
   const execOverrides = buildCliMcpExecOverrides(params.run.execOverrides);
   const bashElevated = buildCliMcpBashElevated(params.run.bashElevated);
   const channelContext = buildCliMcpChannelContext(params.run.channelContext, params.run.senderId);
-  const senderName = normalizeOptionalString(params.run.senderName ?? undefined);
-  const senderUsername = normalizeOptionalString(params.run.senderUsername ?? undefined);
-  const senderE164 = normalizeOptionalString(params.run.senderE164 ?? undefined);
-  const groupId = normalizeOptionalString(params.run.groupId ?? undefined);
-  const groupChannel = normalizeOptionalString(params.run.groupChannel ?? undefined);
-  const groupSpace = normalizeOptionalString(params.run.groupSpace ?? undefined);
-  const spawnedBy = normalizeOptionalString(params.run.spawnedBy ?? undefined);
+  const senderName = normalizeOptionalString(params.run.senderName);
+  const senderUsername = normalizeOptionalString(params.run.senderUsername);
+  const senderE164 = normalizeOptionalString(params.run.senderE164);
+  const groupId = normalizeOptionalString(params.run.groupId);
+  const groupChannel = normalizeOptionalString(params.run.groupChannel);
+  const groupSpace = normalizeOptionalString(params.run.groupSpace);
+  const spawnedBy = normalizeOptionalString(params.run.spawnedBy);
   const messageProvider = resolveGatewayMessageChannel(
     params.run.messageChannel ?? params.run.messageProvider,
   );

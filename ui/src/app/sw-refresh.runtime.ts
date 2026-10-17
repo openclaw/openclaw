@@ -1,5 +1,6 @@
 import { raceWithTimeout } from "@openclaw/retry";
 import { controlUiWorkerActivationRetires } from "../build-info.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
 function waitForReplacementWorker(worker: ServiceWorker): Promise<boolean> {
@@ -7,36 +8,36 @@ function waitForReplacementWorker(worker: ServiceWorker): Promise<boolean> {
     return Promise.resolve(true);
   }
   return new Promise((resolve) => {
-    const onStateChange = () => {
-      if (worker.state !== "activated" && worker.state !== "redundant") {
-        return;
-      }
-      finish(true);
-    };
     const finish = (settled: boolean) => {
       clearTimeout(timeout);
-      worker.removeEventListener("statechange", onStateChange);
+      stopStateChange();
       resolve(settled);
     };
     const timeout = setTimeout(() => finish(false), 10_000);
-    worker.addEventListener("statechange", onStateChange);
+    const stopStateChange = listen(worker, "statechange", () => {
+      if (worker.state === "activated" || worker.state === "redundant") {
+        finish(true);
+      }
+    });
   });
 }
 
 async function readWorkerBuild(worker: ServiceWorker): Promise<unknown> {
   const channel = new MessageChannel();
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  let stopMessage: (() => void) | undefined;
   try {
     return await new Promise<unknown>((resolve) => {
       // Older workers do not answer probes. Bound the wait and release both
       // ports so an unavailable worker cannot strand terminal reconnect work.
       timeout = setTimeout(() => resolve(null), 1_000);
-      channel.port1.addEventListener("message", (event) => resolve(event.data), { once: true });
+      stopMessage = listen(channel.port1, "message", (event) => resolve(event.data));
       channel.port1.start();
       worker.postMessage({ type: "sw-version-probe" }, [channel.port2]);
     });
   } finally {
     clearTimeout(timeout);
+    stopMessage?.();
     channel.port1.close();
     channel.port2.close();
   }

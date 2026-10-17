@@ -44,6 +44,10 @@ backup and its matching build, not just reinstalling the older package.
 | 25      | Session writers validate their own rows; offline import and repair explicitly queue admission work instead of per-write invalidation triggers                                                                                                          | `Unreleased` |
 | 26      | Portable query columns for session maintenance, transcript navigation discriminators, and context-engine outbox state                                                                                                                                  | `Unreleased` |
 | 27      | Explicit context-engine outbox enqueue sequence preserving FIFO through SQLite rebuilds and PostgreSQL generation                                                                                                                                      | `Unreleased` |
+| 28      | Smaller transcript/conversation indexes and primary-key storage for memory origins                                                                                                                                                                     | `Unreleased` |
+| 29      | Retire redundant reaction and unused last-interaction indexes without changing retained rows                                                                                                                                                           | `Unreleased` |
+| 30      | Brotli trajectory payloads with per-row codec markers and logical-byte retention                                                                                                                                                                       | `Unreleased` |
+| 31      | Memory publication advances the index revision once per committed batch instead of once per source or chunk row                                                                                                                                        | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -63,6 +67,91 @@ including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
 be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
+
+### Agent schema 31
+
+Schema 31 removes the six memory index revision triggers on
+`memory_index_sources` and `memory_index_chunks`. The memory writer advances
+`memory_index_state.revision` once inside the same transaction as each committed
+publication, deletion, purge, or reset batch. Readers therefore observe the new
+index rows and their revision together. A rolled-back batch publishes neither.
+
+The migration drops only trigger definitions and PostgreSQL's two corresponding
+trigger functions. It preserves indexed content, embeddings, revision values,
+and the search and vector projection triggers. Both engines advance their schema
+metadata in that transaction. A scoped SQLite backup retains the source and
+chunk tables with their historical triggers; rollback requires restoring the
+verified backup with its matching build, never lowering schema markers.
+
+### Trajectory payload storage
+
+Agent schema 30 adds nullable `event_utf8_bytes`, `event_payload`, and
+`event_codec` columns to `trajectory_runtime_events`. New UTF-8 SQLite writes
+compress suitable events with stable Brotli quality 3. The per-row `br` marker
+identifies the codec independently of the schema version. Readers return the
+original JSON bytes; exports, diagnostics, media repair, generation copies, and
+engine ports share the same decoder. Each compressed event has a 256 KiB output
+bound. Small or incompressible events remain text.
+
+Upgrade adds the columns and rebuilds the retention index without rewriting old
+event payloads. Old text rows remain readable, are compressed only when a repair
+actually rewrites them, and otherwise age out through existing retention. There
+is no background backfill. Retention and read budgets count logical bytes rather
+than compressed bytes. UTF-16 SQLite keeps its existing text representation and
+native-byte global retention accounting. PostgreSQL mirrors the nullable columns
+with `bytea` storage, but receives raw text and retains its native TOAST compression.
+
+The migration declares `trajectory_runtime_events`, `sqlite_stat1`, and
+`sqlite_stat4` as its backup scope; backup machinery includes schema metadata.
+SQLite may scan the trajectory table while adding columns, and rebuilding the
+covering index reads retained event sizes. It does not scan or rewrite transcript
+payloads. Older builds refuse the new schema; rollback needs the verified
+pre-upgrade backup and its matching build.
+
+### Agent schema 29
+
+Schema 29 removes `idx_agent_session_nodes_last_interaction_at` and
+`idx_agent_session_reactions_message`. Session readers use other indexes; the
+reaction primary key already supplies the removed index's lookup prefix and
+continues enforcing reaction uniqueness. Neither migration rewrites rows.
+
+PostgreSQL also makes `openclaw_transcript_navigation_check(text)` strict with a
+fixed `pg_catalog` search path. Absent navigation metadata skips JSON validation;
+present metadata retains the same CHECK. The versioned step updates existing
+stores without rewriting transcript rows. Historical backups retain the old
+function attributes for rollback.
+
+SQLite and PostgreSQL publish the index changes and schema metadata in one
+transaction. A scoped SQLite backup covers `session_nodes`, `session_reactions`,
+and planner statistics. Historical admission and PostgreSQL rollback retain the
+old index definitions. Older binaries require the verified pre-upgrade backup;
+never lower schema markers to roll back.
+
+### Agent schema 28
+
+Schema 28 removes the unused transcript-parent index and narrows the partial
+conversation index on `session_windows` to `primary_conversation_id`. Existing
+reader indexes retain transcript navigation and conversation lookup behavior.
+SQLite stores `memory_entry_origins` as `STRICT, WITHOUT ROWID`, using its existing
+composite primary key directly instead of maintaining a second rowid tree.
+Logical keys, origin rows, constraints, and conflict handling are unchanged.
+An absent optional origins table stays absent until its first write.
+
+The schema owner applies the changes in one migration transaction. Its declared
+backup scope is `transcript_event_identities`, `session_windows`,
+`memory_entry_origins`, `sqlite_stat1`, and `sqlite_stat4`; backup machinery also
+includes schema metadata. Other pending migration or repair work can require a
+full backup. Source integrity admission still examines the complete database.
+Reclaimed pages are reusable free space; the migration does not vacuum or shrink
+the file. SQLite preserves compatible local columns, indexes, and triggers when
+rebuilding the origins table.
+
+PostgreSQL applies the same two index changes through its forward-migration
+runner. `WITHOUT ROWID` has no PostgreSQL equivalent, so origins keep their
+existing PostgreSQL table layout. The runner verifies the destination catalog
+and records its new drift fingerprint before publishing admission.
+Older builds refuse schema 28; rollback requires the verified pre-upgrade backup
+and its matching build.
 
 ### Context-engine outbox FIFO sequence
 
@@ -99,15 +188,26 @@ The context-engine turn outbox records its payload state. Shared TypeScript
 derivations populate these fields in the same statement as each JSON write.
 The session actor uses the same session derivation.
 
-The migration classifies every existing row once in its owning agent database's
-transaction, preserving canonical JSON and compressed transcript bytes. SQLite
-classification retains first-member JSON lookup and last-member legacy navigation
-semantics. Optional outbox tables remain absent until first use. Fresh and
-incognito databases start at schema 26. Later opens reuse admitted schema facts;
-runtime predicates do not fall back to JSON or re-run the backfill.
+The migration eagerly classifies existing session nodes and outbox rows in its
+owning agent database's transaction. It adds transcript predicate columns without
+the eager classification update, preserving canonical JSON and compressed
+transcript bytes. SQLite can still check retained rows while adding columns to
+STRICT tables; upgrade measurements include that work. Optional outbox tables
+remain absent until first use. Later opens reuse admitted schema facts.
+
+SQLite transcript reads derive unclassified predicates within their existing
+queries, before predicate filters, counts, and `LIMIT`. Classification preserves
+first-member JSON lookup, last-member legacy navigation, and malformed-input
+handling. New transcript payload writes and canonical payload rewrites materialize
+all predicate fields atomically. Metadata-only updates and byte-preserving copies
+do not materialize older rows, and no background backfill is scheduled. Existing
+beta databases with materialized predicates remain valid. This lazy classification
+changes no schema version.
 
 The [accepted design](https://github.com/openclaw/openclaw/issues/169254) keeps
-predicate types portable and uses the same derivations for future engine adapters.
+predicate types portable and uses shared derivations for engine adapters.
+SQLite-to-PostgreSQL ports normalize unclassified transcript predicates from the
+payloads already being transferred; PostgreSQL reads the stored columns.
 PostgreSQL bootstrap DDL is generated from the canonical schema; an engine that
 supports this database must provide each forward migration under the same version.
 Size-limiting JSON projections and current writer-authority checks keep their
@@ -116,9 +216,10 @@ existing owners and semantics.
 Schema 25 and older builds refuse schema 26. Rollback requires restoring the
 verified pre-migration backup with its matching build; never lower either version
 marker. Update-time Doctor retains its private rehearsal and verified backup
-requirements for older update drivers. First-upgrade cost scales with retained
-rows in each agent database and the number of databases on a host; implementation
-proof records both measurements.
+requirements for older update drivers. The installed updater runs first; lazy
+transcript classification changes candidate-side migration and reads only.
+Session-node and outbox backfills and other upgrade phases can still scale with
+retained data and the number of databases on a host.
 
 <a id="canonical-writer-validation" />
 

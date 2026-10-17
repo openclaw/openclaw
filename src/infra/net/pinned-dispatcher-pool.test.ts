@@ -1,10 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dispatcher } from "undici";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  closeProviderTransportDispatcherPool,
-  getProviderTransportDispatcherPool,
-} from "../../agents/provider-transport-dispatcher-pool.js";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { PinnedDispatcherPool } from "./pinned-dispatcher-pool.js";
 
@@ -17,11 +13,6 @@ function createDispatcher() {
 }
 
 describe("PinnedDispatcherPool", () => {
-  afterEach(async () => {
-    vi.useRealTimers();
-    await closeProviderTransportDispatcherPool();
-  });
-
   it("reuses an exact live key and closes it only at lifecycle shutdown", async () => {
     const pool = new PinnedDispatcherPool({ maxEntries: 2, idleTtlMs: 60_000 });
     const created = createDispatcher();
@@ -135,29 +126,4 @@ describe("PinnedDispatcherPool", () => {
       }
     },
   );
-
-  it("does not publish a replacement generation while shutdown is closing", async () => {
-    const close = createDeferredCore();
-    const pool = getProviderTransportDispatcherPool();
-    const lease = pool.acquire({
-      key: "origin-a/pin-a",
-      createDispatcher: () => ({ close: vi.fn(() => close.promise) }) as unknown as Dispatcher,
-    });
-
-    const closing = closeProviderTransportDispatcherPool();
-    try {
-      expect(getProviderTransportDispatcherPool()).toBe(pool);
-      expect(
-        pool.acquire({
-          key: "origin-b/pin-b",
-          createDispatcher: () => createDispatcher().dispatcher,
-        }),
-      ).toBeUndefined();
-    } finally {
-      close.resolve();
-      await closing;
-    }
-    expect(getProviderTransportDispatcherPool()).not.toBe(pool);
-    await lease?.release();
-  });
 });

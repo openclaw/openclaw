@@ -254,7 +254,12 @@ export async function readLaunchAgentProgramArguments(
       options.timeoutMs && options.timeoutMs > 0 ? Math.min(options.timeoutMs, 5_000) : 5_000;
     const [probe, system] = await Promise.all([
       probeLaunchAgentState(`${resolveLaunchAgentGuiDomain()}/${label}`, timeoutMs).catch(
-        () => null,
+        (error: unknown) => {
+          if (hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
+          return null;
+        },
       ),
       inspectSystemLaunchDaemonOwnership(label, { timeoutMs, scanInstalledPlists: false }),
     ]);
@@ -287,7 +292,12 @@ export async function resolveLaunchAgentGatewayContext(env: GatewayServiceEnv): 
   if (serviceKind && serviceKind !== GATEWAY_SERVICE_KIND) {
     return { env, port: null, probeHosts: [] };
   }
-  const command = await readLaunchAgentProgramArguments(env).catch(() => null);
+  const command = await readLaunchAgentProgramArguments(env).catch((error: unknown) => {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    return null;
+  });
   return {
     env: mergeGatewayServiceEnv(env, command),
     port:

@@ -8,12 +8,7 @@ import {
   runSqliteImmediateTransactionSync,
   runSqliteReadSnapshotSync,
 } from "../sqlite-transaction.js";
-import type {
-  DatabaseEngineAdapter,
-  DatabaseErrorKind,
-  SearchSchema,
-  SearchStore,
-} from "./contract.js";
+import type { DatabaseEngineAdapter, DatabaseErrorKind } from "./contract.js";
 import { observeConnection } from "./observation.js";
 import { POSTGRES_LOCK_TIMEOUT_MS, POSTGRES_STATEMENT_TIMEOUT_MS } from "./policy.js";
 import {
@@ -21,10 +16,12 @@ import {
   verifyAndRecordPostgresSchema,
   readPostgresSchema,
   verifyPostgresSchema,
+  withPostgresSearchExtensions,
 } from "./postgres-schema.js";
-import { admitStoreSearchExtension } from "./search-extension.js";
 import { bindStoreSearch } from "./search.js";
 import type { DatabaseEngineInput } from "./types.js";
+
+export { admitStoreSearch } from "./search-admission.js";
 
 function classifyError(error: unknown): DatabaseErrorKind {
   if (!(error instanceof Error)) {
@@ -82,6 +79,7 @@ export const databaseEngineAdapters: {
           store.anchor,
           store.storeId,
           {
+            reuse: store.reusePostgresConnection,
             lockTimeoutMs: POSTGRES_LOCK_TIMEOUT_MS,
             statementTimeoutMs: POSTGRES_STATEMENT_TIMEOUT_MS,
           },
@@ -133,16 +131,18 @@ export const databaseEngineAdapters: {
               `Missing PostgreSQL ${store.schema.id} migration to version ${version}; use a compatible binary or restore a matching backup.`,
             );
           }
+          const snapshot = readPostgresSchema(db, store.namespace!, store.schema.id);
+          const schema = withPostgresSearchExtensions(store.schema, snapshot);
           verifyPostgresSchema(
             db,
             store.namespace!,
             {
-              ...store.schema,
+              ...schema,
               version: version - 1,
               postgres: migration.fromSchema.postgres,
               postgresFragments: migration.fromSchema.postgresFragments,
             },
-            readPostgresSchema(db, store.namespace!, store.schema.id),
+            snapshot,
           );
           db.exec(migration.sql);
           db.prepare("UPDATE openclaw_schema_meta SET version = ? WHERE store = ?").run(
@@ -150,7 +150,7 @@ export const databaseEngineAdapters: {
             store.schema.id,
           );
           verifyAndRecordPostgresSchema(db, store.namespace!, {
-            ...store.schema,
+            ...schema,
             version,
             postgres: migration.schema.postgres,
             postgresFragments: migration.schema.postgresFragments,
@@ -161,23 +161,6 @@ export const databaseEngineAdapters: {
     classifyError,
   },
 };
-
-/** @experimental Select the admitted engine once and bind its declared search indexes. */
-export function admitStoreSearch(
-  store: SearchStore,
-  schema: SearchSchema,
-  options?: { extension: string },
-) {
-  if (options) {
-    if ("databasePath" in store) {
-      throw new Error("Search extension admission requires the owner's connection");
-    }
-    return admitStoreSearchExtension(store, options.extension, schema);
-  }
-  const postgres =
-    "databasePath" in store ? store.input !== undefined : isPostgresSqlConnection(store);
-  return databaseEngineAdapters[postgres ? "postgres" : "sqlite"].search(store, schema);
-}
 
 /** Worker envelopes need a transaction only on PostgreSQL; native SQLite statements stay identical. */
 export function runEngineWorkerWrite<T>(

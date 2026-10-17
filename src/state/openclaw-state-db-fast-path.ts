@@ -31,6 +31,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 export function needsOpenClawStateDatabaseSchemaRepair(
   pathname: string,
   scope: "automatic" | "doctor" = "automatic",
+  integrityCheck: "quick" | "full" = "quick",
 ): boolean {
   let database: DatabaseSync | undefined;
   try {
@@ -46,7 +47,7 @@ export function needsOpenClawStateDatabaseSchemaRepair(
     if (!needsRepair) {
       assertCurrentStateRuntimeSchema(database, pathname);
       if (scope === "doctor") {
-        assertSqliteIntegrity(database, pathname);
+        assertSqliteIntegrity(database, pathname, { check: integrityCheck });
       }
     }
     return needsRepair;

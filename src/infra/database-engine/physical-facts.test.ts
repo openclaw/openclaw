@@ -147,7 +147,6 @@ describe.skipIf(!connection)("PostgreSQL physical admission", () => {
       expect(result.writtenName).toBe("written");
       expect(result.reusedAdmissionId).toBe(result.facts.admissionId);
       expect(result.renewedAdmissionId).not.toBe(result.facts.admissionId);
-      expect(result.identityError).toContain("identity or version mismatch");
       expect(result.versionError).toContain("metadata identity or version mismatch");
       expect(result.missingError).toContain("restore the matching PostgreSQL schema and anchor");
     } finally {

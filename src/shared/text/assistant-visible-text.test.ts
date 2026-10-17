@@ -185,6 +185,25 @@ describe("stripAssistantInternalScaffolding", () => {
 });
 
 describe("stripToolCallXmlTags", () => {
+  it.each(["<tool_call>", " \n<tool_call>\n ", "<TOOL_CALL>"])(
+    "hides a bare unfinished tool-call transport marker: %j",
+    (text) => {
+      expect(stripToolCallXmlTags(text)).toBe("");
+    },
+  );
+
+  it.each([
+    "`<tool_call>`",
+    "```xml\n<tool_call>\n```",
+    "    <tool_call>",
+    "\t<tool_call>",
+    "The marker is <tool_call>.",
+    "<tool_call> is a transport marker.",
+  ])("preserves literal tool-call documentation: %j", (text) => {
+    expect(stripToolCallXmlTags(text)).toBe(text);
+    expect(sanitizeAssistantVisibleTextWithProfile(text, "delivery")).toBe(text);
+  });
+
   it("strips compact function_response after a newline-separated stripped function_calls block", () => {
     const input =
       'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls>\n<function_response>ok</function_response>\nAfter';

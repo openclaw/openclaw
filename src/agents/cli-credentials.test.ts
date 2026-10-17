@@ -7,6 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 const execSyncMock = vi.fn();
 const CLI_CREDENTIALS_CACHE_TTL_MS = 15 * 60 * 1000;
 let readCodexCliActiveApiKey: typeof import("./cli-credentials.js").readCodexCliActiveApiKey;
+let hasCodexCliAuthFile: typeof import("./cli-credentials.js").hasCodexCliAuthFile;
 let readCodexCliCredentialsCached: typeof import("./cli-credentials.js").readCodexCliCredentialsCached;
 let readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
 let readMiniMaxCliCredentialsCached: typeof import("./cli-credentials.js").readMiniMaxCliCredentialsCached;
@@ -35,6 +36,7 @@ describe("cli credentials", () => {
   beforeAll(async () => {
     ({
       readCodexCliActiveApiKey,
+      hasCodexCliAuthFile,
       readCodexCliCredentialsCached,
       readGeminiCliCredentialsCached,
       readMiniMaxCliCredentialsCached,
@@ -51,6 +53,25 @@ describe("cli credentials", () => {
     delete process.env.CODEX_HOME;
     vi.unstubAllEnvs();
   });
+
+  it.each(["ENOENT", "ENOTDIR", "EACCES", "EPERM"])(
+    "distinguishes missing Codex login state from inspection failure: %s",
+    (code) => {
+      const failure = Object.assign(new Error(`synthetic ${code}`), { code });
+      const stat = vi.spyOn(fs, "statSync").mockImplementation(() => {
+        throw failure;
+      });
+      try {
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          expect(hasCodexCliAuthFile("/fixture/codex")).toBe(false);
+        } else {
+          expect(() => hasCodexCliAuthFile("/fixture/codex")).toThrow(failure);
+        }
+      } finally {
+        stat.mockRestore();
+      }
+    },
+  );
 
   it("keeps external CLI credential files anchored to the OS home", () => {
     const osHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-os-home-"));

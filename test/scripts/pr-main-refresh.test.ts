@@ -1524,6 +1524,51 @@ printf 'caller-locale=%s\\n' "$LC_ALL"
   );
 
   it.each([
+    { name: "main rename", renamedSide: "main", source: "src/rename-source.ts", critical: false },
+    {
+      name: "prepared rename",
+      renamedSide: "prepared",
+      source: "src/rename-source.ts",
+      critical: false,
+    },
+    {
+      name: "renamed critical source",
+      renamedSide: "main",
+      source: "scripts/rename-source.ts",
+      critical: true,
+    },
+  ])("detects relevant drift from the old path of a $name", ({ renamedSide, source, critical }) => {
+    const f = fixture();
+    f.git(f.canonical, "config", "diff.renames", "true");
+    f.git(f.canonical, "checkout", "--detach", f.main);
+    writeFileSync(join(f.canonical, source), "export const source = true;\n");
+    f.git(f.canonical, "add", "--", source);
+    f.git(f.canonical, "commit", "-qm", "test: rename source");
+    const base = f.git(f.canonical, "rev-parse", "HEAD");
+    f.git(f.canonical, "mv", source, "src/rename-target.ts");
+    f.git(f.canonical, "commit", "-qm", "test: rename path");
+    const renamed = f.git(f.canonical, "rev-parse", "HEAD");
+    f.git(f.canonical, "checkout", "--detach", base);
+    const editedPath = critical ? "src/unrelated.ts" : source;
+    writeFileSync(join(f.canonical, editedPath), "export const source = false;\n");
+    f.git(f.canonical, "add", "--", editedPath);
+    f.git(f.canonical, "commit", "-qm", "test: edit path");
+    const edited = f.git(f.canonical, "rev-parse", "HEAD");
+    const main = renamedSide === "main" ? renamed : edited;
+    const prepared = renamedSide === "prepared" ? renamed : edited;
+
+    const result = f.shell(`mainline_drift_requires_sync ${base} ${prepared} ${main}`);
+
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain(
+      critical
+        ? "Mainline files touching merge-critical infrastructure (1):"
+        : "Mainline files overlapping prepared files (1):",
+    );
+    expect(result.stdout).toContain(`  - ${source}\n`);
+  });
+
+  it.each([
     [
       "commit read",
       'pr_git() { if [ "${DRIFT_FAULT_ACTIVE:-}" = 1 ] && [ "$1" = cat-file ]; then return 1; fi; command git "$@"; }',
@@ -1534,11 +1579,11 @@ printf 'caller-locale=%s\\n' "$LC_ALL"
     ],
     [
       "mainline diff",
-      'pr_git() { if [ "${DRIFT_FAULT_ACTIVE:-}" = 1 ] && [ "$1" = diff ] && [[ "$3" = *"$PR_MAIN_SHA" ]]; then return 1; fi; command git "$@"; }',
+      'pr_git() { if [ "${DRIFT_FAULT_ACTIVE:-}" = 1 ] && [ "$1" = diff ] && [[ "$4" = *"$PR_MAIN_SHA" ]]; then return 1; fi; command git "$@"; }',
     ],
     [
       "prepared diff",
-      'pr_git() { if [ "${DRIFT_FAULT_ACTIVE:-}" = 1 ] && [ "$1" = diff ] && [[ "$3" = *"$PREP_HEAD_SHA" ]]; then return 1; fi; command git "$@"; }',
+      'pr_git() { if [ "${DRIFT_FAULT_ACTIVE:-}" = 1 ] && [ "$1" = diff ] && [[ "$4" = *"$PREP_HEAD_SHA" ]]; then return 1; fi; command git "$@"; }',
     ],
     [
       "overlap read",

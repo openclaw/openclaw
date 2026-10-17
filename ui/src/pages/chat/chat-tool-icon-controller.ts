@@ -75,6 +75,7 @@ export function createChatToolIcons(readSource: () => ToolIconSource): PluginToo
       }
     },
   });
+  // The binding owns abortable icon requests and blob URL retirement.
   createEffect(binding, (next) => {
     if (!next) {
       return undefined;

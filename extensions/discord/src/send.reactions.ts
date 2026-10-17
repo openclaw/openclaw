@@ -1,9 +1,9 @@
+import { getChannelMessage } from "./internal/api.messages.js";
 import {
   createOwnMessageReaction,
   deleteOwnMessageReaction,
-  getChannelMessage,
   listMessageReactionUsers,
-} from "./internal/discord.js";
+} from "./internal/api.reactions.js";
 import {
   buildReactionIdentifier,
   createDiscordClient,

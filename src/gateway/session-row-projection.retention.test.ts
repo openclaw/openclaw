@@ -77,6 +77,7 @@ it("collects superseded resident rows and their materializations after metadata 
     }
     try {
       await projection.ensureMaterialized();
+      await captureList(0);
       for (let revision = 1; revision <= 4; revision++) {
         refreshEntries(revision);
         await projection.ensureMaterialized();
