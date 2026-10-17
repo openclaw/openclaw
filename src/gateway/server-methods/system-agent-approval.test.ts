@@ -126,7 +126,6 @@ describe("Full Access delegated chat", () => {
       surface: "gateway",
       verifiedInference: fixture.binding,
       deps: {
-        ...fixture.deps,
         readConfigFileSnapshot: async () =>
           ({
             exists: true,

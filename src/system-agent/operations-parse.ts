@@ -32,9 +32,6 @@ export type SystemAgentOperationResult = {
 
 export type SystemAgentCommandDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  loadAuthProfileStoreForRuntimeAsync?: typeof import("../agents/auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntimeAsync;
-  resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
-  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
   formatOverview?: (overview: SystemAgentOverview) => string;
   loadOverview?: typeof loadSystemAgentOverview;
   applyPluginRuntime?: import("../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
