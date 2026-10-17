@@ -32,6 +32,11 @@ async function loadPolicy() {
   return createLazyGoogleMeetNodeInvokePolicy({} as GoogleMeetConfig);
 }
 
+async function twice(action: () => unknown) {
+  await action();
+  await action();
+}
+
 describe("google-meet lazy imports", () => {
   afterEach(() => {
     for (const moduleId of lazyModules) {
@@ -120,21 +125,14 @@ describe("google-meet lazy imports", () => {
     expect(nodeCommands[0]?.hasActiveWork?.()).toBe(false);
     expect(imports).toEqual(Object.fromEntries(lazyModules.map((id) => [id, 0])));
 
-    const createHandler = gatewayMethods.get("googlemeet.create");
-    const statusHandler = gatewayMethods.get("googlemeet.status");
-    const transcriptHandler = gatewayMethods.get("googlemeet.transcript");
-    const testListenHandler = gatewayMethods.get("googlemeet.testListen");
     const respond = vi.fn();
-    await transcriptHandler?.({ params: {}, respond } as never);
-    await transcriptHandler?.({ params: {}, respond } as never);
+    const invoke = (method: string, params = {}) =>
+      twice(() => gatewayMethods.get(`googlemeet.${method}`)?.({ params, respond } as never));
+    await invoke("transcript");
     expect(imports["openclaw/plugin-sdk/gateway-runtime"]).toBe(0);
-
-    await createHandler?.({ params: { join: false }, respond } as never);
-    await createHandler?.({ params: { join: false }, respond } as never);
-    await statusHandler?.({ params: {}, respond } as never);
-    await statusHandler?.({ params: {}, respond } as never);
-    await testListenHandler?.({ params: { timeoutMs: 2_500 }, respond } as never);
-    await testListenHandler?.({ params: { timeoutMs: 2_500 }, respond } as never);
+    await invoke("create", { join: false });
+    await invoke("status");
+    await invoke("testListen", { timeoutMs: 2_500 });
     const transcriptProvider = transcriptProviders[0];
     if (
       typeof transcriptProvider?.start !== "function" ||
@@ -153,18 +151,13 @@ describe("google-meet lazy imports", () => {
     if (!tool) {
       throw new Error("expected Google Meet tool");
     }
-    await tool.execute("tool-call", { action: "status" } as never);
-    await tool.execute("tool-call", { action: "status" } as never);
-
-    await nodeCommands[0]?.handle();
-    await nodeCommands[0]?.handle();
+    await twice(() => tool.execute("tool-call", { action: "status" } as never));
+    await twice(() => nodeCommands[0]?.handle());
     expect(nodeCommands[0]?.hasActiveWork?.()).toBe(true);
     nodeHostBusy = false;
     expect(nodeCommands[0]?.hasActiveWork?.()).toBe(false);
-    await nodePolicies[0]?.handle({} as never);
-    await nodePolicies[0]?.handle({} as never);
-    await cliRegistrars[0]?.({ program: {} } as never);
-    await cliRegistrars[0]?.({ program: {} } as never);
+    await twice(() => nodePolicies[0]?.handle({} as never));
+    await twice(() => cliRegistrars[0]?.({ program: {} } as never));
 
     expect(imports).toEqual(
       Object.fromEntries(lazyModules.map((id) => [id, id.endsWith("/transcripts") ? 0 : 1])),
@@ -186,16 +179,14 @@ describe("google-meet lazy imports", () => {
     }));
     const policy = await loadPolicy();
 
-    expect(policy.commands).toEqual([GOOGLE_MEET_NODE_COMMAND]);
-    expect(policy.dangerous).toBe(true);
+    expect(policy).toMatchObject({ commands: [GOOGLE_MEET_NODE_COMMAND], dangerous: true });
     expect(createPolicy).not.toHaveBeenCalled();
 
-    await expect(policy.handle({} as OpenClawPluginNodeInvokePolicyContext)).resolves.toEqual({
-      ok: true,
-    });
-    await expect(policy.handle({} as OpenClawPluginNodeInvokePolicyContext)).resolves.toEqual({
-      ok: true,
-    });
+    await twice(() =>
+      expect(policy.handle({} as OpenClawPluginNodeInvokePolicyContext)).resolves.toEqual({
+        ok: true,
+      }),
+    );
     expect(createPolicy).toHaveBeenCalledTimes(1);
     expect(delegateHandle).toHaveBeenCalledTimes(2);
   });
