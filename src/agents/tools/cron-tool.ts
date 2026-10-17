@@ -27,13 +27,7 @@ import {
   readPositiveIntegerParam,
   readToolStringParam,
 } from "./common.js";
-import {
-  canonicalizeCronToolObject,
-  hasCronCreateSignal,
-  isEmptyRecoveredCronPatch,
-  recoverCronObjectFromFlatParams,
-  stripCronCreateNullClears,
-} from "./cron-tool-canonicalize.js";
+import { canonicalizeCronToolObject, stripCronCreateNullClears } from "./cron-tool-canonicalize.js";
 import {
   buildReminderContextLines,
   REMINDER_CONTEXT_MARKER,
@@ -46,6 +40,7 @@ import {
   resolveCronCreatorExecToolTarget,
 } from "./cron-tool-creator-cap.js";
 import { CronToolOutputSchema } from "./cron-tool-output-schema.js";
+import { prepareCronToolArguments } from "./cron-tool-prepare.js";
 import {
   assertCronPacingInput,
   createCronToolSchema,
@@ -75,23 +70,14 @@ export {
   replaceWithEffectiveCronCreatorToolAllowlist,
 } from "./cron-tool-creator-cap.js";
 
-function readCronToolJob(params: Record<string, unknown>, action: "add" | "update") {
-  let recovered = false;
-  // Models sometimes flatten job fields beside action; create requires a schedule/payload signal.
-  if (!params.job || (isRecord(params.job) && Object.keys(params.job).length === 0)) {
-    const synthetic = recoverCronObjectFromFlatParams(params);
-    if (synthetic.found && (action === "update" || hasCronCreateSignal(synthetic.value))) {
-      params.job = synthetic.value;
-      recovered = true;
-    }
-  }
-  if (!params.job || typeof params.job !== "object") {
+function readCronToolJob(params: Record<string, unknown>) {
+  // Flat recovery belongs to prepareArguments, before schema validation.
+  if (!isRecord(params.job) || Object.keys(params.job).length === 0) {
     throw new Error("job required");
   }
-  return {
-    job: canonicalizeCronToolObject(params.job as Record<string, unknown>),
-    recovered,
-  };
+  // Separate update safeguard: kindless text edits (nested or recovered)
+  // inherit the stored payload kind instead of silently changing a task.
+  return canonicalizeCronToolObject(params.job, params.action !== "update");
 }
 
 function readCronJobIdParam(params: Record<string, unknown>) {
@@ -209,6 +195,15 @@ SCOPE: Authenticated configured channel owners and Control UI administrators can
 
 ADD: job requires schedule+payload.
 
+For ordinary add/update calls, prefer these flat fields when nested objects are unreliable. Examples:
+{ "action":"add", "everyMs":300000, "message":"Check for urgent mail" }
+{ "action":"add", "expr":"0 9 * * *", "tz":"Europe/London", "text":"Take a break" }
+On add, choose exactly one: at (date/time with UTC offset), everyMs (milliseconds), or expr (cron expression). Use tz only with expr.
+Send text for a reminder, or message for a task; not both. A text-only update keeps the existing reminder/task type.
+On update, send jobId and only fields to change, for example { "action":"update", "jobId":"existing-job-id", "enabled":false }.
+toolsAllow restricts tools; omit it, or list every tool the run needs.
+Use nested job only for advanced settings. Do not mix job with flat fields.
+
 SCHEDULE:
 - {kind:"at",at:"ISO-8601"}: one-shot; missing timezone=UTC. Auto-deletes after successful completion; failed/unknown required delivery retains it disabled.
 - {kind:"every",everyMs}.
@@ -264,6 +259,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
           : "also"
         : undefined,
     }),
+    prepareArguments: prepareCronToolArguments,
     execute: async (_toolCallId, args, operationSignal) => {
       operationSignal?.throwIfAborted();
       const callGateway: typeof callGatewayTool = async <T>(
@@ -293,7 +289,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             )
           : await gatewayCall<T>(...request);
       };
-      const params = args as Record<string, unknown>;
+      const params = prepareCronToolArguments(args);
       const action = readToolStringParam(params, "action", { required: true });
       if (
         managementAuthority?.managementOnly &&
@@ -445,7 +441,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             );
           }
           case "add": {
-            const canonicalJob = stripCronCreateNullClears(readCronToolJob(params, "add").job);
+            const canonicalJob = stripCronCreateNullClears(readCronToolJob(params));
             assertNoCronShellExecution(canonicalJob);
             assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
             assertCronPacingInput(canonicalJob.pacing);
@@ -575,10 +571,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
           case "update": {
             const id = requireCronJobIdParam(params);
 
-            const { job: canonicalPatch, recovered: recoveredFlatPatch } = readCronToolJob(
-              params,
-              "update",
-            );
+            const canonicalPatch = readCronToolJob(params);
             if (!managementAuthority) {
               assertNoCronShellExecution(canonicalPatch);
             }
@@ -591,9 +584,6 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               throw new Error("displayName must be a non-empty string or null");
             }
             const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
-            if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
-              throw new Error("job required");
-            }
             let creatorOptions = managementAuthority ? undefined : opts;
             if (
               managementAuthority &&
