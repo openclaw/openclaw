@@ -186,6 +186,11 @@ function startRuntime(child: MockChildProcess) {
   return createRuntime();
 }
 
+async function startTool(child: MockChildProcess, name?: string) {
+  const runtime = await startRuntime(child);
+  return { runtime, tool: getTool(runtime, name) };
+}
+
 function pendingChild(...respondMethods: string[]) {
   return new MockChildProcess("", new Set(respondMethods));
 }
@@ -370,8 +375,7 @@ describe("bundle LSP runtime", () => {
 
   it("rejects pending and future LSP requests when stdout fails", async () => {
     const child = pendingChild("initialize");
-    const runtime = await startRuntime(child);
-    const hoverTool = getTool(runtime);
+    const { tool: hoverTool } = await startTool(child);
 
     const request = hoverTool.execute("call-1", position);
     child.stdout.emit("error", new Error("stdout failed"));
@@ -382,8 +386,7 @@ describe("bundle LSP runtime", () => {
 
   it("blocks new LSP requests on exit while allowing a final stdout response to drain", async () => {
     const child = pendingChild("initialize");
-    const runtime = await startRuntime(child);
-    const hoverTool = getTool(runtime);
+    const { tool: hoverTool } = await startTool(child);
     const pendingRequest = hoverTool.execute("call-1", position);
 
     child.exitCode = 1;
@@ -401,8 +404,7 @@ describe("bundle LSP runtime", () => {
 
   it("rejects undrained LSP requests when the exited process closes", async () => {
     const child = pendingChild("initialize");
-    const runtime = await startRuntime(child);
-    const hoverTool = getTool(runtime);
+    const { tool: hoverTool } = await startTool(child);
     const request = hoverTool.execute("call-1", position);
 
     child.exitCode = 1;
@@ -414,8 +416,7 @@ describe("bundle LSP runtime", () => {
 
   it("cancels pending references requests when the tool signal aborts", async () => {
     const child = pendingChild("initialize", "shutdown");
-    const runtime = await startRuntime(child);
-    const tool = getTool(runtime, "lsp_references_typescript");
+    const { tool } = await startTool(child, "lsp_references_typescript");
     const controller = new AbortController();
     const request = tool.execute("call-1", position, controller.signal);
     const settled = request.then(
@@ -455,8 +456,7 @@ describe("bundle LSP runtime", () => {
   it("preserves consecutive multibyte tool responses delivered in 4096-byte chunks", async () => {
     const chunkSize = 4096;
     const child = pendingChild("initialize", "shutdown");
-    const runtime = await startRuntime(child);
-    const tool = getTool(runtime);
+    const { tool } = await startTool(child);
     const results = [{ contents: "té🙂".repeat(2048) }, { contents: "次の結果".repeat(1024) }];
     const requests = results.map((_, index) =>
       tool.execute(`call-${index}`, { ...position, line: index }),
@@ -491,8 +491,7 @@ describe("bundle LSP runtime", () => {
 
   it("rejects invalid UTF-8 in LSP JSON bodies", async () => {
     const child = pendingChild("initialize");
-    const runtime = await startRuntime(child);
-    const hoverTool = getTool(runtime);
+    const { tool: hoverTool } = await startTool(child);
     const request = hoverTool.execute("call-1", position);
     const hoverRequest = child.messages("textDocument/hover")[0];
     if (typeof hoverRequest?.id !== "number") {
@@ -532,8 +531,7 @@ describe("bundle LSP runtime", () => {
         return _name === "an oversized unterminated header" ? start : `${start}\r\n\r\n${json}`;
       },
     );
-    const runtime = await startRuntime(child);
-    const hoverTool = getTool(runtime);
+    const { tool: hoverTool } = await startTool(child);
 
     const request = hoverTool.execute("call-1", position);
     const outcome = await withinRequestDeadline(requestOutcome(request));
@@ -596,8 +594,7 @@ describe("bundle LSP runtime", () => {
 
   it("rejects retained references requests throughout disposal", async () => {
     const child = new MockChildProcess();
-    const runtime = await startRuntime(child);
-    const tool = getTool(runtime, "lsp_references_typescript");
+    const { runtime, tool } = await startTool(child, "lsp_references_typescript");
     await tool.execute("before-dispose", position);
 
     const disposal = runtime.dispose();
@@ -617,8 +614,7 @@ describe("bundle LSP runtime", () => {
 
   it("rejects outstanding requests before shutdown and detaches their abort listeners", async () => {
     const child = pendingChild("initialize");
-    const runtime = await startRuntime(child);
-    const hover = getTool(runtime);
+    const { runtime, tool: hover } = await startTool(child);
     const controller = new AbortController();
     const pending = requestOutcome(hover.execute("pending", position, controller.signal));
 

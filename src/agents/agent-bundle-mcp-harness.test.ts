@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeMcpAppOperation } from "../gateway/mcp-app-operations.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
-import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 
@@ -113,11 +112,7 @@ beforeEach(() => {
   mocks.retireSessionMcpRuntime.mockClear();
   mocks.rememberAdvertisedScopedMcpCatalog.mockClear();
   mocks.getAdvertisedScopedMcpCatalog.mockClear();
-  readCredentialsStatus
-    .mockReset()
-    .mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
-      identities.map(() => ({ state: "unauthenticated" })),
-    );
+  readCredentialsStatus.mockReset().mockResolvedValue([{ state: "unauthenticated" }]);
   startAuthorization.mockReset();
 });
 
@@ -234,8 +229,7 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
     expect(callTool).not.toHaveBeenCalled();
 
     await expect(tool.execute("allowed", { folder: "team" })).resolves.toBeDefined();
-    expect(callTool).toHaveBeenCalledOnce();
-    expect(callTool).toHaveBeenCalledWith("user-mail", "inbox", { folder: "team" });
+    expect(callTool).toHaveBeenCalledExactlyOnceWith("user-mail", "inbox", { folder: "team" });
     expect(requestInteractiveCodexApproval).toHaveBeenLastCalledWith(
       expect.objectContaining({
         safeToolName: "user-mail__inbox",
@@ -434,8 +428,6 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     startAuthorization.mockResolvedValue({
       status: "redirect",
       authorizationUrl: "https://auth.example/authorize?state=opaque",
-      redirectUrl: "https://gateway.example/oauth/mcp/callback",
-      state: "opaque",
     });
     const result = await requesterTools("session-connect", {
       requesterSenderId: "alice",

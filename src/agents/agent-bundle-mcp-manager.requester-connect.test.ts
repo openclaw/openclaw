@@ -9,7 +9,6 @@ import {
   resetCodeModeTestState,
   runUntilCompleted,
 } from "./code-mode.test-support.js";
-import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 
 const oauthStatus = vi.hoisted(() => vi.fn());
 const startAuthorization = vi.hoisted(() => vi.fn());
@@ -91,11 +90,7 @@ describe("requester MCP connect runtime", () => {
   const created: Array<Parameters<CreateSessionMcpRuntime>[0]> = [];
 
   beforeEach(() => {
-    oauthStatus
-      .mockReset()
-      .mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
-        identities.map(() => ({ state: "unauthenticated" })),
-      );
+    oauthStatus.mockReset().mockResolvedValue([{ state: "unauthenticated" }]);
     startAuthorization.mockReset().mockResolvedValue({ status: "redirect", authorizationUrl });
     created.length = 0;
     manager = createSessionMcpRuntimeManager({
@@ -143,9 +138,7 @@ describe("requester MCP connect runtime", () => {
     expect(disconnected.tools[0]?.resultContentSource).toBe("network");
     await disconnected.dispose();
 
-    oauthStatus.mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
-      identities.map(() => ({ state: "authorized" })),
-    );
+    oauthStatus.mockResolvedValue([{ state: "authorized" }]);
     const connectedRuntime = await manager.getOrCreate(input);
     const connected = await materializeBundleMcpToolsForRun({ runtime: connectedRuntime });
 
