@@ -1,9 +1,6 @@
 import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { prepareActiveNodeContext } from "../../infra/active-node-context.js";
-/**
- * Selects and invokes native agent harnesses for embedded run attempts.
- */
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,

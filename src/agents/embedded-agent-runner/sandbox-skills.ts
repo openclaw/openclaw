@@ -1,6 +1,4 @@
 /**
- * Sandbox skill runtime input selection.
- *
  * Sandboxed runs must build prompt-facing skill entries from readable in-sandbox
  * copies instead of reusing host-path snapshots.
  */

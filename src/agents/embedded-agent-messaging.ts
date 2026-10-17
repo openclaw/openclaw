@@ -1,6 +1,3 @@
-/**
- * Identifies messaging tools and send actions during embedded-agent runs.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { isMessageToolSendActionName } from "../channels/plugins/message-action-names.js";
