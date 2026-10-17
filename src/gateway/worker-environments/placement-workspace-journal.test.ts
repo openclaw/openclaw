@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -12,28 +11,22 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
+import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile-recovery.js";
 import { createWorkspaceResultJournal } from "./workspace-result-settlement.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeStateDatabaseForTest();
-    cleanup();
-  });
-});
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 describe("worker placement workspace journal", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let store: WorkerSessionPlacementStore;
@@ -47,13 +40,11 @@ describe("worker placement workspace journal", () => {
   const prune = () => store.pruneOrphanedWorkspaceReconciliations();
 
   const seedJournal = async () => {
-    seedAttachedPlacementEnvironment(database, {
+    const active = await advancePlacementFixtureToActive(store, database, REQUEST, {
       environmentId: "worker-1",
-      sessionId: REQUEST.sessionId,
-      ownerEpoch: 7,
+      remoteWorkspaceDir: "/worker/workspace",
+      seedEnvironment: "before-dispatch",
     });
-    const active = await seedActivePlacement(store, { environmentId: "worker-1", ownerEpoch: 7 });
-    assert(active.state === "active", "expected active placement");
     const owner = {
       sessionId: active.sessionId,
       environmentId: active.environmentId,
@@ -119,12 +110,9 @@ describe("worker placement workspace journal", () => {
     const placement = store.preparedWorkspaceResultPlacement(claim)!;
     expect(store.preparedWorkspaceResult(claim)).toBe(pendingResult);
     expect(store.preparedWorkspaceResultPlacement(claim)).toBe(placement);
-    expect(() => {
-      pendingResult.claimId = "different-claim";
-    }).toThrow(TypeError);
-    expect(() => {
-      placement.turnClaim!.claimId = "different-claim";
-    }).toThrow(TypeError);
+    for (const frozen of [pendingResult, placement.turnClaim!]) {
+      expect(() => Object.assign(frozen, { claimId: "different-claim" })).toThrow(TypeError);
+    }
     expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
     const queries = observeHostDataSql();
     try {
@@ -184,21 +172,17 @@ describe("worker placement workspace journal", () => {
   it("refuses a journal write whose original caller is revoked at commit", async () => {
     const { owner, journal } = await seedJournal();
     await store.abortWorkspaceReconciliation(owner);
-    let revoked = false;
+    const authority = new AbortController();
     probe.admission(operationAdmission, (request, grant, admit) => {
       if (request.stage === "commit") {
-        revoked = true;
+        authority.abort(new Error("journal caller revoked"));
       }
       admit(request, grant);
     });
     await expect(
-      store.beginWorkspaceReconciliation(owner, journal, () => {
-        if (revoked) {
-          throw new Error("journal caller revoked");
-        }
-      }),
+      store.beginWorkspaceReconciliation(owner, journal, () => authority.signal.throwIfAborted()),
     ).rejects.toThrow("journal caller revoked");
-    expect(revoked).toBe(true);
+    expect(authority.signal.aborted).toBe(true);
     expect(await store.loadWorkspaceReconciliation(owner)).toBeUndefined();
   });
 

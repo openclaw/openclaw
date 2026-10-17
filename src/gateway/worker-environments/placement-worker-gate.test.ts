@@ -6,11 +6,8 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
-import {
-  placementTurnOwner,
-  type WorkerSessionPlacementIdentity,
-  type WorkerSessionTurnClaim,
-} from "./placement-record.js";
+import { REQUEST } from "./placement-dispatch-test-fixtures.js";
+import { placementTurnOwner, type WorkerSessionTurnClaim } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -18,19 +15,9 @@ import {
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 
-const SESSION: WorkerSessionPlacementIdentity = {
-  sessionId: "session-worker-gate",
-  agentId: "main",
-  sessionKey: "agent:main:worker-gate",
-};
-const ENVIRONMENT_ID = "environment-worker-gate";
-const OWNER_EPOCH = 7;
-const BINDING = {
-  sessionId: SESSION.sessionId,
-  environmentId: ENVIRONMENT_ID,
-  ownerEpoch: OWNER_EPOCH,
-};
-const OWNER = { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH } as const;
+const ENVIRONMENT = { environmentId: "environment-worker-gate", ownerEpoch: 7 };
+const BINDING = { sessionId: REQUEST.sessionId, ...ENVIRONMENT };
+const OWNER = { kind: "worker", ...ENVIRONMENT } as const;
 
 describe("worker session placement gate", () => {
   const tempDirs = useStateDatabaseTempDirs();
@@ -43,29 +30,22 @@ describe("worker session placement gate", () => {
     store = createWorkerSessionPlacementStore({ database });
   });
 
-  function activate(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
-    return advancePlacementFixtureToActive(
-      store,
-      database,
-      { ...SESSION, executionMode },
-      {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        workspaceBaseManifestRef: "manifest-worker-gate",
-        remoteWorkspaceDir: "/workspace/worker-gate",
-      },
-    );
-  }
+  const activate = (executionMode: "worker-turn" | "remote-exec" = "worker-turn") =>
+    advancePlacementFixtureToActive(store, database, { ...REQUEST, executionMode }, ENVIRONMENT);
 
-  async function preclaim(runId: string) {
+  async function preclaim(runId: string, tools?: string[]) {
     await activate();
-    return claimTurn(runId);
+    const claim = await claimTurn(runId);
+    if (tools) {
+      await store.authorizeWorkerTurnTools(claim, tools);
+    }
+    return claim;
   }
 
-  const claimTurn = (runId: string) =>
-    store.claimTurn({ ...SESSION, claimId: `claim:${runId}`, runId, owner: OWNER });
+  const claimTurn = (runId: string, owner: WorkerSessionTurnClaim["owner"] = OWNER) =>
+    store.claimTurn({ ...REQUEST, claimId: `claim:${runId}`, runId, owner });
   const reclaim = (id: string) =>
-    store.claimReclaimWorkspaceResult({ ...SESSION, claimId: id, runId: id, owner: OWNER });
+    store.claimReclaimWorkspaceResult({ ...REQUEST, claimId: id, runId: id, owner: OWNER });
   const drain = (expectedGeneration: number) =>
     store.startDrain({ ...BINDING, expectedGeneration });
   const reconcile = (expectedGeneration: number) =>
@@ -126,7 +106,7 @@ describe("worker session placement gate", () => {
       const gate = createWorkerSessionPlacementGate(store);
       const refresh = await gate.prepareWorkerRuntimeRefresh(BINDING);
       if (change === "metadata") {
-        sessionChanges.emit({ agentId: SESSION.agentId, sessionKey: SESSION.sessionKey });
+        sessionChanges.emit({ agentId: REQUEST.agentId, sessionKey: REQUEST.sessionKey });
         expect(() => refresh.assertCurrent()).not.toThrow();
       } else if (change === "rollback") {
         database.db.exec(`
@@ -156,8 +136,7 @@ describe("worker session placement gate", () => {
   );
 
   it("rejects restart-inherited claims while preserving workspace recovery authority", async () => {
-    const claim = await preclaim("run-inherited-worker");
-    await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    const claim = await preclaim("run-inherited-worker", ["sessions_send"]);
     await store.updateAckCursors({ claim, liveEvent: 1 });
 
     const restartedStore = createWorkerSessionPlacementStore({ database });
@@ -194,7 +173,7 @@ describe("worker session placement gate", () => {
       }
       await store.releaseTurn(first);
       const second = await store.claimTurn({
-        ...SESSION,
+        ...REQUEST,
         claimId: reused === "claim" ? first.claimId : "claim:replacement",
         runId: reused === "run" ? first.runId : "run-current",
         owner: first.owner,
@@ -220,12 +199,7 @@ describe("worker session placement gate", () => {
     "settles $mode pending results before owner revocation (staged: $staged)",
     async ({ mode, staged }) => {
       const placement = await activate(mode);
-      const claim = await store.claimTurn({
-        ...SESSION,
-        claimId: "claim:owner-revocation",
-        runId: "run-owner-revocation",
-        owner: placementTurnOwner(placement),
-      });
+      const claim = await claimTurn("run-owner-revocation", placementTurnOwner(placement));
       const gate = createWorkerSessionPlacementGate(store);
       if (mode === "worker-turn") {
         await gate.updateAckCursors({ claim, liveSeq: 1 });
@@ -238,13 +212,9 @@ describe("worker session placement gate", () => {
       }
       const reason = mode === "worker-turn" ? "worker owner revoked" : "local owner revoked";
       await gate.prepareWorkspaceResultOwnerRevocation(BINDING, new Error(reason));
-      if (mode === "remote-exec" && !staged) {
+      const failed = mode === "remote-exec" && !staged;
+      if (failed) {
         expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
-        expect(store.get(claim.sessionId)).toMatchObject({
-          state: "failed",
-          recoveryError: reason,
-          turnClaim: null,
-        });
       } else {
         expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
           {
@@ -253,11 +223,12 @@ describe("worker session placement gate", () => {
             ...(staged ? { stagedResultRef } : {}),
           },
         ]);
-        expect(store.get(claim.sessionId)).toMatchObject({
-          state: "active",
-          turnClaim: expect.anything(),
-        });
       }
+      expect(store.get(claim.sessionId)).toMatchObject({
+        state: failed ? "failed" : "active",
+        turnClaim: failed ? null : expect.anything(),
+        ...(failed ? { recoveryError: reason } : {}),
+      });
     },
   );
 
@@ -267,14 +238,13 @@ describe("worker session placement gate", () => {
     const gate = createWorkerSessionPlacementGate(store);
     expect(gate.validateWorkerTurn(claim)).toBe(true);
     await gate.updateAckCursors({ claim, transcriptSeq: 5 });
-    expect(store.get(SESSION.sessionId)?.lastTranscriptAckCursor).toBe(5);
+    expect(store.get(REQUEST.sessionId)?.lastTranscriptAckCursor).toBe(5);
     await store.releaseTurn(claim);
     expect(gate.validateWorkerTurn(claim)).toBe(false);
   });
 
   it("does not reconcile away a claim while its session operation is running", async () => {
-    const claim = await preclaim("run-worker-reconcile-tools");
-    await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    const claim = await preclaim("run-worker-reconcile-tools", ["sessions_send"]);
     const request = operation(claim, "reconcile-send");
     expect(await store.beginWorkerSessionToolOperation(request)).toMatchObject({ kind: "execute" });
     const draining = await drain(claim.placementGeneration);
@@ -300,8 +270,7 @@ describe("worker session placement gate", () => {
   });
 
   it("caps running session operations across connection incarnations", async () => {
-    const claim = await preclaim("run-worker-tool-capacity");
-    await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    const claim = await preclaim("run-worker-tool-capacity", ["sessions_send"]);
     for (let index = 0; index < WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS; index += 1) {
       expect(
         await store.beginWorkerSessionToolOperation(operation(claim, `capacity-${index}`)),
@@ -318,10 +287,9 @@ describe("worker session placement gate", () => {
   });
 
   it.each([false, true])("retains settlement owner (recovery: %s)", async (recover) => {
-    const claim = await preclaim("run-worker-restart");
     const toolName = recover ? "sessions_send" : "sessions_spawn";
-    await store.authorizeWorkerTurnTools(
-      claim,
+    const claim = await preclaim(
+      "run-worker-restart",
       recover ? ["sessions_send"] : ["sessions_spawn", "sessions_send"],
     );
     const request = { ...operation(claim, "before-restart"), toolName } as const;

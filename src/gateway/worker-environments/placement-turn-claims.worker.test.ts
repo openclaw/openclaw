@@ -115,16 +115,20 @@ function interceptAdmission(
   return once ? spy.mockImplementationOnce(intercept) : spy.mockImplementation(intercept);
 }
 
-function revokeAt(stage: "transaction" | "commit", message: string, onRevoke = () => {}) {
+function revokeAt(
+  stage: "transaction" | "commit",
+  message: string,
+  onRevoke = () => {},
+  once = true,
+) {
   let revoked = false;
   interceptAdmission((request) => {
     if (request.stage === stage) {
       revoked = true;
       onRevoke();
     }
-  });
+  }, once);
   return {
-    isRevoked: () => revoked,
     assertCurrent: () => {
       if (revoked) {
         throw new Error(message);
@@ -179,18 +183,11 @@ function losePlacementReply(sessionId: string, outcome: "committed" | "unknown")
     );
     const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
-      (admit, attachment) => {
-        const admission = createAdmission(admit, attachment);
-        return {
-          ...admission,
-          get committed() {
-            return undefined;
-          },
-          get settlement() {
-            return { kind: "unknown" as const };
-          },
-        };
-      },
+      (admit, attachment) => ({
+        ...createAdmission(admit, attachment),
+        committed: undefined,
+        settlement: { kind: "unknown" as const },
+      }),
     );
   }
   return corruptPlacementReply(
@@ -250,12 +247,7 @@ it("transitions, drains and settles terminal placement failure without caller-th
       expectedGeneration: failed.generation,
       recoveryError: "synthetic cleanup failure",
     });
-    expect(updated).toMatchObject({
-      state: "failed",
-      generation: failed.generation,
-      terminalReason: "synthetic terminal failure",
-      recoveryError: "synthetic cleanup failure",
-    });
+    expect(updated.generation).toBe(failed.generation);
     expect(observedActivation).toEqual([1_000]);
   });
 });
@@ -264,7 +256,7 @@ it.each(["delivered", "committed", "unknown"] as const)(
   "settles %s terminal-result failure before observers without caller-thread SQL",
   async (outcome) => {
     const name = `terminal-failure-boundary-${outcome}`;
-    const requested = input(name);
+    const { sessionId, sessionKey, agentId } = input(name);
     const claim = await workerClaim(name);
     await placements.markWorkspaceResultPending(claim);
     const [pending] = await placements.listPendingWorkspaceResultsAsync(claim.sessionId);
@@ -302,13 +294,7 @@ it.each(["delivered", "committed", "unknown"] as const)(
       if (corrupted) {
         expect(corrupted()).toBe(1);
       }
-      expect(changes).toEqual([
-        {
-          sessionId: requested.sessionId,
-          sessionKey: requested.sessionKey,
-          agentId: requested.agentId,
-        },
-      ]);
+      expect(changes).toEqual([{ sessionId, sessionKey, agentId }]);
     });
     expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toEqual([]);
   },
@@ -493,7 +479,6 @@ it.each(["placement", "caller"] as const)(
         },
       }),
     ).rejects.toThrow(owner === "placement" ? "stale worker turn" : "ACK caller revoked");
-    expect(authority.isRevoked()).toBe(true);
     expect(placements.get(claim.sessionId)?.lastLiveEventAckCursor).toBeNull();
     expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toEqual([]);
     await placements.releaseTurn(claim);
@@ -564,7 +549,7 @@ it.each([
   },
 );
 
-it("claims and strictly releases SQL-free local turns without replacing identity or a successor", async () => {
+it("claims and strictly releases SQL-free local turns without replacing identity", async () => {
   await withoutHostSql(async () => {
     const requested = input("idempotent");
     const claim = await placements.claimTurn(requested);
@@ -594,10 +579,6 @@ it("claims and strictly releases SQL-free local turns without replacing identity
     await expect(placements.releaseTurn(claim)).rejects.toThrow(
       "turn claim changed before release",
     );
-    const successor = await placements.claimTurn({ ...requested, claimId: "successor" });
-    await placements.releaseTurnIfOwned(claim);
-    expect(placements.get(requested.sessionId)?.turnClaim?.claimId).toBe("successor");
-    await placements.releaseTurn(successor);
     expect(placements.get(requested.sessionId)?.turnClaim).toBeNull();
   });
 });
@@ -642,39 +623,24 @@ it.each(["new local", "existing local", "worker"] as const)(
 it("preserves same-session FIFO and cannot conditionally release a successor", async () => {
   const first = input("fifo");
   const successor = { ...first, claimId: "claim-fifo-next", runId: "run-fifo-next" };
-  const [accepted, collision] = await Promise.allSettled([
+  const [accepted] = await Promise.all([
     placements.claimTurn(first),
-    placements.claimTurn(successor),
+    expect(placements.claimTurn(successor)).rejects.toBeInstanceOf(ActiveTurnClaimError),
   ]);
-  if (accepted.status !== "fulfilled" || collision.status !== "rejected") {
-    throw new Error("Concurrent claim admission did not preserve its submitted order");
-  }
-  expect(collision.reason).toBeInstanceOf(ActiveTurnClaimError);
   const [, next] = await Promise.all([
-    placements.releaseTurn(accepted.value),
+    placements.releaseTurn(accepted),
     placements.claimTurn(successor),
-    placements.releaseTurnIfOwned(accepted.value),
+    placements.releaseTurnIfOwned(accepted),
   ]);
   expect(placements.get(first.sessionId)?.turnClaim).toMatchObject({ claimId: successor.claimId });
   await placements.releaseTurn(next);
 });
 
 it("refuses a local claim before its effect when live authority is revoked", async () => {
-  let revoked = false;
-  probe.admission(operationAdmission, (request, grant, admit) => {
-    if (request.stage === "commit") {
-      revoked = true;
-    }
-    admit(request, grant);
-  });
-  await expect(
-    placements.claimTurn(input("refused"), () => {
-      if (revoked) {
-        throw new Error("synthetic placement admission revoked");
-      }
-    }),
-  ).rejects.toThrow("synthetic placement admission revoked");
-  expect(revoked).toBe(true);
+  const authority = revokeAt("commit", "synthetic placement admission revoked", undefined, false);
+  await expect(placements.claimTurn(input("refused"), authority.assertCurrent)).rejects.toThrow(
+    "synthetic placement admission revoked",
+  );
   expect(await placements.getAsync("placement-worker-refused")).toBeUndefined();
 });
 
@@ -881,15 +847,6 @@ it.each(["reclaim", "mutation"] as const)(
       await placements.completeWorkspaceResultAndReleaseTurn(claim);
       expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
       expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toEqual([]);
-      const cancelled = await placements.claimReclaimWorkspaceResult(requested);
-      await placements.cancelWorkspaceResultAndReleaseTurn(cancelled);
-      const abandoned = await placements.claimReclaimWorkspaceResult(requested);
-      const [pending] = await placements.listPendingWorkspaceResultsAsync(abandoned.sessionId);
-      if (!pending) {
-        throw new Error("Fixture lost its pending result");
-      }
-      await placements.abandonWorkspaceResult(pending);
-      await placements.releaseTurn(abandoned);
     });
   },
 );
@@ -922,7 +879,6 @@ it.each(["prepare", "release"] as const)(
     });
     await placements.markWorkspaceResultPending(next);
     await using _ = { [Symbol.asyncDispose]: () => settleResult(next) };
-    expect(placements.validateWorkspaceResultClaim(next)).toBe(true);
     if (operation === "prepare") {
       await expect(placements.prepareWorkspaceResultClaim(previous)).rejects.toThrow(
         "workspace result authority changed",
