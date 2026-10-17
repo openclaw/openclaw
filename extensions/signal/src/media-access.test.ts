@@ -21,9 +21,10 @@ const SIGNAL_IMAGE = Buffer.from(
   "base64",
 );
 
-type SignalMediaContext = Parameters<
-  NonNullable<NonNullable<typeof signalPlugin.outbound>["sendFormattedMedia"]>
->[0] & { deps?: { signal: typeof sendMessageSignal } };
+type SignalMediaContext = Omit<
+  Parameters<NonNullable<NonNullable<typeof signalPlugin.outbound>["sendFormattedMedia"]>>[0],
+  "onDeliveryResult"
+> & { deps?: { signal: typeof sendMessageSignal } };
 
 function requireAdapter<T>(send: T | undefined): T {
   if (!send) {

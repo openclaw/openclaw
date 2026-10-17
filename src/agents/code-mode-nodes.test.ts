@@ -216,7 +216,7 @@ describe("Code Mode nodes", () => {
       code: `return (await nodes.get("Desk")).describe();`,
     },
   ])("reports a guest error after nodes.$label", async ({ code }) => {
-    const details = await runUntilCompleted({ ...createHarness(), code });
+    const details = await runUntilCompleted(code);
 
     expect(details).toMatchObject({
       status: "failed",

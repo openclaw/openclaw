@@ -699,7 +699,11 @@ describe("ssh sandbox backend", () => {
     });
 
     expect(sshMocks.uploadDirectoryToSshTarget).toHaveBeenCalledOnce();
-    const skillsUploadParams = requireSshUploadParams(0, "skills upload params");
+    const skillsUploadParams = requireMockRecordArg(
+      sshMocks.uploadDirectoryToSshTarget,
+      0,
+      "skills upload params",
+    );
     expect(skillsUploadParams.localDir).toBe(skillsWorkspaceDir);
     expect(skillsUploadParams.remoteDir).toBe(runtimePaths.remoteSkillsWorkspaceDir);
     expect(requirePreparedSshInvocation().stdin).toContain(skillsWorkdir);

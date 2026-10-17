@@ -139,8 +139,8 @@ describe("npm placeholder publication", () => {
   it("preserves selected multi-package order and binds unique release-enabled manifests", async () => {
     const names = ["@openclaw/zoom-meetings", "@openclaw/comfy-provider"] as const;
     const root = createRepo([
-      { dir: "comfy", manifest: packageJson(names[1]) },
-      { dir: "zoom-meetings", manifest: packageJson(names[0]) },
+      packageEntry("comfy", names[1]),
+      packageEntry("zoom-meetings", names[0]),
     ]);
     const outputDir = join(tempDirs.make("npm-placeholder-output-parent-"), "publication");
     const manifest = await createPlaceholderPublication({

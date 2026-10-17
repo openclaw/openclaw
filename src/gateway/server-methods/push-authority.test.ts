@@ -292,8 +292,10 @@ describe("Web Push request authority across asynchronous storage", () => {
       invocation.client.connect.scopes = ["operator.read"];
     }
     if (change === "profile switch") {
-      expectDefined(invocation.client.authenticatedUserProfile, "bound profile").profileId =
-        "different-profile";
+      invocation.client.authenticatedUserProfile = {
+        ...expectDefined(invocation.client.authenticatedUserProfile, "bound profile"),
+        profileId: "different-profile",
+      };
     }
     if (change === "session guard revoked") {
       invocation.sessionMutationCommitGuard.mockImplementation(() => {

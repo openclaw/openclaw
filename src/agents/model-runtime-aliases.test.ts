@@ -26,7 +26,7 @@ const claudeBackend = {
 const claudeBinding = { ...claudeBackend, pluginId: "anthropic" };
 const apiProfile = "anthropic:api";
 const cliProfile = "anthropic:claude-cli";
-function unexpectedMetadata() {
+function unexpectedMetadata(): never {
   throw new Error("this path must not load CLI metadata");
 }
 const anthropicAuthAliasMetadata = {
