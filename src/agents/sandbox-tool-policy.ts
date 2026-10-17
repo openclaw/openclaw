@@ -1,7 +1,3 @@
-/**
- * Converts user-facing sandbox tool policy config into the normalized runtime
- * allow/deny policy object used by tool filtering.
- */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 
@@ -16,7 +12,6 @@ type SandboxToolPolicyConfig = {
   deny?: string[];
 };
 
-/** Picks the effective sandbox tool policy from allow/alsoAllow/deny config. */
 export function pickSandboxToolPolicy(
   config?: SandboxToolPolicyConfig,
 ): SandboxToolPolicy | undefined {

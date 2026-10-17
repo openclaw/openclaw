@@ -42,9 +42,7 @@ const EDIT_MISMATCH_HINT_LIMIT = 800;
 interface EditOperations {
   /** Resolve the physical identity used to order this backend's file operations. */
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
-  /** Read file contents as a Buffer */
   readFile: (absolutePath: string) => Promise<Buffer>;
-  /** Write content to a file */
   writeFile: (absolutePath: string, content: string) => Promise<void>;
   /** Stat the target before reporting success */
   statFile: (absolutePath: string) => Promise<PersistedFileStat | null>;

@@ -1,6 +1,4 @@
 /**
- * Session tool truncation facade.
- *
  * Re-exports the shared harness truncation utilities so session tools and agent
  * harness rendering use one byte/line truncation contract.
  */

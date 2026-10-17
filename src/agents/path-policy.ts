@@ -1,5 +1,4 @@
 /**
- * Shared workspace and sandbox path boundary helpers.
  *
  * Converts validated absolute or relative inputs into root-relative paths without allowing boundary escapes.
  */

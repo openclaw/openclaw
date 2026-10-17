@@ -1,5 +1,4 @@
 /**
- * Stdio MCP launch config normalization.
  * Accepts OpenClaw and upstream MCP config field names, keeping only
  * command/args/env/cwd needed to spawn a stdio server.
  */
@@ -8,7 +7,6 @@ import { filterStringEntries } from "@openclaw/normalization-core/string-normali
 import { redactSensitiveArgv } from "../config/redact-argv.js";
 import { toMcpEnvRecord } from "./mcp-config-shared.js";
 
-/** Normalized stdio MCP server launch config. */
 export type StdioMcpServerLaunchConfig = {
   command: string;
   args?: string[];
@@ -20,7 +18,6 @@ type StdioMcpServerLaunchResult =
   | { ok: true; config: StdioMcpServerLaunchConfig }
   | { ok: false; reason: string };
 
-/** Resolve raw MCP server config into a stdio launch config. */
 export function resolveStdioMcpServerLaunchConfig(
   raw: unknown,
   options?: { onDroppedEnv?: (key: string, value: unknown) => void },

@@ -235,7 +235,6 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
     .digest("hex");
 }
 
-/** Load bundle MCP config for one Codex app-server thread. */
 export async function loadCodexBundleMcpThreadConfigCore(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): Promise<CodexBundleMcpThreadConfig> {

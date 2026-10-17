@@ -1,5 +1,4 @@
 /**
- * Spawned run metadata helpers.
  *
  * Projects tool runtime context into persisted lineage, group routing, workspace, and inherited policy metadata.
  */
@@ -54,7 +53,6 @@ export function normalizeSpawnedRunMetadata(
   };
 }
 
-/** Project tool runtime context down to the persisted spawned-run metadata shape. */
 export function mapToolContextToSpawnedRunMetadata(
   value?: SpawnedToolContext | null,
 ): Pick<NormalizedSpawnedRunMetadata, "groupId" | "groupChannel" | "groupSpace" | "workspaceDir"> {
@@ -66,7 +64,6 @@ export function mapToolContextToSpawnedRunMetadata(
   };
 }
 
-/** Resolve which workspace a spawned run should inherit. */
 export function resolveSpawnedWorkspaceInheritance(params: {
   config: OpenClawConfig;
   targetAgentId?: string;

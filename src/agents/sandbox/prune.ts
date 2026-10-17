@@ -1,6 +1,4 @@
 /**
- * Sandbox registry pruning.
- *
  * Removes stale runtime containers and browser bridges on a best-effort schedule.
  */
 import { getRuntimeConfig } from "../../config/config.js";
@@ -35,7 +33,6 @@ function resolveEntryPruneConfig(config: OpenClawConfig, entry: PruneableRegistr
   return resolveSandboxConfigForAgent(config, resolveSandboxAgentId(entry.sessionKey)).prune;
 }
 
-/** Removes expired registry entries and their backing runtime resources. */
 async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(params: {
   config: OpenClawConfig;
   assertCurrent?: () => void;

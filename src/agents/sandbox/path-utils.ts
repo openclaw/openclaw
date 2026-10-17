@@ -1,6 +1,4 @@
 /**
- * POSIX container path helpers for sandbox paths.
- *
  * Container paths normalize independently from host platform paths.
  */
 import path from "node:path";
@@ -21,7 +19,6 @@ export function isPathInsideContainerRoot(root: string, target: string): boolean
   return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`);
 }
 
-/** Returns whether a relative path would escape its container root. */
 export function relativePathEscapesContainerRoot(relativePath: string): boolean {
   return (
     relativePath === ".." || relativePath.startsWith("../") || path.posix.isAbsolute(relativePath)

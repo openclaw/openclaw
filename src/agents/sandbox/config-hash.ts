@@ -53,12 +53,10 @@ function normalizeForHash(value: unknown): unknown {
   return value;
 }
 
-/** Computes the sandbox container config hash. */
 export function computeSandboxConfigHash(input: SandboxHashInput): string {
   return hashTextSha256(JSON.stringify(normalizeForHash(input)));
 }
 
-/** Computes the browser-enabled sandbox container config hash. */
 export function computeSandboxBrowserConfigHash(input: SandboxBrowserHashInput): string {
   return computeSandboxConfigHash(input);
 }

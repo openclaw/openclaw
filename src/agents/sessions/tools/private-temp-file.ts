@@ -1,6 +1,4 @@
 /**
- * Private temporary file helper for tool output spillover.
- *
  * Creates owner-only log files without reusing predictable names.
  */
 import { randomBytes } from "node:crypto";

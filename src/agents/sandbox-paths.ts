@@ -1,5 +1,4 @@
 /**
- * Sandbox input path normalization and boundary checks.
  *
  * Handles host paths, file URLs, temporary media paths, and workspace root assertions.
  */

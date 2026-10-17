@@ -1,6 +1,4 @@
 /**
- * Tool wrappers for extension-registered tools.
- *
  * These wrappers only adapt tool execution so extension tools receive the runner context.
  * Tool call and tool result interception is handled by AgentSession via agent-core hooks.
  */
@@ -11,7 +9,6 @@ import type { ExtensionRunner } from "./runner.js";
 import type { RegisteredTool } from "./types.js";
 
 /**
- * Wrap all registered tools into AgentTools.
  * Uses the runner's createContext() for consistent context across tools and event handlers.
  */
 export function wrapRegisteredTools(

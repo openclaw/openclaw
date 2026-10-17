@@ -1,4 +1,3 @@
-/** Canonical path resolution for remote shell-backed sandbox mounts. */
 import path from "node:path";
 import type {
   SandboxBackendCommandParams,

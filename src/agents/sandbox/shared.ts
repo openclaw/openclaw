@@ -44,7 +44,6 @@ export function buildSandboxContainerName(prefix: string, slug: string): string 
   return `${fullName.slice(0, maxLength - identitySuffix.length)}${identitySuffix}`;
 }
 
-/** Resolves the per-session sandbox workspace directory under the configured sandbox root. */
 function resolveSandboxWorkspaceDir(root: string, sessionKey: string) {
   const resolvedRoot = resolveUserPath(root);
   const slug = slugifySessionKey(sessionKey);
@@ -87,7 +86,6 @@ function resolveSandboxScopeKey(
   return `agent:${resolvedAgentId}${workspaceSuffix}`;
 }
 
-/** Extracts the agent id represented by a sandbox scope key, when one exists. */
 export function resolveSandboxAgentId(scopeKey: string): string | undefined {
   const trimmed = scopeKey.trim();
   if (!trimmed || trimmed === "shared") {

@@ -1,6 +1,3 @@
-/**
- * Shared local container-engine process execution and backend selection.
- */
 import { createAbortError } from "../../infra/abort-signal.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";

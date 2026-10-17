@@ -1,6 +1,4 @@
 /**
- * Stat output parsers for sandbox filesystem bridges.
- *
  * Handles GNU/BSD size and mtime formats returned through backend shell commands.
  */
 import {

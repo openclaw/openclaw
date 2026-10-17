@@ -79,7 +79,6 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
     return true;
   }
 
-  /** Cancel an in-progress retry. */
   abortRetry(): void {
     this.retryAbortController?.abort();
   }

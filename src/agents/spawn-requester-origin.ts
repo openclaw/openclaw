@@ -27,7 +27,6 @@ const KIND_PREFIX_TO_CHAT_TYPE: ReadonlyMap<string, ChatType> = new Map([
   ["pm:", "direct"],
 ]);
 
-// Matches one leading `<alpha-token>:` wrapper at a time.
 const GENERIC_PREFIX_PATTERN = /^[a-z][a-z0-9_-]*:/i;
 
 function inferPeerKindFromBareId(value: string): ChatType | undefined {

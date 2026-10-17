@@ -1,7 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
- * Shared MCP config coercion helpers.
- *
  * MCP transport setup uses these functions to normalize loose JSON config into
  * string records/arrays while dropping unsafe host environment variables.
  */

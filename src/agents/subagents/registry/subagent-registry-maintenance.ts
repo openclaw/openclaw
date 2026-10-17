@@ -1,5 +1,4 @@
 /**
- * Session-store maintenance protection for subagent runs.
  * Preserves child session keys while runs are active, pending delivery, or
  * awaiting completion announces so pruning cannot delete needed transcripts.
  */

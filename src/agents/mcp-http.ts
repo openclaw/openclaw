@@ -1,6 +1,4 @@
 /**
- * HTTP MCP launch config normalization.
- *
  * MCP server setup uses this to validate SSE/streamable HTTP server records,
  * sanitize headers, and redact sensitive URLs in diagnostics.
  */
@@ -8,7 +6,6 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { toMcpStringRecord } from "./mcp-config-shared.js";
 
-/** Supported HTTP-based MCP transport flavors. */
 export type HttpMcpTransportType = "sse" | "streamable-http";
 
 type HttpMcpServerLaunchConfig = {
@@ -21,7 +18,6 @@ type HttpMcpServerLaunchResult =
   | { ok: true; config: HttpMcpServerLaunchConfig }
   | { ok: false; reason: string };
 
-/** Normalizes an HTTP MCP server config record into a launchable transport config. */
 export function resolveHttpMcpServerLaunchConfig(
   raw: unknown,
   options?: {

@@ -1,4 +1,3 @@
-/** Pure mount and path helpers for the remote sandbox filesystem bridge. */
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
 import { isPathInsideContainerRoot, normalizeContainerPathCore } from "./path-utils.js";

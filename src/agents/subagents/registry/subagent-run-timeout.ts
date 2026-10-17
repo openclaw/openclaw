@@ -1,6 +1,4 @@
 /**
- * Subagent run timeout math.
- *
  * Separates timer-safe delays from duration/deadline values because setTimeout has stricter bounds.
  */
 import { asDateTimestampMs, asFiniteNumber } from "@openclaw/normalization-core/number-coercion";

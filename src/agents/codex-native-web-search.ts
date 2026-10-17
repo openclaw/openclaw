@@ -1,4 +1,3 @@
-/** Reports whether native search matters for the configured agent model. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasAvailableCodexAuth,
@@ -7,7 +6,6 @@ import {
 import { resolveCodexNativeWebSearchConfig } from "./codex-native-web-search.shared.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 
-/** True when Codex native web search should appear relevant for an agent. */
 export async function isCodexNativeWebSearchRelevant(params: {
   config: OpenClawConfig;
   agentId?: string;
