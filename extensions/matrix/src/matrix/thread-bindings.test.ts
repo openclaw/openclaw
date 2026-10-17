@@ -48,15 +48,44 @@ function interceptStore(
   return vi.spyOn(state, "openKeyedStoreV2").mockImplementation(replacement);
 }
 
+function pauseNextWrite(bindingsOnly = true) {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let held = false;
+  const hold = async () => {
+    if (held) {
+      return;
+    }
+    held = true;
+    entered.resolve();
+    await release.promise;
+  };
+  const open = interceptStore(
+    (store) => ({
+      ...store,
+      register: async (...args) => {
+        await hold();
+        return await store.register(...args);
+      },
+      delete: bindingsOnly
+        ? async (...args) => {
+            await hold();
+            return await store.delete(...args);
+          }
+        : store.delete,
+    }),
+    bindingsOnly,
+  );
+  return { entered: entered.promise, release: release.resolve, restore: () => open.mockRestore() };
+}
+
 const sendMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (_to: string, _message: string, opts?: { threadId?: string }) => ({
     messageId: opts?.threadId ? "$reply" : "$root",
     roomId: "!room:example",
   })),
 );
-vi.mock("./send.js", () => {
-  return { sendMessageMatrix: sendMessageMatrixMock };
-});
+vi.mock("./send.js", () => ({ sendMessageMatrix: sendMessageMatrixMock }));
 
 describe("matrix thread bindings", () => {
   let stateDir: string;
@@ -80,19 +109,25 @@ describe("matrix thread bindings", () => {
   }
 
   function currentThreadConversation(
-    params: {
-      conversationId?: string;
-      parentConversationId?: string;
-    } = {},
+    conversationId = "$thread",
+    parentConversationId = "!room:example",
   ) {
     return {
       channel: "matrix" as const,
       accountId,
-      conversationId: params.conversationId ?? "$thread",
-      parentConversationId: params.parentConversationId ?? "!room:example",
+      conversationId,
+      parentConversationId,
     };
   }
   const thread = currentThreadConversation();
+
+  type Conversation = Parameters<typeof service.inspectByConversationAsync>[0];
+  async function expectAvailable(binding: unknown, conversation: Conversation = thread) {
+    expect(await service.inspectByConversationAsync(conversation)).toMatchObject({
+      status: "available",
+      binding,
+    });
+  }
 
   async function createBindingManager(
     params: Partial<
@@ -124,7 +159,7 @@ describe("matrix thread bindings", () => {
     return service.bind({
       targetSessionKey: params.targetSessionKey ?? targetSessionKey,
       targetKind: "subagent",
-      conversation: currentThreadConversation(params),
+      conversation: currentThreadConversation(params.conversationId, params.parentConversationId),
       placement: "current",
       metadata: params.metadata,
     });
@@ -140,8 +175,7 @@ describe("matrix thread bindings", () => {
   }
 
   async function readPersistedLastActivityAt(bindingsPath: string) {
-    const parsed = await readPersistedBindings(bindingsPath);
-    return parsed.bindings?.[0]?.lastActivityAt;
+    return (await readPersistedBindings(bindingsPath))[0]?.lastActivityAt;
   }
 
   type StoredBinding = Partial<MatrixThreadBindingRecord>;
@@ -153,29 +187,27 @@ describe("matrix thread bindings", () => {
     });
   }
 
-  async function readPersistedBindings(bindingsPath: string) {
-    return {
-      bindings: (await openStoredBindings(bindingsPath).entries())
-        .map((entry) => entry.value)
-        .filter((entry) => entry.accountId === accountId)
-        .toSorted((a, b) => (a.boundAt ?? 0) - (b.boundAt ?? 0)),
-    };
+  async function readPersistedBindings(bindingsPath?: string) {
+    const store = openStoredBindings(bindingsPath ?? (await resolveBindingsFilePath()));
+    return (await store.entries())
+      .map((entry) => entry.value)
+      .filter((entry) => entry.accountId === accountId)
+      .toSorted((a, b) => (a.boundAt ?? 0) - (b.boundAt ?? 0));
   }
 
   async function expectPersistedThreadBinding(
     bindingsPath: string,
-    expected: {
-      conversationId: string;
-      targetSessionKey: string;
-      parentConversationId?: string;
-    },
+    conversationId = "$thread",
+    sessionKey = targetSessionKey,
   ) {
     const persisted = await readPersistedBindings(bindingsPath);
-    expect(persisted.bindings).toHaveLength(1);
-    expect(persisted.bindings[0]).toMatchObject({
-      ...expected,
-      parentConversationId: expected.parentConversationId ?? "!room:example",
-    });
+    expect(persisted).toMatchObject([
+      {
+        conversationId,
+        targetSessionKey: sessionKey,
+        parentConversationId: "!room:example",
+      },
+    ]);
   }
 
   beforeEach(async () => {
@@ -264,45 +296,35 @@ describe("matrix thread bindings", () => {
     expect(sendMessageMatrixMock).not.toHaveBeenCalled();
   });
 
-  it("creates child Matrix thread bindings from a top-level room context", async () => {
-    await createBindingManager();
-
-    const binding = await service.bind({
-      targetSessionKey,
-      targetKind: "subagent",
-      conversation: { channel: "matrix", accountId: "ops", conversationId: "!room:example" },
-      placement: "child",
-      metadata: { introText: "intro root" },
-    });
-
-    expect(sendMessageMatrixMock).toHaveBeenCalledWith("room:!room:example", "intro root", {
-      cfg: {},
-      client: {},
-      accountId: "ops",
-    });
-    expect(binding.conversation).toEqual(currentThreadConversation({ conversationId: "$root" }));
-  });
-
-  it("posts intro messages inside existing Matrix threads for current placement", async () => {
-    const cfg = { agents: { entries: { main: {}, molty: {} } } };
+  it.each(["child", "current"] as const)("posts an intro with %s placement", async (placement) => {
+    const current = placement === "current";
+    const cfg = current ? { agents: { entries: { main: {}, molty: {} } } } : {};
+    const sessionKey = current ? "agent:molty:subagent:child" : targetSessionKey;
+    const introText = current ? "intro thread" : "intro root";
     await createBindingManager({ cfg });
-
-    const binding = await bindCurrentThread({
-      targetSessionKey: "agent:molty:subagent:child",
-      metadata: { introText: "intro thread" },
+    const binding = await service.bind({
+      targetSessionKey: sessionKey,
+      targetKind: "subagent",
+      conversation: current
+        ? thread
+        : { channel: "matrix", accountId, conversationId: "!room:example" },
+      placement,
+      metadata: { introText },
     });
-
-    expect(sendMessageMatrixMock).toHaveBeenCalledWith("room:!room:example", "intro thread", {
+    expect(sendMessageMatrixMock).toHaveBeenCalledWith("room:!room:example", introText, {
       cfg,
-      client: {},
-      accountId: "ops",
-      threadId: "$thread",
+      client: matrixClient,
+      accountId,
+      ...(current ? { threadId: "$thread" } : {}),
     });
-    expect(service.resolveByConversation(thread)).toMatchObject({
-      bindingId: binding.bindingId,
-      targetSessionKey: "agent:molty:subagent:child",
-    });
-    expect(binding.metadata?.agentId).toBe("molty");
+    expect(binding.conversation).toEqual(current ? thread : currentThreadConversation("$root"));
+    if (current) {
+      expect(service.resolveByConversation(thread)).toMatchObject({
+        bindingId: binding.bindingId,
+        targetSessionKey: sessionKey,
+      });
+      expect(binding.metadata?.agentId).toBe("molty");
+    }
   });
 
   it("persists expired bindings after a sweep", async () => {
@@ -335,11 +357,9 @@ describe("matrix thread bindings", () => {
 
     await vi.waitFor(
       async () => {
-        const persisted = await readPersistedBindings(await resolveBindingsFilePath());
-        expect(
-          service.resolveByConversation(currentThreadConversation({ conversationId: "$thread-1" })),
-        ).toBeNull();
-        expect(persisted.bindings).toEqual([]);
+        const persisted = await readPersistedBindings();
+        expect(service.resolveByConversation(currentThreadConversation("$thread-1"))).toBeNull();
+        expect(persisted).toEqual([]);
       },
       { interval: 10, timeout: 1_000 },
     );
@@ -365,10 +385,7 @@ describe("matrix thread bindings", () => {
       });
       const initialBindingsPath = path.join(initialStoragePaths.rootDir, "thread-bindings.json");
       if (deviceId) {
-        await expectPersistedThreadBinding(initialBindingsPath, {
-          conversationId: "$thread",
-          targetSessionKey,
-        });
+        await expectPersistedThreadBinding(initialBindingsPath);
       }
       await initialManager.stop();
       await resetThreadBindingAdapters();
@@ -395,9 +412,7 @@ describe("matrix thread bindings", () => {
     );
 
     const initialManager = await createBindingManager({ stateDir: initialStateDir });
-
     await bindCurrentThread();
-
     const replacementManager = await createBindingManager({ stateDir: replacementStateDir });
 
     expect(replacementManager).not.toBe(initialManager);
@@ -409,14 +424,12 @@ describe("matrix thread bindings", () => {
       conversationId: "$thread-2",
     });
 
-    await expectPersistedThreadBinding(await resolveBindingsFilePath(replacementStateDir), {
-      conversationId: "$thread-2",
-      targetSessionKey: "agent:ops:subagent:replacement",
-    });
-    await expectPersistedThreadBinding(await resolveBindingsFilePath(initialStateDir), {
-      conversationId: "$thread",
-      targetSessionKey,
-    });
+    await expectPersistedThreadBinding(
+      await resolveBindingsFilePath(replacementStateDir),
+      "$thread-2",
+      "agent:ops:subagent:replacement",
+    );
+    await expectPersistedThreadBinding(await resolveBindingsFilePath(initialStateDir));
 
     await initialManager.stop();
 
@@ -432,9 +445,7 @@ describe("matrix thread bindings", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
     const manager = await createBindingManager();
-
     const original = await bindCurrentThread();
-
     const idleUpdated = setMatrixThreadBindingIdleTimeoutBySessionKey({
       accountId,
       targetSessionKey,
@@ -457,35 +468,17 @@ describe("matrix thread bindings", () => {
 
   it("publishes a binding only after its worker write commits", async () => {
     await createBindingManager();
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    const open = interceptStore(
-      (store) => ({
-        ...store,
-        register: async (...args) => {
-          entered.resolve();
-          await release.promise;
-          await store.register(...args);
-        },
-      }),
-      false,
-    );
+    const gate = pauseNextWrite(false);
     const binding = bindCurrentThread();
     try {
-      await entered.promise;
-      expect(await service.inspectByConversationAsync(thread)).toMatchObject({
-        status: "available",
-        binding: null,
-      });
+      await gate.entered;
+      await expectAvailable(null);
     } finally {
-      release.resolve();
+      gate.release();
       await binding;
-      open.mockRestore();
+      gate.restore();
     }
-    expect(await service.inspectByConversationAsync(thread)).toMatchObject({
-      status: "available",
-      binding: { targetSessionKey },
-    });
+    await expectAvailable({ targetSessionKey });
   });
 
   it("settles due async activity before returning and coalesces only committed timestamps", async () => {
@@ -523,10 +516,7 @@ describe("matrix thread bindings", () => {
       expect(await service.resolveByConversationAsync(binding.conversation)).toMatchObject(
         expected,
       );
-      expect(await service.inspectByConversationAsync(binding.conversation)).toMatchObject({
-        status: "available",
-        binding: expected,
-      });
+      await expectAvailable(expected, binding.conversation);
     }
     expect(manager.getByConversation(binding.conversation)?.lastActivityAt).toBe(
       binding.boundAt + 15_000,
@@ -543,52 +533,25 @@ describe("matrix thread bindings", () => {
     async (operation) => {
       const manager = await createBindingManager();
       const original = operation === "unbind" ? await bindCurrentThread() : undefined;
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      let held = false;
-      const hold = async () => {
-        if (!held) {
-          held = true;
-          entered.resolve();
-          await release.promise;
-        }
-      };
-      const open = interceptStore((store) => ({
-        ...store,
-        register: async (...args) => {
-          await hold();
-          return await store.register(...args);
-        },
-        delete: async (...args) => {
-          await hold();
-          return await store.delete(...args);
-        },
-      }));
+      const gate = pauseNextWrite();
       const mutation = original
         ? service.unbind({ bindingId: original.bindingId, reason: "manual" })
         : bindCurrentThread();
       try {
-        await entered.promise;
+        await gate.entered;
         const persisting = manager.persist();
-        release.resolve();
+        gate.release();
         await Promise.all([mutation, persisting]);
       } finally {
-        release.resolve();
+        gate.release();
         await mutation;
-        open.mockRestore();
+        gate.restore();
       }
-      const persisted = await readPersistedBindings(await resolveBindingsFilePath());
-      const inspected = await service.inspectByConversationAsync(thread);
-      if (operation === "bind") {
-        expect(persisted.bindings).toMatchObject([{ conversationId: "$thread", targetSessionKey }]);
-        expect(inspected).toMatchObject({
-          status: "available",
-          binding: { targetSessionKey },
-        });
-      } else {
-        expect(persisted.bindings).toEqual([]);
-        expect(inspected).toMatchObject({ status: "available", binding: null });
-      }
+      const persisted = await readPersistedBindings();
+      expect(persisted).toMatchObject(
+        operation === "bind" ? [{ conversationId: "$thread", targetSessionKey }] : [],
+      );
+      await expectAvailable(operation === "bind" ? { targetSessionKey } : null);
     },
   );
 
@@ -598,7 +561,6 @@ describe("matrix thread bindings", () => {
       const manager = await createBindingManager();
       await bindCurrentThread({ conversationId: "$first" });
       await bindCurrentThread({ conversationId: "$second" });
-
       let writes = 0;
       const open = interceptStore((store) => ({
         ...store,
@@ -624,24 +586,18 @@ describe("matrix thread bindings", () => {
           }),
         ).rejects.toThrow("snapshot write failed");
         // The worker read crosses the event-loop boundary where orphaned rejections surface.
-        persisted = await readPersistedBindings(await resolveBindingsFilePath());
+        persisted = await readPersistedBindings();
         expect(onUnhandledRejection).not.toHaveBeenCalled();
       } finally {
         process.off("unhandledRejection", onUnhandledRejection);
         open.mockRestore();
       }
-      expect(persisted.bindings.filter((binding) => binding.idleTimeoutMs === 5_000)).toHaveLength(
+      expect(persisted.filter((binding) => binding.idleTimeoutMs === 5_000)).toHaveLength(
         failurePoint === "before-commit" ? 1 : 2,
       );
-      for (const record of persisted.bindings) {
-        expect(
-          await service.inspectByConversationAsync(
-            currentThreadConversation({ conversationId: record.conversationId }),
-          ),
-        ).toMatchObject({
-          status: "available",
-          binding: { metadata: { idleTimeoutMs: record.idleTimeoutMs } },
-        });
+      for (const record of persisted) {
+        const conversation = currentThreadConversation(record.conversationId);
+        await expectAvailable({ metadata: { idleTimeoutMs: record.idleTimeoutMs } }, conversation);
         expect(manager.getByConversation({ conversationId: record.conversationId! })).toMatchObject(
           { idleTimeoutMs: record.idleTimeoutMs },
         );
@@ -655,7 +611,6 @@ describe("matrix thread bindings", () => {
     async (failure) => {
       const manager = await createBindingManager();
       await bindCurrentThread();
-
       const entered = Promise.withResolvers<void>();
       const release = Promise.withResolvers<void>();
       let reads = 0;
@@ -686,17 +641,13 @@ describe("matrix thread bindings", () => {
       const failedMutation = expect(mutation).rejects.toThrow(/restart the account/);
       try {
         await entered.promise;
-        const queued = manager.persist();
-        const failedQueued = expect(queued).rejects.toThrow(/retired/);
-        const stopped = manager.stop();
-        const failedStop = expect(stopped).rejects.toThrow(/retired/);
+        const failedQueued = expect(manager.persist()).rejects.toThrow(/retired/);
+        const failedStop = expect(manager.stop()).rejects.toThrow(/retired/);
         release.resolve();
         await Promise.all([failedMutation, failedQueued, failedStop]);
         trackedManagers.delete(manager);
         expect(reads).toBe(failure === "unknown-write" ? 1 : 2);
-        expect(service.getCapabilities(thread)).toMatchObject({
-          adapterAvailable: false,
-        });
+        expect(service.getCapabilities(thread)).toMatchObject({ adapterAvailable: false });
         expect(await service.inspectByConversationAsync(thread)).toMatchObject({ binding: null });
         expect(manager.listBindings()).toEqual([]);
       } finally {

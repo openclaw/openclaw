@@ -176,31 +176,26 @@ describe("createMatrixDraftStream", () => {
     expect(sendMessageMock).toHaveBeenCalledTimes(callCount);
   });
 
-  it("finalizeLive clears the live marker at most once", async () => {
+  it.each([false, true])("finalizes live previews (failure=%s)", async (failure) => {
+    if (failure) {
+      sendMessageMock
+        .mockResolvedValueOnce("$evt1")
+        .mockRejectedValueOnce(new Error("rate limited"));
+    }
     const stream = createStream({ mode: "partial" });
-
     stream.update("Hello");
     expect(await stream.stop()).toBe("$evt1");
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
     expect(sentContentAt(0)).toHaveProperty("org.matrix.msc4357.live");
-
-    await stream.finalizeLive();
-    await stream.finalizeLive();
-
-    expect(sendMessageMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageMock.mock.calls.at(1)?.[1]).not.toHaveProperty("org.matrix.msc4357.live");
-  });
-
-  it("marks live finalize failures for normal final delivery fallback", async () => {
-    sendMessageMock.mockResolvedValueOnce("$evt1").mockRejectedValueOnce(new Error("rate limited"));
-
-    const stream = createStream({ mode: "partial" });
-
-    stream.update("Hello");
-    await stream.stop();
-
-    await expect(stream.finalizeLive()).resolves.toBe(false);
-    expect(stream.mustDeliverFinalNormally()).toBe(true);
+    if (failure) {
+      await expect(stream.finalizeLive()).resolves.toBe(false);
+      expect(stream.mustDeliverFinalNormally()).toBe(true);
+    } else {
+      await stream.finalizeLive();
+      await stream.finalizeLive();
+      expect(sendMessageMock).toHaveBeenCalledTimes(2);
+      expect(sentContentAt(1)).not.toHaveProperty("org.matrix.msc4357.live");
+    }
   });
 
   it("reset allows reuse for next block", async () => {
