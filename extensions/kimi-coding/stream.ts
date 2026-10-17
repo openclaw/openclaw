@@ -18,7 +18,11 @@ import {
   isRecord,
   parseBooleanValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isKimiK3ModelId, KIMI_K3_THINKING_EFFORTS } from "./provider-policy-api.js";
+import {
+  isKimiCodeEnabledOnlyModelId,
+  isKimiK3ModelId,
+  KIMI_K3_THINKING_EFFORTS,
+} from "./provider-policy-api.js";
 
 const TOOL_CALLS_SECTION_BEGIN = "<|tool_calls_section_begin|>";
 const TOOL_CALLS_SECTION_END = "<|tool_calls_section_end|>";
@@ -227,7 +231,9 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
     const openaiK3 = api === "openai-completions" && isKimiK3ModelId(model.id);
     const requestedLevel = options?.reasoning ?? ctx.thinkingLevel ?? (k3 ? "high" : undefined);
     const thinkingLevel =
-      !isKimiK3ModelId(model.id) && (!requestedLevel || requestedLevel === "off")
+      anthropic &&
+      isKimiCodeEnabledOnlyModelId(model.id) &&
+      (!requestedLevel || requestedLevel === "off")
         ? "low"
         : requestedLevel;
     const thinkingConfig = resolveKimiThinkingConfig(configured, thinkingLevel);

@@ -194,6 +194,24 @@ describe("kimi provider plugin", () => {
     },
   );
 
+  it("keeps off available for Kimi models outside the Kimi Code K2 backend", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "kimi",
+        modelId: "kimi-k2-instruct",
+        reasoning: true,
+      } as never),
+    ).toEqual({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "on" },
+      ],
+      defaultLevel: "off",
+    });
+  });
+
   it("leaves K2 simple completions unchanged", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const streamFn = (() => undefined) as never;
