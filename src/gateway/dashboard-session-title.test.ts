@@ -299,6 +299,23 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     },
   );
 
+  it("draws the fallback title from configured session.fallbackNameNouns", async () => {
+    generateConversationLabelWithFallback.mockRejectedValue(new Error("model attempts exhausted"));
+    const params = titleParams();
+    const onFallback = vi.fn();
+
+    await expect(
+      maybeGenerateDashboardSessionTitle({
+        ...params,
+        cfg: { ...cfg, session: { fallbackNameNouns: ["otter"] } },
+        onFallback,
+      }),
+    ).resolves.toBe(true);
+
+    expect(onFallback).toHaveBeenCalledOnce();
+    expect(loadSessionEntry().displayName).toMatch(/^[a-z]+-otter$/);
+  });
+
   it("does not write into a reset session generation", async () => {
     mockSessionUpdate({ ...baseEntry, sessionId: "session-2" });
 

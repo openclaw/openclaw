@@ -332,7 +332,7 @@ async function generateDashboardSessionTitle(params: {
   }
   // Saved titles also name Git branches; never persist raw prompt text as a fallback.
   params.onFallback?.();
-  return createCrustaceanSlug();
+  return createCrustaceanSlug({ nouns: params.cfg.session?.fallbackNameNouns });
 }
 
 /** Prepares a creation draft's title without creating or updating a session. */

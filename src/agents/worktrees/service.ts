@@ -314,7 +314,11 @@ export class ManagedWorktreeService {
   ): Promise<WorktreeCreation> {
     return await withWorktreeSource({ ...params, ...allocation }, (current) =>
       createOwnedWorktree(
-        { ...current, retainSources: params.retainSources },
+        {
+          ...current,
+          retainSources: params.retainSources,
+          fallbackNameNouns: this.getConfig?.().session?.fallbackNameNouns,
+        },
         repository,
         this.env,
         (name) => this.reserveForRepository(params, current, repository, name, publication),

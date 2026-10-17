@@ -120,7 +120,7 @@ const CRUSTACEAN_NOUNS = [
   "shell",
 ];
 
-function randomChoice(values: string[], fallback: string) {
+function randomChoice(values: readonly string[], fallback: string) {
   return values[generateSecureInt(values.length)] ?? fallback;
 }
 
@@ -134,7 +134,7 @@ function createFallbackSuffix(length: number): string {
   return suffix;
 }
 
-function createSlugBase(words = 2, nouns = SLUG_NOUNS) {
+function createSlugBase(words = 2, nouns: readonly string[] = SLUG_NOUNS) {
   const parts = [randomChoice(SLUG_ADJECTIVES, "steady"), randomChoice(nouns, "harbor")];
   if (words > 2) {
     parts.push(randomChoice(nouns, "reef"));
@@ -145,7 +145,7 @@ function createSlugBase(words = 2, nouns = SLUG_NOUNS) {
 function createAvailableSlug(
   words: number,
   isIdTaken: (id: string) => boolean,
-  nouns = SLUG_NOUNS,
+  nouns: readonly string[] = SLUG_NOUNS,
 ): string | undefined {
   for (let attempt = 0; attempt < 12; attempt += 1) {
     const base = createSlugBase(words, nouns);
@@ -162,7 +162,7 @@ function createAvailableSlug(
   return undefined;
 }
 
-function createUniqueSlug(nouns: string[], isTaken?: (id: string) => boolean): string {
+function createUniqueSlug(nouns: readonly string[], isTaken?: (id: string) => boolean): string {
   const isIdTaken = isTaken ?? (() => false);
   for (const words of [2, 3]) {
     const slug = createAvailableSlug(words, isIdTaken, nouns);
@@ -179,7 +179,16 @@ export function createSessionSlug(isTaken?: (id: string) => boolean): string {
   return createUniqueSlug(SLUG_NOUNS, isTaken);
 }
 
-/** Creates a human-readable crustacean-themed slug for unnamed worktrees. */
-export function createCrustaceanSlug(isTaken?: (id: string) => boolean): string {
-  return createUniqueSlug(CRUSTACEAN_NOUNS, isTaken);
+/**
+ * Creates a human-readable fallback slug for unnamed sessions and worktrees.
+ * Callers pass the configured `session.fallbackNameNouns`; an omitted or empty
+ * list keeps the default crustacean vocabulary.
+ */
+export function createCrustaceanSlug(
+  options: { nouns?: readonly string[]; isTaken?: (id: string) => boolean } = {},
+): string {
+  return createUniqueSlug(
+    options.nouns?.length ? options.nouns : CRUSTACEAN_NOUNS,
+    options.isTaken,
+  );
 }

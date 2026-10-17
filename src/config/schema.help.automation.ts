@@ -9,6 +9,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     'Group/channel session scoping: "per-group" keeps rooms separate while the agent main session ambiently watches them, independently of dmScope; "main" merges room context into main and needs no watch. Use "main" only for trusted rooms.',
   "session.notifyOnCreate":
     "Queue a system notice in the owning agent's Home session when a session is created (default: true). Notices include available title and creator metadata and are read on the next Home turn or heartbeat. Set false to disable; drafts, incognito, internal sessions, and scheduled cron runs are excluded.",
+  "session.fallbackNameNouns":
+    'Nouns used for generated fallback names when a session title or worktree name is not available, e.g. ["falcon", "otter", "badger"]. Omit or leave empty to keep the default crustacean nouns. Each entry must be one lowercase ASCII word of 1-20 letters; duplicates are removed. Applies only to newly generated names; explicit labels, generated titles, and explicit worktree names take precedence.',
   "session.identityLinks":
     "Maps shared identities to provider-prefixed peer IDs so equivalent users resolve to one DM thread (example: telegram:123456). Use this when the same human appears across multiple channels or accounts.",
   "session.resetTriggers":
