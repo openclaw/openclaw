@@ -18,4 +18,9 @@ export type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-export { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+export {
+  findTruncatedSecret,
+  getLongestRegisteredSecretLength,
+  hasConfiguredRedactPatterns,
+  redactSensitiveText,
+} from "openclaw/plugin-sdk/logging-core";

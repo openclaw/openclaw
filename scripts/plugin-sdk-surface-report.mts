@@ -284,7 +284,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // DoctorMemoryStatusPayload for the plugin-owned Memory overview.
       // +2: MemorySearchResponse and AgentsWorkspaceGetResult type-only contracts
       // for the plugin-owned indexed Memory search presentation.
-      3800,
+      // +3: findTruncatedSecret, getLongestRegisteredSecretLength and hasConfiguredRedactPatterns bound diagnostics-otel content-capture redaction (#158145).
+      3803,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -324,7 +325,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +6: four lossless Decision codecs and two bounded V2 validators.
       // +1: the same boot-selected family lookup.
       // +1: the same shared auth-patch application.
-      2205,
+      // +3: findTruncatedSecret, getLongestRegisteredSecretLength and hasConfiguredRedactPatterns bound diagnostics-otel content-capture redaction (#158145).
+      2208,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
