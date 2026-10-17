@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-// Slack tests cover media plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import type { FetchLike, SavedMedia } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -11,7 +10,6 @@ import {
   type LookupFn,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackFile } from "../types.js";
 import {
@@ -33,29 +31,20 @@ type SaveMediaBufferMock = (
 type SlackMediaResult = NonNullable<Awaited<ReturnType<typeof resolveSlackMedia>>>;
 type ResolveSlackThreadStarterParams = Parameters<typeof resolveSlackThreadStarter>[0];
 let threadStarterIdentitySequence = 0;
-let threadStarterIdentity = {
-  channelId: "CMEDIA0",
-  threadTs: "0.000",
+const threadStarterIdentity = {
+  channelId: "CMEDIA",
+  threadTs: "1.000",
   workspaceScope: { accountId: "media-test-0", teamId: "TM0" },
 };
 
 function resolveTestSlackThreadStarter(
   params: Omit<ResolveSlackThreadStarterParams, "channelId" | "threadTs" | "workspaceScope">,
 ) {
-  return resolveSlackThreadStarter({
-    ...params,
-    ...threadStarterIdentity,
-  });
+  return resolveSlackThreadStarter({ ...params, ...threadStarterIdentity });
 }
 
-function expectSlackMediaResult(
-  result: Awaited<ReturnType<typeof resolveSlackMedia>>,
-): SlackMediaResult {
-  if (result === null) {
-    throw new Error("Expected Slack media result");
-  }
-  return result;
-}
+const expectSlackMediaResult = (result: Awaited<ReturnType<typeof resolveSlackMedia>>) =>
+  expectDefined(result, "Slack media result");
 
 const readRemoteMediaBufferMock = vi.hoisted(() =>
   vi.fn(
@@ -108,6 +97,22 @@ const fetchWithRuntimeDispatcherMock = vi.hoisted(() => vi.fn<FetchMock>());
 const logVerboseMock = vi.hoisted(() => vi.fn());
 const mediaWarnMock = vi.hoisted(() => vi.fn());
 
+async function saveFetchedMedia(
+  fetched: Awaited<ReturnType<typeof readRemoteMediaBufferMock>>,
+  params: Parameters<typeof readRemoteMediaBufferMock>[0],
+) {
+  return {
+    ...(await saveMediaBufferMock(
+      fetched.buffer,
+      fetched.contentType,
+      "inbound",
+      params.maxBytes,
+      params.filePathHint,
+    )),
+    fileName: fetched.fileName,
+  };
+}
+
 vi.mock("./media.runtime.js", () => ({
   captureChannelReadAuthority: () => undefined,
   fetchWithRuntimeDispatcher: fetchWithRuntimeDispatcherMock,
@@ -127,15 +132,7 @@ let mockFetch: ReturnType<typeof vi.fn<FetchMock>>;
 
 beforeEach(() => {
   mockFetch = vi.fn();
-  threadStarterIdentitySequence += 1;
-  threadStarterIdentity = {
-    channelId: `CMEDIA${threadStarterIdentitySequence}`,
-    threadTs: `${threadStarterIdentitySequence}.000`,
-    workspaceScope: {
-      accountId: `media-test-${threadStarterIdentitySequence}`,
-      teamId: `TM${threadStarterIdentitySequence}`,
-    },
-  };
+  threadStarterIdentity.workspaceScope.accountId = `media-test-${++threadStarterIdentitySequence}`;
   readRemoteMediaBufferMock.mockClear();
   fetchWithRuntimeDispatcherMock.mockReset();
   fetchWithRuntimeDispatcherMock.mockImplementation((input, init) => mockFetch(input, init));
@@ -149,23 +146,12 @@ beforeEach(() => {
     contentType,
   }));
   saveRemoteMediaMock.mockReset();
-  saveRemoteMediaMock.mockImplementation(
-    async (params: Parameters<typeof readRemoteMediaBufferMock>[0]) => {
-      const fetched = await readRemoteMediaBufferMock(params);
-      const saved = await saveMediaBufferMock(
-        fetched.buffer,
-        fetched.contentType,
-        "inbound",
-        params.maxBytes,
-        params.filePathHint,
-      );
-      return {
-        ...saved,
-        fileName: fetched.fileName,
-      };
-    },
+  saveRemoteMediaMock.mockImplementation(async (params) =>
+    saveFetchedMedia(await readRemoteMediaBufferMock(params), params),
   );
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 const downloadDefaults = { token: "xoxb-test-token", maxBytes: 1024 * 1024 };
 const resolveMedia = (
@@ -188,84 +174,53 @@ const createSavedMedia = (filePath: string, contentType: string): SavedMedia => 
   contentType,
 });
 
-type MockCallReader = { mock: { calls: unknown[][] } };
-
-function requireMockCall(mock: unknown, index: number, label: string): unknown[] {
-  const call = (mock as MockCallReader).mock.calls.at(index);
-  if (!call) {
-    throw new Error(`expected ${label} call ${index}`);
-  }
-  return call;
-}
-
-const requireRecord = createRequireRecord("record", "expected-label-object");
-
-function expectFetchCalledWithUrl(mock: unknown, expectedUrl: string): void {
-  expect(requireMockCall(mock, 0, "fetch")[0]).toBe(expectedUrl);
-}
-
-function expectVerboseLogContains(expected: string): void {
-  const messages = vi
-    .mocked(logVerbose)
-    .mock.calls.map((call) => (typeof call[0] === "string" ? call[0] : ""));
-  expect(messages.join("\n")).toContain(expected);
-}
-
 function getRequestHeader(callIndex: number, headerName: string): string | null {
-  const init = requireMockCall(mockFetch, callIndex, "fetch")[1] as RequestInit | undefined;
+  const init = expectDefined(mockFetch.mock.calls[callIndex], "fetch call")[1];
   return new Headers(init?.headers).get(headerName);
 }
 
-async function expectPrivateDownloadRedirect(params: {
-  location: string;
-  redirectedUrl: string;
-  secondAuthorization: string | null;
-}) {
-  saveMediaBufferMock.mockResolvedValue(createSavedMedia("/tmp/test.jpg", "image/jpeg"));
-
-  mockFetch
-    .mockResolvedValueOnce(
-      new Response(null, {
-        status: 302,
-        headers: { location: params.location },
-      }),
-    )
-    .mockResolvedValueOnce(mediaResponse("image data", "image/jpeg"));
-
-  const result = await resolveMedia({
-    files: [{ url_private_download: "https://files.slack.com/download.jpg", name: "test.jpg" }],
-  });
-
-  expectSlackMediaResult(result);
-  expect(mockFetch).toHaveBeenCalledTimes(2);
-  expect(requireMockCall(mockFetch, 0, "fetch")[0]).toBe("https://files.slack.com/download.jpg");
-  expect(requireMockCall(mockFetch, 1, "fetch")[0]).toBe(params.redirectedUrl);
-  expect(getRequestHeader(0, "Authorization")).toBe("Bearer xoxb-test-token");
-  expect(getRequestHeader(1, "Authorization")).toBe(params.secondAuthorization);
+function fileInfoClient(file: SlackFile, slackApiUrl?: string) {
+  return {
+    slackApiUrl,
+    files: { info: vi.fn().mockResolvedValue({ file }) },
+  } as unknown as WebClient & { files: { info: ReturnType<typeof vi.fn> } };
 }
 
-describe("resolveSlackMedia", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+const privateFile = (name: string, fields: Partial<SlackFile> = {}): SlackFile => ({
+  url_private: `https://files.slack.com/${name}`,
+  name,
+  ...fields,
+});
 
+describe("resolveSlackMedia", () => {
   it("strips Authorization on cross-origin redirects for private downloads", async () => {
-    await expectPrivateDownloadRedirect({
-      location: "https://downloads.slack-edge.com/presigned-url?sig=abc123",
-      redirectedUrl: "https://downloads.slack-edge.com/presigned-url?sig=abc123",
-      secondAuthorization: null,
+    const redirectedUrl = "https://downloads.slack-edge.com/presigned-url?sig=abc123";
+    saveMediaBufferMock.mockResolvedValue(createSavedMedia("/tmp/test.jpg", "image/jpeg"));
+    mockFetch
+      .mockResolvedValueOnce(
+        new Response(null, { status: 302, headers: { location: redirectedUrl } }),
+      )
+      .mockResolvedValueOnce(mediaResponse("image data", "image/jpeg"));
+
+    const result = await resolveMedia({
+      files: [{ url_private_download: "https://files.slack.com/download.jpg", name: "test.jpg" }],
     });
+
+    expectSlackMediaResult(result);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch.mock.calls.map(([url]) => url)).toEqual([
+      "https://files.slack.com/download.jpg",
+      redirectedUrl,
+    ]);
+    expect(getRequestHeader(0, "Authorization")).toBe("Bearer xoxb-test-token");
+    expect(getRequestHeader(1, "Authorization")).toBeNull();
   });
 
   it("rejects files.info refresh URLs that escape the GovSlack trust plane", async () => {
-    const client = {
-      slackApiUrl: "https://slack-gov.com/api/",
-      files: {
-        info: vi.fn(async () => ({
-          file: { url_private_download: "https://files.slack.com/cross-plane.png" },
-        })),
-      },
-    } as unknown as WebClient;
+    const client = fileInfoClient(
+      { url_private_download: "https://files.slack.com/cross-plane.png" },
+      "https://slack-gov.com/api/",
+    );
     mockFetch.mockResolvedValueOnce(new Response("expired", { status: 403 }));
 
     const result = await resolveMedia({
@@ -341,17 +296,14 @@ describe("resolveSlackMedia", () => {
     saveMediaBufferMock.mockResolvedValue(createSavedMedia("/tmp/test.jpg", "image/jpeg"));
     mockFetch.mockResolvedValueOnce(mediaResponse("image data", "image/jpeg"));
 
-    const result = await resolveMedia({
-      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
-    });
+    const result = await resolveMedia({ files: [privateFile("test.jpg")] });
 
     expectSlackMediaResult(result);
-    const fetchOptions = requireRecord(
-      requireMockCall(readRemoteMediaBufferMock, 0, "readRemoteMediaBuffer")[0],
-      "readRemoteMediaBuffer options",
-    ) as { readIdleTimeoutMs?: number; requestInit?: RequestInit };
-    expect(fetchOptions.readIdleTimeoutMs).toBe(SLACK_MEDIA_READ_IDLE_TIMEOUT_MS);
-    expect(fetchOptions.requestInit?.signal).toBeInstanceOf(AbortSignal);
+    const [fetchOptions] = expectDefined(readRemoteMediaBufferMock.mock.calls[0], "read call");
+    expect(fetchOptions).toMatchObject({
+      readIdleTimeoutMs: SLACK_MEDIA_READ_IDLE_TIMEOUT_MS,
+      requestInit: { signal: expect.any(AbortSignal) },
+    });
     expect(new Headers(fetchOptions.requestInit?.headers).get("Authorization")).toBe(
       "Bearer xoxb-test-token",
     );
@@ -376,7 +328,7 @@ describe("resolveSlackMedia", () => {
       );
 
       const resultPromise = resolveMedia({
-        files: [{ url_private: "https://files.slack.com/slow.jpg", name: "slow.jpg" }],
+        files: [privateFile("slow.jpg")],
         totalTimeoutMs: 25,
       });
 
@@ -392,15 +344,10 @@ describe("resolveSlackMedia", () => {
     { name: "skips id-only files when files.info returns no private URL", fails: false },
     { name: "skips id-only files when files.info fails", fails: true },
   ])("$name", async ({ fails }) => {
-    const info = vi.fn();
+    const mockClient = fileInfoClient({ id: "F123" });
     if (fails) {
-      info.mockRejectedValue(new Error("files.info failed"));
-    } else {
-      info.mockResolvedValue({ file: { id: "F123" } });
+      mockClient.files.info.mockRejectedValue(new Error("files.info failed"));
     }
-    const mockClient = {
-      files: { info },
-    } as unknown as WebClient & { files: { info: ReturnType<typeof vi.fn> } };
     const result = await resolveMedia({
       files: [{ id: "F123", name: "test.jpg" }],
       client: mockClient,
@@ -412,15 +359,9 @@ describe("resolveSlackMedia", () => {
 
   it("rejects a refreshed URL when its file metadata fails caller admission", async () => {
     saveMediaBufferMock.mockResolvedValue(createSavedMedia("/tmp/test.jpg", "image/jpeg"));
-    const mockClient = {
-      files: {
-        info: vi.fn().mockResolvedValue({
-          file: {
-            url_private_download: "https://files.slack.com/fresh.jpg",
-          },
-        }),
-      },
-    } as unknown as WebClient & { files: { info: ReturnType<typeof vi.fn> } };
+    const mockClient = fileInfoClient({
+      url_private_download: "https://files.slack.com/fresh.jpg",
+    });
     mockFetch
       .mockResolvedValueOnce(new Response("expired", { status: 404 }))
       .mockResolvedValueOnce(mediaResponse("image data", "image/jpeg"));
@@ -445,20 +386,19 @@ describe("resolveSlackMedia", () => {
   });
 
   it("discards HTML auth pages served as image/jpeg without retaining bytes", async () => {
-    const contentType = "image/jpeg";
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "slack-blocked-media-"));
     const savedPath = path.join(dir, "test.jpg");
     await fs.writeFile(savedPath, "<!DOCTYPE html><html><body>login</body></html>");
     saveRemoteMediaMock.mockResolvedValueOnce({
-      ...createSavedMedia(savedPath, contentType),
+      ...createSavedMedia(savedPath, "image/jpeg"),
       fileName: "test.jpg",
     });
-    const file = { url_private: "https://files.slack.com/test.jpg", name: "test.jpg" };
+    const file = privateFile("test.jpg");
     try {
       const result = await resolveAttachments({ files: [file] });
 
-      expect(result?.media).toEqual([]);
       await expect(fs.stat(savedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(result?.media).toEqual([]);
       expect(result?.files).toEqual([{ ...file, reason: "blocked: unexpected HTML content" }]);
       expect(result).toMatchObject({ unavailableMediaCount: 1 });
       expect(mediaWarnMock).toHaveBeenCalledExactlyOnceWith("slack: file unavailable", {
@@ -473,54 +413,42 @@ describe("resolveSlackMedia", () => {
   it("overrides video/* MIME to audio/* for slack_audio voice messages", async () => {
     // MP4 sniffing must not undo the voice-message MIME override.
     saveRemoteMediaMock.mockResolvedValueOnce({
-      id: "saved-media-id",
-      path: "/tmp/voice.mp4",
-      size: 128,
-      contentType: "video/mp4",
+      ...createSavedMedia("/tmp/voice.mp4", "video/mp4"),
       fileName: "voice.mp4",
     });
 
-    const mockResponse = mediaResponse("audio data", "video/mp4");
-    mockFetch.mockResolvedValueOnce(mockResponse);
+    mockFetch.mockResolvedValueOnce(mediaResponse("audio data", "video/mp4"));
 
     const result = await resolveMedia({
       files: [
-        {
+        privateFile("audio_message.mp4", {
           url_private: "https://files.slack.com/voice.mp4",
-          name: "audio_message.mp4",
           mimetype: "video/mp4",
           subtype: "slack_audio",
-        },
+        }),
       ],
       maxBytes: 16 * 1024 * 1024,
     });
 
     const media = expectSlackMediaResult(result);
     expect(media).toHaveLength(1);
-    expect(
-      requireRecord(requireMockCall(saveRemoteMediaMock, 0, "saveRemoteMedia")[0], "save params"),
-    ).toMatchObject({ fallbackContentType: "audio/mp4" });
+    expect(saveRemoteMediaMock.mock.calls[0]?.[0]).toMatchObject({
+      fallbackContentType: "audio/mp4",
+    });
     expect(media[0]?.contentType).toBe("audio/mp4");
   });
 
   it("caps downloads to 8 files for large multi-attachment messages", async () => {
     saveMediaBufferMock.mockResolvedValue(createSavedMedia("/tmp/x.jpg", "image/jpeg"));
 
-    mockFetch.mockImplementation(async () => {
-      return mediaResponse("image data", "image/jpeg");
-    });
+    mockFetch.mockImplementation(async () => mediaResponse("image data", "image/jpeg"));
 
-    const files = Array.from({ length: 9 }, (_, idx) => ({
-      url_private: `https://files.slack.com/file-${idx}.jpg`,
-      name: `file-${idx}.jpg`,
-      mimetype: "image/jpeg",
-    }));
+    const files = Array.from({ length: 9 }, (_, idx) =>
+      privateFile(`file-${idx}.jpg`, { mimetype: "image/jpeg" }),
+    );
 
     const unavailableFiles = new Map<SlackFile, string>();
-    const result = await resolveMedia({
-      files,
-      unavailableFiles,
-    });
+    const result = await resolveMedia({ files, unavailableFiles });
 
     const media = expectSlackMediaResult(result);
     expect(media).toHaveLength(8);
@@ -533,35 +461,23 @@ describe("resolveSlackMedia", () => {
     const globalFetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("global"));
     fetchWithRuntimeDispatcherMock.mockResolvedValue(new Response("runtime"));
     saveRemoteMediaMock.mockImplementationOnce(async ({ url, fetchImpl, requestInit }) => {
-      await fetchImpl(url, {
-        ...requestInit,
-      });
+      await fetchImpl(url, { ...requestInit });
       return { ...createSavedMedia("/tmp/test.jpg", "image/jpeg"), fileName: "test.jpg" };
     });
 
-    const result = await resolveMedia({
-      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
-    });
+    const result = await resolveMedia({ files: [privateFile("test.jpg")] });
 
     expectSlackMediaResult(result);
     expect(globalFetchMock).toHaveBeenCalledOnce();
     expect(fetchWithRuntimeDispatcherMock).not.toHaveBeenCalled();
-    const fetchInit = requireRecord(
-      requireMockCall(globalFetchMock, 0, "selected fetch")[1],
-      "fetch init",
-    ) as RequestInit & { dispatcher?: unknown };
-    expect(fetchInit.redirect).toBe("manual");
+    const fetchInit = expectDefined(globalFetchMock.mock.calls[0]?.[1], "fetch init");
+    expect(fetchInit).toMatchObject({ redirect: "manual" });
     expect("dispatcher" in fetchInit).toBe(false);
-    expect(fetchInit.dispatcher).toBeUndefined();
     expect(new Headers(fetchInit.headers).get("Authorization")).toBe("Bearer xoxb-test-token");
   });
 });
 
 describe("Slack media SSRF policy", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   const destination = (label: string, gov: boolean, address: string, allowed: boolean) => ({
     label,
     address,
@@ -589,17 +505,14 @@ describe("Slack media SSRF policy", () => {
           lookupFn,
         });
         try {
-          const buffer = Buffer.from(await guarded.response.arrayBuffer());
-          return {
-            ...(await saveMediaBufferMock(
-              buffer,
-              guarded.response.headers.get("content-type") ?? undefined,
-              "inbound",
-              params.maxBytes,
-              params.filePathHint,
-            )),
-            fileName: params.filePathHint,
-          };
+          return await saveFetchedMedia(
+            {
+              buffer: Buffer.from(await guarded.response.arrayBuffer()),
+              contentType: guarded.response.headers.get("content-type") ?? undefined,
+              fileName: params.filePathHint,
+            },
+            params,
+          );
         } finally {
           await guarded.release();
         }
@@ -628,15 +541,16 @@ describe("Slack message file intake", () => {
     mockFetch.mockImplementation(async () => mediaResponse("file contents", "image/png"));
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   const file = (id: string): SlackFile => ({
     id,
     name: `${id.trim()}.png`,
     mimetype: "image/png",
     url_private_download: `https://files.slack.com/${id.trim()}.png`,
+  });
+  const preloadedFile = (fileName: string, reference: string) => ({
+    path: `/tmp/${fileName}`,
+    fileName,
+    placeholder: `[Slack file: ${fileName} (${reference})]`,
   });
 
   async function resolveMessageFiles(params: {
@@ -664,19 +578,12 @@ describe("Slack message file intake", () => {
     });
   }
 
-  it.each([
-    {
-      name: "direct and forwarded copies",
-      direct: [file("FSHARED")],
-      forwarded: [[file("FSHARED")]],
-    },
-    {
-      name: "copies across multiple forwarded attachments",
-      direct: [],
-      forwarded: [[file("FSHARED")], [file("FSHARED")]],
-    },
-  ])("downloads $name once and exposes one agent attachment", async ({ direct, forwarded }) => {
-    const result = await resolveMessageFiles({ direct, forwarded });
+  it.each([true, false])("deduplicates files with a direct copy: %s", async (withDirect) => {
+    const copies = [[file("FSHARED")], [file("FSHARED")]];
+    const result = await resolveMessageFiles({
+      direct: withDirect ? copies[0] : [],
+      forwarded: withDirect ? copies.slice(1) : copies,
+    });
 
     expect(mockFetch).toHaveBeenCalledOnce();
     expect(result?.effectiveDirectMedia).toHaveLength(1);
@@ -730,22 +637,8 @@ describe("Slack message file intake", () => {
         unavailableWithoutId,
       ],
       preloadedMedia: new Map<SlackFile, SlackMediaResult[number]>([
-        [
-          downloaded,
-          {
-            path: "/tmp/renamed.png",
-            fileName: "renamed.png",
-            placeholder: "[Slack file: renamed.png (fileId: F11)]",
-          },
-        ],
-        [
-          downloadedWithoutId,
-          {
-            path: "/tmp/server-renamed.png",
-            fileName: "server-renamed.png",
-            placeholder: "[Slack file: server-renamed.png (image/png)]",
-          },
-        ],
+        [downloaded, preloadedFile("renamed.png", "fileId: F11")],
+        [downloadedWithoutId, preloadedFile("server-renamed.png", "image/png")],
       ]),
     });
 
@@ -809,57 +702,37 @@ describe("Slack message file intake", () => {
     expect(expectDefined(result, "Slack message content").rawBody.length).toBeLessThan(2600);
   });
 
-  it("does not accept richer file metadata from untrusted forwarded attachments", async () => {
+  it.each([
+    { label: "untrusted attachments", id: "FUNTRUSTED", trusted: false, preceding: 0 },
+    { label: "the forwarded-attachment trust limit", id: "FLATE", trusted: true, preceding: 8 },
+  ])("ignores richer metadata beyond $label", async ({ id, trusted, preceding }) => {
     const result = await resolveMessageFiles({
-      direct: [{ id: "FUNTRUSTED" }],
-      attachments: [{ is_share: false, files: [file("FUNTRUSTED")] }],
-    });
-
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(result?.effectiveDirectMedia).toBeNull();
-    expect(result?.rawBody).toBe(
-      "Attached files\n[Slack file: file (fileId: FUNTRUSTED) unavailable (no private download URL)]\n\n[slack attachment unavailable]",
-    );
-  });
-
-  it("ignores richer metadata beyond the existing forwarded-attachment trust limit", async () => {
-    const result = await resolveMessageFiles({
-      direct: [{ id: "FLATE" }],
+      direct: [{ id }],
       attachments: [
-        ...Array.from({ length: 8 }, () => ({ is_share: true })),
-        { is_share: true, files: [file("FLATE")] },
+        ...Array.from({ length: preceding }, () => ({ is_share: true })),
+        { is_share: trusted, files: [file(id)] },
       ],
     });
-
     expect(mockFetch).not.toHaveBeenCalled();
-    expect(result?.effectiveDirectMedia).toBeNull();
-    expect(result?.rawBody).toBe(
-      "Attached files\n[Slack file: file (fileId: FLATE) unavailable (no private download URL)]\n\n[slack attachment unavailable]",
-    );
+    expect(result).toMatchObject({
+      effectiveDirectMedia: null,
+      rawBody: `Attached files\n[Slack file: file (fileId: ${id}) unavailable (no private download URL)]\n\n[slack attachment unavailable]`,
+    });
   });
 });
 
 describe("resolveSlackAttachmentContent", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("bounds forwarded file failures without logging attachment content", async () => {
     const file = {
       id: "FFAILED",
       name: "missing.png",
       url_private: "https://files.slack.com/stale.png",
     };
-    const client = {
-      files: {
-        info: vi.fn(async () => ({ file: { url_private: "https://files.slack.com/fresh.png" } })),
-      },
-    } as unknown as WebClient;
     mockFetch.mockRejectedValueOnce(new Error("stale URL"));
     mockFetch.mockRejectedValueOnce(new Error(`Download denied\n${"detail ".repeat(100)}`));
     const result = await resolveAttachments({
       attachments: [{ is_share: true, files: [file] }],
-      client,
+      client: fileInfoClient({ url_private: "https://files.slack.com/fresh.png" }),
       maxBytes: 1024,
     });
 
@@ -874,21 +747,6 @@ describe("resolveSlackAttachmentContent", () => {
     });
     expect(JSON.stringify(mediaWarnMock.mock.calls)).not.toContain(file.name);
     expect(JSON.stringify(mediaWarnMock.mock.calls)).not.toContain(reason);
-  });
-
-  it("ignores non-forwarded attachments", async () => {
-    const result = await resolveAttachments({
-      attachments: [
-        {
-          text: "unfurl text",
-          is_msg_unfurl: true,
-          image_url: "https://example.com/unfurl.jpg",
-        },
-      ],
-    });
-
-    expect(result).toBeNull();
-    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("extracts text from forwarded shared attachments", async () => {
@@ -923,31 +781,41 @@ describe("resolveSlackAttachmentContent", () => {
     expect(mediaWarnMock.mock.calls[0]?.[0]).not.toContain("synthetic-private-query-value");
   });
 
-  it("skips forwarded image URLs on non-Slack hosts", async () => {
+  it.each([false, true])("ignores untrusted images (forwarded: %s)", async (forwarded) => {
     const result = await resolveAttachments({
-      attachments: [{ is_share: true, image_url: "https://example.com/forwarded.jpg" }],
+      attachments: [
+        forwarded
+          ? { is_share: true, image_url: "https://example.com/forwarded.jpg" }
+          : {
+              text: "unfurl text",
+              is_msg_unfurl: true,
+              image_url: "https://example.com/unfurl.jpg",
+            },
+      ],
     });
-
     expect(result).toBeNull();
-    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    if (forwarded) {
+      expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    }
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("downloads a GovSlack forwarded file using the prepared listener client", async () => {
-    const attachment = {
-      is_share: true,
-      files: [{ url_private_download: "https://files.slack-gov.com/forwarded.png" }],
-    };
     mockFetch.mockResolvedValueOnce(mediaResponse("forwarded government image", "image/png"));
 
     const result = await resolveAttachments({
-      attachments: [attachment],
+      attachments: [
+        {
+          is_share: true,
+          files: [{ url_private_download: "https://files.slack-gov.com/forwarded.png" }],
+        },
+      ],
       client: { slackApiUrl: "https://slack-gov.com/api/" } as WebClient,
       maxBytes: 1024,
     });
 
     expect(result?.media).toHaveLength(1);
-    expectFetchCalledWithUrl(mockFetch, "https://files.slack-gov.com/forwarded.png");
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://files.slack-gov.com/forwarded.png");
   });
 
   it("rejects commercial forwarded images before sending a GovSlack bearer token", async () => {
@@ -974,31 +842,34 @@ const threadWithMessage = (message: Record<string, unknown>) =>
   );
 
 describe("resolveSlackThreadStarter", () => {
-  beforeEach(() => {
-    vi.mocked(logVerbose).mockClear();
-  });
-
-  it("returns the starter text from Slack attachments when bot message text is empty", async () => {
-    const client = threadWithMessage({
-      bot_id: "BMONITOR",
-      attachments: [
-        {
-          pretext: "[FIRING:1] HostFilesystemSpaceLow",
-          title: "Filesystem on /dev/sda1 has only 14.93% available space left.",
-          fallback: "dc2.ipa.mgt /dev/sda1 low free space",
-        },
-      ],
-    });
-
-    const result = await resolveTestSlackThreadStarter({ client });
-
-    expect(result).toEqual({
-      text: "[FIRING:1] HostFilesystemSpaceLow\nFilesystem on /dev/sda1 has only 14.93% available space left.\ndc2.ipa.mgt /dev/sda1 low free space",
-      userId: undefined,
-      botId: "BMONITOR",
-      ts: "1.000",
-      files: undefined,
-    });
+  const rootFiles = [{ id: "FROOT", name: "root.png", mimetype: "image/png", size: 512 }];
+  it.each([
+    {
+      label: "attachment text",
+      message: {
+        bot_id: "BMONITOR",
+        attachments: [{ pretext: "Alert", title: "Disk full", fallback: "Low space" }],
+      },
+      expected: {
+        text: "Alert\nDisk full\nLow space",
+        userId: undefined,
+        botId: "BMONITOR",
+        files: undefined,
+      },
+    },
+    {
+      label: "a files-only placeholder",
+      message: { user: "U1", files: rootFiles },
+      expected: {
+        text: "[attached: root.png (image/png, 512 bytes, fileId: FROOT)]",
+        userId: "U1",
+        botId: undefined,
+        files: rootFiles,
+      },
+    },
+  ])("returns $label when root message text is empty", async ({ message, expected }) => {
+    const result = await resolveTestSlackThreadStarter({ client: threadWithMessage(message) });
+    expect(result).toEqual({ ...expected, ts: "1.000" });
     expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
   });
 
@@ -1023,34 +894,21 @@ describe("resolveSlackThreadStarter", () => {
     expect(result).toBeNull();
   });
 
-  it("returns a placeholder starter when the root message only has files", async () => {
-    const client = threadWithMessage({
-      user: "U1",
-      files: [{ id: "FROOT", name: "root.png", mimetype: "image/png", size: 512 }],
-    });
-
-    const result = await resolveTestSlackThreadStarter({ client });
-
-    expect(result).toEqual({
-      text: "[attached: root.png (image/png, 512 bytes, fileId: FROOT)]",
-      userId: "U1",
-      botId: undefined,
-      ts: "1.000",
-      files: [{ id: "FROOT", name: "root.png", mimetype: "image/png", size: 512 }],
-    });
-    expect(vi.mocked(logVerbose)).not.toHaveBeenCalled();
-  });
-
   it("returns null and surfaces the error via logVerbose when Slack API throws", async () => {
-    const replies = vi.fn().mockRejectedValueOnce(new Error("not_in_channel"));
-    const client = threadClient(replies);
-
-    const result = await resolveTestSlackThreadStarter({ client });
+    const result = await resolveTestSlackThreadStarter({
+      client: threadClient(vi.fn().mockRejectedValueOnce(new Error("not_in_channel"))),
+    });
 
     expect(result).toBeNull();
-    expectVerboseLogContains("slack thread starter fetch failed");
-    expectVerboseLogContains("not_in_channel");
-    expectVerboseLogContains(`channel=${threadStarterIdentity.channelId}`);
-    expectVerboseLogContains(`ts=${threadStarterIdentity.threadTs}`);
+    expect(
+      vi
+        .mocked(logVerbose)
+        .mock.calls.map(([message]) => message)
+        .join("\n"),
+    ).toEqual(
+      expect.stringContaining(
+        `slack thread starter fetch failed channel=${threadStarterIdentity.channelId} ts=${threadStarterIdentity.threadTs}: not_in_channel`,
+      ),
+    );
   });
 });

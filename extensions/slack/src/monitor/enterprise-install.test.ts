@@ -17,6 +17,11 @@ const bindingConfig = (
   bindings,
 });
 
+const binding = (
+  match: NonNullable<OpenClawConfig["bindings"]>[number]["match"],
+  agentId = "channel",
+) => ({ match, agentId });
+
 describe("resolveSlackInstallationIdentity", () => {
   it.each([
     ["degraded without auth.test", {}, { kind: "degraded", reason: "auth_test_failed" }],
@@ -157,14 +162,14 @@ describe("assertEnterpriseSlackBindingsAreWorkspaceQualified", () => {
   it("canonicalizes binding account IDs the same way as runtime routing", () => {
     const cfg = bindingConfig(
       [
-        {
-          match: {
+        binding(
+          {
             channel: "slack",
             accountId: "WORK",
             peer: { kind: "channel", id: "C01234567" },
           },
-          agentId: "main",
-        },
+          "main",
+        ),
       ],
       "other",
       { work: {}, other: {} },
@@ -175,7 +180,7 @@ describe("assertEnterpriseSlackBindingsAreWorkspaceQualified", () => {
   });
 
   it("requires workspace scope only on bindings that apply to the Enterprise account", () => {
-    const cfg = bindingConfig([{ match: { channel: "slack" }, agentId: "main" }], "workspace", {
+    const cfg = bindingConfig([binding({ channel: "slack" }, "main")], "workspace", {
       workspace: {},
       enterprise: {},
     });
@@ -186,14 +191,11 @@ describe("assertEnterpriseSlackBindingsAreWorkspaceQualified", () => {
 
   it("accepts team-scoped and workspace-qualified peer bindings", () => {
     const cfg = bindingConfig([
-      { match: { channel: "slack", teamId: "T01234567" }, agentId: "team" },
-      {
-        match: {
-          channel: "slack",
-          peer: { kind: "channel", id: "team:T01234567:channel:C01234567" },
-        },
-        agentId: "channel",
-      },
+      binding({ channel: "slack", teamId: "T01234567" }, "team"),
+      binding({
+        channel: "slack",
+        peer: { kind: "channel", id: "team:T01234567:channel:C01234567" },
+      }),
     ]);
 
     expectBindings(cfg).not.toThrow();
@@ -201,20 +203,14 @@ describe("assertEnterpriseSlackBindingsAreWorkspaceQualified", () => {
 
   it("rejects unqualified or conflicting Enterprise peer bindings", () => {
     const unqualified = bindingConfig([
-      {
-        match: { channel: "slack", peer: { kind: "channel", id: "C01234567" } },
-        agentId: "channel",
-      },
+      binding({ channel: "slack", peer: { kind: "channel", id: "C01234567" } }),
     ]);
     const conflicting = bindingConfig([
-      {
-        match: {
-          channel: "slack",
-          teamId: "T99999999",
-          peer: { kind: "channel", id: "team:T01234567:channel:C01234567" },
-        },
-        agentId: "channel",
-      },
+      binding({
+        channel: "slack",
+        teamId: "T99999999",
+        peer: { kind: "channel", id: "team:T01234567:channel:C01234567" },
+      }),
     ]);
 
     expectBindings(unqualified).toThrow(/requires configured Slack binding peers/);

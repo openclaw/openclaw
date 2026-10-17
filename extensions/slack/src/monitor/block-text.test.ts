@@ -63,37 +63,32 @@ describe("resolveSlackBlocksText data visualizations", () => {
     expect(resolved?.text).not.toMatch(/private|Hidden option/u);
   });
 
-  it("preserves native table values in inbound conversation context", () => {
-    expect(
-      resolveSlackBlocksText([
-        {
-          type: "data_table",
-          caption: "Pipeline report",
-          rows: [
-            [rawText("Account"), rawText("ARR")],
-            [rawText("Acme"), { type: "raw_number", value: 125000, text: "$125k" }],
-          ],
-        },
-      ]),
-    ).toEqual({
+  it.each([
+    {
+      name: "native data table",
+      type: "data_table",
+      caption: "Pipeline report",
+      rows: [
+        [rawText("Account"), rawText("ARR")],
+        [rawText("Acme"), { type: "raw_number", value: 125000, text: "$125k" }],
+      ],
       text: "Pipeline report (table)\n- Account: Acme; ARR: $125k",
+    },
+    {
+      name: "Slack pasted table",
+      type: "table",
+      rows: [
+        [rawText("ID"), rawText("Status")],
+        [{ type: "raw_number", value: 12345 }, rawText("enabled")],
+      ],
+      text: "ID\tStatus\n12345\tenabled",
+    },
+  ])("preserves $name values in conversation context", ({ name: _name, text, ...block }) => {
+    expect(resolveSlackBlocksText([block])).toEqual({
+      text,
       hasRichText: false,
       hasNativeData: true,
     });
-  });
-
-  it("preserves Slack pasted-table rows in inbound conversation context", () => {
-    expect(
-      resolveSlackBlocksText([
-        {
-          type: "table",
-          rows: [
-            [rawText("ID"), rawText("Status")],
-            [{ type: "raw_number", value: 12345 }, rawText("enabled")],
-          ],
-        },
-      ]),
-    ).toEqual({ text: "ID\tStatus\n12345\tenabled", hasRichText: false, hasNativeData: true });
   });
 
   it("adds only table blocks from ordinary attachments", () => {
@@ -156,23 +151,18 @@ describe("resolveSlackBlocksText data visualizations", () => {
     );
   });
 
-  it("does not duplicate top-level text already represented before a chart", () => {
+  it.each([
+    ["Latency report", "Latency report\nWeekly latency (line chart)\n- p95: Mon: 250"],
+    [
+      "Latency report\n\nWeekly latency (line chart)\n- p95: Mon: 250",
+      "Latency report\n\nWeekly latency (line chart)\n- p95: Mon: 250",
+    ],
+  ])("deduplicates chart text while preserving spacing: %s", (text, expected) => {
     expect(
       resolveSlackMessageText({
-        text: "Latency report",
+        text,
         blocks: [section("Latency report"), latencyChart()],
       }),
-    ).toBe("Latency report\nWeekly latency (line chart)\n- p95: Mon: 250");
-  });
-
-  it("does not duplicate chart data when top-level text uses paragraph spacing", () => {
-    const messageText = "Latency report\n\nWeekly latency (line chart)\n- p95: Mon: 250";
-
-    expect(
-      resolveSlackMessageText({
-        text: messageText,
-        blocks: [section("Latency report"), latencyChart()],
-      }),
-    ).toBe(messageText);
+    ).toBe(expected);
   });
 });
