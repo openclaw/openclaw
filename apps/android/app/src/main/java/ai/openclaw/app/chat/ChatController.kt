@@ -542,6 +542,8 @@ class ChatController internal constructor(
 
   private val _streamingAssistantText = MutableStateFlow<String?>(null)
   val streamingAssistantText: StateFlow<String?> = _streamingAssistantText.asStateFlow()
+  private val _streamingAssistantPhase = MutableStateFlow<String?>(null)
+  val streamingAssistantPhase: StateFlow<String?> = _streamingAssistantPhase.asStateFlow()
   private var streamingAssistantOwner: ChatRunOwner? = null
 
   private val turnToolCallsById = ConcurrentHashMap<Pair<ChatRunOwner?, String>, ChatPendingToolCall>()
@@ -5990,7 +5992,12 @@ class ChatController internal constructor(
           if (!isPending) return
           val text = parseAssistantDeltaText(payload)
           if (text != null) {
-            updateStreamingAssistantText(runId, text)
+            updateStreamingAssistantText(
+              runId,
+              text,
+              payload["message"].asObjectOrNull()?.let(::parseChatAssistantPhase),
+              isChatMirror = true,
+            )
           }
         }
 
@@ -6399,7 +6406,7 @@ class ChatController internal constructor(
       "assistant" -> {
         val text = data?.get("text")?.asStringOrNull()
         if (text != null) {
-          updateStreamingAssistantText(runId, text)
+          updateStreamingAssistantText(runId, text, parseChatAssistantPhase(data))
         }
       }
 
@@ -6587,9 +6594,16 @@ class ChatController internal constructor(
   private fun updateStreamingAssistantText(
     runId: String?,
     text: String,
+    phase: String? = null,
+    isChatMirror: Boolean = false,
   ) {
     synchronized(gatewayScopeApplyLock) {
-      streamingAssistantOwner = liveRunOwner(runId)
+      val owner = liveRunOwner(runId)
+      // Gateway chat mirrors omit phase. Only an identical snapshot from the same
+      // run can inherit it; agent events still define new (possibly unlabelled) output.
+      val preservesPhase = isChatMirror && owner != null && owner == streamingAssistantOwner && text == _streamingAssistantText.value
+      _streamingAssistantPhase.value = phase ?: if (preservesPhase) _streamingAssistantPhase.value else null
+      streamingAssistantOwner = owner
       _streamingAssistantText.value = text
     }
   }
@@ -6603,6 +6617,7 @@ class ChatController internal constructor(
       if (runId != null && retiringOwner == null) return
       if (runId == null || streamingAssistantOwner == retiringOwner) {
         streamingAssistantOwner = null
+        _streamingAssistantPhase.value = null
         _streamingAssistantText.value = null
       }
       if (runId == null) {

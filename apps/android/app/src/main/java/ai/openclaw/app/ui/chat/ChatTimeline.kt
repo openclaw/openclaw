@@ -18,6 +18,7 @@ internal sealed class ChatTimelineItem {
     /** Resolved separately so full-message reads retain the original call blocks. */
     val hasUnresolvedTools: Boolean = false,
     val knownRunIds: Set<String> = message.runId?.let { setOf(it) }.orEmpty(),
+    val isCommentary: Boolean = message.phase == "commentary",
   ) : ChatTimelineItem()
 
   /** Durable queued/failed offline command shown below the transcript until acked or deleted. */
@@ -36,6 +37,7 @@ internal sealed class ChatTimelineItem {
 
   data class StreamingAssistant(
     val text: String,
+    val phase: String? = null,
   ) : ChatTimelineItem()
 
   data class ToolActivity(
@@ -121,9 +123,19 @@ internal fun prepareChatHistory(
         it.role.trim().equals("user", ignoreCase = true)
       }
     }
+  val workSpans = prepareCompletedWorkSpans(rows, messages, sessionKey, mainSessionKey)
+  val workRows = workSpans.flatMap { it.workRowIndexes }.toSet()
+  val styledRows =
+    rows.mapIndexed { index, row ->
+      if (row is ChatTimelineItem.Message && index in workRows && row.message.phase != "final_answer") {
+        row.copy(isCommentary = true)
+      } else {
+        row
+      }
+    }
   val latest = messages.lastOrNull()
   return PreparedChatHistory(
-    rows = rows,
+    rows = styledRows,
     latestUserMessageId = latestUser?.id,
     latestUserMessageVersion = latestUser?.let(::stableMessageVersion),
     rawHistoryVersionPrefix =
@@ -140,7 +152,7 @@ internal fun prepareChatHistory(
         append(":turnBoundary=")
         append(latest?.turnBoundary ?: false)
       },
-    workSpans = prepareCompletedWorkSpans(rows, messages, sessionKey, mainSessionKey),
+    workSpans = workSpans,
     toolScope = messages.indexOfLast { it.startsToolScope() }.takeIf { it >= 0 }?.let { toolScopes[it] } ?: "root",
     toolScopesByRun = messages.mapIndexedNotNull { index, message -> message.runId?.let { it to toolScopes[index] } }.distinctBy { it.first }.toMap(),
   )
@@ -155,6 +167,7 @@ internal fun PreparedChatHistory.buildTimeline(
   questions: List<ChatQuestionPrompt> = emptyList(),
   expandedWorkKeys: Set<String> = emptySet(),
   activeRunId: String? = null,
+  streamingAssistantPhase: String? = null,
 ): ChatTimeline {
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
   val latestTurnLive = pendingRunCount > 0 || pendingToolCalls.any { !it.isComplete } || stream != null
@@ -165,7 +178,7 @@ internal fun PreparedChatHistory.buildTimeline(
       outboxItems.asReversed().forEach { item -> add(ChatTimelineItem.OutboxCommand(item)) }
       recoveryOutboxItems.asReversed().forEach { item -> add(ChatTimelineItem.RecoveryOutboxCommand(item)) }
       if (recoveryOutboxItems.isNotEmpty()) add(ChatTimelineItem.OutboxRecoveryHeader(recoveryOutboxItems.size))
-      if (stream != null) add(ChatTimelineItem.StreamingAssistant(stream))
+      if (stream != null) add(ChatTimelineItem.StreamingAssistant(stream, streamingAssistantPhase))
       if (pendingRunCount > 0) add(ChatTimelineItem.Thinking)
       var rowIndex = rows.lastIndex
       var spanIndex = workSpans.lastIndex
@@ -189,7 +202,28 @@ internal fun PreparedChatHistory.buildTimeline(
         }
       }
     }
-  val items = projectToolActivity(sourceItems, rows, pendingToolCalls, toolScope, toolScopesByRun)
+  // Unlabelled output in an unfinished turn is provisional, just like the live stream.
+  // Explicit final answers never inherit the provisional style.
+  val provisionalMessages =
+    if (latestTurnLive) {
+      rows
+        .drop(rows.indexOfLast { it is ChatTimelineItem.Message && it.message.role == "user" } + 1)
+        .filterIsInstance<ChatTimelineItem.Message>()
+        .filter { it.message.role == "assistant" && it.message.phase == null }
+        .map { it.message.id }
+        .toSet()
+    } else {
+      emptySet()
+    }
+  val styledSourceItems =
+    sourceItems.map { item ->
+      if (item is ChatTimelineItem.Message && item.message.id in provisionalMessages) {
+        item.copy(isCommentary = true)
+      } else {
+        item
+      }
+    }
+  val items = projectToolActivity(styledSourceItems, rows, pendingToolCalls, toolScope, toolScopesByRun)
   val latestUserIndex = items.indexOfFirst { it is ChatTimelineItem.Message && it.message.id == latestUserMessageId }.takeIf { it >= 0 }
   val latestContentIndex = 0.takeIf { items.isNotEmpty() }
   // In reverseLayout, index 0 is bottom-most. Keep the latest prompt as a stable
