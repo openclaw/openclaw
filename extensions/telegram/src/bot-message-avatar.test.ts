@@ -32,6 +32,11 @@ function account(accountId = "sample-bot", abortSignal?: AbortSignal) {
   const params = { api, accountId, token: "test-token", abortSignal };
   return { api, resolve: createTelegramDirectAvatarResolver(params) };
 }
+async function load(get: ReturnType<typeof account>["resolve"], ctx = context(), initial?: string) {
+  expect(get(ctx, {})).toBe(initial);
+  await vi.advanceTimersByTimeAsync(0);
+  return get(ctx, {});
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -63,9 +68,7 @@ it("downloads through the existing account media policy and reuses the bounded n
   const { api, resolve } = account();
   const ctx = context();
   const before = structuredClone(ctx.message);
-  expect(resolve(ctx, {})).toBeUndefined();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(resolve(ctx, {})).toBe("/media/inbound/portrait.png");
+  expect(await load(resolve, ctx)).toBe("/media/inbound/portrait.png");
   expect(api.getUserProfilePhotos).toHaveBeenCalledExactlyOnceWith(
     1000000001,
     { offset: 0, limit: 1 },
@@ -87,8 +90,7 @@ it.each([false, true])("removes the abort bridge (failure=%s)", async (fails) =>
   if (fails) {
     api.getUserProfilePhotos.mockRejectedValueOnce(new Error("request failed"));
   }
-  resolve(context(), {});
-  await vi.advanceTimersByTimeAsync(0);
+  await load(resolve);
   expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
 });
 
@@ -101,8 +103,7 @@ it("forwards native account cancellation to the grammY request", async () => {
     controller.abort();
     throw new Error("request aborted");
   });
-  expect(resolve(context(), {})).toBeUndefined();
-  await vi.advanceTimersByTimeAsync(0);
+  await load(resolve);
   expect(aborted).toHaveBeenCalledTimes(1);
   expect(resolveMedia).not.toHaveBeenCalled();
 });
@@ -110,14 +111,10 @@ it("forwards native account cancellation to the grammY request", async () => {
 it("clears a removed photo after the account cache expires", async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(0);
   const { api, resolve } = account();
-  expect(resolve(context(), {})).toBeUndefined();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(resolve(context(), {})).toBe("/media/inbound/portrait.png");
+  expect(await load(resolve)).toBe("/media/inbound/portrait.png");
   clock.mockReturnValue(5 * 60 * 1000 + 1);
   api.getUserProfilePhotos.mockResolvedValueOnce({ total_count: 0, photos: [] });
-  expect(resolve(context(), {})).toBe("/media/inbound/portrait.png");
-  await vi.advanceTimersByTimeAsync(0);
-  expect(resolve(context(), {})).toBe("");
+  expect(await load(resolve, context(), "/media/inbound/portrait.png")).toBe("");
   expect(api.getUserProfilePhotos).toHaveBeenCalledTimes(2);
 });
 
@@ -138,12 +135,9 @@ it("never shares native photos between senders or bot accounts", async () => {
 it("keeps initials for absent, private, or unavailable photos", async () => {
   const { api, resolve } = account();
   api.getUserProfilePhotos.mockResolvedValueOnce({ total_count: 0, photos: [] });
-  expect(resolve(context(), {})).toBeUndefined();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(resolve(context(), {})).toBe("");
+  expect(await load(resolve)).toBe("");
   api.getUserProfilePhotos.mockRejectedValueOnce(new Error("unavailable"));
-  expect(resolve(context(1000000002), {})).toBeUndefined();
-  await vi.advanceTimersByTimeAsync(0);
+  await load(resolve, context(1000000002));
   expect(resolveMedia).not.toHaveBeenCalled();
 });
 

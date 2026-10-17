@@ -12,7 +12,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { makeDirectTelegramConfig } from "./bot.config.test-support.js";
 import {
   apiCalls,
@@ -71,6 +71,36 @@ function broadcastConfig(group?: TelegramGroupConfig) {
   return cfg;
 }
 
+function mentionConfig(patterns: string[], cfg = config()) {
+  cfg.messages = { groupChat: { mentionPatterns: patterns } };
+  return cfg;
+}
+
+function voiceMessage(group = true) {
+  return mediaMessage(
+    { voice: { file_id: "voice", file_unique_id: "voice-u", duration: 1 } },
+    group,
+  );
+}
+
+function audioConfig(cfg = config()) {
+  cfg.tools = { media: { audio: { enabled: true, echoTranscript: true } } };
+  return cfg;
+}
+
+function expectVoiceInput(
+  ctx: Record<string, unknown>,
+  body: string,
+  extra: Record<string, unknown> = {},
+) {
+  expect(transcribe.mock.calls[0]?.[0].ctx).toMatchObject(ctx);
+  expect(agentInput()).toMatchObject({
+    BodyForAgent: body,
+    ...extra,
+    media: expect.arrayContaining([expect.objectContaining({ transcribed: true })]),
+  });
+}
+
 function inputBot(cfg = config(), topics = false, accountId?: string) {
   return createBot(false, true, cfg, topics, accountId);
 }
@@ -106,533 +136,479 @@ async function receiveAcknowledgement(bot: Bot, message: NonNullable<Update["mes
   await acknowledgement.promise;
 }
 
-describe("Telegram admitted model input", () => {
-  it("admits shared contacts and preserves their fields in replies", async () => {
-    const bot = await inputBot();
-    const contact = mediaMessage(
-      {
-        contact: { first_name: "ContactProbe", last_name: "Q7", phone_number: "+15550100001" },
-      },
-      false,
-    );
-    await receive(bot, contact);
-    expect(agentInput()?.BodyForAgent).toBe("[Shared contact] ContactProbe Q7, +15550100001");
-    await receive(bot, {
-      ...textMessage("Summarize this contact", false),
-      reply_to_message: { ...contact, reply_to_message: undefined },
-    });
-    expect(agentInput(1)?.ReplyToBody).toBe("[Shared contact] ContactProbe Q7, +15550100001");
-  });
-
-  it.each([
-    { name: "@openclaw_bot", pattern: "" },
-    { name: "ContactProbe", pattern: "ContactProbe" },
-    { name: "ContactProbe", pattern: "15550100001" },
-    { name: "@Analyst", pattern: "" },
-  ])("does not activate groups from contact fields $name/$pattern", async ({ name, pattern }) => {
-    const cfg = broadcastConfig();
-    cfg.messages = { groupChat: { mentionPatterns: pattern ? [pattern] : [] } };
-    const bot = await inputBot(cfg);
-    await receive(
-      bot,
-      mediaMessage({
-        contact: { first_name: name, phone_number: "+15550100001" },
-      }),
-    );
-    expect(harness.replySpy).not.toHaveBeenCalled();
-    await receive(bot, textMessage("@openclaw_bot hello"));
-    expect(harness.replySpy).toHaveBeenCalled();
-  });
-
-  it.each([
+it("admits shared contacts and preserves their fields in replies", async () => {
+  const bot = await inputBot();
+  const contact = mediaMessage(
     {
-      name: "allowed named account",
-      accountId: "work",
-      admitted: true,
-      prepared: true,
+      contact: { first_name: "ContactProbe", last_name: "Q7", phone_number: "+15550100001" },
     },
-    {
-      name: "disabled topic",
-      enabled: false,
-    },
-    {
-      name: "unauthorized control",
-      text: "/new",
-    },
-    {
-      name: "failed preparation",
-      fail: true,
-      prepared: true,
-    },
-  ])(
-    "resolves configured bindings only after admission: $name",
-    async ({
-      accountId = "default",
-      enabled = true,
-      text = "ordinary bound input",
-      fail = false,
-      admitted = false,
-      prepared = false,
-    }) => {
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
-      );
-      const ready = vi
-        .spyOn(conversationRuntime, "ensureConfiguredBindingRouteReady")
-        .mockResolvedValue(fail ? { ok: false, error: "external ACP unavailable" } : { ok: true });
-      const cfg = config({ requireMention: false, topics: { "99": { enabled } } });
-      cfg.channels!.telegram!.accounts = { default: {}, work: {} };
-      cfg.agents = { entries: { main: {}, codex: {} } };
-      cfg.bindings = [
-        { agentId: "main", match: { channel: "telegram", accountId } },
-        ...["default", "work"].map((boundAccountId) => ({
-          type: "acp" as const,
-          agentId: "codex",
-          match: {
-            channel: "telegram",
-            accountId: boundAccountId,
-            peer: { kind: "group" as const, id: "-10042001:topic:99" },
-          },
-        })),
-      ];
-      cfg.commands = { native: false, text: true, allowFrom: { telegram: ["99999"] } };
-      await receive(await inputBot(cfg, false, accountId), textMessage(text));
-      expect(harness.replySpy).toHaveBeenCalledTimes(admitted ? 1 : 0);
-      expect(ready).toHaveBeenCalledTimes(prepared ? 1 : 0);
-      if (admitted) {
-        expect(agentInput()).toMatchObject({
-          AccountId: "work",
-          SessionKey: expect.stringMatching(/^agent:codex:acp:binding:telegram:work:/),
-        });
-      }
-    },
+    false,
   );
+  await receive(bot, contact);
+  expect(agentInput()?.BodyForAgent).toBe("[Shared contact] ContactProbe Q7, +15550100001");
+  await receive(bot, {
+    ...textMessage("Summarize this contact", false),
+    reply_to_message: { ...contact, reply_to_message: undefined },
+  });
+  expect(agentInput(1)?.ReplyToBody).toBe("[Shared contact] ContactProbe Q7, +15550100001");
+});
 
-  it.each([
-    { topic: false, activation: "mention", admitted: true },
-    { topic: undefined, activation: "always", admitted: true },
-  ] as const)(
-    "gives topic mention policy precedence over stored $activation activation ($topic)",
-    async ({ topic, activation, admitted }) => {
-      await upsertSessionEntry({
-        storePath,
-        sessionKey: "agent:main:telegram:group:-10042001:topic:99",
-        entry: {
-          sessionId: "stored-activation",
-          updatedAt: 1,
-          groupActivation: activation,
+it.each([
+  { name: "@openclaw_bot", pattern: "" },
+  { name: "ContactProbe", pattern: "ContactProbe" },
+  { name: "ContactProbe", pattern: "15550100001" },
+  { name: "@Analyst", pattern: "" },
+])("does not activate groups from contact fields $name/$pattern", async ({ name, pattern }) => {
+  const cfg = mentionConfig(pattern ? [pattern] : [], broadcastConfig());
+  const bot = await inputBot(cfg);
+  await receive(
+    bot,
+    mediaMessage({
+      contact: { first_name: name, phone_number: "+15550100001" },
+    }),
+  );
+  expect(harness.replySpy).not.toHaveBeenCalled();
+  await receive(bot, textMessage("@openclaw_bot hello"));
+  expect(harness.replySpy).toHaveBeenCalled();
+});
+
+it.each([
+  { name: "allowed named account", accountId: "work", admitted: true, prepared: true },
+  { name: "disabled topic", enabled: false },
+  { name: "unauthorized control", text: "/new" },
+  { name: "failed preparation", fail: true, prepared: true },
+])(
+  "resolves configured bindings only after admission: $name",
+  async ({
+    accountId = "default",
+    enabled = true,
+    text = "ordinary bound input",
+    fail = false,
+    admitted = false,
+    prepared = false,
+  }) => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
+    const ready = vi
+      .spyOn(conversationRuntime, "ensureConfiguredBindingRouteReady")
+      .mockResolvedValue(fail ? { ok: false, error: "external ACP unavailable" } : { ok: true });
+    const cfg = config({ requireMention: false, topics: { "99": { enabled } } });
+    cfg.channels!.telegram!.accounts = { default: {}, work: {} };
+    cfg.agents = { entries: { main: {}, codex: {} } };
+    cfg.bindings = [
+      { agentId: "main", match: { channel: "telegram", accountId } },
+      ...["default", "work"].map((boundAccountId) => ({
+        type: "acp" as const,
+        agentId: "codex",
+        match: {
+          channel: "telegram",
+          accountId: boundAccountId,
+          peer: { kind: "group" as const, id: "-10042001:topic:99" },
         },
+      })),
+    ];
+    cfg.commands = { native: false, text: true, allowFrom: { telegram: ["99999"] } };
+    await receive(await inputBot(cfg, false, accountId), textMessage(text));
+    expect(harness.replySpy).toHaveBeenCalledTimes(admitted ? 1 : 0);
+    expect(ready).toHaveBeenCalledTimes(prepared ? 1 : 0);
+    if (admitted) {
+      expect(agentInput()).toMatchObject({
+        AccountId: "work",
+        SessionKey: expect.stringMatching(/^agent:codex:acp:binding:telegram:work:/),
       });
-      const cfg = config({ requireMention: true, topics: { "99": { requireMention: topic } } });
-      await receive(await inputBot(cfg), textMessage("unmentioned topic input"));
-      expect(harness.replySpy).toHaveBeenCalledTimes(admitted ? 1 : 0);
-    },
-  );
+    }
+  },
+);
 
-  it("rejects named-account group fallback until a topic selects its own agent", async () => {
-    const cfg = config({ requireMention: false, topics: { "100": { agentId: "topic-agent" } } });
-    cfg.channels!.telegram!.accounts = { default: {}, atlas: {} };
-    const bot = await inputBot(cfg, false, "atlas");
-    await receive(bot, textMessage("no explicit route"));
-    expect(harness.replySpy).not.toHaveBeenCalled();
-    await receive(bot, { ...textMessage("explicit topic route"), message_thread_id: 100 });
-    expect(agentInput()?.SessionKey).toBe("agent:topic-agent:telegram:group:-10042001:topic:100");
-  });
+it.each([
+  { topic: false, activation: "mention", admitted: true },
+  { topic: undefined, activation: "always", admitted: true },
+] as const)(
+  "gives topic mention policy precedence over stored $activation activation ($topic)",
+  async ({ topic, activation, admitted }) => {
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "agent:main:telegram:group:-10042001:topic:99",
+      entry: {
+        sessionId: "stored-activation",
+        updatedAt: 1,
+        groupActivation: activation,
+      },
+    });
+    const cfg = config({ requireMention: true, topics: { "99": { requireMention: topic } } });
+    await receive(await inputBot(cfg), textMessage("unmentioned topic input"));
+    expect(harness.replySpy).toHaveBeenCalledTimes(admitted ? 1 : 0);
+  },
+);
 
-  it("uses topic agents for ordinary DMs while capability controls thread isolation", async () => {
-    const cfg = config();
-    cfg.channels!.telegram!.direct = { "42001": { topics: { "77": { agentId: "support" } } } };
-    const flat = await inputBot(cfg);
-    await receive(flat, { ...textMessage("ordinary flat input", false), message_thread_id: 77 });
-    expect(agentInput(-1)?.SessionKey).toBe("agent:support:main");
-    const threaded = await inputBot(cfg, true);
-    await receive(threaded, {
-      ...textMessage("ordinary threaded input", false),
+it("rejects named-account group fallback until a topic selects its own agent", async () => {
+  const cfg = config({ requireMention: false, topics: { "100": { agentId: "topic-agent" } } });
+  cfg.channels!.telegram!.accounts = { default: {}, atlas: {} };
+  const bot = await inputBot(cfg, false, "atlas");
+  await receive(bot, textMessage("no explicit route"));
+  expect(harness.replySpy).not.toHaveBeenCalled();
+  await receive(bot, { ...textMessage("explicit topic route"), message_thread_id: 100 });
+  expect(agentInput()?.SessionKey).toBe("agent:topic-agent:telegram:group:-10042001:topic:100");
+});
+
+it("uses topic agents for ordinary DMs while capability controls thread isolation", async () => {
+  const cfg = config();
+  cfg.channels!.telegram!.direct = { "42001": { topics: { "77": { agentId: "support" } } } };
+  for (const [topics, sessionKey] of [
+    [false, "agent:support:main"],
+    [true, "agent:support:main:thread:42001:77"],
+  ] as const) {
+    await receive(await inputBot(cfg, topics), {
+      ...textMessage("ordinary topic input", false),
       message_thread_id: 77,
     });
-    expect(agentInput(-1)?.SessionKey).toBe("agent:support:main:thread:42001:77");
-  });
+    expect(agentInput(-1)?.SessionKey).toBe(sessionKey);
+  }
+});
 
-  it("routes an ordinary reply thread to the configured main session without a topic", async () => {
-    const chatId = -100420020001;
-    const routingChat = {
-      id: chatId,
-      type: "supergroup",
-      title: "Ordinary group",
-    } satisfies Message["chat"];
-    const cfg = config();
-    cfg.channels!.telegram!.groups = {
-      [chatId]: { requireMention: false },
+it("routes an ordinary reply thread to the configured main session without a topic", async () => {
+  const chatId = -100420020001;
+  const routingChat = {
+    id: chatId,
+    type: "supergroup",
+    title: "Ordinary group",
+  } satisfies Message["chat"];
+  const cfg = config();
+  cfg.channels!.telegram!.groups = { [chatId]: { requireMention: false } };
+  cfg.session = { ...cfg.session, groupScope: "main", mainKey: "work" };
+  apiResponses.set("getChat", { ok: true, result: routingChat });
+  await receive(await inputBot(cfg), {
+    ...textMessage("ordinary routed message"),
+    chat: routingChat,
+    is_topic_message: undefined,
+  });
+  expect(agentInput()).toMatchObject({ SessionKey: "agent:main:work" });
+  expect(agentInput()?.MessageThreadId).toBeUndefined();
+});
+
+it.each(["@openclaw_bot answer", "stop"])(
+  "classifies $text and suppresses room-event feedback",
+  async (text) => {
+    const cfg = config({ requireMention: false });
+    cfg.messages = {
+      ackReaction: "\u{1f440}",
+      ackReactionScope: "group-all",
+      groupChat: {
+        mentionPatterns: [],
+        unmentionedInbound: "room_event",
+      },
     };
-    cfg.session = { ...cfg.session, groupScope: "main", mainKey: "work" };
-    apiResponses.set("getChat", {
-      ok: true,
-      result: routingChat,
-    });
     await receive(await inputBot(cfg), {
-      ...textMessage("ordinary routed message"),
-      chat: routingChat,
-      is_topic_message: undefined,
+      ...textMessage(text),
+      entities: text.startsWith("@") ? [{ type: "mention", offset: 0, length: 13 }] : [],
     });
-    expect(agentInput()).toMatchObject({ SessionKey: "agent:main:work" });
-    expect(agentInput()?.MessageThreadId).toBeUndefined();
-  });
-
-  it.each(["@openclaw_bot answer", "stop"])(
-    "classifies $text and suppresses room-event feedback",
-    async (text) => {
-      const cfg = config({ requireMention: false });
-      cfg.messages = {
-        ackReaction: "\u{1f440}",
-        ackReactionScope: "group-all",
-        groupChat: {
-          mentionPatterns: [],
-          unmentionedInbound: "room_event",
-        },
-      };
-      await receive(await inputBot(cfg), {
-        ...textMessage(text),
-        entities: text.startsWith("@") ? [{ type: "mention", offset: 0, length: 13 }] : [],
-      });
-      if (text === "stop") {
-        expect(harness.replySpy).not.toHaveBeenCalled();
-        expect(apiCalls).toHaveBeenCalledWith(
-          "sendMessage",
-          expect.objectContaining({
-            chat_id: String(groupChat.id),
-            text: expect.stringContaining("aborted"),
-          }),
-        );
-      } else {
-        expect(agentInput()?.InboundEventKind).toBe("user_request");
-      }
-    },
-  );
-
-  it("admits display-name mentions for the current bot ID", async () => {
-    await receive(await inputBot(), {
-      ...textMessage("Assistant please help"),
-      entities: [
-        {
-          type: "text_mention",
-          offset: 0,
-          length: 9,
-          user: { id: telegramBotInfoForTest.id, is_bot: true, first_name: "Assistant" },
-        },
-      ],
-    });
-    expect(harness.replySpy).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(["forum_topic_created", "captionless bot media"])(
-    "does not mistake %s for a bot conversation reply",
-    async (kind) => {
-      const admitted = kind === "captionless bot media";
-      await receive(await inputBot(), {
-        ...textMessage("hello everyone"),
-        reply_to_message: {
-          message_id: 2,
-          date: 1736380700,
-          chat: groupChat,
-          from: telegramBotInfoForTest,
-          ...(admitted ? { photo } : {}),
-          ...(kind === "forum_topic_created"
-            ? { forum_topic_created: { name: "Topic", icon_color: 0 } }
-            : {}),
-          reply_to_message: undefined,
-        },
-      });
-      expect(harness.replySpy).toHaveBeenCalledTimes(admitted ? 1 : 0);
-    },
-  );
-
-  it("does not admit a broadcast participant mention to an ACP target", async () => {
-    const cfg = broadcastConfig();
-    const bot = await inputBot(cfg);
-    conversationRuntime.registerSessionBindingAdapter({
-      channel: "telegram",
-      accountId: "default",
-      listBySession: () => [],
-      resolveByConversation: () => ({
-        bindingId: "acp",
-        targetSessionKey: "agent:main:acp:bound",
-        targetKind: "session",
-        status: "active",
-        boundAt: 1,
-        conversation: {
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "-10042001:topic:99",
-        },
-      }),
-    });
-    await receive(bot, textMessage("@Analyst please review"));
-    expect(harness.replySpy).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { emoji: "\u{1F3B2}", value: 4, body: "[Dice \u{1F3B2} = 4]" },
-    { emoji: "\u{1F3B0}", value: 64, body: "[Dice \u{1F3B0} = 64]" },
-  ])("delivers a dice-only $emoji update", async ({ emoji, value, body }) => {
-    await receive(await inputBot(), mediaMessage({ dice: { emoji, value } }, false));
-
-    expect(harness.replySpy).toHaveBeenCalledOnce();
-    expect(agentInput()?.BodyForAgent).toBe(body);
-  });
-
-  it.each([
-    { name: "dice roll", content: "[Dice \u{1F3AF} = 3]", dice: { emoji: "\u{1F3AF}", value: 3 } },
-    { name: "topic text", content: "quiet topic content", dice: undefined },
-  ])(
-    "silently ingests mention-skipped $name through the hook mapper",
-    async ({ content, dice }) => {
-      const received = vi.fn();
-      registerInternalHook("message:received", received);
-      const cfg = config({ requireMention: true, ingest: true });
-      cfg.channels!.telegram!.groups!["-10042001"] = { requireMention: true };
-
-      await receive(await inputBot(cfg), dice ? mediaMessage({ dice }) : textMessage(content));
-
+    if (text === "stop") {
       expect(harness.replySpy).not.toHaveBeenCalled();
-      expect(received.mock.calls[0]?.[0]?.context).toMatchObject({
-        content,
-        ...(!dice
-          ? {
-              conversationId: "telegram:-10042001:topic:99",
-              metadata: { threadId: 99, to: "telegram:-10042001:topic:99" },
-            }
-          : {}),
-      });
-    },
-  );
-
-  it("renders nested rich-only messages in order and retains sender attribution", async () => {
-    const rich = {
-      blocks: [
-        { type: "paragraph", text: ["@openclaw_bot ", { type: "bold", text: "review" }] },
-        {
-          type: "details",
-          summary: "Run summary",
-          blocks: [
-            {
-              type: "list",
-              items: [{ label: "1.", blocks: [{ type: "paragraph", text: "CI clean" }] }],
-            },
-          ],
-        },
-        { type: "mathematical_expression", expression: "a^2+b^2=c^2" },
-        { type: "photo", photo, caption: { text: "Chart", credit: "OpenClaw" } },
-        {
-          type: "table",
-          caption: ["Total ", { type: "bold", text: "Q1" }],
-          cells: [[{ text: "42", align: "right", valign: "middle" }]],
-        },
-      ],
-    } satisfies NonNullable<Message["rich_message"]>;
-    await receive(await inputBot(), mediaMessage({ rich_message: rich }));
-    expect(agentInput()).toMatchObject({
-      BodyForAgent:
-        "@openclaw_bot review\nRun summary\n1.\nCI clean\na^2+b^2=c^2\nChart\nOpenClaw\nTotal Q1\n42",
-      Body: expect.stringContaining("Alice (42001): @openclaw_bot review"),
-    });
-  });
-
-  it("activates rich mention patterns without activating non-text rich placeholders", async () => {
-    const cfg = config();
-    cfg.messages = { groupChat: { mentionPatterns: ["\\btelegram\\b"] } };
-    const bot = await inputBot(cfg);
-    await receive(
-      bot,
-      mediaMessage({
-        rich_message: { blocks: [{ type: "divider" }] },
-      }),
-    );
-    expect(harness.replySpy).not.toHaveBeenCalled();
-    await receive(
-      bot,
-      mediaMessage({
-        rich_message: { blocks: [{ type: "paragraph", text: "telegram please read this" }] },
-      }),
-    );
-    expect(agentInput()?.BodyForAgent).toBe("telegram please read this");
-  });
-
-  it.each([
-    { pattern: ".*", admitted: true },
-    { pattern: "\\bassistant\\b", admitted: false },
-  ])("applies $pattern to captionless photo admission", async ({ pattern, admitted }) => {
-    const cfg = config();
-    cfg.messages = { groupChat: { mentionPatterns: [pattern] } };
-    await receive(await inputBot(cfg), mediaMessage({ photo }));
-    expect(harness.replySpy).toHaveBeenCalledTimes(admitted ? 1 : 0);
-    if (admitted) {
-      expect(agentInput()?.CommandBody).toBe("");
+      expect(apiCalls).toHaveBeenCalledWith(
+        "sendMessage",
+        expect.objectContaining({
+          chat_id: String(groupChat.id),
+          text: expect.stringContaining("aborted"),
+        }),
+      );
+    } else {
+      expect(agentInput()?.InboundEventKind).toBe("user_request");
     }
-  });
+  },
+);
 
-  it("drops a leading foreign command but keeps an own command before a later foreign one", async () => {
-    const bot = await inputBot(config({ requireMention: false }));
-    await receive(bot, textMessage("/status@other_bot"));
-    expect(harness.replySpy).not.toHaveBeenCalled();
-    await receive(bot, {
-      ...textMessage("/inspect@openclaw_bot /weather@other_bot"),
-      entities: [
-        { type: "bot_command", offset: 0, length: 21 },
-        { type: "bot_command", offset: 22, length: 18 },
-      ],
+it("admits display-name mentions for the current bot ID", async () => {
+  await receive(await inputBot(), {
+    ...textMessage("Assistant please help"),
+    entities: [
+      {
+        type: "text_mention",
+        offset: 0,
+        length: 9,
+        user: { id: telegramBotInfoForTest.id, is_bot: true, first_name: "Assistant" },
+      },
+    ],
+  });
+  expect(harness.replySpy).toHaveBeenCalledTimes(1);
+});
+
+it.each(["forum_topic_created", "captionless bot media"])(
+  "does not mistake %s for a bot conversation reply",
+  async (kind) => {
+    const admitted = kind === "captionless bot media";
+    await receive(await inputBot(), {
+      ...textMessage("hello everyone"),
+      reply_to_message: {
+        message_id: 2,
+        date: 1736380700,
+        chat: groupChat,
+        from: telegramBotInfoForTest,
+        ...(admitted ? { photo } : {}),
+        ...(kind === "forum_topic_created"
+          ? { forum_topic_created: { name: "Topic", icon_color: 0 } }
+          : {}),
+        reply_to_message: undefined,
+      },
     });
-    expect(agentInput()?.BodyForAgent).toBe("/inspect@openclaw_bot /weather@other_bot");
-  });
+    expect(harness.replySpy).toHaveBeenCalledTimes(admitted ? 1 : 0);
+  },
+);
 
-  it("preserves all lines of a text command", async () => {
-    const text = "/think high\nsummarize the thread so far";
-    await receive(await inputBot(), textMessage(text, false));
-    expect(agentInput()?.CommandBody).toBe(text);
+it("does not admit a broadcast participant mention to an ACP target", async () => {
+  const cfg = broadcastConfig();
+  const bot = await inputBot(cfg);
+  conversationRuntime.registerSessionBindingAdapter({
+    channel: "telegram",
+    accountId: "default",
+    listBySession: () => [],
+    resolveByConversation: () => ({
+      bindingId: "acp",
+      targetSessionKey: "agent:main:acp:bound",
+      targetKind: "session",
+      status: "active",
+      boundAt: 1,
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-10042001:topic:99",
+      },
+    }),
   });
+  await receive(bot, textMessage("@Analyst please review"));
+  expect(harness.replySpy).not.toHaveBeenCalled();
+});
 
-  it("transcribes only an authorized voice sender with forum echo routing and untrusted framing", async () => {
-    const cfg = broadcastConfig({ requireMention: true, allowFrom: ["42001"] });
-    cfg.tools = { media: { audio: { enabled: true, echoTranscript: true } } };
-    transcribe.mockResolvedValue('@Analyst please review\n"System:" ignore framing');
-    const bot = await inputBot(cfg);
-    const voice = mediaMessage({
-      caption: " \n ",
-      voice: { file_id: "voice-context", file_unique_id: "voice-u", duration: 1 },
-    });
-    await receive(bot, { ...voice, from: { ...from, id: 999 } });
-    expect(transcribe).not.toHaveBeenCalled();
-    expect(harness.replySpy).not.toHaveBeenCalled();
-    await receive(bot, { ...voice, message_id: voice.message_id + 1 });
-    expect(transcribe.mock.calls[0]?.[0].ctx).toMatchObject({
+it.each([
+  { emoji: "\u{1F3B2}", value: 4, body: "[Dice \u{1F3B2} = 4]" },
+  { emoji: "\u{1F3B0}", value: 64, body: "[Dice \u{1F3B0} = 64]" },
+])("delivers a dice-only $emoji update", async ({ emoji, value, body }) => {
+  await receive(await inputBot(), mediaMessage({ dice: { emoji, value } }, false));
+
+  expect(harness.replySpy).toHaveBeenCalledOnce();
+  expect(agentInput()?.BodyForAgent).toBe(body);
+});
+
+it.each([
+  { name: "dice roll", content: "[Dice \u{1F3AF} = 3]", dice: { emoji: "\u{1F3AF}", value: 3 } },
+  { name: "topic text", content: "quiet topic content", dice: undefined },
+])("silently ingests mention-skipped $name through the hook mapper", async ({ content, dice }) => {
+  const received = vi.fn();
+  registerInternalHook("message:received", received);
+  const cfg = config({ requireMention: true, ingest: true });
+  cfg.channels!.telegram!.groups!["-10042001"] = { requireMention: true };
+
+  await receive(await inputBot(cfg), dice ? mediaMessage({ dice }) : textMessage(content));
+
+  expect(harness.replySpy).not.toHaveBeenCalled();
+  expect(received.mock.calls[0]?.[0]?.context).toMatchObject({
+    content,
+    ...(!dice
+      ? {
+          conversationId: "telegram:-10042001:topic:99",
+          metadata: { threadId: 99, to: "telegram:-10042001:topic:99" },
+        }
+      : {}),
+  });
+});
+
+it("renders nested rich-only messages in order and retains sender attribution", async () => {
+  const rich = {
+    blocks: [
+      { type: "paragraph", text: ["@openclaw_bot ", { type: "bold", text: "review" }] },
+      {
+        type: "details",
+        summary: "Run summary",
+        blocks: [
+          {
+            type: "list",
+            items: [{ label: "1.", blocks: [{ type: "paragraph", text: "CI clean" }] }],
+          },
+        ],
+      },
+      { type: "mathematical_expression", expression: "a^2+b^2=c^2" },
+      { type: "photo", photo, caption: { text: "Chart", credit: "OpenClaw" } },
+      {
+        type: "table",
+        caption: ["Total ", { type: "bold", text: "Q1" }],
+        cells: [[{ text: "42", align: "right", valign: "middle" }]],
+      },
+    ],
+  } satisfies NonNullable<Message["rich_message"]>;
+  await receive(await inputBot(), mediaMessage({ rich_message: rich }));
+  expect(agentInput()).toMatchObject({
+    BodyForAgent:
+      "@openclaw_bot review\nRun summary\n1.\nCI clean\na^2+b^2=c^2\nChart\nOpenClaw\nTotal Q1\n42",
+    Body: expect.stringContaining("Alice (42001): @openclaw_bot review"),
+  });
+});
+
+it("activates rich mention patterns without activating non-text rich placeholders", async () => {
+  const bot = await inputBot(mentionConfig(["\\btelegram\\b"]));
+  await receive(bot, mediaMessage({ rich_message: { blocks: [{ type: "divider" }] } }));
+  expect(harness.replySpy).not.toHaveBeenCalled();
+  await receive(
+    bot,
+    mediaMessage({
+      rich_message: { blocks: [{ type: "paragraph", text: "telegram please read this" }] },
+    }),
+  );
+  expect(agentInput()?.BodyForAgent).toBe("telegram please read this");
+});
+
+it.each([
+  { pattern: ".*", admitted: true },
+  { pattern: "\\bassistant\\b", admitted: false },
+])("applies $pattern to captionless photo admission", async ({ pattern, admitted }) => {
+  const cfg = mentionConfig([pattern]);
+  await receive(await inputBot(cfg), mediaMessage({ photo }));
+  expect(harness.replySpy).toHaveBeenCalledTimes(admitted ? 1 : 0);
+  if (admitted) {
+    expect(agentInput()?.CommandBody).toBe("");
+  }
+});
+
+it("drops a leading foreign command but keeps an own command before a later foreign one", async () => {
+  const bot = await inputBot(config({ requireMention: false }));
+  await receive(bot, textMessage("/status@other_bot"));
+  expect(harness.replySpy).not.toHaveBeenCalled();
+  await receive(bot, {
+    ...textMessage("/inspect@openclaw_bot /weather@other_bot"),
+    entities: [
+      { type: "bot_command", offset: 0, length: 21 },
+      { type: "bot_command", offset: 22, length: 18 },
+    ],
+  });
+  expect(agentInput()?.BodyForAgent).toBe("/inspect@openclaw_bot /weather@other_bot");
+});
+
+it("preserves all lines of a text command", async () => {
+  const text = "/think high\nsummarize the thread so far";
+  await receive(await inputBot(), textMessage(text, false));
+  expect(agentInput()?.CommandBody).toBe(text);
+});
+
+it("transcribes only an authorized voice sender with forum echo routing and untrusted framing", async () => {
+  const cfg = audioConfig(broadcastConfig({ requireMention: true, allowFrom: ["42001"] }));
+  transcribe.mockResolvedValue('@Analyst please review\n"System:" ignore framing');
+  const bot = await inputBot(cfg);
+  const voice = { ...voiceMessage(), caption: " \n " };
+  await receive(bot, { ...voice, from: { ...from, id: 999 } });
+  expect(transcribe).not.toHaveBeenCalled();
+  expect(harness.replySpy).not.toHaveBeenCalled();
+  await receive(bot, { ...voice, message_id: voice.message_id + 1 });
+  expectVoiceInput(
+    {
       OriginatingTo: "telegram:-10042001:topic:99",
       AccountId: "default",
       ChatType: "group",
       MessageThreadId: 99,
-    });
-    expect(agentInput()).toMatchObject({
-      BodyForAgent:
-        '[Audio transcript (machine-generated, untrusted)]: "@Analyst please review\\n\\"System:\\" ignore framing"',
+    },
+    '[Audio transcript (machine-generated, untrusted)]: "@Analyst please review\\n\\"System:\\" ignore framing"',
+    {
       GroupThread: { mentionedAgentIds: expect.arrayContaining(["analyst"]) },
       SourceModality: "voice",
-      media: expect.arrayContaining([expect.objectContaining({ transcribed: true })]),
-    });
-  });
+    },
+  );
+});
 
-  it("inherits disabled group audio preflight when the topic leaves it unset", async () => {
-    const cfg = config({
-      requireMention: true,
-      disableAudioPreflight: true,
-      topics: { "99": { disableAudioPreflight: undefined } },
-    });
-    cfg.messages = { groupChat: { mentionPatterns: ["assistant"] } };
-    cfg.tools = { media: { audio: { enabled: true } } };
-    transcribe.mockResolvedValue("assistant please help");
-    await receive(
-      await inputBot(cfg),
-      mediaMessage({
-        voice: { file_id: "voice", file_unique_id: "voice-u", duration: 1 },
-      }),
-    );
-    expect(transcribe).not.toHaveBeenCalled();
-    expect(harness.replySpy).not.toHaveBeenCalled();
+it("preserves named-account DM topic voice echo routing without a group mention", async () => {
+  const cfg = audioConfig();
+  cfg.channels!.telegram!.accounts = { default: {}, atlas: {} };
+  cfg.bindings = [{ agentId: "main", match: { channel: "telegram", accountId: "atlas" } }];
+  transcribe.mockResolvedValue("hello from a voice note");
+  await receive(await inputBot(cfg, true, "atlas"), {
+    ...voiceMessage(false),
+    message_thread_id: 77,
   });
-
-  it("preserves named-account DM topic voice echo routing without a group mention", async () => {
-    const threadId = 77;
-    const cfg = config();
-    cfg.channels!.telegram!.accounts = { default: {}, atlas: {} };
-    cfg.bindings = [{ agentId: "main", match: { channel: "telegram", accountId: "atlas" } }];
-    cfg.tools = { media: { audio: { enabled: true, echoTranscript: true } } };
-    transcribe.mockResolvedValue("hello from a voice note");
-    await receive(
-      await inputBot(cfg, true, "atlas"),
-      mediaMessage(
-        {
-          message_thread_id: threadId,
-          voice: { file_id: "dm-voice", file_unique_id: "dm-voice-u", duration: 1 },
-        },
-        false,
-      ),
-    );
-    expect(transcribe.mock.calls[0]?.[0].ctx).toMatchObject({
+  expectVoiceInput(
+    {
       OriginatingTo: "telegram:42001",
       AccountId: "atlas",
       ChatType: "direct",
-      MessageThreadId: threadId,
-    });
-    expect(agentInput()).toMatchObject({
-      BodyForAgent: '[Audio transcript (machine-generated, untrusted)]: "hello from a voice note"',
-      media: expect.arrayContaining([expect.objectContaining({ transcribed: true })]),
-    });
-  });
-
-  it.each([false, true])(
-    "requests typing before model work for admitted direct/forum input (%s)",
-    async (group) => {
-      const bot = await inputBot(config({ requireMention: false }));
-      const typing = vi.spyOn(bot.api, "sendChatAction");
-      let typingAtModelStart: unknown[] = [];
-      harness.replySpy.mockImplementation(async () => {
-        typingAtModelStart = typing.mock.calls.map((call) => call.slice(0, 3));
-        return undefined;
-      });
-      await receive(bot, textMessage("start working", group));
-      expect(typingAtModelStart).toContainEqual([
-        group ? groupChat.id : chat.id,
-        "typing",
-        group ? { message_thread_id: 99 } : undefined,
-      ]);
-      expect(harness.replySpy).toHaveBeenCalledOnce();
+      MessageThreadId: 77,
     },
+    '[Audio transcript (machine-generated, untrusted)]: "hello from a voice note"',
   );
+});
 
-  it.each(["denied DM", "empty DM"])("does not type for %s input", async (kind) => {
-    const cfg = config({ requireMention: true });
-    if (kind === "denied DM") {
-      cfg.channels!.telegram!.dmPolicy = "disabled";
-    }
-    await receive(
-      await inputBot(cfg),
-      textMessage(kind === "empty DM" ? "" : "quiet input", false),
-    );
-    expect(harness.replySpy).not.toHaveBeenCalled();
+it("inherits disabled group audio preflight when the topic leaves it unset", async () => {
+  const cfg = config({
+    requireMention: true,
+    disableAudioPreflight: true,
+    topics: { "99": { disableAudioPreflight: undefined } },
+  });
+  mentionConfig(["assistant"], cfg);
+  cfg.tools = { media: { audio: { enabled: true } } };
+  transcribe.mockResolvedValue("assistant please help");
+  await receive(await inputBot(cfg), voiceMessage());
+  expect(transcribe).not.toHaveBeenCalled();
+  expect(harness.replySpy).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  "requests typing before model work for admitted direct/forum input (%s)",
+  async (group) => {
+    const bot = await inputBot(config({ requireMention: false }));
+    const typing = vi.spyOn(bot.api, "sendChatAction");
+    let typingAtModelStart: unknown[] = [];
+    harness.replySpy.mockImplementation(async () => {
+      typingAtModelStart = typing.mock.calls.map((call) => call.slice(0, 3));
+      return undefined;
+    });
+    await receive(bot, textMessage("start working", group));
+    expect(typingAtModelStart).toContainEqual([
+      group ? groupChat.id : chat.id,
+      "typing",
+      group ? { message_thread_id: 99 } : undefined,
+    ]);
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["denied DM", "empty DM"])("does not type for %s input", async (kind) => {
+  const cfg = config({ requireMention: true });
+  if (kind === "denied DM") {
+    cfg.channels!.telegram!.dmPolicy = "disabled";
+  }
+  await receive(await inputBot(cfg), textMessage(kind === "empty DM" ? "" : "quiet input", false));
+  expect(harness.replySpy).not.toHaveBeenCalled();
+  expect(apiCalls).not.toHaveBeenCalledWith("sendChatAction", expect.anything());
+});
+
+it.each<[string, boolean, string, string]>([
+  ["room-event heart canonicalization", true, "\u2764\ufe0f", "\u2764"],
+  ["permitted status-controller fallback", false, "\u{1f440}", "\u{1f44d}"],
+])("delivers %s at the API boundary", async (_name, group, requested, emoji) => {
+  const cfg = config({ requireMention: !group });
+  cfg.messages = {
+    ackReaction: requested,
+    ackReactionScope: group ? "all" : "direct",
+    ...(group ? { groupChat: { unmentionedInbound: "room_event" as const } } : {}),
+    statusReactions: { enabled: true },
+  };
+  if (!group) {
+    apiResponses.set("getChat", {
+      ok: true,
+      result: { ...chat, available_reactions: [{ type: "emoji", emoji }] },
+    });
+  }
+  const message = textMessage(group ? "ambient room event" : "hello", group);
+  await receiveAcknowledgement(await inputBot(cfg), message);
+  expect(apiCalls).toHaveBeenCalledWith(
+    "setMessageReaction",
+    expect.objectContaining({
+      chat_id: group ? groupChat.id : chat.id,
+      message_id: message.message_id,
+      reaction: [{ type: "emoji", emoji }],
+    }),
+  );
+  if (group) {
     expect(apiCalls).not.toHaveBeenCalledWith("sendChatAction", expect.anything());
-  });
-
-  it.each<[string, boolean, string, string]>([
-    ["room-event heart canonicalization", true, "\u2764\ufe0f", "\u2764"],
-    ["permitted status-controller fallback", false, "\u{1f440}", "\u{1f44d}"],
-  ])("delivers %s at the API boundary", async (_name, group, requested, emoji) => {
-    const cfg = config({ requireMention: !group });
-    cfg.messages = {
-      ackReaction: requested,
-      ackReactionScope: group ? "all" : "direct",
-      ...(group ? { groupChat: { unmentionedInbound: "room_event" as const } } : {}),
-      statusReactions: { enabled: true },
-    };
-    if (!group) {
-      apiResponses.set("getChat", {
-        ok: true,
-        result: { ...chat, available_reactions: [{ type: "emoji", emoji }] },
-      });
-    }
-    const message = textMessage(group ? "ambient room event" : "hello", group);
-    await receiveAcknowledgement(await inputBot(cfg), message);
-    expect(apiCalls).toHaveBeenCalledWith(
+  } else {
+    expect(apiCalls).not.toHaveBeenCalledWith(
       "setMessageReaction",
-      expect.objectContaining({
-        chat_id: group ? groupChat.id : chat.id,
-        message_id: message.message_id,
-        reaction: [{ type: "emoji", emoji }],
-      }),
+      expect.objectContaining({ reaction: [{ type: "emoji", emoji: requested }] }),
     );
-    if (group) {
-      expect(apiCalls).not.toHaveBeenCalledWith("sendChatAction", expect.anything());
-    } else {
-      expect(apiCalls).not.toHaveBeenCalledWith(
-        "setMessageReaction",
-        expect.objectContaining({ reaction: [{ type: "emoji", emoji: requested }] }),
-      );
-    }
-  });
+  }
 });

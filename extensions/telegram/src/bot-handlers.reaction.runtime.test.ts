@@ -121,7 +121,6 @@ function forumReactionContext(overrides?: {
   chatType?: string;
 }) {
   return {
-    update: { update_id: 900 },
     messageReaction: {
       chat: {
         id: overrides?.chatType === "private" ? 5678 : FORUM_CHAT_ID,
@@ -131,7 +130,6 @@ function forumReactionContext(overrides?: {
       },
       message_id: REACTED_MESSAGE_ID,
       user: overrides?.user ?? { id: 10, first_name: "Bob", username: "bob_user" },
-      date: 1736380800,
       old_reaction: (overrides?.oldReaction ?? []).map(emojiReaction),
       new_reaction: (overrides?.newReaction ?? [FIRE_EMOJI]).map(emojiReaction),
     },
@@ -224,11 +222,7 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
 
   it("keeps default own, off, and all notification modes distinct", async () => {
     enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
-    const cfg = buildTelegramConfig({
-      reactionNotifications: undefined,
-      groupPolicy: undefined,
-      groups: undefined,
-    });
+    const cfg = makeTelegramConfig({ dmPolicy: "open", allowFrom: ["*"] });
     const context = privateReaction();
     for (const [mode, sentByBot, expected] of [
       [undefined, false, []],
@@ -259,7 +253,6 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
       agents: { entries: { main: {}, research: {} } },
       bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
     };
-    setRuntimeConfigSnapshot(cfg);
     const binding = {
       bindingId: "reaction-owner",
       targetSessionKey: "global",
@@ -279,9 +272,7 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
       resolveByConversation: () => binding,
     });
     enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
-
     await registerHandler(cfg)(forumReactionContext({ isForum: false }));
-
     expect(peekSystemEventEntries("agent:research:global")).toEqual([reactionEvent()]);
     expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
   });
@@ -297,11 +288,10 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
           topics: { [String(FORUM_TOPIC_ID)]: { enabled: true, agentId } },
         }),
       )(forumReactionContext({ isForum: !isDirectMessages, isDirectMessages }));
-      expectRoutedTo(
-        ...(isDirectMessages
-          ? [agentId, `telegram:group:${FORUM_CHAT_ID}:direct-topic:${FORUM_TOPIC_ID}`]
-          : [agentId]),
-      );
+      expectRoutedTo(agentId);
+      if (isDirectMessages) {
+        expectRoutedTo(`telegram:group:${FORUM_CHAT_ID}:direct-topic:${FORUM_TOPIC_ID}`);
+      }
     },
   );
 
@@ -315,32 +305,30 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     expect(enqueueRoutedSystemEvent).not.toHaveBeenCalled();
   });
 
-  it("drops a forum reaction with an unknown topic instead of guessing General", async () => {
-    await registerHandler(buildTelegramConfig({ topics: { "1": { enabled: true } } }))(
-      forumReactionContext(),
-    );
-    expect(enqueueRoutedSystemEvent).not.toHaveBeenCalled();
-    expect(runtimeLog).toHaveBeenCalledTimes(1);
-    const logged = String(runtimeLog.mock.calls[0]?.[0] ?? "");
-    expect(logged).toContain("thread-context-unavailable");
-    expect(logged).toContain(`chat=${FORUM_CHAT_ID}`);
-    expect(logged).toContain(`message=${REACTED_MESSAGE_ID}`);
-    expect(logged).not.toContain("bob_user");
-    expect(logged).not.toContain(FIRE_EMOJI);
-  });
-
   it.each([
-    { name: "cache miss", recovered: undefined },
-    { name: "scope mismatch", recovered: { scope: "forum" as const, id: FORUM_TOPIC_ID } },
-  ])("drops a channel Direct Messages reaction on $name", async ({ recovered }) => {
-    resolveCachedMessageThreadSpec.mockResolvedValue(recovered);
-    await registerHandler(buildTelegramConfig())(
-      forumReactionContext({ isForum: false, isDirectMessages: true }),
-    );
-    expect(enqueueRoutedSystemEvent).not.toHaveBeenCalled();
-    expect(runtimeLog).toHaveBeenCalledTimes(1);
-    expect(String(runtimeLog.mock.calls[0]?.[0])).toContain("thread-context-unavailable");
-  });
+    { scope: "forum", recovered: undefined },
+    { scope: "direct-messages", recovered: undefined },
+    { scope: "direct-messages", recovered: { scope: "forum", id: FORUM_TOPIC_ID } },
+  ] as const)(
+    "drops unresolved $scope topic ($recovered), never guessing General",
+    async ({ scope, recovered }) => {
+      resolveCachedMessageThreadSpec.mockResolvedValue(recovered);
+      await registerHandler(buildTelegramConfig({ topics: { "1": { enabled: true } } }))(
+        forumReactionContext({
+          isForum: scope === "forum",
+          isDirectMessages: scope === "direct-messages",
+        }),
+      );
+      expect(enqueueRoutedSystemEvent).not.toHaveBeenCalled();
+      expect(runtimeLog).toHaveBeenCalledTimes(1);
+      const logged = String(runtimeLog.mock.calls[0]?.[0] ?? "");
+      expect(logged).toContain("thread-context-unavailable");
+      expect(logged).toContain(`chat=${FORUM_CHAT_ID}`);
+      expect(logged).toContain(`message=${REACTED_MESSAGE_ID}`);
+      expect(logged).not.toContain("bob_user");
+      expect(logged).not.toContain(FIRE_EMOJI);
+    },
+  );
 
   it.each([false, true])(
     "awaits own-message lookup before reaction delivery: %s",
