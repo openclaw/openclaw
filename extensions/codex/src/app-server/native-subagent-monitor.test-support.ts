@@ -2,7 +2,6 @@ import type {
   deliverAgentHarnessCompletion,
   captureAgentHarnessCompletionCustody,
   createAgentHarnessCompletionEventSink,
-  AgentHarnessCompletionDelivery,
   AgentHarnessCompletionScope,
 } from "openclaw/plugin-sdk/agent-harness-completion";
 import { onTestFinished, vi } from "vitest";
@@ -187,11 +186,10 @@ export function createRuntime() {
     createAgentHarnessCompletionEventSink: vi.fn<typeof createAgentHarnessCompletionEventSink>(() =>
       vi.fn(),
     ),
-    deliverAgentHarnessCompletion: vi.fn(
-      async (
-        _params: Parameters<typeof deliverAgentHarnessCompletion>[0],
-      ): Promise<AgentHarnessCompletionDelivery> => ({ delivered: true, path: "direct" }),
-    ),
+    deliverAgentHarnessCompletion: vi.fn<typeof deliverAgentHarnessCompletion>(async () => ({
+      delivered: true,
+      path: "direct",
+    })),
   };
 }
 
@@ -390,6 +388,10 @@ export function childTurnCompletedNotification(params: {
   };
 }
 
+function agentMessage(id: string, text: string, phase?: "commentary" | "final_answer"): JsonObject {
+  return { id, type: "agentMessage", text, ...(phase ? { phase } : {}) };
+}
+
 export function threadRead(
   params: {
     childThreadId?: string;
@@ -411,25 +413,9 @@ export function threadRead(
   const parentThreadId = params.parentThreadId ?? "parent-thread";
   const status = params.status ?? "completed";
   const items: JsonValue[] = [
-    ...(params.result
-      ? [
-          {
-            id: "message-1",
-            type: "agentMessage",
-            text: params.result,
-            ...(params.resultPhase ? { phase: params.resultPhase } : {}),
-          },
-        ]
-      : []),
+    ...(params.result ? [agentMessage("message-1", params.result, params.resultPhase)] : []),
     ...(params.trailingCommentary
-      ? [
-          {
-            id: "message-commentary",
-            type: "agentMessage",
-            text: params.trailingCommentary,
-            phase: "commentary",
-          },
-        ]
+      ? [agentMessage("message-commentary", params.trailingCommentary, "commentary")]
       : []),
   ];
   return {
@@ -452,9 +438,7 @@ export function threadRead(
               {
                 id: "turn-previous",
                 status: "completed",
-                items: [
-                  { id: "message-previous", type: "agentMessage", text: params.previousResult },
-                ],
+                items: [agentMessage("message-previous", params.previousResult)],
                 completedAt: 1_779_000_000,
               },
             ]

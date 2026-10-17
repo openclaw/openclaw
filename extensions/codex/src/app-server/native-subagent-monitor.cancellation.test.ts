@@ -38,6 +38,14 @@ const requester = {
   acceptsRequest: (custody: ParentOwner["requestCustody"]) => custody === requestCustody,
   assertCurrent: () => {},
 };
+const cancelledRequester = {
+  agentId: "main",
+  sessionKey,
+  sessionId: "physical-1",
+  lifecycleRevision: "revision-1",
+  requesterTurnRunId: "parent-run",
+};
+const noCancellation = { killed: 0, cancelledRequesters: [] };
 const registration = {
   requestCustody,
   parentThreadId,
@@ -47,6 +55,29 @@ const registration = {
   historyOwner: nativeHistoryOwner(),
   completionScope: createCompletionScope(sessionKey),
 };
+
+function transportImplementation(client: ReturnType<typeof createClient>) {
+  const original = client.request.getMockImplementation();
+  if (!original) {
+    throw new Error("Missing transport fixture");
+  }
+  return original;
+}
+
+async function spawnChild(
+  client: ReturnType<typeof createClient>,
+  childThreadId = "child-thread",
+  turnId = "parent-turn",
+) {
+  await client.notify({
+    method: "item/completed",
+    params: {
+      threadId: parentThreadId,
+      turnId,
+      item: directSpawnItem("v1", parentThreadId, childThreadId),
+    },
+  });
+}
 
 async function nativeChild(startChild = true, keepParent = false, attributed = true) {
   const client = createClient();
@@ -60,10 +91,7 @@ async function nativeChild(startChild = true, keepParent = false, attributed = t
   }
   const runtime = createRuntime();
   const interrupted = createDeferred<void>();
-  const original = client.request.getMockImplementation();
-  if (!original) {
-    throw new Error("Missing transport fixture");
-  }
+  const original = transportImplementation(client);
   client.request.mockImplementation(async (method, params, options) => {
     if (method === "turn/interrupt") {
       expect(params).toEqual({ threadId: "child-thread", turnId: "child-turn" });
@@ -98,14 +126,7 @@ async function nativeChild(startChild = true, keepParent = false, attributed = t
   });
   parent.bindTurn("parent-turn");
   await notifyChildStarted(client);
-  await client.notify({
-    method: "item/completed",
-    params: {
-      threadId: parentThreadId,
-      turnId: "parent-turn",
-      item: directSpawnItem("v1", parentThreadId, "child-thread"),
-    },
-  });
+  await spawnChild(client);
   if (startChild) {
     await client.notify(turnStartedNotification("child-turn"));
   }
@@ -142,10 +163,7 @@ it.each([true, false])(
     const f = await nativeChild();
     await f.client.notify(childTurnCompletedNotification({ status: "interrupted" }));
     expect(isCodexAppServerLiveThreadClaimed(f.client.client, parentThreadId)).toBe(true);
-    const original = f.client.request.getMockImplementation();
-    if (!original) {
-      throw new Error("Missing transport fixture");
-    }
+    const original = transportImplementation(f.client);
     f.client.request.mockImplementation((method, params, options) => {
       if (method === "turn/interrupt") {
         throw new CodexAppServerRpcError(
@@ -166,17 +184,7 @@ it.each([true, false])(
     await vi.advanceTimersByTimeAsync(5_000);
     expect(await stop).toEqual({
       killed: selected ? 1 : 0,
-      cancelledRequesters: selected
-        ? [
-            {
-              agentId: requester.agentId,
-              sessionKey,
-              sessionId: requester.sessionId,
-              lifecycleRevision: requester.lifecycleRevision,
-              requesterTurnRunId: requester.requesterTurnRunId,
-            },
-          ]
-        : [],
+      cancelledRequesters: selected ? [cancelledRequester] : [],
     });
     expect(f.interruptBudgets).toEqual([]);
     expect(isCodexAppServerLiveThreadClaimed(f.client.client, parentThreadId)).toBe(!selected);
@@ -236,18 +244,10 @@ it.each(["interrupted", "preturn", "natural success"] as const)(
       await completion;
       expect(await stop).toEqual(
         ending === "natural success"
-          ? { killed: 0, cancelledRequesters: [] }
+          ? noCancellation
           : {
               killed: 1,
-              cancelledRequesters: [
-                {
-                  agentId: "main",
-                  sessionKey,
-                  sessionId: "physical-1",
-                  lifecycleRevision: "revision-1",
-                  requesterTurnRunId: "parent-run",
-                },
-              ],
+              cancelledRequesters: [cancelledRequester],
             },
       );
       expect(f.releaseChild).toHaveBeenCalledOnce();
@@ -302,7 +302,7 @@ it("joins selected pending custody while admitting a different request during se
     capture.resolve(undefined);
     await rejected;
     await siblingAccepted;
-    expect(await stop).toEqual({ killed: 0, cancelledRequesters: [] });
+    expect(await stop).toEqual(noCancellation);
   } finally {
     capture.resolve(undefined);
     await pending.catch(() => {});
@@ -322,7 +322,7 @@ it("keeps a sibling request and refuses a stale physical generation before Stop 
       { ...requester, requesterTurnRunId: "different-request", acceptsRequest: () => false },
       (cancel) => cancel(),
     ),
-  ).toEqual({ killed: 0, cancelledRequesters: [] });
+  ).toEqual(noCancellation);
   expect(f.interruptBudgets).toEqual([]);
   expect(f.releaseChild).not.toHaveBeenCalled();
 });
@@ -338,7 +338,7 @@ it("leaves an unselected detached child running during session-wide Stop", async
         { ...requester, requesterTurnRunId: undefined, acceptsRequest: () => false },
         (cancel) => cancel(),
       ),
-    ).toEqual({ killed: 0, cancelledRequesters: [] });
+    ).toEqual(noCancellation);
     expect(f.interruptBudgets).toEqual([]);
     expect(f.releaseChild).not.toHaveBeenCalled();
   } finally {
@@ -368,39 +368,17 @@ it("fences selected late admissions while preserving another request during sess
     });
     sibling.bindTurn("sibling-turn");
     await notifyChildStarted(f.client, parentThreadId, "sibling-child");
-    await f.client.notify({
-      method: "item/completed",
-      params: {
-        threadId: parentThreadId,
-        turnId: "sibling-turn",
-        item: directSpawnItem("v1", parentThreadId, "sibling-child"),
-      },
-    });
+    await spawnChild(f.client, "sibling-child", "sibling-turn");
     expect(siblingClaim).toHaveBeenCalledExactlyOnceWith("sibling-child");
     expect(siblingRelease).not.toHaveBeenCalled();
     await notifyChildStarted(f.client, parentThreadId, "late-child");
-    await f.client.notify({
-      method: "item/completed",
-      params: {
-        threadId: parentThreadId,
-        turnId: "parent-turn",
-        item: directSpawnItem("v1", parentThreadId, "late-child"),
-      },
-    });
+    await spawnChild(f.client, "late-child", "parent-turn");
     expect(f.claimDirectChild).toHaveBeenCalledExactlyOnceWith("child-thread");
     expect(f.releaseChild).not.toHaveBeenCalled();
     await f.client.notify(childTurnCompletedNotification({ status: "interrupted" }));
     expect(await stop).toEqual({
       killed: 1,
-      cancelledRequesters: [
-        {
-          agentId: requester.agentId,
-          sessionKey,
-          sessionId: requester.sessionId,
-          lifecycleRevision: requester.lifecycleRevision,
-          requesterTurnRunId: requester.requesterTurnRunId,
-        },
-      ],
+      cancelledRequesters: [cancelledRequester],
       errors: [new Error("Codex descendant admission remains unsettled after cancellation")],
     });
     expect(siblingRelease).not.toHaveBeenCalled();
@@ -413,10 +391,9 @@ it("fences selected late admissions while preserving another request during sess
 
 it("does not authorize an ownerless child from its saved session or run identity", async () => {
   const f = await nativeChild(true, false, false);
-  expect(await f.monitor.withDescendantCancellation(requester, (cancel) => cancel())).toEqual({
-    killed: 0,
-    cancelledRequesters: [],
-  });
+  expect(await f.monitor.withDescendantCancellation(requester, (cancel) => cancel())).toEqual(
+    noCancellation,
+  );
   expect(f.interruptBudgets).toEqual([]);
   expect(f.releaseChild).not.toHaveBeenCalled();
   expect(
@@ -424,7 +401,7 @@ it("does not authorize an ownerless child from its saved session or run identity
       { ...requester, requesterTurnRunId: undefined },
       (cancel) => cancel(),
     ),
-  ).toEqual({ killed: 0, cancelledRequesters: [] });
+  ).toEqual(noCancellation);
   expect(f.interruptBudgets).toEqual([]);
   expect(f.releaseChild).not.toHaveBeenCalled();
 });

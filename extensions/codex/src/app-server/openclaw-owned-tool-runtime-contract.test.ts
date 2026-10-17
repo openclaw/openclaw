@@ -40,16 +40,29 @@ function expectExecuteCall(execute: unknown, callId: string, params: Record<stri
   expect(execute).toHaveBeenNthCalledWith(1, callId, params, expect.any(AbortSignal), undefined);
 }
 
-function expectAfterToolCall(
+async function expectAfterToolCall(
   hooks: ReturnType<typeof installOpenClawOwnedToolHooks>,
   event: Record<string, unknown>,
   context: Record<string, unknown>,
 ) {
-  expect(hooks.afterToolCall).toHaveBeenNthCalledWith(
-    1,
-    expect.objectContaining(event),
-    expect.objectContaining(context),
+  await vi.waitFor(() =>
+    expect(hooks.afterToolCall).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining(event),
+      expect.objectContaining(context),
+    ),
   );
+}
+
+function expectResponse(
+  result: Parameters<typeof toCodexDynamicToolProtocolResponse>[0],
+  success: boolean,
+  text: string,
+) {
+  expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
+    success,
+    contentItems: [{ type: "inputText", text }],
+  });
 }
 
 describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", () => {
@@ -61,13 +74,16 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
     const mergedParams = { command: "status", mode: "safe" };
     const hooks = installOpenClawOwnedToolHooks({ adjustedParams: { mode: "safe" } });
     const middleware = installCodexToolResultMiddleware((event) => {
-      expect(event).toMatchObject({
-        toolName: "exec",
-        toolCallId: "call-middleware",
+      expect(event).toMatchObject({ toolName: "exec", toolCallId: "call-middleware" });
+      expect({
+        args: event.args,
+        content: event.result.content,
+        details: event.result.details,
+      }).toEqual({
+        args: mergedParams,
+        content: [{ type: "text", text: "raw output" }],
+        details: { stage: "execute" },
       });
-      expect(event.args).toEqual(mergedParams);
-      expect(event.result.content).toEqual([{ type: "text", text: "raw output" }]);
-      expect(event.result.details).toEqual({ stage: "execute" });
       return textToolResult("compacted output", { stage: "middleware" });
     });
     const execute = vi.fn(async () => textToolResult("raw output", { stage: "execute" }));
@@ -88,10 +104,7 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
       toolCallId: "call-middleware",
     };
 
-    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
-      success: true,
-      contentItems: [{ type: "inputText", text: "compacted output" }],
-    });
+    expectResponse(result, true, "compacted output");
     expect(hooks.beforeToolCall).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
@@ -104,19 +117,17 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
     );
     expectExecuteCall(execute, "call-middleware", mergedParams);
     expect(middleware.middleware).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() =>
-      expectAfterToolCall(
-        hooks,
-        {
-          toolName: "exec",
-          toolCallId: "call-middleware",
-          params: mergedParams,
-          result: expect.objectContaining(
-            textToolResult("compacted output", { stage: "middleware" }),
-          ),
-        },
-        context,
-      ),
+    await expectAfterToolCall(
+      hooks,
+      {
+        toolName: "exec",
+        toolCallId: "call-middleware",
+        params: mergedParams,
+        result: expect.objectContaining(
+          textToolResult("compacted output", { stage: "middleware" }),
+        ),
+      },
+      context,
     );
   });
 
@@ -129,30 +140,25 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
     const params = { action: "send", text: "blocked", provider: "telegram", to: "chat-1" };
     const result = await bridge.handleToolCall(toolCall("message", "call-blocked", params));
 
-    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
-      success: false,
-      contentItems: [{ type: "inputText", text: "blocked by policy" }],
-    });
+    expectResponse(result, false, "blocked by policy");
     expect(execute).not.toHaveBeenCalled();
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
-    await vi.waitFor(() =>
-      expectAfterToolCall(
-        hooks,
-        {
-          toolName: "message",
-          toolCallId: "call-blocked",
-          params,
-          result: expect.objectContaining({
-            content: [{ type: "text", text: "blocked by policy" }],
-            details: {
-              status: "blocked",
-              deniedReason: "plugin-before-tool-call",
-              reason: "blocked by policy",
-            },
-          }),
-        },
-        { runId: "run-blocked", toolCallId: "call-blocked" },
-      ),
+    await expectAfterToolCall(
+      hooks,
+      {
+        toolName: "message",
+        toolCallId: "call-blocked",
+        params,
+        result: expect.objectContaining({
+          content: [{ type: "text", text: "blocked by policy" }],
+          details: {
+            status: "blocked",
+            deniedReason: "plugin-before-tool-call",
+            reason: "blocked by policy",
+          },
+        }),
+      },
+      { runId: "run-blocked", toolCallId: "call-blocked" },
     );
   });
 
@@ -167,17 +173,12 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
       toolCall("exec", "call-error", { command: "false" }),
     );
 
-    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
-      success: false,
-      contentItems: [{ type: "inputText", text: "tool failed" }],
-    });
+    expectResponse(result, false, "tool failed");
     expectExecuteCall(execute, "call-error", mergedParams);
-    await vi.waitFor(() =>
-      expectAfterToolCall(
-        hooks,
-        { toolName: "exec", toolCallId: "call-error", params: mergedParams, error: "tool failed" },
-        { runId: "run-error", toolCallId: "call-error" },
-      ),
+    await expectAfterToolCall(
+      hooks,
+      { toolName: "exec", toolCallId: "call-error", params: mergedParams, error: "tool failed" },
+      { runId: "run-error", toolCallId: "call-error" },
     );
   });
 
@@ -198,10 +199,7 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
       }),
     );
 
-    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
-      success: true,
-      contentItems: [{ type: "inputText", text: "Sent." }],
-    });
+    expectResponse(result, true, "Sent.");
     expect(bridge.telemetry).toMatchObject({
       didSendViaMessagingTool: true,
       messagingToolSentTexts: ["hello from Codex"],
@@ -217,19 +215,17 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
         mediaUrls: ["/tmp/codex-reply.png"],
       },
     ]);
-    await vi.waitFor(() =>
-      expectAfterToolCall(
-        hooks,
-        {
-          toolName: "message",
-          toolCallId: "call-message",
-          params: expect.objectContaining({
-            text: "hello from Codex",
-            mediaUrl: "/tmp/codex-reply.png",
-          }),
-        },
-        { runId: "run-message", toolCallId: "call-message" },
-      ),
+    await expectAfterToolCall(
+      hooks,
+      {
+        toolName: "message",
+        toolCallId: "call-message",
+        params: expect.objectContaining({
+          text: "hello from Codex",
+          mediaUrl: "/tmp/codex-reply.png",
+        }),
+      },
+      { runId: "run-message", toolCallId: "call-message" },
     );
   });
 
@@ -244,10 +240,7 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
       toolCall("exec", "call-wrapped", { command: "pwd" }),
     );
 
-    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
-      success: true,
-      contentItems: [{ type: "inputText", text: "done" }],
-    });
+    expectResponse(result, true, "done");
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
     expectExecuteCall(execute, "call-wrapped", { command: "pwd", mode: "safe" });
   });

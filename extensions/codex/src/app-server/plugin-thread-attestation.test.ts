@@ -1,5 +1,5 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   attestCodexThreadToolSurface,
   checkCodexThreadAppAvailability,
@@ -25,31 +25,42 @@ describe("Codex thread tool-surface admission", () => {
       if (state === "aborted") {
         controller.abort(failure);
       }
-      try {
-        const attestation = attestCodexThreadToolSurface({
-          client: h.client,
-          threadId: "thread-empty",
-          appIds: [],
-          restrictedToolSurface: false,
-          lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
-          signal: controller.signal,
-          assertCurrent,
-          withCurrent,
-        });
-        if (state === "current") {
-          await expect(attestation).resolves.toBeUndefined();
-          expect(assertCurrent).toHaveBeenCalledOnce();
-        } else {
-          await expect(attestation).rejects.toBe(failure);
-        }
-        expect(withCurrent).not.toHaveBeenCalled();
-        expect(h.writes).toHaveLength(0);
-      } finally {
-        h.client.close();
+      onTestFinished(() => h.client.close());
+      const attestation = attestCodexThreadToolSurface({
+        client: h.client,
+        threadId: "thread-empty",
+        appIds: [],
+        restrictedToolSurface: false,
+        lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
+        signal: controller.signal,
+        assertCurrent,
+        withCurrent,
+      });
+      if (state === "current") {
+        await expect(attestation).resolves.toBeUndefined();
+        expect(assertCurrent).toHaveBeenCalledOnce();
+      } else {
+        await expect(attestation).rejects.toBe(failure);
       }
+      expect(withCurrent).not.toHaveBeenCalled();
+      expect(h.writes).toHaveLength(0);
     },
   );
 });
+
+function checkApps(
+  request: ReturnType<typeof vi.fn>,
+  appIds: string[],
+  threadId: string,
+  signal?: AbortSignal,
+) {
+  return checkCodexThreadAppAvailability({
+    client: { request } as never,
+    threadId,
+    appIds,
+    signal,
+  });
+}
 
 describe("Codex thread app availability", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -63,11 +74,11 @@ describe("Codex thread app availability", () => {
       ],
     }));
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    await checkCodexThreadAppAvailability({
-      client: { request } as never,
-      threadId: "thread-mixed",
-      appIds: ["working", "readonly", "missing", "disabled", "missing"],
-    });
+    await checkApps(
+      request,
+      ["working", "readonly", "missing", "disabled", "missing"],
+      "thread-mixed",
+    );
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       "codex apps unavailable; continuing with remaining tools",
       {
@@ -80,11 +91,7 @@ describe("Codex thread app availability", () => {
 
   it("does not read the app snapshot when no apps are configured", async () => {
     const request = vi.fn();
-    await checkCodexThreadAppAvailability({
-      client: { request } as never,
-      threadId: "thread-empty",
-      appIds: [],
-    });
+    await checkApps(request, [], "thread-empty");
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -94,13 +101,10 @@ describe("Codex thread app availability", () => {
     const request = vi.fn(async () => {
       throw cause;
     });
-    await expect(
-      checkCodexThreadAppAvailability({
-        client: { request } as never,
-        threadId: "thread-unavailable",
-        appIds: ["plugin-app"],
-      }),
-    ).rejects.toMatchObject({ name: "CodexPluginThreadAppAttestationError", cause });
+    await expect(checkApps(request, ["plugin-app"], "thread-unavailable")).rejects.toMatchObject({
+      name: "CodexPluginThreadAppAttestationError",
+      cause,
+    });
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -118,12 +122,7 @@ describe("Codex thread app availability", () => {
         return installedApps([]);
       });
       await expect(
-        checkCodexThreadAppAvailability({
-          client: { request } as never,
-          threadId: "thread-cancelled",
-          appIds: ["plugin-app"],
-          signal: abort.signal,
-        }),
+        checkApps(request, ["plugin-app"], "thread-cancelled", abort.signal),
       ).rejects.toBe(cause);
       expect(warn).not.toHaveBeenCalled();
     },
@@ -131,38 +130,21 @@ describe("Codex thread app availability", () => {
 });
 
 describe("unattested Codex plugin thread cleanup", () => {
-  it("deletes a persistent thread before its first rollout", async () => {
+  it.each([
+    { ephemeral: false, method: "thread/delete" },
+    { ephemeral: true, method: "thread/unsubscribe" },
+  ])("cleans up an unattested thread with $method", async ({ ephemeral, method }) => {
     const request = vi.fn(async () => ({}));
-
     await expect(
       discardUnattestedCodexPluginThread({
         client: { request } as never,
-        threadId: "thread-persistent",
-        ephemeral: false,
+        threadId: "thread-cleanup",
+        ephemeral,
       }),
     ).resolves.toBe(true);
-
     expect(request).toHaveBeenCalledExactlyOnceWith(
-      "thread/delete",
-      { threadId: "thread-persistent" },
-      { timeoutMs: 5_000 },
-    );
-  });
-
-  it("unsubscribes an ephemeral thread that Codex cannot delete", async () => {
-    const request = vi.fn(async () => ({}));
-
-    await expect(
-      discardUnattestedCodexPluginThread({
-        client: { request } as never,
-        threadId: "thread-ephemeral",
-        ephemeral: true,
-      }),
-    ).resolves.toBe(true);
-
-    expect(request).toHaveBeenCalledExactlyOnceWith(
-      "thread/unsubscribe",
-      { threadId: "thread-ephemeral" },
+      method,
+      { threadId: "thread-cleanup" },
       { timeoutMs: 5_000 },
     );
   });

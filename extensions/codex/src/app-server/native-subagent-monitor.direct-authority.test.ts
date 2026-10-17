@@ -27,6 +27,13 @@ function itemNotification(
   return { method: "item/completed", params: { threadId, turnId, item } };
 }
 
+function registerDirect(
+  monitor: InstanceType<typeof CodexNativeSubagentMonitor>,
+  options: Omit<Parameters<typeof monitor.registerParent>[0], "parentThreadId">,
+) {
+  return monitor.registerParent({ parentThreadId: "parent-thread", ...options });
+}
+
 function monitorFixture(options?: ConstructorParameters<typeof CodexNativeSubagentMonitor>[2]) {
   const client = createClient();
   const runtime = createRuntime();
@@ -59,9 +66,7 @@ describe("CodexNativeSubagentMonitor", () => {
       rootTurnId: "parent-a",
     };
     const waitingForReceipt = monitor.captureModelSource(originalRequest);
-    await client.notify(
-      itemNotification(directSpawnItem("v2", "parent-thread", "child-thread"), "parent-a"),
-    );
+    await client.notify(spawnNotification("v2", "parent-a"));
     const original = requireCapture(await waitingForReceipt);
     expect(monitor.resolveModelThreadId("child-a")).toBe("child-thread");
     expect(original.modelMapping).toEqual(mappingA);
@@ -89,10 +94,7 @@ describe("CodexNativeSubagentMonitor", () => {
     expect(
       await monitor.captureModelSource({ ...originalRequest, turnId: "unrelated-turn" }),
     ).toBeUndefined();
-    const second = await monitor.registerParent({
-      parentThreadId: "parent-thread",
-      modelSource: b,
-    });
+    const second = await registerDirect(monitor, { modelSource: b });
     second.bindTurn("parent-b", mappingB);
     await client.notify(
       itemNotification(
@@ -162,10 +164,7 @@ describe("CodexNativeSubagentMonitor", () => {
   it("retains nested admitted work and fences only the cancelled execution across regrant", async () => {
     const { client, monitor } = monitorFixture({ recoveryPollDelaysMs: [] });
     const source = modelSource(["model-a", "model-b"]);
-    const parent = await monitor.registerParent({
-      parentThreadId: "parent-thread",
-      modelSource: source,
-    });
+    const parent = await registerDirect(monitor, { modelSource: source });
     parent.bindTurn("parent-turn");
     for (const child of ["child-a", "child-b"]) {
       await notifyChildStarted(client, "parent-thread", child);
@@ -234,14 +233,9 @@ describe("CodexNativeSubagentMonitor", () => {
   it("does not consume pre-bind direct spawn evidence for another turn", async () => {
     const { client, monitor } = monitorFixture();
     const claimDirectChild = vi.fn(() => () => undefined);
-    const owner = await monitor.registerParent({
-      parentThreadId: "parent-thread",
-      claimDirectChild,
-    });
+    const owner = await registerDirect(monitor, { claimDirectChild });
 
-    await client.notify(
-      itemNotification(directSpawnItem("v1", "parent-thread", "child-thread"), "wrong-turn"),
-    );
+    await client.notify(spawnNotification("v1", "wrong-turn"));
     owner.bindTurn("turn-1");
 
     expect(claimDirectChild).not.toHaveBeenCalled();
@@ -288,10 +282,7 @@ describe("CodexNativeSubagentMonitor", () => {
   it("does not resurrect terminal pre-bind V1 spawn evidence", async () => {
     const { client, monitor } = monitorFixture();
     const claimDirectChild = vi.fn(() => () => undefined);
-    const owner = await monitor.registerParent({
-      parentThreadId: "parent-thread",
-      claimDirectChild,
-    });
+    const owner = await registerDirect(monitor, { claimDirectChild });
     const item = directSpawnItem("v1", "parent-thread", "child-thread");
     await client.notify(itemNotification(item, "turn-1"));
     await client.notify(nativeCompletionNotification({ result: "done" }));
@@ -309,8 +300,7 @@ describe("CodexNativeSubagentMonitor", () => {
       return { delivered: true, path: "direct" };
     });
     const claimDirectChild = vi.fn(() => release);
-    const owner = await monitor.registerParent({
-      parentThreadId: "parent-thread",
+    const owner = await registerDirect(monitor, {
       requesterSessionKey: "agent:main:main",
       completionScope: createCompletionScope("agent:main:main"),
       agentId: "main",
@@ -320,9 +310,7 @@ describe("CodexNativeSubagentMonitor", () => {
 
     await notifyChildStarted(client);
     expect(claimDirectChild).not.toHaveBeenCalled();
-    await client.notify(
-      itemNotification(directSpawnItem("v1", "parent-thread", "child-thread"), "turn-1"),
-    );
+    await client.notify(spawnNotification("v1", "turn-1"));
     expect(claimDirectChild).toHaveBeenCalledWith("child-thread");
 
     await client.notify(
@@ -335,10 +323,7 @@ describe("CodexNativeSubagentMonitor", () => {
   it("does not retain authority for a failed V1 spawn", async () => {
     const { client, monitor } = monitorFixture();
     const claimDirectChild = vi.fn(() => () => undefined);
-    const owner = await monitor.registerParent({
-      parentThreadId: "parent-thread",
-      claimDirectChild,
-    });
+    const owner = await registerDirect(monitor, { claimDirectChild });
     owner.bindTurn("turn-1");
 
     await client.notify(
@@ -362,10 +347,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const { client, monitor } = monitorFixture();
     const release = vi.fn();
     const claimDirectChild = vi.fn(() => release);
-    const owner = await monitor.registerParent({
-      parentThreadId: "parent-thread",
-      claimDirectChild,
-    });
+    const owner = await registerDirect(monitor, { claimDirectChild });
     owner.bindTurn("turn-1");
     const spawn = directSpawnItem("v1", "parent-thread", "child-thread");
     await client.notify(itemNotification(spawn, "turn-1"));
@@ -383,17 +365,14 @@ describe("CodexNativeSubagentMonitor", () => {
       const { client, monitor } = monitorFixture();
       const rejectPendingDirectChild = vi.fn();
       const claimDirectChild = vi.fn(() => () => undefined);
-      const owner = await monitor.registerParent({
-        parentThreadId: "parent-thread",
+      const owner = await registerDirect(monitor, {
         claimDirectChild,
         rejectPendingDirectChild,
       });
       owner.bindTurn("turn-1");
       await notifyChildStarted(client);
       await client.notify(childTurnCompletedNotification({ status }));
-      await client.notify(
-        itemNotification(directSpawnItem("v1", "parent-thread", "child-thread"), "turn-1"),
-      );
+      await client.notify(spawnNotification("v1", "turn-1"));
 
       expect(rejectPendingDirectChild).toHaveBeenCalledWith(
         "child-thread",
@@ -404,6 +383,10 @@ describe("CodexNativeSubagentMonitor", () => {
     },
   );
 });
+
+function spawnNotification(version: "v1" | "v2", turnId = "parent-turn") {
+  return itemNotification(directSpawnItem(version, "parent-thread", "child-thread"), turnId);
+}
 
 function interactionNotification(
   id: string,
@@ -462,8 +445,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const claimDirectChild = vi.fn(relay.claimDirectChild);
     const onDirectChildAccepted = vi.fn();
     const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
-    const owner = await monitor.registerParent({
-      parentThreadId: "parent-thread",
+    const owner = await registerDirect(monitor, {
       requesterSessionKey: "agent:main:main",
       completionScope: createCompletionScope("agent:main:main"),
       agentId: "main",
@@ -471,7 +453,7 @@ describe("CodexNativeSubagentMonitor", () => {
       onDirectChildAccepted,
     });
     owner.bindTurn("parent-turn");
-    await client.notify(itemNotification(directSpawnItem("v1", "parent-thread", "child-thread")));
+    await client.notify(spawnNotification("v1"));
     await client.notify(turnStartedNotification("initial-turn", { error: null }));
     await client.notify(
       nativeCompletionNotification({
@@ -552,17 +534,14 @@ describe("CodexNativeSubagentMonitor", () => {
       await monitor.dispose();
     });
     const register = (claimDirectChild: typeof oldClaim) =>
-      monitor.registerParent({
-        parentThreadId: "parent-thread",
+      registerDirect(monitor, {
         requesterSessionKey: "agent:main:main",
         completionScope: createCompletionScope("agent:main:main"),
         claimDirectChild,
       });
     const first = await register(oldClaim);
     first.bindTurn("first-parent-turn");
-    await client.notify(
-      itemNotification(directSpawnItem("v2", "parent-thread", "child-thread"), "first-parent-turn"),
-    );
+    await client.notify(spawnNotification("v2", "first-parent-turn"));
     await client.notify(turnStartedNotification("running-turn", { error: null }));
     await first.unregister();
     expect(oldRelease).not.toHaveBeenCalled();
@@ -730,8 +709,7 @@ describe("CodexNativeSubagentMonitor", () => {
       recoveryPollDelaysMs: [],
     });
     onTestFinished(() => monitor.dispose());
-    const owner = await monitor.registerParent({
-      parentThreadId: "parent-thread",
+    const owner = await registerDirect(monitor, {
       requesterSessionKey: "agent:main:main",
       completionScope: createCompletionScope("agent:main:main"),
       claimDirectChild,
@@ -761,17 +739,14 @@ describe("CodexNativeSubagentMonitor", () => {
   });
 
   it("releases direct authority when history ends a native turn before its final text arrives", async () => {
-    const client = createClient();
-    const runtime = createRuntime();
+    const { client, monitor } = monitorFixture();
     const releaseClaim = vi.fn();
-    const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
     onTestFinished(() => monitor.dispose());
-    const owner = await monitor.registerParent({
-      parentThreadId: "parent-thread",
+    const owner = await registerDirect(monitor, {
       claimDirectChild: () => releaseClaim,
     });
     owner.bindTurn("parent-turn");
-    await client.notify(itemNotification(directSpawnItem("v2", "parent-thread", "child-thread")));
+    await client.notify(spawnNotification("v2"));
     await client.notify(turnStartedNotification("turn-1", { error: null }));
     client.setThreadRead("child-thread", threadRead({ status: "completed" }));
     await expect(monitor.reconcileChildThread("child-thread")).resolves.toBe(false);

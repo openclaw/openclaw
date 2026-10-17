@@ -26,20 +26,16 @@ async function endTurn(
   turnId: string,
   status: "completed" | "interrupted" = "completed",
 ) {
-  await client.notify({
-    method: "turn/completed",
-    params: {
+  await client.notify(
+    childTurnCompletedNotification({
       threadId,
-      turn: {
-        id: turnId,
-        status,
-        items: [
-          { type: "agentMessage", id: `result-${turnId}`, phase: "final_answer", text: turnId },
-        ],
-        error: null,
-      },
-    },
-  });
+      turnId,
+      status,
+      items: [
+        { type: "agentMessage", id: `result-${turnId}`, phase: "final_answer", text: turnId },
+      ],
+    }),
+  );
 }
 
 async function waitItem(client: Client, phase: "started" | "completed", receivers: string[]) {
