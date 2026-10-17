@@ -20,7 +20,7 @@ import { registerSandboxBackend } from "./backend.js";
 import type {
   CreateSandboxBackendParams,
   CreateReservedSandboxBackendParamsV1,
-  SandboxBackendFactory,
+  ReservedSandboxBackendFactoryV1,
   SandboxBackendManager,
 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -59,15 +59,12 @@ let disposeBackend: (() => void) | undefined;
 let nextId: number;
 let pruneTimeMs = Date.now();
 
-function advancePruneTime() {
+function pruneImmediately() {
   pruneTimeMs += 4 * 60 * 60 * 1000;
   vi.spyOn(Date, "now").mockReturnValue(pruneTimeMs);
-}
-
-function withImmediatePrune(cfg: OpenClawConfig): OpenClawConfig {
-  const result = structuredClone(cfg);
+  const result = structuredClone(config);
   result.agents!.defaults!.sandbox!.prune = { idleHours: 1, maxAgeDays: 0 };
-  return result;
+  return maybePruneSandboxes(result);
 }
 
 beforeEach(() => {
@@ -106,7 +103,10 @@ function handle(params: CreateSandboxBackendParams) {
   };
 }
 
-function install(factory: SandboxBackendFactory, removeRuntime = vi.fn(async () => {})) {
+function install(
+  factory: ReservedSandboxBackendFactoryV1 = async (params) => handle(params),
+  removeRuntime = vi.fn<SandboxBackendManager["removeRuntime"]>(async () => {}),
+) {
   disposeBackend = registerSandboxBackend("reserved-test", {
     reserveRuntimeId: () => `reserved-${++nextId}`,
     factory,
@@ -150,7 +150,6 @@ async function seedLegacyRuntime() {
     createdAtMs: 1,
     lastUsedAtMs: 1,
   });
-  return cfg;
 }
 
 describe("durable sandbox runtime generations", () => {
@@ -213,9 +212,11 @@ describe("durable sandbox runtime generations", () => {
       sessionKey: "agent:another:shared-reservation",
       workspaceDir,
     });
-    expect(second?.runtimeId).toBe(first?.runtimeId);
-    expect(second?.workspaceDir).toBe(workspaceDir);
-    expect(second?.agentWorkspaceDir).toBe(workspaceDir);
+    expect(second).toMatchObject({
+      runtimeId: first?.runtimeId,
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+    });
     expect(factory.mock.calls.map(([params]) => params.workspaceDir)).toEqual([
       originalWorkspace,
       originalWorkspace,
@@ -285,9 +286,16 @@ describe("durable sandbox runtime generations", () => {
     let configured = false;
     const allocated = new Set<string>();
     const cleaned: string[] = [];
-    const manager: SandboxBackendManager = {
-      describeRuntime: async () => ({ running: false, configLabelMatch: true }),
-      removeRuntime: async ({ entry }) => {
+    install(
+      async (params) => {
+        if (!configured) {
+          throw new Error("provider config invalid");
+        }
+        const backend = handle(params);
+        allocated.add(backend.runtimeId);
+        return backend;
+      },
+      vi.fn<SandboxBackendManager["removeRuntime"]>(async ({ entry }) => {
         expect(entry).toMatchObject({ runtimeState: "removing-pending", workspaceDir });
         if (!configured) {
           throw new Error("provider config invalid");
@@ -296,19 +304,8 @@ describe("durable sandbox runtime generations", () => {
         allocated.add(entry.containerName);
         cleaned.push(entry.containerName);
         allocated.delete(entry.containerName);
-      },
-    };
-    disposeBackend = registerSandboxBackend("reserved-test", {
-      reserveRuntimeId: () => `reserved-${++nextId}`,
-      factory: async (params: CreateReservedSandboxBackendParamsV1) => {
-        if (!configured) {
-          throw new Error("provider config invalid");
-        }
-        allocated.add(params.runtimeId);
-        return handle(params);
-      },
-      manager,
-    });
+      }),
+    );
     await expect(resolve()).rejects.toThrow("provider config invalid");
     expect(allocated.size).toBe(0);
     await expect(removeSandboxContainer("reserved-1")).rejects.toThrow("provider config invalid");
@@ -325,48 +322,58 @@ describe("durable sandbox runtime generations", () => {
     await expect(resolve()).resolves.toMatchObject({ runtimeId: "reserved-2" });
   });
 
-  it.each(["recreate", "prune"] as const)(
-    "fences a legacy %s snapshot after concurrent adoption",
-    async (operation) => {
+  it.each([
+    { operation: "recreate", legacy: true },
+    { operation: "prune", legacy: true },
+    { operation: "recreate", legacy: false },
+    { operation: "prune", legacy: false },
+  ])("fences $operation against provisioning (legacy=$legacy)", async ({ operation, legacy }) => {
+    if (legacy) {
       await seedLegacyRuntime();
+    }
+    const started = createDeferred<string>();
+    const finish = createDeferred();
+    const remove = install(async (params) => {
+      const backend = handle(params);
+      started.resolve(backend.runtimeId);
+      await finish.promise;
+      return backend;
+    });
+    if (legacy) {
       const snapshot = await readRegistry();
-      const started = createDeferred();
-      const finish = createDeferred();
-      const remove = install(async (params) => {
-        const backend = handle(params);
-        expect(backend.runtimeId).toBe("legacy-runtime");
-        started.resolve();
-        await finish.promise;
-        return backend;
-      });
       vi.spyOn(registry, "readRegistry").mockImplementationOnce(async () => {
         await started.promise;
         return snapshot;
       });
-      if (operation === "prune") {
-        advancePruneTime();
-      }
-      const intent = observeRemovalIntent();
-      const removing =
-        operation === "recreate"
-          ? removeSandboxContainer("legacy-runtime")
-          : maybePruneSandboxes(withImmediatePrune(config));
-      const creating = expect(resolve()).rejects.toThrow("removed or is being removed");
-      await started.promise;
-      try {
-        await awaitGateBeforeSettlement(intent, removing, "Removal intent was not acknowledged");
-        expect((await readRegistryEntry("legacy-runtime"))?.runtimeState).toBe("removing-pending");
-        expect(remove).not.toHaveBeenCalled();
-      } finally {
-        finish.resolve();
-        await Promise.allSettled([creating, removing]);
-      }
-      await creating;
-      await removing;
-      expect(remove).toHaveBeenCalledOnce();
-      await expect(readRegistryEntry("legacy-runtime")).resolves.toBeNull();
-    },
-  );
+    }
+    const startRemoval = (id: string) =>
+      operation === "prune" ? pruneImmediately() : removeSandboxContainer(id);
+    const intent = observeRemovalIntent();
+    const legacyRemoval = legacy ? startRemoval("legacy-runtime") : undefined;
+    const creating = expect(resolve()).rejects.toThrow("removed or is being removed");
+    const id = await started.promise;
+    if (legacy) {
+      expect(id).toBe("legacy-runtime");
+    }
+    const removing = legacyRemoval ?? startRemoval(id);
+    try {
+      await awaitGateBeforeSettlement(intent, removing, "Removal intent was not acknowledged");
+      await expect(readRegistryEntry(id)).resolves.toMatchObject({
+        runtimeState: "removing-pending",
+      });
+      expect(remove).not.toHaveBeenCalled();
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([creating, removing]);
+    }
+    await creating;
+    await removing;
+    expect(remove).toHaveBeenCalledOnce();
+    await expect(readRegistryEntry(id)).resolves.toBeNull();
+    if (!legacy) {
+      await expect(resolve()).resolves.toMatchObject({ runtimeId: "reserved-2" });
+    }
+  });
 
   it("prevents adoption of a legacy runtime while provider removal is pending", async () => {
     await seedLegacyRuntime();
@@ -375,7 +382,7 @@ describe("durable sandbox runtime generations", () => {
     const factory = vi.fn(async (params: CreateSandboxBackendParams) => handle(params));
     install(
       factory,
-      vi.fn(async () => {
+      vi.fn<SandboxBackendManager["removeRuntime"]>(async () => {
         started.resolve();
         await finish.promise;
       }),
@@ -472,46 +479,8 @@ describe("durable sandbox runtime generations", () => {
     }
   });
 
-  it.each(["recreate", "prune"] as const)(
-    "fences %s against in-flight provisioning before cleanup",
-    async (operation) => {
-      const started = createDeferred<string>();
-      const finish = createDeferred();
-      const remove = install(async (params) => {
-        const backend = handle(params);
-        started.resolve(backend.runtimeId);
-        await finish.promise;
-        return backend;
-      });
-      const creating = resolve();
-      const failedCreation = expect(creating).rejects.toThrow("removed or is being removed");
-      const id = await started.promise;
-      const intent = observeRemovalIntent();
-      let removing: Promise<void>;
-      if (operation === "prune") {
-        advancePruneTime();
-        removing = maybePruneSandboxes(withImmediatePrune(config));
-      } else {
-        removing = removeSandboxContainer(id);
-      }
-      try {
-        await awaitGateBeforeSettlement(intent, removing, "Removal intent was not acknowledged");
-        expect((await readRegistryEntry(id))?.runtimeState).toBe("removing-pending");
-        expect(remove).not.toHaveBeenCalled();
-      } finally {
-        finish.resolve();
-        await Promise.allSettled([failedCreation, removing]);
-      }
-      await failedCreation;
-      await removing;
-      expect(remove).toHaveBeenCalledOnce();
-      await expect(readRegistryEntry(id)).resolves.toBeNull();
-      await expect(resolve()).resolves.toMatchObject({ runtimeId: "reserved-2" });
-    },
-  );
-
   it("revokes retained handles and preserves failed cleanup across restart", async () => {
-    const remove = install(async (params) => handle(params));
+    const remove = install();
     const context = await resolve();
     remove.mockRejectedValueOnce(new Error("cleanup response lost"));
     await expect(removeSandboxContainer("reserved-1")).rejects.toThrow("cleanup response lost");

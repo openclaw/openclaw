@@ -1,5 +1,3 @@
-// SSH sandbox helper tests cover temp auth materialization, remote command
-// validation, shell quoting, and upload symlink safety.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -42,6 +40,22 @@ async function createSession(settings: Partial<SshSandboxSettings>) {
 
 const validateWorkdir = (workdir: string, root: string) =>
   execFileAsync("/bin/sh", ["-c", buildRemoteWorkdirValidationCommand({ workdir, root })]);
+const validatedCommand = (command: string) => buildValidatedExecRemoteCommand({ command, env: {} });
+const ensureDirectory = (target: string, root: string, script = "exit 0") =>
+  execFileAsync("/bin/sh", [
+    "-c",
+    `${ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT}\n${script}`,
+    "openclaw-remote-dir",
+    target,
+    root,
+  ]);
+
+async function workspaceTree() {
+  const root = makeTempDir(tempDirs, "openclaw-ssh-workdir-");
+  const workspace = path.join(root, "workspace");
+  await fs.mkdir(workspace, { recursive: true });
+  return { root, workspace };
+}
 
 describe("sandbox ssh helpers", () => {
   it("materializes inline SSH auth data into a temp config", async () => {
@@ -101,8 +115,6 @@ describe("sandbox ssh helpers", () => {
     ).rejects.toThrow("SSH sandbox knownHostsFile must not contain line breaks or double quotes.");
   });
 
-  // Default macOS crabbox lease keys live under "Application Support"; unquoted
-  // ssh_config arguments tokenize on whitespace and read as extra arguments.
   it("quotes path directives containing whitespace", async () => {
     const session = await createSession({
       identityFile: "/tmp/Application Support/lease/id_ed25519",
@@ -147,18 +159,13 @@ describe("sandbox ssh helpers", () => {
     ["cat <<EOF", /unterminated here-doc EOF/],
     ["cat <<EOF\nstill open", /unterminated here-doc EOF/],
   ])("rejects malformed generated exec commands: %s", (rawCommand, message) => {
-    expect(() =>
-      buildValidatedExecRemoteCommand({
-        command: rawCommand,
-        env: {},
-      }),
-    ).toThrow(message);
+    expect(() => validatedCommand(rawCommand)).toThrow(message);
   });
 
   it("allows shell features and quoted placeholder-looking text", () => {
     expect(() =>
-      buildValidatedExecRemoteCommand({
-        command: [
+      validatedCommand(
+        [
           "cat < input.txt > output.txt",
           "cat <in>out",
           "cat <input> output",
@@ -184,13 +191,12 @@ describe("sandbox ssh helpers", () => {
           'printf "%s\\n" "<name>"',
           "# workflow run <workflow-id>",
         ].join("\n"),
-        env: {},
-      }),
+      ),
     ).not.toThrow();
   });
 
   it.runIf(process.platform !== "win32")(
-    "preserves caller positional args for commands after remote directory validation",
+    "preserves positional args after remote directory validation",
     async () => {
       const realParent = makeTempDir(tempDirs, "openclaw-ssh-real-");
       const linkParent = `${realParent}-link`;
@@ -199,18 +205,15 @@ describe("sandbox ssh helpers", () => {
       const root = path.join(linkParent, "runtime");
       const target = path.join(root, "workspace", ".openclaw", "sandbox-skills");
 
-      const { stdout } = await execFileAsync("/bin/sh", [
-        "-c",
+      const { stdout } = await ensureDirectory(
+        target,
+        root,
         [
-          ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
           'printf "%s\\n%s\\n" "$1" "$2"',
           'touch "$1/proof"',
           'find "$1" -mindepth 1 -maxdepth 1 -name proof -print',
         ].join("\n"),
-        "openclaw-remote-dir",
-        target,
-        root,
-      ]);
+      );
 
       expect(stdout.trim().split("\n")).toEqual([target, root, path.join(target, "proof")]);
       await expect(
@@ -222,60 +225,40 @@ describe("sandbox ssh helpers", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "validates exec workdirs without creating missing directories",
+    "validates workdirs without creating missing directories",
     async () => {
-      const root = makeTempDir(tempDirs, "openclaw-ssh-workdir-");
-      const project = path.join(root, "workspace", "project one");
+      const { workspace } = await workspaceTree();
+      const project = path.join(workspace, "project one");
       await fs.mkdir(project, { recursive: true });
       const canonicalProject = await fs.realpath(project);
 
       const { stdout } = await validateWorkdir(canonicalProject, "/");
 
       expect(stdout.trim()).toBe(canonicalProject);
-      await expect(
-        validateWorkdir(path.join(root, "workspace", "missing"), path.join(root, "workspace")),
-      ).rejects.toThrow(/remote directory not found/);
-      await expect(fs.stat(path.join(root, "workspace", "missing"))).rejects.toThrow();
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "rejects symlinked exec workdirs inside the trusted remote root",
-    async () => {
-      const root = makeTempDir(tempDirs, "openclaw-ssh-workdir-");
-      const workspace = path.join(root, "workspace");
-      await fs.mkdir(workspace, { recursive: true });
-      await fs.symlink(root, path.join(workspace, "escape"));
-
-      await expect(validateWorkdir(path.join(workspace, "escape"), workspace)).rejects.toThrow(
-        /unsafe remote directory symlink/,
+      await expect(validateWorkdir(path.join(workspace, "missing"), workspace)).rejects.toThrow(
+        /remote directory not found/,
       );
+      await expect(fs.stat(path.join(workspace, "missing"))).rejects.toThrow();
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "rejects symlinked directories inside the trusted remote root",
-    async () => {
+  it.runIf(process.platform !== "win32").each([
+    ["exec workdir", validateWorkdir, ""],
+    ["created directory", ensureDirectory, "sandbox-skills"],
+  ] as const)("rejects symlinked %s inside the trusted root", async (_, run, suffix) => {
+    const { root, workspace } = await workspaceTree();
+    const link = path.join(workspace, "escape");
+    await fs.symlink(root, link);
+    if (suffix) {
       expect(ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT.split("\n")[0]).toBe("set -e");
-      const realParent = makeTempDir(tempDirs, "openclaw-ssh-real-");
-      const root = path.join(realParent, "runtime");
-      await fs.mkdir(path.join(root, "workspace"), { recursive: true });
-      await fs.symlink(realParent, path.join(root, "workspace", ".openclaw"));
-
-      await expect(
-        execFileAsync("/bin/sh", [
-          "-c",
-          [ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT, "exit 0"].join("\n"),
-          "openclaw-remote-dir",
-          path.join(root, "workspace", ".openclaw", "sandbox-skills"),
-          root,
-        ]),
-      ).rejects.toThrow(/unsafe remote directory symlink/);
-    },
-  );
+    }
+    await expect(run(path.join(link, suffix), workspace)).rejects.toThrow(
+      /unsafe remote directory symlink/,
+    );
+  });
 
   it.runIf(process.platform !== "win32")(
-    "rejects upload trees with symlinks that escape the local workspace",
+    "rejects upload symlinks escaping the workspace",
     async () => {
       const localDir = makeTempDir(tempDirs, "openclaw-ssh-upload-");
       await fs.symlink("/etc", path.join(localDir, "escape"));
