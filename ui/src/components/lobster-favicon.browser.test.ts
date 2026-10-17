@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getLobsterdex, recordLobsterVisit, subscribeLobsterdex } from "./lobster-dex.ts";
 import { loadUnlockedLobsterFavicon } from "./lobster-favicon.ts";
+import { loadLobsterImage } from "./lobster-image.ts";
 
 const dexKey = "openclaw.control.lobsterdex.v1";
 const cleanups: Array<() => void> = [];
@@ -35,6 +36,14 @@ async function artwork(id: string) {
 }
 
 describe("unlocked Lobsterdex favicon artwork", () => {
+  it("exports identity presets independently of favicon unlocks", async () => {
+    expect(getLobsterdex().has("crimson")).toBe(false);
+    const image = expectDefined(await loadLobsterImage("crimson"), "identity artwork");
+    expect(image.naturalWidth).toBeGreaterThan(0);
+    expect(await loadUnlockedLobsterFavicon("crimson")).toBeNull();
+    expect(getLobsterdex().has("crimson")).toBe(false);
+  });
+
   it("rejects locked or unknown picks and rereads unlocks after decoding", async () => {
     const children = [...document.body.children];
     expect(await loadUnlockedLobsterFavicon("crimson")).toBeNull();

@@ -1,15 +1,51 @@
 import { expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createAgentViewTestProps } from "./agents-view.test-helpers.ts";
 import { Agents } from "./view.tsx";
 
 it("opens agent avatar selection from the keyboard and respects the busy state", async () => {
   const container = document.createElement("div");
+  container.style.cssText = "position:fixed;inset:0;overflow:auto";
   document.body.append(container);
   const props = createAgentViewTestProps();
   const mounted = mountSolid(Agents, props, container);
   try {
+    const editAvatar = page.getByRole("button", { name: "Edit avatar", exact: true });
+    const avatarButton = editAvatar.element();
+    if (!(avatarButton instanceof HTMLButtonElement)) {
+      throw new Error("Avatar edit affordance must use a native button");
+    }
+    avatarButton.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(avatarButton.getAttribute("aria-expanded")).toBe("true");
+    expect(avatarButton.hasAttribute("title")).toBe(false);
+    const popover = container.querySelector<HTMLElement>(".agent-identity-editor__popover");
+    expect(popover?.matches(":popover-open")).toBe(true);
+    await vi.waitFor(() => expect(popover?.getBoundingClientRect().width).toBeGreaterThan(0));
+    const avatarBounds = avatarButton.getBoundingClientRect();
+    const fieldsBounds = container
+      .querySelector<HTMLElement>(".agent-identity-editor__fields")!
+      .getBoundingClientRect();
+    expect(
+      Math.abs(
+        avatarBounds.top + avatarBounds.height / 2 - (fieldsBounds.top + fieldsBounds.height / 2),
+      ),
+    ).toBeLessThanOrEqual(1);
+    const popoverBounds = popover!.getBoundingClientRect();
+    expect(popoverBounds.width).toBeLessThanOrEqual(480);
+    const beside = popoverBounds.left >= avatarBounds.right - 1;
+    const below =
+      popoverBounds.top >= avatarBounds.bottom - 1 && popoverBounds.top <= avatarBounds.bottom + 20;
+    expect(beside || below).toBe(true);
+    expect(popoverBounds.right).toBeLessThanOrEqual(window.innerWidth + 1);
+    expect(
+      [...popover!.querySelectorAll("button")].some(
+        (button) => button.textContent?.trim() === "Reset",
+      ),
+    ).toBe(false);
+    await page.getByRole("button", { name: "Upload", exact: true }).click();
     const input = container.querySelector<HTMLInputElement>('input[type="file"]');
     if (!input) {
       throw new Error("Missing avatar file input");
@@ -26,14 +62,46 @@ it("opens agent avatar selection from the keyboard and respects the busy state",
     await userEvent.keyboard(" ");
     expect(openPicker).toHaveBeenCalledTimes(2);
 
-    mounted.update({ ...props, overview: { ...props.overview, identitySaving: true } });
+    mounted.update({ ...props, access: { ...props.access, canUpdateIdentity: false } });
     expect(button.disabled).toBe(true);
     button.click();
     expect(openPicker).toHaveBeenCalledTimes(2);
+    await userEvent.keyboard("{Escape}");
+    expect(popover?.matches(":popover-open")).toBe(false);
   } finally {
     vi.restoreAllMocks();
     mounted.dispose();
 
+    container.remove();
+  }
+});
+
+it("keeps avatar editing usable when upload policy changes without remounting", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const base = createAgentViewTestProps();
+  const withUploads = (enabled: boolean) => ({
+    ...base,
+    overview: {
+      ...base.overview,
+      applicationConfig: { current: { uploadsEnabled: enabled } } as ApplicationConfigCapability,
+    },
+  });
+  const mounted = mountSolid(Agents, withUploads(false), container);
+  try {
+    mounted.update(withUploads(true));
+    await page.getByRole("button", { name: "Edit avatar", exact: true }).click();
+    const popover = container.querySelector<HTMLElement>(".agent-identity-editor__popover");
+    expect(popover?.matches(":popover-open")).toBe(true);
+
+    mounted.update(withUploads(false));
+    expect(popover?.matches(":popover-open")).toBe(false);
+
+    mounted.update(withUploads(true));
+    await page.getByRole("button", { name: "Edit avatar", exact: true }).click();
+    expect(popover?.matches(":popover-open")).toBe(true);
+  } finally {
+    mounted.dispose();
     container.remove();
   }
 });

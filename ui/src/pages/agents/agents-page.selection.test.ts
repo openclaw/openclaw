@@ -332,7 +332,7 @@ describe("AgentsPage routing", () => {
   });
 
   it.each(["same target", "different target", "excluded target", "profile", "source"])(
-    "retains an identity draft through discovery retirement only for its current owner (%s)",
+    "retains an identity draft for its original agent and profile through selection changes (%s)",
     (change) => {
       const listeners = new Set<() => void>();
       const client = {
@@ -387,7 +387,7 @@ describe("AgentsPage routing", () => {
           change === "excluded target" ? "research" : "main",
         );
         expect(page.read().overview.identityDraft.name).toBe(
-          change === "same target" ? "Lunar museum guide" : null,
+          change === "same target" || change === "different target" ? "Lunar museum guide" : null,
         );
       } finally {
         page.dispose();
@@ -496,7 +496,7 @@ describe("AgentsPage routing", () => {
     page.read().overview.onIdentityFieldChange("name", "Main draft");
 
     page.read().overview.onIdentitySave();
-    expect(runExternalMutation).toHaveBeenCalledOnce();
+    await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledOnce());
     selection.set("research");
     admission.resolve();
     await runExternalMutation.mock.results[0]?.value;
