@@ -196,6 +196,7 @@ it.each([
         }
         if (decline) {
           expect(loadTranscriptEventsSync(target)).toEqual(originalEvents);
+          expect(JSON.stringify(seed)).toContain("Older history outside that window is omitted");
         }
         expect(loadTranscriptEventsSync(target)).toEqual(expect.arrayContaining(originalEvents));
       }
@@ -217,7 +218,7 @@ it.each([false, true])(
       };
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
       const manager = await SessionManager.openAsync(target, state.workspaceDir);
-      await manager.appendMessageAsync(makeUserMessage("Earlier history", 1));
+      await manager.appendMessageAsync(makeUserMessage("Earlier history".repeat(600), 1));
       const recorder = createUserTurnTranscriptRecorder({
         message: {
           ...makeUserMessage("ORIGINAL_ADMITTED_TASK", 2),
@@ -256,6 +257,7 @@ it.each([false, true])(
         throw new Error("fixture has no seed capability");
       }
       const seed = await prepare({ assertCurrent: () => {} });
+      expect(JSON.stringify(seed)).toContain("Older history outside that window is omitted");
       expect(
         seed.filter(
           (message) => message.role === "user" && message.content === "ORIGINAL_ADMITTED_TASK",

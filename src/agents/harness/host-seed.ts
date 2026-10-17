@@ -5,7 +5,10 @@ import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/ses
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { boundContextEngineAssembly } from "../../context-engine/bounded-context.js";
-import { resolveMaxActiveTranscriptBytes } from "../../context-engine/transcript-byte-limit.js";
+import {
+  BOUNDED_CONTEXT_NOTICE,
+  resolveMaxActiveTranscriptBytes,
+} from "../../context-engine/transcript-byte-limit.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { requireCompactionWriterEntry } from "../embedded-agent-runner/compaction-successor.js";
@@ -100,6 +103,7 @@ export function bindBoundedSeed(
         ? [...(refresh ?? []), ...(attempt.continuation?.messages ?? [])]
         : undefined;
     let activeCount = 0;
+    let omitted = 0;
     const read = async () => {
       const history = await SessionManager.readSessionContextAsync(
         sessionTarget,
@@ -119,6 +123,7 @@ export function bindBoundedSeed(
       return history.filter((message) => !isAdmittedUser(message));
     };
     const select = async (messages: AgentMessage[]) => {
+      omitted = 0;
       const history = activeCount ? messages.slice(0, -activeCount) : messages;
       const active = activeCount ? messages.slice(-activeCount) : [];
       const bounded = boundContextEngineAssembly(
@@ -126,7 +131,7 @@ export function bindBoundedSeed(
         maxSeedBytes,
         tokenBudget,
       );
-      if (!prepareMedia && !activeCount) {
+      if (!prepareMedia && !activeCount && bounded.messages.length === history.length) {
         return bounded.messages;
       }
       const additionalBytes = new Map<AgentMessage, number>();
@@ -155,18 +160,34 @@ export function bindBoundedSeed(
       if (activeTokens > tokenBudget) {
         throw new Error("Active native continuation exceeds the history delivery allowance");
       }
-      const remainingTokens = tokenBudget - activeTokens;
-      const retained = boundContextEngineAssembly(
-        bounded,
-        Math.min(maxBytes, remainingTokens * 4),
-        remainingTokens,
-        additionalBytes,
-      ).messages;
+      let remainingTokens = tokenBudget - activeTokens;
+      let bytes = Math.min(maxBytes, remainingTokens * 4);
+      const boundHistory = () =>
+        boundContextEngineAssembly(bounded, bytes, remainingTokens, additionalBytes).messages;
+      let retained = boundHistory();
+      omitted = history.length - retained.length;
+      if (omitted) {
+        const notice: AgentMessage = {
+          role: "user",
+          content: BOUNDED_CONTEXT_NOTICE,
+          timestamp: 0,
+        };
+        remainingTokens -= estimateTokens(notice);
+        bytes = Math.min(
+          maxBytes - Buffer.byteLength(JSON.stringify(notice)) - 1,
+          remainingTokens * 4,
+        );
+        if (bytes < 2) {
+          throw new Error("Native history allowance cannot fit its omission notice");
+        }
+        retained = boundHistory();
+        omitted = history.length - retained.length;
+        return [notice, ...retained, ...active];
+      }
       return activeCount ? [...retained, ...active] : retained;
     };
     let messages = await read();
     let bounded = await select(messages);
-    const omitted = messages.length - bounded.length;
     if (
       config?.agents?.defaults?.compaction?.enabled !== false &&
       messages.slice(0, omitted).some((message) => message.role !== "compactionSummary")
@@ -236,7 +257,7 @@ export function bindBoundedSeed(
       bounded = await select(messages);
     }
     assert();
-    if (bounded.length < messages.length) {
+    if (omitted) {
       await attempt.onAgentEvent?.({ stream: "compaction", data: { phase: "context_bounded" } });
       assert();
     }
