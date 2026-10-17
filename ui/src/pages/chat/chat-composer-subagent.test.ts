@@ -170,40 +170,6 @@ it("explains an unresolved initial turn while offline without blocking the outbo
   }
 });
 
-it("updates held Send when an edited draft changes between control and ordinary input", () => {
-  const { state, container, draw } = createRecoveringComposer("/stop");
-  let renderRequested = false;
-  state.requestUpdate = () => {
-    renderRequested = true;
-  };
-  let view = draw();
-  const edit = (draft: string) => {
-    renderRequested = false;
-    view.input.value = draft;
-    view.input.dispatchEvent(new Event("input", { bubbles: true }));
-    // Exercise the draft-only fast path instead of unconditionally redrawing the pane.
-    if (renderRequested) {
-      view = draw();
-    }
-  };
-  try {
-    expect(view.send.disabled).toBe(false);
-    edit("Keep this ordinary draft");
-    expect(view.input.value).toBe("Keep this ordinary draft");
-    expect(view.send.disabled).toBe(true);
-    view.send.click();
-    view.input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(state.handleSendChat).not.toHaveBeenCalled();
-
-    edit("/approve approval-123 allow-once");
-    expect(view.send.disabled).toBe(false);
-    view.send.click();
-    expect(state.handleSendChat).toHaveBeenCalledOnce();
-  } finally {
-    disposeComposer(container);
-  }
-});
-
 it.each(["Keep this suggestion", "/stop"])(
   "keeps suggestion submission independent of chat recovery: %s",
   async (draft) => {

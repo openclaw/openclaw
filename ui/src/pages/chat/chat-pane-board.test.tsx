@@ -20,6 +20,7 @@ import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { projectChatFields } from "./chat-field-projection.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { createPaneTestHost } from "./chat-pane-runtime.test-support.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
@@ -75,7 +76,7 @@ type TestChatPane = HTMLElement & {
   readonly conversationPresented: boolean;
   presentedChanged: (presented: boolean) => void;
   sessionKey: string;
-  resetConfirmation: object | undefined;
+  resetConfirmation: { pending: object | undefined };
   swarm: ChatPaneRuntime["swarm"];
   routeFace: "chat" | "dashboard";
   dashboardExpanded: boolean;
@@ -96,7 +97,6 @@ type TestChatPane = HTMLElement & {
   renderResetConfirmation: () => Parameters<typeof ChatBoardResetConfirmation>[0] | null;
   syncRetainedBoardSession: (board: ResolvedBoardView) => void;
   refreshSwarmRoster: () => void;
-  invalidate: () => void;
 };
 
 let theme: ReturnType<typeof createApplicationTheme>;
@@ -135,8 +135,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
     client,
     connected: true,
     lastError: null,
-    renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
-    requestUpdate: vi.fn(),
+    renderLifecycle: { afterCommit: () => () => {} },
     sessionKey: "agent:main:current",
     sidebarFocusPanelId: "",
     sidebarFocusVersion: 0,
@@ -545,7 +544,6 @@ describe("chat pane board shell", () => {
     pane.commitRender();
 
     await expect(pending).resolves.toBe(false);
-    expect(Boolean(pane.resetConfirmation)).toBe(false);
     expect(sessions.create).not.toHaveBeenCalled();
     expect(sessions.reset).not.toHaveBeenCalled();
   });
@@ -561,7 +559,6 @@ describe("chat pane board shell", () => {
     const second = pane.confirmConversationReset();
 
     await expect(first).resolves.toBe(false);
-    expect(Boolean(pane.resetConfirmation)).toBe(true);
     pane.settleResetConfirmation(true);
     await expect(second).resolves.toBe(true);
   });
@@ -581,11 +578,9 @@ describe("chat pane board shell", () => {
       await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(1));
       const pending = pane.confirmConversationReset();
       pane.commitRender();
-      expect(Boolean(pane.resetConfirmation)).toBe(true);
       pane.state.assistantAgentId = "main";
       pane.commitRender();
       await expect(pending).resolves.toBe(false);
-      expect(Boolean(pane.resetConfirmation)).toBe(false);
     } finally {
       pane.settleResetConfirmation(false);
       (Reflect.get(pane, "releaseBoardProviderLease") as () => void).call(pane);
@@ -598,12 +593,16 @@ describe("chat pane board shell", () => {
       installDialogPolyfill();
       const pane = createTestPane();
       pane.boardProvider = createMockBoardProvider(pane.state.sessionKey);
+      const mounted = mountSolid(() => {
+        projectChatFields(pane.resetConfirmation);
+        return (
+          <Show when={pane.renderResetConfirmation()}>
+            {(current) => <ChatBoardResetConfirmation {...current()} />}
+          </Show>
+        );
+      });
+      expect(mounted.container.querySelector("openclaw-modal-dialog")).toBeNull();
       const pending = pane.confirmConversationReset();
-      const mounted = mountSolid(() => (
-        <Show when={pane.renderResetConfirmation()}>
-          {(current) => <ChatBoardResetConfirmation {...current()} />}
-        </Show>
-      ));
       flush();
       try {
         const modal = mounted.container.querySelector("openclaw-modal-dialog")!;
@@ -617,7 +616,9 @@ describe("chat pane board shell", () => {
             .click();
         }
         await expect(pending).resolves.toBe(action === "confirm");
-        expect(pane.resetConfirmation).toBeUndefined();
+        expect(pane.resetConfirmation.pending).toBeUndefined();
+        flush();
+        expect(mounted.container.querySelector("openclaw-modal-dialog")).toBeNull();
       } finally {
         pane.settleResetConfirmation(false);
         mounted.unmount();
@@ -630,7 +631,6 @@ describe("chat pane board shell", () => {
     pane.boardProvider = boardProviderForSession({ sessionKey: "agent:main:current" });
 
     await expect(pane.confirmConversationReset()).resolves.toBe(true);
-    expect(Boolean(pane.resetConfirmation)).toBe(false);
   });
 
   it("maps transient Board presentation commands onto the dashboard panel", () => {

@@ -53,7 +53,6 @@ export function cancelPendingQueuedChatInput(state: ChatHistoryHost, id: string)
     }
     if (!result.ok) {
       state.chatError = formatUiError(result.error);
-      state.requestUpdate?.();
       return;
     }
     await loadChatHistory(state, { supersedeInFlight: true });

@@ -99,7 +99,6 @@ export type ChatState = StreamCausalBoundaryState & {
   chatBranches?: SessionBranch[];
   chatBranchesSessionKey?: string | null;
   chatBranchesConnectionEpoch?: number | null;
-  requestUpdate?: () => void;
   /** Reports transcript loading edges; see CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT. */
   transcriptLoadingChanged?: () => void;
   /** Reports transient read recovery to the shell connection indicator. */

@@ -113,20 +113,15 @@ export function createDashboardHarness(
     sessionKey: current.key,
     sidebarSessionLayouts: options.savedLayout ? { [current.key]: options.savedLayout } : {},
   });
-  const state = createPageState(
-    pane.context,
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
-    pane,
-  );
+  const state = createPageState(pane.context, { afterCommit: () => () => {} }, pane);
   pane.state = state;
   pane.sessionKey = current.key;
   pane.routeFace = "dashboard";
   pane.dashboardExpanded = options.expandedLink ?? false;
   pane.paneWidth = 1400;
   pane.boardProvider = createMockBoardProvider(current.key);
-  // The detached pane exposes real controller methods without running unrelated
+  // The detached pane exposes real runtime methods without running unrelated
   // connectedCallback polling. Header templates are mounted separately below.
-  vi.spyOn(pane, "invalidate").mockImplementation(() => {});
   pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
     ["sessions.patch"],
     options.scopes ?? ["operator.write", "operator.read"],

@@ -28,7 +28,6 @@ import {
 } from "./chat-pane.test-support.ts";
 import { enqueueChatMessage } from "./chat-queue.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { createPageState } from "./chat-state-page.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
 import {
   dismissConfirmedActionPopovers,
@@ -160,15 +159,8 @@ it("publishes queued-edit retention changes while its pane is parked", async () 
   await pane.updateComplete;
 });
 
-it("publishes a disconnected gateway snapshot without a redraw callback", () => {
-  const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
-  const redraw = vi.fn();
-  const state = createPageState(
-    pane.context,
-    { invalidate: redraw, afterCommit: () => () => {} },
-    pane,
-  );
-  pane.state = state;
+it("publishes a disconnected gateway snapshot through reactive page state", () => {
+  const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
   state.client = pane.context.gateway.snapshot.client;
   state.connected = true;
   const changes: Array<{
@@ -196,7 +188,6 @@ it("publishes a disconnected gateway snapshot without a redraw callback", () => 
     expect(state.connected).toBe(false);
     flush();
     expect(changes).toEqual([{ connected: false, canvas: "/canvas/reconnected" }]);
-    expect(redraw).not.toHaveBeenCalled();
   } finally {
     dispose();
   }

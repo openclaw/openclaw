@@ -95,7 +95,7 @@ describe("chat pane session presentation", () => {
       const context = createSessionContext(createGatewayBrowserClientFixture(), sessions);
       const state = createPageState(
         context,
-        { invalidate: () => {}, afterCommit: () => () => {} },
+        { afterCommit: () => () => {} },
         { dispatchEvent: () => true, querySelector: () => null },
       );
       const rendered = vi.fn();

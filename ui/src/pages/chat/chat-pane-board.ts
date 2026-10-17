@@ -54,7 +54,9 @@ import {
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBoard extends ChatPaneHistory {
-  private dashboardDefaultWrite?: { owner: string };
+  readonly dashboardPresentation: { defaultWrite: { owner: string } | undefined } = {
+    defaultWrite: undefined,
+  };
 
   private get dashboardDefaultWriteOwner(): string {
     return JSON.stringify([
@@ -107,7 +109,8 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (!this.canSaveDashboardDefault(row)) {
       return undefined;
     }
-    const saving = this.dashboardDefaultWrite?.owner === this.dashboardDefaultWriteOwner;
+    const saving =
+      this.dashboardPresentation.defaultWrite?.owner === this.dashboardDefaultWriteOwner;
     const agentId = this.resolveBoardConversation().agentId;
     return {
       label: t(saving ? "chat.sidePanel.savingDefault" : "chat.sidePanel.useViewAsDefault"),
@@ -135,19 +138,18 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       !presentation ||
       !this.canSaveDashboardDefault(currentRow) ||
       this.isDashboardDefault(currentRow, presentation) ||
-      this.dashboardDefaultWrite?.owner === this.dashboardDefaultWriteOwner
+      this.dashboardPresentation.defaultWrite?.owner === this.dashboardDefaultWriteOwner
     ) {
       return;
     }
     const operation = { owner: this.dashboardDefaultWriteOwner };
-    this.dashboardDefaultWrite = operation;
+    this.dashboardPresentation.defaultWrite = operation;
     const isCurrent = () =>
       this.ownsHeaderOutcomeScope(scope) &&
-      this.dashboardDefaultWrite === operation &&
+      this.dashboardPresentation.defaultWrite === operation &&
       this.context.sessions === scope.sessions &&
       this.dashboardDefaultWriteOwner === operation.owner &&
       selectedChatSessionRow(scope.state)?.sessionId === row.sessionId;
-    this.invalidate();
     try {
       const result = await scope.sessions.patch(
         row.key,
@@ -175,9 +177,8 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         });
       }
     } finally {
-      if (this.dashboardDefaultWrite === operation) {
-        this.dashboardDefaultWrite = undefined;
-        this.invalidate();
+      if (this.dashboardPresentation.defaultWrite === operation) {
+        this.dashboardPresentation.defaultWrite = undefined;
       }
     }
   }
@@ -412,6 +413,8 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       }
     }
     if (
+      this.presented &&
+      this.presentation.documentVisible &&
       board.available &&
       this.state &&
       isSidebarSlotVisible(this.state.sidebarLayout, "dashboard") &&
