@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
+import { makeModel } from "../agents/embedded-agent-runner/model.test-harness.js";
 import * as providerCatalog from "../agents/models-config.providers.implicit.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import {
@@ -55,17 +56,7 @@ function sourceConfig() {
           baseUrl: "https://healthy.example/v1",
           api: "openai-completions",
           apiKey: "healthy-fixture-key",
-          models: [
-            {
-              id: "model",
-              name: "Model",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 512,
-              contextWindow: 4096,
-            },
-          ],
+          models: [makeModel("model")],
         },
         "recoverable-fixture": {
           baseUrl: "https://recoverable.example/v1",
@@ -97,6 +88,9 @@ function prepareRuntime(config = requireRuntimeConfig()) {
   return prepareModelRuntimeSnapshot({ config, agentId: "main", agentDir: state.agentDir() });
 }
 
+const recoveredKey = (config?: OpenClawConfig | null) =>
+  config?.models?.providers?.["recoverable-fixture"]?.apiKey;
+
 function sharedClient(generation = "initial"): SharedGatewayAuthClient {
   return {
     usesSharedGatewayAuth: true,
@@ -105,7 +99,7 @@ function sharedClient(generation = "initial"): SharedGatewayAuthClient {
   };
 }
 
-function pauseCatalog(phase: "candidate" | "restoration") {
+function pauseCatalog(phase: "candidate" | "restoration" = "candidate") {
   const started = createDeferred();
   const release = createDeferred();
   const prepare = providerCatalog.prepareImplicitProviderStaticCatalog;
@@ -118,7 +112,7 @@ function pauseCatalog(phase: "candidate" | "restoration") {
     await release.promise;
     return await prepare(...args);
   });
-  return { started, release };
+  return { started, release, hook, prepare };
 }
 
 async function expectBeforeSettlement(started: Promise<unknown>, pending: Promise<unknown>) {
@@ -152,23 +146,19 @@ async function coldRuntime(clients: SharedGatewayAuthClient[] = []) {
     config: runtimeConfig,
     allowUnavailableSecretOwners: true,
   });
-  expect(initial.degradedOwners).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        ownerKind: "provider",
-        ownerId: "recoverable-fixture",
-        degradationState: "cold",
-      }),
-    ]),
+  expect(initial.degradedOwners).toContainEqual(
+    expect.objectContaining({
+      ownerKind: "provider",
+      ownerId: "recoverable-fixture",
+      degradationState: "cold",
+    }),
   );
   activateSecretsRuntimeSnapshotWithSource(initial, config);
   await refreshPreparedModelRuntimeSnapshots(requireRuntimeConfig(), {
     catalogMode: "static",
     gatewayLifecycle: true,
   });
-  expect(publishedCatalog()?.config.models?.providers?.["recoverable-fixture"]?.apiKey).toEqual(
-    recoveredRef,
-  );
+  expect(recoveredKey(publishedCatalog()?.config)).toEqual(recoveredRef);
   const generationState = new SharedGatewaySessionGenerationState({
     current: "initial",
     required: null,
@@ -242,32 +232,22 @@ describe("secret reload model-runtime publication", () => {
       await writeConfigFile(next);
       const canonicalSource = getRuntimeConfigSourceSnapshot();
       expect(canonicalSource?.agents?.defaults?.model).toEqual(next.agents.defaults.model);
-      expect(canonicalSource?.models?.providers?.["recoverable-fixture"]?.apiKey).toEqual(
-        recoveredRef,
-      );
+      expect(recoveredKey(canonicalSource)).toEqual(recoveredRef);
       const configRuntime = requireRuntimeConfig();
       const { handlers, requestRecoveryRestart } = hotReloadRuntime();
-      const started = createDeferred();
-      const release = createDeferred();
+      const { started, release, hook, prepare } = pauseCatalog();
       const successorStarted = createDeferred();
       const releaseSuccessor = createDeferred();
       const secretsActivated = createDeferred();
-      const prepare = providerCatalog.prepareImplicitProviderStaticCatalog;
-      vi.spyOn(providerCatalog, "prepareImplicitProviderStaticCatalog")
-        .mockImplementationOnce(async (...args) => {
-          started.resolve();
-          await release.promise;
-          return await prepare(...args);
-        })
-        .mockImplementationOnce(async (...args) => {
-          const catalog = await prepare(...args);
-          successorStarted.resolve();
-          await releaseSuccessor.promise;
-          if (outcome === "failed") {
-            throw new Error("successor catalog build failed");
-          }
-          return catalog;
-        });
+      hook.mockImplementationOnce(async (...args) => {
+        const catalog = await prepare(...args);
+        successorStarted.resolve();
+        await releaseSuccessor.promise;
+        if (outcome === "failed") {
+          throw new Error("successor catalog build failed");
+        }
+        return catalog;
+      });
       const activate = activator.activatePreparedSnapshotIfCurrent!;
       activator.activatePreparedSnapshotIfCurrent = async (...args) => {
         const activated = await activate(...args);
@@ -318,9 +298,7 @@ describe("secret reload model-runtime publication", () => {
         const published = await prepareRuntime(current);
         expect(published.config).toBe(current);
         expect(published.config.agents?.defaults?.model).toEqual(next.agents.defaults.model);
-        expect(published.config.models?.providers?.["recoverable-fixture"]?.apiKey).toBe(
-          "rotated-fixture-key",
-        );
+        expect(recoveredKey(published.config)).toBe("rotated-fixture-key");
       } finally {
         release.resolve();
         releaseSuccessor.resolve();
@@ -338,13 +316,8 @@ describe("secret reload model-runtime publication", () => {
 
     expect(getRuntimeConfigSourceSnapshot()).toEqual(config);
     expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(authRevision);
-    expect(requireRuntimeConfig().models?.providers?.["recoverable-fixture"]?.apiKey).toBe(
-      "recovered-fixture-key",
-    );
-    const published = publishedCatalog();
-    expect(published?.config.models?.providers?.["recoverable-fixture"]?.apiKey).toBe(
-      "recovered-fixture-key",
-    );
+    expect(recoveredKey(requireRuntimeConfig())).toBe("recovered-fixture-key");
+    expect(recoveredKey(publishedCatalog()?.config)).toBe("recovered-fixture-key");
   });
 
   it("restores the authoritative runtime model config after a publication failure", async () => {
@@ -369,9 +342,7 @@ describe("secret reload model-runtime publication", () => {
       const published = await prepareRuntime(current);
       expect(published.config).toBe(current);
       // The canonical restore retains this now-resolved Ref, rather than the cold predecessor bytes.
-      expect(current.models?.providers?.["recoverable-fixture"]?.apiKey).toBe(
-        "recovered-fixture-key",
-      );
+      expect(recoveredKey(current)).toBe("recovered-fixture-key");
     } finally {
       unsubscribeClient();
       unsubscribeGeneration?.();

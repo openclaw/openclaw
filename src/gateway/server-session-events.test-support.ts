@@ -27,32 +27,24 @@ export const readSessionMessageByIdAsyncMock = vi.hoisted(() => vi.fn());
 export const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtimeConfigState.value }));
-vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
-  return {
-    ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
-    listSessionEntriesReadOnly: listAccessorSessionEntriesReadOnlyMock,
-    loadSessionEntryReadOnly: loadAccessorSessionEntryReadOnlyMock,
-  };
-});
-vi.mock("./chat-display-projection.js", async (importOriginal) => {
-  return {
-    ...(await importOriginal<typeof import("./chat-display-projection.js")>()),
-    projectChatDisplayMessage: projectChatDisplayMessageMock,
-  };
-});
-vi.mock("./session-transcript-readers.js", async (importOriginal) => {
-  return {
-    ...(await importOriginal<typeof import("./session-transcript-readers.js")>()),
-    readSessionMessageCountAsync: readSessionMessageCountAsyncMock,
-    readSessionMessageByIdAsync: readSessionMessageByIdAsyncMock,
-  };
-});
-vi.mock("../agents/embedded-agent-runner/runs.js", async (importOriginal) => {
-  return {
-    ...(await importOriginal<typeof import("../agents/embedded-agent-runner/runs.js")>()),
-    resolveEmbeddedAgentSessionProgressState: resolveEmbeddedAgentSessionProgressStateMock,
-  };
-});
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
+  listSessionEntriesReadOnly: listAccessorSessionEntriesReadOnlyMock,
+  loadSessionEntryReadOnly: loadAccessorSessionEntryReadOnlyMock,
+}));
+vi.mock("./chat-display-projection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chat-display-projection.js")>()),
+  projectChatDisplayMessage: projectChatDisplayMessageMock,
+}));
+vi.mock("./session-transcript-readers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-transcript-readers.js")>()),
+  readSessionMessageCountAsync: readSessionMessageCountAsyncMock,
+  readSessionMessageByIdAsync: readSessionMessageByIdAsyncMock,
+}));
+vi.mock("../agents/embedded-agent-runner/runs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent-runner/runs.js")>()),
+  resolveEmbeddedAgentSessionProgressState: resolveEmbeddedAgentSessionProgressStateMock,
+}));
 
 const {
   createLifecycleEventBroadcastHandler: createLifecycleHandler,
@@ -61,6 +53,11 @@ const {
 export const { createGatewayBroadcaster } = await import("./server-broadcast.js");
 export const { subscribePluginSessionsChanged } =
   await import("../plugins/services.test-support.js");
+
+type RowQuery = { key?: string; agentId?: string; storePath?: string };
+function projectedEntry(row: { key: string; entry: unknown }, { agentId, storePath }: RowQuery) {
+  return Object.assign({}, row, { agentId, storeTarget: { agentId, storePath } });
+}
 
 const projection = {
   get state() {
@@ -75,54 +72,31 @@ const projection = {
     return consume(projection);
   }) satisfies SessionRowProjection["withPreparedExactRows"],
   isCurrent: () => true,
-  selectEntries(query: { key?: string; agentId?: string; storePath?: string }) {
-    if (!query.key) {
-      return (
-        listAccessorSessionEntriesReadOnlyMock({
-          agentId: query.agentId,
-          storePath: query.storePath,
-        }) ?? []
-      ).map((row: { key: string; entry: unknown }) =>
-        Object.assign({}, row, {
-          agentId: query.agentId,
-          storeTarget: { agentId: query.agentId, storePath: query.storePath },
-        }),
+  selectEntries({ key, agentId, storePath }: RowQuery) {
+    if (!key) {
+      return (listAccessorSessionEntriesReadOnlyMock({ agentId, storePath }) ?? []).map(
+        (row: { key: string; entry: unknown }) => projectedEntry(row, { agentId, storePath }),
       );
     }
-    const target = query.storePath
+    const target = storePath
       ? {
-          entry: loadAccessorSessionEntryReadOnlyMock({
-            agentId: query.agentId,
-            sessionKey: query.key,
-            storePath: query.storePath,
-          }),
-          storePath: query.storePath,
+          entry: loadAccessorSessionEntryReadOnlyMock({ agentId, sessionKey: key, storePath }),
+          storePath,
         }
-      : loadGatewaySessionEntryReadOnlyMock(query.key, { agentId: query.agentId });
+      : loadGatewaySessionEntryReadOnlyMock(key, { agentId });
     return target?.entry
-      ? [
-          {
-            key: query.key,
-            agentId: query.agentId,
-            entry: target.entry,
-            storeTarget: { agentId: query.agentId, storePath: target.storePath },
-          },
-        ]
+      ? [projectedEntry({ key, entry: target.entry }, { agentId, storePath: target.storePath })]
       : [];
   },
-  capture(query: { key: string; agentId: string; storePath?: string }) {
-    return projection.selectEntries(query)[0];
-  },
+  capture: (query: { key: string; agentId: string; storePath?: string }) =>
+    projection.selectEntries(query)[0],
   findBySessionId(query: { sessionId: string; agentId?: string; storePath?: string }) {
     return projection
       .selectEntries({ agentId: query.agentId, storePath: query.storePath })
       .filter(({ entry }) => entry.sessionId === query.sessionId);
   },
-  snapshot(query: { key: string; agentId: string }) {
-    return { row: loadGatewaySessionRowMock(query.key, { agentId: query.agentId }) };
-  },
   describe(query: { key: string; agentId: string }) {
-    const row = projection.snapshot(query).row;
+    const row = loadGatewaySessionRowMock(query.key, { agentId: query.agentId });
     return row ? { materialized: { row } } : undefined;
   },
   present(record: Parameters<SessionRowProjection["present"]>[0]) {
@@ -130,51 +104,41 @@ const projection = {
   },
 } as unknown as SessionRowProjection;
 
-export function createLifecycleEventBroadcastHandler(
+export const createLifecycleEventBroadcastHandler = (
   params: Parameters<typeof createLifecycleHandler>[0],
-) {
-  return createLifecycleHandler({ getSessionRowProjection: () => projection, ...params });
-}
-export function createTranscriptUpdateBroadcastHandler(
+) => createLifecycleHandler({ getSessionRowProjection: () => projection, ...params });
+export const createTranscriptUpdateBroadcastHandler = (
   params: Parameters<typeof createTranscriptHandler>[0],
-) {
-  return createTranscriptHandler({ getSessionRowProjection: () => projection, ...params });
-}
+) => createTranscriptHandler({ getSessionRowProjection: () => projection, ...params });
 
-export function createActiveRun(
+export const createActiveRun = (
   projectSessionActive: boolean,
   executionStarted = true,
-): ChatAbortControllerEntry {
-  return {
-    controller: new AbortController(),
-    sessionId: "sess-main",
-    sessionKey: "agent:main:main",
-    startedAtMs: Date.now(),
-    executionStarted,
-    expiresAtMs: Date.now() + 60_000,
-    projectSessionActive,
-  };
-}
+): ChatAbortControllerEntry => ({
+  controller: new AbortController(),
+  sessionId: "sess-main",
+  sessionKey: "agent:main:main",
+  startedAtMs: Date.now(),
+  executionStarted,
+  expiresAtMs: Date.now() + 60_000,
+  projectSessionActive,
+});
 
-export function storedMessage(messageId: string, seq = 1) {
-  return {
-    found: true,
-    oversized: false,
-    seq,
-    message: { role: "assistant", content: `Stored ${messageId}` },
-  };
-}
+export const storedMessage = (messageId: string, seq = 1) => ({
+  found: true,
+  oversized: false,
+  seq,
+  message: { role: "assistant", content: `Stored ${messageId}` },
+});
 
-export function fixedStoreRuntimeConfig(ownerAgentId: string, configuredAgentIds: string[]) {
-  return {
-    session: { store: "/tmp/shared.sqlite" },
-    agents: {
-      ownership: "explicit",
-      defaults: { sessionStore: { agentId: ownerAgentId } },
-      entries: Object.fromEntries(configuredAgentIds.map((agentId) => [agentId, {}])),
-    },
-  };
-}
+export const fixedStoreRuntimeConfig = (ownerAgentId: string, configuredAgentIds: string[]) => ({
+  session: { store: "/tmp/shared.sqlite" },
+  agents: {
+    ownership: "explicit",
+    defaults: { sessionStore: { agentId: ownerAgentId } },
+    entries: Object.fromEntries(configuredAgentIds.map((agentId) => [agentId, {}])),
+  },
+});
 
 export function createHandler(
   projectSessionActive: boolean,
@@ -205,13 +169,10 @@ export const ownerGoal = {
   continuationTurns: 0,
 };
 
-const PRIVATE_SESSION_FIELDS =
-  "agentId session message owner goal status hasActiveRun activeRunIds model responseUsage".split(
-    " ",
-  );
-
 export function expectPrivateSessionInvalidation(payload: unknown) {
-  for (const field of PRIVATE_SESSION_FIELDS) {
+  for (const field of "agentId session message owner goal status hasActiveRun activeRunIds model responseUsage".split(
+    " ",
+  )) {
     expect(payload, field).not.toHaveProperty(field);
   }
 }

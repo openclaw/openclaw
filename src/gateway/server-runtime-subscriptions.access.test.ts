@@ -20,7 +20,10 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { forgetActiveSessionForShutdown } from "./active-sessions-shutdown-tracker.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -44,47 +47,56 @@ vi.mock("../audit/audit-recorder.js", () => ({
   }),
 }));
 
-async function withAccessFixture(
-  body: (fixture: {
-    scope: { agentId: string; sessionKey: string; storePath: string };
-    params: Parameters<typeof startGatewayEventSubscriptions>[0];
-    workspaceDir: string;
-    start: () => ReturnType<typeof startGatewayEventSubscriptions>;
-  }) => Promise<void>,
-) {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    setRuntimeConfigSnapshot({});
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:identity-access",
-      storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
-    };
-    const params = createSubscriptionTestFixture().createParams();
-    const subscriptions: ReturnType<typeof startGatewayEventSubscriptions>[] = [];
-    try {
-      await body({
-        scope,
-        params,
-        workspaceDir: state.workspaceDir,
-        start: () => {
-          const subscription = startGatewayEventSubscriptions(params);
-          subscriptions.push(subscription);
-          return subscription;
-        },
-      });
-    } finally {
+const initialEntry = { sessionId: "same-session", lifecycleRevision: "before", updatedAt: 1 };
+const resetEntry = { ...initialEntry, lifecycleRevision: "after", updatedAt: 2 };
+
+function createAccessFixture(state: OpenClawTestState) {
+  setRuntimeConfigSnapshot({});
+  const store = {
+    agentId: "main",
+    storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+  };
+  const scope = { ...store, sessionKey: "agent:main:identity-access" };
+  const params = createSubscriptionTestFixture().createParams();
+  const subscriptions: ReturnType<typeof startGatewayEventSubscriptions>[] = [];
+  return {
+    scope,
+    params,
+    store,
+    workspaceDir: state.workspaceDir,
+    mutate: (
+      mutation: Omit<
+        Parameters<typeof applySessionEntryLifecycleMutation>[0],
+        "agentId" | "storePath"
+      >,
+    ) => applySessionEntryLifecycleMutation({ ...store, skipMaintenance: true, ...mutation }),
+    start() {
+      const subscription = startGatewayEventSubscriptions(params);
+      subscriptions.push(subscription);
+      return subscription;
+    },
+    async [Symbol.asyncDispose]() {
       for (const subscription of subscriptions) {
         await subscription.agentUnsub();
         subscription.heartbeatUnsub();
         subscription.transcriptUnsub();
         subscription.lifecycleUnsub();
       }
-    }
+    },
+  };
+}
+
+async function withAccessFixture(
+  body: (fixture: ReturnType<typeof createAccessFixture>) => Promise<void>,
+) {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await using fixture = createAccessFixture(state);
+    await body(fixture);
   });
 }
 
 it("invalidates access synchronously for committed create, move, reset, and delete", async () => {
-  await withAccessFixture(async ({ scope, start }) => {
+  await withAccessFixture(async ({ scope, store, mutate, start }) => {
     start();
     const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
     const revision = readGatewayAccessRevision();
@@ -97,32 +109,22 @@ it("invalidates access synchronously for committed create, move, reset, and dele
       });
     });
     try {
-      const entry = { sessionId: "same-session", lifecycleRevision: "before", updatedAt: 1 };
-      await upsertSessionEntryCore(scope, entry);
+      await upsertSessionEntryCore(scope, { ...initialEntry });
       const movedKey = "agent:main:moved-identity-access";
-      await applySessionEntryLifecycleMutation({
-        agentId: scope.agentId,
-        storePath: scope.storePath,
+      await mutate({
         removals: [{ sessionKey: scope.sessionKey }],
-        upserts: [{ sessionKey: movedKey, entry }],
-        skipMaintenance: true,
+        upserts: [{ sessionKey: movedKey, entry: initialEntry }],
       });
       await resetSessionEntryLifecycle({
-        agentId: scope.agentId,
-        storePath: scope.storePath,
+        ...store,
         target: { canonicalKey: movedKey, storeKeys: [movedKey] },
-        buildNextEntry: () => ({ ...entry, lifecycleRevision: "after", updatedAt: 2 }),
+        buildNextEntry: () => ({ ...resetEntry }),
       });
       expect(loadSessionEntry({ ...scope, sessionKey: movedKey })).toMatchObject({
-        sessionId: entry.sessionId,
+        sessionId: initialEntry.sessionId,
         lifecycleRevision: "after",
       });
-      await applySessionEntryLifecycleMutation({
-        agentId: scope.agentId,
-        storePath: scope.storePath,
-        removals: [{ sessionKey: movedKey }],
-        skipMaintenance: true,
-      });
+      await mutate({ removals: [{ sessionKey: movedKey }] });
       expect(changes.map((change) => change.kind)).toEqual(["create", "move", "reset", "delete"]);
       for (const [index, change] of changes.entries()) {
         expect(change.inTransaction).toBe(false);
@@ -194,9 +196,8 @@ it.each([
 ])(
   "publishes a same-ID reset only after $mode commits (rollback: $rollback)",
   async ({ mode, rollback }) => {
-    await withAccessFixture(async ({ scope, workspaceDir, start }) => {
-      const entry = { sessionId: "same-session", lifecycleRevision: "before", updatedAt: 1 };
-      await upsertSessionEntryCore(scope, entry);
+    await withAccessFixture(async ({ scope, workspaceDir, mutate, start }) => {
+      await upsertSessionEntryCore(scope, { ...initialEntry });
       start();
       const revision = readGatewayAccessRevision();
       if (mode === "outer transaction") {
@@ -205,11 +206,7 @@ it.each([
         const replace = () =>
           runOpenClawAgentWriteTransaction(
             () => {
-              replaceSessionEntrySync(scope, {
-                ...entry,
-                lifecycleRevision: "after",
-                updatedAt: 2,
-              });
+              replaceSessionEntrySync(scope, { ...resetEntry });
               expect(readGatewayAccessRevision()).toBe(revision);
               if (rollback) {
                 throw new Error("rollback identity");
@@ -219,53 +216,47 @@ it.each([
           );
         if (rollback) {
           expect(replace).toThrow("rollback identity");
-          expect(readGatewayAccessRevision()).toBe(revision);
         } else {
           replace();
-          expect(readGatewayAccessRevision()).toBeGreaterThan(revision);
         }
-        expect(loadSessionEntry(scope)).toMatchObject({
-          sessionId: entry.sessionId,
-          lifecycleRevision: rollback ? "before" : "after",
-        });
-        return;
-      }
-      const kinds: string[] = [];
-      const observe = onSessionIdentityMutation((mutation) => kinds.push(mutation.kind));
-      try {
-        const reset = applySessionEntryLifecycleMutation({
-          agentId: scope.agentId,
-          activeSessionKey: scope.sessionKey,
-          storePath: scope.storePath,
-          upserts: [
-            {
-              sessionKey: scope.sessionKey,
-              entry: {
-                ...entry,
-                ...(rollback ? { parentSessionKey: "invalid-reset-parent" } : {}),
-                lifecycleRevision: "after",
-                updatedAt: 2,
+      } else {
+        const kinds: string[] = [];
+        const observe = onSessionIdentityMutation((mutation) => kinds.push(mutation.kind));
+        try {
+          const reset = mutate({
+            activeSessionKey: scope.sessionKey,
+            upserts: [
+              {
+                sessionKey: scope.sessionKey,
+                entry: {
+                  ...resetEntry,
+                  ...(rollback ? { parentSessionKey: "invalid-reset-parent" } : {}),
+                },
+                resetBoundary: { context: "preserve-tail", reason: "reset", cwd: workspaceDir },
               },
-              resetBoundary: { context: "preserve-tail", reason: "reset", cwd: workspaceDir },
-            },
-          ],
-          skipMaintenance: true,
-        });
-        if (rollback) {
-          await expect(reset).rejects.toThrow(
-            "refusing non-canonical session key write invalid-reset-parent",
-          );
-          expect(kinds).toEqual([]);
-          expect(readGatewayAccessRevision()).toBe(revision);
-        } else {
-          await reset;
-          expect(kinds).toEqual(["reset"]);
-          expect(readGatewayAccessRevision()).toBeGreaterThan(revision);
+            ],
+          });
+          if (rollback) {
+            await expect(reset).rejects.toThrow(
+              "refusing non-canonical session key write invalid-reset-parent",
+            );
+          } else {
+            await reset;
+          }
+          expect(kinds).toEqual(rollback ? [] : ["reset"]);
+        } finally {
+          observe();
         }
-        expect(loadSessionEntry(scope)?.lifecycleRevision).toBe(rollback ? "before" : "after");
-      } finally {
-        observe();
       }
+      if (rollback) {
+        expect(readGatewayAccessRevision()).toBe(revision);
+      } else {
+        expect(readGatewayAccessRevision()).toBeGreaterThan(revision);
+      }
+      expect(loadSessionEntry(scope)).toMatchObject({
+        sessionId: initialEntry.sessionId,
+        lifecycleRevision: rollback ? "before" : "after",
+      });
     });
   },
 );
@@ -314,9 +305,11 @@ it("invalidates committed compaction access after the run is aborted and removed
           result: { tokensBefore: 4_096, sessionId: "successor" },
         },
       });
-      expect(committed.entry.sessionId).toBe("successor");
-      expect(run.entry.controller.signal.aborted).toBe(true);
-      expect(params.chatAbortControllers.has(runId)).toBe(false);
+      expect({
+        sessionId: committed.entry.sessionId,
+        aborted: run.entry.controller.signal.aborted,
+        registered: params.chatAbortControllers.has(runId),
+      }).toEqual({ sessionId: "successor", aborted: true, registered: false });
       expect(readGatewayAccessRevision()).toBeGreaterThan(revision);
       expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
       expect((await readSessionMembersInWorker(scope)).members).toEqual([]);

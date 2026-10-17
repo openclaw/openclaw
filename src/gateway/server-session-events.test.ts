@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { registerTranscriptMarkerQueueTests } from "./server-session-events.marker-queue.test-support.js";
 import {
   createGatewayBroadcaster,
@@ -49,6 +50,19 @@ function expectAbsent(payload: unknown, ...fields: string[]) {
   for (const field of fields) {
     expect(payload, field).not.toHaveProperty(field);
   }
+}
+
+const defaultEntry = { sessionId: "sess-main", updatedAt: 1 };
+function entryWithRevision(lifecycleRevision: string) {
+  return { ...defaultEntry, lifecycleRevision };
+}
+
+function expectMessage(broadcast: ReturnType<typeof vi.fn>, messageId: string, messageSeq: number) {
+  expectBroadcast(broadcast, "session.message", {
+    sessionKey: "agent:main:main",
+    messageId,
+    messageSeq,
+  });
 }
 
 describe("createTranscriptUpdateBroadcastHandler", () => {
@@ -109,11 +123,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     });
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    expectBroadcast(broadcastToConnIds, "session.message", {
-      sessionKey: "agent:main:main",
-      messageId: "durable-user-1",
-      messageSeq: 1,
-    });
+    expectMessage(broadcastToConnIds, "durable-user-1", 1);
   });
 
   it("invalidates broad and targeted subscribers once for an identity-only commit", async () => {
@@ -123,11 +133,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       sessionKey === "agent:main:main" ? targetConnIds : new Set<string>(),
     );
     const broadcastToConnIds = vi.fn();
-    loadAccessorSessionEntryReadOnlyMock.mockReturnValue({
-      sessionId: "sess-main",
-      lifecycleRevision: "committed-revision",
-      updatedAt: 1,
-    });
+    loadAccessorSessionEntryReadOnlyMock.mockReturnValue(entryWithRevision("committed-revision"));
     const handler = createTranscriptUpdateBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => broadConnIds },
@@ -221,29 +227,15 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   ])(
     "discards a queued %s message when its session owner is %s",
     async (_updateSource, ownerChange, lifecycleRevision) => {
-      let currentEntry:
-        | { sessionId: string; lifecycleRevision: string; updatedAt: number }
-        | undefined = {
-        sessionId: "sess-main",
-        lifecycleRevision: "revision-before-reset",
-        updatedAt: 1,
-      };
+      let currentEntry: ReturnType<typeof entryWithRevision> | undefined =
+        entryWithRevision("revision-before-reset");
       loadAccessorSessionEntryReadOnlyMock.mockImplementation(() => currentEntry);
       loadGatewaySessionEntryReadOnlyMock.mockReturnValue({
-        entry: {
-          sessionId: "sess-main",
-          lifecycleRevision: "revision-before-reset",
-          updatedAt: 1,
-        },
+        entry: entryWithRevision("revision-before-reset"),
         storePath: "/tmp/default-lifecycle-sessions.json",
       });
-      let resolveMessageRead: ((value: ReturnType<typeof storedMessage>) => void) | undefined;
-      readSessionMessageByIdAsyncMock.mockImplementation(
-        () =>
-          new Promise<ReturnType<typeof storedMessage>>((resolve) => {
-            resolveMessageRead = resolve;
-          }),
-      );
+      const messageRead = createDeferredCore<ReturnType<typeof storedMessage>>();
+      readSessionMessageByIdAsyncMock.mockImplementation(() => messageRead.promise);
       const { broadcastToConnIds, handler } = createHandler(false);
 
       const pendingBroadcast = handler({
@@ -261,7 +253,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       } else {
         currentEntry.lifecycleRevision = "revision-after-reset";
       }
-      resolveMessageRead?.(storedMessage("message-before-reset"));
+      messageRead.resolve(storedMessage("message-before-reset"));
 
       await pendingBroadcast;
       expect(loadGatewaySessionEntryReadOnlyMock).not.toHaveBeenCalled();
@@ -270,17 +262,9 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   );
 
   it("validates a committed custom-store owner without exposing private identity", async () => {
-    loadAccessorSessionEntryReadOnlyMock.mockReturnValue({
-      sessionId: "sess-main",
-      lifecycleRevision: "current-revision",
-      updatedAt: 1,
-    });
+    loadAccessorSessionEntryReadOnlyMock.mockReturnValue(entryWithRevision("current-revision"));
     loadGatewaySessionEntryReadOnlyMock.mockReturnValue({
-      entry: {
-        sessionId: "sess-main",
-        lifecycleRevision: "unrelated-default-revision",
-        updatedAt: 1,
-      },
+      entry: entryWithRevision("unrelated-default-revision"),
       storePath: "/tmp/default-lifecycle-sessions.json",
     });
     const { broadcastToConnIds, handler } = createHandler(false);
@@ -300,20 +284,13 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       storePath: "/tmp/current-lifecycle-sessions.json",
     });
     expect(loadGatewaySessionEntryReadOnlyMock).not.toHaveBeenCalled();
-    expectBroadcast(broadcastToConnIds, "session.message", {
-      sessionKey: "agent:main:main",
-      messageId: "message-current-lifecycle",
-      messageSeq: 1,
-    });
+    expectMessage(broadcastToConnIds, "message-current-lifecycle", 1);
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
     expectAbsent(payload, "lifecycleRevision", "storePath", "target.storePath");
   });
 
   it("keeps committed messages visible when the current owner has no legacy revision", async () => {
-    loadAccessorSessionEntryReadOnlyMock.mockReturnValue({
-      sessionId: "sess-main",
-      updatedAt: 1,
-    });
+    loadAccessorSessionEntryReadOnlyMock.mockReturnValue({ ...defaultEntry });
     const { broadcastToConnIds, handler } = createHandler(false);
 
     await handler({
@@ -325,11 +302,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     });
 
     expect(broadcastToConnIds).toHaveBeenCalledOnce();
-    expectBroadcast(broadcastToConnIds, "session.message", {
-      sessionKey: "agent:main:main",
-      messageId: "revisionless-owner-message",
-      messageSeq: 1,
-    });
+    expectMessage(broadcastToConnIds, "revisionless-owner-message", 1);
   });
 
   it("preserves revisionless transcript updates when ownership is unavailable", async () => {
@@ -345,11 +318,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     });
 
     expect(broadcastToConnIds).toHaveBeenCalledOnce();
-    expectBroadcast(broadcastToConnIds, "session.message", {
-      sessionKey: "agent:main:main",
-      messageId: "legacy-lifecycle-message",
-      messageSeq: 3,
-    });
+    expectMessage(broadcastToConnIds, "legacy-lifecycle-message", 3);
   });
 
   it("carries terminal assistant run ownership while plugin finalization keeps the run active", async () => {
@@ -534,34 +503,19 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     expectPrivateSessionInvalidation(broadcastToConnIds.mock.calls[0]?.[1]);
   });
 
-  it("broadcasts user idempotency keys in session.message metadata", async () => {
-    await expect(
-      emitAssistantTranscriptUpdate(false, {
-        role: "user",
-        content: [{ type: "text", text: "Optimistic turn" }],
-        idempotencyKey: "client-turn-3",
-      }),
-    ).resolves.toMatchObject({
-      message: {
-        __openclaw: {
-          id: "message-1",
-          idempotencyKey: "client-turn-3",
-          seq: 1,
-        },
-      },
-    });
-  });
-
-  it("broadcasts the authenticated sender ownership decision", async () => {
-    await expect(
-      emitAssistantTranscriptUpdate(false, {
-        role: "user",
-        content: [{ type: "text", text: "Owner turn" }],
-        __openclaw: { senderIsOwner: true },
-      }),
-    ).resolves.toMatchObject({
-      senderIsOwner: true,
-    });
+  it.each([
+    [
+      "broadcasts user idempotency keys in session.message metadata",
+      { ...textMessage("user", "Optimistic turn"), idempotencyKey: "client-turn-3" },
+      { message: { __openclaw: { id: "message-1", idempotencyKey: "client-turn-3", seq: 1 } } },
+    ],
+    [
+      "broadcasts the authenticated sender ownership decision",
+      { ...textMessage("user", "Owner turn"), __openclaw: { senderIsOwner: true } },
+      { senderIsOwner: true },
+    ],
+  ])("%s", async (_name, message, expected) => {
+    await expect(emitAssistantTranscriptUpdate(false, message)).resolves.toMatchObject(expected);
   });
   it("publishes message-phase changes to plugins without websocket subscribers", async () => {
     const received = vi.fn();
@@ -596,10 +550,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   });
 
   it("reads the canonical message through the target's explicit store", async () => {
-    loadAccessorSessionEntryReadOnlyMock.mockReturnValue({
-      sessionId: "sess-main",
-      updatedAt: 1,
-    });
+    loadAccessorSessionEntryReadOnlyMock.mockReturnValue({ ...defaultEntry });
     readSessionMessageByIdAsyncMock.mockResolvedValueOnce(
       storedMessage("message-partial-target", 7),
     );
@@ -633,12 +584,10 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   ])(
     "does not stall %s behind another transcript's pending seq read",
     async (_name, slowAgentId, slowSessionKey, fastAgentId, fastSessionKey) => {
-      let releaseSlowCount: (value: number) => void = () => undefined;
+      const slowCount = createDeferredCore<number>();
       const readSequence = vi.fn((params: { agentId?: string; sessionKey?: string }) =>
         params.agentId === slowAgentId && params.sessionKey === slowSessionKey
-          ? new Promise<number>((resolve) => {
-              releaseSlowCount = resolve;
-            })
+          ? slowCount.promise
           : Promise.resolve(3),
       );
       readSessionMessageCountAsyncMock.mockImplementation(readSequence);
@@ -678,7 +627,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         });
         expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({ messageId: "fast-1" });
       } finally {
-        releaseSlowCount(5);
+        slowCount.resolve(5);
         await Promise.allSettled([slowTask, fastTask]);
       }
 
@@ -715,13 +664,10 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
               session: { store: "/tmp/owned-shared.sqlite" },
             }
           : {};
-      let releaseFirstCount: (value: number) => void = () => undefined;
-      const firstRead = new Promise<number>((resolve) => {
-        releaseFirstCount = resolve;
-      });
-      readSessionMessageCountAsyncMock.mockImplementationOnce(() => firstRead);
+      const firstRead = createDeferredCore<number>();
+      readSessionMessageCountAsyncMock.mockImplementationOnce(() => firstRead.promise);
       readSessionMessageByIdAsyncMock.mockImplementationOnce(async (_scope, id: string) =>
-        storedMessage(id, await firstRead),
+        storedMessage(id, await firstRead.promise),
       );
       loadAccessorSessionEntryReadOnlyMock.mockReturnValue({ sessionId: "sess-main" });
       if (markerOnly) {
@@ -764,7 +710,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       try {
         expect(broadcastToConnIds).not.toHaveBeenCalled();
       } finally {
-        releaseFirstCount(1);
+        firstRead.resolve(1);
         await Promise.allSettled([firstTask, secondTask]);
       }
       expect(broadcastToConnIds.mock.calls.map((call) => call[1]?.messageId)).toEqual([

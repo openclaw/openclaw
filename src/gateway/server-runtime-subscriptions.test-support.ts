@@ -35,6 +35,10 @@ import {
 } from "./server-chat-state.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 
+type SubscriptionParams = Parameters<typeof startGatewayEventSubscriptions>[0];
+type AuditConfig = NonNullable<NonNullable<OpenClawConfig["logging"]>["audit"]>;
+type InstallHandler = (factory: typeof import("./server-chat.js").createAgentEventHandler) => void;
+
 export function createSubscriptionTestFixture() {
   const warn = vi.fn();
   const log: SubsystemLogger = {
@@ -52,7 +56,7 @@ export function createSubscriptionTestFixture() {
   return {
     log,
     warn,
-    createParams: (): Parameters<typeof startGatewayEventSubscriptions>[0] => {
+    createParams: (): SubscriptionParams => {
       const chatRunState = createChatRunState();
       return {
         scheduler: createTestGatewayScheduler(),
@@ -76,7 +80,7 @@ export function createSubscriptionTestFixture() {
 }
 
 export function registerSubscriptionChatRun(
-  params: Parameters<typeof startGatewayEventSubscriptions>[0],
+  params: SubscriptionParams,
   input: Omit<
     Parameters<typeof registerChatAbortController>[0],
     "chatAbortControllers" | "timeoutMs"
@@ -136,10 +140,7 @@ export function registerAuditSubscriptionTests(params: {
   warn: ReturnType<typeof createSubscriptionTestFixture>["warn"];
 }) {
   const { start, runtimeConfigState, auditTestState, warn } = params;
-  const setAudit = (
-    audit: NonNullable<NonNullable<OpenClawConfig["logging"]>["audit"]>,
-    unsubs?: ReturnType<typeof start>,
-  ) => {
+  const setAudit = (audit: AuditConfig, unsubs?: ReturnType<typeof start>) => {
     runtimeConfigState.value = { logging: { audit } };
     unsubs?.reconcileAuditPolicy(runtimeConfigState.value);
   };
@@ -186,6 +187,10 @@ export function registerAuditSubscriptionTests(params: {
     const resolveGateway = readChannelContextGatewayContextResolver(context);
     expect(resolveGateway).toBeTypeOf("function");
     const gateway = resolveGateway?.();
+    const expectRoutingUnchanged = () => {
+      expect(readChannelContextGatewayContextResolver(context)).toBe(resolveGateway);
+      expect(resolveGateway?.()).toBe(gateway);
+    };
     expect(gateway?.channelAdmissionAudit).toBe(unsubs.channelAdmissionAudit);
 
     setAudit({ executionIdentity: true }, unsubs);
@@ -209,8 +214,7 @@ export function registerAuditSubscriptionTests(params: {
     setAudit({ enabled: false, executionIdentity: true }, unsubs);
     const disabledContext = {};
     expect(bindEvidence(disabledContext)).toBeUndefined();
-    expect(readChannelContextGatewayContextResolver(context)).toBe(resolveGateway);
-    expect(resolveGateway?.()).toBe(gateway);
+    expectRoutingUnchanged();
     expect(
       readChannelContextGatewayContextResolver(disabledContext)?.()?.channelAdmissionAudit,
     ).toBe(unsubs.channelAdmissionAudit);
@@ -219,8 +223,7 @@ export function registerAuditSubscriptionTests(params: {
     expect(consumeChannelAdmissionEvidence(retired)).toMatchObject({ ingressState: "unknown" });
     expect(recordChannelAdmissionDecision(evidence, decision)).toBe(false);
     expect(auditTestState.decisionRecorded).toBe(1);
-    expect(readChannelContextGatewayContextResolver(context)).toBe(resolveGateway);
-    expect(resolveGateway?.()).toBe(gateway);
+    expectRoutingUnchanged();
 
     const beforeShutdown = createEvidence();
     expect(beforeShutdown).toBeDefined();
@@ -247,34 +250,14 @@ export function registerAuditSubscriptionTests(params: {
   it("applies audit policy changes through the existing event subscriptions", async () => {
     setAudit({ enabled: false });
     const unsubs = start();
-    const steps: Array<{
-      audit: NonNullable<NonNullable<OpenClawConfig["logging"]>["audit"]>;
-      recorded: number;
-      messages: number;
-      identityRecorded: number;
-    }> = [
-      {
-        audit: { enabled: false, messages: "all", executionIdentity: true },
-        recorded: 0,
-        messages: 0,
-        identityRecorded: 0,
-      },
-      { audit: {}, recorded: 1, messages: 0, identityRecorded: 0 },
-      {
-        audit: { messages: "direct", executionIdentity: true },
-        recorded: 2,
-        messages: 1,
-        identityRecorded: 1,
-      },
-      { audit: { messages: "all" }, recorded: 3, messages: 3, identityRecorded: 1 },
-      {
-        audit: { enabled: false, messages: "all", executionIdentity: true },
-        recorded: 3,
-        messages: 3,
-        identityRecorded: 1,
-      },
+    const steps: Array<[AuditConfig, number, number, number]> = [
+      [{ enabled: false, messages: "all", executionIdentity: true }, 0, 0, 0],
+      [{}, 1, 0, 0],
+      [{ messages: "direct", executionIdentity: true }, 2, 1, 1],
+      [{ messages: "all" }, 3, 3, 1],
+      [{ enabled: false, messages: "all", executionIdentity: true }, 3, 3, 1],
     ];
-    for (const [index, { audit, ...counts }] of steps.entries()) {
+    for (const [index, [audit, recorded, messages, identityRecorded]] of steps.entries()) {
       setAudit(audit, unsubs);
       const runId = `live-audit-${index}`;
       emitAudit(runId);
@@ -301,7 +284,13 @@ export function registerAuditSubscriptionTests(params: {
         },
         { enabled: true },
       );
-      expect(auditTestState).toMatchObject({ created: 1, stopped: 0, ...counts });
+      expect(auditTestState).toMatchObject({
+        created: 1,
+        stopped: 0,
+        recorded,
+        messages,
+        identityRecorded,
+      });
     }
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
@@ -400,29 +389,23 @@ export function registerAssistantTailSubscriptionTests({
   start,
 }: {
   createParams: ReturnType<typeof createSubscriptionTestFixture>["createParams"];
-  installHandlerFactory: (
-    factory: typeof import("./server-chat.js").createAgentEventHandler,
-  ) => void;
-  start: (params: Parameters<typeof startGatewayEventSubscriptions>[0]) => void;
+  installHandlerFactory: InstallHandler;
+  start: (params: SubscriptionParams) => void;
 }): void {
+  const tailCase = (
+    source: string,
+    initial?: string,
+    committed = [initial ?? "Saved paragraph."],
+  ) => ({ source, committed, initial });
   it.each([
-    { source: "plain", committed: ["Saved paragraph."], initial: "Saved paragraph." },
-    {
-      source: "native raw directive",
-      committed: ["[[reply_to_current]]Saved paragraph."],
-      initial: "[[reply_to_current]]Saved paragraph.",
-    },
-    {
-      source: "native partial before directive",
-      committed: ["Saved[[reply_to_current]] paragraph."],
-      initial: "Saved",
-    },
-    { source: "before first bytes", committed: ["Saved paragraph."], initial: undefined },
-    {
-      source: "identical receipts before first bytes",
-      committed: ["Saved paragraph.", "Saved paragraph."],
-      initial: undefined,
-    },
+    tailCase("plain", "Saved paragraph."),
+    tailCase("native raw directive", "[[reply_to_current]]Saved paragraph."),
+    tailCase("native partial before directive", "Saved", ["Saved[[reply_to_current]] paragraph."]),
+    tailCase("before first bytes"),
+    tailCase("identical receipts before first bytes", undefined, [
+      "Saved paragraph.",
+      "Saved paragraph.",
+    ]),
   ])(
     "retires $source by identity before queued continuation without session subscribers",
     async ({ committed, initial }) => {
@@ -430,16 +413,16 @@ export function registerAssistantTailSubscriptionTests({
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const params = createParams();
       const runId = "run-persisted-tail";
-      const sessionKey = "agent:main:main";
-      const sessionId = "session-persisted-tail";
-      const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      const registration = registerSubscriptionChatRun(params, {
-        runId,
-        sessionId,
-        sessionKey,
-        lifecycleGeneration,
-      });
-      claimAgentRunContext(runId, { lifecycleGeneration, sessionId, sessionKey });
+      const identity = {
+        sessionKey: "agent:main:main",
+        sessionId: "session-persisted-tail",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      };
+      const registration = registerSubscriptionChatRun(params, { runId, ...identity });
+      claimAgentRunContext(runId, identity);
+      const { sessionKey, sessionId } = identity;
+      const emitText = (itemId: string, text: string) =>
+        emitAgentEvent({ runId, stream: "assistant", data: { itemId, text } });
       const delivered = createDeferred();
       installHandlerFactory((options) => {
         const handler = actual.createAgentEventHandler(options);
@@ -479,17 +462,9 @@ export function registerAssistantTailSubscriptionTests({
           });
         }
         for (const [index, text] of committed.entries()) {
-          emitAgentEvent({
-            runId,
-            stream: "assistant",
-            data: { itemId: `saved-paragraph-${index}`, text },
-          });
+          emitText(`saved-paragraph-${index}`, text);
         }
-        emitAgentEvent({
-          runId,
-          stream: "assistant",
-          data: { itemId: "new-paragraph", text: "Unpersisted tail." },
-        });
+        emitText("new-paragraph", "Unpersisted tail.");
         await delivered.promise;
         expect(params.chatRunState.resolveBuffer(runId).text.trim()).toBe("Unpersisted tail.");
         expect(params.chatRunState.resolveBuffer(runId, { final: true }).text).toBe(
