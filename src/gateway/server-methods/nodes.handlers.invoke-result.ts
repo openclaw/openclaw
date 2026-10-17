@@ -60,10 +60,6 @@ export const handleNodeInvokeResult: GatewayRequestHandler = async ({
     payloadJSON: p.payloadJSON ?? null,
     error: p.error ?? null,
   });
-  if (!ok) {
-    // Late-arriving results (after invoke timeout) are expected and harmless.
-    // Return success instead of error to reduce log noise; client can discard.
-    context.logGateway.debug(`late invoke result ignored: id=${p.id} node=${p.nodeId}`);
-  }
+  // Late-arriving results after invoke timeout are harmless; clients can discard them.
   respond(true, { ok: true, ...(!ok ? { ignored: true } : {}) }, undefined);
 };

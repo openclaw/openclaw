@@ -176,7 +176,6 @@ export function createGatewayRunSignals(params: {
       return;
     }
     observeSignal("SIGTERM");
-    gatewayLog.debug("signal SIGTERM received");
     const terminalHostedStop = params.getTerminalHostedStop();
     if (terminalHostedStop) {
       // Kernel cleanup is already joined. A native stop signal belongs to this
@@ -228,7 +227,6 @@ export function createGatewayRunSignals(params: {
       return;
     }
     observeSignal("SIGINT");
-    gatewayLog.debug("signal SIGINT received");
     if (params.isForcedExitStarted()) {
       request("stop", "SIGINT");
       return;
@@ -263,7 +261,6 @@ export function createGatewayRunSignals(params: {
       return;
     }
     observeSignal("SIGUSR2");
-    gatewayLog.debug("signal SIGUSR2 received");
     if (params.isForegroundUpdateClosed()) {
       return;
     }
