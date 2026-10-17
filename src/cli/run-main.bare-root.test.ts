@@ -56,19 +56,6 @@ function expectBoundTui(expected: {
   );
 }
 
-function expectGatewayTarget(expected: Parameters<typeof expectBoundTui>[0]): void {
-  expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
-    ...expected,
-    ...(expected.configuredRemote
-      ? {
-          originScopedDeviceAuth: true,
-          config: expect.objectContaining({ gateway: expect.objectContaining({ mode: "remote" }) }),
-        }
-      : {}),
-  });
-  expectBoundTui(expected);
-}
-
 function primeBareRootConfig(sourceConfig: ConfigSnapshotStub["sourceConfig"]): void {
   readConfigFileSnapshotMock.mockResolvedValueOnce({ exists: true, valid: true, sourceConfig });
 }
@@ -164,16 +151,13 @@ describe("runCli exit behavior", () => {
     expect(runTuiCliActionMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "resumes onboarding when an interrupted first run only persisted risk acknowledgement",
-      snapshot: validConfig({
+  it("resumes onboarding when an interrupted first run only persisted risk acknowledgement", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce(
+      validConfig({
         meta: { updatedBy: "fixture" },
         wizard: { securityAcknowledgedAt: "2026-07-13T00:00:00.000Z" },
       }),
-    },
-  ])("$name", async ({ snapshot }) => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce(snapshot);
+    );
     await expect(runBareCli()).resolves.toBeUndefined();
 
     expect(readConfigFileSnapshotMock).toHaveBeenCalledOnce();
@@ -194,44 +178,46 @@ describe("runCli exit behavior", () => {
     expectNonInteractiveBareCliError,
   });
 
-  it.each(["ws://127.0.0.1:18789"])(
-    "configures missing inference on the selected remote Gateway: %s",
-    async (url) => {
-      const sourceConfig = {
-        agents: { defaults: { model: { primary: "openai/local-only-model" } } },
-        gateway: {
-          mode: "remote",
-          remote: {
-            url,
-            token: "missing-inference-remote-auth",
-            tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
-          },
+  it("configures missing inference on the selected remote Gateway", async () => {
+    const url = "ws://127.0.0.1:18789";
+    const sourceConfig = {
+      agents: { defaults: { model: { primary: "openai/local-only-model" } } },
+      gateway: {
+        mode: "remote",
+        remote: {
+          url,
+          token: "missing-inference-remote-auth",
+          tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
         },
-      };
-      readConfigFileSnapshotMock.mockResolvedValueOnce({ exists: true, valid: true, sourceConfig });
-      probeGatewayConfiguredModelMock.mockImplementationOnce(async (options) =>
-        options.url === "ws://127.0.0.1:18789" && !options.originScopedDeviceAuth
-          ? { kind: "reachable-unverified", detail: "missing scope: operator.read" }
-          : {
-              kind: "missing-configured-model",
-              detail: "Gateway default agent has no configured model",
-            },
-      );
+      },
+    };
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      sourceConfig,
+    });
+    probeGatewayConfiguredModelMock.mockImplementationOnce(async (options) =>
+      options.url === "ws://127.0.0.1:18789" && !options.originScopedDeviceAuth
+        ? { kind: "reachable-unverified", detail: "missing scope: operator.read" }
+        : {
+            kind: "missing-configured-model",
+            detail: "Gateway default agent has no configured model",
+          },
+    );
 
-      await runBareCli();
+    await runBareCli();
 
-      expect(setupWizardCommandMock).not.toHaveBeenCalled();
-      expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
-      expect(runRemoteGatewayInferenceOnboardingMock).toHaveBeenCalledWith({
-        config: sourceConfig,
-        gatewayUrl: url,
-        configuredRemote: true,
-        token: "missing-inference-remote-auth",
-        tlsFingerprint: TLS_FINGERPRINT,
-      });
-      expect(runTuiMock).not.toHaveBeenCalled();
-    },
-  );
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
+    expect(runRemoteGatewayInferenceOnboardingMock).toHaveBeenCalledWith({
+      config: sourceConfig,
+      gatewayUrl: url,
+      configuredRemote: true,
+      token: "missing-inference-remote-auth",
+      tlsFingerprint: TLS_FINGERPRINT,
+    });
+    expect(runTuiMock).not.toHaveBeenCalled();
+  });
 
   it("carries the canonical local TLS fingerprint through bare root", async () => {
     primeBareRootConfig({
@@ -248,11 +234,13 @@ describe("runCli exit behavior", () => {
 
     await runBareCli();
 
-    expectGatewayTarget({
+    const target = {
       url: "wss://127.0.0.1:18789",
       token: "configured-token",
       tlsFingerprint: TLS_FINGERPRINT,
-    });
+    };
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith(target);
+    expectBoundTui(target);
   });
 
   it("resolves only the configured auth-mode SecretRef for bare root preflight", async () => {
@@ -269,22 +257,18 @@ describe("runCli exit behavior", () => {
       `fs.writeFileSync(${JSON.stringify(passwordMarker)},'1');`,
       "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { PASSWORD_SECRET: 'password-from-exec' } }));", // pragma: allowlist secret
     ].join("");
+    const execProvider = (program: string) => ({
+      source: "exec",
+      command: process.execPath,
+      args: ["-e", program],
+      allowInsecurePath: true,
+    });
     await withSecureTestNodeExecPath(async () => {
       primeBareRootConfig({
         secrets: {
           providers: {
-            tokenprovider: {
-              source: "exec",
-              command: process.execPath,
-              args: ["-e", tokenProgram],
-              allowInsecurePath: true,
-            },
-            passwordprovider: {
-              source: "exec",
-              command: process.execPath,
-              args: ["-e", passwordProgram],
-              allowInsecurePath: true,
-            },
+            tokenprovider: execProvider(tokenProgram),
+            passwordprovider: execProvider(passwordProgram),
           },
         },
         gateway: {
@@ -377,28 +361,26 @@ describe("runCli exit behavior", () => {
     expectBoundTui({ url, configuredRemote: true, token: "restart-remote-auth" });
   });
 
-  it.each([{ label: "LAN IP", url: "ws://192.168.1.10:18789" }])(
-    "does not probe a plaintext remote gateway over $label without opt-in",
-    async ({ url }) => {
-      primeBareRootConfig({
-        gateway: {
-          mode: "remote",
-          remote: {
-            url,
-            token: "unsafe-remote-auth",
-          },
+  it("does not probe a plaintext remote gateway over LAN without opt-in", async () => {
+    const url = "ws://192.168.1.10:18789";
+    primeBareRootConfig({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url,
+          token: "unsafe-remote-auth",
         },
-      });
+      },
+    });
 
-      await withEnvAsync({ OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: undefined }, async () => {
-        await runBareCli();
-      });
+    await withEnvAsync({ OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: undefined }, async () => {
+      await runBareCli();
+    });
 
-      expect(probeGatewayConfiguredModelMock).not.toHaveBeenCalled();
-      expect(setupWizardCommandMock).toHaveBeenCalledWith({});
-      expect(runTuiMock).not.toHaveBeenCalled();
-    },
-  );
+    expect(probeGatewayConfiguredModelMock).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
+    expect(runTuiMock).not.toHaveBeenCalled();
+  });
 
   it.each([
     {

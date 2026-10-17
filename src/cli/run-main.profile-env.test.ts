@@ -1,4 +1,3 @@
-// Run-main profile env tests cover profile environment handling in the CLI entrypoint.
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -117,7 +116,7 @@ import { runCli } from "./run-main.js";
 
 describe("runCli environment and passive startup", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  const envSnapshot = captureEnv([
+  const envKeys = [
     "OPENCLAW_UPDATE_IN_PROGRESS",
     "OPENCLAW_PROFILE",
     "OPENCLAW_STATE_DIR",
@@ -127,22 +126,14 @@ describe("runCli environment and passive startup", () => {
     "OPENCLAW_GATEWAY_URL",
     "OPENCLAW_GATEWAY_TOKEN",
     "OPENCLAW_GATEWAY_PASSWORD",
-  ]);
+  ];
+  const envSnapshot = captureEnv(envKeys);
 
   beforeEach(() => {
     vi.clearAllMocks();
-    deleteTestEnvValue("OPENCLAW_UPDATE_IN_PROGRESS");
     startup.prepareDoctorDatabasePreflight.mockResolvedValue(startup.schemas);
-    deleteTestEnvValue("OPENCLAW_PROFILE");
-    deleteTestEnvValue("OPENCLAW_STATE_DIR");
-    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-    deleteTestEnvValue("OPENCLAW_CONTAINER");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
+    envKeys.forEach(deleteTestEnvValue);
     dotenvState.state.profileAtDotenvLoad = undefined;
-    dotenvState.loadDotEnv.mockClear();
     fileState.hasCliDotEnv = false;
   });
 
@@ -261,8 +252,8 @@ describe("runCli environment and passive startup", () => {
     }).toEqual({ configReads: 0, proxyStarts: 0, pathEnsures: 0, dispatcherEnsures: 0 });
   });
 
-  it.each(["--channel"])("retains update startup when cleanup is the value of %s", async (flag) => {
-    await runCli(["node", "openclaw", "update", flag, "cleanup"]);
+  it("retains update startup when cleanup is the value of --channel", async () => {
+    await runCli(["node", "openclaw", "update", "--channel", "cleanup"]);
     expect(startup.readConfig).toHaveBeenCalledOnce();
     expect(startup.startProxy).toHaveBeenCalledWith({ selected: "synthetic" });
     expect(startup.ensurePath).toHaveBeenCalledOnce();
