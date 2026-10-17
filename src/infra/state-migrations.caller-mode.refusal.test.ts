@@ -35,19 +35,7 @@ function writeJson(file: string, value: unknown) {
 
 const tempDirs = createTrackedTempDirs();
 
-function candidateAt(
-  root: string,
-): Pick<LegacyStateMigrationPlan["candidate"], "root" | "version"> {
-  return { root, version: "test" };
-}
-
-function writeLegacyDoctorSources(
-  stateDir: string,
-  tuiValue: unknown,
-): {
-  execPath: string;
-  tuiPath: string;
-} {
+function writeLegacyDoctorSources(stateDir: string) {
   const execPath = path.join(stateDir, "exec-approvals.json");
   const tuiPath = path.join(stateDir, "tui", "last-session.json");
   fs.mkdirSync(path.dirname(tuiPath), { recursive: true });
@@ -56,11 +44,11 @@ function writeLegacyDoctorSources(
     defaults: { security: "allowlist", ask: "on-miss" },
     agents: { main: { allowlist: [{ pattern: "/usr/bin/rg" }] } },
   });
-  writeJson(tuiPath, tuiValue);
-  return { execPath, tuiPath };
+  writeJson(tuiPath, {});
+  return execPath;
 }
 
-async function makeFixture() {
+async function makeFixture(candidatePlugin = false) {
   const root = await tempDirs.make("openclaw-doctor-caller-refusal-");
   const fixture = createMigrationFixture(root, { bundledPluginsDir: path.resolve("extensions") });
   fs.symlinkSync(
@@ -68,15 +56,36 @@ async function makeFixture() {
     path.join(root, "extensions"),
     process.platform === "win32" ? "junction" : "dir",
   );
+  if (candidatePlugin) {
+    writeJson(fixture.configPath, {
+      plugins: { entries: { "candidate-plugin": { enabled: true } } },
+    });
+  }
   return fixture;
 }
 
-async function makeCallerModeFixture() {
-  const fixture = await makeFixture();
-  writeJson(fixture.configPath, {
-    plugins: { entries: { "candidate-plugin": { enabled: true } } },
+function expectRefusal(plan: LegacyStateMigrationPlan, code: string, extra = {}) {
+  expect(plan).toMatchObject({
+    mutationAllowed: false,
+    outcome: "refused",
+    refusal: { code },
+    ...extra,
   });
-  return fixture;
+}
+
+function expectDeferred(
+  plan: LegacyStateMigrationPlan,
+  id: string,
+  code: string,
+  source?: LegacyStateMigrationPlan["steps"][number]["source"][number],
+) {
+  const index = plan.steps.findIndex((step) => step.id === id);
+  expect(plan.steps[index]).toMatchObject({
+    outcome: "deferred",
+    refusal: { code },
+    ...(source ? { source: expect.arrayContaining([source]) } : {}),
+  });
+  expectDeferredTail(plan, index);
 }
 
 function expectDeferredTail(plan: LegacyStateMigrationPlan, blockerIndex: number) {
@@ -119,7 +128,8 @@ describe("legacy state migration read-only refusals", () => {
   it("does not accept a caller-asserted staged-candidate artifact identity", async () => {
     const fixture = await makeFixture();
     const assertedCandidate = {
-      ...candidateAt(fixture.root),
+      root: fixture.root,
+      version: "test",
       artifact: {
         outcome: "bound" as const,
         owner: "staged-candidate" as const,
@@ -141,52 +151,29 @@ describe("legacy state migration read-only refusals", () => {
     });
   });
 
-  it("returns a closed refusal when read-only detection cannot produce a safe plan", async () => {
+  it.each(["warning", "throw"] as const)("closes read-only detection on %s", async (failure) => {
     const fixture = await makeFixture();
     const before = snapshotFiles(fixture.root);
-    const plan = await fixture.plan({
-      legacySessionSurfaces: { surfaces: [], failures: ["session surface unavailable"] },
-    });
-
-    expect(plan).toMatchObject({
-      mutationAllowed: false,
-      outcome: "refused",
-      warnings: ["session surface unavailable"],
-      refusal: { code: "migration-planning-warning" },
-    });
-    const detectionIndex = plan.steps.findIndex((step) => step.id === "migration-detection");
-    expect(plan.steps[detectionIndex]).toMatchObject({
-      outcome: "deferred",
-      refusal: { code: "migration-detection-warning" },
-    });
-    expectDeferredTail(plan, detectionIndex);
-    expect(snapshotFiles(fixture.root)).toEqual(before);
-  });
-
-  it("returns a closed refusal when copied-state detection throws", async () => {
-    const fixture = await makeFixture();
-    const before = snapshotFiles(fixture.root);
-    const legacySessionSurfaces = Object.defineProperty(
-      { surfaces: [], failures: [] },
-      "failures",
-      {
+    const message =
+      failure === "warning"
+        ? "session surface unavailable"
+        : "synthetic copied-state detection failure";
+    const legacySessionSurfaces = { surfaces: [], failures: [message] };
+    if (failure === "throw") {
+      Object.defineProperty(legacySessionSurfaces, "failures", {
         get() {
-          throw new Error("synthetic copied-state detection failure");
+          throw new Error(message);
         },
-      },
-    ) as typeof EMPTY_LEGACY_SESSION_SURFACES;
-
-    const plan = await fixture.plan({
-      legacySessionSurfaces,
-    });
-
-    expect(plan).toMatchObject({
-      mutationAllowed: false,
-      outcome: "refused",
-      refusal: { code: "migration-detection-failed" },
-      steps: [],
-    });
-    expect(plan.warnings.join("\n")).toContain("synthetic copied-state detection failure");
+      });
+    }
+    const plan = await fixture.plan({ legacySessionSurfaces });
+    if (failure === "warning") {
+      expectRefusal(plan, "migration-planning-warning", { warnings: [message] });
+      expectDeferred(plan, "migration-detection", "migration-detection-warning");
+    } else {
+      expectRefusal(plan, "migration-detection-failed", { steps: [] });
+      expect(plan.warnings.join("\n")).toContain(message);
+    }
     expect(snapshotFiles(fixture.root)).toEqual(before);
   });
 
@@ -201,13 +188,10 @@ describe("legacy state migration read-only refusals", () => {
       env: { ...fixture.env, OPENCLAW_OAUTH_DIR: externalOAuthDir },
     });
 
-    const blockerIndex = plan.steps.findIndex((step) => step.id === "migration-detection");
-    expect(plan.steps[blockerIndex]).toMatchObject({
-      source: expect.arrayContaining([{ kind: "path", path: externalOAuthDir }]),
-      outcome: "deferred",
-      refusal: { code: "oauth-dir-outside-snapshot" },
+    expectDeferred(plan, "migration-detection", "oauth-dir-outside-snapshot", {
+      kind: "path",
+      path: externalOAuthDir,
     });
-    expectDeferredTail(plan, blockerIndex);
     expect(snapshotFiles(fixture.root)).toEqual(before);
   });
 
@@ -361,7 +345,7 @@ describe("legacy state migration read-only refusals", () => {
   });
 
   it("keeps candidate shadow refusal separate from the selected live owner's action order", async () => {
-    const fixture = await makeCallerModeFixture();
+    const fixture = await makeFixture(true);
     const externalPluginRoot = path.join(fixture.root, "external-candidate-plugin");
     fs.mkdirSync(externalPluginRoot);
     writeJson(path.join(externalPluginRoot, "openclaw.plugin.json"), {
@@ -444,12 +428,7 @@ module.exports = { stateMigrations: [{
 
     const plan = await fixture.plan();
 
-    expect(plan).toMatchObject({
-      mutationAllowed: false,
-      outcome: "refused",
-      refusal: { code: "snapshot-identity-unavailable" },
-      steps: [],
-    });
+    expectRefusal(plan, "snapshot-identity-unavailable", { steps: [] });
     expect(plan.snapshot.stateDigest).toBeUndefined();
     expect(plan.warnings).toEqual([
       expect.stringContaining(`Snapshot tree contains a symbolic link: ${linkedDir}`),
@@ -478,10 +457,7 @@ module.exports = { stateMigrations: [{
         },
       });
 
-      expect(plan).toMatchObject({
-        mutationAllowed: false,
-        outcome: "refused",
-        refusal: { code: "snapshot-identity-unavailable" },
+      expectRefusal(plan, "snapshot-identity-unavailable", {
         snapshot: { stateDir: linkedStateDir },
         steps: [],
       });
@@ -506,18 +482,13 @@ module.exports = { stateMigrations: [{
       },
     });
 
-    expect(plan).toMatchObject({
-      mutationAllowed: false,
-      outcome: "refused",
-      refusal: { code: "snapshot-identity-mismatch" },
-      steps: [],
-    });
+    expectRefusal(plan, "snapshot-identity-mismatch", { steps: [] });
     expect(plan.snapshot.stateDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(plan.snapshot.stateDigest).not.toBe(`sha256:${"b".repeat(64)}`);
   });
 
   it("plans registered agent targets that a preceding schema repair makes canonical", async () => {
-    const fixture = await makeCallerModeFixture();
+    const fixture = await makeFixture(true);
     writeJson(fixture.configPath, {
       agents: { entries: { legacy: {} } },
       plugins: { entries: { "candidate-plugin": { enabled: true } } },
@@ -572,53 +543,11 @@ module.exports = { stateMigrations: [{
 
     const plan = await fixture.plan();
 
-    const blockerIndex = plan.steps.findIndex((step) => step.id === "agent-migration-targets");
-    expect(plan.steps[blockerIndex]).toMatchObject({
-      source: expect.arrayContaining([{ kind: "sqlite", path: externalDatabasePath }]),
-      outcome: "deferred",
-      refusal: { code: "session-target-outside-snapshot" },
+    expectDeferred(plan, "agent-migration-targets", "session-target-outside-snapshot", {
+      kind: "sqlite",
+      path: externalDatabasePath,
     });
-    expectDeferredTail(plan, blockerIndex);
     expect(fs.readFileSync(externalDatabasePath, "utf8")).toBe("external\n");
-  });
-
-  it("returns thrown-step receipts and stops later Doctor mutations", async () => {
-    const fixture = await makeCallerModeFixture();
-    const { execPath } = writeLegacyDoctorSources(fixture.stateDir, {});
-    const plan = await fixture.plan();
-    const pluginDoctorConfig = Object.defineProperty({}, "meta", {
-      get() {
-        throw new Error("synthetic config migration failure");
-      },
-    }) as OpenClawConfig;
-    const emittedReceipts: LegacyStateMigrationStepReceipt[] = [];
-
-    const result = await fixture.migrate(
-      {},
-      {
-        pluginDoctorConfig,
-        onStepReceipt: (receipt) => emittedReceipts.push(receipt),
-      },
-    );
-
-    expectBlockedTailInPlanOrder({
-      plan,
-      receipts: result.stepReceipts,
-      blockerId: "config-machine-state",
-    });
-    expect(byId(result.stepReceipts, "config-machine-state")).toMatchObject({
-      id: "config-machine-state",
-      outcome: "refused",
-      changes: [],
-      warnings: ["synthetic config migration failure"],
-      refusal: { code: "step-threw", message: "synthetic config migration failure" },
-    });
-    expect(emittedReceipts).toEqual(result.stepReceipts);
-    expect(byId(result.stepReceipts, "exec-approvals")).toMatchObject({
-      outcome: "refused",
-      refusal: { code: "blocked-by-prior-refusal" },
-    });
-    expect(fs.existsSync(execPath)).toBe(true);
   });
 
   it.each([
@@ -627,7 +556,7 @@ module.exports = { stateMigrations: [{
   ] as const)(
     "closes receipts before rethrowing automatic $blockerId failure",
     async ({ blockerId, property }) => {
-      const fixture = await makeCallerModeFixture();
+      const fixture = await makeFixture(true);
       const sourcePath = path.join(fixture.stateDir, "logs", "config-health.json");
       const sourceBytes = `${JSON.stringify({
         entries: {
@@ -679,71 +608,82 @@ module.exports = { stateMigrations: [{
     },
   );
 
-  it("returns target-discovery refusal after a completed schema step", async () => {
-    const fixture = await makeCallerModeFixture();
-    const { execPath } = writeLegacyDoctorSources(fixture.stateDir, {});
-    writeLegacyStateSchemaV1(resolveOpenClawStateSqlitePath(fixture.env));
-    const plan = await fixture.plan();
-    const lastTouchedAt = "2026-09-02T00:00:00.000Z";
-    const cfg = Object.defineProperty({ meta: { lastTouchedAt } }, "session", {
-      get() {
-        throw new Error("synthetic agent target discovery failure");
-      },
-    }) as OpenClawConfig;
-
-    const result = await fixture.migrate(cfg);
-
-    expectBlockedTailInPlanOrder({
-      plan,
-      receipts: result.stepReceipts,
-      blockerId: "agent-migration-targets",
-    });
-    expect(byId(result.stepReceipts, "agent-migration-targets")).toMatchObject({
-      id: "agent-migration-targets",
-      outcome: "refused",
-      refusal: { code: "agent-target-discovery-failed" },
-    });
-    expect(result.warnings.join("\n")).toContain("synthetic agent target discovery failure");
-    expect(result.stepReceipts[0]).toMatchObject({ outcome: "completed" });
-    expect(result.stepReceipts[0]?.changes.length).toBeGreaterThan(0);
-    expect(result.stepReceipts[1]).toMatchObject({
-      id: "retired-core-state",
-      outcome: "skipped",
-    });
-    expect(result.stepReceipts[2]).toMatchObject({
-      id: "config-machine-state",
-      outcome: "completed",
-    });
-    expect(readConfigMachineState("config.lastTouchedAt", { env: fixture.env })).toBe(
-      lastTouchedAt,
-    );
-    expect(fs.existsSync(execPath)).toBe(true);
-  });
-
-  it("returns detection refusal after preludes and stops later Doctor mutations", async () => {
-    const fixture = await makeCallerModeFixture();
-    const { execPath } = writeLegacyDoctorSources(fixture.stateDir, {});
-    const plan = await fixture.plan();
-    vi.spyOn(deviceIdentityMigrations, "detectLegacyDeviceIdentity").mockImplementationOnce(() => {
-      throw new Error("synthetic execution detection failure");
-    });
-
-    const result = await fixture.migrate({});
-
-    expectBlockedTailInPlanOrder({
-      plan,
-      receipts: result.stepReceipts,
-      blockerId: "migration-detection",
-    });
-    expect(byId(result.stepReceipts, "agent-dir")).toMatchObject({
-      outcome: "refused",
-      refusal: { code: "blocked-by-prior-refusal" },
-    });
-    expect(result.warnings.join("\n")).toContain("synthetic execution detection failure");
-    expect(byId(result.stepReceipts, "exec-approvals")).toMatchObject({
-      outcome: "refused",
-      refusal: { code: "blocked-by-prior-refusal" },
-    });
-    expect(fs.existsSync(execPath)).toBe(true);
-  });
+  it.each(["config-machine-state", "agent-migration-targets", "migration-detection"] as const)(
+    "returns %s refusal and blocks later Doctor mutations",
+    async (blockerId) => {
+      const fixture = await makeFixture(true);
+      const execPath = writeLegacyDoctorSources(fixture.stateDir);
+      const lastTouchedAt = "2026-09-02T00:00:00.000Z";
+      const message =
+        blockerId === "config-machine-state"
+          ? "synthetic config migration failure"
+          : blockerId === "agent-migration-targets"
+            ? "synthetic agent target discovery failure"
+            : "synthetic execution detection failure";
+      let cfg: OpenClawConfig = {};
+      if (blockerId === "agent-migration-targets") {
+        writeLegacyStateSchemaV1(resolveOpenClawStateSqlitePath(fixture.env));
+        cfg = Object.defineProperty({ meta: { lastTouchedAt } }, "session", {
+          get() {
+            throw new Error(message);
+          },
+        });
+      }
+      const plan = await fixture.plan();
+      const pluginDoctorConfig =
+        blockerId === "config-machine-state"
+          ? Object.defineProperty({}, "meta", {
+              get() {
+                throw new Error(message);
+              },
+            })
+          : undefined;
+      if (blockerId === "migration-detection") {
+        vi.spyOn(deviceIdentityMigrations, "detectLegacyDeviceIdentity").mockImplementationOnce(
+          () => {
+            throw new Error(message);
+          },
+        );
+      }
+      const emittedReceipts: LegacyStateMigrationStepReceipt[] = [];
+      const result = await fixture.migrate(cfg, {
+        pluginDoctorConfig,
+        onStepReceipt: (receipt) => emittedReceipts.push(receipt),
+      });
+      expectBlockedTailInPlanOrder({ plan, receipts: result.stepReceipts, blockerId });
+      expect(emittedReceipts).toEqual(result.stepReceipts);
+      if (blockerId === "config-machine-state") {
+        expect(byId(result.stepReceipts, blockerId)).toMatchObject({
+          id: blockerId,
+          outcome: "refused",
+          changes: [],
+          warnings: [message],
+          refusal: { code: "step-threw", message },
+        });
+      } else if (blockerId === "agent-migration-targets") {
+        expect(byId(result.stepReceipts, blockerId)).toMatchObject({
+          id: blockerId,
+          outcome: "refused",
+          refusal: { code: "agent-target-discovery-failed" },
+        });
+        expect(result.stepReceipts[0]).toMatchObject({ outcome: "completed" });
+        expect(result.stepReceipts[0]?.changes.length).toBeGreaterThan(0);
+        expect(result.stepReceipts[1]).toMatchObject({
+          id: "retired-core-state",
+          outcome: "skipped",
+        });
+        expect(result.stepReceipts[2]).toMatchObject({
+          id: "config-machine-state",
+          outcome: "completed",
+        });
+        expect(readConfigMachineState("config.lastTouchedAt", { env: fixture.env })).toBe(
+          lastTouchedAt,
+        );
+      }
+      if (blockerId !== "config-machine-state") {
+        expect(result.warnings.join("\n")).toContain(message);
+      }
+      expect(fs.existsSync(execPath)).toBe(true);
+    },
+  );
 });
