@@ -5,7 +5,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { installLaunchAgent } from "./launchd-install.js";
-import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
   resolveLaunchAgentEnvironmentReadOptions,
   resolveLaunchAgentEnvWrapperPath,
@@ -24,22 +23,12 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
   runCommandWithTimeout: native.command,
 }));
-vi.mock("./launchd-system.js", () => ({
-  assertNoSystemLaunchDaemonOwnership: native.ownership,
-}));
+vi.mock("./launchd-system.js", () => ({ assertNoSystemLaunchDaemonOwnership: native.ownership }));
 vi.mock("./launchd-current-service.js", () => ({
   isCurrentProcessInsideLaunchdService: async () => false,
 }));
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
-const commandResult = (code: number, stdout: string, stderr = "") => ({
-  code,
-  stdout,
-  stderr,
-  signal: null,
-  killed: false,
-  termination: "exit" as const,
-});
 const checkCurrent = async () => {
   assertGatewayServiceUpdateCurrent();
 };
@@ -55,80 +44,58 @@ const definitionTransaction = {
   taskWritten: rejectTask,
 };
 
-function installWithAuthority(
-  args: Parameters<typeof installLaunchAgent>[0],
-  isCurrent: () => boolean,
-  message = "Doctor maintenance custody released",
-) {
-  return withGatewayServiceUpdateAuthority(
-    () => {
-      if (!isCurrent()) {
-        throw new Error(message);
-      }
-    },
-    () => installLaunchAgent(args),
-    { updateOwned: false, assertRecoveryCurrent: () => {} },
-  );
-}
-
 beforeEach(() => {
   native.command.mockReset();
   native.ownership.mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => vi.restoreAllMocks());
 
-async function fixture() {
-  const root = temporary.make("launchd-install-authority-");
-  const env = {
-    HOME: root,
-    OPENCLAW_STATE_DIR: path.join(root, "state"),
-    OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.install-authority",
-  };
-  const label = resolveLaunchAgentLabel(env);
-  const plist = resolveLaunchAgentPlistPath(env);
-  const environment = resolveLaunchAgentEnvironmentReadOptions(
-    env,
-    label,
-  ).expectedEnvironmentFilePath;
-  const wrapper = resolveLaunchAgentEnvWrapperPath(env, label);
-  const originals = new Map([
-    [plist, { contents: "previous plist\n", mode: 0o644 }],
-    [environment, { contents: "export OPERATOR='original'\n", mode: 0o600 }],
-    [wrapper, { contents: "#!/bin/sh\nexec old-gateway\n", mode: 0o700 }],
-  ]);
-  for (const [file, original] of originals) {
-    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-    await fs.writeFile(file, original.contents, { mode: original.mode });
-  }
-  return {
-    originals,
-    plist,
-    environment,
-    args: {
+const activation = ["bootout", "unload", "enable", "bootstrap"];
+const recovery = ["bootout", "enable", "bootstrap"];
+it.each<[string, boolean, string | null | undefined, string[], number]>([
+  ["snapshot-read", false, "unchanged", [], 0],
+  ["before-write", false, "unchanged", [], 0],
+  ["before-publication", false, "unchanged", [], 0],
+  ["environment-published", false, "restored", [], 0],
+  ["plist-published", false, "restored", [], 0],
+  ["publication-error", false, null, [], 0],
+  ["bootout", false, "restored", recovery, 1],
+  ["bootstrap", false, "restored", [...activation, ...recovery], 2],
+  ["plist-published", true, undefined, [], 0],
+  ["bootstrap", true, undefined, activation, 0],
+  ["competing-writer", false, "recovery-pending", [], 0],
+])(
+  "retains %s effects (transaction=%s)",
+  async (boundary, transaction, outcome, actions, restores) => {
+    const root = temporary.make("launchd-install-authority-");
+    const env = {
+      HOME: root,
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.install-authority",
+    };
+    const label = env.OPENCLAW_LAUNCHD_LABEL;
+    const plist = resolveLaunchAgentPlistPath(env);
+    const { expectedEnvironmentFilePath: environment } = resolveLaunchAgentEnvironmentReadOptions(
+      env,
+      label,
+    );
+    const wrapper = resolveLaunchAgentEnvWrapperPath(env, label);
+    const previousPlist = "previous plist\n";
+    const originals = [
+      [plist, previousPlist, 0o644],
+      [environment, "export OPERATOR='original'\n", 0o600],
+      [wrapper, "#!/bin/sh\nexec old-gateway\n", 0o700],
+    ] as const;
+    for (const [file, contents, mode] of originals) {
+      await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+      await fs.writeFile(file, contents, { mode });
+    }
+    const args = {
       env,
       stdout: new PassThrough(),
       programArguments: [process.execPath, "/candidate/openclaw/dist/index.js", "gateway"],
       environment: { OPENCLAW_GATEWAY_PORT: "19871" },
-    },
-  };
-}
-
-it.each([
-  ...[
-    "snapshot-read",
-    "before-write",
-    "before-publication",
-    "environment-published",
-    "plist-published",
-    "publication-error",
-    "bootout",
-    "bootstrap",
-  ].map((boundary) => ({ boundary, transaction: false })),
-  ...["plist-published", "bootstrap"].map((boundary) => ({ boundary, transaction: true })),
-])(
-  "retains owned LaunchAgent effects at $boundary (caller transaction=$transaction)",
-  async ({ boundary, transaction }) => {
-    const { args, originals, plist, environment } = await fixture();
+    };
     let current = true;
     let loaded = true;
     const activations: string[] = [];
@@ -149,11 +116,14 @@ it.each([
       if (action === boundary || (boundary === "snapshot-read" && action === "print")) {
         current = false;
       }
-      return commandResult(
-        action === "print" && !loaded ? 1 : 0,
-        action === "print" && loaded ? `${target} = {\n\tstate = waiting\n}` : "",
-        action === "print" && !loaded ? "Could not find service" : "",
-      );
+      return {
+        code: action === "print" && !loaded ? 1 : 0,
+        stdout: action === "print" && loaded ? `${target} = {\n\tstate = waiting\n}` : "",
+        stderr: action === "print" && !loaded ? "Could not find service" : "",
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
     });
     if (boundary === "before-write") {
       native.ownership.mockImplementationOnce(async () => {
@@ -179,79 +149,56 @@ it.each([
       }
       if (
         (boundary === "environment-published" && to === environment) ||
-        (boundary === "plist-published" && to === plist)
+        (["plist-published", "competing-writer"].includes(boundary) && to === plist)
       ) {
+        if (boundary === "competing-writer") {
+          await fs.writeFile(environment, "external replacement\n");
+        }
         current = false;
       }
     });
 
-    const installation = installWithAuthority(
-      { ...args, ...(transaction ? { definitionTransaction } : {}) },
-      () => current,
+    const installation = withGatewayServiceUpdateAuthority(
+      () => {
+        if (!current) {
+          throw new Error("Maintenance custody released");
+        }
+      },
+      () => installLaunchAgent({ ...args, ...(transaction ? { definitionTransaction } : {}) }),
+      { updateOwned: false, assertRecoveryCurrent: () => {} },
     );
     if (boundary === "publication-error") {
       await expect(installation).rejects.toThrow("publication confirmation failed after rename");
     } else {
       await expect(installation).rejects.toMatchObject({
         code: "service-authority-revoked",
-        outcome: transaction
-          ? undefined
-          : boundary.startsWith("before-") || boundary === "snapshot-read"
-            ? "unchanged"
-            : "restored",
+        outcome,
       });
+    }
+    expect({ activations, loaded }).toEqual({ activations: actions, loaded: true });
+    if (boundary === "competing-writer") {
+      expect(await fs.readFile(environment, "utf8")).toBe("external replacement\n");
+      expect(await fs.readFile(plist, "utf8")).toContain("/candidate/openclaw/dist/index.js");
+      expect(native.command.mock.calls.every(([argv]) => argv[1] === "print")).toBe(true);
+      return;
     }
     if (transaction) {
       expect(await fs.readFile(plist, "utf8")).toContain("/candidate/openclaw/dist/index.js");
-      expect(loaded).toBe(true);
-      expect(activations).toEqual(
-        boundary === "bootstrap" ? ["bootout", "unload", "enable", "bootstrap"] : [],
-      );
       return;
     }
-    for (const [file, original] of originals) {
-      expect(await fs.readFile(file, "utf8")).toBe(original.contents);
-      expect((await fs.stat(file)).mode & 0o777).toBe(original.mode);
+    for (const [file, contents, mode] of originals) {
+      expect(await fs.readFile(file, "utf8")).toBe(contents);
+      expect((await fs.stat(file)).mode & 0o777).toBe(mode);
     }
-    expect(loaded).toBe(true);
     if (boundary.startsWith("before-") || boundary === "snapshot-read") {
       expect(publications).toEqual([]);
     }
-    if (boundary === "bootout" || boundary === "bootstrap") {
-      expect(bootstrapDefinitions.at(-1)).toBe(originals.get(plist)!.contents);
-      expect(bootstrapDefinitions).toHaveLength(boundary === "bootstrap" ? 2 : 1);
-      expect(activations).toEqual(
-        boundary === "bootout"
-          ? ["bootout", "enable", "bootstrap"]
-          : ["bootout", "unload", "enable", "bootstrap", "bootout", "enable", "bootstrap"],
-      );
-    } else {
-      expect(activations).toEqual([]);
+    if (restores) {
+      expect(bootstrapDefinitions.at(-1)).toBe(previousPlist);
+      expect(bootstrapDefinitions).toHaveLength(restores);
     }
-    for (const directory of new Set([...originals.keys()].map((file) => path.dirname(file)))) {
+    for (const directory of new Set(originals.map(([file]) => path.dirname(file)))) {
       expect((await fs.readdir(directory)).some((file) => file.endsWith(".tmp"))).toBe(false);
     }
   },
 );
-
-it("retains another writer's artifact instead of claiming successful LaunchAgent recovery", async () => {
-  const { args, plist, environment } = await fixture();
-  let current = true;
-  native.command.mockImplementation(async (argv) =>
-    commandResult(0, `${argv[2]} = {\n\tstate = waiting\n}`),
-  );
-  const rename = fs.rename;
-  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-    await rename(from, to);
-    if (to === plist) {
-      await fs.writeFile(environment, "external replacement\n");
-      current = false;
-    }
-  });
-  await expect(
-    installWithAuthority(args, () => current, "Competing update admitted"),
-  ).rejects.toMatchObject({ code: "service-authority-revoked", outcome: "recovery-pending" });
-  expect(await fs.readFile(environment, "utf8")).toBe("external replacement\n");
-  expect(await fs.readFile(plist, "utf8")).toContain("/candidate/openclaw/dist/index.js");
-  expect(native.command.mock.calls.every(([argv]) => argv[1] === "print")).toBe(true);
-});
