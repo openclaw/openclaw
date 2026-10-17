@@ -170,6 +170,7 @@ it.for([
   { json: true, legacy: false, parentOwns: true, settlement: "uncertain-cleanup" },
 ])(
   "fences migrated candidate finalization (json=$json, legacy=$legacy, parentOwns=$parentOwns, foreground=$foreground, retained=$retained, original=$original, check=$checkWorkMs, budget=$stepBudgetMs, settlement=$settlement, replay=$replay)",
+  { timeout: 30_000 },
   async (
     {
       json,
@@ -282,10 +283,10 @@ it.for([
       settlement === "healthy"
         ? await runtimeFixture.acquire(async () => {
             const receipts = await openFixtureReceiptChannel();
-            return { ...receipts, cleanup: receipts.close };
+            return { ...receipts, cleanup: () => receipts.close() };
           })
         : undefined;
-    const progressSeen = createDeferred<void>();
+    const progressSeen = createDeferred();
     let stderr = "";
     vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
       stderr += String(chunk);
@@ -736,5 +737,4 @@ it.for([
       inspected.close();
     }
   },
-  30_000,
 );

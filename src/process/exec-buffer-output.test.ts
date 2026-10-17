@@ -13,7 +13,9 @@ describe("owned command output bytes", () => {
       {
         timeoutMs: 10_000,
         onOutputChunk(chunk, stream) {
-          if (stream === "stderr") observed.push(chunk);
+          if (stream === "stderr") {
+            observed.push(chunk);
+          }
         },
       },
     );
