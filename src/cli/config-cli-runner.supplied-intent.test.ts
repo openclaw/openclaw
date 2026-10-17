@@ -139,6 +139,13 @@ function loadSnapshot(resolved: unknown, authored: unknown = resolved): void {
     authoredConfig: structuredClone(authored),
   };
 }
+const run = (operations: ConfigSetOperation[], successMode: "set" | "patch" = "patch") =>
+  runConfigOperations({
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    operations,
+    options: {},
+    successMode,
+  });
 
 async function apply(
   resolved: unknown,
@@ -146,12 +153,7 @@ async function apply(
   authored: unknown = resolved,
 ) {
   loadSnapshot(resolved, authored);
-  await runConfigOperations({
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    operations,
-    options: {},
-    successMode: "patch",
-  });
+  await run(operations);
   expect(state.prepare).toHaveBeenCalled();
   expect(state.replace).toHaveBeenCalledTimes(1);
   const prepared = state.prepare.mock.calls.find(([params]) => params.explicitSetPaths)?.[0];
@@ -297,12 +299,7 @@ describe("replacement guard advice per subcommand", () => {
   async function refusal(successMode: "set" | "patch"): Promise<string> {
     loadSnapshot(modelConfig(resolvedRows));
     try {
-      await runConfigOperations({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        operations: [op(undefined, modelsPath, [{ id: "edited", name: "${TARGET}" }])],
-        options: {},
-        successMode,
-      });
+      await run([op(undefined, modelsPath, [{ id: "edited", name: "${TARGET}" }])], successMode);
     } catch (err) {
       return (err as Error).message;
     }
@@ -312,17 +309,11 @@ describe("replacement guard advice per subcommand", () => {
   // The advice has to name flags the running subcommand registers: `config patch` accepts
   // neither --merge nor --replace, only --replace-path.
   it.each([
-    {
-      successMode: "patch" as const,
-      advice: "Use --replace-path models.providers.example.models to replace intentionally.",
-    },
-    {
-      successMode: "set" as const,
-      advice: "Use --merge to merge by id or --replace to replace intentionally.",
-    },
-  ])(
-    "refuses a $successMode model list replacement naming its own flags",
-    async ({ successMode, advice }) => {
+    ["patch", "Use --replace-path models.providers.example.models to replace intentionally."],
+    ["set", "Use --merge to merge by id or --replace to replace intentionally."],
+  ] as const)(
+    "refuses a %s model list replacement naming its own flags",
+    async (successMode, advice) => {
       expect(await refusal(successMode)).toBe(
         `Refusing to replace models.providers.example.models; it would remove existing entries: drop, untouched. ${advice}`,
       );
