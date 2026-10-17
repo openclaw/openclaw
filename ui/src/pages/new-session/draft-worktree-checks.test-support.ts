@@ -2,11 +2,28 @@ import { expect, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import type { identityPreferences } from "./draft-worktree-preferences.test-support.ts";
+import { acceptedWorktreeSession } from "./draft-worktree-submission.test-support.ts";
 import { renderControl } from "./model-control.test-support.ts";
 import { loadNewSessionPreference } from "./preferences.ts";
 
 type Fixture = ReturnType<typeof createDraftFixture>;
 export const browserPreference = () => loadNewSessionPreference("ws://gateway.example", "main");
+export const acceptedNameWarning = {
+  message:
+    "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
+};
+
+export function resetWorktreeMocks() {
+  vi.restoreAllMocks();
+  localStorage.clear();
+  sessionStorage.clear();
+}
+
+export function startAcceptedWorktree(fixture: Fixture, detached = true) {
+  vi.mocked(fixture.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
+  fixture.flow.setMessage("first task");
+  return fixture.flow.submit(undefined, detached);
+}
 
 export function preferenceGate() {
   const started = createDeferred();
