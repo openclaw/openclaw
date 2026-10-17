@@ -196,39 +196,25 @@ describe("usage route", () => {
     },
   );
 
-  it("records a provider usage request failure separately from an empty response", async () => {
+  it.each([
+    ["usage.status", "gateway transport unavailable", null],
+    ["sessions.usage", "OPENAI_API_KEY=sk-1234567890abcdef", "OPENAI_API_KEY=sk-123...cdef"],
+  ] as const)("reports %s failure without exposing secrets", async (method, message, error) => {
     const { router, context, request } = createUsageRouter();
-    request.mockImplementation(async (method) => {
-      switch (method) {
-        case "sessions.usage":
-          return payload;
-        case "usage.status":
-          throw new Error("gateway transport unavailable");
-        default:
-          return {};
+    request.mockImplementation(async (requested) => {
+      if (requested === method) {
+        throw new Error(message);
       }
+      return requested === "sessions.usage" ? payload : {};
     });
     await router.navigate("usage", context);
     const result = router.getState().matches[0]?.data;
-
-    expect(result?.error).toBeNull();
-    expect(result?.providerUsage).toEqual({
-      state: "settled",
-      result: { ok: false, error: { kind: "request-failed" } },
-    });
-  });
-
-  it("redacts secrets in displayed loader failures", async () => {
-    const { router, context, request } = createUsageRouter();
-    request.mockImplementation(async (method) => {
-      if (method === "sessions.usage") {
-        throw new Error("OPENAI_API_KEY=sk-1234567890abcdef");
-      }
-      return {};
-    });
-    await router.navigate("usage", context);
-    const result = router.getState().matches[0]?.data;
-
-    expect(result?.error).toBe("OPENAI_API_KEY=sk-123...cdef");
+    expect(result?.error).toBe(error);
+    if (method === "usage.status") {
+      expect(result?.providerUsage).toEqual({
+        state: "settled",
+        result: { ok: false, error: { kind: "request-failed" } },
+      });
+    }
   });
 });

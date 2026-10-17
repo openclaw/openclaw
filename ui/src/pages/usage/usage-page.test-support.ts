@@ -6,38 +6,25 @@ import type { UsageOverviewOptions } from "../../../../src/shared/usage-types.js
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { page as usageRoute } from "./route.ts";
 import type { UsageRouteData, UsageSessionEntry } from "./types.ts";
 import { createUsagePage } from "./usage-page-state.ts";
 
-export type TestUsagePage = Pick<
-  HTMLElement,
-  "querySelector" | "querySelectorAll" | "textContent" | "isConnected" | "remove"
-> & {
-  readonly element: HTMLElement;
-  context: ApplicationContext;
-  routeData: UsageRouteData | undefined;
-  usageError: string | null;
-  readonly usageResult: SessionsUsageResult | null;
-  readonly usageLoading: boolean;
-  usageSelectedSessions: string[];
-  providerUsageStalled: boolean;
-  providerUsageUnavailable: boolean;
-  read: ReturnType<typeof createUsagePage>["read"];
-  refresh: () => Promise<void>;
-  readonly updateComplete: Promise<boolean>;
-};
+export type TestUsagePage = Awaited<ReturnType<typeof createPage>>;
 
 const pageCleanups = new Set<() => void>();
 
 export async function createUsagePageFixture(
   request: (...args: never[]) => unknown,
   renderView = true,
+  configure?: (context: ReturnType<typeof contextWithClient>) => void,
 ) {
   const client = { request } as unknown as GatewayBrowserClient;
   const context = contextWithClient(client);
+  configure?.(context);
   const page = await createPage(client, renderView, context);
   return { client, context, page };
 }
@@ -69,7 +56,7 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
   publishUsage: (publication: UsagePublicationFixture) => void;
 } {
   const subscribe = () => () => undefined;
-  let snapshot = {
+  const { gateway, publish } = createApplicationGateway({
     client,
     phase: "connected",
     hello: null,
@@ -77,8 +64,7 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
     sessionKey: "main",
     lastError: null,
     lastErrorCode: null,
-  } as ApplicationGatewaySnapshot;
-  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
+  } as ApplicationGatewaySnapshot);
   const selectionState: ApplicationContext["agentSelection"]["state"] = {
     selectedId: null,
     scopeId: null,
@@ -86,12 +72,8 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
   const selectionListeners = new Set<
     Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0]
   >();
-  const setGatewaySnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
-    snapshot = { ...snapshot, ...patch };
-    for (const listener of listeners) {
-      listener(snapshot);
-    }
-  };
+  const setGatewaySnapshot = (patch: Partial<ApplicationGatewaySnapshot>) =>
+    publish({ ...gateway.snapshot, ...patch });
   return {
     setGatewaySnapshot,
     publishUsage: ({
@@ -101,26 +83,18 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
     }: UsagePublicationFixture) =>
       setGatewaySnapshot({
         usagePublications: {
-          ...snapshot.usagePublications,
+          ...gateway.snapshot.usagePublications,
           [agentId]: {
             usageUpdatedAt,
             committedAt: usageRefreshFailed
-              ? (snapshot.usagePublications?.[agentId]?.committedAt ?? 0)
+              ? (gateway.snapshot.usagePublications?.[agentId]?.committedAt ?? 0)
               : usageUpdatedAt,
             usageRefreshFailed: usageRefreshFailed || undefined,
           },
         },
       }),
     basePath: "",
-    gateway: {
-      get snapshot() {
-        return snapshot;
-      },
-      subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    },
+    gateway,
     agents: {
       state: { agentsList: null, agentsLoading: false, agentsError: null },
       ensureList: vi.fn(async () => null),
@@ -149,7 +123,7 @@ export async function createPage(
   client: GatewayBrowserClient,
   renderView = false,
   initialContext: ApplicationContext = contextWithClient(client),
-): Promise<TestUsagePage> {
+) {
   let context = initialContext;
   // Legacy test fixtures describe canonical rows; expose the same server projection
   // as the real RPC so page tests exercise request ownership and presentation.
@@ -229,7 +203,7 @@ export async function createPage(
     disposeView();
     pageCleanups.delete(cleanup);
   };
-  const page: TestUsagePage = {
+  const page = {
     element: container,
     querySelector: container.querySelector.bind(container),
     querySelectorAll: container.querySelectorAll.bind(container),
@@ -259,9 +233,6 @@ export async function createPage(
       routeData = data;
       model.setRouteData(data);
     },
-    get usageError() {
-      return model.read().data.error;
-    },
     get usageResult() {
       return model.result();
     },
@@ -270,12 +241,6 @@ export async function createPage(
     },
     get usageSelectedSessions() {
       return model.read().filters.selectedSessions;
-    },
-    get providerUsageStalled() {
-      return model.read().data.providerUsageStalled;
-    },
-    get providerUsageUnavailable() {
-      return model.read().data.providerUsageUnavailable;
     },
     read: () => model.read(),
     refresh: async () => {

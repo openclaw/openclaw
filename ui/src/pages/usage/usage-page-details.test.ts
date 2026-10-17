@@ -23,6 +23,21 @@ import {
 
 afterEach(cleanupUsagePageTest);
 
+function suspensionError(message: string) {
+  return new GatewayRequestError({
+    code: "UNAVAILABLE",
+    message,
+    retryable: true,
+    details: { reason: "gateway-suspending", phase: "draining" },
+  });
+}
+
+function detailCalls<T extends readonly unknown[]>(request: { mock: { calls: T[] } }) {
+  return request.mock.calls.filter(
+    ([method]) => method === "sessions.usage.timeseries" || method === "sessions.usage.logs",
+  );
+}
+
 describe("UsagePage detail requests", () => {
   it("keeps selected comparisons across pages and refreshes them with their overview", async () => {
     const snapshot = cacheSnapshot("fresh");
@@ -225,12 +240,7 @@ describe("UsagePage detail requests", () => {
         return { providers: [] };
       }
       if (unavailable) {
-        throw new GatewayRequestError({
-          code: "UNAVAILABLE",
-          message: "Gateway is suspending",
-          retryable: true,
-          details: { reason: "gateway-suspending", phase: "draining" },
-        });
+        throw suspensionError("Gateway is suspending");
       }
       return method === "sessions.usage.logs"
         ? { logs: [{ timestamp: Date.now(), role: "user", content: "Recovered conversation" }] }
@@ -252,10 +262,12 @@ describe("UsagePage detail requests", () => {
     await preloadUsage(page);
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
     page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
-    await waitForFast(() => {
-      expect(page.read().detail.timeSeriesStatus.awaitingGateway).toBe(true);
-      expect(page.read().detail.sessionLogsStatus.awaitingGateway).toBe(true);
-    });
+    await waitForFast(() =>
+      expect(page.read().detail).toMatchObject({
+        timeSeriesStatus: { awaitingGateway: true },
+        sessionLogsStatus: { awaitingGateway: true },
+      }),
+    );
     await page.updateComplete;
     expect(page.querySelector(".usage-detail-error--timeline")).toBeNull();
     expect(page.querySelector(".usage-detail-error--conversation")).toBeNull();
@@ -271,57 +283,58 @@ describe("UsagePage detail requests", () => {
     }
   });
 
-  it("waits for pending detail failures before retrying when admission reopens first", async () => {
-    const pending = deferred<never>();
-    let recovered = false;
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.usage") {
-        return cacheSnapshot("fresh").result;
+  it.each(["admission", "reconnect"] as const)(
+    "recovers pending details after %s and fences late failures",
+    async (recovery) => {
+      const pending = deferred<never>();
+      let recovered = false;
+      const request = vi.fn(async (method: string) => {
+        if (method === "sessions.usage") {
+          return cacheSnapshot("fresh").result;
+        }
+        if (method === "usage.status") {
+          return { providers: [] };
+        }
+        if (!recovered) {
+          return pending.promise;
+        }
+        return method === "sessions.usage.logs"
+          ? { logs: [{ timestamp: 1, role: "user", content: "Recovered" }] }
+          : { points: [{ timestamp: 1 }] };
+      });
+      const { context, page } = await createUsagePageFixture(request, false);
+      page
+        .read()
+        .callbacks.details.onSelectSession("agent:main:detail", false, ["agent:main:detail"]);
+      if (recovery === "admission") {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          context.setGatewaySnapshot({ suspensionPhase: "draining" });
+          context.setGatewaySnapshot({ suspensionPhase: "accepting" });
+        }
+        expect(detailCalls(request)).toHaveLength(2);
+        recovered = true;
+        pending.reject(suspensionError("Gateway was suspending"));
+      } else {
+        context.setGatewaySnapshot({ phase: "stopped" });
+        recovered = true;
+        context.setGatewaySnapshot({ phase: "connected" });
+        await waitForFast(() =>
+          expect(page.read().detail.sessionLogs?.[0]?.content).toBe("Recovered"),
+        );
+        pending.reject(new Error("gateway closed (1006): disconnected"));
       }
-      if (method === "usage.status") {
-        return { providers: [] };
-      }
-      if (!recovered) {
-        return pending.promise;
-      }
-      return method === "sessions.usage.logs"
-        ? { logs: [{ timestamp: 1, role: "user", content: "Recovered after late rejection" }] }
-        : { points: [{ timestamp: 1 }] };
-    });
-    const { context, page } = await createUsagePageFixture(request, false);
-    page
-      .read()
-      .callbacks.details.onSelectSession("agent:main:detail", false, ["agent:main:detail"]);
-    context.setGatewaySnapshot({ suspensionPhase: "draining" });
-    context.setGatewaySnapshot({ suspensionPhase: "accepting" });
-    context.setGatewaySnapshot({ suspensionPhase: "draining" });
-    context.setGatewaySnapshot({ suspensionPhase: "accepting" });
-    expect(
-      request.mock.calls.filter(
-        ([method]) => method === "sessions.usage.timeseries" || method === "sessions.usage.logs",
-      ),
-    ).toHaveLength(2);
-
-    recovered = true;
-    pending.reject(
-      new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "Gateway was suspending",
-        retryable: true,
-        details: { reason: "gateway-suspending", phase: "draining" },
-      }),
-    );
-    await pending.promise.catch(() => {});
-    await waitForFast(() =>
-      expect(page.read().detail.sessionLogs?.[0]?.content).toBe("Recovered after late rejection"),
-    );
-    expect(page.read().detail.timeSeries?.points).toHaveLength(1);
-    expect(
-      request.mock.calls.filter(
-        ([method]) => method === "sessions.usage.timeseries" || method === "sessions.usage.logs",
-      ),
-    ).toHaveLength(4);
-  });
+      await pending.promise.catch(() => {});
+      await waitForFast(() =>
+        expect(page.read().detail.sessionLogs?.[0]?.content).toBe("Recovered"),
+      );
+      expect(page.read().detail.timeSeries?.points).toHaveLength(1);
+      expect(page.read().detail).toMatchObject({
+        timeSeriesStatus: { error: null },
+        sessionLogsStatus: { error: null },
+      });
+      expect(detailCalls(request)).toHaveLength(4);
+    },
+  );
 
   it("does not transfer queued detail recovery to a replacement selection", async () => {
     const first = deferred<never>();
@@ -360,42 +373,6 @@ describe("UsagePage detail requests", () => {
     ).toHaveLength(2);
     expect(page.read().detail.timeSeries).toBeNull();
     expect(page.read().detail.timeSeriesStatus.error).toBe("Selected timeline unavailable");
-  });
-
-  it("retries interrupted detail requests on immediate same-client reconnect and fences their old replies", async () => {
-    const pending = deferred<never>();
-    let disconnected = false;
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.usage") {
-        return cacheSnapshot("fresh").result;
-      }
-      if (method === "usage.status") {
-        return { providers: [] };
-      }
-      if (!disconnected) {
-        return pending.promise;
-      }
-      return method === "sessions.usage.logs"
-        ? { logs: [{ timestamp: 1, role: "user", content: "Recovered" }] }
-        : { points: [{ timestamp: 1 }] };
-    });
-    const { context, page } = await createUsagePageFixture(request, false);
-    page
-      .read()
-      .callbacks.details.onSelectSession("agent:main:detail", false, ["agent:main:detail"]);
-    context.setGatewaySnapshot({ phase: "stopped" });
-    disconnected = true;
-    context.setGatewaySnapshot({ phase: "connected" });
-    await waitForFast(() => expect(page.read().detail.sessionLogs?.[0]?.content).toBe("Recovered"));
-    pending.reject(new Error("gateway closed (1006): disconnected"));
-    await pending.promise.catch(() => {});
-    expect(page.read().detail.timeSeriesStatus.error).toBeNull();
-    expect(page.read().detail.sessionLogsStatus.error).toBeNull();
-    expect(
-      request.mock.calls.filter(
-        ([method]) => method === "sessions.usage.timeseries" || method === "sessions.usage.logs",
-      ),
-    ).toHaveLength(4);
   });
 
   it("loads context only for the selected session and fences superseded replies through automatic recovery", async () => {
@@ -684,10 +661,10 @@ describe("UsagePage detail requests", () => {
     }
 
     expect(usageCalls(request, "usage.status")).toHaveLength(3);
-    expect(page.providerUsageStalled).toBe(true);
+    expect(page.read().data.providerUsageStalled).toBe(true);
 
     rejectProviderUsage = false;
     await page.refresh();
-    expect(page.providerUsageStalled).toBe(false);
+    expect(page.read().data.providerUsageStalled).toBe(false);
   });
 });

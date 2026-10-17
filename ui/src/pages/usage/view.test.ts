@@ -29,6 +29,40 @@ function mountFixture(
   );
 }
 
+function mountReactiveUsage(props: UsageProps) {
+  const [data, setData] = createSignal(props.data);
+  const [display, setDisplay] = createSignal(props.display);
+  const container = mountUsage({
+    ...props,
+    get data() {
+      return data();
+    },
+    get display() {
+      return display();
+    },
+  });
+  return { container, data, display, setData, setDisplay };
+}
+
+function textAt(container: ParentNode, selector: string) {
+  return container.querySelector(selector)?.textContent?.trim();
+}
+
+function usageTotals(
+  input: number,
+  cost: number,
+  overrides: Partial<UsageTotals> = {},
+): UsageTotals {
+  return {
+    ...createEmptyCostUsageTotals(),
+    input,
+    totalTokens: input,
+    totalCost: cost,
+    inputCost: cost,
+    ...overrides,
+  };
+}
+
 function insightCard(container: ParentNode, title: string): Element | undefined {
   return Array.from(container.querySelectorAll(".usage-insight-card")).find(
     (card) => card.querySelector(".usage-insight-title")?.textContent === title,
@@ -124,19 +158,13 @@ describe("renderUsage", () => {
       label,
       agentId: "main",
       updatedAt: Date.now(),
-      usage: {
-        ...createEmptyCostUsageTotals(),
-        input: 1,
-        totalTokens: 1,
-      },
+      usage: usageTotals(1, 0),
     } satisfies UsageProps["data"]["sessions"][number];
 
     const container = mountFixture({ sessions: [session] }, { selectedSessions: [session.key] });
 
-    expect(container.querySelector(".filter-chip-label")?.textContent).toContain(
-      `${"a".repeat(19)}…`,
-    );
-    expect(container.querySelector(".session-detail-title")?.textContent?.trim()).toBe(
+    expect(textAt(container, ".filter-chip-label")).toContain(`${"a".repeat(19)}…`);
+    expect(textAt(container, ".session-detail-title")).toBe(
       `${"a".repeat(19)}🚀${"b".repeat(28)}…`,
     );
   });
@@ -200,44 +228,29 @@ describe("renderUsage", () => {
 
   it("updates the existing breakdown when mode and totals change", () => {
     const base = createUsageProps();
-    const initial: UsageTotals = {
-      ...createEmptyCostUsageTotals(),
-      input: 100,
+    const initial = usageTotals(100, 1, {
       output: 20,
       totalTokens: 120,
       inputCost: 0.8,
       outputCost: 0.2,
-      totalCost: 1,
-    };
-    const [data, setData] = createSignal({ ...base.data, totals: initial });
-    const [display, setDisplay] = createSignal(base.display);
-    const container = document.createElement("div");
-    mountUsage(
-      {
-        ...base,
-        get data() {
-          return data();
-        },
-        get display() {
-          return display();
-        },
-      },
-      container,
-    );
+    });
+    const { container, setData, setDisplay } = mountReactiveUsage({
+      ...base,
+      data: { ...base.data, totals: initial },
+    });
     const breakdown = container.querySelector(".cost-breakdown")!;
-    expect(breakdown.querySelector(".cost-breakdown-total")?.textContent).toContain("120");
+    expect(textAt(breakdown, ".cost-breakdown-total")).toContain("120");
     setDisplay((current) => ({ ...current, chartMode: "cost" }));
     flush();
     expect(container.querySelector(".cost-breakdown")).toBe(breakdown);
-    expect(breakdown.querySelector(".cost-breakdown-total")?.textContent).toContain("Total: $1.00");
+    expect(textAt(breakdown, ".cost-breakdown-total")).toContain("Total: $1.00");
     setData((current) => ({ ...current, totals: { ...initial, inputCost: 1.8, totalCost: 2 } }));
     flush();
-    expect(breakdown.querySelector(".cost-breakdown-total")?.textContent).toContain("Total: $2.00");
-    expect(breakdown.querySelector(".cost-breakdown-legend")?.textContent).toContain("$1.80");
+    expect(textAt(breakdown, ".cost-breakdown-total")).toContain("Total: $2.00");
+    expect(textAt(breakdown, ".cost-breakdown-legend")).toContain("$1.80");
   });
 
   it("refreshes filter order and draft selections when chart mode, agent, or source changes", () => {
-    const container = document.createElement("div");
     const props = createUsageProps();
     props.data.sessions = [
       usageSession("first", "main", "first", { totalTokens: 200, totalCost: 1 }),
@@ -247,6 +260,7 @@ describe("renderUsage", () => {
     props.filters.query = "provider:absent";
     props.filters.queryDraft = 'label:"Team  Planning" provider:second';
     props.callbacks.filters.onQueryDraftChange = vi.fn();
+    const { container, data, display, setData, setDisplay } = mountReactiveUsage(props);
     const providerOptions = () =>
       [...container.querySelectorAll<HTMLElement>(".usage-filter-select")]
         .find((menu) =>
@@ -259,20 +273,6 @@ describe("renderUsage", () => {
         (button) => button.textContent?.trim() === label,
       );
 
-    const [data, setData] = createSignal(props.data);
-    const [display, setDisplay] = createSignal(props.display);
-    mountUsage(
-      {
-        ...props,
-        get data() {
-          return data();
-        },
-        get display() {
-          return display();
-        },
-      },
-      container,
-    );
     expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("true");
     expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("false");
     expect(values()).toEqual(["first", "second"]);
@@ -281,9 +281,7 @@ describe("renderUsage", () => {
         .find((option) => option.getAttribute("aria-checked") === "true")
         ?.getAttribute("aria-label"),
     ).toBe("second");
-    expect(container.querySelector(".usage-query-suggestion")?.textContent?.trim()).toBe(
-      "provider:second",
-    );
+    expect(textAt(container, ".usage-query-suggestion")).toBe("provider:second");
 
     setDisplay({ ...display(), chartMode: "cost" });
     flush();
@@ -327,8 +325,9 @@ describe("renderUsage", () => {
       "Provider usage did not finish loading",
     );
     const card = container.querySelector(".provider-usage-card");
-    expect(card?.textContent).toContain("OpenAI");
-    expect(card?.textContent).toContain("Weekly");
+    for (const label of ["OpenAI", "Weekly"]) {
+      expect(card?.textContent).toContain(label);
+    }
   });
 
   it("renders provider plans, quotas, and billing independently of session usage", () => {
@@ -361,11 +360,9 @@ describe("renderUsage", () => {
     });
 
     const card = container.querySelector(".provider-usage-card");
-    expect(card?.textContent).toContain("OpenRouter");
-    expect(card?.textContent).toContain("Production");
-    expect(card?.textContent).toContain("75% left");
-    expect(card?.textContent).toContain("$64.50");
-    expect(card?.textContent).toContain("$5.00 / $20.00");
+    for (const label of ["OpenRouter", "Production", "75% left", "$64.50", "$5.00 / $20.00"]) {
+      expect(card?.textContent).toContain(label);
+    }
     expect(
       Array.from(
         container.querySelectorAll(".provider-usage-billing-row strong"),
@@ -375,21 +372,8 @@ describe("renderUsage", () => {
   });
 
   it("keeps complete insights and history beyond the visible page", () => {
-    const totals: UsageTotals = {
-      ...createEmptyCostUsageTotals(),
-      input: 1_000,
-      totalTokens: 1_000,
-      totalCost: 10,
-      inputCost: 10,
-      missingCostEntries: 1,
-    };
-    const visibleUsage = {
-      ...createEmptyCostUsageTotals(),
-      input: 10,
-      totalTokens: 10,
-      totalCost: 0.1,
-      inputCost: 0.1,
-    };
+    const totals = usageTotals(1_000, 10, { missingCostEntries: 1 });
+    const visibleUsage = usageTotals(10, 0.1);
     const visibleDay = { ...visibleUsage, date: "2026-05-14" };
 
     const container = mountFixture(
@@ -407,6 +391,7 @@ describe("renderUsage", () => {
           visibleDay,
         ],
         aggregates: {
+          ...buildAggregatesFromSessions([]),
           messages: {
             total: 100,
             user: 50,
@@ -415,12 +400,6 @@ describe("renderUsage", () => {
             toolResults: 0,
             errors: 0,
           },
-          tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-          byModel: [],
-          byProvider: [],
-          byAgent: [],
-          byChannel: [],
-          daily: [],
         },
         sessions: [
           {
@@ -445,10 +424,9 @@ describe("renderUsage", () => {
       { startDate: "2026-05-01", endDate: "2026-05-14" },
     );
 
-    const messagesValue = container.querySelector(
-      ".usage-overview-card .usage-summary-card--hero .usage-summary-value",
-    );
-    expect(messagesValue?.textContent?.trim()).toBe("100");
+    expect(
+      textAt(container, ".usage-overview-card .usage-summary-card--hero .usage-summary-value"),
+    ).toBe("100");
     expect(container.textContent).toContain(
       "Cost data is missing for some or all sessions in this range.",
     );
@@ -459,11 +437,7 @@ describe("renderUsage", () => {
     expect(firstDay?.getAttribute("aria-label")).toContain("May 1, 2026");
     expect(firstDay?.getAttribute("aria-label")).toContain("990 tokens, $9.90");
     expect(firstDay?.querySelector(".daily-bar--empty")).toBeNull();
-    expect(
-      container
-        .querySelector(".cost-window-card--range .cost-window-card__value")
-        ?.textContent?.trim(),
-    ).toBe("$10.00");
+    expect(textAt(container, ".cost-window-card--range .cost-window-card__value")).toBe("$10.00");
   });
 
   it("shows the empty state for an all-zero successful response", () => {

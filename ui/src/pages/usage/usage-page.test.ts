@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
@@ -21,6 +22,15 @@ import {
 } from "./usage-page.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
+
+function usageRequest(
+  usage: (params?: Record<string, unknown>) => unknown,
+  provider = (): unknown => ({ updatedAt: 1, providers: [] }),
+) {
+  return vi.fn(async (method: string, params?: Record<string, unknown>) =>
+    method === "usage.status" ? provider() : usage(params),
+  );
+}
 
 describe("UsagePage cache convergence", () => {
   it("shows an exhausted empty page as partial and clears its message after refresh", async () => {
@@ -48,16 +58,16 @@ describe("UsagePage cache convergence", () => {
     expect(page.querySelector(".callout.danger")).toBeNull();
   });
 
+  beforeEach(() => {
+    vi.useFakeTimers();
+    focusDocument();
+  });
   it.each([false, true])(
     "retains committed totals and coalesces publications (hidden: %s)",
     async (hidden) => {
-      vi.useFakeTimers();
-      focusDocument();
       const visibility = vi.spyOn(document, "visibilityState", "get");
       let snapshot = cacheSnapshot(hidden ? "fresh" : "stale");
-      const request = vi.fn(async (method: string) =>
-        method === "usage.status" ? { updatedAt: 1, providers: [] } : snapshot.result,
-      );
+      const request = usageRequest(() => snapshot.result);
       const { context, page } = await createUsagePageFixture(request);
       await preloadUsage(page);
       await settleUsageTimers(page, 35_000);
@@ -108,16 +118,8 @@ describe("UsagePage cache convergence", () => {
   ])(
     "distinguishes committed zero totals from an uncomputed cache ($sessionCount sessions, empty: $emptyUsage, committed: $committed)",
     async ({ sessionCount, emptyUsage, committed }) => {
-      vi.useFakeTimers();
-      focusDocument();
       const snapshot = cacheSnapshot("refreshing");
-      const zeroTotals = {
-        ...snapshot.result.totals,
-        input: 0,
-        totalTokens: 0,
-        totalCost: 0,
-        inputCost: 0,
-      };
+      const zeroTotals = createEmptyCostUsageTotals();
       const result = {
         ...snapshot.result,
         totals: zeroTotals,
@@ -126,9 +128,7 @@ describe("UsagePage cache convergence", () => {
           usage: emptyUsage ? { ...zeroTotals, ...(committed ? { computedAt: 1 } : {}) } : null,
         })),
       };
-      const request = vi.fn(async (method: string) =>
-        method === "usage.status" ? { updatedAt: 1, providers: [] } : result,
-      );
+      const request = usageRequest(() => result);
       const { context, page } = await createUsagePageFixture(request);
       await preloadUsage(page);
 
@@ -166,16 +166,11 @@ describe("UsagePage cache convergence", () => {
   it.each(["constructor", null])(
     "keeps interleaved refresh outcomes with their owning agent for scope %s",
     async (scopeId) => {
-      vi.useFakeTimers();
-      focusDocument();
       const ownerAgentId = scopeId ?? "main";
-      const request = vi.fn(async (method: string, _params?: unknown) =>
-        method === "usage.status" ? { updatedAt: 1, providers: [] } : cacheSnapshot("stale").result,
-      );
-      const client = { request } as unknown as GatewayBrowserClient;
-      const context = contextWithClient(client);
-      context.agentSelection.state.scopeId = scopeId;
-      const page = await createPage(client, true, context);
+      const request = usageRequest(() => cacheSnapshot("stale").result);
+      const { context, page } = await createUsagePageFixture(request, true, (initial) => {
+        initial.agentSelection.state.scopeId = scopeId;
+      });
       await preloadUsage(page);
       expect(request.mock.calls.find(([method]) => method === "sessions.usage")?.[1]).toMatchObject(
         scopeId ? { agentId: scopeId } : { agentScope: "all" },
@@ -196,14 +191,11 @@ describe("UsagePage cache convergence", () => {
   );
 
   it("preserves failure until publication after changing the query's date", async () => {
-    vi.useFakeTimers();
-    focusDocument();
     let snapshot = cacheSnapshot("partial");
-    const request = vi.fn(async (method: string) =>
-      method === "usage.status"
-        ? { updatedAt: 1, providers: [] }
-        : { ...snapshot.result, creatorOptions: [{ key: "user:one" }] },
-    );
+    const request = usageRequest(() => ({
+      ...snapshot.result,
+      creatorOptions: [{ key: "user:one" }],
+    }));
     const { context, page } = await createUsagePageFixture(request);
     await preloadUsage(page);
     context.publishUsage({ usageUpdatedAt: 1, usageRefreshFailed: true });
@@ -221,19 +213,14 @@ describe("UsagePage cache convergence", () => {
     await settleUsageTimers(page);
     expect(usageCalls(request)).toHaveLength(3);
     expect(page.querySelector(".usage-cache-warning")).toBeNull();
-    expect(page.providerUsageStalled).toBe(false);
+    expect(page.read().data.providerUsageStalled).toBe(false);
   });
 
   it("acknowledges only failed receipts in the explicit Refresh scope", async () => {
-    vi.useFakeTimers();
-    focusDocument();
-    const request = vi.fn(async (method: string, _params?: unknown) =>
-      method === "usage.status" ? { updatedAt: 1, providers: [] } : cacheSnapshot("stale").result,
+    const request = usageRequest(() => cacheSnapshot("stale").result);
+    const { context, page } = await createUsagePageFixture(request, true, (initial) =>
+      initial.agentSelection.setScope("main"),
     );
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = contextWithClient(client);
-    context.agentSelection.setScope("main");
-    const page = await createPage(client, true, context);
     await preloadUsage(page);
     context.publishUsage({ agentId: "other", usageUpdatedAt: 1, usageRefreshFailed: true });
     context.publishUsage({ agentId: "main", usageUpdatedAt: 2, usageRefreshFailed: true });
@@ -265,18 +252,13 @@ describe("UsagePage cache convergence", () => {
   it.each(["resolve", "reject"] as const)(
     "coalesces publications received while an older usage request is pending (%s)",
     async (completion) => {
-      vi.useFakeTimers();
-      focusDocument();
       const stale = cacheSnapshot("stale").result;
       const fresh = cacheSnapshot("fresh").result;
       const pending = deferred<SessionsUsageResult>();
       let phase: "stale" | "pending" | "fresh" = "stale";
-      const request = vi.fn(async (method: string) => {
-        if (method === "usage.status") {
-          return { updatedAt: 1, providers: [] };
-        }
-        return phase === "pending" ? pending.promise : phase === "stale" ? stale : fresh;
-      });
+      const request = usageRequest(() =>
+        phase === "pending" ? pending.promise : phase === "stale" ? stale : fresh,
+      );
       const { context, page } = await createUsagePageFixture(request);
       await preloadUsage(page);
       phase = "pending";
@@ -294,7 +276,7 @@ describe("UsagePage cache convergence", () => {
       await settleUsageTimers(page);
       expect(usageCalls(request)).toHaveLength(3);
       expect(page.querySelector(".usage-cache-warning")).toBeNull();
-      expect(page.usageError).toBeNull();
+      expect(page.read().data.error).toBeNull();
       context.publishUsage({ usageUpdatedAt: 2 });
       await vi.advanceTimersByTimeAsync(35_000);
       expect(usageCalls(request)).toHaveLength(3);
@@ -311,8 +293,6 @@ describe("UsagePage cache convergence", () => {
   ])(
     "adopts a preload publication $publication the request (failed: $failed, later failure: $failureAfterCommit) without losing or duplicating its refresh",
     async ({ publication, failed, failureAfterCommit }) => {
-      vi.useFakeTimers();
-      focusDocument();
       let snapshot = cacheSnapshot("stale");
       const provider = deferred<{ updatedAt: number; providers: never[] }>();
       const usageStarted = deferred();
@@ -363,55 +343,55 @@ describe("UsagePage cache convergence", () => {
       );
     },
   );
+});
 
-  it("does not transfer a manual detail refresh to a replacement selection", async () => {
-    const snapshot = cacheSnapshot("fresh");
-    const keys = ["agent:main:a", "agent:main:b"];
-    const result = {
-      ...snapshot.result,
-      sessions: keys.map((key) => ({ key, usage: snapshot.result.totals })),
-    };
-    const manual = deferred<typeof result>();
-    let refreshing = false;
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "sessions.usage") {
-        return refreshing ? manual.promise : result;
-      }
-      if (method === "sessions.usage.timeseries") {
-        return { points: [] };
-      }
-      if (method === "sessions.usage.logs") {
-        return { logs: [{ timestamp: Date.now(), role: "user", content: String(params?.key) }] };
-      }
-      return { providers: [] };
-    });
-    const { page } = await createUsagePageFixture(request);
-    await preloadUsage(page);
-    page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[0]!.click();
-    await vi.waitFor(() => expect(textOf(page, ".session-log-content")).toBe(keys[0]));
-
-    refreshing = true;
-    refreshButton(page).click();
-    page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[1]!.click();
-    await vi.waitFor(() => expect(textOf(page, ".session-log-content")).toBe(keys[1]));
-    manual.resolve(result);
-    await vi.waitFor(() => expect(refreshButton(page).disabled).toBe(false));
-
-    expect(textOf(page, ".session-log-content")).toBe(keys[1]);
-    for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
-      expect(
-        request.mock.calls.filter(([called]) => called === method).map(([, params]) => params?.key),
-      ).toEqual(keys);
+it("does not transfer a manual detail refresh to a replacement selection", async () => {
+  const snapshot = cacheSnapshot("fresh");
+  const keys = ["agent:main:a", "agent:main:b"];
+  const result = {
+    ...snapshot.result,
+    sessions: keys.map((key) => ({ key, usage: snapshot.result.totals })),
+  };
+  const manual = deferred<typeof result>();
+  let refreshing = false;
+  const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    if (method === "sessions.usage") {
+      return refreshing ? manual.promise : result;
     }
+    if (method === "sessions.usage.timeseries") {
+      return { points: [] };
+    }
+    if (method === "sessions.usage.logs") {
+      return { logs: [{ timestamp: Date.now(), role: "user", content: String(params?.key) }] };
+    }
+    return { providers: [] };
   });
+  const { page } = await createUsagePageFixture(request);
+  await preloadUsage(page);
+  page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[0]!.click();
+  await vi.waitFor(() => expect(textOf(page, ".session-log-content")).toBe(keys[0]));
+
+  refreshing = true;
+  refreshButton(page).click();
+  page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[1]!.click();
+  await vi.waitFor(() => expect(textOf(page, ".session-log-content")).toBe(keys[1]));
+  manual.resolve(result);
+  await vi.waitFor(() => expect(refreshButton(page).disabled).toBe(false));
+
+  expect(textOf(page, ".session-log-content")).toBe(keys[1]);
+  for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
+    expect(
+      request.mock.calls.filter(([called]) => called === method).map(([, params]) => params?.key),
+    ).toEqual(keys);
+  }
 });
 
 describe("UsagePage provider usage outcome", () => {
+  beforeEach(focusDocument);
   it.each(["idle", "pending", "hidden"] as const)(
     "preserves the provider retry budget through %s usage publications",
     async (state) => {
       vi.useFakeTimers();
-      focusDocument();
       const visibility = vi.spyOn(document, "visibilityState", "get");
       let providerUsageRefreshing = true;
       let heldUsage: ReturnType<typeof deferred<SessionsUsageResult>> | undefined;
@@ -443,10 +423,10 @@ describe("UsagePage provider usage outcome", () => {
         }
         await vi.advanceTimersByTimeAsync(5_000 * 2 ** attempt);
       }
-      expect(page.providerUsageStalled).toBe(true);
+      expect(page.read().data.providerUsageStalled).toBe(true);
       providerUsageRefreshing = false;
       await page.refresh();
-      expect(page.providerUsageStalled).toBe(false);
+      expect(page.read().data.providerUsageStalled).toBe(false);
     },
   );
 
@@ -458,7 +438,6 @@ describe("UsagePage provider usage outcome", () => {
   ])(
     "recovers $loadSource provider outcomes (previous failure: $failed, aggregate fails: $aggregateFails)",
     async ({ loadSource, failed, aggregateFails }) => {
-      focusDocument();
       let phase = 1;
       const summary = failed
         ? { updatedAt: 2, providers: [] }
@@ -493,7 +472,7 @@ describe("UsagePage provider usage outcome", () => {
         await refresh();
         await vi.waitFor(() => {
           if (failed) {
-            expect(page.providerUsageUnavailable).toBe(true);
+            expect(page.read().data.providerUsageUnavailable).toBe(true);
           } else {
             expect(page.read().data.providerUsage).toEqual(summary.providers);
           }
@@ -505,8 +484,8 @@ describe("UsagePage provider usage outcome", () => {
       phase = 2;
       if (aggregateFails) {
         await refresh();
-        await vi.waitFor(() => expect(page.usageError).not.toBeNull());
-        expect(page.providerUsageUnavailable).toBe(false);
+        await vi.waitFor(() => expect(page.read().data.error).not.toBeNull());
+        expect(page.read().data.providerUsageUnavailable).toBe(false);
         if (!failed) {
           expect(page.read().data.providerUsage).toEqual(summary.providers);
         }
