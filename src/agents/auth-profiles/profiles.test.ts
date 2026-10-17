@@ -285,24 +285,19 @@ describe("promoteAuthProfileInOrder", () => {
 
       const brokenAfterRotation = runtimeSnapshot(brokenAgentDir);
       const healthyAfterRotation = runtimeSnapshot(healthyAgentDir);
+      const resolveKey = (
+        store: RuntimeAuthProfileStore,
+        agentDir: string,
+        profileId = "openai:shared",
+      ) => resolveApiKeyForProfile({ cfg: {}, store, profileId, agentDir });
       expect(brokenAfterRotation).toBeDefined();
       expect(healthyAfterRotation).toBeDefined();
-      await expect(
-        resolveApiKeyForProfile({
-          cfg: {},
-          store: brokenAfterRotation!,
-          profileId: "openai:shared",
-          agentDir: brokenAgentDir,
-        }),
-      ).resolves.toMatchObject({ apiKey: "sk-shared-new" });
-      await expect(
-        resolveApiKeyForProfile({
-          cfg: {},
-          store: healthyAfterRotation!,
-          profileId: "openai:shared",
-          agentDir: healthyAgentDir,
-        }),
-      ).resolves.toMatchObject({ apiKey: "sk-shared-new" });
+      await expect(resolveKey(brokenAfterRotation!, brokenAgentDir)).resolves.toMatchObject({
+        apiKey: "sk-shared-new",
+      });
+      await expect(resolveKey(healthyAfterRotation!, healthyAgentDir)).resolves.toMatchObject({
+        apiKey: "sk-shared-new",
+      });
       expect(brokenAfterRotation?.profiles["anthropic:broken"]).toMatchObject({
         key: "sk-broken-local",
       });
@@ -314,21 +309,9 @@ describe("promoteAuthProfileInOrder", () => {
 
       const brokenAfterDeletion = runtimeSnapshot(brokenAgentDir);
       expect(brokenAfterDeletion).toBeDefined();
+      await expect(resolveKey(brokenAfterDeletion!, brokenAgentDir)).resolves.toBeNull();
       await expect(
-        resolveApiKeyForProfile({
-          cfg: {},
-          store: brokenAfterDeletion!,
-          profileId: "openai:shared",
-          agentDir: brokenAgentDir,
-        }),
-      ).resolves.toBeNull();
-      await expect(
-        resolveApiKeyForProfile({
-          cfg: {},
-          store: brokenAfterDeletion!,
-          profileId: "openai:replacement",
-          agentDir: brokenAgentDir,
-        }),
+        resolveKey(brokenAfterDeletion!, brokenAgentDir, "openai:replacement"),
       ).resolves.toMatchObject({ apiKey: "sk-shared-replacement" });
     }, true));
 
@@ -639,109 +622,76 @@ describe("promoteAuthProfileInOrder", () => {
       });
     }));
 
-  it("moves a relogin profile to the front of an existing per-agent provider order", () =>
-    withProfileState(async ({ agentDir }) => {
-      fs.mkdirSync(agentDir, { recursive: true });
-      const newProfileId = "openai:bunsthedev@gmail.com";
-      const staleProfileId = "openai:val@viewdue.ai";
-      saveProfiles(
-        {
-          [newProfileId]: oauth("new-access", "new-refresh", Date.now() + 60 * 60 * 1000),
-          [staleProfileId]: oauth("stale-access", "stale-refresh", Date.now() + 30 * 60 * 1000),
-        },
-        agentDir,
-        { order: { openai: [staleProfileId] } },
-      );
-
-      const updated = await promoteAuthProfileInOrder({
-        agentDir,
-        provider: "openai",
-        profileId: newProfileId,
-        createIfMissing: true,
+  it.each(["existing", "config-only", "implicit"] as const)(
+    "promotes relogin with %s provider ordering",
+    async (mode) => {
+      await withProfileState(async ({ agentDir }) => {
+        fs.mkdirSync(agentDir, { recursive: true });
+        const newId = mode === "existing" ? "openai:bunsthedev@gmail.com" : "openai:new-login";
+        const oldId = mode === "existing" ? "openai:val@viewdue.ai" : "openai:old-login";
+        const configId = "openai:aws-sdk";
+        const profiles = {
+          [newId]: oauth("new-access", "new-refresh", Date.now() + 60 * 60 * 1000),
+        };
+        if (mode !== "implicit") {
+          const prefix = mode === "existing" ? "stale" : "old";
+          profiles[oldId] = oauth(
+            `${prefix}-access`,
+            `${prefix}-refresh`,
+            Date.now() + 30 * 60 * 1000,
+          );
+        }
+        saveProfiles(profiles, agentDir, mode === "existing" ? { order: { openai: [oldId] } } : {});
+        const updated = await promoteAuthProfileInOrder({
+          agentDir,
+          provider: "openai",
+          profileId: newId,
+          ...(mode !== "implicit" ? { createIfMissing: true } : {}),
+          ...(mode === "config-only" ? { createFromOrder: [oldId, configId] } : {}),
+        });
+        const expected =
+          mode === "implicit"
+            ? undefined
+            : mode === "config-only"
+              ? [newId, oldId, configId]
+              : [newId, oldId];
+        expect(updated).toMatchObject({ ok: true });
+        expect(updated.ok && updated.value.order?.openai).toEqual(expected);
+        expect(loadRuntime(agentDir).order?.openai).toEqual(expected);
+        if (mode === "config-only") {
+          saveAuthProfileStore(loadRuntime(agentDir), agentDir);
+          expect(loadRuntime(agentDir).order?.openai).toEqual(expected);
+        }
       });
+    },
+  );
 
-      expect(updated).toMatchObject({
-        ok: true,
-        value: { order: { openai: [newProfileId, staleProfileId] } },
+  it.each([true, false])(
+    "clears lastGood only for the failed profile (matching=%s)",
+    async (matching) => {
+      await withProfileState(async ({ agentDir }) => {
+        fs.mkdirSync(agentDir, { recursive: true });
+        const storedId = matching ? "openai:default" : "openai:user@example.test";
+        const prefix = matching ? "stale" : "good";
+        saveProfile(
+          storedId,
+          oauth(
+            `${prefix}-access-token`,
+            `${prefix}-refresh-token`,
+            Date.now() + (matching ? -60_000 : 60_000),
+          ),
+          agentDir,
+          { lastGood: { openai: storedId } },
+        );
+        await clearLastGoodProfileWithLock({
+          agentDir,
+          provider: "openai",
+          profileId: "openai:default",
+        });
+        expect(loadRuntime(agentDir).lastGood).toEqual(matching ? undefined : { openai: storedId });
       });
-      expect(loadRuntime(agentDir).order?.["openai"]).toEqual([newProfileId, staleProfileId]);
-    }));
-
-  it("preserves config-only fallback ids when creating a relogin order", () =>
-    withProfileState(async ({ agentDir }) => {
-      fs.mkdirSync(agentDir, { recursive: true });
-      const newProfileId = "openai:new-login";
-      const existingProfileId = "openai:old-login";
-      const configOnlyProfileId = "openai:aws-sdk";
-      saveProfiles(
-        {
-          [existingProfileId]: oauth("old-access", "old-refresh", Date.now() + 30 * 60 * 1000),
-          [newProfileId]: oauth("new-access", "new-refresh", Date.now() + 60 * 60 * 1000),
-        },
-        agentDir,
-      );
-
-      await promoteAuthProfileInOrder({
-        agentDir,
-        provider: "openai",
-        profileId: newProfileId,
-        createIfMissing: true,
-        createFromOrder: [existingProfileId, configOnlyProfileId],
-      });
-
-      expect(loadRuntime(agentDir).order?.["openai"]).toEqual([
-        newProfileId,
-        existingProfileId,
-        configOnlyProfileId,
-      ]);
-      saveAuthProfileStore(loadRuntime(agentDir), agentDir);
-      expect(loadRuntime(agentDir).order?.["openai"]).toEqual([
-        newProfileId,
-        existingProfileId,
-        configOnlyProfileId,
-      ]);
-    }));
-
-  it("keeps implicit round-robin when relogin has no existing order by default", () =>
-    withProfileState(async ({ agentDir }) => {
-      fs.mkdirSync(agentDir, { recursive: true });
-      const newProfileId = "openai:new-login";
-      saveProfile(
-        newProfileId,
-        oauth("new-access", "new-refresh", Date.now() + 60 * 60 * 1000),
-        agentDir,
-      );
-
-      const updated = await promoteAuthProfileInOrder({
-        agentDir,
-        provider: "openai",
-        profileId: newProfileId,
-      });
-
-      expect(updated).toMatchObject({ ok: true });
-      expect(updated.ok && updated.value.order?.["openai"]).toBeUndefined();
-      expect(loadRuntime(agentDir).order?.["openai"]).toBeUndefined();
-    }));
-
-  it("clears matching lastGood after a stale refresh_token_reused profile", () =>
-    withProfileState(async ({ agentDir }) => {
-      fs.mkdirSync(agentDir, { recursive: true });
-      const staleProfileId = "openai:default";
-      saveProfile(
-        staleProfileId,
-        oauth("stale-access-token", "stale-refresh-token", Date.now() - 60_000),
-        agentDir,
-        { lastGood: { openai: staleProfileId } },
-      );
-
-      await clearLastGoodProfileWithLock({
-        agentDir,
-        provider: "openai",
-        profileId: staleProfileId,
-      });
-
-      expect(loadRuntime(agentDir).lastGood).toBeUndefined();
-    }));
+    },
+  );
 
   it("clears cooldown classification and retry backoff after a successful profile use", () =>
     withProfileState(async ({ agentDir }) => {
@@ -1047,23 +997,6 @@ describe("promoteAuthProfileInOrder", () => {
       await expect(removing).resolves.toBe(true);
       expect(loadPersisted(mainAgentDir)?.profiles[profileId]).toBeUndefined();
       expect(loadPersisted(peerAgentDir)?.profiles[profileId]).toBeUndefined();
-    }));
-
-  it("does not clear lastGood when the failed profile is not the stored profile", () =>
-    withProfileState(async ({ agentDir }) => {
-      fs.mkdirSync(agentDir, { recursive: true });
-      const goodProfileId = "openai:user@example.test";
-      saveProfile(goodProfileId, oauth("good-access-token", "good-refresh-token"), agentDir, {
-        lastGood: { openai: goodProfileId },
-      });
-
-      await clearLastGoodProfileWithLock({
-        agentDir,
-        provider: "openai",
-        profileId: "openai:default",
-      });
-
-      expect(loadRuntime(agentDir).lastGood?.["openai"]).toBe(goodProfileId);
     }));
 });
 
