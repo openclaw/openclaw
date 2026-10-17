@@ -6,6 +6,7 @@ import { getEnvironmentData } from "node:worker_threads";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { readPreparedSessionEntryChange } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionEntryPublicationSource } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -89,7 +90,7 @@ function targetFor(sessionKey: string) {
       kind: "file" as const,
       physicalIdentity: identity.identity,
       birthtime: identity.birthtime,
-      nativeLocation: database.path,
+      nativeLocation: identity.canonicalPath,
     },
   };
 }
@@ -128,13 +129,19 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
   beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", root));
 
   it("reuses the actor through admitted PG path aliases without crossing database identities", async () => {
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+    await captureRuntimeConfigAsyncReader()();
     const otherDatabase = withEngineStoreAdmission(() =>
       owners.openOpenClawAgentDatabase({
         agentId: "main",
         path: path.join(path.dirname(database.path), "other.sqlite"),
       }),
     );
-    await assertSessionActorPathAliasReuse(database, otherDatabase);
+    try {
+      await assertSessionActorPathAliasReuse(database, otherDatabase);
+    } finally {
+      withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(otherDatabase.path));
+    }
   });
 
   it("publishes complete replacements under PG admission and reuses fresh actor facts after patches", async () => {
