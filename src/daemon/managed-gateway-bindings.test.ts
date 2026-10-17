@@ -24,73 +24,72 @@ import { readGatewayServiceState, resolveGatewayService } from "./service.js";
 // binding selection, physical layout and publication admission are real.
 afterEach(() => vi.restoreAllMocks());
 
+type Install = "system" | "local" | "global";
+type ScenarioOptions = {
+  edited?: boolean;
+  selected?:
+    | "generated"
+    | "native logging"
+    | "authored logging"
+    | "changed logging"
+    | "extra environment"
+    | "wrong native marker"
+    | "changed env file"
+    | "other definition"
+    | "changed argv zero"
+    | "explicit Program";
+  observation?: "stopped" | "mismatch" | "mismatch-stopped" | "uncertain";
+  customLabel?: boolean;
+};
+function makeScenario(
+  loaded: Install,
+  target: Install,
+  refused: boolean,
+  options: ScenarioOptions = {},
+) {
+  return { loaded, target, refused, edited: false, ...options };
+}
+
 it.each([
-  { loaded: "system", target: "system", edited: false, refused: true },
-  { loaded: "system", target: "local", edited: false, refused: false },
-  { loaded: "system", target: "system", edited: false, refused: false, observation: "stopped" },
-  { loaded: "system", target: "system", edited: false, refused: true, observation: "mismatch" },
-  { loaded: "system", target: "local", edited: false, refused: false, observation: "mismatch" },
-  {
-    loaded: "system",
-    target: "system",
-    edited: false,
-    refused: false,
-    observation: "mismatch-stopped",
-  },
-  { loaded: "system", target: "system", edited: false, refused: true, observation: "uncertain" },
-  { loaded: "local", target: "local", edited: false, refused: true },
-  { loaded: "local", target: "global", edited: false, refused: false },
-  { loaded: "global", target: "local", edited: false, refused: false },
-  { loaded: "global", target: "global", edited: false, refused: true },
-  { loaded: "local", target: "local", edited: true, refused: true },
-  { loaded: "local", target: "local", edited: false, refused: false, selected: "generated" },
-  {
-    loaded: "local",
-    target: "local",
-    edited: false,
-    refused: true,
-    selected: "generated",
-    observation: "mismatch",
-  },
-  { loaded: "local", target: "local", edited: false, refused: false, selected: "native logging" },
-  { loaded: "local", target: "local", edited: false, refused: false, selected: "authored logging" },
-  { loaded: "local", target: "local", edited: false, refused: true, selected: "changed logging" },
-  { loaded: "local", target: "local", edited: false, refused: true, selected: "extra environment" },
-  {
-    loaded: "local",
-    target: "local",
-    edited: false,
-    refused: true,
-    selected: "wrong native marker",
-  },
-  { loaded: "local", target: "local", edited: false, refused: true, selected: "changed env file" },
-  {
-    loaded: "global",
-    target: "global",
-    edited: false,
-    refused: true,
-    selected: "other definition",
-  },
-  { loaded: "local", target: "local", edited: false, refused: true, selected: "changed argv zero" },
-  { loaded: "local", target: "local", edited: false, refused: false, selected: "explicit Program" },
-  { loaded: "global", target: "global", edited: false, refused: true, customLabel: true },
-] as const)(
+  makeScenario("system", "system", true),
+  makeScenario("system", "local", false),
+  makeScenario("system", "system", false, { observation: "stopped" }),
+  makeScenario("system", "system", true, { observation: "mismatch" }),
+  makeScenario("system", "local", false, { observation: "mismatch" }),
+  makeScenario("system", "system", false, { observation: "mismatch-stopped" }),
+  makeScenario("system", "system", true, { observation: "uncertain" }),
+  makeScenario("local", "local", true),
+  makeScenario("local", "global", false),
+  makeScenario("global", "local", false),
+  makeScenario("global", "global", true),
+  makeScenario("local", "local", true, { edited: true }),
+  makeScenario("local", "local", false, { selected: "generated" }),
+  makeScenario("local", "local", true, { selected: "generated", observation: "mismatch" }),
+  makeScenario("local", "local", false, { selected: "native logging" }),
+  makeScenario("local", "local", false, { selected: "authored logging" }),
+  makeScenario("local", "local", true, { selected: "changed logging" }),
+  makeScenario("local", "local", true, { selected: "extra environment" }),
+  makeScenario("local", "local", true, { selected: "wrong native marker" }),
+  makeScenario("local", "local", true, { selected: "changed env file" }),
+  makeScenario("global", "global", true, { selected: "other definition" }),
+  makeScenario("local", "local", true, { selected: "changed argv zero" }),
+  makeScenario("local", "local", false, { selected: "explicit Program" }),
+  makeScenario("global", "global", true, { customLabel: true }),
+])(
   "uses the loaded launchd definition: loaded=$loaded target=$target edited=$edited selected=$selected custom=$customLabel observation=$observation",
   async (scenario) =>
     withTestDir({ prefix: "launchd-loaded-install-" }, async (directory) => {
       mockProcessPlatform("darwin");
       const home = path.join(directory, "home");
-      const customLabel = "customLabel" in scenario;
+      const customLabel = scenario.customLabel;
       const label = customLabel ? "org.example.shared-proof" : "ai.openclaw.shared-proof";
+      const installLocation = (kind: string, base: string) => ({
+        root: path.join(directory, `${kind}-install`),
+        plist: path.join(base, "Library", "LaunchAgents", `${label}.plist`),
+      });
       const locations = {
-        local: {
-          root: path.join(directory, "local-install"),
-          plist: path.join(home, "Library", "LaunchAgents", `${label}.plist`),
-        },
-        global: {
-          root: path.join(directory, "global-install"),
-          plist: path.join(directory, "global", "Library", "LaunchAgents", `${label}.plist`),
-        },
+        local: installLocation("local", home),
+        global: installLocation("global", path.join(directory, "global")),
       };
       const systemPlist = `/Library/LaunchDaemons/${label}.plist`;
       const systemFixturePlist = path.join(directory, "system.plist");
@@ -98,31 +97,19 @@ it.each([
         ...locations,
         system: { root: path.join(directory, "system-install"), plist: systemPlist },
       };
-      for (const location of Object.values(allLocations)) {
-        await fs.mkdir(path.join(location.root, "dist"), { recursive: true });
-        await fs.writeFile(
-          path.join(location.root, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-        );
-        await fs.writeFile(
-          path.join(location.root, "dist", "entry.js"),
-          "// synthetic serving artifact\n",
-        );
-        if (location.plist !== systemPlist) {
-          await fs.mkdir(path.dirname(location.plist), { recursive: true });
-        }
-      }
-      const argv = (root: string) => [
-        process.execPath,
-        path.join(root, "dist", "entry.js"),
-        "gateway",
-      ];
+      const write = async (file: string, data: string) => {
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, data);
+      };
+      const entry = (root: string) => path.join(root, "dist", "entry.js");
+      const argv = (root: string) => [process.execPath, entry(root), "gateway"];
+      const envFile = (root: string) => path.join(root, "service-env", `${label}.env`);
       const environment = {
         ...(customLabel ? {} : { OPENCLAW_PROFILE: "shared-proof" }),
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",
       };
-      const selectedScenario = "selected" in scenario ? scenario.selected : undefined;
+      const selectedScenario = scenario.selected;
       const wrapped = selectedScenario && selectedScenario !== "explicit Program";
       const authoredLogging =
         selectedScenario === "authored logging" || selectedScenario === "changed logging"
@@ -133,17 +120,21 @@ it.each([
           ? [
               "/bin/sh",
               path.join(root, "service-env", `${label}-env-wrapper.sh`),
-              path.join(root, "service-env", `${label}.env`),
+              envFile(root),
               ...argv(root),
             ]
           : selectedScenario === "explicit Program"
             ? [path.join(directory, "argv-zero", "node"), ...argv(root).slice(1)]
             : argv(root);
       for (const [kind, location] of Object.entries(allLocations)) {
+        await write(
+          path.join(location.root, "package.json"),
+          '{"name":"openclaw","version":"1.0.0"}',
+        );
+        await write(entry(location.root), "// synthetic serving artifact\n");
         if (wrapped) {
-          await fs.mkdir(path.join(location.root, "service-env"), { recursive: true });
-          await fs.writeFile(
-            path.join(location.root, "service-env", `${label}.env`),
+          await write(
+            envFile(location.root),
             Object.entries(environment)
               .map(([name, value]) => `export ${name}='${value}'`)
               .join("\n"),
@@ -168,42 +159,22 @@ it.each([
             `<key>Program</key><string>${executable}</string>\n<key>ProgramArguments</key>`,
           );
         }
-        await fs.writeFile(
-          location.plist === systemPlist ? systemFixturePlist : location.plist,
-          plist,
-        );
+        await write(location.plist === systemPlist ? systemFixturePlist : location.plist, plist);
       }
       const readFile = fs.readFile;
       vi.spyOn(fs, "readFile").mockImplementation((file, options) =>
         readFile(file === systemPlist ? systemFixturePlist : file, options),
       );
+      const services = Object.entries(allLocations).map(([kind, { plist }]) => ({
+        platform: "darwin" as const,
+        label,
+        detail: `plist: ${plist}`,
+        sourcePath: plist,
+        scope: kind === "local" ? ("user" as const) : ("system" as const),
+        marker: "openclaw",
+      }));
       vi.spyOn(inventory, "listManagedOpenClawGatewayServices").mockResolvedValue({
-        services: [
-          {
-            platform: "darwin",
-            label,
-            detail: `plist: ${locations.local.plist}`,
-            sourcePath: locations.local.plist,
-            scope: "user",
-            marker: "openclaw",
-          },
-          {
-            platform: "darwin",
-            label,
-            detail: `plist: ${locations.global.plist}`,
-            sourcePath: locations.global.plist,
-            scope: "system",
-            marker: "openclaw",
-          },
-          {
-            platform: "darwin",
-            label,
-            detail: `plist: ${systemPlist}`,
-            sourcePath: systemPlist,
-            scope: "system",
-            marker: "openclaw",
-          },
-        ],
+        services,
         errors: [],
       });
       vi.spyOn(nativeExec, "runExec").mockImplementation(async (bin, args, options) => {
@@ -216,13 +187,27 @@ it.each([
       const guiDomain = `gui/${process.getuid?.() ?? 501}`;
       const domain = scenario.loaded === "system" ? "system" : guiDomain;
       const loaded = allLocations[scenario.loaded];
-      const observation = "observation" in scenario ? scenario.observation : undefined;
+      const observation = scenario.observation;
       const sourceMismatch = observation?.startsWith("mismatch") ?? false;
       const observedPlist = sourceMismatch
         ? path.join(directory, "loaded-elsewhere.plist")
         : loaded.plist;
       const stopped = observation === "stopped" || observation === "mismatch-stopped";
       const cleanupError = new CommandProcessCleanupError();
+      const observedEnv: NodeJS.ProcessEnv = {
+        ...(!selectedScenario || !wrapped ? environment : {}),
+      };
+      if (selectedScenario) {
+        Object.assign(observedEnv, authoredLogging, {
+          XPC_SERVICE_NAME: selectedScenario === "wrong native marker" ? "another.job" : label,
+        });
+        if (["native logging", "changed logging"].includes(selectedScenario)) {
+          observedEnv.OSLogRateLimit = "synthetic-native-value";
+        }
+        if (selectedScenario === "extra environment") {
+          observedEnv.NODE_OPTIONS = "--inspect=0";
+        }
+      }
       const print = [
         `${domain}/${label} = {`,
         `\tpath = ${observedPlist}`,
@@ -237,22 +222,7 @@ it.each([
         ),
         "\t}",
         "\tenvironment = {",
-        ...Object.entries(
-          selectedScenario
-            ? {
-                ...(wrapped ? {} : environment),
-                XPC_SERVICE_NAME:
-                  selectedScenario === "wrong native marker" ? "another.job" : label,
-                ...authoredLogging,
-                ...(selectedScenario === "native logging" || selectedScenario === "changed logging"
-                  ? { OSLogRateLimit: "synthetic-native-value" }
-                  : {}),
-                ...(selectedScenario === "extra environment"
-                  ? { NODE_OPTIONS: "--inspect=0" }
-                  : {}),
-              }
-            : environment,
-        ).map(([name, value]) => `\t\t${name} => ${value}`),
+        ...Object.entries(observedEnv).map(([name, value]) => `\t\t${name} => ${value}`),
         "\t}",
         "}",
       ].join("\n");
@@ -288,7 +258,7 @@ it.each([
         };
         if (selectedScenario === "changed env file") {
           await fs.appendFile(
-            path.join(locations.local.root, "service-env", `${label}.env`),
+            envFile(locations.local.root),
             "\nexport NODE_OPTIONS='--inspect=0'\n",
           );
         }
@@ -342,10 +312,10 @@ it.each([
           env: { HOME: home, OPENCLAW_LAUNCHD_LABEL: label },
           launchAgentPlistPath: loaded.plist,
         });
-        expect(state.launchAgent?.target).toBe(`${domain}/${label}`);
-        expect(state.launchAgent?.sourcePath).toBe(observedPlist);
-        expect(state.command?.sourcePath).toBe(observedPlist);
-        expect(state.launchAgent).toBeDefined();
+        expect(state).toMatchObject({
+          launchAgent: { target: `${domain}/${label}`, sourcePath: observedPlist },
+          command: { sourcePath: observedPlist },
+        });
         await expect(
           readCorrespondingLaunchAgentCommand(
             { HOME: home, OPENCLAW_LAUNCHD_LABEL: label },
@@ -355,15 +325,9 @@ it.each([
         ).resolves.toBeNull();
         if (scenario.loaded === "system") {
           expect(
-            inventory.renderGatewayServiceCleanupHints([
-              {
-                platform: "darwin",
-                label,
-                detail: `plist: ${systemPlist}`,
-                sourcePath: systemPlist,
-                scope: "system",
-              },
-            ]),
+            inventory.renderGatewayServiceCleanupHints(
+              services.filter((service) => service.sourcePath === systemPlist),
+            ),
           ).toContain(`sudo launchctl bootout system/${label}`);
         }
       }

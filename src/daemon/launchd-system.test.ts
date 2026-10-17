@@ -1,4 +1,3 @@
-// System launchd ownership tests cover loaded, installed, and unverifiable states.
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -82,6 +81,22 @@ import {
   renderSystemLaunchDaemonOwnershipShellProbe,
 } from "./launchd-system.js";
 
+const label = "ai.openclaw.gateway";
+const serviceTarget = `system/${label}`;
+const absent = { status: "absent", serviceTarget };
+const inspect = (options?: Parameters<typeof inspectSystemLaunchDaemonOwnership>[1]) =>
+  inspectSystemLaunchDaemonOwnership(label, options);
+function plist(name: string, value?: unknown, error?: string) {
+  const target = `/Library/LaunchDaemons/${name}.plist`;
+  state.files.set(target, "<plist/>");
+  if (value !== undefined) {
+    state.plutilValues.set(target, { Label: value });
+  }
+  if (error) {
+    state.accessErrors.set(target, error);
+  }
+  return target;
+}
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const hostPlatform = process.platform;
 const absentQuery = 'printf "%s\\n" "Could not find service" >&2\nexit 113';
@@ -143,7 +158,7 @@ ${launchctlBody}
   if (plistMode === "unreadable") {
     chmodSync(path.join(daemonsDir, plistName), 0o000);
   }
-  const script = renderSystemLaunchDaemonOwnershipShellProbe("ai.openclaw.gateway")
+  const script = renderSystemLaunchDaemonOwnershipShellProbe(label)
     .replaceAll("/Library/LaunchDaemons", daemonsDir)
     .replaceAll("/usr/bin/plutil", plutilShim)
     .concat(
@@ -194,9 +209,9 @@ describe("system LaunchDaemon ownership", () => {
   it("fails closed when launchctl cannot classify system ownership", async () => {
     state.launchctl = { stdout: "", stderr: "Operation not permitted", code: 1 };
 
-    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
+    await expect(inspect()).resolves.toEqual({
       status: "unverifiable",
-      serviceTarget: "system/ai.openclaw.gateway",
+      serviceTarget,
       operation: "launchctl",
       detail: "Operation not permitted",
       reason: "launchd-system-domain-unavailable",
@@ -204,36 +219,21 @@ describe("system LaunchDaemon ownership", () => {
   });
 
   it("treats a valid non-string Label as unable to own the gateway label", async () => {
-    const unrelated = "/Library/LaunchDaemons/com.vendor.numeric-label.plist";
-    state.files.set(unrelated, "<plist/>");
-    state.plutilValues.set(unrelated, { Label: 42 });
-
-    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
-      status: "absent",
-      serviceTarget: "system/ai.openclaw.gateway",
-    });
+    plist("com.vendor.numeric-label", 42);
+    await expect(inspect()).resolves.toEqual(absent);
     expect(execLaunchctl).toHaveBeenCalledTimes(1);
   });
 
   it("skips an unreadable foreign plist", async () => {
-    const unrelated = "/Library/LaunchDaemons/com.vendor.locked.plist";
-    state.files.set(unrelated, "<plist/>");
-    state.accessErrors.set(unrelated, "EACCES");
-
-    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
-      status: "absent",
-      serviceTarget: "system/ai.openclaw.gateway",
-    });
-    await expect(
-      assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway"),
-    ).resolves.toBeUndefined();
+    plist("com.vendor.locked", undefined, "EACCES");
+    await expect(inspect()).resolves.toEqual(absent);
+    await expect(assertNoSystemLaunchDaemonOwnership(label)).resolves.toBeUndefined();
   });
 
-  it("refuses inspection when the native plist parser is missing", async () => {
-    const plistPath = "/Library/LaunchDaemons/com.vendor.worker.plist";
-    state.files.set(plistPath, "native-input");
+  it("refuses an unreadable native result for a readable plist", async () => {
+    const plistPath = plist("com.vendor.worker");
     runExec.mockRejectedValueOnce(fsError("ENOENT", "/usr/bin/plutil"));
-    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toMatchObject({
+    await expect(inspect()).resolves.toMatchObject({
       status: "unverifiable",
       operation: "filesystem",
       detail: expect.stringContaining(plistPath),
@@ -241,45 +241,31 @@ describe("system LaunchDaemon ownership", () => {
   });
 
   it("detects a readable owner after an unreadable foreign plist", async () => {
-    const unrelated = "/Library/LaunchDaemons/com.vendor.locked.plist";
-    const owner = "/Library/LaunchDaemons/vendor-openclaw.plist";
-    state.files.set(unrelated, "<plist/>");
-    state.accessErrors.set(unrelated, "EACCES");
-    state.files.set(owner, "<plist/>");
-    state.plutilValues.set(owner, { Label: "ai.openclaw.gateway" });
-
-    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
+    plist("com.vendor.locked", undefined, "EACCES");
+    const owner = plist("vendor-openclaw", label);
+    await expect(inspect()).resolves.toEqual({
       status: "installed",
-      serviceTarget: "system/ai.openclaw.gateway",
+      serviceTarget,
       plistPath: owner,
     });
   });
 
   it("can skip the installed-plist scan for read-only status probes", async () => {
-    const plistPath = "/Library/LaunchDaemons/ai.openclaw.gateway.plist";
-    state.files.set(plistPath, "<plist/>");
-
-    await expect(
-      inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
-        scanInstalledPlists: false,
-      }),
-    ).resolves.toEqual({
-      status: "absent",
-      serviceTarget: "system/ai.openclaw.gateway",
-    });
+    plist(label);
+    await expect(inspect({ scanInstalledPlists: false })).resolves.toEqual(absent);
   });
 
   it("throws one typed recovery error and documents that force cannot bypass it", async () => {
     state.launchctl = { stdout: "state = running", stderr: "", code: 0 };
 
-    const error = await assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway").catch(
+    const error = await assertNoSystemLaunchDaemonOwnership(label).catch(
       (caught: unknown) => caught,
     );
 
     expect(error).toMatchObject({
       name: "SystemLaunchDaemonOwnershipError",
       code: "SYSTEM_LAUNCH_DAEMON_OWNERSHIP",
-      ownership: { status: "loaded", serviceTarget: "system/ai.openclaw.gateway" },
+      ownership: { status: "loaded", serviceTarget },
     });
     expect(String(error)).toContain("duplicate KeepAlive managers can restart-loop the gateway");
     expect(String(error)).toContain("--force does not override system ownership");
