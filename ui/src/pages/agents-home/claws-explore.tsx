@@ -6,7 +6,7 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { searchOfficialClaws, type ClawCatalogEntry } from "./claws-catalog-client.ts";
+import { searchClaws, type ClawCatalogEntry } from "./claws-catalog-client.ts";
 import "../../styles/agents-home.css";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
@@ -66,7 +66,7 @@ export function ClawsExplore(props: { onSelect?: (entry: ClawCatalogEntry) => vo
     loadedForConnection = true;
     updateView({ entries: [], loading: true, error: null });
     try {
-      const entries = await searchOfficialClaws(scope.client, view.query);
+      const entries = await searchClaws(scope.client, view.query);
       if (gateway.isCurrent(scope) && revision === searchRevision) {
         updateView({ entries });
       }
@@ -168,7 +168,7 @@ export function ClawsExplore(props: { onSelect?: (entry: ClawCatalogEntry) => vo
                   </span>
                   <div class="agents-home__claw-identity">
                     <h3>{entry().displayName}</h3>
-                    <span>{t("clawsCatalog.publisher")}</span>
+                    <span>{`@${entry().ownerHandle}`}</span>
                   </div>
                   <button
                     type="button"

@@ -26,6 +26,7 @@ const workflowOperator = {
   latestVersion: "1.2.0",
   channel: "official",
   official: true,
+  ownerHandle: "openclaw",
   downloads: 12,
   updatedAtMs: 1_000,
 };
@@ -53,7 +54,11 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
     await server?.close();
   });
 
-  async function fixture(page: import("playwright").Page) {
+  async function fixture(
+    page: import("playwright").Page,
+    entry = workflowOperator,
+    detailPublisher: Partial<Pick<typeof workflowOperator, "ownerHandle" | "official">> = {},
+  ) {
     return await installMockGateway(page, {
       featureMethods: [
         "openclaw.chat",
@@ -80,10 +85,11 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
           scope: "per-sender",
           agents: [{ id: "main", name: "Main" }],
         },
-        "claws.catalog.search": { entries: [workflowOperator] },
+        "claws.catalog.search": { entries: [entry] },
         "claws.catalog.detail": {
           detail: {
-            ...workflowOperator,
+            ...entry,
+            ...detailPublisher,
             version: "1.2.0",
             agentName: "Workflow Operator",
             workspaceFiles: 2,
@@ -157,7 +163,7 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
         expect(await card.textContent()).not.toContain("@openclaw/workflow-operator");
         expect(await page.locator("[data-claws-attention]").count()).toBe(0);
         await card.getByRole("button", { name: "Add" }).click();
-        await page.waitForURL(/\/agents\/claws\/workflow-operator$/u);
+        await page.waitForURL(/\/agents\/claws\/packages\/%40openclaw%2Fworkflow-operator$/u);
         const detail = page.locator(".plugin-catalog-detail");
         await detail.getByRole("heading", { name: "Skills" }).waitFor();
         const publisher = detail.locator(".plugin-catalog-detail__publisher");
@@ -236,10 +242,53 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
     },
   );
 
-  it("adds an agent and sends the first chat message despite pending setup", async () => {
+  it("uses the accepted detail publisher when the catalog identity is stale", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 900 },
+    });
+    const page = await context.newPage();
+    await fixture(
+      page,
+      { ...workflowOperator, packageName: "workflow-operator" },
+      { ownerHandle: "maker", official: false },
+    );
+    try {
+      await page.goto(`${server.baseUrl}agents`);
+      const card = page.locator("[data-claws-explore] [data-claws-entry]").first();
+      await card.waitFor();
+      expect(await card.textContent()).toContain("@openclaw");
+      await card.getByRole("button", { name: "Add" }).click();
+      const detail = page.locator(".plugin-catalog-detail");
+      await detail.getByRole("heading", { name: "Skills" }).waitFor();
+      expect(await detail.locator("[data-claws-confirm] button").isEnabled()).toBe(true);
+      if (capture) {
+        const dir = createControlUiE2eArtifactDir("claws-detail-publisher-refresh");
+        await page.screenshot({ path: `${dir}/detail.png`, animations: "disabled" });
+      }
+      const publisher = detail.locator(".plugin-catalog-detail__publisher");
+      expect(await publisher.getByRole("img", { name: "Official" }).count()).toBe(0);
+      expect(await publisher.locator("strong").textContent()).toBe("maker");
+      expect(await publisher.getByRole("link", { name: "@maker" }).getAttribute("href")).toBe(
+        "https://clawhub.ai/maker",
+      );
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("adds a personal publisher Claw and sends the first chat message despite pending setup", async () => {
     const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
-    const gateway = await fixture(page);
+    const community = {
+      ...workflowOperator,
+      packageName: "@maker/workflow-operator",
+      ownerHandle: "maker",
+      channel: "community",
+      official: false,
+    };
+    const gateway = await fixture(page, community);
     try {
       await page.goto(`${server.baseUrl}agents`);
       await page
@@ -251,6 +300,9 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
         .locator(".plugin-catalog-detail")
         .getByRole("heading", { name: "Skills" })
         .waitFor();
+      const publisher = page.locator(".plugin-catalog-detail__publisher");
+      expect(await publisher.getByRole("link", { name: "@maker" }).count()).toBe(1);
+      expect(await publisher.getByRole("img", { name: "Official" }).count()).toBe(0);
       await gateway.setMethodResponse("agents.list", {
         defaultId: "main",
         mainKey: "main",
@@ -268,7 +320,7 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
         message: "Workflow Operator, what can you do?",
       });
       expect((await gateway.waitForRequest("claws.add.apply")).params).toMatchObject({
-        source: { packageName: workflowOperator.packageName, version: "1.2.0" },
+        source: { packageName: community.packageName, version: "1.2.0" },
       });
       expect(await gateway.getRequests("claws.add.plan")).toHaveLength(0);
       expect(await gateway.getRequests("claws.status")).toHaveLength(0);

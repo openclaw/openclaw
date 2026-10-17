@@ -47,6 +47,7 @@ export const workflowOperator = {
   latestVersion: "1.2.0",
   channel: "official",
   official: true,
+  ownerHandle: "openclaw",
   downloads: 12,
   updatedAtMs: 1_000,
 } as const;
