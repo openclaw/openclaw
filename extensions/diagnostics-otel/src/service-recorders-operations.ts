@@ -80,6 +80,16 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         runtime.gatewayWsOperatorConnectionsGauge.record(evt.operators);
       }
     },
+    recordSessionsListRetention(
+      evt: Extract<DiagnosticEventPayload, { type: "sessions.list.retention" }>,
+      metadata: DiagnosticEventMetadata,
+    ) {
+      if (metadata.trusted) {
+        runtime.sessionsListRetainedViewsGauge.record(evt.views);
+        runtime.sessionsListRetainedRefsGauge.record(evt.refs);
+        runtime.sessionsListRetainedBytesGauge.record(evt.estimatedBytes);
+      }
+    },
     recordGatewayRpc(
       evt: Extract<DiagnosticEventPayload, { type: "gateway.rpc" }>,
       metadata: DiagnosticEventMetadata,

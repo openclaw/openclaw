@@ -39,11 +39,7 @@ import type {
   DiagnosticRuntimeMeasurementFields,
   DiagnosticWorkerRequestFields,
 } from "./diagnostic-process-types.js";
-import type {
-  DiagnosticGatewayRpcFields,
-  DiagnosticGatewayWsFields,
-  DiagnosticSessionsListBaselineRetiredFields,
-} from "./diagnostic-rpc-types.js";
+import type { DiagnosticGatewayFields } from "./diagnostic-rpc-types.js";
 import type {
   DiagnosticAgentCommentaryFields,
   DiagnosticRunScopeFields,
@@ -86,8 +82,6 @@ type DiagnosticBaseEvent = {
 
 type DiagnosticSessionEvent = DiagnosticBaseEvent &
   Pick<DiagnosticRunScopeFields, "sessionKey" | "sessionId">;
-
-type DiagnosticGatewayRpcEvent = DiagnosticBaseEvent & DiagnosticGatewayRpcFields;
 
 type DiagnosticUsageEvent = DiagnosticSessionEvent & {
   type: "model.usage";
@@ -785,9 +779,7 @@ type DiagnosticTelemetryExporterEvent = DiagnosticBaseEvent & {
 };
 
 export type DiagnosticEventPayload =
-  | DiagnosticGatewayRpcEvent
-  | (DiagnosticBaseEvent & DiagnosticSessionsListBaselineRetiredFields)
-  | (DiagnosticBaseEvent & DiagnosticGatewayWsFields)
+  | (DiagnosticBaseEvent & DiagnosticGatewayFields)
   | (DiagnosticBaseEvent & DiagnosticRuntimeMeasurementFields)
   | (DiagnosticBaseEvent & DiagnosticWorkerRequestFields)
   | DiagnosticUsageEvent
@@ -1600,6 +1592,7 @@ export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => voi
     exclude: [
       "log.record",
       "gateway.rpc",
+      "sessions.list.retention",
       "gateway.ws.event",
       "gateway.ws.connections",
       "gateway.event_loop.sample",

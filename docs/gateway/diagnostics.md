@@ -903,7 +903,9 @@ view-cache clear or eviction that retires sidebar rows or history, not rows or
 views removed. Selection-only and non-sidebar views do not count; an empty
 sidebar row list is still a baseline. Its bounded
 causes are `projection-revision`, `config`, `identity`, `selection-reset`,
-`view-evicted`, and `history-evicted`. View and history limits are both 32.
+`view-evicted`, and `history-evicted`. Views are evicted in least-recently-used
+order at 512 cache slots or 32 MiB estimated retention per projection; each view
+retains at most 32 prior row generations.
 For invalidations observed together on a read, config wins over identity, then
 projection revision; selection resets count where they clear the cache.
 

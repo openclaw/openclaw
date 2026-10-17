@@ -1,6 +1,14 @@
 import type { GatewayClientId } from "../../packages/gateway-protocol/src/client-info.js";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 
+/** Process totals for retained session-list views and their estimated memory. */
+export type DiagnosticSessionsListRetentionFields = {
+  type: "sessions.list.retention";
+  views: number;
+  refs: number;
+  estimatedBytes: number;
+};
+
 export type SessionsListBaseMissReason = "unknown-base" | "all-rows-changed";
 
 export type DiagnosticSessionsListBaselineRetiredFields = {
@@ -98,3 +106,9 @@ export type DiagnosticGatewayWsFields =
       sessionEvent?: GatewayWsSessionEventAttribution;
     }
   | { type: "gateway.ws.connections"; operators: number };
+
+export type DiagnosticGatewayFields =
+  | DiagnosticGatewayRpcFields
+  | DiagnosticGatewayWsFields
+  | DiagnosticSessionsListBaselineRetiredFields
+  | DiagnosticSessionsListRetentionFields;
