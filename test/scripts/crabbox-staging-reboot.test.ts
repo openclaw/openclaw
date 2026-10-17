@@ -258,36 +258,26 @@ posixIt("records provenance; same-host reboot recovery never probes reused PID",
   expect(fs.existsSync(fixture.owner.root)).toBe(false);
 });
 
-posixIt.each(["different host", "different namespace", "missing provenance"])(
+const namespaceHost = { ...oldHost, platform: "linux" as const, hostId: "1".repeat(32) };
+posixIt.each([
+  ["different host", oldHost, { ...newHost, hostId: "ffffffff-bbbb-4ccc-8ddd-eeeeeeeeeeee" }],
+  [
+    "different namespace",
+    { ...namespaceHost, pidNamespace: "pid:[4026531836]" },
+    { ...namespaceHost, bootId: newHost.bootId, pidNamespace: "pid:[4026531837]" },
+  ],
+  ["missing provenance", oldHost, newHost],
+] satisfies [string, ProcessProvenance, ProcessProvenance][])(
   "refuses %s as proof of producer death",
-  async (defect) => {
-    if (defect === "different namespace") {
-      injected.provenance = Object.freeze({
-        platform: "linux",
-        hostId: "1".repeat(32),
-        bootId: oldHost.bootId,
-        pidNamespace: "pid:[4026531836]",
-      });
-    }
+  async (defect, previous, current) => {
+    injected.provenance = previous;
     const fixture = stage();
-    if (defect === "different host") {
-      injected.provenance = Object.freeze({
-        ...newHost,
-        hostId: "ffffffff-bbbb-4ccc-8ddd-eeeeeeeeeeee",
-      });
-    } else if (defect === "different namespace") {
-      injected.provenance = Object.freeze({
-        platform: "linux",
-        hostId: "1".repeat(32),
-        bootId: newHost.bootId,
-        pidNamespace: "pid:[4026531837]",
-      });
-    } else {
+    injected.provenance = current;
+    if (defect === "missing provenance") {
       rewriteReceipt(fixture, (receipt) => {
         delete receipt.ownerProvenance;
         delete receipt.ownerDomain;
       });
-      injected.provenance = newHost;
     }
     const before = fixture.read();
     await refused(fixture, ["recover", fixture.id], /host|namespace/);

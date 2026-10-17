@@ -367,54 +367,37 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
   );
 
   it.each([
-    { vanishAt: 5, detaches: 5, forced: false },
-    { vanishAt: 10, detaches: 11, forced: true },
-  ])(
-    "treats a busy volume that vanished at detach attempt $vanishAt as detached",
-    ({ vanishAt, detaches, forced }) => {
-      const { output, tools, run } = fixture();
-
-      const result = run({
-        HDIUTIL_DETACH_FAIL_COUNT: "9",
-        HDIUTIL_DETACH_VANISH_AT: String(vanishAt),
-      });
-
-      expect(result.status).toBe(0);
-      expect(readFileSync(output, "utf8")).toBe("converted");
-      expect(result.stderr).not.toContain("Preserving DMG temp root");
-      const log = readFileSync(tools.hdiutilLog, "utf8");
-      const mountPoint = expectPrivateDmgMount(log);
-      expect(existsSync(path.dirname(mountPoint))).toBe(false);
-      const detachLines = log.split("\n").filter((line) => line.startsWith("detach "));
-      expect(detachLines).toHaveLength(detaches);
-      // The forced round tries the device node first, then the mount path.
-      expect(detachLines.filter((line) => line.endsWith("-force"))).toEqual(
-        forced ? ["detach /dev/disk99s1 -force", `detach ${mountPoint} -force`] : [],
-      );
-      expect(log).toContain("resize");
-      expect(log).toContain("convert ");
-    },
-  );
-
-  it.each([6, 9])("retries %i failed DMG detaches before finalizing the artifact", (failures) => {
+    ["vanishes before force", 9, 5, 5],
+    ["vanishes during force", 9, 10, 11],
+    ["recovers with quiet detach", 6, 0, 7],
+    ["recovers with forced detach", 9, 0, 10],
+  ] as const)("finalizes an image that %s", (_name, failures, vanishAt, count) => {
     const { output, tools, run } = fixture();
-
     const result = run({
       HDIUTIL_DETACH_FAIL_COUNT: String(failures),
+      HDIUTIL_DETACH_VANISH_AT: String(vanishAt),
     });
-
     expect(result.status).toBe(0);
     expect(readFileSync(output, "utf8")).toBe("converted");
+    expect(result.stderr).not.toContain("Preserving DMG temp root");
     const log = readFileSync(tools.hdiutilLog, "utf8");
+    const mountPoint = expectPrivateDmgMount(log);
     const detaches = log.split("\n").filter((line) => line.startsWith("detach "));
-    expect(detaches).toHaveLength(failures + 1);
-    expect(detaches.slice(0, -1).every((line) => line.endsWith("-quiet"))).toBe(true);
-    expect(detaches.at(-1)).toMatch(failures === 9 ? /-force$/ : /-quiet$/);
-    expect(log.indexOf("sync ")).toBeGreaterThan(log.indexOf("attach "));
-    expect(log.indexOf("sync ")).toBeLessThan(log.indexOf("sleep "));
-    const delays = Array.from(log.matchAll(/^sleep (\d+)$/gm), ([, delay]) => Number(delay));
-    expect(delays).toHaveLength(Math.min(failures + 1, 9));
-    expect(delays.reduce((sum, delay) => sum + delay, 0)).toBe(failures === 9 ? 54 : 35);
+    expect(detaches).toHaveLength(count);
+    if (vanishAt) {
+      expect(existsSync(path.dirname(mountPoint))).toBe(false);
+      expect(detaches.filter((line) => line.endsWith("-force"))).toEqual(
+        vanishAt === 10 ? ["detach /dev/disk99s1 -force", `detach ${mountPoint} -force`] : [],
+      );
+    } else {
+      expect(detaches.slice(0, -1).every((line) => line.endsWith("-quiet"))).toBe(true);
+      expect(detaches.at(-1)).toMatch(failures === 9 ? /-force$/ : /-quiet$/);
+      expect(log.indexOf("sync ")).toBeGreaterThan(log.indexOf("attach "));
+      expect(log.indexOf("sync ")).toBeLessThan(log.indexOf("sleep "));
+      const delays = Array.from(log.matchAll(/^sleep (\d+)$/gm), ([, delay]) => Number(delay));
+      expect(delays).toHaveLength(Math.min(failures + 1, 9));
+      expect(delays.reduce((sum, delay) => sum + delay, 0)).toBe(failures === 9 ? 54 : 35);
+    }
     expect(log).toContain("resize");
     expect(log).toContain("convert ");
   });

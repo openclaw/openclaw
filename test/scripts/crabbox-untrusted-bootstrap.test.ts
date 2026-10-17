@@ -63,12 +63,9 @@ case "$1" in
 esac
 `,
   );
-  const wrapper = join(stage, "wrapper");
-  const native = join(stage, "native");
-  mkdirSync(wrapper);
-  mkdirSync(native);
-  writeFileSync(join(wrapper, "package.json"), '{"version":"12.11.1"}');
-  executable(join(native, "pnpm"), "#!/bin/sh\necho 12.11.1\n");
+  for (const name of ["wrapper", "native"]) {
+    mkdirSync(join(stage, name));
+  }
   function archive(directory: string, name: string, algorithm: string) {
     const output = join(origin, name);
     execFileSync("tar", [name.endsWith(".xz") ? "-cJf" : "-czf", output, "-C", stage, directory]);
@@ -94,15 +91,13 @@ case "$*" in
 esac
 echo node-download >> ${JSON.stringify(join(root, "downloads"))}
 while [[ $# -gt 0 ]]; do
-  if [[ "$1" == "-o" ]]; then output="$2"; shift; fi
-  url="$1"
+  if [[ "$1" == "-o" ]]; then
+    cp ${JSON.stringify(join(origin, "node-v24.21.0-linux-x64.tar.xz"))} "$2"
+    exit
+  fi
   shift
 done
-if [[ "$url" == */SHASUMS256.txt ]]; then
-  printf '%s  %s\\n' ${JSON.stringify(hashes.node)} node-v24.21.0-linux-x64.tar.xz > "$output"
-else
-  cp ${JSON.stringify(join(origin, "node-v24.21.0-linux-x64.tar.xz"))} "$output"
-fi
+exit 1
 `,
   );
   executable(join(bin, "git"), "#!/bin/sh\necho aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
@@ -136,9 +131,11 @@ fi
     );
   const scriptPath = join(root, "bootstrap.sh");
   writeFileSync(scriptPath, script);
+  const read = (name: string) => readFileSync(join(root, name), "utf8");
+  const exists = (name: string) => existsSync(join(root, name));
   return {
-    read: (name: string) => readFileSync(join(root, name), "utf8"),
-    exists: (name: string) => existsSync(join(root, name)),
+    read,
+    exists,
     root,
     image,
     origin,
@@ -166,11 +163,7 @@ fi
         env: process.env,
       });
     },
-    downloads() {
-      return existsSync(join(root, "downloads"))
-        ? readFileSync(join(root, "downloads"), "utf8")
-        : "";
-    },
+    downloads: () => (exists("downloads") ? read("downloads") : ""),
   };
 }
 
@@ -197,8 +190,7 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
   });
 
   it("bounds both IMDSv2 identity requests", () => {
-    const script = readFileSync("scripts/crabbox-untrusted-bootstrap.sh", "utf8");
-    const imdsRequests = script.match(
+    const imdsRequests = source.match(
       /\/usr\/bin\/curl[\s\S]*?http:\/\/169\.254\.169\.254[^\n]*/gu,
     );
 
