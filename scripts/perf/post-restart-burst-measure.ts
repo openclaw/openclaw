@@ -684,9 +684,10 @@ async function rpc(
   client: ReturnType<typeof createGatewayWsClient>,
   method: string,
   params: unknown,
+  timeoutMs = 360_000,
 ) {
   assertAlive();
-  const reply = await client.request(method, params, 360_000);
+  const reply = await client.request(method, params, timeoutMs);
   assertAlive();
   if (!reply.ok) {
     throw new Error(`${method}: ${JSON.stringify(reply.error)}`);
@@ -900,6 +901,43 @@ async function settleWorktreeOperations<T>(operations: Promise<T>[]): Promise<T[
     return result.value;
   });
 }
+async function settleArchivedWorktreeCleanup(client: ReturnType<typeof createGatewayWsClient>) {
+  const deadline = performance.now() + 60_000;
+  let jobId: string | undefined;
+  while (performance.now() < deadline) {
+    let receipt: unknown;
+    try {
+      receipt = await rpc(
+        client,
+        "worktrees.gc",
+        jobId ? { jobId } : {},
+        Math.max(1, deadline - performance.now()),
+      );
+    } catch (error) {
+      // Archive notifications can queue a follow-up pass that replaces the latest receipt.
+      if (error instanceof Error && error.message.includes("only the latest job is retained")) {
+        jobId = undefined;
+        continue;
+      }
+      throw error;
+    }
+    if (performance.now() >= deadline) {
+      break;
+    }
+    if (!isRecord(receipt) || typeof receipt.jobId !== "string") {
+      throw new Error("worktrees.gc did not return a cleanup receipt");
+    }
+    if (receipt.state === "failed" || receipt.outcome === "partial") {
+      throw new Error(`Archive cleanup failed: ${JSON.stringify(receipt)}`);
+    }
+    if (receipt.state === "completed") {
+      return receipt;
+    }
+    jobId = receipt.jobId;
+    await delay(100);
+  }
+  throw new Error("Archive cleanup did not settle within 60 seconds");
+}
 async function measureWorktreeChurn() {
   await delay(Math.max(0, 120_000 - (performance.now() - restartAt)));
   const firstTwoMinutes = await scrapeWriterMetrics("worktree-first-120s");
@@ -938,6 +976,7 @@ async function measureWorktreeChurn() {
         }),
       ),
     );
+    const archiveCleanup = await settleArchivedWorktreeCleanup(client);
     const archived = await scrapeWriterMetrics("worktree-burst-archived");
     await settleWorktreeOperations(
       sessions.map(async (session) => {
@@ -967,6 +1006,7 @@ async function measureWorktreeChurn() {
       before,
       created,
       archived,
+      archiveCleanup,
       cleaned,
       boundary:
         "cumulative exporter counts; subtract adjacent snapshots for create/archive/cleanup; concurrent reconnect reads remain included",

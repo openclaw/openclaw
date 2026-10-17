@@ -272,7 +272,9 @@ Add `--writer-reads --worktree-churn --clients 40 --seconds 180` to compare
 worktree traffic after reconnect. The driver saves writer queue count/wait
 snapshots at 120 seconds, then creates 12 sessions with real worktrees in a
 seeded project concurrently, archives them, and deletes them through the normal
-RPCs. Each stage completes before the next and saves another metrics snapshot.
+RPCs. After archiving, it waits for the background cleanup receipt (including a
+coalesced follow-up pass) before sampling counters and deleting sessions. Each
+stage completes before the next and saves another metrics snapshot.
 `worktreeChurn` in `result.json` retains the snapshots and elapsed times; subtract
 adjacent counts/wait sums for each stage. Reconnect polling continues during the
 burst. Worktree creation or preserved cleanup failures reject the run. These
