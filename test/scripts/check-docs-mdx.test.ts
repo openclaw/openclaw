@@ -36,6 +36,18 @@ describe("scripts/check-docs-mdx", () => {
       error: null,
     },
     {
+      name: "annotated LF frontmatter delimiter",
+      prefix: '---\ntitle: Example\ndescription: "{"\n--- # end\n',
+      body: "# Valid\n",
+      error: null,
+    },
+    {
+      name: "annotated CRLF frontmatter delimiter",
+      prefix: '---\r\ntitle: Example\r\ndescription: "{"\r\n... # end\r\n',
+      body: "# Valid\r\n",
+      error: null,
+    },
+    {
       name: "LF MDX expression",
       prefix: "---\ntitle: Example\n---\n",
       body: "{\n",

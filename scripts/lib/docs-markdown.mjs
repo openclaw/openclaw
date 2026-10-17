@@ -743,7 +743,7 @@ export function parseDocsDocument(markdown, md = createDocsMarkdown(), options =
 }
 
 const openingDelimiter = /^---[ \t]*\r?\n/u;
-const closingDelimiter = /\r?\n---[ \t]*(?:\r?\n|$)/u;
+const closingDelimiter = /\r?\n(?:---|\.\.\.)(?:[ \t]+(?:#[^\r\n]*)?)?[ \t]*(?:\r?\n|$)/u;
 
 /** @public Consumed by openclaw/docs build.mjs and smoke.mjs through docs sync. */
 export function parseFrontmatter(source) {

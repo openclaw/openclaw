@@ -173,6 +173,19 @@ describe("release docs mirrors", () => {
     };
   }
 
+  it.each([
+    ["LF annotated delimiter", "\n--- # end\n"],
+    ["CRLF document-end delimiter", "\r\n... # end\r\n"],
+  ])("renders a release page with a %s", (_name, closing) => {
+    const options = mirrorFixture();
+    fs.writeFileSync(
+      path.join(options.rootDir, source),
+      `---\ntitle: "Release title"${closing}\n# Release title\n\nExact prose.\n`,
+    );
+    expect(renderReleaseDocsMirror(options)).toContain("### Release title");
+    expect(renderReleaseDocsMirror(options)).toContain("Exact prose.");
+  });
+
   it("retains prose, credits, tables, images and code while flattening wrappers and links", () => {
     const preserved = [
       "- Exact credit [#42](https://github.com/openclaw/openclaw/pull/42). Thanks @alice, @steipete.",
