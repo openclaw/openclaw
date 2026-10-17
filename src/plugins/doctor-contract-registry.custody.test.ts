@@ -68,7 +68,7 @@ function fixture() {
   return { rootDir, source, actions, input, load };
 }
 
-it.each(["plain", "overlapping package", "native companion"])(
+it.each(["plain", "overlapping package", "native companion", "external dependency junctions"])(
   "captures unchanged Doctor %s source once with independent callbacks",
   async (layout) => {
     const plugin = fixture();
@@ -83,6 +83,40 @@ it.each(["plain", "overlapping package", "native companion"])(
         path.join(plugin.rootDir, "package.json"),
         '{"type":"module","dependencies":{"shared":"1.0.0"}}',
       );
+    } else if (layout === "external dependency junctions") {
+      // Use real filesystem links: Windows junctions are absolute even when
+      // capture's dependency producer supplies a relative target.
+      const dependencies = dirs.make("doctor-custody-dependencies-");
+      const shared = path.join(dependencies, "shared");
+      const consumer = path.join(dependencies, "consumer");
+      fs.mkdirSync(shared);
+      fs.mkdirSync(path.join(consumer, "node_modules"), { recursive: true });
+      fs.writeFileSync(
+        path.join(shared, "package.json"),
+        '{"name":"shared","type":"module","main":"index.mjs"}',
+      );
+      fs.writeFileSync(path.join(shared, "index.mjs"), 'export const value = "first";');
+      fs.writeFileSync(path.join(shared, "resource.txt"), "first");
+      fs.writeFileSync(
+        path.join(consumer, "package.json"),
+        '{"name":"consumer","type":"module","main":"index.mjs","dependencies":{"shared":"1.0.0"}}',
+      );
+      fs.writeFileSync(
+        path.join(consumer, "index.mjs"),
+        `import fs from 'node:fs';
+         import { value } from 'shared';
+         const resource = fs.readFileSync(new URL('./node_modules/shared/resource.txt', import.meta.url), 'utf8');
+         export const version = value === resource ? value : 'broken resource';`,
+      );
+      fs.symlinkSync(shared, path.join(consumer, "node_modules", "shared"), "junction");
+      fs.mkdirSync(path.join(plugin.rootDir, "node_modules"));
+      fs.symlinkSync(consumer, path.join(plugin.rootDir, "node_modules", "consumer"), "junction");
+      fs.symlinkSync(shared, path.join(plugin.rootDir, "node_modules", "shared"), "junction");
+      fs.writeFileSync(
+        path.join(plugin.rootDir, "package.json"),
+        '{"type":"module","dependencies":{"consumer":"1.0.0","shared":"1.0.0"}}',
+      );
+      fs.writeFileSync(plugin.actions, "export { version } from 'consumer';");
     } else if (layout === "native companion") {
       fs.writeFileSync(path.join(plugin.rootDir, "a.so"), "synthetic native fixture");
       fs.writeFileSync(path.join(plugin.rootDir, "z-helper.dat"), "original companion");
