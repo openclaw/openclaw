@@ -20,13 +20,7 @@ import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Team-scale cold-load fixture" });
 
-async function readStoredWarmState({
-  sessionKey,
-  sidebarPeople,
-}: {
-  sessionKey: string;
-  sidebarPeople?: number;
-}) {
+async function readStoredWarmState({ sessionKey }: { sessionKey: string }) {
   const open = indexedDB.open("openclaw-chat-snapshots");
   const database = await new Promise<IDBDatabase>((resolve, reject) => {
     open.addEventListener("success", () => resolve(open.result), { once: true });
@@ -59,9 +53,6 @@ async function readStoredWarmState({
     );
     if (!sidebar) {
       throw new Error("Selected sidebar was not persisted");
-    }
-    if (sidebarPeople !== undefined && sidebar.model.onlineUsers.length !== sidebarPeople) {
-      return null;
     }
     return { transcript: record.snapshot, sidebar: sidebar.model };
   } finally {
@@ -267,28 +258,46 @@ suite.define(() => {
         if (!presence) {
           throw new Error("The Team fixture must include presence events");
         }
+        const sidebarWrite = await page.evaluateHandle(() => {
+          // oxlint-disable-next-line typescript/unbound-method -- call(this, value, key) preserves each store receiver.
+          const put = IDBObjectStore.prototype.put;
+          return {
+            done: new Promise<void>((resolve) => {
+              IDBObjectStore.prototype.put = function (
+                this: IDBObjectStore,
+                value: { model?: { onlineUsers?: unknown[] } },
+                key?: IDBValidKey,
+              ) {
+                const request = put.call(this, value, key);
+                if (this.name === "sidebarSnapshots" && value.model?.onlineUsers?.length === 119) {
+                  IDBObjectStore.prototype.put = put;
+                  this.transaction.addEventListener("complete", () => resolve(), { once: true });
+                }
+                return request;
+              };
+            }),
+          };
+        });
         await gateway.emitGatewayEvent("presence", {
           presence: presence.payload.presence
             .filter((entry) => entry.user?.id !== "team-person-120")
-            .map((entry) => ({
-              ...entry,
-              instanceId:
-                entry.instanceId === TEAM_SCALE_SELF_INSTANCE_ID ? instanceId : entry.instanceId,
-            })),
+            .map((entry) =>
+              Object.assign({}, entry, {
+                instanceId:
+                  entry.instanceId === TEAM_SCALE_SELF_INSTANCE_ID ? instanceId : entry.instanceId,
+              }),
+            ),
         });
         await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor({
           state: "detached",
         });
         expect(await sidebar.locator("[data-online-user-id]").count()).toBe(119);
-        const persistedMutation = await page.waitForFunction(readStoredWarmState, {
-          sessionKey: fixture.selectedSessionKey,
-          sidebarPeople: 119,
-        });
-        const mutated = await persistedMutation.jsonValue();
-        await persistedMutation.dispose();
-        expect(JSON.stringify(mutated?.transcript)).toContain(mutation);
-        expect(mutated?.transcript).not.toEqual(baseline?.transcript);
-        expect(mutated?.sidebar).not.toEqual(baseline?.sidebar);
+        await sidebarWrite.evaluate(({ done }) => done);
+        await sidebarWrite.dispose();
+        const mutated = await page.evaluate(readStoredWarmState, warmInput);
+        expect(JSON.stringify(mutated.transcript)).toContain(mutation);
+        expect(mutated.transcript).not.toEqual(baseline.transcript);
+        expect(mutated.sidebar).not.toEqual(baseline.sidebar);
         await restoreColdLoadWarmState(page, warm.storage);
         expect(await page.evaluate(readStoredWarmState, warmInput)).toEqual(baseline);
         await page.reload();
