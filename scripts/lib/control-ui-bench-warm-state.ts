@@ -1,7 +1,12 @@
 import type { Page } from "playwright";
-import type { SidebarSnapshotModel } from "../../ui/src/components/sidebar-snapshot-model.ts";
-import type { ChatSessionSnapshot } from "../../ui/src/pages/chat/session-message-cache.ts";
-import type { SessionSnapshotStore } from "../../ui/src/pages/chat/session-snapshot-store.ts";
+// Only these structural ports cross Playwright's serialized browser boundary.
+type ChatSessionSnapshot = { messages: unknown[] };
+type SessionSnapshotStore = {
+  write(key: string, snapshot: ChatSessionSnapshot): void;
+  flush(): Promise<void>;
+};
+
+type SidebarSnapshotModel = { navigationView: string; onlineUsers: unknown[] };
 
 type StoredTranscript = {
   sessionKey: string;
@@ -10,7 +15,6 @@ type StoredTranscript = {
 };
 type StoredSidebar = { sessionKey: string; model: SidebarSnapshotModel };
 
-/** Runs in the page; the application owns trimming and serializing both projections. */
 export async function persistColdLoadWarmState(input: {
   sessionKey: string;
   sidebarView: "sessions" | "online";

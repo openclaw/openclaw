@@ -164,11 +164,11 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       label: person.name,
     })),
   };
-  const { cronJobs, listCronJobs } = createTeamScaleCronInventory({
-    count: counts.cronJobs,
+  const { cronJobs, listCronJobs } = createTeamScaleCronInventory(
+    counts.cronJobs,
     now,
     selectedSessionKey,
-  });
+  );
   const { messageIds, historyMessages } = createTeamScaleHistoryFixture({
     messageCount: counts.transcriptMessages,
     inlineWidgets: counts.inlineWidgets,

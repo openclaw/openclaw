@@ -1,13 +1,16 @@
 import { sortCronJobs } from "../../../src/cron/service/list-page-sort.ts";
-import type { CronJob } from "../../../src/cron/types.ts";
-import type { CronCompactJob, CronJobsListResult, GatewaySessionRow } from "../api/types.ts";
+import type {
+  CronCompactJob,
+  CronJob,
+  CronJobsListResult,
+  GatewaySessionRow,
+} from "../api/types.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 import { prepareTeamScaleSessionOwnership } from "./control-ui-sidebar-list-fixture.ts";
 import { compactCronJobFixture } from "./cron.ts";
 
 type TeamScaleSession = GatewaySessionRow & { updatedAt: number; sessionId: string };
 
-/** Shared source rows for the browser fixture and its query owner. */
 export function createTeamScaleSessionInventory({
   now,
   people,
@@ -124,16 +127,11 @@ export function createTeamScaleSessionInventory({
   return { sessions, pinnedRows, pinnedKeys, selectedSessionKey };
 }
 
-/** Definition and compact inventory views share the same synthetic scheduler state. */
-export function createTeamScaleCronInventory({
-  count,
-  now,
-  selectedSessionKey,
-}: {
-  count: number;
-  now: number;
-  selectedSessionKey: string;
-}) {
+export function createTeamScaleCronInventory(
+  count: number,
+  now: number,
+  selectedSessionKey: string,
+) {
   const cronJobs: CronJob[] = Array.from({ length: count }, (_, index) => ({
     id: `team-cron-${index + 1}`,
     name: `Synthetic scheduled check ${index + 1}`,
