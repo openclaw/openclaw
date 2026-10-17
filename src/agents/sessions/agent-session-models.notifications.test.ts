@@ -17,8 +17,6 @@ const reasoningModel = {
   ...testModel,
   id: "notification-reasoning",
   reasoning: true,
-  contextWindow: 32_768,
-  maxTokens: 8_192,
 };
 const plainModel = { ...reasoningModel, id: "notification-plain", reasoning: false };
 
@@ -121,12 +119,9 @@ describe("metadata notifications after publication", () => {
       }
     });
 
-    const outcome = fixture.session.setThinkingLevel("low").then(
-      () => ({ status: "fulfilled" as const }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    );
+    const outcome = fixture.session.setThinkingLevel("low").catch((error: unknown) => error);
     const nestedFailure = await nestedFailureReady.promise;
-    expect(await outcome).toEqual({ status: "rejected", error: nestedFailure });
+    expect(await outcome).toBe(nestedFailure);
     expect(fixture.sessionManager.getEntries().slice(before)).toMatchObject([
       { type: "thinking_level_change", thinkingLevel: "low" },
       { type: "thinking_level_change", thinkingLevel: "medium" },
@@ -139,32 +134,27 @@ describe("metadata notifications after publication", () => {
     const modelHookStarted = createDeferredCore();
     const releaseModelHook = createDeferredCore();
     const failures: Error[] = [];
+    const failHook = (message: string) => {
+      const failure = notificationFailure(fixture, new Error(message));
+      failures.push(failure);
+      throw failure;
+    };
     const fixture = await createNotificationSession({
       reasoning: false,
-      thinking: async () => {
-        const failure = notificationFailure(fixture, new Error("thinking hook failed"));
-        failures.push(failure);
-        throw failure;
-      },
+      thinking: async () => failHook("thinking hook failed"),
       model: async () => {
         modelHookStarted.resolve();
         await releaseModelHook.promise;
-        const failure = notificationFailure(fixture, new Error("model hook failed"));
-        failures.push(failure);
-        throw failure;
+        failHook("model hook failed");
       },
     });
     let settled = false;
-    const outcome = fixture.session.setModel(reasoningModel).then(
-      () => {
+    const outcome = fixture.session
+      .setModel(reasoningModel)
+      .finally(() => {
         settled = true;
-        return undefined;
-      },
-      (error: unknown) => {
-        settled = true;
-        return error;
-      },
-    );
+      })
+      .catch((error: unknown) => error);
     try {
       await modelHookStarted.promise;
       await setImmediate();

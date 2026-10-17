@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { streamAnthropic } from "../../../packages/ai/src/providers/anthropic.js";
 import {
   appendHistory,
+  collectCompactionEnds,
   createAssistant,
   createAutoCompactionSettings,
   createTestSession,
@@ -20,63 +21,27 @@ import {
   createCompactionHandlers,
   createResourceLoader,
 } from "./agent-session-loop-resource-loader.test-support.js";
-import type { AgentSessionEvent } from "./agent-session-types.js";
 import { SessionManager } from "./session-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
 
 describe("AgentSession refusal compaction", () => {
   it.each([
-    {
-      name: "refusal explanation resembles overflow",
-      overflow: false,
-      overlap: true,
-      threshold: false,
-      queued: false,
-      later: false,
-      expectedRequests: 1,
-    },
-    {
-      name: "threshold maintenance after refusal",
-      overflow: false,
-      overlap: false,
-      threshold: true,
-      queued: false,
-      later: false,
-      expectedRequests: 1,
-    },
-    {
-      name: "threshold maintenance preserves explicit queued user",
-      overflow: false,
-      overlap: false,
-      threshold: true,
-      queued: true,
-      later: false,
-      expectedRequests: 2,
-    },
-    {
-      name: "actual overflow still retries",
-      overflow: true,
-      overlap: false,
-      threshold: false,
-      queued: false,
-      later: false,
-      expectedRequests: 2,
-    },
-    {
-      name: "explicit later user turn after refusal",
-      overflow: false,
-      overlap: false,
-      threshold: false,
-      queued: false,
-      later: true,
-      expectedRequests: 1,
-    },
-  ])("$name", async ({ overflow, overlap, threshold, queued, later, expectedRequests }) => {
+    ["refusal explanation resembles overflow", "overlap", 1],
+    ["threshold maintenance after refusal", "threshold", 1],
+    ["threshold maintenance preserves explicit queued user", "queued", 2],
+    ["actual overflow still retries", "overflow", 2],
+    ["explicit later user turn after refusal", "later", 1],
+  ] as const)("%s", async (_name, mode, expectedRequests) => {
+    const overflow = mode === "overflow";
+    const threshold = mode === "threshold" || mode === "queued";
+    const queued = mode === "queued";
+    const later = mode === "later";
     const requests: Array<{ url: string | undefined; body: unknown }> = [];
-    const explanation = overlap
-      ? "This request is refused; prompt is too long."
-      : "This request is not allowed.";
+    const explanation =
+      mode === "overlap"
+        ? "This request is refused; prompt is too long."
+        : "This request is not allowed.";
     const server = http.createServer((request, response) => {
       let body = "";
       request.setEncoding("utf8");
@@ -196,12 +161,9 @@ describe("AgentSession refusal compaction", () => {
         settingsManager: createAutoCompactionSettings(),
         resourceLoader: createResourceLoader(handlers),
       });
-      const compactions: Array<Extract<AgentSessionEvent, { type: "compaction_end" }>> = [];
+      const compactions = collectCompactionEnds(session);
       const assistants: AssistantMessage[] = [];
       session.subscribe((event) => {
-        if (event.type === "compaction_end") {
-          compactions.push(event);
-        }
         if (event.type === "message_end" && event.message.role === "assistant") {
           assistants.push(event.message);
         }
@@ -219,22 +181,15 @@ describe("AgentSession refusal compaction", () => {
       }
       expect(firstTurnRequests).toBe(expectedRequests);
       expect(requests.every(({ url }) => url === "/v1/messages")).toBe(true);
-      if (threshold) {
+      if (threshold || overflow) {
         expect(compactions).toContainEqual(
           expect.objectContaining({
-            reason: "threshold",
-            outcome: expect.objectContaining({ status: "completed", willRetry: false }),
+            reason: overflow ? "overflow" : "threshold",
+            outcome: expect.objectContaining({ status: "completed", willRetry: overflow }),
           }),
         );
       }
-      if (overflow) {
-        expect(compactions).toContainEqual(
-          expect.objectContaining({
-            reason: "overflow",
-            outcome: expect.objectContaining({ status: "completed", willRetry: true }),
-          }),
-        );
-      } else {
+      if (!overflow) {
         expect(
           compactions.some(({ outcome }) => outcome.status === "completed" && outcome.willRetry),
         ).toBe(false);
