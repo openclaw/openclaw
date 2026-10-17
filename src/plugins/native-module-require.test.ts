@@ -1,10 +1,9 @@
-/** Tests native module require behavior for plugin runtime loading. */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   isJavaScriptModulePath,
@@ -18,10 +17,6 @@ function writeFile(dir: string, name: string, source: string) {
   const target = path.join(dir, name);
   fs.writeFileSync(target, source, "utf8");
   return target;
-}
-
-function writeModule(source: string, name = "plugin.cjs") {
-  return writeFile(tempDirs.make("openclaw-native-require-"), name, source);
 }
 
 function expectProbe(
@@ -55,84 +50,73 @@ async function bundleOwner(dir: string) {
   return pathToFileURL(outfile).href;
 }
 
-describe("tryNativeRequireJavaScriptModule", () => {
-  it("uses source-transform fallback only when native TLA loading needs it", () => {
-    const modulePath = writeModule(
-      'await Promise.resolve();\nexport const marker = "esm";\n',
-      "plugin.mjs",
-    );
+it("uses source-transform fallback only when native TLA loading needs it", () => {
+  const modulePath = writeFile(
+    tempDirs.make("openclaw-native-require-"),
+    "plugin.mjs",
+    'await Promise.resolve();\nexport const marker = "esm";\n',
+  );
 
-    const result = tryNativeRequireJavaScriptModule(modulePath);
-    if (process.versions.bun) {
-      expect(result).toMatchObject({ ok: true, moduleExport: { marker: "esm" } });
-    } else {
-      expect(result).toEqual({ ok: false });
-    }
-  });
+  const result = tryNativeRequireJavaScriptModule(modulePath);
+  if (process.versions.bun) {
+    expect(result).toMatchObject({ ok: true, moduleExport: { marker: "esm" } });
+  } else {
+    expect(result).toEqual({ ok: false });
+  }
+});
 
-  it("declines an in-flight ESM require race for source-transform fallback", () => {
-    const modulePath = writeModule(
-      'throw Object.assign(new Error("ESM is still loading"), { code: "ERR_REQUIRE_ESM_RACE_CONDITION" });\n',
-    );
+it("declines an in-flight ESM require race for source-transform fallback", () => {
+  const modulePath = writeFile(
+    tempDirs.make("openclaw-native-require-"),
+    "plugin.cjs",
+    'throw Object.assign(new Error("ESM is still loading"), { code: "ERR_REQUIRE_ESM_RACE_CONDITION" });\n',
+  );
+  expect(tryNativeRequireJavaScriptModule(modulePath)).toEqual({ ok: false });
+});
 
-    expect(tryNativeRequireJavaScriptModule(modulePath)).toEqual({ ok: false });
-  });
-
-  it("declines missing target modules so callers can try source fallback", () => {
-    const modulePath = path.join(tempDirs.make("openclaw-native-require-"), "missing.cjs");
-
-    expect(tryNativeRequireJavaScriptModule(modulePath)).toEqual({ ok: false });
-  });
-
-  it("loads native ESM graphs with temporary SDK aliases", () => {
-    const dir = tempDirs.make("openclaw-native-require-");
-    const nativeRequireModuleUrl = pathToFileURL(
-      path.resolve("src/plugins/native-module-require.ts"),
-    ).href;
-    const sdkPath = writeFile(
-      dir,
-      "sdk.js",
-      'export const defineChannelMessageAdapter = () => "adapter";\n',
-    );
-    const modulePath = writeFile(
-      dir,
-      "plugin.mjs",
-      'import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outbound";\nexport const marker = defineChannelMessageAdapter();\n',
-    );
-    const probePath = writeFile(
-      dir,
-      "probe.mjs",
-      `import { tryNativeRequireJavaScriptModule } from ${JSON.stringify(nativeRequireModuleUrl)};
+it("loads native ESM graphs with temporary SDK aliases", () => {
+  const dir = tempDirs.make("openclaw-native-require-");
+  const ownerUrl = pathToFileURL(path.resolve("src/plugins/native-module-require.ts")).href;
+  const sdkPath = writeFile(dir, "sdk.js", 'export const adapter = () => "adapter";\n');
+  const modulePath = writeFile(
+    dir,
+    "plugin.mjs",
+    'import { adapter } from "openclaw/plugin-sdk/channel-outbound";\nexport const marker = adapter();\n',
+  );
+  const probePath = writeFile(
+    dir,
+    "probe.mjs",
+    `import { tryNativeRequireJavaScriptModule } from ${JSON.stringify(ownerUrl)};
 const result = tryNativeRequireJavaScriptModule(${JSON.stringify(modulePath)}, {
   aliasMap: { "openclaw/plugin-sdk/channel-outbound": ${JSON.stringify(sdkPath)} },
 });
 if (!result.ok) throw new Error("native require declined ESM graph");
 console.log(result.moduleExport.marker);
 `,
-    );
-    expectProbe(probePath, "adapter", { args: ["--import", "tsx"], native: false });
-  });
+  );
+  expectProbe(probePath, "adapter", { args: ["--import", "tsx"], native: false });
+});
 
-  it("uses the configured native loader for JavaScript-to-TypeScript lookup", () => {
-    const dir = tempDirs.make("openclaw-native-require-");
-    const modulePath = writeFile(dir, "plugin.cjs", 'module.exports = require("./helper.js");\n');
-    writeFile(dir, "helper.ts", "export const loaded = true;\n");
+it("uses the configured native loader for JavaScript-to-TypeScript lookup", () => {
+  const dir = tempDirs.make("openclaw-native-require-");
+  const modulePath = writeFile(dir, "plugin.cjs", 'module.exports = require("./helper.js");\n');
+  writeFile(dir, "helper.ts", "export const loaded = true;\n");
 
-    const result = tryNativeRequireJavaScriptModule(modulePath);
-    expect(result).toMatchObject({ ok: true, moduleExport: { loaded: true } });
-  });
+  const result = tryNativeRequireJavaScriptModule(modulePath);
+  expect(result).toMatchObject({ ok: true, moduleExport: { loaded: true } });
+});
 
-  it("keeps native paths, file URLs, and source SDK aliases on the process module graph", async () => {
-    const dir = tempDirs.make("openclaw-native-require-");
-    // tsx's CommonJS hook accepts file URLs and masks Node's native contract.
-    const ownerUrl = await bundleOwner(dir);
-    const modulePath = path.join(dir, "space # percent% plugin.cjs");
-    const probePath = path.join(dir, "probe.mjs");
-    const tsconfigPath = path.join(dir, "tsconfig.json");
-    fs.writeFileSync(tsconfigPath, "{}\n");
-    fs.writeFileSync(
-      probePath,
-      `import assert from "node:assert/strict";
+it("keeps native paths, file URLs, and source SDK aliases on the process module graph", async () => {
+  const dir = tempDirs.make("openclaw-native-require-");
+  // tsx's CommonJS hook accepts file URLs and masks Node's native contract.
+  const ownerUrl = await bundleOwner(dir);
+  const modulePath = path.join(dir, "space # percent% plugin.cjs");
+  const probePath = path.join(dir, "probe.mjs");
+  const tsconfigPath = path.join(dir, "tsconfig.json");
+  fs.writeFileSync(tsconfigPath, "{}\n");
+  fs.writeFileSync(
+    probePath,
+    `import assert from "node:assert/strict";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -144,15 +128,12 @@ for (const target of [modulePath, pathToFileURL(modulePath).href]) {
   assert.deepEqual(load(target), { ok: true, moduleExport: { marker: "before" } });
   fs.writeFileSync(modulePath, 'module.exports = { marker: "after" };\\n');
   assert.deepEqual(load(target), { ok: true, moduleExport: { marker: "before" } });
-  assert.deepEqual(load(target), { ok: true, moduleExport: { marker: "before" } });
 }
 assert.deepEqual(load(pathToFileURL(modulePath + ".missing.cjs").href), { ok: false });
 fs.writeFileSync(modulePath + ".broken.cjs", 'require("./missing-dependency.cjs");\\n');
 assert.throws(() => load(pathToFileURL(modulePath + ".broken.cjs").href), /missing-dependency\\.cjs/);
 fs.writeFileSync(modulePath + ".missing-peer.cjs", 'require("openclaw/plugin-sdk/core");\\n');
-assert.throws(() => load(modulePath + ".missing-peer.cjs", {
-  fallbackOnMissingDependency: true,
-}), /openclaw\\/plugin-sdk\\/core/);
+assert.throws(() => load(modulePath + ".missing-peer.cjs", { fallbackOnMissingDependency: true }), /openclaw\\/plugin-sdk\\/core/);
 const sdkPath = modulePath + ".sdk.ts";
 fs.writeFileSync(modulePath + ".helper.ts", 'export const value = "source";\\n');
 fs.writeFileSync(modulePath + ".preferred.js", 'export const value = "javascript";\\n');
@@ -163,8 +144,7 @@ fs.writeFileSync(sdkPath, [
   'export const state = { value, preferred };',
 ].join("\\n"));
 const source = loadSource(sdkPath, { aliasMap: {} });
-assert.equal(source.ok, true);
-assert.deepEqual(source.moduleExport.state, { value: "source", preferred: "javascript" });
+assert.deepEqual([source.ok, source.moduleExport.state], [true, { value: "source", preferred: "javascript" }]);
 assert.equal(source.moduleExport.state, (await import(pathToFileURL(sdkPath).href)).state);
 // Jiti alias maps spell Windows targets with forward slashes; "/./" is the portable non-native spelling.
 const aliasedSdkPath = modulePath + ".aliased-sdk.cjs";
@@ -174,29 +154,25 @@ const aliased = loadSource(modulePath + ".aliased.cjs", {
   aliasMap: { "fixture-sdk": path.dirname(aliasedSdkPath) + "/./" + path.basename(aliasedSdkPath) },
 });
 assert.equal(aliased.moduleExport, createRequire(import.meta.url)(aliasedSdkPath));
-console.log("native path + source SDK process identity; native JavaScript precedence; missing target/dependency controls passed");
+console.log("native contracts passed");
 `,
-    );
-    expectProbe(
-      probePath,
-      "native path + source SDK process identity; native JavaScript precedence; missing target/dependency controls passed",
-      {
-        cwd: dir,
-        args: process.versions.bun ? ["--no-install", "--tsconfig-override", tsconfigPath] : [],
-      },
-    );
+  );
+  expectProbe(probePath, "native contracts passed", {
+    cwd: dir,
+    args: process.versions.bun ? ["--no-install", "--tsconfig-override", tsconfigPath] : [],
   });
+});
 
-  // Temporary ESM aliases belong to the selected Node hooks path; Bun owns its native resolver.
-  it.runIf(useNodeModuleHooks())(
-    "retains terminal ESM failures across eviction and alias changes until a new path loads",
-    async () => {
-      const dir = tempDirs.make("openclaw-native-failed-generation-");
-      const ownerUrl = await bundleOwner(dir);
-      const probePath = path.join(dir, "probe.mjs");
-      fs.writeFileSync(
-        probePath,
-        `import assert from "node:assert/strict";
+// Temporary ESM aliases belong to the selected Node hooks path; Bun owns its native resolver.
+it.runIf(useNodeModuleHooks())(
+  "retains terminal ESM failures across eviction and alias changes until a new path loads",
+  async () => {
+    const dir = tempDirs.make("openclaw-native-failed-generation-");
+    const ownerUrl = await bundleOwner(dir);
+    const probePath = path.join(dir, "probe.mjs");
+    fs.writeFileSync(
+      probePath,
+      `import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -250,34 +226,27 @@ assert.deepEqual(load(aliasRequest, {
 }), { ok: true, moduleExport: "first" });
 console.log("terminal error retained; new generation recovered");
 `,
-      );
-      // tsx changes named-import linking, so this contract needs an unhooked Node process.
-      expectProbe(probePath, "terminal error retained; new generation recovered");
-    },
-  );
+    );
+    // tsx changes named-import linking, so this contract needs an unhooked Node process.
+    expectProbe(probePath, "terminal error retained; new generation recovered");
+  },
+);
+it("isJavaScriptModulePath only accepts JavaScript runtime extensions", () => {
+  expect(isJavaScriptModulePath("/plugin/index.js")).toBe(true);
+  expect(isJavaScriptModulePath("/plugin/index.mjs")).toBe(true);
+  expect(isJavaScriptModulePath("/plugin/index.cjs")).toBe(true);
+  expect(isJavaScriptModulePath("/plugin/index.ts")).toBe(false);
 });
 
-describe("isJavaScriptModulePath", () => {
-  it("only accepts JavaScript runtime extensions", () => {
-    expect(isJavaScriptModulePath("/plugin/index.js")).toBe(true);
-    expect(isJavaScriptModulePath("/plugin/index.mjs")).toBe(true);
-    expect(isJavaScriptModulePath("/plugin/index.cjs")).toBe(true);
-    expect(isJavaScriptModulePath("/plugin/index.ts")).toBe(false);
-  });
-});
-
-describe("plugin native loading selection", () => {
-  it.each([
-    ["dist/plugins/runtime/index.js", false, true],
-    ["extensions/demo/index.ts", false, false],
-    ["dist/extensions/demo/index.js", true, true],
-    ["dist/extensions/demo/helper.ts", true, false],
-  ] as const)(
-    "selects native loading for %s (prefer dist=%s): %s",
-    (entry, preferBuiltDist, expected) => {
-      expect(resolvePluginLoaderTryNative(path.join("/repo", entry), { preferBuiltDist })).toBe(
-        expected,
-      );
-    },
-  );
-});
+it.each([
+  ["dist/plugins/runtime/index.js", false, true],
+  ["extensions/demo/index.ts", false, false],
+  ["dist/extensions/demo/index.js", true, true],
+  ["dist/extensions/demo/helper.ts", true, false],
+] as const)(
+  "selects native loading for %s (prefer dist=%s): %s",
+  (entry, preferBuiltDist, expected) => {
+    const result = resolvePluginLoaderTryNative(path.join("/repo", entry), { preferBuiltDist });
+    expect(result).toBe(expected);
+  },
+);

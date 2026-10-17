@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState as createState } from "../test-utils/openclaw-test-state.js";
 import type { EmbeddingProviderAdapter } from "./embedding-provider-types.js";
 import { createPluginRecord } from "./loader-records.js";
 import { activatePluginRegistry } from "./loader-shared.js";
@@ -16,7 +16,7 @@ import { disposePluginRegistryInstances as disposeRegistry } from "./runtime.js"
 import { getPluginRuntimeGatewayRequestScope as currentScope } from "./runtime/gateway-request-scope.js";
 
 const cleanupClock = vi.hoisted(() => ({ setTimeout: globalThis.setTimeout }));
-const recordDefaults = {
+const fixture = {
   source: "fixture",
   origin: "config",
   enabled: true,
@@ -83,32 +83,9 @@ async function expectAvailable(manager: Awaited<ReturnType<typeof getManager>>, 
   await expect(manager.probeEmbeddingAvailability()).resolves.toMatchObject({ ok });
 }
 
-it("keeps persistent managers isolated between memory runtime instances with the same agent", async () => {
-  const state = await createOpenClawTestState({
-    scenario: "minimal",
-    label: "memory-runtime-owners",
-  });
-  const config = memoryConfig(state.workspaceDir, { provider: "none" });
-  const first = registerMemoryOwner(config);
-  const second = registerMemoryOwner(config);
-  try {
-    await getManager(first, config);
-    const two = await getManager(second, config);
-    await first.runtime.closeAllMemorySearchManagers?.();
-    expect(two.status().sources).toBeDefined();
-    await expect(two.search("sibling still live")).resolves.toEqual([]);
-  } finally {
-    await first.runtime.closeAllMemorySearchManagers?.();
-    await second.runtime.closeAllMemorySearchManagers?.();
-    await disposeRegistry(first.registry);
-    await disposeRegistry(second.registry);
-    await state.cleanup();
-  }
-});
-
 function registerMemoryOwner(config: OpenClawConfig, options: { legacy?: boolean } = {}) {
   const owner = createTestPluginRegistry();
-  const record = createPluginRecord({ ...recordDefaults, id: "memory-fixture" });
+  const record = createPluginRecord({ ...fixture, id: "memory-fixture" });
   record.kind = "memory";
   record.memorySlotSelected = true;
   owner.registry.plugins.push(record);
@@ -131,11 +108,8 @@ function registerAdapter(
   config: OpenClawConfig,
   adapter: EmbeddingProviderAdapter,
 ) {
-  const record = createPluginRecord({
-    ...recordDefaults,
-    id: adapter.id,
-    contracts: { embeddingProviders: [adapter.id] },
-  });
+  const { id } = adapter;
+  const record = createPluginRecord({ ...fixture, id, contracts: { embeddingProviders: [id] } });
   owner.registry.plugins.push(record);
   owner.createApi(record, { config }).registerEmbeddingProvider(adapter);
   return { record, registration: owner.registry.embeddingProviders.at(-1)! };
@@ -153,14 +127,12 @@ it.each([
   "late-probe",
   "transient",
 ] as const)("drains the actual managed embedding owner before replacement (%s)", async (mode) => {
-  const state = await createOpenClawTestState({
-    scenario: "minimal",
-    label: "memory-provider-reload",
-  });
+  const state = await createState({ scenario: "minimal", label: "memory-provider-reload" });
   const fallback = mode === "pending-fallback" || mode === "healthy-fallback";
   const providerId = fallback ? "primary-probe" : "embedding-probe";
   const targetId = fallback ? "fallback-probe" : providerId;
   const revoked = mode === "failed-close" || mode === "late-probe";
+  const timedOut = mode === "timeout" || mode === "late-probe";
   const revokedMessage = `Plugin ${targetId} was reloaded or disabled`;
   const config = memoryConfig(state.workspaceDir, {
     provider: providerId,
@@ -295,18 +267,11 @@ it.each([
     }
     const providerClosesBeforeReload = close.mock.calls.length;
     const reload = prepareReload(owner.registry, next);
-    const commitReload = () => {
-      activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
-      reload.commit();
-    };
-    let drained = false;
-    drain = reload.drain().then((drainResult) => {
-      drained = true;
-      return drainResult;
-    });
+    const drained = vi.fn();
+    drain = reload.drain().finally(drained);
     if (mode.startsWith("pending")) {
       await Promise.resolve();
-      expect(drained).toBe(false);
+      expect(drained).not.toHaveBeenCalled();
       expect(close).not.toHaveBeenCalled();
     }
     if (mode !== "legacy-retained") {
@@ -325,25 +290,30 @@ it.each([
         errors: [expect.objectContaining({ message: "synthetic provider cleanup refused" })],
       });
       expect(siblingClose).not.toHaveBeenCalled();
-      commitReload();
-    } else if (mode === "timeout" || mode === "late-probe") {
+    } else if (timedOut) {
       const expired = expect(drain).rejects.toThrow("plugin host cleanup timed out");
       if (mode === "timeout") {
         await closeEntered.promise;
       }
       await vi.advanceTimersByTimeAsync(500);
       await expired;
-      commitReload();
+    } else {
+      await drain;
+      expect(close).toHaveBeenCalledTimes(
+        providerClosesBeforeReload + (mode === "unavailable-create" ? 0 : 1),
+      );
+    }
+    activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
+    reload.commit();
+    if (timedOut) {
       const fresh = await getManager(owner, config);
       expect(fresh).not.toBe(manager);
       await expectAvailable(fresh, mode !== "late-probe");
       if (mode === "timeout") {
-        let joined = false;
-        const finalClose = reload.close().then(() => {
-          joined = true;
-        });
+        const joined = vi.fn();
+        const finalClose = reload.close().then(joined);
         await Promise.resolve();
-        expect(joined).toBe(false);
+        expect(joined).not.toHaveBeenCalled();
         releaseClose.resolve();
         await finalClose;
         expect(close).toHaveBeenCalledOnce();
@@ -354,12 +324,6 @@ it.each([
           errors: [expect.objectContaining({ message: `Plugin ${targetId} is retiring` })],
         });
       }
-    } else {
-      await drain;
-      expect(close).toHaveBeenCalledTimes(
-        providerClosesBeforeReload + (mode === "unavailable-create" ? 0 : 1),
-      );
-      commitReload();
     }
     await expect(manager.probeEmbeddingAvailability()).rejects.toThrow("closed");
     await expectAvailable(other);
@@ -393,6 +357,10 @@ it.each([
       expect(close).toHaveBeenCalledTimes(attemptedCloses);
     } else {
       await finalClose;
+    }
+    if (mode === "ready") {
+      expect(other.status().sources).toBeDefined();
+      await expect(other.search("sibling still live")).resolves.toEqual([]);
     }
     expect(successorClose).toHaveBeenCalledTimes(successorProviders());
   } finally {

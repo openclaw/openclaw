@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -44,11 +45,7 @@ async function registerCatalog(
   const configFor = (enabled?: boolean): OpenClawConfig =>
     enabled === undefined
       ? {}
-      : {
-          plugins: {
-            entries: { [pluginId]: { config: { sessionCatalog: { enabled } } } },
-          },
-        };
+      : { plugins: { entries: { [pluginId]: { config: { sessionCatalog: { enabled } } } } } };
   const source = configFor(initial);
   if (configExists === "dangling") {
     await fs.symlink(path.join(root, "missing.json"), configPath);
@@ -56,17 +53,18 @@ async function registerCatalog(
     await fs.writeFile(configPath, JSON.stringify(source));
   }
   const env = { HOME: root, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
-  const io = createConfigIO({
-    env,
-    homedir: () => root,
-    observe: false,
-    pluginValidation: "core-only",
-  });
+  const homedir = () => root;
+  const io = createConfigIO({ env, homedir, observe: false, pluginValidation: "core-only" });
   if (configExists === "fresh") {
     await io.writeConfigFile(source);
   }
   const snapshot = await io.readConfigFileSnapshot();
   expect(snapshot.exists).toBe(configExists === true || configExists === "fresh");
+  const catalogProperties = {
+    enabled: { type: "boolean", default: true },
+    pageSize: { type: "integer", default: 10 },
+  };
+  const catalogSchema = { type: "object", default: {}, properties: catalogProperties };
   const manifest = createPluginManifestRecordFixture({
     id: pluginId,
     enabledByDefault: true,
@@ -80,19 +78,7 @@ async function registerCatalog(
           : {}),
       },
     },
-    configSchema: {
-      type: "object",
-      properties: {
-        sessionCatalog: {
-          type: "object",
-          default: {},
-          properties: {
-            enabled: { type: "boolean", default: true },
-            pageSize: { type: "integer", default: 10 },
-          },
-        },
-      },
-    },
+    configSchema: { type: "object", properties: { sessionCatalog: catalogSchema } },
   });
   const pluginLocal = validatePluginSchemaValue({
     origin: "bundled",
@@ -107,28 +93,19 @@ async function registerCatalog(
   });
   const validate = (input: OpenClawConfig) => {
     const validated = validateConfigObjectWithPlugins(
-      {
-        ...input,
-        plugins: { ...input.plugins, slots: { memory: "none" } },
-      },
+      { ...input, plugins: { ...input.plugins, slots: { memory: "none" } } },
       {
         env,
-        homedir: () => root,
+        homedir,
         pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [manifest] } },
       },
     );
-    expect(validated.ok).toBe(true);
-    if (!validated.ok) {
-      throw new Error("Fixture configuration is invalid");
-    }
+    assert(validated.ok === true, "Fixture configuration is invalid");
     return validated.config;
   };
   let config = validate(snapshot.sourceConfig ?? source);
   expect(config.plugins?.entries?.[pluginId]?.config).toEqual({
-    sessionCatalog: {
-      ...(initial !== undefined ? { enabled: initial } : {}),
-      pageSize: 10,
-    },
+    sessionCatalog: { ...(initial !== undefined ? { enabled: initial } : {}), pageSize: 10 },
   });
   const registry = createPluginRegistry({
     runtime: { config: { current: () => config } } as PluginRuntime,
@@ -167,7 +144,6 @@ async function registerCatalog(
   return {
     dispose,
     instance: getPluginInstance(record)!,
-    registry: registry.registry,
     provider: registry.registry.sessionCatalogs[0]!.provider,
     node: registry.registry.nodeHostCommands[0]!.command,
     staticNode: registry.registry.nodeHostCommands[1]!.command,
@@ -327,10 +303,10 @@ describe("registered native catalog access", () => {
         expect(state.instance.hasRetainedConsumers).toBe(true);
         await vi.advanceTimersByTimeAsync(51);
         const timeout = (await disposal).errors[0];
-        expect(timeout).toBeInstanceOf(PluginInstanceDrainTimeoutError);
-        if (!(timeout instanceof PluginInstanceDrainTimeoutError)) {
-          throw new Error("Expected bounded logical retirement");
-        }
+        assert(
+          timeout instanceof PluginInstanceDrainTimeoutError,
+          "Expected bounded logical retirement",
+        );
         expect(timeout.forcedRetirement).toEqual({ activeCallCount: 0, retainedConsumerCount: 1 });
         expect(state.instance.lifecycle.signal.aborted).toBe(true);
         expect(state.instance.hasRetainedConsumers).toBe(true);
