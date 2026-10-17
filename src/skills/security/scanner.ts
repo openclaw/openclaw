@@ -275,6 +275,17 @@ function matchAliasedChildProcessCalls(line: string, methodAliases: Set<string>)
 // Retain the conventional child_process names alongside proven namespace aliases.
 const LITERAL_NAMESPACE_RECEIVERS = new Set(["cp", "childProcess", "child_process"]);
 
+// Requiring child_process inline as the immediate receiver is a real
+// child_process call even when the module is not bound to a local namespace
+// alias first. Only the receiver expression itself counts; a load earlier on
+// the same line is a different statement and must not attribute this call.
+const CHILD_PROCESS_MODULE_LOAD_RECEIVER_PATTERN =
+  /\b(?:require|import)\s*\(\s*["'](?:node:)?child_process["']\s*\)\s*(?:\[\s*)?$|getBuiltinModule\s*\(\s*["'](?:node:)?child_process["']\s*\)\s*(?:\[\s*)?$/;
+
+function receiverLoadsChildProcess(receiverSource: string): boolean {
+  return CHILD_PROCESS_MODULE_LOAD_RECEIVER_PATTERN.test(receiverSource);
+}
+
 function isBenignMemberExecMatch(
   line: string,
   match: RegExpExecArray,
@@ -298,9 +309,18 @@ function isBenignMemberExecMatch(
   } else {
     return false;
   }
-  return (
-    !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
-  );
+
+  // When the receiver cannot be read as a bare identifier (for example
+  // require("child_process") or process.getBuiltinModule("child_process")),
+  // it is only benign when it does not load the child_process module inline.
+  if (receiver === undefined) {
+    const receiverSource =
+      charAtMatch === '"' || charAtMatch === "'"
+        ? line.slice(0, matchIndex)
+        : line.slice(0, matchIndex - 1);
+    return !receiverLoadsChildProcess(receiverSource);
+  }
+  return !namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver);
 }
 
 function stripCommentsForHeuristics(source: string): string {
