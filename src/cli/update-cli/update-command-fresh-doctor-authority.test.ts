@@ -25,7 +25,6 @@ import { formatUpdateFinalizationError } from "./update-command-result.js";
 
 const testFixture = createFixtureLifetime();
 afterEach(async () => {
-  // Join the whole state scope before restoring mocks, including after a test timeout.
   try {
     await testFixture.cleanup();
   } finally {
@@ -53,6 +52,8 @@ const packageRoot = source("../../infra/openclaw-root");
 const runtime = source("../../runtime");
 const database = source("../../state/openclaw-state-db");
 const doctorResult = source("../../infra/update-doctor-result");
+const readText = (file: string) => fs.readFileSync(file, "utf8");
+const readConfig = (file: string) => JSON.parse(readText(file));
 
 it.for(["healthy", "original-owner-replaced"] as const)(
   "fresh Doctor retains update authority at final config I/O: %s",
@@ -63,7 +64,6 @@ it.for(["healthy", "original-owner-replaced"] as const)(
         scenario: "minimal",
         env: {
           OPENCLAW_PROFILE: undefined,
-          // This config-write fixture installs no plugins; do not discover the host catalog.
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         },
       },
@@ -99,12 +99,10 @@ it.for(["healthy", "original-owner-replaced"] as const)(
             },
           },
         });
-        const original = fs.readFileSync(state.configPath, "utf8");
+        const original = readText(state.configPath);
         const readyPath = state.path("ready");
-        const progressPath = state.path("doctor-progress");
         const proceed = state.path("proceed");
-        // Root/temp discovery stays isolated; the worker, full Doctor flow, grant,
-        // input-hash check, config writer and filesystem effects remain real.
+        // Only root/temp discovery is mocked; Doctor, its grant and config I/O remain real.
         const barrier = `
         import fs from "node:fs";
         import fsp from "node:fs/promises";
@@ -112,21 +110,16 @@ it.for(["healthy", "original-owner-replaced"] as const)(
         import {registerHooks} from "node:module";
         ${fixtureReceiptClientSource(receipts.endpoint)}
         ${doctor.pathname.endsWith(".ts") ? `process.chdir(${JSON.stringify(path.resolve("."))});` : ""}
-        const mark=(stage)=>fs.appendFileSync(${JSON.stringify(progressPath)},JSON.stringify({stage,at:Date.now(),pid:process.pid})+"\\n");
-        mark("fixture-entry");
-        process.on('exit',(code)=>mark({event:'exit',code}));
         const overrides=new Map([
           [${JSON.stringify(temporary.href)}, ${JSON.stringify(`export function resolvePreferredOpenClawTmpDir(){return ${JSON.stringify(control)};}`)}],
           [${JSON.stringify(packageRoot.href)}, ${JSON.stringify(`export async function resolveOpenClawPackageRoot(){return ${JSON.stringify(root)};}`)}],
         ]);
         registerHooks({load(url,ctx,next){
-          if(/\\/(?:update-migrated-finalize\\.worker|doctor-health)\\.(?:ts|js)$/.test(url)) mark(url);
           const replacement=overrides.get(url);
           return replacement===undefined?next(url,ctx):{format:"module",source:'export * from '+JSON.stringify(url+'?fixture-original')+';\\n'+replacement,shortCircuit:true};
         }});
         ${doctor.pathname.endsWith(".ts") ? `process.env.TSX_TSCONFIG_PATH=${JSON.stringify(path.resolve("tsconfig.json"))}; await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)});` : ""}
         const {getUpdateDoctorConfigWriteAuthority}=await import(${JSON.stringify(doctorResult.href)});
-        mark("capture-loaded");
         const open=fsp.open;
         let reached=false;
         fsp.open=async(...args)=>{
@@ -166,10 +159,9 @@ it.for(["healthy", "original-owner-replaced"] as const)(
         const pending = withUpdateCommandExecutor(run.runId, async (executor) => {
           const fence = await executor.enter(root);
           opts.run!.executorFence = fence;
-          const params = {
-            phase: "post-plugin" as const,
-            // This prepared candidate already supplies the native Doctor contract.
-            doctorConfigWrites: true as const,
+          await runUpdateFinalizationDoctorInFreshProcess({
+            phase: "post-plugin",
+            doctorConfigWrites: true,
             root,
             entryPath,
             opts,
@@ -180,12 +172,14 @@ it.for(["healthy", "original-owner-replaced"] as const)(
             nodeRunner: resolveTestNodeExecPath(),
             timeoutMs: 45_000,
             assertCurrent: fence.assertCurrent,
-          };
-          await runUpdateFinalizationDoctorInFreshProcess(params);
+          });
           fence.assertCurrent();
         }).then(
           () => ({ ok: true as const }),
-          (error: unknown) => ({ ok: false as const, error: formatUpdateFinalizationError(error) }),
+          (error: unknown) => ({
+            ok: false as const,
+            error: formatUpdateFinalizationError(error),
+          }),
         );
         try {
           // The atomic record also covers settlement beating delivery on the receipt socket.
@@ -195,44 +189,35 @@ it.for(["healthy", "original-owner-replaced"] as const)(
               pending.then((outcome) => {
                 if (!fs.existsSync(readyPath)) {
                   throw new Error(
-                    `Doctor exited before config I/O: ${JSON.stringify(outcome)} ${diagnostics} ${fs.existsSync(progressPath) ? fs.readFileSync(progressPath, "utf8") : "no child entry"}`,
+                    `Doctor exited before config I/O: ${JSON.stringify(outcome)} ${diagnostics}`,
                   );
                 }
               }),
             ]),
             signal,
           );
-          const binding: { pid: number; authority: boolean } = JSON.parse(
-            fs.readFileSync(readyPath, "utf8"),
-          );
+          const binding: { pid: number; authority: boolean } = readConfig(readyPath);
           expect(binding.pid).not.toBe(process.pid);
-          expect(fs.readFileSync(state.configPath, "utf8")).toBe(original);
+          expect(readText(state.configPath)).toBe(original);
           if (fault === "original-owner-replaced") {
-            const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
-            try {
-              expect(
-                db
-                  .prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?")
-                  .run("replacement", root).changes,
-              ).toBe(1);
-            } finally {
-              db.close();
-            }
+            using db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
+            expect(
+              db
+                .prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?")
+                .run("replacement", root).changes,
+            ).toBe(1);
           }
         } finally {
           fs.writeFileSync(proceed, "go");
           await pending;
         }
         const outcome = await pending;
+        expect(outcome.ok, diagnostics).toBe(fault === "healthy");
         if (fault === "healthy") {
-          expect(outcome.ok, diagnostics).toBe(true);
-          expect(
-            JSON.parse(fs.readFileSync(state.configPath, "utf8")).gateway.nodes?.commands,
-          ).toBeUndefined();
-          expect(fs.readFileSync(`${state.configPath}.bak`, "utf8")).toBe(original);
+          expect(readConfig(state.configPath).gateway.nodes?.commands).toBeUndefined();
+          expect(readText(`${state.configPath}.bak`)).toBe(original);
         } else {
-          expect(outcome.ok, diagnostics).toBe(false);
-          expect(fs.readFileSync(state.configPath, "utf8")).toBe(original);
+          expect(readText(state.configPath)).toBe(original);
           expect(fs.existsSync(`${state.configPath}.bak`)).toBe(false);
         }
       },

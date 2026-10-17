@@ -54,18 +54,38 @@ function mockPackageRoot(root: string) {
   vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
   vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
 }
+const writeClaim = (meta: object) =>
+  fs.writeFile(
+    claimPath,
+    JSON.stringify({ version: 1, meta: { runId: foregroundRunId, ...meta } }),
+  );
+const expectRefusal = (operation: Promise<unknown>) =>
+  expect(operation).rejects.toMatchObject({ reason: "managed-service-preflight" });
+function admissionSpies() {
+  return {
+    nativePlan: vi.spyOn(servicePlan, "resolveManagedServicePackageUpdatePlan"),
+    nativeOwner: vi
+      .spyOn(servicePlan, "readManagedGatewayServiceForUpdate")
+      .mockResolvedValue(null),
+    create: vi.spyOn(updateRunLedger, "createUpdateRun").mockImplementation(() => {
+      throw new Error("Unexpected ledger creation before foreground admission");
+    }),
+    adopt: vi.spyOn(updateRunLedger, "adoptUpdateRun"),
+  };
+}
+function foregroundRun(env = { ...process.env }, runId?: string) {
+  return {
+    runId: createUpdateRun({ runId, trigger: "api" }, { env }).runId,
+    env,
+    completionOwner: "gateway-restart" as const,
+  };
+}
 
 beforeEach(async () => {
   const home = dirs.make("foreground-claim-");
   vi.spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
   claimPath = path.join(home, "sentinel-meta.json");
-  await fs.writeFile(
-    claimPath,
-    JSON.stringify({
-      version: 1,
-      meta: { runId: foregroundRunId, completionOwner: "gateway-restart" },
-    }),
-  );
+  await writeClaim({ completionOwner: "gateway-restart" });
   vi.stubEnv(CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, claimPath);
   vi.stubEnv(UPDATE_RUN_ID_ENV, foregroundRunId);
   vi.stubEnv("OPENCLAW_STATE_DIR", home);
@@ -90,19 +110,11 @@ it.each([
 ] as const)("refuses invalid handoff command admission: %s", async (response) => {
   const root = dirs.make("foreground-admission-");
   mockPackageRoot(root);
-  const nativePlan = vi
-    .spyOn(servicePlan, "resolveManagedServicePackageUpdatePlan")
-    .mockRejectedValue(new Error("Unexpected native plan from invalid handoff metadata"));
-  const nativeOwner = vi
-    .spyOn(servicePlan, "readManagedGatewayServiceForUpdate")
-    .mockResolvedValue(null);
+  const { nativePlan, nativeOwner, create, adopt } = admissionSpies();
+  nativePlan.mockRejectedValue(new Error("Unexpected native plan from invalid handoff metadata"));
   const state = vi
     .spyOn(stateOwnership, "assertOpenClawStateWriteAllowedAtPath")
     .mockResolvedValue(undefined);
-  const create = vi.spyOn(updateRunLedger, "createUpdateRun").mockImplementation(() => {
-    throw new Error("Unexpected ledger creation from invalid handoff metadata");
-  });
-  const adopt = vi.spyOn(updateRunLedger, "adoptUpdateRun");
   const handshakeRefusal = response === "unverified" || response === "expired";
   if (handshakeRefusal) {
     handoff.inspect.mockImplementationOnce(async () => {
@@ -116,29 +128,20 @@ it.each([
   } else if (response === "malformed" || response === "invalid-envelope") {
     await fs.writeFile(claimPath, response === "malformed" ? "{" : '{"version":2,"meta":{}}');
   } else {
-    await fs.writeFile(
-      claimPath,
-      JSON.stringify({
-        version: 1,
-        meta: {
-          runId: foregroundRunId,
-          completionOwner: response === "origin-only" ? undefined : "native",
-          foregroundOrigin: {
-            owner: "fixture-owner",
-            pid: process.pid,
-            host: "localhost",
-            startedAt: 1,
-            port: 18789,
-            stateDatabasePath: path.join(root, "state.sqlite"),
-            configPath: path.join(root, "openclaw.json"),
-          },
-        },
-      }),
-    );
+    await writeClaim({
+      completionOwner: response === "origin-only" ? undefined : "native",
+      foregroundOrigin: {
+        owner: "fixture-owner",
+        pid: process.pid,
+        host: "localhost",
+        startedAt: 1,
+        port: 18789,
+        stateDatabasePath: path.join(root, "state.sqlite"),
+        configPath: path.join(root, "openclaw.json"),
+      },
+    });
   }
-  await expect(updateCommand({ json: true })).rejects.toMatchObject({
-    reason: "managed-service-preflight",
-  });
+  await expectRefusal(updateCommand({ json: true }));
   expect(handoff.inspect).toHaveBeenCalledTimes(handshakeRefusal ? 1 : 0);
   expectNotCalled(nativePlan, nativeOwner, mocks.maybeStopService, mocks.captureSchemaContext);
   expectNotCalled(state, create, adopt);
@@ -146,13 +149,7 @@ it.each([
 
 it("keeps post-core continuation separate from foreground request admission", async () => {
   const root = dirs.make("foreground-post-core-");
-  await fs.writeFile(
-    claimPath,
-    JSON.stringify({
-      version: 1,
-      meta: { root, runId: foregroundRunId, completionOwner: "gateway-restart" },
-    }),
-  );
+  await writeClaim({ root, completionOwner: "gateway-restart" });
   vi.stubEnv(POST_CORE_UPDATE_ENV, "1");
   vi.stubEnv(POST_CORE_UPDATE_CHANNEL_ENV, "stable");
   mockPackageRoot(root);
@@ -172,39 +169,30 @@ it.each(["preparation", "environment", "state preflight"] as const)(
   async (boundary) => {
     const root = dirs.make("foreground-interleave-");
     mockPackageRoot(root);
-    const nativePlan = vi
-      .spyOn(servicePlan, "resolveManagedServicePackageUpdatePlan")
-      .mockResolvedValue({ rootRedirect: null });
-    const nativeOwner = vi
-      .spyOn(servicePlan, "readManagedGatewayServiceForUpdate")
-      .mockResolvedValue(null);
     const before = createUpdateRun({ runId: foregroundRunId, trigger: "api" });
-    const create = vi.spyOn(updateRunLedger, "createUpdateRun").mockImplementation(() => {
-      throw new Error("Unexpected ledger creation after foreground claim loss");
-    });
-    const adopt = vi.spyOn(updateRunLedger, "adoptUpdateRun");
+    const { nativePlan, nativeOwner, create, adopt } = admissionSpies();
+    nativePlan.mockResolvedValue({ rootRedirect: null });
     let admitting = false;
     let expired = false;
     const expire = async () => {
       await fs.rm(claimPath);
       expired = true;
     };
+    const expireAfter = async <T>(operation: Promise<T>, at: typeof boundary) => {
+      const result = await operation;
+      if (boundary === at) {
+        await expire();
+      }
+      return result;
+    };
     const prepare = commandRun.prepareUpdateCommand;
-    vi.spyOn(commandRun, "prepareUpdateCommand").mockImplementation(async (opts) => {
-      const prepared = await prepare(opts);
-      if (boundary === "preparation") {
-        await expire();
-      }
-      return prepared;
-    });
+    vi.spyOn(commandRun, "prepareUpdateCommand").mockImplementation((opts) =>
+      expireAfter(prepare(opts), "preparation"),
+    );
     const resolveEnv = commandRun.resolveUpdateCommandAdmissionEnv;
-    vi.spyOn(commandRun, "resolveUpdateCommandAdmissionEnv").mockImplementation(async (params) => {
-      const env = await resolveEnv(params);
-      if (boundary === "environment") {
-        await expire();
-      }
-      return env;
-    });
+    vi.spyOn(commandRun, "resolveUpdateCommandAdmissionEnv").mockImplementation((params) =>
+      expireAfter(resolveEnv(params), "environment"),
+    );
     const admit = commandRun.admitUpdateCommandRun;
     vi.spyOn(commandRun, "admitUpdateCommandRun").mockImplementation(async (params) => {
       admitting = true;
@@ -218,9 +206,7 @@ it.each(["preparation", "environment", "state preflight"] as const)(
       },
     );
 
-    await expect(updateCommand({ json: true }).then(() => "admitted")).rejects.toMatchObject({
-      reason: "managed-service-preflight",
-    });
+    await expectRefusal(updateCommand({ json: true }).then(() => "admitted"));
     expect(expired).toBe(true);
     expect(handoff.inspect).toHaveBeenCalled();
     expectNotCalled(nativePlan, nativeOwner, create, adopt);
@@ -233,11 +219,7 @@ it.each(["schema", "execution", "already current"] as const)(
   async (boundary) => {
     const params = executionParams("package");
     params.root = dirs.make("foreground-admitted-");
-    params.opts.run = {
-      runId: createUpdateRun({ runId: foregroundRunId, trigger: "api" }).runId,
-      env: { ...process.env },
-      completionOwner: "gateway-restart",
-    };
+    params.opts.run = foregroundRun(undefined, foregroundRunId);
     const refuseUpdate: RefuseUpdate = async (reason, message) => {
       throw new shared.UpdatePreMutationError(reason, message ?? reason);
     };
@@ -263,9 +245,7 @@ it.each(["schema", "execution", "already current"] as const)(
               controlPlaneUpdateSentinelMeta: null,
               refuseUpdate,
             });
-      await expect(operation.then(() => "admitted")).rejects.toMatchObject({
-        reason: "managed-service-preflight",
-      });
+      await expectRefusal(operation.then(() => "admitted"));
     }
     expectNotCalled(
       mocks.maybeStopService,
@@ -293,10 +273,7 @@ it.each([
     let state: PreManagedServiceStop | undefined;
     if (!foreground) {
       if (marker === "native") {
-        await fs.writeFile(
-          claimPath,
-          JSON.stringify({ version: 1, meta: { runId: foregroundRunId } }),
-        );
+        await writeClaim({});
       } else {
         vi.stubEnv(CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, marker === "blank" ? " \t " : undefined);
         vi.stubEnv(UPDATE_RUN_ID_ENV, undefined);
@@ -331,28 +308,29 @@ it.each([
     };
     const admission = inspectUpdateDatabaseContexts(params);
     if (native === "active" || native === "unknown") {
-      await expect(admission).rejects.toMatchObject({ reason: "managed-service-preflight" });
+      await expectRefusal(admission);
       expect(mocks.captureManagedPreflight).not.toHaveBeenCalled();
     } else {
       const value = await admission;
       if (foreground) {
-        expect(value.foreground).toBe(true);
-        expect(value.managedEnv).toBeUndefined();
+        expect([value.foreground, value.managedEnv]).toEqual([true, undefined]);
         expect(value.services.get(root)).toBe(state);
         expect(value.contexts[0]?.configSnapshot.path).toBe("/fixture/invoker/openclaw.json");
         if (native === "absent") {
           handoff.inspect.mockResolvedValue(false);
-          await expect(
+          await expectRefusal(
             inspectUpdateDatabaseContexts({
               ...params,
               expectedServices: value.services,
               expectedForeground: value.foreground,
             }),
-          ).rejects.toMatchObject({ reason: "managed-service-preflight" });
+          );
         }
       } else {
-        expect(value.foreground).toBeUndefined();
-        expect(value.managedEnv).toEqual(schemaContext("default").env);
+        expect([value.foreground, value.managedEnv]).toEqual([
+          undefined,
+          schemaContext("default").env,
+        ]);
         expect(handoff.inspect).not.toHaveBeenCalled();
       }
     }
@@ -376,13 +354,9 @@ it.each([
     const env = { ...process.env };
     const params = executionParams("package");
     params.root = root;
+    params.opts.run = foregroundRun(env);
     params.timeoutMs = omittedTimeout ? undefined : 30_000;
     params.opts.timeout = omittedTimeout ? undefined : "30";
-    params.opts.run = {
-      runId: createUpdateRun({ trigger: "api" }, { env }).runId,
-      env,
-      completionOwner: "gateway-restart",
-    };
     mocks.captureSchemaContext.mockResolvedValue({
       ...schemaContext("caller"),
       env,
