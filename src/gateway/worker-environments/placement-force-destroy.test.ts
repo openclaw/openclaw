@@ -38,6 +38,34 @@ describe("forced worker environment destruction", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  async function seedJournal(
+    active: Awaited<ReturnType<typeof seedActivePlacement>>,
+    nonce: string,
+    currentManifestRef: string,
+  ) {
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const owner = {
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      placementGeneration: active.generation,
+    };
+    await placementStore.beginWorkspaceReconciliation(owner, {
+      version: 1,
+      temporaryNonce: nonce.repeat(32),
+      baseManifestRef: active.workspaceBaseManifestRef,
+      currentManifestRef,
+      baseEntries: [],
+      appliedEntries: [],
+      baseTree: "f".repeat(40),
+      basePackSha256: createHash("sha256").update("").digest("hex"),
+      basePack: Buffer.alloc(0),
+    });
+    return owner;
+  }
+
   it("serializes with workspace work and abandons an applied result fence", async () => {
     const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
     const harness = await createHarness(database, placementStore, {
@@ -64,24 +92,8 @@ describe("forced worker environment destruction", () => {
       },
     });
     await placementStore.markWorkspaceResultPending(claim);
-    const owner = {
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      placementGeneration: active.generation,
-    };
     const appliedManifestRef = harness.reconciledManifestRef;
-    await placementStore.beginWorkspaceReconciliation(owner, {
-      version: 1,
-      temporaryNonce: "a".repeat(32),
-      baseManifestRef: active.workspaceBaseManifestRef,
-      currentManifestRef: appliedManifestRef,
-      baseEntries: [],
-      appliedEntries: [],
-      baseTree: "f".repeat(40),
-      basePackSha256: createHash("sha256").update("").digest("hex"),
-      basePack: Buffer.alloc(0),
-    });
+    const owner = await seedJournal(active, "a", appliedManifestRef);
     await placementStore.updateWorkspaceBaseManifest({ claim, manifestRef: appliedManifestRef });
     expect((await placementStore.loadWorkspaceReconciliation(owner))?.appliedManifestRef).toBe(
       appliedManifestRef,
@@ -144,23 +156,7 @@ describe("forced worker environment destruction", () => {
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const owner = {
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      placementGeneration: active.generation,
-    };
-    await placementStore.beginWorkspaceReconciliation(owner, {
-      version: 1,
-      temporaryNonce: "e".repeat(32),
-      baseManifestRef: active.workspaceBaseManifestRef,
-      currentManifestRef: `sha256:${"e".repeat(64)}`,
-      baseEntries: [],
-      appliedEntries: [],
-      baseTree: "f".repeat(40),
-      basePackSha256: createHash("sha256").update("").digest("hex"),
-      basePack: Buffer.alloc(0),
-    });
+    const owner = await seedJournal(active, "e", `sha256:${"e".repeat(64)}`);
 
     await expect(
       harness.service.forceDestroyEnvironment(active.environmentId),
