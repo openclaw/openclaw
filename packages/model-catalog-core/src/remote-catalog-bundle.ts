@@ -2,7 +2,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import {
   MODEL_CATALOG_APIS,
+  MODEL_CATALOG_INPUTS,
   MODEL_CATALOG_MAX_CONTEXT_WINDOWS,
+  MODEL_CATALOG_STATUSES,
   MODEL_CATALOG_THINKING_LEVELS,
 } from "./model-catalog-types.js";
 import type { ModelCatalogModel, ModelCatalogProvider } from "./model-catalog-types.js";
@@ -46,7 +48,7 @@ const contextWindowOptionSchema = z
   })
   .strict();
 
-const inputModalitySchema = z.enum(["text", "image", "video", "document"]);
+const inputModalitySchema = z.enum(MODEL_CATALOG_INPUTS);
 const modelFieldsSchema = z.object({
   id: z.string().trim().min(1),
   name: z.string().optional(),
@@ -70,7 +72,7 @@ const modelFieldsSchema = z.object({
   cost: costSchema.optional(),
   compat: z.record(z.string(), z.unknown()).optional(),
   mediaInput: z.record(z.string(), z.unknown()).optional(),
-  status: z.enum(["available", "preview", "deprecated", "disabled"]).optional(),
+  status: z.enum(MODEL_CATALOG_STATUSES).optional(),
   statusReason: z.string().optional(),
   replaces: z.array(z.string()).optional(),
   replacedBy: z.string().optional(),
