@@ -42,6 +42,10 @@ function readRigProbeSnapshot() {
     loaf: [...(perf?.loaf ?? [])],
     paints: [...(perf?.paints ?? [])],
     rpc: [...(Reflect.get(window, "__wsLog") ?? [])],
+    avatarRequests: performance
+      .getEntriesByType("resource")
+      .filter((entry) => /\/api\/users\/[^/]+\/avatar/u.test(new URL(entry.name).pathname))
+      .map((entry) => ({ url: entry.name, start: entry.startTime, duration: entry.duration })),
   };
 }
 
@@ -211,6 +215,7 @@ const { values } = parseArgs({
     "sidebar-live-churn": { type: "boolean", default: false },
     "session-event-churn": { type: "boolean", default: false },
     "duplicate-boot-reads": { type: "boolean", default: false },
+    "closed-menu-members": { type: "boolean", default: false },
     "capture-ms": { type: "string", default: "0" },
     "sidebar-row-transfer": { type: "string", default: "full" },
     "bundle-dir": { type: "string" },
@@ -295,6 +300,7 @@ const fixture = createControlUiTeamScaleFixture({
   sidebarLiveChurn: values["sidebar-live-churn"],
   sessionEventChurn: values["session-event-churn"],
   duplicateBootReads: values["duplicate-boot-reads"],
+  closedMenuMembers: values["closed-menu-members"],
 });
 const streamingReply = values["streaming-reply"] ? createControlUiStreamingReply() : undefined;
 const extraInitScripts = await Promise.all(
@@ -388,7 +394,7 @@ try {
       return asset ? route.fulfill({ status: 200, ...asset }) : route.fallback();
     });
   }
-  if (values["sidebar-live-churn"]) {
+  if (values["sidebar-live-churn"] || values["closed-menu-members"]) {
     await page.route("**/api/users/*/avatar?*", async (route) => {
       const asset = fixture.assets.get(new URL(route.request().url()).pathname);
       if (!asset) {
@@ -941,7 +947,17 @@ try {
       }
     }
     const overlays = values["overlay-probe"]
-      ? await probeColdLoadOverlays(page, artifactDir, run)
+      ? await probeColdLoadOverlays(
+          page,
+          artifactDir,
+          run,
+          values["closed-menu-members"]
+            ? [
+                ["sharing", ".chat-pane__sharing-trigger", ".chat-pane__sharing-member"],
+                ["layout", ".chat-pane__layout-trigger", ".chat-pane__layout-menu .oc-menu-item"],
+              ]
+            : undefined,
+        )
       : undefined;
     await cdp.detach();
     const result = {

@@ -73,6 +73,7 @@ export type SessionStoreTargetReadOptions = {
   registeredDatabases?: SessionStoreRegistryRead;
   readCandidates?: readonly SessionStoreReadCandidate[];
   readPaths?: CapturedSessionStorePaths;
+  excludeTarget?: (target: SessionStoreTarget) => boolean;
 };
 
 export function resolveConfiguredSessionStoreTargets(
@@ -145,6 +146,7 @@ export function resolveAllAgentSessionStoreTargetsSync(
     readCandidates?: readonly SessionStoreReadCandidate[];
     readPaths?: CapturedSessionStorePaths;
     onResolvedTarget?: (selected: SessionStoreTarget, physical: SessionStoreTarget) => void;
+    excludeTarget?: SessionStoreTargetReadOptions["excludeTarget"];
   } = {},
 ): SessionStoreTarget[] {
   return resolveAllAgentSessionStoreTargets(cfg, params, false);
@@ -181,9 +183,13 @@ function resolveAllAgentSessionStoreTargets(
     readPaths: params.readPaths,
     agentIds: params.agentIds,
     fixedStoreAgentIds: params.fixedStoreAgentIds,
+    excludeTarget: params.excludeTarget,
   });
   const getRealAgentsRoot = createRealAgentsRootResolver();
   const validatedConfiguredTargets = configuredTargets.flatMap((target) => {
+    if (params.excludeTarget?.(target)) {
+      return [];
+    }
     const agentsRoot = resolveAgentsDirFromSessionStorePath(target.storePath);
     // Configured explicit non-agent paths are accepted as-is; only agent-tree paths need
     // containment validation.
@@ -217,6 +223,13 @@ function resolveAllAgentSessionStoreTargets(
         return [];
       }
       return resolveAgentSessionDirsFromAgentsDirSync(agentsDir).flatMap((sessionsDir) => {
+        const discovered = toDiscoveredSessionStoreTarget(
+          sessionsDir,
+          path.join(sessionsDir, "sessions.json"),
+        );
+        if (discovered && params.excludeTarget?.(discovered)) {
+          return [];
+        }
         const validatedStorePath = recoveryCandidates
           ? isValidatedRecoveryCandidateSessionsDir({ realAgentsRoot, sessionsDir })
             ? path.join(sessionsDir, "sessions.json")
@@ -261,7 +274,7 @@ export type ExistingAgentSessionStoreTargetResolver = (
 export function resolveAgentSessionStoreTargetsSync(
   cfg: OpenClawConfig,
   agentId: string,
-  params: Pick<SessionStoreTargetReadOptions, "env" | "registeredDatabases"> = {},
+  params: Pick<SessionStoreTargetReadOptions, "env" | "registeredDatabases" | "excludeTarget"> = {},
 ): SessionStoreTarget[] {
   return resolveAgentSessionStoreTargets(cfg, agentId, params);
 }
@@ -287,6 +300,9 @@ export function resolveAgentSessionStoreTargets(
   const getRealAgentsRoot = createRealAgentsRootResolver();
 
   for (const storePath of storePaths) {
+    if (params.excludeTarget?.({ agentId: requested, storePath })) {
+      continue;
+    }
     const agentsRoot = resolveAgentsDirFromSessionStorePath(storePath);
     if (!agentsRoot) {
       if (params.sqliteOnly) {
@@ -339,7 +355,7 @@ export function resolveAgentSessionStoreTargets(
           sessionsDir,
           path.join(sessionsDir, "sessions.json"),
         );
-        if (!target) {
+        if (!target || params.excludeTarget?.(target)) {
           continue;
         }
         const validatedStorePath = resolveValidatedDiscoveredStorePathSync({
@@ -492,7 +508,9 @@ export function resolveSessionStoreTargets(
 
   if (allAgents) {
     const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
-    const targets = resolveConfiguredSessionStoreTargets(cfg, env, params.readPaths);
+    const targets = resolveConfiguredSessionStoreTargets(cfg, env, params.readPaths).filter(
+      (target) => !params.excludeTarget?.(target),
+    );
     return dedupeSessionStoreTargetsBySqliteTarget(targets, {
       defaultAgentId,
       env,

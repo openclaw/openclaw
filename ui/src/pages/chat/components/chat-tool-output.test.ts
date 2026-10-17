@@ -217,7 +217,7 @@ describe("tool output inspection", () => {
     const rawBody = panel.querySelector<HTMLElement>(".chat-tool-card__raw-body")!;
     expect(rawBody.hidden).toBe(true);
     button(panel, t("chat.toolCards.rawDetails")).click();
-    expect(rawBody.hidden).toBe(false);
+    await waitForSolid(() => expect(rawBody.hidden).toBe(false));
     expect(rawBody.querySelector("code")?.textContent).toBe(raw);
     const copy = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
