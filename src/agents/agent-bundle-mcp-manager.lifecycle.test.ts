@@ -36,6 +36,11 @@ const params = {
   cfg: { mcp: { servers: {} } },
   manifestRegistry: { plugins: [] },
 };
+const idleParams = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
+const nextTurn = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 
 function createRuntimeFixture(input: Parameters<CreateSessionMcpRuntime>[0]): SessionMcpRuntime {
   let lastUsedAt = Date.now();
@@ -127,6 +132,20 @@ function holdDisposal(runtime: SessionMcpRuntime) {
   return { started: started.promise, release: () => released.resolve() };
 }
 
+function creationSequence(pending = true) {
+  const first = holdFactory();
+  const next = holdFactory();
+  const createRuntime = vi
+    .fn<CreateSessionMcpRuntime>(createRuntimeFixture)
+    .mockImplementationOnce(pending ? first.createRuntime : createRuntimeFixture)
+    .mockImplementationOnce(next.createRuntime);
+  return { first, next, createRuntime, manager: createManager(createRuntime) };
+}
+
+function dispose(manager: SessionMcpRuntimeManager, scope: "session" | "all") {
+  return scope === "session" ? manager.disposeSession(params.sessionId) : manager.disposeAll();
+}
+
 afterEach(async () => {
   for (const release of releaseHeldWork.splice(0)) {
     release();
@@ -210,9 +229,7 @@ describe("MCP manager creation ownership", () => {
         joined = true;
       }),
     );
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextTurn();
     expect(joined).toBe(false);
     closing.release();
     await Promise.all([first, second]);
@@ -325,15 +342,10 @@ describe("MCP manager creation ownership", () => {
           const pendingInput = `${turn} input`;
           await turnContext.run(turn, () =>
             pendingInputContext.run(pendingInput, async () => {
+              const input = requesterParams("sender");
               await manager.getOrCreateRequesterScoped({
-                ...params,
-                requesterSenderId: "sender",
-                cfg: {
-                  mcp: {
-                    sessionIdleTtlMs: 600_000,
-                    servers: { scoped: { transport: "streamable-http" } },
-                  },
-                },
+                ...input,
+                cfg: { mcp: { ...input.cfg.mcp, sessionIdleTtlMs: 600_000 } },
               });
               await manager.setScheduler(createTestGatewayScheduler(clock.clock));
               expect(readContext()).toEqual({ turn, pendingInput });
@@ -359,7 +371,7 @@ describe("MCP manager creation ownership", () => {
     const standaloneScheduler = createTestGatewayScheduler(standaloneClock.clock);
     const gatewayScheduler = createTestGatewayScheduler(gatewayClock.clock);
     const manager = createManager(createRuntimeFixture, gatewayScheduler);
-    const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
+    const input = idleParams;
     try {
       await manager.setScheduler(gatewayScheduler);
       const gatewayRuntime = await manager.getOrCreate(input);
@@ -385,7 +397,7 @@ describe("MCP manager creation ownership", () => {
     const firstScheduler = createTestGatewayScheduler(firstClock.clock);
     const secondScheduler = createTestGatewayScheduler(secondClock.clock);
     const manager = createManager(createRuntimeFixture, firstScheduler);
-    const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
+    const input = idleParams;
     const runtime = await manager.getOrCreate(input);
     const cleanup = holdDisposal(runtime);
     const sweep = firstClock.advanceBy(120_000);
@@ -421,7 +433,7 @@ describe("MCP manager creation ownership", () => {
     const firstScheduler = createTestGatewayScheduler(firstClock.clock);
     const nextScheduler = createTestGatewayScheduler();
     const manager = createManager(createRuntimeFixture, firstScheduler);
-    const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
+    const input = idleParams;
     const runtime = await manager.getOrCreate(input);
     const cleanup = holdDisposal(runtime);
     const sweep = firstClock.advanceBy(120_000);
@@ -554,13 +566,7 @@ describe("MCP manager creation ownership", () => {
     "drains late $kind creation during $scope disposal before admitting a successor",
     async ({ scope, kind }) => {
       await withRequesterResolver(async () => {
-        const first = holdFactory();
-        const next = holdFactory();
-        const createRuntime = vi
-          .fn<CreateSessionMcpRuntime>(createRuntimeFixture)
-          .mockImplementationOnce(first.createRuntime)
-          .mockImplementationOnce(next.createRuntime);
-        const manager = createManager(createRuntime);
+        const { first, next, createRuntime, manager } = creationSequence();
         const acquire = async () =>
           kind === "static"
             ? manager.getOrCreate(params)
@@ -572,9 +578,7 @@ describe("MCP manager creation ownership", () => {
         const oldRuntime = await first.started;
         const closing = holdDisposal(oldRuntime);
         let drained = false;
-        const disposal = (
-          scope === "session" ? manager.disposeSession(params.sessionId) : manager.disposeAll()
-        ).then(() => {
+        const disposal = dispose(manager, scope).then(() => {
           drained = true;
         });
         const nextRequest = acquire();
@@ -628,13 +632,7 @@ describe("MCP manager creation ownership", () => {
   ])(
     "serializes a $label replacement and joins its concurrent callers",
     async ({ update, pending }) => {
-      const first = holdFactory();
-      const next = holdFactory();
-      const createRuntime = vi
-        .fn<CreateSessionMcpRuntime>(createRuntimeFixture)
-        .mockImplementationOnce(pending ? first.createRuntime : createRuntimeFixture)
-        .mockImplementationOnce(next.createRuntime);
-      const manager = createManager(createRuntime);
+      const { first, next, createRuntime, manager } = creationSequence(pending);
       const oldRequest = manager.getOrCreate(params);
       const oldRuntime = await (pending ? first.started : oldRequest);
       const closing = pending ? undefined : holdDisposal(oldRuntime);
@@ -688,16 +686,12 @@ describe("MCP manager creation ownership", () => {
         const pending = manager.acquire(requesterParams("sender"));
         await first.started;
         let drained = false;
-        const disposal = (
-          scope === "session" ? manager.disposeSession(params.sessionId) : manager.disposeAll()
-        ).then(() => {
+        const disposal = dispose(manager, scope).then(() => {
           drained = true;
         });
         first.release();
         await resolutionStarted.promise;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
         expect(drained).toBe(false);
         releaseResolution.resolve();
         const acquired = await pending;
@@ -725,16 +719,13 @@ describe("MCP manager creation ownership", () => {
         );
         old.releaseLease();
         const closing = holdDisposal(old.runtime);
-        const disposal =
-          scope === "session" ? manager.disposeSession(params.sessionId) : manager.disposeAll();
+        const disposal = dispose(manager, scope);
         await closing.started;
         const next = manager.acquireRequesterScoped({
           ...requesterParams("next"),
           ...(scope === "all" ? { sessionId: "another-session", sessionKey: "another-key" } : {}),
         });
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
         expect(createRuntime).toHaveBeenCalledOnce();
         closing.release();
         await disposal;
