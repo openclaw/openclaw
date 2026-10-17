@@ -14,21 +14,22 @@ function createChannelSchemaRegistry(
   return {
     diagnostics: [],
     plugins: [
-      {
+      createPluginManifestRecordFixture({
         id: "deep-channel-schema-plugin",
         channels: [channelId],
         channelConfigs: { [channelId]: { schema } },
-        cliBackends: [],
-        hooks: [],
-        manifestPath: "/tmp/deep-channel-schema-plugin/openclaw.plugin.json",
         origin,
-        providers: [],
-        rootDir: "/tmp/deep-channel-schema-plugin",
-        skills: [],
-        source: "/tmp/deep-channel-schema-plugin/index.js",
-      } satisfies PluginManifestRecord,
+      }),
     ],
   };
+}
+
+function deepSchema() {
+  let schema: Record<string, unknown> = { type: "object" };
+  for (let depth = 0; depth < 3_000; depth++) {
+    schema = { type: "object", properties: { nested: schema } };
+  }
+  return schema;
 }
 
 describe("collectChannelSchemaMetadataWithOwnership", () => {
@@ -105,16 +106,11 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
     },
   );
 
-  // Non-bundled channel schemas are cloned and recursively walked here, before any validator
-  // runs. This producer owns the fixed traversal limit so runtime stack size cannot change
-  // whether normalization mutates the surfaced schema.
+  // The producer's traversal bound must not depend on the runtime stack limit.
   it.each(["feishu", "qqbot"])(
     "surfaces the raw deeply nested %s schema after bounded traversal",
     (channelId) => {
-      let schema: Record<string, unknown> = { type: "object" };
-      for (let depth = 0; depth < 3_000; depth++) {
-        schema = { type: "object", properties: { nested: schema } };
-      }
+      const schema = deepSchema();
 
       const entries = collectChannelSchemaMetadataWithOwnership(
         createChannelSchemaRegistry(channelId, schema),
@@ -126,14 +122,9 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
   );
 
   it("keeps bundled schema preparation failures on the throwing path", () => {
-    let schema: Record<string, unknown> = { type: "object" };
-    for (let depth = 0; depth < 3_000; depth++) {
-      schema = { type: "object", properties: { nested: schema } };
-    }
-
     expect(() =>
       collectChannelSchemaMetadataWithOwnership(
-        createChannelSchemaRegistry("qqbot", schema, "bundled"),
+        createChannelSchemaRegistry("qqbot", deepSchema(), "bundled"),
       ),
     ).toThrow("channel config schema exceeds maximum traversal depth of 256");
   });
@@ -190,29 +181,20 @@ describe("collectChannelDmPolicyMetadata", () => {
   it("retains closest-origin nested metadata when no channel owner is selected", () => {
     const registry = {
       diagnostics: [],
-      plugins: [
+      plugins: (["config", "global"] as const).map((origin) =>
         createPluginManifestRecordFixture({
-          id: "local-chat",
-          origin: "config",
+          id: `${origin}-chat`,
+          origin,
           channels: ["proofchat"],
           packageChannel: {
             id: "proofchat",
-            doctorCapabilities: {
-              dmAllowFromMode: "nestedOnly",
-              openDmRequiresAllowFromWildcard: false,
-            },
+            doctorCapabilities:
+              origin === "config"
+                ? { dmAllowFromMode: "nestedOnly", openDmRequiresAllowFromWildcard: false }
+                : { openDmRequiresAllowFromWildcard: true },
           },
         }),
-        createPluginManifestRecordFixture({
-          id: "global-chat",
-          origin: "global",
-          channels: ["proofchat"],
-          packageChannel: {
-            id: "proofchat",
-            doctorCapabilities: { openDmRequiresAllowFromWildcard: true },
-          },
-        }),
-      ],
+      ),
     };
 
     expect(collectChannelDmPolicyMetadata(registry, new Set<string>()).get("proofchat")).toEqual({

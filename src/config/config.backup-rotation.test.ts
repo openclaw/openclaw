@@ -16,19 +16,23 @@ import { withTempHome } from "./test-helpers.js";
 
 const { runRegisteredConfigCommand, withConfigFileHarness } = useConfigCliIntegrationHarness();
 
-async function expectRegularFile(filePath: string): Promise<void> {
-  expect((await fs.stat(filePath)).isFile()).toBe(true);
+async function expectPathMissing(filePath: string): Promise<void> {
+  await expect(fs.stat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
-async function expectPathMissing(filePath: string): Promise<void> {
-  let error: { code?: unknown } | undefined;
-  try {
-    await fs.stat(filePath);
-  } catch (err) {
-    error = err as { code?: unknown };
-  }
-  expect(error?.code).toBe("ENOENT");
-}
+const createSnapshot = (
+  configPath: string,
+  overrides: Partial<Parameters<typeof createPreUpdateConfigSnapshot>[0]["fs"]> = {},
+) =>
+  createPreUpdateConfigSnapshot({
+    configPath,
+    fs: {
+      writeFile: fs.writeFile,
+      readFile: fs.readFile,
+      existsSync: fsNode.existsSync,
+      ...overrides,
+    },
+  });
 
 describe("config backup rotation", () => {
   it("openclaw config set keeps five recovery points and preserves manual and pre-update backups", async () => {
@@ -41,15 +45,11 @@ describe("config backup rotation", () => {
           const raw = await fs.readFile(`${configPath}${suffix}`, "utf-8");
           return (JSON.parse(raw) as { gateway: { port: number } }).gateway.port;
         };
-        const { existsSync } = await import("node:fs");
         const manualBackupPath = `${configPath}.bak.20260808`;
         const manualBackupContent = '{"gateway":{"mode":"local","port":18000}}\n';
 
         await fs.writeFile(manualBackupPath, manualBackupContent, "utf-8");
-        await createPreUpdateConfigSnapshot({
-          configPath,
-          fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
-        });
+        await createSnapshot(configPath);
         for (let version = 1; version <= 6; version += 1) {
           await runRegisteredConfigCommand([
             "config",
@@ -62,12 +62,9 @@ describe("config backup rotation", () => {
           }
         }
 
-        await expect(readPort()).resolves.toBe(19006);
-        await expect(readPort(".bak")).resolves.toBe(19005);
-        await expect(readPort(".bak.1")).resolves.toBe(19004);
-        await expect(readPort(".bak.2")).resolves.toBe(19003);
-        await expect(readPort(".bak.3")).resolves.toBe(19002);
-        await expect(readPort(".bak.4")).resolves.toBe(19001);
+        await expect(
+          Promise.all(["", ".bak", ".bak.1", ".bak.2", ".bak.3", ".bak.4"].map(readPort)),
+        ).resolves.toEqual([19006, 19005, 19004, 19003, 19002, 19001]);
         for (const suffix of [".bak", ".bak.1"]) {
           expectPosixMode((await fs.stat(`${configPath}${suffix}`)).mode, 0o600);
         }
@@ -242,19 +239,12 @@ describe("config backup rotation", () => {
       await fs.writeFile(configPath, current, { mode: 0o600 });
       await fs.writeFile(snapshotPath, stale, { mode: 0o600 });
 
-      const { existsSync } = await import("node:fs");
-      await createPreUpdateConfigSnapshot({
-        configPath,
-        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
-      });
+      await createSnapshot(configPath);
       await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(current);
 
       // Later writes in the same update attempt should not replace the first snapshot.
       await fs.writeFile(configPath, second);
-      await createPreUpdateConfigSnapshot({
-        configPath,
-        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
-      });
+      await createSnapshot(configPath);
       await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(current);
     });
   });
@@ -262,12 +252,7 @@ describe("config backup rotation", () => {
   it("createPreUpdateConfigSnapshot is a no-op when config does not exist", async () => {
     await withTempHome(async () => {
       const configPath = resolveConfigPathFromTempState();
-      const { existsSync } = await import("node:fs");
-
-      await createPreUpdateConfigSnapshot({
-        configPath,
-        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
-      });
+      await createSnapshot(configPath);
 
       await expectPathMissing(`${configPath}.pre-update`);
     });
@@ -276,7 +261,6 @@ describe("config backup rotation", () => {
   it("retries snapshot after transient read and write errors (#105431)", async () => {
     await withTempHome(async () => {
       const content = JSON.stringify({ plugins: { installs: ["slack"] } });
-      const { existsSync } = await import("node:fs");
       const rejectingReadFile = (async () => {
         throw new Error("EIO: transient read error");
       }) as typeof fs.readFile;
@@ -288,23 +272,16 @@ describe("config backup rotation", () => {
         const configPath = `${resolveConfigPathFromTempState()}.${failingOperation}`;
         await fs.writeFile(configPath, content, { mode: 0o600 });
 
-        await createPreUpdateConfigSnapshot({
-          configPath,
-          fs: {
-            readFile: failingOperation === "read" ? rejectingReadFile : fs.readFile,
-            writeFile: failingOperation === "write" ? rejectingWriteFile : fs.writeFile,
-            existsSync,
-          },
+        await createSnapshot(configPath, {
+          readFile: failingOperation === "read" ? rejectingReadFile : fs.readFile,
+          writeFile: failingOperation === "write" ? rejectingWriteFile : fs.writeFile,
         });
         await expectPathMissing(`${configPath}.pre-update`);
 
-        await createPreUpdateConfigSnapshot({
-          configPath,
-          fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
-        });
+        await createSnapshot(configPath);
 
         const snapshotPath = `${configPath}.pre-update`;
-        await expectRegularFile(snapshotPath);
+        expect((await fs.stat(snapshotPath)).isFile()).toBe(true);
         await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(content);
       }
     });
