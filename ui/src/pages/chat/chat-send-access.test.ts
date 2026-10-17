@@ -30,6 +30,15 @@ const sessionRow = (sendDisabledReason: string | null = null): GatewaySessionRow
   kind: "direct",
   sendDisabledReason,
 });
+function attachmentHost(overrides: NonNullable<Parameters<typeof makeChatHost>[0]>) {
+  const attachment = createStagedAttachment("held-att");
+  const host = makeChatHost({
+    chatAttachments: [attachment],
+    ...overrides,
+    requestHandlers: overrides.requestHandlers ?? sendStarted,
+  });
+  return { host, attachment };
+}
 
 useChatSendBrowserFixture();
 
@@ -42,21 +51,18 @@ it.each([
 ])(
   "retains the composer behind $hold (connected: $connected, text: $message)",
   async ({ hold, connected, message }) => {
-    const attachment = createStagedAttachment("held-att");
     const earlierError = hold === "access" ? "Earlier request failed" : undefined;
     const replyTarget =
       hold === "session"
         ? { messageId: "reply-1", sourceMessageId: "source-1", text: "original message" }
         : null;
-    const host = makeChatHost({
+    const { host, attachment } = attachmentHost({
       connected,
       sessionKey: hold === "session" ? "" : "agent:main",
       chatMessage: message,
-      chatAttachments: [attachment],
       chatReplyTarget: replyTarget,
       lastError: earlierError ?? null,
       chatError: earlierError,
-      requestHandlers: sendStarted,
       sessionsResult: sessions(sessionRow(hold === "access" ? accessError : null)),
     });
     const readiness =
@@ -89,13 +95,9 @@ it.each([true, false])(
   "queues later text and attachments behind an initial turn (connected: %s)",
   async (connected) => {
     let pending = true;
-    const attachment = createStagedAttachment("held-att");
-    const host = makeChatHost({
+    const { host } = attachmentHost({
       connected,
       chatMessage: "keep this later draft",
-      chatAttachments: [attachment],
-      lastError: "Earlier request failed",
-      chatError: "Earlier request failed",
       requestHandlers: {
         "chat.history": {
           messages: [],
@@ -138,11 +140,8 @@ it.each(["initial-turn", "recovery-scope", "send-access"])(
       sessionId: "pending-settings-test",
       updatedAt: 1,
     };
-    const attachment = createStagedAttachment("waiting-att");
-    const host = makeChatHost({
+    const { host, attachment } = attachmentHost({
       chatMessage: "later turn",
-      chatAttachments: [attachment],
-      requestHandlers: sendStarted,
       pendingSettingsPatches: { "agent:main": settingsPatch.promise },
       hasPendingInitialTurn: () => pending,
       ...(hold === "send-access" ? { sessionsResult: sessions(row) } : {}),
@@ -171,13 +170,8 @@ it.each(["initial-turn", "recovery-scope", "send-access"])(
     const stored = readStoredOutboxStore(sessionStorage, target);
     const retained = Object.values(stored.sessions).flatMap((session) => session.queue ?? []);
     const expectedRow = { id: original.id, text: "later turn", sendAttempts: 0, sendState };
-    expect(retained).toMatchObject([
-      {
-        ...expectedRow,
-        sendRunId: original.sendRunId,
-        attachmentPayload: original.attachmentPayload,
-      },
-    ]);
+    const { sendRunId, attachmentPayload } = original;
+    expect(retained).toMatchObject([{ ...expectedRow, sendRunId, attachmentPayload }]);
     if (hold === "send-access") {
       expect(listStoredChatOutboxes(host)[0]?.queue).toMatchObject(retained);
     }
@@ -210,9 +204,8 @@ it.each([true, false])(
       sessionsResultAgentId: "main",
       sessionsResult: sessions(
         {
-          key: "global",
+          ...writer,
           agentId: "main",
-          kind: "global",
           sendDisabledReason: blocked ? null : "Main global session is read-only.",
         },
         writer,

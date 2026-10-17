@@ -48,6 +48,7 @@ function makeClient(host: ChatHost) {
 }
 function expectComposer(host: ChatHost, message: string, error: string | null) {
   expect(host).toMatchObject({ chatMessage: message, chatError: error, chatRunId: "active-run" });
+  expect(host.chatSubmitGuards?.size).toBe(0);
 }
 function respond(ws: MockWebSocket, id: string, payload: unknown) {
   ws.emitMessage({ type: "res", id, ok: true, payload });
@@ -151,7 +152,6 @@ it.each(["unchanged", "newer input", "navigation", "account"] as const)(
       timeoutMs: 30_000,
       method: "chat.send",
     });
-    expect(host.chatSubmitGuards?.size).toBe(0);
     const expectedError =
       change === "unchanged" || change === "newer input"
         ? UNCONFIRMED_CHAT_SEND_ERROR
@@ -214,7 +214,6 @@ it.each(["success", "terminal error", "known rejection"] as const)(
     await vi.advanceTimersByTimeAsync(0);
     expect(settled).toHaveBeenCalledOnce();
     await sending;
-    expect(host.chatSubmitGuards?.size).toBe(0);
     if (outcome === "success") {
       expectComposer(host, "", null);
       expect(host.chatAttachments).toEqual([]);
@@ -256,5 +255,4 @@ it("does not call a known unsent timeout unconfirmed", async () => {
   });
   await handleSendChat(host);
   expectComposer(host, approvalMessage, error.message);
-  expect(host.chatSubmitGuards?.size).toBe(0);
 });

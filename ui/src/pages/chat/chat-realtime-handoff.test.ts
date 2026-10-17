@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
-import { loadSettings } from "../../app/settings.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -48,7 +47,7 @@ function fixture() {
     replacementActive: createDeferred(),
     transportStopped: createDeferred(),
   };
-  const speech = createDeferred<{ audioBase64: string; mimeType: string; provider: string }>();
+  const speech = createDeferred<{ audioBase64: string; mimeType: string }>();
   transports.stop.mockImplementation(() => gates.transportStopped.resolve());
   transports.onActivated = () => {
     if (transports.contexts.length === 2) {
@@ -68,10 +67,8 @@ function fixture() {
         gates.replacementStarted.resolve();
       }
       return {
-        provider: "openai",
         transport: "webrtc",
         voiceSessionId: `voice-${snapshots.length}`,
-        clientSecret: "synthetic-session",
       };
     }
     if (method === "talk.client.transcript") {
@@ -99,7 +96,6 @@ function fixture() {
     client,
     connected: true,
     sessionKey: "main",
-    settings: loadSettings(),
     ...createInitialChatRealtimeState(),
   } as unknown as ChatRealtimeState;
   attachChatRealtimeActions(state);
@@ -127,7 +123,7 @@ function fixture() {
     },
     async dispose() {
       reader.stop();
-      speech.resolve({ audioBase64: "UklGRg==", mimeType: "audio/wav", provider: "openai" });
+      speech.resolve({ audioBase64: "UklGRg==", mimeType: "audio/wav" });
       gates.transcript.resolve();
       gates.close.resolve();
       await reading;
@@ -166,7 +162,6 @@ describe("browser voice handoff history", () => {
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
     transports.contexts.length = 0;
     transports.stop.mockReset();
-    transports.onActivated = undefined;
     f = fixture();
   });
   afterEach(async () => {

@@ -26,14 +26,23 @@ import { resetToolStream } from "./tool-stream-state.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
 const runId = "reasoning-run";
-const user = {
-  role: "user",
-  content: "Explain a synthetic puzzle.",
-  timestamp: 1,
-  __openclaw: { id: "user", seq: 1, idempotencyKey: `${runId}:user` },
-};
+const user = transcriptRow(
+  "Explain a synthetic puzzle.",
+  { id: "user", seq: 1, idempotencyKey: `${runId}:user` },
+  { role: "user" },
+);
 let state: TestState;
 let container: HTMLElement;
+const thinkingNode = () => container.querySelector(".chat-thinking");
+const thinkingNodes = () => container.querySelectorAll(".chat-thinking");
+
+function transcriptRow<T extends { id: string; seq: number }>(
+  content: unknown,
+  identity: T,
+  fields: { role?: string; timestamp?: number; stopReason?: string } = {},
+) {
+  return { role: "assistant", timestamp: identity.seq, content, __openclaw: identity, ...fields };
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -97,7 +106,7 @@ function receipt(
 }
 
 function expectAnswer() {
-  expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
+  expect(thinkingNodes()).toHaveLength(1);
   expect(
     container.querySelector(".chat-thread-inner")?.textContent?.match(/The answer is 42\./g),
   ).toHaveLength(1);
@@ -122,22 +131,25 @@ function show(mode: "on" | "off" | "stream" = "on", showThinking = true) {
   });
 }
 
+function showReasoning(count: number, mode: "on" | "off" | "stream" = "on", visible = true) {
+  show(mode, visible);
+  expect(thinkingNodes()).toHaveLength(count);
+}
+
 function persistReasoning(
   text: string,
   active: boolean,
   positions = { appended: 2, displayed: 2 },
 ) {
   receipt("answer", "thinking-1", 2, runId, positions.appended);
-  const message = {
-    role: "assistant",
-    content: [
+  const message = transcriptRow(
+    [
       { type: "thinking", thinking: text },
       { type: "text", text: "The answer is 42." },
     ],
-    timestamp: 4,
-    stopReason: "stop",
-    __openclaw: { id: "answer", seq: positions.displayed, runId, runTerminal: true },
-  };
+    { id: "answer", seq: positions.displayed, runId, runTerminal: true },
+    { timestamp: 4, stopReason: "stop" },
+  );
   applyMessage(message, { runId }, active);
   return message;
 }
@@ -168,7 +180,7 @@ it("shows thinking while generating and retains it through thinking-only history
 
   await loadChatHistory(state);
   show();
-  expect(container.querySelector(".chat-thinking")?.textContent).toContain("the evidence.");
+  expect(thinkingNode()?.textContent).toContain("the evidence.");
   expect(state.chatRunId).toBe(runId);
 });
 
@@ -180,12 +192,10 @@ it.each([
   async ({ order, appended, displayed }) => {
     const text = "Checking the evidence carefully.";
     thinking(text);
-    show();
-    expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
+    showReasoning(1);
     if (order === "before") {
       persistReasoning(text, true, { appended, displayed });
-      show();
-      expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
+      showReasoning(1);
       expect(state.chatReasoning?.items.at(-1)?.receipt?.persisted).toBe(true);
     }
     final();
@@ -212,21 +222,20 @@ it("applies View and session visibility independently to live and saved reasonin
     ["off", false],
   ] as const) {
     show(mode);
-    expect(Boolean(container.querySelector(".chat-thinking"))).toBe(visible);
+    expect(Boolean(thinkingNode())).toBe(visible);
     show(mode, false);
-    expect(container.querySelector(".chat-thinking")).toBeNull();
+    expect(thinkingNode()).toBeNull();
   }
   persistReasoning("Private synthetic reasoning.", true);
   for (const mode of ["on", "stream"] as const) {
-    show(mode);
-    expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
-    expect(container.querySelector(".chat-thinking")?.textContent).toContain("Private synthetic");
+    showReasoning(1, mode);
+    expect(thinkingNode()?.textContent).toContain("Private synthetic");
   }
   final("The answer is 42.", 2);
   show("stream");
-  expect(container.querySelector(".chat-thinking")).toBeNull();
+  expect(thinkingNode()).toBeNull();
   show("on");
-  expect(container.querySelector(".chat-thinking")?.textContent).toContain("Private synthetic");
+  expect(thinkingNode()?.textContent).toContain("Private synthetic");
 });
 
 it("falls back to the inherited reasoning default only without a session override", () => {
@@ -344,63 +353,48 @@ it("does not let an earlier receipt consume equal reasoning from the next assist
   const text = "Checking the same evidence.";
   thinking(text, 1, runId, "earlier");
   thinking(text, 2, runId, "later");
-  show();
-  expect(container.querySelectorAll(".chat-thinking")).toHaveLength(2);
+  showReasoning(2);
   receipt("earlier", "earlier", 3);
   applyMessage(
-    {
-      role: "assistant",
-      timestamp: 3,
-      stopReason: "toolUse",
-      content: [
+    transcriptRow(
+      [
         { type: "thinking", thinking: text },
         { type: "toolCall", id: "tool-1", name: "read", arguments: {} },
       ],
-      __openclaw: { id: "earlier", seq: 2, runId },
-    },
+      { id: "earlier", seq: 2, runId },
+      { timestamp: 3, stopReason: "toolUse" },
+    ),
     { runId },
   );
   expect(state.chatReasoning?.items.at(-1)).toMatchObject({ itemId: "later", text });
   expect(state.chatReasoning?.items.at(-1)?.receipt?.messageId).toBeUndefined();
   for (const mode of ["on", "stream"] as const) {
-    show(mode);
-    expect(container.querySelectorAll(".chat-thinking")).toHaveLength(2);
+    showReasoning(2, mode);
   }
 });
 
 it("keeps persisted tool-step reasoning visible until its run finishes", () => {
   const sessionKey = "agent:main:dashboard:reasoning";
-  const toolMessage = (index: number, owner: string, text: string, timestamp: number) => ({
-    role: "assistant",
-    timestamp,
-    stopReason: "toolUse",
-    content: [
-      { type: "thinking", thinking: text },
-      {
-        type: "toolCall",
-        id: `read-${index}`,
-        name: "read",
-        arguments: { path: `evidence-${index}.txt` },
-      },
-    ],
-    __openclaw: { id: `${owner}-${index}`, seq: timestamp, runId: owner },
-  });
+  const toolMessage = (index: number, owner: string, text: string, timestamp: number) =>
+    transcriptRow(
+      [
+        { type: "thinking", thinking: text },
+        {
+          type: "toolCall",
+          id: `read-${index}`,
+          name: "read",
+          arguments: { path: `evidence-${index}.txt` },
+        },
+      ],
+      { id: `${owner}-${index}`, seq: timestamp, runId: owner },
+      { stopReason: "toolUse" },
+    );
   const history = activeHistory(runId);
   history.messages = [
-    {
-      role: "user",
-      content: "Earlier question.",
-      timestamp: 100,
-      __openclaw: { id: "earlier-user", seq: 100 },
-    },
+    transcriptRow("Earlier question.", { id: "earlier-user", seq: 100 }, { role: "user" }),
     toolMessage(0, "earlier-run", "Earlier first thought.", 200),
     toolMessage(1, "earlier-run", "Earlier second thought.", 300),
-    {
-      role: "assistant",
-      content: "Earlier answer.",
-      timestamp: 400,
-      __openclaw: { id: "earlier-answer", seq: 400, runId: "earlier-run" },
-    },
+    transcriptRow("Earlier answer.", { id: "earlier-answer", seq: 400, runId: "earlier-run" }),
     { ...user, timestamp: 1_000, __openclaw: { ...user["__openclaw"], seq: 1_000 } },
   ];
   state = createState(history);
@@ -440,7 +434,7 @@ it("keeps persisted tool-step reasoning visible until its run finishes", () => {
   }
   agent("thinking", { itemId: "thought-2", text: thoughts[2] }, 1_300);
   const expectSteps = () => {
-    expect(container.querySelectorAll(".chat-thinking")).toHaveLength(3);
+    expect(thinkingNodes()).toHaveLength(3);
     expect(
       [...container.querySelectorAll(".chat-thinking, .chat-tool-msg-summary")].map(
         (node) => node.textContent,
@@ -473,8 +467,7 @@ it("keeps persisted tool-step reasoning visible until its run finishes", () => {
       expectSteps();
     }
   }
-  show("on", false);
-  expect(container.querySelectorAll(".chat-thinking")).toHaveLength(0);
+  showReasoning(0, "on", false);
   show();
   expectSteps();
 
@@ -497,14 +490,13 @@ it("keeps persisted tool-step reasoning visible until its run finishes", () => {
   final("The answer is 42.", ++seq);
   show();
   expect(worked()).toHaveLength(2);
-  expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
+  expect(thinkingNodes()).toHaveLength(1);
   worked()[1]!.click();
   show();
   expect(rawDetails().getAttribute("aria-expanded")).toBe("false");
-  expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
+  expect(thinkingNodes()).toHaveLength(1);
   rawDetails().click();
-  show();
-  expect(container.querySelectorAll(".chat-thinking")).toHaveLength(3);
+  showReasoning(3);
 });
 
 it("does not attach known-committed pre-tool reasoning to a later final answer", () => {
@@ -524,14 +516,11 @@ it.each([false, true])(
     const seq = earlier ? 2 : 1;
     thinking("A discarded draft.", seq, runId, itemId);
     show();
-    expect(container.querySelector(".chat-thinking")).not.toBeNull();
+    expect(thinkingNode()).not.toBeNull();
     thinking("", seq + 1, runId, itemId);
-    show();
-    expect(container.querySelectorAll(".chat-thinking")).toHaveLength(earlier ? 1 : 0);
+    showReasoning(earlier ? 1 : 0);
     if (earlier) {
-      expect(container.querySelector(".chat-thinking")?.textContent).toContain(
-        "Keep the earlier tool reasoning.",
-      );
+      expect(thinkingNode()?.textContent).toContain("Keep the earlier tool reasoning.");
     }
     final("The final answer.", seq + 2);
     expect(state.chatMessages.map(extractThinkingCached).filter(Boolean)).toEqual([]);
@@ -542,15 +531,14 @@ it("uses the producer run in the receipt when Gateway remaps the live client run
   thinking("A remapped source occurrence.");
   receipt("source-answer", "thinking-1", 2, "source-run");
   applyMessage(
-    {
-      role: "assistant",
-      timestamp: 4,
-      content: [
+    transcriptRow(
+      [
         { type: "thinking", thinking: "A remapped source occurrence." },
         { type: "text", text: "Source answer." },
       ],
-      __openclaw: { id: "source-answer", seq: 2, runId: "source-run" },
-    },
+      { id: "source-answer", seq: 2, runId: "source-run" },
+      { timestamp: 4 },
+    ),
     { runId: "source-run", clientRunId: runId },
   );
   expect(state.chatReasoning?.items.at(-1)?.receipt).toEqual({
@@ -558,6 +546,5 @@ it("uses the producer run in the receipt when Gateway remaps the live client run
     messageId: "source-answer",
     persisted: true,
   });
-  show();
-  expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
+  showReasoning(1);
 });
