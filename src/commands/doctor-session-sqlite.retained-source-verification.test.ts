@@ -35,13 +35,18 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
-import { runDoctorSessionSqlite, type DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
+import {
+  runDoctorSessionSqlite,
+  settleRetainedDoctorSessionSources,
+  type DoctorSessionSqliteReport,
+} from "./doctor-session-sqlite.js";
 import {
   containsObjects,
   expectFiles,
   expectMissing,
 } from "./doctor-session-sqlite.publication-spies.test-support.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
+import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 import { doctorCommand } from "./doctor.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -551,6 +556,79 @@ it("reads each archive manifest once when verifying 32 retained transcripts", as
     expect(read()?.sources).toHaveLength(32 + 1);
     fs.appendFileSync(transcriptMove.archivePath, "\n");
     expect(read).toThrow("Retained session migration source changed");
+  });
+});
+
+it("settles verified retained sources when a historical transcript stays deferred", async () => {
+  await withOpenClawTestState({ label: "deferred-historical-settlement" }, async (state) => {
+    const { cfg, storePath, originals } = await seedDeferredPluginSessionSource(
+      state,
+      "default",
+      "codex",
+    );
+    const directory = path.dirname(storePath);
+    const bootTranscript = path.join(directory, "boot-2026-06-12_01-38-43-539-a2a5aeed.jsonl");
+    writeTranscript(bootTranscript, "legacy-boot", "boot-message", "boot");
+    const bootBytes = fs.readFileSync(bootTranscript);
+    const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
+    entries["agent:main:boot"] = {
+      sessionId: "legacy-boot",
+      sessionFile: path.basename(bootTranscript),
+      updatedAt: 20,
+    };
+    writeJson(storePath, entries);
+    const run = () =>
+      runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+    expectIssueCodes(await run(), "plugin_migration_source_retained");
+    fs.renameSync(storePath, `${storePath}.preserved`);
+    const deferredWarning = {
+      code: "historical_transcript_deferred",
+      message: `${bootTranscript}: Error: Primary transcript header does not match its original filename`,
+    };
+    await withDoctorSqliteMaintenanceLock({
+      env: state.env,
+      operation: "settle retained codex sources",
+      run: async (authority) => {
+        const report = await run();
+        await expect(
+          settleRetainedDoctorSessionSources(report, ["codex"], authority, () =>
+            authority.assertCurrent(),
+          ),
+        ).resolves.toBeUndefined();
+        expect(allIssues(report)).toEqual([
+          expect.objectContaining({ code: "retained_plugin_source_index_rebuilt" }),
+          deferredWarning,
+        ]);
+      },
+    });
+    const moves = listManifests(state.env)
+      .flatMap((file) => readManifest(file)?.targets ?? [])
+      .flatMap((owner) => owner.completedMoves);
+    for (const transcript of ["legacy-kept.jsonl", "legacy-deleted.jsonl"]) {
+      const sourcePath = path.join(directory, transcript);
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      const move = moves.find((candidate) => candidate.sourcePath === sourcePath);
+      expect(move?.artifact).toMatchObject({
+        classification: "protected",
+        reason: "indexed-historical-primary",
+      });
+      expect(fs.readFileSync(move!.archivePath)).toEqual(originals.get(sourcePath));
+    }
+    const bootMoves = moves.filter((candidate) => candidate.sourcePath === bootTranscript);
+    expect(bootMoves).toHaveLength(1);
+    expect(bootMoves[0]!.artifact).toMatchObject({
+      classification: "protected",
+      reason: "unreferenced-history",
+      disposal: { state: "retained" },
+    });
+    expect(fs.readFileSync(bootMoves[0]!.archivePath)).toEqual(bootBytes);
+    await recordDeferredPluginMigrations({
+      env: state.env,
+      pending: [],
+      resolvedPluginIds: ["codex"],
+    });
+    expect(allIssues(await run())).toEqual([deferredWarning]);
+    expect(fs.readFileSync(bootMoves[0]!.archivePath)).toEqual(bootBytes);
   });
 });
 
