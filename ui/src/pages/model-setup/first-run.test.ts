@@ -25,21 +25,12 @@ async function startRedirect(
 function createConnectedContext(
   options: {
     selectedId?: string | null;
-    defaultAgentId?: string;
     modelConfigured?: boolean;
-    includeModelConfigured?: boolean;
     admin?: boolean;
-    advertised?: boolean;
   } = {},
 ) {
   const request = vi.fn();
   const replace = vi.fn();
-  const sessionDefaults = {
-    defaultAgentId: options.defaultAgentId ?? "main",
-    ...(options.includeModelConfigured === false
-      ? {}
-      : { modelConfigured: options.modelConfigured ?? false }),
-  };
   const snapshot = {
     phase: "connected" as const,
     client: { request },
@@ -48,8 +39,13 @@ function createConnectedContext(
         role: "operator",
         scopes: [options.admin === false ? "operator.read" : "operator.admin"],
       },
-      features: { methods: options.advertised === false ? [] : ["openclaw.setup.detect"] },
-      snapshot: { sessionDefaults },
+      features: { methods: ["openclaw.setup.detect"] },
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "main",
+          modelConfigured: options.modelConfigured ?? false,
+        },
+      },
     },
   };
   const context = {
@@ -111,11 +107,7 @@ describe("model setup first-run redirect", () => {
       search: "?session=agent%3Aresearch%3Atelegram%3A12345",
       hash: "",
     };
-    const canonicalLocation = {
-      pathname: "/chat/research/telegram/12345",
-      search: "",
-      hash: "",
-    };
+    const canonicalLocation = { ...defaultLanding, pathname: "/chat/research/telegram/12345" };
     let currentLocation = releasedLocation;
     const replaceLocation = vi.fn((location: typeof releasedLocation) => {
       currentLocation = location;
@@ -179,24 +171,17 @@ describe("model setup first-run redirect", () => {
   });
 
   it("settles the initial decision on a terminal stopped snapshot", async () => {
-    const phase = "stopped";
     const onInitialDecision = vi.fn();
     const context = {
       gateway: {
-        snapshot: { phase, client: null, hello: null },
+        snapshot: { phase: "stopped", client: null, hello: null },
         subscribe: () => () => undefined,
       },
       agentSelection: { state: { selectedId: "main" } },
       replace: vi.fn(),
     } as unknown as ApplicationContext;
 
-    const dispose = await startModelSetupFirstRunRedirectAfterLocation({
-      context,
-      enabled: true,
-      history: { location: () => defaultLanding, replace: () => undefined },
-      initialLocationReady: Promise.resolve(defaultLanding),
-      onInitialDecision,
-    });
+    const dispose = await startRedirect(context, defaultLanding, onInitialDecision);
 
     expect(onInitialDecision).toHaveBeenCalledOnce();
     dispose();

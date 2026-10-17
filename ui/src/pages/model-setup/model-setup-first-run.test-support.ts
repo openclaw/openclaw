@@ -1,21 +1,35 @@
 /* @vitest-environment jsdom */
 
-import { expect, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
+import type { SystemAgentSetupDetectResult, WizardNextResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
+import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import type { ModelSetupRouteData } from "./first-run-setup.ts";
-import type { ModelSetupPageState } from "./state.ts";
-import {
-  createPage,
-  mountModelSetupPage,
-  type TestModelSetupPage,
-} from "./test-helpers/solid-page.test-support.tsx";
+import { mountPage } from "./test-helpers/page.test-support.ts";
+import type { TestModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
+
+export { mountPage };
+
+export function authOption(
+  id: string,
+  label = "Provider",
+  kind: SystemAgentSetupDetectResult["authOptions"][number]["kind"] = "oauth",
+  featured = true,
+): SystemAgentSetupDetectResult["authOptions"][number] {
+  return { id, label, kind, featured };
+}
+
+export function activated(
+  modelRef: string,
+  details: Partial<NonNullable<WizardNextResult["modelActivation"]>> = {},
+) {
+  return { done: true, status: "done" as const, modelActivation: { modelRef, ...details } };
+}
 
 export const detection: SystemAgentSetupDetectResult = {
   candidates: [],
@@ -27,6 +41,41 @@ export const detection: SystemAgentSetupDetectResult = {
   workspace: "/tmp/workspace",
   setupComplete: false,
 };
+
+export function useFirstRunFixtures(privateKey: string, restoreTimers = false, session = false) {
+  beforeEach(async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    if (session) {
+      vi.stubGlobal("sessionStorage", createStorageMock());
+    }
+    localStorage.setItem("openclaw-device-identity-v1", JSON.stringify({ version: 1, privateKey }));
+    await i18n.setLocale("en");
+  });
+  afterEach(() => {
+    document.body.replaceChildren();
+    if (restoreTimers) {
+      vi.useRealTimers();
+    }
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+}
+
+export const pendingReceipt = () =>
+  localStorage.getItem("openclaw.modelSetup.pendingActivation.v1");
+
+export function mockRequests(
+  request: ReturnType<typeof createFirstRunContext>["request"],
+  handlers: Record<string, (params: unknown) => unknown>,
+) {
+  request.mockImplementation(async (method, params) => {
+    const handler = handlers[method];
+    if (!handler) {
+      throw new Error(`Unexpected method ${method}`);
+    }
+    return handler(params);
+  });
+}
 
 function mutableGatewaySnapshot(snapshot: ApplicationGateway["snapshot"]) {
   return snapshot;
@@ -141,25 +190,42 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
   };
 }
 
-export async function mountPage(
+export function mountDetection(
   context: ApplicationContext,
-  fixture: ModelSetupRouteData & {
-    state: Extract<ModelSetupPageState, { phase: "ready" }>;
-    client: GatewayBrowserClient;
-  },
+  client: GatewayBrowserClient,
+  result: Partial<SystemAgentSetupDetectResult> = {},
+  firstRun = true,
 ) {
-  const provider = createApplicationContextProvider(context);
-  const page = createPage(context);
-  // Prime inventory through the real detection boundary; the request fixture
-  // below it continues observing subsequent activation and recovery actions.
-  vi.spyOn(fixture.client, "request").mockResolvedValueOnce(fixture.state.result);
-  page.routeData = { firstRun: fixture.firstRun };
-  provider.append(page);
-  document.body.append(provider);
-  mountModelSetupPage(page);
-  await page.updateComplete;
-  await waitForFast(() => expect(page.querySelector(".model-setup__loading")).toBeNull());
-  return { page, provider };
+  return mountPage(context, {
+    client,
+    firstRun,
+    state: { phase: "ready", result: { ...detection, ...result } },
+  });
+}
+
+export function modalButton(page: ParentNode, label: string) {
+  return [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
+    (button) => button.textContent?.trim() === label,
+  );
+}
+
+export function callsFor<T extends readonly unknown[]>(
+  request: { mock: { calls: T[] } },
+  method: string,
+) {
+  return request.mock.calls.filter(([name]) => name === method);
+}
+
+export function setInput(page: ParentNode, selector: string, value: string) {
+  const input = page.querySelector<HTMLInputElement>(selector)!;
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+export async function enterManualKey(page: TestModelSetupPage, provider: string, key: string) {
+  await selectManualProvider(page, provider);
+  setInput(page, 'input[type="password"]', key);
+  page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
 }
 
 export function candidate(

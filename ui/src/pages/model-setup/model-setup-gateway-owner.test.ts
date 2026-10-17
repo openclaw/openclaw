@@ -1,17 +1,24 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { WizardNextResult } from "../../api/types.ts";
 import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
-import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { persistFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
-import { createFirstRunContext, detection } from "./model-setup-first-run.test-support.ts";
+import {
+  authOption,
+  activated,
+  useFirstRunFixtures,
+  pendingReceipt,
+  callsFor,
+  setInput,
+  createFirstRunContext,
+  detection,
+} from "./model-setup-first-run.test-support.ts";
 import {
   createPage,
   mountModelSetupPage,
@@ -19,21 +26,7 @@ import {
 } from "./test-helpers/solid-page.test-support.tsx";
 
 describe("first-run wizard ownership through the real Gateway store", () => {
-  beforeEach(async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    localStorage.setItem(
-      "openclaw-device-identity-v1",
-      JSON.stringify({ version: 1, privateKey: "synthetic-gateway-owner-device-key" }),
-    );
-    await i18n.setLocale("en");
-  });
-  afterEach(() => {
-    document.body.replaceChildren();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
+  useFirstRunFixtures("synthetic-gateway-owner-device-key", false, true);
   const ownerChanges = [
     "same target",
     "token change",
@@ -81,14 +74,7 @@ describe("first-run wizard ownership through the real Gateway store", () => {
       const answerStarted = createDeferred();
       const inventory = {
         ...detection,
-        authOptions: [
-          {
-            id: "selected-provider",
-            label: "Selected provider",
-            kind: "oauth" as const,
-            featured: true,
-          },
-        ],
+        authOptions: [authOption("selected-provider", "Selected provider")],
       };
       gateway.start();
       const original = current();
@@ -159,15 +145,13 @@ describe("first-run wizard ownership through the real Gateway store", () => {
         await waitForFast(() =>
           expect(page.querySelector("#model-setup-wizard-text-input")).not.toBeNull(),
         );
-        const input = page.querySelector<HTMLInputElement>("#model-setup-wizard-text-input")!;
-        input.value = "synthetic-provider-key";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
+        setInput(page, "#model-setup-wizard-text-input", "synthetic-provider-key");
         await page.updateComplete;
         page
           .querySelector<HTMLFormElement>("openclaw-modal-dialog form")!
           .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
         await answerStarted.promise;
-        const receipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1");
+        const receipt = pendingReceipt();
         expect(receipt).not.toBeNull();
         const originalRevision = gateway.connectionRevision;
         const originalStart = original.request.mock.calls.find(
@@ -181,7 +165,7 @@ describe("first-run wizard ownership through the real Gateway store", () => {
             kind: "provider-auth",
             modelRef: "provider/another-choice",
           });
-          replacementReceipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1");
+          replacementReceipt = pendingReceipt();
           expect(replacementReceipt).not.toBe(receipt);
         }
         // Exercise both actual client replacement and the store's socket-close
@@ -224,23 +208,19 @@ describe("first-run wizard ownership through the real Gateway store", () => {
 
         if (change === "same target") {
           await waitForFast(() => expect(page.textContent).toContain("Review selected provider"));
-          expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBe(receipt);
+          expect(pendingReceipt()).toBe(receipt);
           expect(
             replacementRequests()
               .filter(([method]) => method === "wizard.next")
               .map(([, params]) => params),
           ).toEqual([{ sessionId }]);
-          expect(
-            original.request.mock.calls.filter(([method]) => method === "wizard.cancel"),
-          ).toHaveLength(0);
+          expect(callsFor(original.request, "wizard.cancel")).toHaveLength(0);
         } else {
           await waitForFast(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
           expect(
             replacementRequests().filter(([method]) => method.startsWith("wizard.")),
           ).toHaveLength(0);
-          expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBe(
-            replacementReceipt,
-          );
+          expect(pendingReceipt()).toBe(replacementReceipt);
           if (authorityLost) {
             expect(page.textContent).toContain("operator.admin");
             expect(
@@ -248,11 +228,7 @@ describe("first-run wizard ownership through the real Gateway store", () => {
             ).toHaveLength(0);
           }
         }
-        originalAnswer.resolve({
-          done: true,
-          status: "done",
-          modelActivation: { modelRef: "provider/original" },
-        });
+        originalAnswer.resolve(activated("provider/original"));
         await waitForFast(() =>
           expect(
             original.request.mock.settledResults.filter((result) => result.type === "incomplete"),
@@ -271,14 +247,10 @@ describe("first-run wizard ownership through the real Gateway store", () => {
           ).toHaveLength(0);
         }
         if (change !== "same target") {
-          expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBe(
-            replacementReceipt,
-          );
+          expect(pendingReceipt()).toBe(replacementReceipt);
         }
         expect(context.navigate).not.toHaveBeenCalled();
-        expect(
-          original.request.mock.calls.filter(([method]) => method === "openclaw.setup.auth.start"),
-        ).toHaveLength(1);
+        expect(callsFor(original.request, "openclaw.setup.auth.start")).toHaveLength(1);
         expect(
           replacementRequests().filter(([method]) => method === "openclaw.setup.auth.start"),
         ).toHaveLength(0);

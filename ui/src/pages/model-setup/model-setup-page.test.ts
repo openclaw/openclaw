@@ -2,21 +2,26 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import {
-  createContext,
-  mountPage,
-  detection,
-  customIconUrl,
-} from "./test-helpers/page.test-support.ts";
+import { activated, authOption, mountDetection } from "./model-setup-first-run.test-support.ts";
+import { createContext, detection, customIconUrl } from "./test-helpers/page.test-support.ts";
 import {
   createPage,
   mountModelSetupPage,
   unmountModelSetupPage,
 } from "./test-helpers/solid-page.test-support.tsx";
+
+function mountSettings(
+  context: ApplicationContext,
+  client: GatewayBrowserClient,
+  result: Partial<SystemAgentSetupDetectResult> = {},
+) {
+  return mountDetection(context, client, { ...detection, ...result }, false);
+}
 
 describe("ModelSetupPage catalog icons", () => {
   beforeEach(async () => {
@@ -75,24 +80,16 @@ describe("ModelSetupPage catalog icons", () => {
     );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const { context, client } = createContext();
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          recommendedInstalls: [
-            {
-              id: "acme",
-              label: "Acme",
-              hint: "Install the Acme runtime",
-              website: "https://example.com/acme",
-              icon: customIconUrl,
-            },
-          ],
+    const { page } = await mountSettings(context, client, {
+      recommendedInstalls: [
+        {
+          id: "acme",
+          label: "Acme",
+          hint: "Install the Acme runtime",
+          website: "https://example.com/acme",
+          icon: customIconUrl,
         },
-      },
-      client,
-      firstRun: false,
+      ],
     });
 
     await waitForFast(() => {
@@ -133,11 +130,7 @@ describe("ModelSetupPage catalog icons", () => {
       }
       return {};
     });
-    const { page } = await mountPage(context, {
-      state: { phase: "ready", result: detection },
-      client,
-      firstRun: false,
-    });
+    const { page } = await mountSettings(context, client, detection);
 
     page.querySelector<HTMLButtonElement>('[data-prepare-choice="llama-cpp"] button')?.click();
 
@@ -183,33 +176,25 @@ describe("ModelSetupPage catalog icons", () => {
         order.push(method);
         config = { ...config, configuredModel: "openai/gpt-5" };
         hash = "hash-3";
-        return { done: true, status: "done", modelActivation: { modelRef: "openai/gpt-5" } };
+        return activated("openai/gpt-5");
       }
       throw new Error(`Unexpected method ${method}`);
     });
     await runtimeConfig.ensureLoaded();
     order.length = 0;
     runtimeConfig.patchForm(["pending"], true);
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          candidates: [
-            {
-              kind: "codex-cli",
-              brandId: "openai",
-              label: "Codex CLI",
-              detail: "Signed in locally",
-              modelRef: "openai/gpt-5",
-              recommended: true,
-              credentials: true,
-            },
-          ],
+    const { page } = await mountSettings(context, client, {
+      candidates: [
+        {
+          kind: "codex-cli",
+          brandId: "openai",
+          label: "Codex CLI",
+          detail: "Signed in locally",
+          modelRef: "openai/gpt-5",
+          recommended: true,
+          credentials: true,
         },
-      },
-      client,
-      firstRun: false,
+      ],
     });
 
     page.querySelector<HTMLButtonElement>('[data-candidate-kind="codex-cli"] button')?.click();
@@ -248,16 +233,8 @@ describe("ModelSetupPage catalog icons", () => {
     });
     await runtimeConfig.ensureLoaded();
     runtimeConfig.patchForm(["pending"], true);
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          authOptions: [{ id: "provider-auth", label: "Provider", kind: "oauth", featured: true }],
-        },
-      },
-      client,
-      firstRun: false,
+    const { page } = await mountSettings(context, client, {
+      authOptions: [authOption("provider-auth")],
     });
 
     page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-auth"] button')?.click();
@@ -317,16 +294,8 @@ describe("ModelSetupPage catalog icons", () => {
     });
     await runtimeConfig.ensureLoaded();
     order.length = 0;
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          authOptions: [{ id: "provider-auth", label: "Provider", kind: "oauth", featured: true }],
-        },
-      },
-      client,
-      firstRun: false,
+    const { page } = await mountSettings(context, client, {
+      authOptions: [authOption("provider-auth")],
     });
     page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-auth"] button')?.click();
     await vi.waitFor(() => expect(releaseProgress).toBeTypeOf("function"));
@@ -370,26 +339,18 @@ describe("ModelSetupPage catalog icons", () => {
         }),
       } as unknown as ApplicationContext["runtimeConfig"],
     } as ApplicationContext;
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          candidates: [
-            {
-              kind: "codex-cli",
-              brandId: "openai",
-              label: "Codex CLI",
-              detail: "Signed in locally",
-              modelRef: "openai/gpt-5",
-              recommended: true,
-              credentials: true,
-            },
-          ],
+    const { page } = await mountSettings(context, client, {
+      candidates: [
+        {
+          kind: "codex-cli",
+          brandId: "openai",
+          label: "Codex CLI",
+          detail: "Signed in locally",
+          modelRef: "openai/gpt-5",
+          recommended: true,
+          credentials: true,
         },
-      },
-      client,
-      firstRun: false,
+      ],
     });
 
     page.querySelector<HTMLButtonElement>('[data-candidate-kind="codex-cli"] button')?.click();
@@ -400,87 +361,61 @@ describe("ModelSetupPage catalog icons", () => {
     expect(replacementRequest).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      entry: "provider sign-in",
-      feedback: "restart and config refresh",
-      restart: true,
-      refreshError: "config.get failed after model commit",
-      warnings: ["Gateway restart required.", "config.get failed after model commit"],
-    },
-  ])(
-    "keeps verified $entry success visible with $feedback feedback",
-    async ({ entry, restart, refreshError, warnings }) => {
-      const { context: baseContext, client, request } = createContext();
-      const modelActivation = {
-        modelRef: "provider/verified",
-        ...(restart ? { gatewayRestartRequired: true as const } : {}),
-      };
-      request.mockImplementation(async (method) => {
-        if (method === "openclaw.setup.activate.start") {
-          return { done: true, status: "done", modelActivation };
-        }
-        if (method === "openclaw.setup.auth.start") {
-          return { sessionId: "warning-auth", done: false, status: "running" };
-        }
-        if (method === "wizard.next") {
-          return { done: true, status: "done", modelActivation };
-        }
-        throw new Error(`Unexpected method ${method}`);
-      });
-      const context = {
-        ...baseContext,
-        runtimeConfig: {
-          runExternalMutation: vi.fn(
-            async (task: (client: GatewayBrowserClient) => Promise<unknown>) => ({
-              ok: true as const,
-              value: await task(client),
-              refresh: refreshError
-                ? { ok: false as const, error: refreshError }
-                : { ok: true as const },
-            }),
-          ),
-        } as unknown as ApplicationContext["runtimeConfig"],
-      } as ApplicationContext;
-      const { page } = await mountPage(context, {
-        state: {
-          phase: "ready",
-          result: {
-            ...detection,
-            candidates: [
-              {
-                kind: "openai-api-key",
-                label: "Detected provider",
-                detail: "Available",
-                modelRef: modelActivation.modelRef,
-                recommended: true,
-                credentials: true,
-              },
-            ],
-            authOptions: [
-              { id: "provider-auth", label: "Provider", kind: "oauth", featured: true },
-            ],
-          },
+  it("keeps verified provider sign-in visible with restart and config refresh warnings", async () => {
+    const refreshError = "config.get failed after model commit";
+    const { context: baseContext, client, request } = createContext();
+    const modelActivation = {
+      modelRef: "provider/verified",
+      gatewayRestartRequired: true,
+    };
+    request.mockImplementation(async (method) => {
+      if (method === "openclaw.setup.activate.start") {
+        return { done: true, status: "done", modelActivation };
+      }
+      if (method === "openclaw.setup.auth.start") {
+        return { sessionId: "warning-auth", done: false, status: "running" };
+      }
+      if (method === "wizard.next") {
+        return { done: true, status: "done", modelActivation };
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const context = {
+      ...baseContext,
+      runtimeConfig: {
+        runExternalMutation: vi.fn(
+          async (task: (client: GatewayBrowserClient) => Promise<unknown>) => ({
+            ok: true as const,
+            value: await task(client),
+            refresh: { ok: false as const, error: refreshError },
+          }),
+        ),
+      } as unknown as ApplicationContext["runtimeConfig"],
+    } as ApplicationContext;
+    const { page } = await mountSettings(context, client, {
+      candidates: [
+        {
+          kind: "openai-api-key",
+          label: "Detected provider",
+          detail: "Available",
+          modelRef: modelActivation.modelRef,
+          recommended: true,
+          credentials: true,
         },
-        client,
-        firstRun: false,
-      });
-      const selector =
-        entry === "candidate"
-          ? '[data-candidate-kind="openai-api-key"] button'
-          : '[data-auth-choice="provider-auth"] button';
-      page.querySelector<HTMLButtonElement>(selector)?.click();
-      await waitForFast(() => {
-        expect(page.textContent).toContain("Connection verified");
-        const warning = page.querySelector(".model-setup-success__warning")?.textContent;
-        for (const expected of warnings) {
-          expect(warning).toContain(expected);
-        }
-        expect(page.textContent).not.toContain("You can start chatting now.");
-        expect(page.querySelector(".model-setup-success .btn.primary")?.textContent?.trim()).toBe(
-          "Chat",
-        );
-      });
-    },
-  );
+      ],
+      authOptions: [authOption("provider-auth")],
+    });
+    page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-auth"] button')?.click();
+    await waitForFast(() => {
+      expect(page.textContent).toContain("Connection verified");
+      const warning = page.querySelector(".model-setup-success__warning")?.textContent;
+      for (const expected of ["Gateway restart required.", refreshError]) {
+        expect(warning).toContain(expected);
+      }
+      expect(page.textContent).not.toContain("You can start chatting now.");
+      expect(page.querySelector(".model-setup-success .btn.primary")?.textContent?.trim()).toBe(
+        "Chat",
+      );
+    });
+  });
 });
