@@ -79,6 +79,10 @@ describe("gateway tool", () => {
   });
 
   it("scopes both config.get result representations to the requested path", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      hash: "hash-1",
+      config: { tools: { exec: { ask: "on-miss", security: "allowlist" } } },
+    });
     const result = await createGatewayTool().execute("call-config-get", {
       action: "config.get",
       path: "tools.exec",
