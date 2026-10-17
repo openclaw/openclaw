@@ -111,7 +111,7 @@ evidence that a previously sealed database needs another full scan.
 Existing-file integrity and schema preparation may be shared by current callers.
 Every preparation effect still requires a live caller; cancellation cannot leave
 authority behind after its last caller departs. A successor joins any pending
-request-owned native open before reusing preparation or replacing a refused worker.
+initial native open before reusing preparation or replacing a refused worker.
 
 A matching seal supplies the previously admitted facts without copying or
 inspecting the database again for startup state snapshots, readiness, schema
