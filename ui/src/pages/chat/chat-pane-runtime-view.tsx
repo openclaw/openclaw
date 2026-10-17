@@ -20,6 +20,7 @@ import { projectOwner } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
+import { chatGoalOperations } from "./chat-goals.ts";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
@@ -117,6 +118,9 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const context = runtime.context;
     const gateway = projectGateway(context.gateway);
     const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
+    // Startup attaches one host for this mounted pane's lifetime.
+    const state = runtime.readProviderReviewState();
+    const goals = state && projectOwner(chatGoalOperations(state), (owner) => owner);
     const boardProvider = createMemo(() => {
       revision();
       return runtime.subscribedBoardProvider;
@@ -181,6 +185,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         revision();
         progress.read();
         projects.read();
+        goals?.read();
         board().forEach((source) => source.read());
         i18nRevision();
         sources.forEach((source) => source?.read());
