@@ -76,32 +76,25 @@ export function registerRestoredRollbackPublicationTest({
     vi.useRealTimers();
     const now = Date.now();
     mockSingleCollectorConcurrency();
-    mockRestoredRuns(() => [
-      makeQueuedRun({
-        runId: "run-restored-stop-one",
-        childSessionIdentity: { sessionId: "one", lifecycleRevision: "revision-one" },
-        groupId: "restore-stop",
-        createdAt: now,
-      }),
-      makeQueuedRun({
-        runId: "run-restored-stop-two",
-        childSessionIdentity: { sessionId: "two", lifecycleRevision: "revision-two" },
-        groupId: "restore-stop",
-        createdAt: now + 1,
-      }),
-    ]);
-    mocks.entries = {
-      "agent:main:subagent:run-restored-stop-one": {
-        sessionId: "one",
-        lifecycleRevision: "revision-one",
-        updatedAt: now,
-      },
-      "agent:main:subagent:run-restored-stop-two": {
-        sessionId: "two",
-        lifecycleRevision: "revision-two",
-        updatedAt: now,
-      },
-    };
+    const makeRestoredRuns = () =>
+      ["one", "two"].map((sessionId, index) =>
+        makeQueuedRun({
+          runId: `run-restored-stop-${sessionId}`,
+          childSessionIdentity: { sessionId, lifecycleRevision: `revision-${sessionId}` },
+          groupId: "restore-stop",
+          createdAt: now + index,
+        }),
+      );
+    mockRestoredRuns(makeRestoredRuns);
+    mocks.entries = Object.fromEntries(
+      makeRestoredRuns().map((entry) => [
+        entry.childSessionKey,
+        {
+          ...expectDefined(entry.childSessionIdentity, "queued child identity"),
+          updatedAt: now,
+        },
+      ]),
+    );
     let agentCalls = 0;
     const dispatchedSessionKeys: unknown[] = [];
     const launchEntered = createDeferred();

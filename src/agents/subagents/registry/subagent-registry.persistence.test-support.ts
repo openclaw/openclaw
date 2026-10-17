@@ -438,11 +438,13 @@ export function registerSubagentRegistrationPersistenceTests({
   mockPendingAgentWait: () => void;
   findRequesterRun: (runId: string) => SubagentRunRecord | undefined;
 }) {
+  const diskFull = () => {
+    throw new Error("disk full");
+  };
+  const failNextWrite = () => mocks.persistRegistryRows.mockImplementationOnce(diskFull);
   it("throws and removes the entry when the initial durable registry write fails", async () => {
     const mod = getRegistry();
-    mocks.persistRegistryRows.mockImplementationOnce(() => {
-      throw new Error("disk full");
-    });
+    failNextWrite();
 
     await expect(
       mod.registerSubagentRun({
@@ -486,9 +488,7 @@ export function registerSubagentRegistrationPersistenceTests({
       task: "keep live successor tracked",
     });
     mocks.persistRegistryRows.mockClear();
-    mocks.persistRegistryRows.mockImplementation(() => {
-      throw new Error("disk full");
-    });
+    mocks.persistRegistryRows.mockImplementation(diskFull);
 
     await expect(
       mod.replaceSubagentRunAfterSteerCore({
@@ -514,9 +514,7 @@ export function registerSubagentRegistrationPersistenceTests({
     await mod.registerSubagentRun({ runId, task: "original registration" });
     const previous = findRequesterRun(runId);
     expect(previous).toBeDefined();
-    mocks.persistRegistryRows.mockImplementationOnce(() => {
-      throw new Error("disk full");
-    });
+    failNextWrite();
 
     await expect(mod.registerSubagentRun({ runId, task: "failed successor" })).rejects.toThrow(
       "disk full",
@@ -540,9 +538,7 @@ export function registerSubagentRegistrationPersistenceTests({
       suppressAnnounceReason: "killed",
       killReconciliation: { killedAt: Date.now() - 500 },
     });
-    mocks.persistRegistryRows.mockImplementationOnce(() => {
-      throw new Error("disk full");
-    });
+    failNextWrite();
 
     await expect(
       mod.registerSubagentRun({
@@ -578,9 +574,7 @@ export function registerSubagentRegistrationPersistenceTests({
       sessionEntry,
       task: "keep kill state atomic",
     });
-    mocks.persistRegistryRows.mockImplementationOnce(() => {
-      throw new Error("disk full");
-    });
+    failNextWrite();
 
     await expect(
       mod.markSubagentRunTerminated({ runId, reason: "manual kill" }),

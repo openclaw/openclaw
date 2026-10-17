@@ -121,6 +121,29 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
 describe("announce loop guard (#18264)", () => {
   let registry: typeof import("./subagent-registry.test-helpers.js");
 
+  const makeEntry = (
+    runId: string,
+    child: string,
+    sessionId: string,
+    overrides: Partial<SubagentRunRecord>,
+  ): SubagentRunRecord => ({
+    runId,
+    childSessionKey: `agent:main:subagent:${child}`,
+    childSessionIdentity: { sessionId },
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "agent:main:main",
+    task: "retry announcement",
+    cleanup: "keep",
+    createdAt: Date.now() - 30_000,
+    execution: { status: "terminal", startedAt: Date.now() - 20_000, endedAt: Date.now() - 10_000 },
+    completion: { required: false },
+    delivery: { status: "pending" },
+    ...overrides,
+  });
+
+  const restoreEntry = (entry: SubagentRunRecord) =>
+    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
+
   async function hydrateAndActivateRegistry() {
     await registry.initSubagentRegistry();
     const recoveryRuntime = {
@@ -186,26 +209,16 @@ describe("announce loop guard (#18264)", () => {
 
   test("expired entries with high retry count are skipped by resumeSubagentRun", async () => {
     const now = Date.now();
-    const entry = {
-      // Ended 10 minutes ago (well past ANNOUNCE_EXPIRY_MS of 5 min).
-      runId: "test-expired-loop",
-      childSessionKey: "agent:main:subagent:expired-child",
-      childSessionIdentity: { sessionId: "sess-expired" },
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "agent:main:main",
-      task: "expired test task",
-      cleanup: "keep" as const,
+    const entry = makeEntry("test-expired-loop", "expired-child", "sess-expired", {
       createdAt: now - 15 * 60_000,
       execution: {
-        status: "terminal" as const,
+        status: "terminal",
         startedAt: now - 14 * 60_000,
         endedAt: now - 10 * 60_000,
       },
-      cleanupCompletedAt: undefined,
-      completion: { required: false },
-      delivery: { status: "pending" as const, attemptCount: 3, lastAttemptAt: now - 9 * 60_000 },
-    };
-    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
+      delivery: { status: "pending", attemptCount: 3, lastAttemptAt: now - 9 * 60_000 },
+    });
+    restoreEntry(entry);
 
     // Initialization finalizes expired pending rows without another recipient-visible attempt.
     const beforeInit = Date.now();
@@ -237,14 +250,7 @@ describe("announce loop guard (#18264)", () => {
     mocks.runSubagentAnnounceFlow.mockResolvedValue(outcome);
 
     const now = Date.now();
-    const entry: SubagentRunRecord = {
-      runId: "test-retry-budget",
-      childSessionKey: "agent:main:subagent:retry-budget",
-      childSessionIdentity: { sessionId: "sess-retry" },
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "agent:main:main",
-      task: "retry window test",
-      cleanup: "keep",
+    const entry = makeEntry("test-retry-budget", "retry-budget", "sess-retry", {
       createdAt: now - 2 * 60_000,
       execution: {
         status: "terminal",
@@ -259,9 +265,9 @@ describe("announce loop guard (#18264)", () => {
         lastAttemptAt: now - 30_000,
         ...(restoreDelayMs ? { nextAttemptAt: now + restoreDelayMs } : {}),
       },
-    };
+    });
     await prepareSubagentRecoveryFixture(entry, { entries: sessionStore });
-    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
+    restoreEntry(entry);
 
     await hydrateAndActivateRegistry();
     if (restoreDelayMs) {
@@ -285,47 +291,19 @@ describe("announce loop guard (#18264)", () => {
       deadlineAt: entry.execution.endedAt! + 30 * 60_000,
     });
     expect(resumed.delivery!.nextAttemptAt).toBeGreaterThan(now);
-    if (outcome === "requester_turn_pending") {
-      mocks.runSubagentAnnounceFlow.mockResolvedValue("retryable");
-      await vi.advanceTimersByTimeAsync(resumed.delivery!.nextAttemptAt! - Date.now());
-      const retried = await waitForRun(entry.runId, (run) => run.delivery?.attemptCount === 4);
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
-      expect(retried.delivery?.deadlineAt).toBe(entry.execution.endedAt! + 30 * 60_000);
-    }
+    mocks.runSubagentAnnounceFlow.mockResolvedValue("retryable");
+    await vi.advanceTimersByTimeAsync(resumed.delivery!.nextAttemptAt! - Date.now());
+    const retried = await waitForRun(entry.runId, (run) => run.delivery?.attemptCount === 4);
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+    expect(retried.delivery?.deadlineAt).toBe(entry.execution.endedAt! + 30 * 60_000);
   });
 
   test("announce rejection resets cleanupHandled so retries can resume", async () => {
     mocks.runSubagentAnnounceFlow.mockRejectedValueOnce(new Error("announce failed"));
 
-    const now = Date.now();
     const runId = "test-announce-rejection";
-    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(
-      new Map([
-        [
-          runId,
-          {
-            runId,
-            childSessionKey: "agent:main:subagent:child-1",
-            childSessionIdentity: { sessionId: "sess-child-1" },
-            requesterSessionKey: "agent:main:main",
-            requesterDisplayKey: "agent:main:main",
-            task: "rejection test",
-            cleanup: "keep" as const,
-            createdAt: now - 30_000,
-            execution: {
-              status: "terminal" as const,
-              startedAt: now - 20_000,
-              endedAt: now - 10_000,
-            },
-            cleanupHandled: false,
-            completion: { required: false },
-            delivery: { status: "pending" as const },
-          },
-        ],
-      ]),
-    );
-
-    const entry = mocks.loadSubagentRegistryFromSqlite().get(runId)!;
+    const entry = makeEntry(runId, "child-1", "sess-child-1", { cleanupHandled: false });
+    restoreEntry(entry);
     await prepareSubagentRecoveryFixture(entry, { entries: sessionStore });
 
     await hydrateAndActivateRegistry();

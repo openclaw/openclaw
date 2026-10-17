@@ -244,6 +244,12 @@ export function registerRequesterWakeReceiptBoundaryTests({
     onReceiptsHeld(holds.releaseAll);
     return holds;
   };
+  const expectDelivered = (entry: SubagentRunRecord | undefined) => {
+    expect(entry).toMatchObject({ delivery: { status: "delivered" } });
+    expect(entry?.requesterSettleWake).toBeUndefined();
+  };
+  const expectPublication = (publication: Promise<unknown>) =>
+    expect(publication).resolves.toEqual({ applied: true, publication: "published" });
   it.each<{
     name: string;
     rejectRequesterWake?: boolean;
@@ -397,10 +403,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
         );
         try {
           heldReceipts.transition.release.resolve();
-          await expect(heldReceipts.publications.transition.promise).resolves.toEqual({
-            applied: true,
-            publication: "published",
-          });
+          await expectPublication(heldReceipts.publications.transition.promise);
           await successor;
           if (receiptReplacement) {
             expect(planSuccessor).toHaveBeenCalledOnce();
@@ -481,11 +484,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
       );
     }
     for (const child of [alpha, beta]) {
-      const entry = registry.getSubagentRunByRunId(child.runId);
-      expect(entry).toMatchObject({
-        delivery: { status: "delivered" },
-      });
-      expect(entry?.requesterSettleWake).toBeUndefined();
+      expectDelivered(registry.getSubagentRunByRunId(child.runId));
     }
 
     releaseAgentCall(beta.childSessionKey);
@@ -581,10 +580,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
           expect(registry.getSubagentRunByRunId(runId)).toBeUndefined();
           expect(getGatewayContextResolver(entry)).toBeDefined();
         } else {
-          await expect(held.publications.complete.promise).resolves.toEqual({
-            applied: true,
-            publication: "published",
-          });
+          await expectPublication(held.publications.complete.promise);
         }
         if (change !== "unchanged") {
           database.db.exec(
@@ -595,10 +591,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
           await vi.advanceTimersByTimeAsync(30_000);
           await held.reconcile.entered.promise;
           held.reconcile.release.resolve();
-          await expect(held.publications.reconcile.promise).resolves.toEqual({
-            applied: true,
-            publication: "published",
-          });
+          await expectPublication(held.publications.reconcile.promise);
           database.db.exec("DROP TRIGGER reject_quiet_retirement_replay");
           replayTrigger = false;
         }
