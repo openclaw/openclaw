@@ -105,7 +105,15 @@ export type MenuProps = {
   triggerClass?: JSX.ClassValue;
   triggerAttributes?: Pick<
     JSX.ButtonHTMLAttributes<HTMLButtonElement>,
-    "title" | "style" | "tabindex" | "aria-hidden" | "aria-keyshortcuts" | "aria-busy" | "value"
+    | "title"
+    | "style"
+    | "tabindex"
+    | "aria-hidden"
+    | "aria-keyshortcuts"
+    | "aria-busy"
+    | "value"
+    | "onPointerEnter"
+    | "onFocus"
   > & {
     /** Stable for this mount, like the menu id. */
     id?: string;

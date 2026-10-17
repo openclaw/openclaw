@@ -1,4 +1,4 @@
-import { Show, createMemo, createUniqueId } from "solid-js";
+import { Show, createMemo, createUniqueId, mapArray, merge } from "solid-js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { readPanelHostedTabs, type PanelHostedTab } from "../../../components/panel-hosted-tabs.ts";
 import {
@@ -97,20 +97,34 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
   const id = createUniqueId();
   const openSlots = () =>
     new Set((props.layout.columns[0]?.panels ?? []).map((panel) => panel.slot));
-  const items = createMemo<MenuItem[]>(() =>
-    props.panelDefinitions
-      .filter(
-        (type) =>
-          type.available &&
-          (HOSTED_TAB_REQUESTS.some(([slot]) => slot === type.slot) || !openSlots().has(type.slot)),
-      )
-      .map((type) => ({
-        id: type.slot,
-        label: type.label,
-        class: "side-panel-type-menu__item session-menu__item",
-        content: <PanelTypeOption type={type} />,
-      })),
+  const types = () =>
+    props.panelDefinitions.filter(
+      (type) =>
+        type.available &&
+        (HOSTED_TAB_REQUESTS.some(([slot]) => slot === type.slot) || !openSlots().has(type.slot)),
+    );
+  const entries = createMemo(
+    () =>
+      mapArray(
+        types,
+        (current): MenuItem => {
+          const type = merge(current);
+          return {
+            get id() {
+              return type.slot;
+            },
+            get label() {
+              return type.label;
+            },
+            class: "side-panel-type-menu__item session-menu__item",
+            content: <PanelTypeOption type={type} />,
+          };
+        },
+        { keyed: (type) => type.slot },
+      ),
+    { lazy: true },
   );
+  const items = createMemo(() => entries()(), { lazy: true });
   return (
     <Menu
       lazy

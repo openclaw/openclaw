@@ -103,6 +103,90 @@ async function mount(props: ChatSessionSharingProps, open = true) {
 }
 
 describe("chat session sharing menu", () => {
+  it("prepares on trigger intent without following closed-menu updates", async () => {
+    const idle = new Map<number, IdleRequestCallback>();
+    let nextIdle = 0;
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
+      idle.set(++nextIdle, callback);
+      return nextIdle;
+    });
+    vi.stubGlobal("cancelIdleCallback", (id: number) => idle.delete(id));
+    const readAvatar = vi.fn(() => undefined);
+    const onOpen = vi.fn();
+    const sharing = (label: string) =>
+      renderSharing({
+        onOpen,
+        state: {
+          loading: false,
+          result: {
+            sessionKey: "agent:main:main",
+            members: [],
+            role: "owner",
+            allowedVisibilities: ["shared", "read-only"],
+            identities: [
+              {
+                type: "human",
+                id: "alice",
+                label,
+                get avatarUrl() {
+                  return readAvatar();
+                },
+              },
+            ],
+          },
+        },
+      });
+    try {
+      const root = await mount(sharing("Alice"), false);
+      const trigger = root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")!;
+      expect(readAvatar).not.toHaveBeenCalled();
+      expect(idle.size).toBe(0);
+      trigger.dispatchEvent(new Event("pointerenter"));
+      flush();
+      vi.advanceTimersToNextFrame();
+      vi.advanceTimersToNextFrame();
+      while (idle.size) {
+        const [id, callback] = idle.entries().next().value!;
+        idle.delete(id);
+        callback({ didTimeout: false, timeRemaining: () => 50 });
+        flush();
+      }
+      expect(readAvatar).toHaveBeenCalled();
+      expect(onOpen).not.toHaveBeenCalled();
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      const preparedReads = readAvatar.mock.calls.length;
+      render(sharing("Alice updated"), root);
+      trigger.dispatchEvent(new Event("pointerenter"));
+      flush();
+      expect(readAvatar).toHaveBeenCalledTimes(preparedReads);
+      expect(idle.size).toBe(0);
+      expect(root.querySelector('[data-value="member:alice"]')?.textContent).toContain("Alice");
+      expect(root.querySelector('[data-value="member:alice"]')?.textContent).not.toContain(
+        "updated",
+      );
+      vi.useRealTimers();
+      const panel = root.querySelector<HTMLElement>(".chat-pane__sharing-panel")!;
+      const nativeShow = panel.showPopover.bind(panel);
+      const show = vi.spyOn(panel, "showPopover").mockImplementation(() => {
+        expect(root.querySelector('[data-value="member:alice"]')?.textContent).toContain(
+          "Alice updated",
+        );
+        nativeShow();
+      });
+      await openMenu(root);
+      expect(show).toHaveBeenCalledOnce();
+      show.mockRestore();
+      expect(root.querySelector('[data-value="member:alice"]')?.textContent).toContain(
+        "Alice updated",
+      );
+      expect(onOpen).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("reads people only on opening and retains the latest member rows across reopening", async () => {
     const onOpen = vi.fn();
     const readAvatar = vi.fn(() => undefined);
