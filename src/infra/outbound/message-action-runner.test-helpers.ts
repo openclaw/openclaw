@@ -28,6 +28,7 @@ const runnerMocks = vi.hoisted(() => ({
   executePollAction: vi.fn(),
   hasCorePresentationDelivery: vi.fn(),
   materializeMessagePresentationFallback: vi.fn(),
+  mirrorPluginHandledDelivery: vi.fn(async () => {}),
   callGateway: vi.fn(),
   callGatewayLeastPrivilege: vi.fn(),
   isGatewayTransportError: vi.fn(),
@@ -56,6 +57,7 @@ vi.mock("./outbound-send-service.js", () => ({
   executePollAction: runnerMocks.executePollAction,
   hasCorePresentationDelivery: runnerMocks.hasCorePresentationDelivery,
   materializeMessagePresentationFallback: runnerMocks.materializeMessagePresentationFallback,
+  mirrorPluginHandledDelivery: runnerMocks.mirrorPluginHandledDelivery,
 }));
 
 // mock-isolation: Control Gateway outcomes without opening a live connection.
@@ -317,6 +319,7 @@ export function resetMessageActionRunnerMocks() {
     (outbound?: { sendPayload?: unknown; sendText?: unknown; sendFormattedText?: unknown }) =>
       Boolean(outbound?.sendPayload || outbound?.sendText || outbound?.sendFormattedText),
   );
+  resetMock(mocks.mirrorPluginHandledDelivery, async () => {});
   resetMock(
     mocks.materializeMessagePresentationFallback,
     (params: { payload: { presentation?: unknown; text?: string }; text?: string }) => {

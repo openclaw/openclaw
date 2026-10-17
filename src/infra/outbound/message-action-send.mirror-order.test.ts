@@ -163,7 +163,7 @@ describe("outbound mirror route ordering", () => {
           request: gatewayRequest,
         },
       });
-    const mirroredContents = (sessionKey: string) => {
+    const transcriptEvents = (sessionKey: string) => {
       const entry = loadExactSessionEntry({ ...transcriptScope(), sessionKey })?.entry;
       if (!entry?.sessionId) {
         return [];
@@ -172,7 +172,7 @@ describe("outbound mirror route ordering", () => {
         ...transcriptScope(),
         sessionKey,
         sessionId: entry.sessionId,
-      }).flatMap((event) => (event.type === "message" ? [event.message.content] : []));
+      });
     };
 
     beforeEach(() => {
@@ -192,8 +192,15 @@ describe("outbound mirror route ordering", () => {
       expect(result.handledBy).toBe("plugin");
       expect(gatewayRequest).toHaveBeenCalledOnce();
       expect(handleAction).not.toHaveBeenCalled();
-      expect(mirroredContents(OTHER_SESSION_KEY)).toEqual([
-        [{ type: "text", text: "card details" }],
+      const messages = transcriptEvents(OTHER_SESSION_KEY).filter((event) =>
+        expect.objectContaining({ type: "message" }).asymmetricMatch(event),
+      );
+      expect(messages).toEqual([
+        expect.objectContaining({
+          message: expect.objectContaining({
+            content: [{ type: "text", text: "card details" }],
+          }),
+        }),
       ]);
     });
 
@@ -201,7 +208,9 @@ describe("outbound mirror route ordering", () => {
       await sendViaGateway(OTHER_SESSION_KEY);
 
       expect(gatewayRequest).toHaveBeenCalledOnce();
-      expect(mirroredContents(OTHER_SESSION_KEY)).toEqual([]);
+      expect(transcriptEvents(OTHER_SESSION_KEY)).not.toContainEqual(
+        expect.objectContaining({ type: "message" }),
+      );
     });
   });
 
