@@ -44,43 +44,36 @@ function writeJson(file: string, value: unknown) {
   fs.writeFileSync(file, JSON.stringify(value) + "\n");
 }
 
+function pluginConfig(
+  id: string,
+  root?: string,
+  entry: { enabled: boolean; config?: Record<string, unknown> } = { enabled: true },
+): OpenClawConfig {
+  return { plugins: { ...(root ? { load: { paths: [root] } } : {}), entries: { [id]: entry } } };
+}
+
 function writePlugin(
   root: string,
   id: string,
-  sessions = false,
-  name = `@openclaw/${id}`,
-  version = "0.0.0-test",
+  actions: ActionFixture[],
+  sessionIds?: string[],
+  packageInfo = { name: `@openclaw/${id}`, version: "0.0.0-test" },
 ) {
+  fs.mkdirSync(root, { recursive: true });
   writeJson(path.join(root, "openclaw.plugin.json"), {
     id,
     configSchema: {},
     doctorContract: {
       stateMigrations: true,
-      ...(sessions ? { resolveSessionStoreAgentIds: true } : {}),
+      ...(sessionIds ? { resolveSessionStoreAgentIds: true } : {}),
     },
   });
   writeJson(path.join(root, "package.json"), {
-    name,
-    version,
+    ...packageInfo,
     type: "commonjs",
     openclaw: { extensions: ["./index.cjs"] },
   });
   fs.writeFileSync(path.join(root, "index.cjs"), "module.exports = {};\n");
-}
-
-type ActionFixture = [
-  id: string,
-  marker: string,
-  change: string,
-  options?: {
-    content?: string;
-    pending?: "always" | "present";
-    remove?: boolean;
-    doctorOnly?: boolean;
-    phase?: "after-session-repair";
-  },
-];
-function writeActions(root: string, actions: ActionFixture[], sessionIds?: string[]) {
   fs.writeFileSync(
     path.join(root, "doctor-contract-api.cjs"),
     `const fs = require("node:fs");
@@ -96,15 +89,20 @@ module.exports = { stateMigrations: ${JSON.stringify(actions)}.map(([id, marker,
   );
 }
 
+type ActionFixture = [
+  id: string,
+  marker: string,
+  change: string,
+  options?: {
+    content?: string;
+    pending?: "always" | "present";
+    remove?: boolean;
+    doctorOnly?: boolean;
+    phase?: "after-session-repair";
+  },
+];
+
 const tempDirs = createTrackedTempDirs();
-const discoveryDefaults = {
-  phase: undefined,
-  legacyRoot: false,
-  fromInstallIndex: false,
-  direct: false,
-  legacySchema: false,
-  excludeDoctorOnly: false,
-};
 
 async function makeFixture() {
   const root = await tempDirs.make("openclaw-doctor-caller-execution-");
@@ -131,105 +129,90 @@ afterEach(async () => {
 });
 
 describe("legacy state migration caller plugin execution", () => {
+  const orderedIds = ["first-action", "second-action"];
   it.each([
-    {
-      name: "reordered exports with only the second action pending",
-      manifestIds: ["first-action", "second-action"],
-      runtimeIds: ["second-action", "first-action"],
-      pendingIds: ["second-action"],
-      refused: true,
-    },
-
-    {
-      name: "missing exports with no pending preview",
-      manifestIds: ["first-action"],
-      runtimeIds: [],
-      pendingIds: [],
-      refused: true,
-    },
-    {
-      name: "matching exports with only the second action pending",
-      manifestIds: ["first-action", "second-action"],
-      runtimeIds: ["first-action", "second-action"],
-      pendingIds: ["second-action"],
-      refused: false,
-    },
-  ])("validates runtime plugin $name against the immutable manifest order", async (testCase) => {
-    const fixture = await makeFixture();
-    const candidateRoot = path.join(fixture.root, "surprise-candidate");
-    const bundledRoot = path.join(candidateRoot, "extensions");
-    const pluginRoot = path.join(bundledRoot, "surprise-owner");
-    const mutationPath = path.join(fixture.root, "unplanned-migration-ran");
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
-      id: "surprise-owner",
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-      doctorContract: {
-        stateMigrations: testCase.manifestIds.map((id) => ({ id })),
-      },
-    });
-    fs.writeFileSync(
-      path.join(pluginRoot, "index.ts"),
-      'export default { id: "surprise-owner", name: "Surprise owner", register() {} };\n',
-    );
-    fs.writeFileSync(
-      path.join(pluginRoot, "doctor-contract-api.ts"),
-      `import fs from "node:fs";
-export const stateMigrations = ${JSON.stringify(testCase.runtimeIds)}.map((id) => ({
+    ["reordered", orderedIds, orderedIds.toReversed(), ["second-action"], true],
+    ["missing", ["first-action"], [], [], true],
+    ["matching", orderedIds, orderedIds, ["second-action"], false],
+  ] as const)(
+    "validates %s runtime exports against the immutable manifest order",
+    async (_name, manifestIds, runtimeIds, pendingIds, refused) => {
+      const fixture = await makeFixture();
+      const candidateRoot = path.join(fixture.root, "surprise-candidate");
+      const bundledRoot = path.join(candidateRoot, "extensions");
+      const pluginRoot = path.join(bundledRoot, "surprise-owner");
+      const mutationPath = path.join(fixture.root, "unplanned-migration-ran");
+      fs.mkdirSync(pluginRoot, { recursive: true });
+      writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+        id: "surprise-owner",
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+        doctorContract: {
+          stateMigrations: manifestIds.map((id) => ({ id })),
+        },
+      });
+      fs.writeFileSync(
+        path.join(pluginRoot, "index.ts"),
+        'export default { id: "surprise-owner", name: "Surprise owner", register() {} };\n',
+      );
+      fs.writeFileSync(
+        path.join(pluginRoot, "doctor-contract-api.ts"),
+        `import fs from "node:fs";
+export const stateMigrations = ${JSON.stringify(runtimeIds)}.map((id) => ({
   id,
   label: id,
-  detectLegacyState: () => ${JSON.stringify(testCase.pendingIds)}.includes(id) ? { preview: [id + " pending"] } : null,
+  detectLegacyState: () => ${JSON.stringify(pendingIds)}.includes(id) ? { preview: [id + " pending"] } : null,
   migrateLegacyState: () => {
     fs.appendFileSync(${JSON.stringify(mutationPath)}, id + "\\n");
     return { changes: [id + " migrated"], warnings: [] };
   },
 }));
 `,
-    );
-    fixture.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
+      );
+      fixture.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
 
-    const plan = await fixture.plan({ candidate: { root: candidateRoot, version: "test" } });
-    const plannedSources = testCase.manifestIds.map((id) => ({
-      kind: "owner",
-      id: `plugin:surprise-owner:${id}`,
-    }));
-    expect(plan.steps.find((step) => step.refusal !== undefined)).toMatchObject({
-      id: "skill-workshop",
-      outcome: "deferred",
-      refusal: { code: "skill-workshop-planning-deferred" },
-    });
-    expect(byId(plan.steps, "plugin-doctor-state")).toMatchObject({
-      source: plannedSources,
-      outcome: "deferred",
-      refusal: { code: "blocked-by-prior-refusal" },
-    });
+      const plan = await fixture.plan({ candidate: { root: candidateRoot, version: "test" } });
+      const plannedSources = manifestIds.map((id) => ({
+        kind: "owner",
+        id: `plugin:surprise-owner:${id}`,
+      }));
+      expect(plan.steps.find((step) => step.refusal !== undefined)).toMatchObject({
+        id: "skill-workshop",
+        outcome: "deferred",
+        refusal: { code: "skill-workshop-planning-deferred" },
+      });
+      expect(byId(plan.steps, "plugin-doctor-state")).toMatchObject({
+        source: plannedSources,
+        outcome: "deferred",
+        refusal: { code: "blocked-by-prior-refusal" },
+      });
 
-    const result = await fixture.migrate({});
+      const result = await fixture.migrate({});
 
-    if (!testCase.refused) {
+      if (!refused) {
+        expect(byId(result.stepReceipts, "plugin-doctor-state")).toMatchObject({
+          source: plannedSources,
+          outcome: "completed",
+          changes: ["second-action migrated"],
+          warnings: [],
+        });
+        expect(fs.readFileSync(mutationPath, "utf8")).toBe("second-action\n");
+        return;
+      }
       expect(byId(result.stepReceipts, "plugin-doctor-state")).toMatchObject({
         source: plannedSources,
-        outcome: "completed",
-        changes: ["second-action migrated"],
-        warnings: [],
+        outcome: "refused",
+        refusal: { code: "step-refused" },
+        warnings: [expect.stringContaining("immutable action order")],
       });
-      expect(fs.readFileSync(mutationPath, "utf8")).toBe("second-action\n");
-      return;
-    }
-    expect(byId(result.stepReceipts, "plugin-doctor-state")).toMatchObject({
-      source: plannedSources,
-      outcome: "refused",
-      refusal: { code: "step-refused" },
-      warnings: [expect.stringContaining("immutable action order")],
-    });
-    expectBlockedTailInPlanOrder({
-      plan,
-      receipts: result.stepReceipts,
-      blockerId: "plugin-doctor-state",
-    });
-    expectPlanReceiptDescriptorsToMatch({ plan, receipts: result.stepReceipts });
-    expect(fs.existsSync(mutationPath)).toBe(false);
-  });
+      expectBlockedTailInPlanOrder({
+        plan,
+        receipts: result.stepReceipts,
+        blockerId: "plugin-doctor-state",
+      });
+      expectPlanReceiptDescriptorsToMatch({ plan, receipts: result.stepReceipts });
+      expect(fs.existsSync(mutationPath)).toBe(false);
+    },
+  );
 
   it("continues to post-session repairs after quarantining a legacy agent collision in live Doctor", async () => {
     const fixture = await makeFixture();
@@ -239,14 +222,13 @@ export const stateMigrations = ${JSON.stringify(testCase.runtimeIds)}.map((id) =
     const postSessionPath = path.join(fixture.stateDir, "external-plugin-session-migrated");
     const legacyAgentDir = path.join(fixture.stateDir, "agent");
     fixture.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
-    fs.mkdirSync(pluginRoot);
     writeFixtureFile(path.join(legacyAgentDir, "settings.json"), "{}\n");
     writeFixtureFile(path.join(legacyAgentDir, "bin", "rg"), "legacy binary");
     const targetBin = path.join(fixture.stateDir, "agents", "main", "agent", "bin");
     writeFixtureFile(path.join(targetBin, "rg"), "current binary");
-    writePlugin(pluginRoot, pluginId, true);
-    writeActions(
+    writePlugin(
       pluginRoot,
+      pluginId,
       [
         [
           "external-state",
@@ -263,12 +245,9 @@ export const stateMigrations = ${JSON.stringify(testCase.runtimeIds)}.map((id) =
       ],
       ["voice"],
     );
-    const cfg: OpenClawConfig = {
+    const cfg = {
+      ...pluginConfig(pluginId, pluginRoot),
       agents: { entries: { main: {} } },
-      plugins: {
-        load: { paths: [pluginRoot] },
-        entries: { [pluginId]: { enabled: true } },
-      },
     };
     writeJson(fixture.configPath, cfg);
     clearPluginDoctorContractRegistryCache();
@@ -327,18 +306,15 @@ export const stateMigrations = ${JSON.stringify(testCase.runtimeIds)}.map((id) =
   });
 
   it.each([
-    { ...discoveryDefaults, legacyRoot: true, fromInstallIndex: true },
-    {
-      ...discoveryDefaults,
-      phase: "after-session-repair" as const,
-      legacyRoot: true,
-    },
-    { ...discoveryDefaults, direct: true },
-    { ...discoveryDefaults, fromInstallIndex: true, direct: true, legacySchema: true },
-    { ...discoveryDefaults, fromInstallIndex: true, direct: true, excludeDoctorOnly: true },
-  ])(
-    "discovers live plugin actions across state root and schema preparation (legacy root: $legacyRoot, phase: $phase, indexed: $fromInstallIndex, direct: $direct, legacy schema: $legacySchema, ordinary-only: $excludeDoctorOnly)",
-    async ({ phase, legacyRoot, fromInstallIndex, direct, legacySchema, excludeDoctorOnly }) => {
+    // legacy root, install index, phase, direct entry, old schema, ordinary-only
+    [true, true, undefined, false, false, false],
+    [true, false, "after-session-repair", false, false, false],
+    [false, false, undefined, true, false, false],
+    [false, true, undefined, true, true, false],
+    [false, true, undefined, true, false, true],
+  ] as const)(
+    "discovers live actions: legacy=%s indexed=%s phase=%s direct=%s old-schema=%s ordinary-only=%s",
+    async (legacyRoot, fromInstallIndex, phase, direct, legacySchema, excludeDoctorOnly) => {
       const fixture = await makeFixture();
       // This execution fixture has no candidate package. Its config-root plugin directory
       // must contain only the live owner, not makeFixture's copied-plan bundled tree.
@@ -353,7 +329,6 @@ export const stateMigrations = ${JSON.stringify(testCase.runtimeIds)}.map((id) =
       const markerPath = path.join(fixture.root, "relocated-action-ran");
       const doctorOnlyMarkerPath = path.join(fixture.root, "doctor-only-action-ran");
       fs.mkdirSync(legacyStateDir, { recursive: true });
-      fs.mkdirSync(pluginRoot, { recursive: true });
       const installRecords = {
         [pluginId]: { source: "path" as const, sourcePath: pluginRoot, installPath: pluginRoot },
       };
@@ -374,7 +349,6 @@ export const stateMigrations = ${JSON.stringify(testCase.runtimeIds)}.map((id) =
         );
         await closeOpenClawStateDatabaseAsync();
       }
-      writePlugin(pluginRoot, pluginId);
       const actions: ActionFixture[] = [
         ["relocated-action", markerPath, "migrated relocated action", { phase }],
       ];
@@ -390,10 +364,10 @@ export const stateMigrations = ${JSON.stringify(testCase.runtimeIds)}.map((id) =
           },
         ]);
       }
-      writeActions(pluginRoot, actions);
-      const cfg: OpenClawConfig = {
+      writePlugin(pluginRoot, pluginId, actions);
+      const cfg = {
+        ...pluginConfig(pluginId),
         agents: { entries: { main: {} } },
-        plugins: { entries: { [pluginId]: { enabled: true } } },
       };
       writeJson(legacyRoot ? path.join(legacyStateDir, "openclaw.json") : fixture.configPath, cfg);
       const env: NodeJS.ProcessEnv = {
@@ -418,12 +392,10 @@ export const stateMigrations = ${JSON.stringify(testCase.runtimeIds)}.map((id) =
               "utf8",
             ),
           );
-          database.exec("PRAGMA user_version = 1;");
-          database
-            .prepare(
-              "INSERT INTO schema_meta VALUES ('primary', 'global', 1, NULL, '2026.7.35', 1, 1)",
-            )
-            .run();
+          database.exec(`
+            PRAGMA user_version = 1;
+            INSERT INTO schema_meta VALUES ('primary', 'global', 1, NULL, '2026.7.35', 1, 1);
+          `);
           database
             .prepare(`
             INSERT INTO installed_plugin_index (
@@ -517,18 +489,16 @@ export const stateMigrations = ${JSON.stringify(testCase.runtimeIds)}.map((id) =
     const pluginId = "paused-owner";
     const pluginRoot = path.join(fixture.root, pluginId);
     const sourcePath = path.join(fixture.stateDir, "pending-owner-source.json");
-    fs.mkdirSync(pluginRoot);
     fs.writeFileSync(sourcePath, '{"retained":true}\n');
-    writePlugin(pluginRoot, pluginId, false, "@example/paused-owner", "1.0.0");
-    writeActions(pluginRoot, [
-      ["pending-source", sourcePath, "source migrated", { pending: "present", remove: true }],
-    ]);
-    const cfg: OpenClawConfig = {
-      plugins: {
-        load: { paths: [pluginRoot] },
-        entries: { [pluginId]: { enabled: true, config: { legacyRoot: sourcePath } } },
-      },
-    };
+    writePlugin(
+      pluginRoot,
+      pluginId,
+      [["pending-source", sourcePath, "source migrated", { pending: "present", remove: true }]],
+      undefined,
+      { name: "@example/paused-owner", version: "1.0.0" },
+    );
+    const settings = { legacyRoot: sourcePath };
+    const cfg = pluginConfig(pluginId, pluginRoot, { enabled: true, config: settings });
     fs.writeFileSync(fixture.configPath, JSON.stringify(cfg));
     const pending = {
       pluginId,
@@ -544,13 +514,7 @@ export const stateMigrations = ${JSON.stringify(testCase.runtimeIds)}.map((id) =
       legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     });
     expect(detected.pluginPlans?.hasLegacy).toBe(true);
-    const disabledConfig: OpenClawConfig = {
-      ...cfg,
-      plugins: {
-        ...cfg.plugins,
-        entries: { [pluginId]: { enabled: false, config: { legacyRoot: sourcePath } } },
-      },
-    };
+    const disabledConfig = pluginConfig(pluginId, pluginRoot, { enabled: false, config: settings });
     fs.writeFileSync(fixture.configPath, JSON.stringify(disabledConfig));
     const migrate = (config: OpenClawConfig) =>
       runLegacyStateMigrations({
@@ -579,13 +543,10 @@ export const stateMigrations = ${JSON.stringify(testCase.runtimeIds)}.map((id) =
 
   it("defers a dynamic bundled session-store owner without loading its contract in copied planning", async () => {
     const fixture = await makeFixture();
-    const cfg: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "voice-call": { enabled: true, config: { agentId: "voice" } },
-        },
-      },
-    };
+    const cfg = pluginConfig("voice-call", undefined, {
+      enabled: true,
+      config: { agentId: "voice" },
+    });
     writeJson(fixture.configPath, cfg);
     const pluginLoader = vi
       .spyOn(pluginSetupModule, "getPluginSetupModuleLoader")

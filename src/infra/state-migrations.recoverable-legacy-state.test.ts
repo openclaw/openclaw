@@ -37,13 +37,11 @@ import type { MigrationMessages } from "./state-migrations.types.js";
 const receiptName = ".legacy-agent-dir-migration.json";
 const agentConfig = { agents: { entries: { main: {} } }, plugins: { enabled: false } };
 
-async function expectFile(file: string, contents: string) {
-  await expect(fs.readFile(file, "utf8")).resolves.toBe(contents);
-}
+const expectFile = (file: string, contents: string) =>
+  expect(fs.readFile(file, "utf8")).resolves.toBe(contents);
 
-async function expectMissing(file: string) {
-  await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
-}
+const expectMissing = (file: string) =>
+  expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
 
 async function writeFiles(root: string, files: Record<string, string>) {
   for (const [relative, contents] of Object.entries(files)) {
@@ -59,29 +57,38 @@ async function expectFiles(root: string, files: Record<string, string>) {
   }
 }
 
-function withAgentState(
+const withAgentState = (
   run: (state: OpenClawTestState) => Promise<void>,
   layout?: "home" | "split",
-) {
-  return withOpenClawTestState({ label: "legacy-agent", agentEnv: "clear", layout }, run);
+) => withOpenClawTestState({ label: "legacy-agent", agentEnv: "clear", layout }, run);
+
+async function standaloneAgent(state: OpenClawTestState) {
+  const legacyDir = state.statePath("agent");
+  const canonicalDir = state.agentDir();
+  await state.writeText("agent/bin/fd", "legacy binary");
+  await fs.mkdir(canonicalDir, { recursive: true });
+  const receipt = {
+    version: 1,
+    source: await fs.realpath(legacyDir),
+    target: await fs.realpath(canonicalDir),
+  };
+  return { legacyDir, canonicalDir, receipt };
 }
 
-function detectAgentState(
+const detectAgentState = (
   state: { env: NodeJS.ProcessEnv },
   cfg: Parameters<typeof detectLegacyStateMigrations>[0]["cfg"] = { agents: agentConfig.agents },
   homedir?: () => string,
-) {
-  return detectLegacyStateMigrations({
+) =>
+  detectLegacyStateMigrations({
     cfg,
     env: state.env,
     homedir,
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
   });
-}
 
-async function listQuarantines(stateDir: string) {
-  return (await fs.readdir(stateDir)).filter((name) => name.startsWith("agent.legacy-"));
-}
+const listQuarantines = async (stateDir: string) =>
+  (await fs.readdir(stateDir)).filter((name) => name.startsWith("agent.legacy-"));
 
 async function onlyQuarantine(stateDir: string) {
   const quarantines = await listQuarantines(stateDir);
@@ -89,14 +96,22 @@ async function onlyQuarantine(stateDir: string) {
   return path.join(stateDir, expectDefined(quarantines[0], "quarantine"));
 }
 
-function failUnlink(source: string, message: string) {
-  const unlink = fsSync.unlinkSync;
-  vi.spyOn(fsSync, "unlinkSync").mockImplementation((target) => {
-    if (target === source) {
+function failOnSource<Args extends unknown[]>(
+  original: (...args: Args) => void,
+  source: Args[0],
+  message: string,
+) {
+  return (...args: Args) => {
+    if (args[0] === source) {
       throw new Error(message);
     }
-    unlink(target);
-  });
+    original(...args);
+  };
+}
+
+function failUnlink(source: string, message: string) {
+  const unlink = failOnSource(fsSync.unlinkSync, source, message);
+  vi.spyOn(fsSync, "unlinkSync").mockImplementation(unlink);
 }
 
 function walRows(file: string) {
@@ -108,9 +123,8 @@ function walRows(file: string) {
   }
 }
 
-function expectWarning(result: MigrationMessages, text: string) {
+const expectWarning = (result: MigrationMessages, text: string) =>
   expect(result.warnings).toContainEqual(expect.stringContaining(text));
-}
 
 function migrationReceipt(id: string, result: MigrationMessages) {
   return createLegacyStateMigrationStepReceipt(
@@ -133,8 +147,8 @@ afterEach(() => {
 
 it.each([false, true])(
   "keeps Discord cache cleanup advisory with retired state=%s",
-  async (retiredState) => {
-    await withOpenClawTestState({ label: "discord-cache-cleanup" }, async ({ stateDir, env }) => {
+  (retiredState) =>
+    withOpenClawTestState({ label: "discord-cache-cleanup" }, async ({ stateDir, env }) => {
       const discordDir = path.join(stateDir, "discord");
       const sourcePath = path.join(discordDir, "command-deploy-cache.json");
       const retiredPath = path.join(discordDir, "thread-bindings.json");
@@ -198,12 +212,11 @@ it.each([false, true])(
         expect((await migrate()).flatMap((receipt) => receipt.warnings)).toEqual([]);
         await expectMissing(sourcePath);
       }
-    });
-  },
+    }),
 );
 
-it("keeps a shared source blocked when another cleanup owner does not opt in", async () => {
-  await withOpenClawTestState({ label: "shared-cleanup-policy" }, async ({ stateDir }) => {
+it("keeps a shared source blocked when another cleanup owner does not opt in", () =>
+  withOpenClawTestState({ label: "shared-cleanup-policy" }, async ({ stateDir }) => {
     const sourcePath = path.join(stateDir, "shared-cache.json");
     await fs.writeFile(sourcePath, "retained source");
     failUnlink(sourcePath, "synthetic shared cleanup failure");
@@ -231,9 +244,7 @@ it("keeps a shared source blocked when another cleanup owner does not opt in", a
       "Doctor stopped because a state migration refused",
     );
     await expectFile(sourcePath, "retained source");
-    vi.restoreAllMocks();
-  });
-});
+  }));
 it.each<{
   relativeDatabase: string;
   destination: "database" | "wal" | "empty";
@@ -449,12 +460,9 @@ it.each(["OPENCLAW_STATE_DIR", "OPENCLAW_HOME"])(
 
 it("switches standalone state only after migration, reporting recreated state", () =>
   withAgentState(async (state) => {
-    await state.writeText("agent/bin/fd", "legacy binary");
-    const legacyDir = state.statePath("agent");
-    const canonicalDir = state.agentDir();
+    const { legacyDir, canonicalDir, receipt: expectedReceipt } = await standaloneAgent(state);
     const detect = () => detectAgentState(state);
 
-    await fs.mkdir(canonicalDir, { recursive: true });
     expect(getAgentDir()).toBe(legacyDir);
     await expect(fs.readdir(canonicalDir)).resolves.toEqual([]);
     if (process.platform !== "win32") {
@@ -462,7 +470,6 @@ it("switches standalone state only after migration, reporting recreated state", 
       await fs.chmod(canonicalDir, 0o2750);
       expect((await fs.stat(canonicalDir)).mode & 0o7777).toBe(0o2750);
     }
-    const sourceRoot = await fs.realpath(legacyDir);
     const detected = await detect();
     expect(detected.agentDir.targetDir).toBe(canonicalDir);
     const migrated = await migrateLegacyAgentDir(detected, () => 1234);
@@ -471,11 +478,7 @@ it("switches standalone state only after migration, reporting recreated state", 
       expect((await fs.stat(canonicalDir)).mode & 0o7777).toBe(0o2750);
     }
     const receipt = await fs.readFile(path.join(canonicalDir, receiptName), "utf8");
-    expect(JSON.parse(receipt)).toEqual({
-      version: 1,
-      source: sourceRoot,
-      target: await fs.realpath(canonicalDir),
-    });
+    expect(JSON.parse(receipt)).toEqual(expectedReceipt);
     expect(getAgentDir()).toBe(canonicalDir);
     await expectFile(path.join(canonicalDir, "bin/fd"), "legacy binary");
 
@@ -513,40 +516,22 @@ it.each([false, true])(
   "keeps standalone state after an incomplete migration, including a source-carried receipt (companion: %s)",
   (companion) =>
     withAgentState(async (state) => {
-      await state.writeText("agent/bin/fd", "legacy binary");
-      const legacyDir = state.statePath("agent");
-      const canonicalDir = state.agentDir();
-      await fs.mkdir(canonicalDir, { recursive: true });
-      const receiptBytes =
-        JSON.stringify({
-          version: 1,
-          source: await fs.realpath(legacyDir),
-          target: await fs.realpath(canonicalDir),
-        }) + "\n";
+      const { legacyDir, canonicalDir, receipt } = await standaloneAgent(state);
+      const receiptBytes = JSON.stringify(receipt) + "\n";
       await fs.writeFile(path.join(legacyDir, receiptName), receiptBytes);
       if (companion) {
         await fs.writeFile(path.join(legacyDir, `${receiptName}-wal`), "untrusted companion");
       }
       const detected = await detectAgentState(state);
-      const rename = fsSync.renameSync;
       const sourceBin = path.join(await fs.realpath(legacyDir), "bin");
-      vi.spyOn(fsSync, "renameSync").mockImplementation((source, target) => {
-        if (source === sourceBin) {
-          throw new Error("synthetic binary move failure");
-        }
-        rename(source, target);
-      });
-
-      const copy = fsSync.cpSync;
-      vi.spyOn(fsSync, "cpSync").mockImplementation((source, target, options) => {
-        if (source === sourceBin) {
-          throw new Error("synthetic binary move failure");
-        }
-        copy(source, target, options);
-      });
+      const failure = "synthetic binary move failure";
+      const rename = failOnSource(fsSync.renameSync, sourceBin, failure);
+      const copy = failOnSource(fsSync.cpSync, sourceBin, failure);
+      vi.spyOn(fsSync, "renameSync").mockImplementation(rename);
+      vi.spyOn(fsSync, "cpSync").mockImplementation(copy);
       const result = await migrateLegacyAgentDir(detected, () => 1234);
 
-      expectWarning(result, "synthetic binary move failure");
+      expectWarning(result, failure);
       expect(getAgentDir()).toBe(legacyDir);
       await expectFile(path.join(legacyDir, "bin/fd"), "legacy binary");
       await expectMissing(path.join(canonicalDir, receiptName));
@@ -576,8 +561,8 @@ it.each([false, true])(
     }),
 );
 
-it("keeps conflict quarantines confined to state for an ancestor-symlink agent directory", async () => {
-  await withOpenClawTestState({ label: "agent-quarantine-boundary" }, async (state) => {
+it("keeps conflict quarantines confined to state for an ancestor-symlink agent directory", () =>
+  withOpenClawTestState({ label: "agent-quarantine-boundary" }, async (state) => {
     const outside = path.join(state.root, "external");
     const physicalTarget = path.join(outside, "agent");
     await writeFiles(physicalTarget, { "bin/rg": "current binary" });
@@ -601,11 +586,10 @@ it("keeps conflict quarantines confined to state for an ancestor-symlink agent d
       warningDisposition: "recoverable",
       warnings: [expect.stringContaining(path.join(quarantine, "bin/rg"))],
     });
-  });
-});
+  }));
 
-it("merges nested binaries, keeps destination bytes, and quarantines only conflicts once", async () => {
-  await withOpenClawTestState({ label: "legacy-agent-merge" }, async (state) => {
+it("merges nested binaries, keeps destination bytes, and quarantines only conflicts once", () =>
+  withOpenClawTestState({ label: "legacy-agent-merge" }, async (state) => {
     const binaries = { "bin/rg": "legacy", "bin/fd": "same", "bin/nested/tool": "missing" };
     await writeFiles(state.statePath("agent"), binaries);
     const expected = { ...binaries, "bin/rg": "current" };
@@ -631,11 +615,10 @@ it("merges nested binaries, keeps destination bytes, and quarantines only confli
     const repeated = await migrateLegacyAgentDir(await detect(), () => 5678);
     expect(repeated.warnings).toEqual([]);
     expect(await listQuarantines(agentRoot)).toEqual(quarantines);
-  });
-});
+  }));
 
-it("reports old quarantine artifacts without requiring a new legacy payload or deleting data", async () => {
-  await withOpenClawTestState({ label: "legacy-agent-quarantine" }, async (state) => {
+it("reports old quarantine artifacts without requiring a new legacy payload or deleting data", () =>
+  withOpenClawTestState({ label: "legacy-agent-quarantine" }, async (state) => {
     const files = {
       "agent.legacy-1234/bin/rg": "preserved binary",
       "agents/main/agent.legacy-1234/bin/rg": "older layout binary",
@@ -647,5 +630,4 @@ it("reports old quarantine artifacts without requiring a new legacy payload or d
       detected.notices?.filter((notice) => notice.includes("older than 30 days")),
     ).toHaveLength(2);
     await expectFiles(state.stateDir, files);
-  });
-});
+  }));
