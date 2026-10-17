@@ -110,7 +110,7 @@ export function createMeetingRealtimeOutputQueue(params: {
         await params.transport.writeOutput(audio);
         if (!stopped && next.generation === generation) {
           // Native write completion admits audio to playback; it does not mean it was heard.
-          playableUntilMs = Math.max(Date.now(), playableUntilMs);
+          playableUntilMs = Math.max(performance.now(), playableUntilMs);
           for (const entry of batch) {
             playableUntilMs += entry.audio.byteLength / params.bytesPerMs;
             if (entry.audible) {
@@ -168,7 +168,7 @@ export function createMeetingRealtimeOutputQueue(params: {
       reset();
     },
     pending: () => ({ pendingBytes, pendingFrames }),
-    hasUnplayedAudibleAudio: () => pendingAudibleFrames > 0 || Date.now() < audibleUntilMs,
+    hasUnplayedAudibleAudio: () => pendingAudibleFrames > 0 || performance.now() < audibleUntilMs,
     getHealth: () => ({ clearCount, lastClearAt }),
   };
 }
