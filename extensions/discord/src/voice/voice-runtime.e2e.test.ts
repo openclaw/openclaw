@@ -28,6 +28,7 @@ defineDiscordVoiceTests(
     realtimeSessionMock,
     decodeOpusStreamChunksMock,
     managerModule,
+    listenersModule,
     realtimeModule,
     configureVoiceStateGateway,
     createClient,
@@ -769,7 +770,7 @@ defineDiscordVoiceTests(
         .spyOn(manager, "autoJoin")
         .mockRejectedValue(new Error("autoJoin rejected"));
 
-      const { DiscordVoiceReadyListener } = managerModule;
+      const { DiscordVoiceReadyListener } = listenersModule;
       const listener = new DiscordVoiceReadyListener(manager);
 
       await expect(listener.handle(undefined, undefined as never)).resolves.toBeUndefined();
@@ -780,7 +781,7 @@ defineDiscordVoiceTests(
       const manager = createManager();
       const autoJoinSpy = vi.spyOn(manager, "autoJoin").mockResolvedValue(undefined);
 
-      const { DiscordVoiceResumedListener } = managerModule;
+      const { DiscordVoiceResumedListener } = listenersModule;
       const listener = new DiscordVoiceResumedListener(manager);
 
       await expect(listener.handle(undefined, undefined as never)).resolves.toBeUndefined();

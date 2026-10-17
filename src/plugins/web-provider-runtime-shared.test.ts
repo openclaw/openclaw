@@ -19,12 +19,12 @@ const mocks = vi.hoisted(() => ({
   buildPluginRuntimeLoadOptions: vi.fn((_values: unknown, overrides?: Record<string, unknown>) => ({
     ...overrides,
   })),
-  createPluginRuntimeLoaderLogger: vi.fn(() => ({
+  pluginRuntimeLoaderLogger: {
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
     debug: vi.fn(),
-  })),
+  },
 }));
 
 vi.mock("./loader.js", () => ({
@@ -47,7 +47,7 @@ vi.mock("./runtime.js", () => ({
 
 vi.mock("./runtime/load-context.js", () => ({
   buildPluginRuntimeLoadOptions: mocks.buildPluginRuntimeLoadOptions,
-  createPluginRuntimeLoaderLogger: mocks.createPluginRuntimeLoaderLogger,
+  pluginRuntimeLoaderLogger: mocks.pluginRuntimeLoaderLogger,
 }));
 
 let resolvePluginWebProviders: typeof import("./web-provider-runtime-shared.js").resolvePluginWebProviders;

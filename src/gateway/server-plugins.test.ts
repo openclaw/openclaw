@@ -85,7 +85,7 @@ vi.mock("../plugins/runtime/load-context.js", async (importOriginal) => {
     buildPluginRuntimeLoadOptions,
     getPluginRuntimeLoadContext: readPluginRuntimeLoadContext,
     setPluginRuntimeLoadContext,
-    createPluginRuntimeLoaderLogger: () => pluginRuntimeLoaderLogger,
+    pluginRuntimeLoaderLogger,
   };
 });
 
