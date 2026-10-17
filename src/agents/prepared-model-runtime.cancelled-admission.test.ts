@@ -82,6 +82,7 @@ function cancellableRun(input: PreparedModelRuntimeInput) {
 function holdModelBuild() {
   const entered = createDeferred();
   const release = createDeferred();
+  pendingBuildReleases.push(release);
   mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
     entered.resolve();
     await release.promise;
@@ -90,86 +91,74 @@ function holdModelBuild() {
   return { entered, release };
 }
 
+function closeProcess() {
+  const closing = { done: false, promise: Promise.resolve() };
+  closing.promise = drainGlobalSingletonLifecycleState("close").then(() => {
+    closing.done = true;
+  });
+  return closing;
+}
+
+function observe<T>(pending: Promise<T>) {
+  void pending.catch(() => {});
+  return pending;
+}
+
 describe("prepared model runtime cancelled admission ownership", () => {
   beforeEach(() => {
     pendingBuildReleases = [];
     buildBatchSpy = vi.spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch");
   });
 
-  it.each(["cancels", "finishes"] as const)(
-    "retains a shared cold owner until its final admission %s",
-    async (outcome) => {
-      const input = dynamicInput("coalesced-admissions");
-      const build = prepareColdBuildGate();
-      const first = cancellableRun(input);
-      await build.started.promise;
-      const second = cancellableRun(input);
+  it.each([
+    ["retains a shared cold owner until its final admission cancels", "cancel"],
+    ["retains a shared cold owner until its final admission finishes", "finish"],
+    ["does not let an abandoned publication satisfy or delete its same-key replacement", "replace"],
+    ["skips workspace preparation for a cancelled queued replacement", "skip"],
+  ] as const)("%s", async (_name, outcome) => {
+    const input = dynamicInput("coalesced-admissions");
+    const build = prepareColdBuildGate();
+    const first = cancellableRun(input);
+    await build.started.promise;
+    const shared = outcome === "cancel" || outcome === "finish";
+    let replacementBuild: ReturnType<typeof prepareColdBuildGate> | undefined;
+    if (!shared) {
+      await first.cancel("first request cancelled");
+      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
+      if (outcome === "replace") {
+        replacementBuild = prepareColdBuildGate();
+      } else {
+        await cancellableRun(input).cancel("queued request cancelled");
+      }
+    }
+    const second = cancellableRun(input);
+    if (shared) {
       const observed = second.pending.then(
         () => "settled",
         () => "settled",
       );
       await expect(Promise.race([observed, Promise.resolve("pending")])).resolves.toBe("pending");
       await first.cancel("first request cancelled");
-      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-      if (outcome === "cancels") {
-        await second.cancel("second request cancelled");
-        expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
-        build.release.resolve();
-      } else {
-        build.release.resolve();
-        const lease = await second.pending;
-        expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
+    }
+    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+    if (outcome === "cancel") {
+      await second.cancel("second request cancelled");
+      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
+      build.release.resolve();
+    } else {
+      build.release.resolve();
+      if (replacementBuild) {
+        await replacementBuild.started.promise;
+        expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
         expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-        await lease[Symbol.asyncDispose]();
-        expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
+        replacementBuild.release.resolve();
       }
-    },
-  );
-
-  it("does not let an abandoned publication satisfy or delete its same-key replacement", async () => {
-    const input = dynamicInput("same-key-replacement");
-    const firstBuild = prepareColdBuildGate();
-    const abandoned = cancellableRun(input);
-
-    await firstBuild.started.promise;
-    await abandoned.cancel("first request cancelled");
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
-
-    const secondBuild = prepareColdBuildGate();
-    const replacement = acquireRun(input);
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-
-    firstBuild.release.resolve();
-    await secondBuild.started.promise;
-    expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-
-    secondBuild.release.resolve();
-    const lease = await replacement;
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-    await lease[Symbol.asyncDispose]();
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
-  });
-
-  it("skips workspace preparation for a cancelled queued replacement", async () => {
-    const input = dynamicInput("queued-cancelled-replacement");
-    const firstBuild = prepareColdBuildGate();
-    const first = cancellableRun(input);
-
-    await firstBuild.started.promise;
-    await first.cancel("first request cancelled");
-
-    const queued = cancellableRun(input);
-    await queued.cancel("queued request cancelled");
-
-    const survivor = acquireRun(input);
-    firstBuild.release.resolve();
-
-    const lease = await survivor;
-    expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
-
-    await lease[Symbol.asyncDispose]();
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
+      const lease = await second.pending;
+      expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(shared ? 1 : 2);
+      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+      await lease[Symbol.asyncDispose]();
+      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
+    }
   });
 
   it("retires model publication before auth snapshots are cleared during restart", async () => {
@@ -203,27 +192,22 @@ describe("prepared model runtime cancelled admission ownership", () => {
       if (source === "auth") {
         mocks.mutationListener?.({ affectsInheritedStores: true });
       } else {
-        refreshWork = refresh({});
-        void refreshWork.catch(() => {});
+        refreshWork = observe(refresh({}));
       }
       await entered.promise;
-      const reader = prepare(configuredInput());
-      void reader.catch(() => {});
-      let closed = false;
-      const closing = drainGlobalSingletonLifecycleState("close").then(() => {
-        closed = true;
-      });
+      const reader = observe(prepare(configuredInput()));
+      const closing = closeProcess();
       try {
         await nextTurn();
-        expect(closed).toBe(false);
+        expect(closing.done).toBe(false);
         release.resolve();
-        await closing;
+        await closing.promise;
         await expect(reader).rejects.toThrow(/closed|superseded/);
         expect(readSnapshot(configuredInput())).toBeUndefined();
         expect(published).not.toHaveBeenCalled();
       } finally {
         release.resolve();
-        await Promise.allSettled([refreshWork, reader, closing]);
+        await Promise.allSettled([refreshWork, reader, closing.promise]);
         unregister();
       }
     },
@@ -235,17 +219,14 @@ describe("prepared model runtime cancelled admission ownership", () => {
     const input = { config: {}, agentDir: fixture.state.agentDir("direct") };
     const options = { retainIdleRunOwner: true, abortSignal: signal };
     const previous = await acquireRun(input, options);
-    let closed = false;
-    const closing = drainGlobalSingletonLifecycleState("close").then(() => {
-      closed = true;
-    });
+    const closing = closeProcess();
     try {
       await nextTurn(undefined, { signal });
-      expect(closed).toBe(false);
+      expect(closing.done).toBe(false);
       expect(previous.snapshot.isCurrent()).toBe(false);
       expect(previous.snapshot.createStores()).toBeDefined();
       await previous[Symbol.asyncDispose]();
-      await closing;
+      await closing.promise;
       await using next = await acquireRun(input, options);
       expect(next.snapshot).not.toBe(previous.snapshot);
       await previous[Symbol.asyncDispose]();
@@ -253,18 +234,16 @@ describe("prepared model runtime cancelled admission ownership", () => {
       expect(next.snapshot.isCurrent()).toBe(true);
     } finally {
       await previous[Symbol.asyncDispose]();
-      await closing;
+      await closing.promise;
     }
   });
 
   it("does not revive a queued standalone activation after its process lifetime closes", async () => {
     const { entered, release } = holdModelBuild();
     const input = { config: {}, agentDir: fixture.state.agentDir("queued") };
-    const first = activate(input);
-    void first.catch(() => {});
+    const first = observe(activate(input));
     await entered.promise;
-    const second = activate(input);
-    void second.catch(() => {});
+    const second = observe(activate(input));
     const closing = drainGlobalSingletonLifecycleState("close");
     try {
       release.resolve();

@@ -42,6 +42,25 @@ vi.mock("../auto-reply/reply/get-reply-run-execute.js", () => ({
 
 const { mocks } = usePreparedModelRuntimeHarness();
 
+function replyMetadata(config: OpenClawConfig, providers: string[] = []) {
+  return createPluginMetadataSnapshot({
+    config,
+    manifestRegistry: {
+      plugins: providers.map((id) =>
+        createPluginManifestRecordFixture({
+          id,
+          providers: id === "broken-harness" ? [] : [id],
+          activation:
+            id === "broken-harness"
+              ? { onStartup: false, onAgentHarnesses: [id] }
+              : { onStartup: false, onProviders: [id] },
+        }),
+      ),
+      diagnostics: [],
+    },
+  });
+}
+
 async function prepareReply(
   config: OpenClawConfig,
   metadata: ReturnType<typeof createPluginMetadataSnapshot>,
@@ -115,10 +134,7 @@ describe("prepared reply fallback ownership", () => {
         entries: { "unavailable-context": { enabled: true } },
       },
     };
-    const metadata = createPluginMetadataSnapshot({
-      config,
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    });
+    const metadata = replyMetadata(config);
     mocks.configuredAgentIds = ["default", "secondary"];
     mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() =>
       createEmptyPluginRegistry(),
@@ -211,30 +227,7 @@ describe("prepared reply fallback ownership", () => {
           slots: { memory: "none" },
         },
       };
-      const manifests = ["initial", "selected", "fallback"].map((id) =>
-        createPluginManifestRecordFixture({
-          id,
-          name: id,
-          providers: [id],
-          rootDir: `/plugins/${id}`,
-          activation: { onStartup: false, onProviders: [id] },
-        }),
-      );
-      const metadata = createPluginMetadataSnapshot({
-        config,
-        manifestRegistry: {
-          plugins: [
-            ...manifests,
-            {
-              ...manifests[0]!,
-              id: "broken-harness",
-              providers: [],
-              activation: { onStartup: false, onAgentHarnesses: ["broken-harness"] },
-            },
-          ],
-          diagnostics: [],
-        },
-      });
+      const metadata = replyMetadata(config, ["initial", "selected", "fallback", "broken-harness"]);
       mocks.configuredAgentIds = ["default"];
       mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) => {
         const registry = createEmptyPluginRegistry();
@@ -284,7 +277,7 @@ describe("prepared reply fallback ownership", () => {
         expect(candidates.map((candidate) => candidate.provider)).toEqual(
           source === "user" || locked ? ["selected"] : ["selected", "fallback"],
         );
-        const nested = await acquireRun(
+        await using nested = await acquireRun(
           {
             ...input,
             runtimePluginSelections: candidates.map((candidate) => ({
@@ -305,7 +298,6 @@ describe("prepared reply fallback ownership", () => {
             }),
           ).rejects.toThrow("reason=owner-plugin-degraded, ownerPluginId=broken-harness");
         }
-        await nested[Symbol.asyncDispose]();
         return { text: "fallback admitted" };
       });
       const execute = bindPreparedReplyDispatchRuntime(dispatch, () =>

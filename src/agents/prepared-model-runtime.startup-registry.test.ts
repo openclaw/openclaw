@@ -7,6 +7,7 @@ import { createHookRunner } from "../plugins/hooks.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
+  EMPTY_PLUGIN_SCHEMA,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
   writePlugin,
@@ -86,6 +87,7 @@ function startupFixture(
       cache: false,
       throwOnLoadError: true,
     });
+    prepareOwnedPluginLoadContext(input, process.env, root, metadata, true);
     return { root, metadata };
   };
   return { plugin, input, captures, start, [Symbol.dispose]: () => process.off(event, capture) };
@@ -106,13 +108,9 @@ it.each<[boolean, boolean, RuntimePluginLoadPurpose]>([
         api.registerProvider({ id: "selected", label: "Selected", auth: [] });`,
     );
     const { plugin, captures } = fixture;
-    const manifestFile = path.join(plugin.dir, "openclaw.plugin.json");
     fs.writeFileSync(
-      manifestFile,
-      JSON.stringify({
-        ...JSON.parse(fs.readFileSync(manifestFile, "utf8")),
-        providers: ["selected"],
-      }),
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify({ id: plugin.id, configSchema: EMPTY_PLUGIN_SCHEMA, providers: ["selected"] }),
     );
     const input = {
       ...fixture.input,
@@ -121,7 +119,6 @@ it.each<[boolean, boolean, RuntimePluginLoadPurpose]>([
     await using cache = createPluginCache();
     await withPluginCache(cache, async () => {
       const { root, metadata } = await fixture.start(selectedAtStartup ? [plugin.id] : []);
-      prepareOwnedPluginLoadContext(input, process.env, root, metadata, true);
       const gatewayOwner = { current: () => root };
       bindPluginRegistryGatewayOwner(root, gatewayOwner);
       const resources = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
@@ -225,7 +222,6 @@ it.each(["inbound", "selected", "inspection"] as const)(
     await using cache = createPluginCache();
     await withPluginCache(cache, async () => {
       const { root: gatewayRegistry, metadata } = await fixture.start([plugin.id], "full");
-      prepareOwnedPluginLoadContext(input, process.env, gatewayRegistry, metadata, true);
       const gateway = createPluginRegistryOwner(gatewayRegistry, input.workspaceDir);
       const closing = createEmptyPluginRegistry();
       closing.plugins.push(...gateway.registry.plugins);

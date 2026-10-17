@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createPreparedAccountCatalogAccess } from "./prepared-model-runtime.catalog-auth.js";
 
@@ -33,22 +33,7 @@ function deferredDiscovery() {
 }
 
 describe("prepared account catalog observations", () => {
-  beforeEach(() => {
-    // These cases describe prepared auth facts, not credentials from the host shell.
-    for (const key of [
-      "OPENAI_API_KEY",
-      "CODEX_API_KEY",
-      "OPENAI_OAUTH_TOKEN",
-      "CHATGPT_OAUTH_TOKEN",
-    ]) {
-      vi.stubEnv(key, "");
-    }
-  });
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
   it("retains account discovery across request projections until explicit refresh or identity replacement", async () => {
     const retirement = new AbortController();
@@ -100,17 +85,10 @@ describe("prepared account catalog observations", () => {
     "retires response observers when explicit refresh arrives %s",
     async (timing) => {
       const owner = createPreparedAccountCatalogAccess(() => true);
-      const record = owner.prepareServiceTierObserver({
-        credential,
-        selectedCredential: {
-          source: "profile",
-          profileId: "account",
-          identityKey: "profile:account",
-        },
-      });
+      const record = owner.prepareServiceTierObserver(account);
       record(observation);
       const { entered, release, load } = deferredDiscovery();
-      const request = { profileId: "account", credential, load, allowDiscovery: true };
+      const request = { ...account, load, allowDiscovery: true };
       const cold = owner.acquire(request);
       await entered.promise;
       if (timing === "after publication") {
@@ -126,9 +104,7 @@ describe("prepared account catalog observations", () => {
         expect(refresh).resolves.toMatchObject({ outcomes: [] }),
       ]);
       expect(load).toHaveBeenCalledTimes(timing === "during discovery" ? 1 : 2);
-      expect(
-        owner.readServiceTierObservation({ ...observation, identityKey: "profile:account" }),
-      ).toBeUndefined();
+      expect(owner.readServiceTierObservation(route)).toBeUndefined();
       expect(record(observation)).toBe(false);
     },
   );
@@ -158,18 +134,12 @@ describe("prepared account catalog observations", () => {
     expect((await owner.acquire({ ...request, allowDiscovery: false })).outcomes).toEqual([]);
     expect(load).not.toHaveBeenCalled();
     const catalogFailure = new Error("catalog unavailable");
-    await expect(
-      owner.acquire({
-        ...request,
-        load: async () => {
-          throw catalogFailure;
-        },
-      }),
-    ).rejects.toBe(catalogFailure);
+    load.mockRejectedValueOnce(catalogFailure);
+    await expect(owner.acquire(request)).rejects.toBe(catalogFailure);
     expect(owner.readServiceTierObservation(route)?.responseTier).toBe("priority");
     expect((await owner.acquire(request)).outcomes).toEqual(outcomes);
     expect(owner.readServiceTierObservation(route)?.responseTier).toBe("priority");
-    expect(load).toHaveBeenCalledOnce();
+    expect(load).toHaveBeenCalledTimes(2);
 
     onChanged.mockClear();
     await owner.acquire({ ...request, refresh: true });
@@ -235,11 +205,7 @@ describe("prepared account catalog observations", () => {
     const firstRoute = { ...route, modelId: "model-0" };
     const record = owner.prepareServiceTierObserver(account);
     for (let index = 0; index <= 128; index++) {
-      record({
-        ...route,
-        modelId: `model-${index}`,
-        ...tiers,
-      });
+      record({ ...observation, modelId: `model-${index}` });
     }
     expect(owner.readServiceTierObservation(firstRoute)).toBeUndefined();
     expect(owner.readServiceTierObservation({ ...route, modelId: "model-128" })).toEqual(tiers);

@@ -5,14 +5,14 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as configSerialization from "../config/runtime-config-snapshot-match.js";
 import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
+  clearRuntimeConfigSnapshot as clearConfig,
+  setRuntimeConfigSnapshot as setConfig,
 } from "../config/runtime-snapshot.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
-import { getPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
+import { getPreparedModelCatalogOwnerSnapshot as catalogOwner } from "./prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import {
   acquireAgentRunPreparedModelRuntime as acquireRun,
@@ -23,6 +23,7 @@ import {
   prepareModelRuntimeSnapshot as prepare,
   publishPreparedModelRuntimeSnapshot as publish,
   refreshPreparedModelRuntimeSnapshots as refresh,
+  type PreparedModelRuntimeInput,
 } from "./prepared-model-runtime.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
@@ -37,9 +38,19 @@ const { mocks } = fixture;
 const configFor = (model = "openai/gpt-5.5", defaults: Partial<AgentDefaultsConfig> = {}) => ({
   agents: { defaults: { model, ...defaults } },
 });
-const inputFor = (name: string, config: OpenClawConfig = {}) => ({
+const inputFor = (
+  name: string,
+  config: OpenClawConfig = {},
+  options: Partial<PreparedModelRuntimeInput> = {},
+) => ({
   agentDir: fixture.state.agentDir(name),
   config,
+  ...options,
+});
+const scopedModel = (model: string, runtime: string, allow: string) => ({
+  model: { primary: model },
+  models: { [model]: { agentRuntime: { id: runtime } } },
+  modelPolicy: { allow: [allow] },
 });
 function holdNextBuild() {
   const started = createDeferred();
@@ -83,8 +94,7 @@ describe("prepared model runtime snapshots", () => {
       entries: [row],
       routeVariants: [row],
     });
-    // Raw user config permits sparse provider model overrides. This omission is
-    // the contract under test: it must not become an explicit reasoning opt-out.
+    // A sparse user override must not become an explicit reasoning opt-out.
     const config = {
       ...configFor(`anthropic/${modelId}`, {
         models: {
@@ -103,11 +113,9 @@ describe("prepared model runtime snapshots", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const snapshot = await publish({
-      agentId: "main",
-      config,
-      agentDir: fixture.state.agentDir("claude-cli-capabilities"),
-    });
+    const snapshot = await publish(
+      inputFor("claude-cli-capabilities", config, { agentId: "main" }),
+    );
     expect(snapshot.modelCatalog.entries).toEqual([
       expect.objectContaining({ provider: "anthropic", id: modelId, reasoning: true }),
     ]);
@@ -136,27 +144,24 @@ describe("prepared model runtime snapshots", () => {
       return registry;
     });
     await refresh({}, { gatewayLifecycle: true });
-    markStale("test isolated probe replacement", {
-      waitForReplacement: true,
-    });
-    const leasePending = acquireReadOnly({
+    markStale("test isolated probe replacement", { waitForReplacement: true });
+    const input = inputFor("setup-probe-agent", stagedConfig, {
       agentId: "openclaw",
-      config: stagedConfig,
-      agentDir: fixture.state.agentDir("setup-probe-agent"),
       inheritedAuthDir: fixture.state.agentDir("setup-probe-agent"),
       workspaceDir: "/tmp/setup-probe-workspace",
       runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.6", runtime: "codex" }],
     });
+    const leasePending = acquireReadOnly(input);
     await Promise.resolve();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
 
     await refresh(configFor());
     await using lease = await leasePending;
     expect(lease.snapshot).toMatchObject({
-      agentId: "openclaw",
+      agentId: input.agentId,
       config: stagedConfig,
-      agentDir: fixture.state.agentDir("setup-probe-agent"),
-      workspaceDir: "/tmp/setup-probe-workspace",
+      agentDir: input.agentDir,
+      workspaceDir: input.workspaceDir,
       pluginRegistry: expect.any(Object),
     });
     expect(lease.snapshot.pluginRegistry?.agentHarnesses.map((entry) => entry.harness.id)).toEqual([
@@ -203,18 +208,8 @@ describe("prepared model runtime snapshots", () => {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.6" } },
         entries: {
-          selected: {
-            model: { primary: "anthropic/claude-sonnet-5" },
-            models: {
-              "anthropic/claude-sonnet-5": { agentRuntime: { id: "selected-runtime" } },
-            },
-            modelPolicy: { allow: ["vllm/*"] },
-          },
-          sibling: {
-            model: { primary: "ollama/sibling" },
-            models: { "ollama/sibling": { agentRuntime: { id: "sibling-runtime" } } },
-            modelPolicy: { allow: ["sibling-only/*"] },
-          },
+          selected: scopedModel("anthropic/claude-sonnet-5", "selected-runtime", "vllm/*"),
+          sibling: scopedModel("ollama/sibling", "sibling-runtime", "sibling-only/*"),
         },
       },
       models: {
@@ -226,15 +221,12 @@ describe("prepared model runtime snapshots", () => {
     } as OpenClawConfig;
     mocks.runtimeSyntheticAuthProviderRefs = ["selected-runtime", "sibling-runtime"];
 
-    await publish({
-      agentId: "selected",
-      config,
-      agentDir: fixture.state.agentDir("selected-provider-scope"),
-    });
+    const input = inputFor("selected-provider-scope", config, { agentId: "selected" });
+    await publish(input);
 
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledWith(
       config,
-      fixture.state.agentDir("selected-provider-scope"),
+      input.agentDir,
       expect.objectContaining({
         providerDiscoveryProviderIds: ["anthropic", "custom", "openai", "selected-runtime", "vllm"],
       }),
@@ -267,21 +259,20 @@ describe("prepared model runtime snapshots", () => {
   });
 
   it("builds credential-free command owners separately from runtime owners", async () => {
-    const config = {};
-    const agentDir = fixture.state.agentDir("credential-free");
-    await publish({ config, agentDir });
+    const input = inputFor("credential-free");
+    await publish(input);
 
     const credentialFree = await publish({
-      ...inputFor("credential-free", config),
+      ...input,
       readOnly: true,
       skipCredentials: true,
     });
 
-    expect(credentialFree).not.toBe(await prepare({ config, agentDir }));
+    const runtime = await prepare(input);
+    expect(credentialFree).not.toBe(runtime);
     expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
     expect(getPreparedModelRuntimeAuthStore(credentialFree)).toEqual({ version: 1, profiles: {} });
     expect(credentialFree.createStores().authStorage.getAll()).toEqual({});
-    const runtime = await prepare({ config, agentDir });
     expect(runtime.createStores().authStorage.getAll()).toEqual({
       custom: { type: "api_key", key: "test-key" },
     });
@@ -331,41 +322,32 @@ describe("prepared model runtime snapshots", () => {
             ),
           },
         };
-        setRuntimeConfigSnapshot(config);
-        const input = {
-          ...inputFor(`read-only-fleet-${size}`, config),
+        setConfig(config);
+        const input = inputFor(`read-only-fleet-${size}`, config, {
           agentId: "agent-0",
           readOnly: true,
-        };
-        const snapshot = await publish(input, {
-          catalogMode: "static",
         });
+        const snapshot = await publish(input, { catalogMode: "static" });
         stringify.mockClear();
         for (let request = 0; request < 16; request++) {
-          expect(getPreparedModelCatalogOwnerSnapshot(input)).toBe(snapshot);
+          expect(catalogOwner(input)).toBe(snapshot);
         }
         expect(stringify.mock.calls.filter(([value]) => value === config)).toHaveLength(0);
 
         const projected = structuredClone(config);
-        expect(getPreparedModelCatalogOwnerSnapshot({ ...input, config: projected })).toBe(
-          snapshot,
-        );
+        expect(catalogOwner({ ...input, config: projected })).toBe(snapshot);
         projected.agents!.entries!["agent-0"]!.name = "projected";
-        expect(
-          getPreparedModelCatalogOwnerSnapshot({ ...input, config: projected }),
-        ).toBeUndefined();
+        expect(catalogOwner({ ...input, config: projected })).toBeUndefined();
 
         config.agents!.entries!["agent-0"]!.name = "republished";
-        setRuntimeConfigSnapshot(config);
-        expect(getPreparedModelCatalogOwnerSnapshot(input)).toBeUndefined();
-        const replacement = await publish(input, {
-          catalogMode: "static",
-        });
+        setConfig(config);
+        expect(catalogOwner(input)).toBeUndefined();
+        const replacement = await publish(input, { catalogMode: "static" });
         expect(replacement).not.toBe(snapshot);
-        expect(getPreparedModelCatalogOwnerSnapshot(input)).toBe(replacement);
+        expect(catalogOwner(input)).toBe(replacement);
       }
     } finally {
-      clearRuntimeConfigSnapshot();
+      clearConfig();
     }
   });
 
@@ -377,9 +359,7 @@ describe("prepared model runtime snapshots", () => {
     await refresh(initialConfig);
     const build = holdNextBuild();
 
-    markStale("test overlapping config commit", {
-      waitForReplacement: true,
-    });
+    markStale("test overlapping config commit", { waitForReplacement: true });
     const skipped = build.track(refresh(skippedConfig));
     const latest = build.track(refresh(latestConfig));
     const read = build.track(
@@ -408,8 +388,7 @@ describe("prepared model runtime snapshots", () => {
     "deduplicates standalone activation while publishing a changed %s",
     async (changed) => {
       const input = {
-        config: {},
-        agentDir: fixture.state.agentDir("standalone"),
+        ...inputFor("standalone"),
         workspaceDir: "/tmp/prepared-model-runtime-standalone-workspace",
       };
 
@@ -445,9 +424,8 @@ describe("prepared model runtime snapshots", () => {
     const selectedMetadata = { ...mocks.pluginMetadataSnapshot };
     await using lease = await acquireRun(
       {
-        config: {},
+        ...inputFor("selected-metadata-agent"),
         agentId: "main",
-        agentDir: fixture.state.agentDir("selected-metadata-agent"),
         workspaceDir: "/tmp/selected-metadata-workspace",
         loadRuntimePlugins: true,
         runtimePluginSelections: [{ provider: "selected", modelId: "model" }],

@@ -475,12 +475,14 @@ describe("auth publication generation recovery", () => {
     const failure = new PluginInstanceUnavailableError("synthetic");
     const failed = createDeferred<Error>();
     const phases: string[] = [];
-    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
-      phases.push(event.phase);
-      if (event.phase === "failed") {
-        failed.resolve(event.error);
-      }
-    });
+    using _ = {
+      [Symbol.dispose]: registerPreparedModelRuntimePublicationListener((event) => {
+        phases.push(event.phase);
+        if (event.phase === "failed") {
+          failed.resolve(event.error);
+        }
+      }),
+    };
     mocks.resolveAmbientCredentials.mockClear().mockImplementation(() => {
       throw failure;
     });
@@ -488,24 +490,20 @@ describe("auth publication generation recovery", () => {
     mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(
       (params) => params.reusableRegistry ?? currentRegistry,
     );
-    try {
-      mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
-      const waiting = loadDispatch();
-      const rejected = expect(waiting).rejects.toThrow("after 1 fresh-generation retry");
-      const recorded = await failed.promise;
-      await rejected;
-      expect(recorded.cause).toBe(failure);
-      expect(owner.refreshError).toBe(recorded);
-      expect(owner).toMatchObject({ pending: undefined, needsRefresh: true });
-      await expect(prepare(input)).rejects.toBe(recorded);
-      expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
-      expect(phases.filter((phase) => phase === "failed")).toHaveLength(1);
-      expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("after 1 fresh-generation retry"),
-      );
-    } finally {
-      unregister();
-    }
+    mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+    const waiting = loadDispatch();
+    const rejected = expect(waiting).rejects.toThrow("after 1 fresh-generation retry");
+    const recorded = await failed.promise;
+    await rejected;
+    expect(recorded.cause).toBe(failure);
+    expect(owner.refreshError).toBe(recorded);
+    expect(owner).toMatchObject({ pending: undefined, needsRefresh: true });
+    await expect(prepare(input)).rejects.toBe(recorded);
+    expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
+    expect(phases.filter((phase) => phase === "failed")).toHaveLength(1);
+    expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("after 1 fresh-generation retry"),
+    );
   });
 });
 
