@@ -385,7 +385,7 @@ it("persists monotonic ACKs and their terminal fence through the gate without ho
     });
   });
   {
-    using _ = onExit(admission.mockRestore, retained.release);
+    using _ = onExit(admission.mockRestore, () => retained.release());
     await withoutHostSql(async () => {
       await gate.updateAckCursors({ claim, transcriptSeq: 4 });
       expect(await placements.listPendingWorkspaceResultsAsync(claim.sessionId)).toEqual([]);
@@ -439,7 +439,7 @@ it("keeps the maintenance inventory usable across non-local turn bookkeeping", a
       return grant();
     });
   });
-  using _ = onExit(admission.mockRestore, inventory.release);
+  using _ = onExit(admission.mockRestore, () => inventory.release());
   await withoutHostSql(async () => {
     await placements.releaseTurn(await placements.claimTurn(turn));
     const claim = await placements.claimTurn(turn);

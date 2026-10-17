@@ -68,7 +68,7 @@ function installPermissionPrompt(session: Session, api: Model["api"] = "anthropi
 
 function holdInitialRequest(
   nextText: string,
-  thinking: () => Parameters<typeof createAssistant>[1] = () => [],
+  thinking: () => Exclude<Parameters<typeof createAssistant>[1], string> = () => [],
 ) {
   const requests: Context[] = [];
   const firstRequest = createDeferredCore();

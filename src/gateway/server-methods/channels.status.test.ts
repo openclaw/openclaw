@@ -321,18 +321,18 @@ describe("channelsHandlers channels.status", () => {
         },
       ]);
 
-      const payload = await runChannelsStatus({ probe: true, timeoutMs: 2000 });
+      const payload = await runStatus({ probe: true, timeoutMs: 2000 });
 
       expect(payload.partial).toBeUndefined();
       expect(probeAccount).toHaveBeenCalledOnce();
       expect(probeAccount.mock.calls[0]?.[0].cfg).toStrictEqual(publishedConfig);
       expect(probeAccount.mock.calls[0]?.[0].cfg).toBe(runtimeConfig);
       const snapshotArgs = requireGatewayRecord(
-        requireFirstCallArg(mocks.buildChannelAccountSnapshotFromAccount),
+        firstCallArgs(mocks.buildChannelAccountSnapshotFromAccount),
         "snapshot args",
       );
       expect(snapshotArgs.cfg).toBe(runtimeConfig);
-      expect(firstChannelAccount(payload, "whatsapp").configured).toBe(true);
+      expect(firstAccount(payload, "whatsapp").configured).toBe(true);
     },
   );
 

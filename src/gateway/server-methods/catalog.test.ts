@@ -269,7 +269,11 @@ it("pages the deduplicated official union without combining keywords or truncati
   expect(all).toHaveLength(3);
   expect(new Set(all.map((entry) => `${entry.kind}:${entry.registry}:${entry.id}`)).size).toBe(3);
   expect(
-    new Set(fetchMock.mock.calls.map(([input]) => new URL(String(input)).searchParams.get("q"))),
+    new Set(
+      fetchMock.mock.calls.map(([input]) =>
+        new URL(input instanceof Request ? input.url : String(input)).searchParams.get("q"),
+      ),
+    ),
   ).toEqual(new Set(["calendar", "office tools"]));
   expect(resolveCoreOperatorGatewayMethodScope("catalog.searchKeywords")).toBe("operator.read");
 });

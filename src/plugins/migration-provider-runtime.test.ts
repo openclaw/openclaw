@@ -52,11 +52,13 @@ vi.mock("./loader.js", async (importOriginal) => ({
   acquirePluginRegistryForInspection: mocks.acquirePluginRegistryForInspection,
 }));
 
+// mock-isolation: Migration fixtures own the active registry without ambient plugin state.
 vi.mock("./active-runtime-registry.js", () => ({
   getLoadedRuntimePluginRegistry: (params?: { requiredPluginIds?: string[] }) =>
     mocks.resolveRuntimePluginRegistry(params && { onlyPluginIds: params.requiredPluginIds }),
 }));
 
+// mock-isolation: Migration fixtures provide their installed index without filesystem discovery.
 vi.mock("./plugin-registry-snapshot.js", () => ({
   loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
   loadPluginRegistrySnapshotWithMetadata: (params?: { index?: MockPluginIndex }) => ({
@@ -66,6 +68,7 @@ vi.mock("./plugin-registry-snapshot.js", () => ({
   }),
 }));
 
+// mock-isolation: Migration fixtures bind metadata to their synthetic installed registry.
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (params: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv }) => {
     const index = mocks.loadPluginRegistrySnapshot();
@@ -124,7 +127,9 @@ function createOwnedMigrationRegistry(
   );
   registry.plugins.push(record);
   const instance = expectDefined(getPluginInstance(record), "migration provider instance");
-  const release = async () => instance.dispose();
+  const release = async () => {
+    await instance.dispose();
+  };
   mocks.release.mockImplementation(release);
   onTestFinished(release);
   return registry;

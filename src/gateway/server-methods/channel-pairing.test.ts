@@ -13,7 +13,9 @@ const mocks = vi.hoisted(() => ({
   notify: vi.fn(),
 }));
 
+// mock-isolation: Pairing tests supply their channel inventory without loading live plugins.
 vi.mock("../../channels/plugins/index.js", () => ({ listChannelPlugins: mocks.listPlugins }));
+// mock-isolation: Pairing notification is observed without contacting a live channel.
 vi.mock("../../channels/plugins/pairing.js", () => ({ notifyPairingApproved: mocks.notify }));
 vi.mock("../../commands/doctor-command-owner.js", () => ({
   hasConfiguredCommandOwners: mocks.hasOwners,

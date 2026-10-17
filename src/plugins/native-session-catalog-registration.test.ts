@@ -100,7 +100,7 @@ async function registerCatalog(
         pluginMetadataSnapshot: { manifestRegistry: { diagnostics: [], plugins: [manifest] } },
       },
     );
-    assert(validated.ok === true, "Fixture configuration is invalid");
+    assert(validated.ok, "Fixture configuration is invalid");
     return validated.config;
   };
   let config = validate(snapshot.sourceConfig ?? source);

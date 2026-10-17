@@ -153,7 +153,7 @@ async function readBootstrap(baseUrl: string): Promise<Bootstrap> {
   return getLabJson<Bootstrap>(baseUrl, "/api/bootstrap");
 }
 
-async function expectBootstrap(baseUrl: string, expected: unknown) {
+async function expectBootstrap(baseUrl: string, expected: Record<string, unknown>) {
   await vi.waitFor(async () => expect(await readBootstrap(baseUrl)).toMatchObject(expected));
 }
 
@@ -774,8 +774,7 @@ describe("qa-lab server", () => {
   });
 
   it("enforces explicit execution.channel through the shared suite channel planner", async () => {
-    const lab = await startQaLabServerForTest();
-    cleanups.push(lab.stop);
+    const lab = await startLab();
 
     const response = await postLabJson(lab.baseUrl, "/api/scenario/suite", {
       profile: "all",
@@ -1232,13 +1231,11 @@ describe("qa-lab server", () => {
       "utf8",
     );
 
-    const lab = await startQaLabServerForTest({
+    const lab = await startLab({
       host: "127.0.0.1",
       port: 0,
       uiDistDir,
     });
-    cleanups.push(lab.stop);
-
     const rootResponse = await fetchWithRetry(`${lab.baseUrl}/`);
     expect(rootResponse.status).toBe(200);
     const html = await rootResponse.text();
@@ -1307,13 +1304,11 @@ describe("qa-lab server", () => {
       "utf8",
     );
 
-    const lab = await startQaLabServerForTest({
+    const lab = await startLab({
       host: "127.0.0.1",
       port: 0,
       repoRoot,
     });
-    cleanups.push(lab.stop);
-
     await expectFileMissing(markerPath);
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
@@ -1370,13 +1365,11 @@ describe("qa-lab server", () => {
   });
 
   it("can disable the embedded echo gateway for real-suite runs", async () => {
-    const lab = await startQaLabServerForTest({
+    const lab = await startLab({
       host: "127.0.0.1",
       port: 0,
       embeddedGateway: "disabled",
     });
-    cleanups.push(lab.stop);
-
     await fetch(`${lab.baseUrl}/api/inbound/message`, {
       method: "POST",
       headers: {
