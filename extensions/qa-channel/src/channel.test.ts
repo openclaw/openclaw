@@ -8,18 +8,16 @@ import {
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { extractToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
 import { listQaChannelAccountIds, resolveDefaultQaChannelAccountId } from "./accounts.js";
@@ -273,19 +271,27 @@ describe("qa-channel plugin", () => {
       expect(qaChannelPlugin.capabilities.media).toBe(true);
 
       const proveText = async () => {
+        const onPlatformSendDispatch = vi.fn(async () => {});
+        const assertDirectAdapterHandoff = vi.fn();
         const result = await adapter.send!.text!({
           cfg: createQaChannelConfig({ baseUrl: harness.baseUrl, allowFrom: ["*"] }),
           to: "thread:qa-room/thread-1",
           text: "hello",
           accountId: "default",
           replyToId: "parent-1",
+          onPlatformSendDispatch,
+          assertDirectAdapterHandoff,
         });
+        expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+        expect(assertDirectAdapterHandoff).toHaveBeenCalled();
         const receiptPart = result.receipt.parts[0];
         expect(receiptPart?.kind).toBe("text");
         expect(receiptPart?.replyToId).toBe("parent-1");
         expect(receiptPart?.threadId).toBe("thread-1");
       };
       const proveMedia = async (kind: "media" | "payload" = "media") => {
+        const onPlatformSendDispatch = vi.fn(async () => {});
+        const assertDirectAdapterHandoff = vi.fn();
         const before = harness.state.getSnapshot().messages.length;
         const mediaPath = path.join(process.cwd(), "qa-channel-generated-capability.png");
         const context = {
@@ -300,6 +306,8 @@ describe("qa-channel plugin", () => {
           },
           accountId: "default",
           replyToId: "parent-1",
+          onPlatformSendDispatch,
+          assertDirectAdapterHandoff,
         };
         const result =
           kind === "payload"
@@ -313,6 +321,8 @@ describe("qa-channel plugin", () => {
                 },
               })
             : await adapter.send!.media!(context);
+        expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+        expect(assertDirectAdapterHandoff).toHaveBeenCalled();
         expect(result.receipt.parts[0]).toMatchObject({
           kind: "media",
           replyToId: "parent-1",
@@ -422,8 +432,19 @@ describe("qa-channel plugin", () => {
         expect.soft(state.getSnapshot().messages).toHaveLength(expectedSends);
         expect(result.status).toBe(authority === "current" ? "fulfilled" : "rejected");
         if (authority !== "current") {
+          expect(result).toMatchObject({
+            status: "rejected",
+            error: expect.any(PlatformMessageNotDispatchedError),
+          });
+          expect(
+            result.status === "rejected" &&
+              result.error instanceof PlatformMessageNotDispatchedError &&
+              result.error.cause,
+          ).toBe(authority === "aborted" ? abort.signal.reason : revoked);
           if (authority === "aborted") {
             expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+          } else {
+            expect(assertDirectAdapterHandoff).toHaveBeenCalled();
           }
           return;
         }
