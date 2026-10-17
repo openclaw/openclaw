@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -26,25 +26,17 @@ import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.
 import { recoverEmbeddedRunOverflow } from "./overflow-context-recovery.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
-type RecoveryInput = Parameters<typeof recoverEmbeddedRunOverflow>[0];
+type RecoveryInput = Omit<Parameters<typeof recoverEmbeddedRunOverflow>[0], "attempt">;
 type PromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 
 async function withRecovery(
   manager: SessionManager,
   runId: string,
-  check: (
-    input: RecoveryInput,
-    promptState: PromptState,
-    target: NonNullable<RecoveryInput["runParams"]["sessionTarget"]>,
-  ) => Promise<void>,
+  check: (input: RecoveryInput, promptState: PromptState) => Promise<void>,
   sessionKey = `agent:main:${manager.getSessionId()}`,
 ) {
   const sessionId = manager.getSessionId();
   const identity = { agentId: "main", sessionId, sessionKey };
-  const target = {
-    ...identity,
-    storePath: "/tmp/unused-in-memory-recovery.sqlite",
-  };
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "recovery-test");
   try {
     const runParams = {
@@ -53,7 +45,7 @@ async function withRecovery(
       sessionId,
       sessionKey,
       sessionFile: sessionKey,
-      sessionTarget: target,
+      sessionTarget: { ...identity, storePath: "/tmp/unused-in-memory-recovery.sqlite" },
       sessionManager: manager,
       config: {},
       workspaceDir: "/tmp/workspace",
@@ -92,7 +84,6 @@ async function withRecovery(
       aborted: false,
       signalOwnedInterruption: false,
       promptError,
-      attempt: makeAttemptResult({ promptError, promptErrorSource: "prompt" }),
       attemptCompactionCount: 0,
       runtimeAuthPlan: undefined,
       resolvedSessionKey: sessionKey,
@@ -124,143 +115,138 @@ async function withRecovery(
       armPostCompactionGuard: () => {},
       usageAccumulator: createUsageAccumulator(),
     };
-    await check(input, sessionPromptState, target);
+    await check(input, sessionPromptState);
   } finally {
     admission.close();
   }
 }
 
-describe("recoverEmbeddedRunOverflow transcript ownership", () => {
-  it.each(["frozen", "cache-ttl"] as const)(
-    "restores %s tool bytes after attempt teardown before recovery",
-    async (mode) => {
-      const manager = SessionManager.inMemory("/tmp/workspace");
-      const sessionId = manager.getSessionId();
-      const original: ToolResultMessage = {
-        role: "toolResult",
-        toolName: "read",
-        toolCallId: "retained-tool",
-        timestamp: 2,
-        content: [{ type: "text", text: "original result ".repeat(8_000) }],
-        isError: false,
+it.each(["frozen", "cache-ttl"] as const)(
+  "restores %s tool bytes after attempt teardown before recovery",
+  async (mode) => {
+    const manager = SessionManager.inMemory("/tmp/workspace");
+    const sessionId = manager.getSessionId();
+    const original: ToolResultMessage = {
+      role: "toolResult",
+      toolName: "read",
+      toolCallId: "retained-tool",
+      timestamp: 2,
+      content: [{ type: "text", text: "original result ".repeat(8_000) }],
+      isError: false,
+    };
+    const messages = [
+      makeAgentUserMessage({ content: "read the file", timestamp: 1 }),
+      original,
+      ...[3, 4, 5].map((timestamp) =>
+        makeAgentAssistantMessage({ content: [{ type: "text", text: "continuing" }], timestamp }),
+      ),
+    ];
+    for (const message of messages) {
+      await manager.appendMessageAsync(message);
+    }
+    let expectedContent: ToolResultMessage["content"] | undefined;
+    {
+      using attemptState = retainEmbeddedSessionPromptState(sessionId);
+      const projectionState = attemptState.state.toolResults;
+      const projected =
+        mode === "frozen"
+          ? truncateOversizedToolResultsInMessages(
+              messages,
+              200_000,
+              8_000,
+              32_000,
+              projectionState,
+            ).messages
+          : pruneExpiredCacheTtlToolResults({
+              messages,
+              projectionState,
+              contextWindowTokens: 1_000,
+              settings: {
+                ttlMs: 10,
+                hardClear: false,
+                placeholder: "cleared",
+                isToolPrunable: () => true,
+              },
+              lastCacheTouchAt: 1,
+              now: 100,
+              dropThinkingBlocksForEstimate: false,
+              pruneNewRounds: true,
+            });
+      expectedContent = projected.find((message) => message.role === "toolResult")?.content;
+      expect(expectedContent).not.toEqual(original.content);
+      await persistToolResultProjections(projectionState, (customType, data) =>
+        manager.appendCustomEntryAsync(customType, data),
+      );
+    }
+    {
+      using idle = retainEmbeddedSessionPromptState(sessionId);
+      expect(idle.state.toolResults.frozen.size).toBe(0);
+    }
+    await withRecovery(manager, `run-${mode}`, async (input) => {
+      input.state.overflowCompactionAttempts = MAX_OVERFLOW_COMPACTION_ATTEMPTS;
+      const outcome = await recoverEmbeddedRunOverflow({
+        ...input,
+        attempt: makeAttemptResult({
+          promptError: input.promptError,
+          promptErrorSource: "prompt",
+          messagesSnapshot: messages,
+        }),
+      });
+      expect(outcome).toEqual({ action: "retry" });
+      expect(
+        manager.buildSessionContext().messages.find((message) => message.role === "toolResult")
+          ?.content,
+      ).toEqual(expectedContent);
+    });
+  },
+);
+
+it("rejects a changed active transcript without losing a known compaction", async () => {
+  const adoptCompactionTranscript = vi.fn(async () => undefined);
+  const afterHook = vi.fn(async () => {});
+  const prepareCurrentTranscriptRetry = vi.fn();
+  await withRecovery(
+    SessionManager.inMemory("/tmp/workspace"),
+    "run-owner-change",
+    async (input, sessionPromptState) => {
+      input.contextEngine.compact = async () => {
+        sessionPromptState.capturePreparedCompactionTarget({
+          sessionId: "session-2",
+          sessionFile: "agent:main:session-2",
+          sessionTarget: { ...input.runParams.sessionTarget, sessionId: "session-2" },
+        });
+        return {
+          ok: true,
+          compacted: true,
+          result: { summary: "done", tokensBefore: 200_001, tokensAfter: 80_000 },
+        };
       };
-      const messages = [
-        makeAgentUserMessage({ content: "read the file", timestamp: 1 }),
-        original,
-        ...[3, 4, 5].map((timestamp) =>
-          makeAgentAssistantMessage({ content: [{ type: "text", text: "continuing" }], timestamp }),
-        ),
-      ];
-      for (const message of messages) {
-        await manager.appendMessageAsync(message);
-      }
-      let expectedContent: ToolResultMessage["content"] | undefined;
-      {
-        using attemptState = retainEmbeddedSessionPromptState(sessionId);
-        const projectionState = attemptState.state.toolResults;
-        const projected =
-          mode === "frozen"
-            ? truncateOversizedToolResultsInMessages(
-                messages,
-                200_000,
-                8_000,
-                32_000,
-                projectionState,
-              ).messages
-            : pruneExpiredCacheTtlToolResults({
-                messages,
-                projectionState,
-                contextWindowTokens: 1_000,
-                settings: {
-                  ttlMs: 10,
-                  hardClear: false,
-                  placeholder: "cleared",
-                  isToolPrunable: () => true,
-                },
-                lastCacheTouchAt: 1,
-                now: 100,
-                dropThinkingBlocksForEstimate: false,
-                pruneNewRounds: true,
-              });
-        expectedContent = projected.find((message) => message.role === "toolResult")?.content;
-        expect(expectedContent).not.toEqual(original.content);
-        await persistToolResultProjections(projectionState, (customType, data) =>
-          manager.appendCustomEntryAsync(customType, data),
-        );
-      }
-      {
-        using idle = retainEmbeddedSessionPromptState(sessionId);
-        expect(idle.state.toolResults.frozen.size).toBe(0);
-      }
-      await withRecovery(manager, `run-${mode}`, async (input) => {
-        input.state.overflowCompactionAttempts = MAX_OVERFLOW_COMPACTION_ATTEMPTS;
-        const outcome = await recoverEmbeddedRunOverflow({
+
+      await expect(
+        recoverEmbeddedRunOverflow({
           ...input,
+          prepareRecoverySession: async () => {
+            throw new Error("unexpected transcript rewrite");
+          },
           attempt: makeAttemptResult({
             promptError: input.promptError,
-            promptErrorSource: "prompt",
-            messagesSnapshot: messages,
+            promptErrorSource: "precheck",
+            replayMetadata: { replaySafe: false, hadPotentialSideEffects: true },
           }),
-        });
-        expect(outcome).toEqual({ action: "retry" });
-        expect(
-          manager.buildSessionContext().messages.find((message) => message.role === "toolResult")
-            ?.content,
-        ).toEqual(expectedContent);
+          runOwnsCompactionAfterHook: afterHook,
+          adoptCompactionTranscript,
+          prepareCurrentTranscriptRetry,
+        }),
+      ).rejects.toThrow("active session changed after recovery transcript preparation");
+
+      expect(input.state).toMatchObject({
+        autoCompactionCount: 1,
+        lastCompactionTokensAfter: 80_000,
       });
+      expect(adoptCompactionTranscript).not.toHaveBeenCalled();
+      expect(afterHook).not.toHaveBeenCalled();
+      expect(prepareCurrentTranscriptRetry).not.toHaveBeenCalled();
     },
+    "agent:main:session-1",
   );
-
-  it("rejects a changed active transcript without losing a known compaction", async () => {
-    const adoptCompactionTranscript = vi.fn(async () => undefined);
-    const afterHook = vi.fn(async () => {});
-    const prepareCurrentTranscriptRetry = vi.fn();
-    const sessionManager = SessionManager.inMemory("/tmp/workspace");
-    await withRecovery(
-      sessionManager,
-      "run-owner-change",
-      async (input, sessionPromptState, target) => {
-        input.contextEngine.compact = async () => {
-          sessionPromptState.capturePreparedCompactionTarget({
-            sessionId: "session-2",
-            sessionFile: "agent:main:session-2",
-            sessionTarget: { ...target, sessionId: "session-2" },
-          });
-          return {
-            ok: true,
-            compacted: true,
-            result: { summary: "done", tokensBefore: 200_001, tokensAfter: 80_000 },
-          };
-        };
-
-        await expect(
-          recoverEmbeddedRunOverflow({
-            ...input,
-            prepareRecoverySession: async () => {
-              throw new Error("unexpected transcript rewrite");
-            },
-            attempt: makeAttemptResult({
-              promptError: input.promptError,
-              promptErrorSource: "precheck",
-              replayMetadata: { replaySafe: false, hadPotentialSideEffects: true },
-            }),
-            runOwnsCompactionAfterHook: afterHook,
-            adoptCompactionTranscript,
-            prepareCurrentTranscriptRetry,
-            markOwnedTranscriptRetry: vi.fn(),
-            armPostCompactionGuard: vi.fn(),
-          }),
-        ).rejects.toThrow("active session changed after recovery transcript preparation");
-
-        expect(input.state).toMatchObject({
-          autoCompactionCount: 1,
-          lastCompactionTokensAfter: 80_000,
-        });
-        expect(adoptCompactionTranscript).not.toHaveBeenCalled();
-        expect(afterHook).not.toHaveBeenCalled();
-        expect(prepareCurrentTranscriptRetry).not.toHaveBeenCalled();
-      },
-      "agent:main:session-1",
-    );
-  });
 });

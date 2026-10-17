@@ -35,6 +35,8 @@ const videoFact = (overrides: Partial<MediaFact>): MediaFact => ({
   contentType: "video/mp4",
   ...overrides,
 });
+const managedVideo = (name: string, overrides: Partial<MediaFact> = {}) =>
+  videoFact({ sizeBytes: MP4.length, url: `media://inbound/${name}.mp4`, ...overrides });
 const imageVideoFacts = (video: Partial<MediaFact>) => [imageFact, videoFact(video), imageFact];
 const text = (value: string) => ({ type: "text" as const, text: value });
 const persistedVideo = (media = [videoFact({ path: "/workspace/clip.mp4" })]) => ({
@@ -64,6 +66,14 @@ function sandboxBridge(readFile: SandboxFsBridge["readFile"]): SandboxFsBridge {
     readFile,
   } as unknown as SandboxFsBridge;
 }
+const sandboxMaterializer =
+  (bridge: SandboxFsBridge): ProviderContextMaterializer =>
+  (input) =>
+    materializeProviderContext({
+      ...input,
+      workspaceDir: "/workspace",
+      sandbox: { root: "/workspace", bridge },
+    });
 
 describe("direct provider context handoff", () => {
   const tempDirs: string[] = [];
@@ -88,20 +98,16 @@ describe("direct provider context handoff", () => {
       const historical = imagePair(
         "historical",
         1,
-        imageVideoFacts({
-          contentType: "application/octet-stream",
-          sizeBytes: MP4.length,
-          url: "media://inbound/old.mp4",
-          hydrationSuppressed: true,
-        }),
+        imageVideoFacts(
+          managedVideo("old", {
+            contentType: "application/octet-stream",
+            hydrationSuppressed: true,
+          }),
+        ),
       );
       const recent = attachRuntimePromptMediaFacts(
         imagePair("recent", 2),
-        imageVideoFacts({
-          sizeBytes: MP4.length,
-          url: "media://inbound/recent.mp4",
-          hydrationSuppressed: true,
-        }),
+        imageVideoFacts(managedVideo("recent", { hydrationSuppressed: true })),
       );
       const steer = attachRuntimePromptMediaFacts(
         {
@@ -110,13 +116,7 @@ describe("direct provider context handoff", () => {
           timestamp: 3,
           __openclaw: { mediaImageBlockFactIndexes: [1] },
         },
-        [
-          videoFact({
-            sizeBytes: MP4.length,
-            url: "media://inbound/steer.mp4",
-          }),
-          imageFact,
-        ],
+        [managedVideo("steer"), imageFact],
       );
       const missingHistorical = {
         ...persistedVideo([videoFact({ url: "media://inbound/missing.mp4" })]),
@@ -187,11 +187,9 @@ describe("direct provider context handoff", () => {
       }),
     );
     const controller = new AbortController();
-    const resolving = materializeProviderContext({
+    const resolving = sandboxMaterializer(bridge)({
       context: { systemPrompt: "system", messages: [persistedVideo()], tools: [] },
       signal: controller.signal,
-      workspaceDir: "/workspace",
-      sandbox: { root: "/workspace", bridge },
     });
     let dispatched = false;
     const dispatching = resolving.then(() => {
@@ -211,10 +209,8 @@ describe("direct provider context handoff", () => {
       videoFact({ path: "/workspace/first.mp4", sizeBytes: MP4.length }),
       videoFact({ path: "/workspace/second.mp4", sizeBytes: MAX_VIDEO_BYTES }),
     ]);
-    const resolved = await materializeProviderContext({
+    const resolved = await sandboxMaterializer(bridge)({
       context: { systemPrompt: "system", messages: [current], tools: [] },
-      workspaceDir: "/workspace",
-      sandbox: { root: "/workspace", bridge },
     });
     expect(resolved.messages[0]?.content).toEqual([
       text("inspect"),
@@ -229,12 +225,7 @@ describe("direct provider context handoff", () => {
     const bridge = sandboxBridge(readFile);
     const context = { systemPrompt: "system", messages: [persistedVideo()], tools: [] };
     const model = { id: "test", provider: "test", api: "test", input: ["text", "image"] };
-    const materialize: ProviderContextMaterializer = (input) =>
-      materializeProviderContext({
-        ...input,
-        workspaceDir: "/workspace",
-        sandbox: { root: "/workspace", bridge },
-      });
+    const materialize = sandboxMaterializer(bridge);
     const nonconsumer = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
     void wrapStreamFnWithMessageTransform(nonconsumer, (messages) => messages, materialize)(
       model as Parameters<StreamFn>[0],
