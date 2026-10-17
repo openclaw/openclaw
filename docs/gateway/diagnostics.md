@@ -844,6 +844,14 @@ OpenTelemetry exports the corresponding
 `openclaw.gateway.ws.events`, `openclaw.gateway.ws.event_bytes`, and
 `openclaw.gateway.ws.operator_connections` metrics.
 
+`openclaw_gateway_ws_presence_frames_total{mode}` and
+`openclaw_gateway_ws_presence_bytes_total{mode}` split presence traffic into
+`delta`, `reset` (full snapshots for capable clients), and `legacy` (full frames
+without delta negotiation). OpenTelemetry exports
+`openclaw.gateway.ws.presence_frames` and `openclaw.gateway.ws.presence_bytes`
+with the `openclaw.gateway.ws.mode` attribute. Counts and bytes use the same
+per-socket send acceptance and batching as the aggregate counters.
+
 `openclaw_gateway_ws_session_event_frames_total{event,reason,delivery}` and
 `openclaw_gateway_ws_session_event_bytes_total{event,reason,delivery}` add session
 traffic attribution. OpenTelemetry exports

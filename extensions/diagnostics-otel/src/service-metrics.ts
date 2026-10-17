@@ -63,6 +63,15 @@ export function createDiagnosticsMetrics(
       "Encoded outbound session event bytes by reason and exact message subscription per socket",
       "By",
     ),
+    gatewayWsPresenceFramesCounter: createCounter(
+      "gateway.ws.presence_frames",
+      "Outbound presence frames accepted by the sender per socket, by delivery mode",
+    ),
+    gatewayWsPresenceBytesCounter: createCounter(
+      "gateway.ws.presence_bytes",
+      "Encoded outbound presence bytes before framing or compression per socket, by delivery mode",
+      "By",
+    ),
     gatewayWsEventsCounter: createCounter(
       "gateway.ws.events",
       "Outbound Gateway WebSocket event frames accepted by the sender per socket",

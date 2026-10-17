@@ -78,6 +78,33 @@ it("exports session traffic attribution while keeping aggregate event labels unc
   }
 });
 
+it("exports presence frame counts and bytes by delivery mode", () => {
+  const metrics = createMetricsHarness();
+  try {
+    for (const presenceMode of ["delta", "reset", "legacy"] as const) {
+      const observation = {
+        type: "gateway.ws.event",
+        event: "presence",
+        count: 2,
+        bytes: 256,
+        presenceMode,
+      } as const;
+      metrics.record(observation);
+      metrics.record({ ...observation, count: 1, bytes: 128 });
+      metrics.record(observation, untrusted);
+    }
+    const rendered = metrics.render();
+    expect(rendered).toContain('openclaw_gateway_ws_events_total{event="presence"} 9');
+    expect(rendered).toContain('openclaw_gateway_ws_event_bytes_total{event="presence"} 1152');
+    for (const mode of ["delta", "reset", "legacy"]) {
+      expect(rendered).toContain(`openclaw_gateway_ws_presence_frames_total{mode="${mode}"} 3`);
+      expect(rendered).toContain(`openclaw_gateway_ws_presence_bytes_total{mode="${mode}"} 384`);
+    }
+  } finally {
+    metrics.stop();
+  }
+});
+
 it("exports trusted session retention gauges and clears them on retirement", () => {
   const metrics = createMetricsHarness();
   const retentionLines = () =>

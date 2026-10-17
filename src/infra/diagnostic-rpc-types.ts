@@ -98,6 +98,8 @@ type DiagnosticGatewayRpcFields = {
     }
 );
 
+export type GatewayWsPresenceMode = "delta" | "reset" | "legacy";
+
 export type GatewayWsSessionEventAttribution = {
   reason: string;
   delivery: "subscribed" | "roster";
@@ -111,6 +113,7 @@ type DiagnosticGatewayWsFields =
       count: number;
       bytes: number;
       sessionEvent?: GatewayWsSessionEventAttribution;
+      presenceMode?: GatewayWsPresenceMode;
     }
   | { type: "gateway.ws.connections"; operators: number };
 

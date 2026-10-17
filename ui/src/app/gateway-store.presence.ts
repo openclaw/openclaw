@@ -104,7 +104,16 @@ export function createGatewayPresenceObserver(options: {
           Array.isArray(update.remove) &&
           Array.isArray(update.order) &&
           update.upsert.every(
-            (entry) => entry && typeof entry.key === "string" && entry.presence,
+            (entry) =>
+              entry &&
+              typeof entry.key === "string" &&
+              ("presence" in entry
+                ? entry.presence
+                : entry.set &&
+                  typeof entry.set === "object" &&
+                  !Array.isArray(entry.set) &&
+                  Array.isArray(entry.unset) &&
+                  entry.unset.every((field) => typeof field === "string")),
           ) &&
           update.remove.every((key) => typeof key === "string") &&
           update.order.every((key) => typeof key === "string")
@@ -113,10 +122,25 @@ export function createGatewayPresenceObserver(options: {
           for (const key of update.remove) {
             next.delete(key);
           }
+          let complete = true;
           for (const entry of update.upsert) {
-            next.set(entry.key, entry.presence);
+            if ("presence" in entry) {
+              next.set(entry.key, entry.presence);
+            } else {
+              const before = next.get(entry.key);
+              if (!before) {
+                complete = false;
+                break;
+              }
+              const row: PresenceEntry & Record<string, unknown> = { ...before, ...entry.set };
+              for (const field of entry.unset) {
+                delete row[field];
+              }
+              next.set(entry.key, row);
+            }
           }
           if (
+            complete &&
             new Set(update.order).size === next.size &&
             update.order.length === next.size &&
             update.order.every((key) => next.has(key))
