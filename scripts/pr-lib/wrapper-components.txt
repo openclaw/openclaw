@@ -916,6 +916,7 @@ src/infra/delivery-queue-retention-columns.ts
 src/infra/delivery-queue-sqlite-bound.ts
 src/infra/delivery-queue-sqlite.types.ts
 src/infra/diagnostic-event-listener-presence.ts
+src/infra/diagnostic-event-queue-policy.ts
 src/infra/diagnostic-event-snapshot.ts
 src/infra/diagnostic-events.ts
 src/infra/diagnostic-flags-env.ts
@@ -1891,7 +1892,6 @@ src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
 src/state/openclaw-agent-pending-inputs-schema.ts
 src/state/openclaw-agent-progress-card-schema.ts
-src/state/openclaw-agent-schema-inspection-operations.worker.ts
 src/state/openclaw-agent-schema-inspection-response.ts
 src/state/openclaw-agent-schema-inspection-worker.ts
 src/state/openclaw-agent-schema.sql

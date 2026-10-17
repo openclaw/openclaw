@@ -31,6 +31,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { serializeGatewayFrame } from "./serialized-json.js";
 import { listSessions, requestContext } from "./server-methods/sessions-read-cache.test-support.js";
+import { getSessionListBaseMiss } from "./session-list-diagnostics.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { shareSidebarSessionRows } from "./session-row-presentation.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -201,6 +202,7 @@ it("encodes insertions, replacements, reorders and removals against an exact imm
   for (const token of [revision, `${SESSION_ROWS_DELTA_PREFIX}missing`]) {
     const full = shareSidebarSessionRows(rows, token, [previous]);
     expect(full.rowsDelta).toBeUndefined();
+    expect(getSessionListBaseMiss(full)).toBe("unknown-base");
     expect(expandSessionRowFacts(full.sessions, full.sharedFacts)).toEqual(rows);
   }
   expect(
@@ -210,10 +212,12 @@ it("encodes insertions, replacements, reorders and removals against an exact imm
     rowsRevision: delta.rowsRevision,
     rowsUnchanged: true,
   });
-  expect(
-    shareSidebarSessionRows([changed], `${SESSION_ROWS_DELTA_PREFIX}${revision}`, [previous])
-      .rowsDelta,
-  ).toBeUndefined();
+  const allChanged = shareSidebarSessionRows([changed], `${SESSION_ROWS_DELTA_PREFIX}${revision}`, [
+    previous,
+  ]);
+  expect(allChanged.rowsDelta).toBeUndefined();
+  expect(getSessionListBaseMiss(allChanged)).toBe("all-rows-changed");
+  expect(getSessionListBaseMiss(shareSidebarSessionRows([changed]))).toBeUndefined();
 });
 
 it("keeps deltas inside the authorized owner, personal and paginated list owners", async () => {
@@ -342,6 +346,7 @@ it("keeps deltas inside the authorized owner, personal and paginated list owners
       expect(applied?.sessions).toEqual(expandSessionRowFacts(full.sessions, full.sharedFacts));
       const differentLimit = await read({ ...primary, limit: 1 }, removed);
       expect(differentLimit.rowsDelta).toBeUndefined();
+      expect(getSessionListBaseMiss(differentLimit)).toBe("unknown-base");
       expect(differentLimit.count).toBe(2);
 
       assignSessionOwner(scope("a"), { owner: { type: "human", id: viewer }, assignedBy: creator });

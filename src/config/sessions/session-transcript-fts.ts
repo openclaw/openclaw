@@ -1,3 +1,4 @@
+import { sql } from "kysely";
 import { admitStoreSearch } from "../../infra/database-engine/adapters.js";
 import {
   executeSqliteQuerySync,
@@ -12,6 +13,7 @@ import {
 } from "../../infra/sqlite-database-admission.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
+import { TRANSCRIPT_INSERT_BATCH_SIZE } from "./transcript-payload.js";
 
 type TranscriptFtsDatabase = Pick<DB, "session_transcript_fts_rows"> & {
   session_transcript_fts: Omit<DB["session_transcript_fts"], "timestamp"> & {
@@ -30,62 +32,128 @@ type TranscriptFtsEntry = {
 /** Insert both projection records in the caller's synchronous write transaction. */
 export function createSessionTranscriptFtsInserter(db: EngineConnection, sessionId: string) {
   const kysely = getNodeSqliteKysely<TranscriptFtsDatabase>(db);
-  if (isPostgresSqlConnection(db)) {
-    const insert = prepareSqliteQuerySync<TranscriptFtsEntry>(db, (parameter) =>
-      kysely
-        .with("inserted", (query) =>
-          query
-            .insertInto("session_transcript_fts_rows")
-            .values({
-              session_id: sessionId,
-              message_id: parameter((entry) => entry.messageId),
-            })
-            .returning("id"),
+  const postgres = isPostgresSqlConnection(db);
+  const search = postgres ? undefined : admitStoreSearch(db, agentTranscriptSearchSchema);
+  if (search && !search.fullText) {
+    throw new Error(search.diagnostics.join("; "));
+  }
+  const prepare = (count: number) => {
+    const indexes = Array.from({ length: count }, (_, index) => index);
+    const insertContent = prepareSqliteQuerySync<readonly TranscriptFtsEntry[]>(db, (parameter) => {
+      const entries = kysely.with(
+        "entries(position, message_id, text, role, timestamp)",
+        () =>
+          /* kysely-allow-raw: A bounded VALUES relation carries entry order and natural keys with the content. */
+          sql<{
+            position: number;
+            message_id: string | null;
+            text: string | null;
+            role: string | null;
+            timestamp: number | string | null;
+          }>`(values ${sql.join(indexes.map((index) => sql`(${sql.lit(index)}, ${parameter((rows) => rows[index]!.messageId)}, ${parameter((rows) => rows[index]!.text)}, ${parameter((rows) => rows[index]!.role)}, ${parameter((rows) => rows[index]!.timestamp)})`))})`,
+      );
+      if (postgres) {
+        return entries
+          .with("inserted", (query) =>
+            query
+              .insertInto("session_transcript_fts_rows")
+              .columns(["session_id", "message_id"])
+              .expression((source) =>
+                source
+                  .selectFrom("entries")
+                  .select((eb) => [eb.val(sessionId).as("session_id"), "message_id"])
+                  .orderBy("position"),
+              )
+              .returning(["id", "message_id"]),
+          )
+          .insertInto("session_transcript_fts")
+          .columns(["rowid", "text", "session_id", "message_id", "role", "timestamp"])
+          .expression((query) =>
+            query
+              .selectFrom("inserted")
+              .innerJoin("entries", (join) =>
+                join.onRef("entries.message_id", "is not distinct from", "inserted.message_id"),
+              )
+              .select((eb) => [
+                "id",
+                "entries.text",
+                eb.val(sessionId).as("session_id"),
+                "entries.message_id",
+                "entries.role",
+                eb.cast<number>("entries.timestamp", "double precision").as("timestamp"),
+              ])
+              .orderBy("entries.position"),
+          );
+      }
+      return entries
+        .with(
+          (cte) => cte("allocated").materialized(),
+          (query) =>
+            query.selectNoFrom(
+              search!.fullText!.allocatedIdentity(search!.text.transcript!).as("last_id"),
+            ),
         )
         .insertInto("session_transcript_fts")
         .columns(["rowid", "text", "session_id", "message_id", "role", "timestamp"])
         .expression((query) =>
           query
-            .selectFrom("inserted")
+            .selectFrom("entries")
+            .crossJoin("allocated")
             .select((eb) => [
-              "id",
-              parameter((entry) => entry.text).as("text"),
+              // Below INT64_MAX, SQLite allocates consecutive IDs. Capture before FTS5
+              // changes last_insert_rowid; all 64-bit arithmetic stays in SQLite.
+              eb(
+                eb("allocated.last_id", "-", sql.lit(count - 1)),
+                "+",
+                eb.ref("entries.position"),
+              ).as("rowid"),
+              "entries.text",
               eb.val(sessionId).as("session_id"),
-              parameter((entry) => entry.messageId).as("message_id"),
-              parameter((entry) => entry.role).as("role"),
-              parameter((entry) => entry.timestamp).as("timestamp"),
-            ]),
+              "entries.message_id",
+              "entries.role",
+              "entries.timestamp",
+            ])
+            .orderBy("entries.position"),
+        );
+    });
+    if (postgres) {
+      return insertContent;
+    }
+    const insertIdentities = prepareSqliteQuerySync<readonly TranscriptFtsEntry[]>(
+      db,
+      (parameter) =>
+        kysely.insertInto("session_transcript_fts_rows").values(
+          indexes.map((index) => ({
+            session_id: sessionId,
+            message_id: parameter((entries) => entries[index]!.messageId),
+          })),
         ),
     );
-    return (entry: TranscriptFtsEntry): void => {
-      withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => insert(entry));
+    return (entries: readonly TranscriptFtsEntry[]) => {
+      insertIdentities(entries);
+      insertContent(entries);
     };
-  }
-  const search = admitStoreSearch(db, agentTranscriptSearchSchema);
-  if (!search.fullText) {
-    throw new Error(search.diagnostics.join("; "));
-  }
-  const insertIdentity = prepareSqliteQuerySync<TranscriptFtsEntry>(db, (parameter) =>
-    kysely.insertInto("session_transcript_fts_rows").values({
-      session_id: sessionId,
-      message_id: parameter((entry) => entry.messageId),
-    }),
-  );
-  const insertContent = prepareSqliteQuerySync<TranscriptFtsEntry>(db, (parameter) =>
-    kysely.insertInto("session_transcript_fts").values({
-      // Keep the allocated 64-bit identity inside SQLite, including above JS's safe integer range.
-      rowid: search.fullText!.allocatedIdentity(search.text.transcript!),
-      text: parameter((entry) => entry.text),
-      session_id: sessionId,
-      message_id: parameter((entry) => entry.messageId),
-      role: parameter((entry) => entry.role),
-      timestamp: parameter((entry) => entry.timestamp),
-    }),
-  );
-  return (entry: TranscriptFtsEntry): void => {
+  };
+  const inserts = new Map<number, ReturnType<typeof prepare>>();
+  return (entries: readonly TranscriptFtsEntry[]): void => {
     withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => {
-      insertIdentity(entry);
-      insertContent(entry);
+      for (let offset = 0; offset < entries.length;) {
+        const keys = new Set<string | null>();
+        const start = offset;
+        // At most 4 * 64 + 2 binds, below both engines' limits. Split repeated keys
+        // (including null) so the PG RETURNING join has exactly one content row.
+        while (
+          offset < entries.length &&
+          offset - start < TRANSCRIPT_INSERT_BATCH_SIZE &&
+          !keys.has(entries[offset]!.messageId)
+        ) {
+          keys.add(entries[offset++]!.messageId);
+        }
+        const chunk = entries.slice(start, offset);
+        const write = inserts.get(chunk.length) ?? prepare(chunk.length);
+        inserts.set(chunk.length, write);
+        write(chunk);
+      }
     });
   };
 }

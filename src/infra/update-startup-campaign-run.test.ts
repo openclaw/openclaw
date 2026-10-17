@@ -10,12 +10,14 @@ import {
 import * as sentinelStore from "./restart-sentinel.js";
 import { readRestartSentinel } from "./restart-sentinel.js";
 import { UpdateCampaignController } from "./update-campaign.js";
+import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 import {
   createUpdateRun,
   finishUpdateRun,
   listUpdateRuns,
   recordUpdateRunVerification,
 } from "./update-run-ledger.js";
+import { renderUpdateRunReport } from "./update-run-report.js";
 import {
   runAutoUpdateCommand,
   runCampaignUpdate,
@@ -134,6 +136,42 @@ describe("automatic campaign handoff failure", () => {
     vi.restoreAllMocks();
     await closeStateDatabaseForTest();
     await state.cleanup();
+  });
+
+  it("records the refusal in the failed phase even when later diagnostics are unavailable", async () => {
+    const reason = "update-recovery-pending";
+    const message = "Package publication recovery permissions are unsafe: activation mode 0750.";
+    const run = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
+    start.mockImplementationOnce(async () => {
+      await failWorkerWrite("diagnostic ledger is read-only", true);
+      throw new UpdatePreMutationError(reason, message);
+    });
+    const outcome = await runAutoUpdateCommand(
+      {
+        runId: run.runId,
+        channel: "beta",
+        mode: "npm",
+        root: "/opt/openclaw",
+        timeoutMs: 1_000,
+        restartDrainTimeoutMs: undefined,
+      },
+      { info: vi.fn() },
+    );
+    expect(outcome).toMatchObject({ status: "failed", result: { reason } });
+    expect(outcome).toHaveProperty("message", expect.stringContaining(`${reason}: ${message}`));
+    finishUpdateRun(run.runId, { status: "failed", reason });
+    const recorded = expectDefined(listUpdateRuns()[0], "failed automatic update run");
+    expect(recorded.steps).toContainEqual(
+      expect.objectContaining({
+        step: "requested",
+        status: "failed",
+        detail: `${reason}: ${message}`,
+        failureFacts: [{ check: reason, code: reason, message }],
+      }),
+    );
+    expectIncludes(renderUpdateRunReport(recorded).markdown, reason, message);
+    const report = await recordedFailureReport(recorded);
+    expectIncludes(report.body, reason);
   });
 
   it.each([

@@ -10,6 +10,37 @@ import { createTestIngressQueue, withTempState } from "./ingress-drain.test-help
 import { createChannelIngressQueue } from "./ingress-queue.js";
 
 describe("channel ingress claim ownership", () => {
+  it("deduplicates batched and competing admissions without replacing the first payload", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir, { now: () => 100 });
+      await queue.enqueue("completed", { text: "processed" });
+      await queue.complete("completed");
+      const [batch, competing] = await Promise.all([
+        queue.enqueueBatch!([
+          { id: "second", payload: { text: "first payload" }, receivedAt: 102 },
+          { id: "first", payload: { text: "earlier" }, receivedAt: 101 },
+          { id: "completed", payload: { text: "replay" } },
+          { id: "second", payload: { text: "duplicate payload" }, receivedAt: 103 },
+        ]),
+        queue.enqueue("second", { text: "competing payload" }),
+      ]);
+      expect(batch.map((result) => result.kind)).toEqual([
+        "accepted",
+        "accepted",
+        "completed",
+        "pending",
+      ]);
+      expect(competing).toMatchObject({
+        kind: "pending",
+        record: { payload: { text: "first payload" } },
+      });
+      expect((await queue.listPending()).map(({ id, payload }) => ({ id, payload }))).toEqual([
+        { id: "first", payload: { text: "earlier" } },
+        { id: "second", payload: { text: "first payload" } },
+      ]);
+    });
+  });
+
   it.each(["transaction", "commit"] as const)(
     "revalidates live lane policy at native %s admission",
     async (stage) => {

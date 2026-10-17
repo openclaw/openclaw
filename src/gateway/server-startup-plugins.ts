@@ -61,12 +61,12 @@ export async function runGatewayPostReadyStartupMaintenance(params: {
         if (params.pluginMetadataSnapshot?.registrySource !== "derived") {
           return;
         }
-        const [{ withPluginLifecycleLease }, { refreshPluginRegistryAfterConfigMutation }] =
+        const [{ withPluginLifecycleLeaseAsync }, { refreshPluginRegistryAfterConfigMutation }] =
           await Promise.all([
             import("../plugins/plugin-lifecycle-lease.js"),
             import("../plugins/registry-refresh.js"),
           ]);
-        await withPluginLifecycleLease(
+        await withPluginLifecycleLeaseAsync(
           {
             signal: params.signal,
             assertCurrent: () => params.signal.throwIfAborted(),

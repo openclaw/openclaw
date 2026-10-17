@@ -65,9 +65,10 @@ cached transcript opens at its latest messages without an initial scroll animati
 It retains participant and completed-work timing information and the last task
 progress card for display while connecting; live Gateway results replace those
 cached facts in place. Cached progress does not authorize offline actions. The
-first chat request waits up to 300 ms for stored history before falling back to
-a live read. Agent switches and stale asynchronous reads retain their own
-identity checks. Agent pickers and the agent directory wait for a live roster;
+first chat request uses the saved cursor if the cached transcript is ready when
+the live message subscription finishes connecting. Otherwise, the live read and
+cache restoration run in parallel. Agent switches and stale asynchronous reads
+retain their own identity checks. Agent pickers and the agent directory wait for a live roster;
 stored agent lists cannot establish the current role’s discovery permissions. Short
 conversation links use cached routing defaults and session rows before agent
 discovery; the Gateway revalidates the established session after connecting.

@@ -99,13 +99,13 @@ export async function loadStatePortDescriptor(
     }),
     inspectSqliteSource(db) {
       admitSqliteSchema(db);
-      assertOpenClawStateDatabaseForMaintenance(db, { pathname: "shared-state port source" });
       const version = getAdmittedSqliteSchemaFacts(db)!.userVersion;
       if (version !== OPENCLAW_STATE_SCHEMA_VERSION) {
         throw new DatabasePortDataError(
           "Shared-state port requires the current schema; run openclaw doctor --fix with the matching version first.",
         );
       }
+      assertOpenClawStateDatabaseForMaintenance(db, { pathname: "shared-state port source" });
       return { version, migrationRequired: false, pendingColumns: {} };
     },
     async admit(file, input) {

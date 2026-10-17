@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -11,6 +12,7 @@ import {
 import { createMessageTool } from "../../agents/tools/message-tool-execution.js";
 import * as dispatch from "../../auto-reply/dispatch.js";
 import { mintReplyMessageActionTurnCapability } from "../../auto-reply/reply/agent-runner-utils.js";
+import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -104,6 +106,29 @@ function createBindingClient(options: {
         ? { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" }
         : { id: "cli", version: "test", platform: "test", mode: "cli" },
     },
+  };
+}
+
+async function prepareBindingRequest(
+  params: { sessionKey: string; message: string; idempotencyKey: string },
+  client: GatewayClient,
+  context: GatewayRequestContext,
+) {
+  const authorization = await resolveSessionMutationAuthorizationAsync({
+    client,
+    context,
+    method: "chat.send",
+    requestParams: params,
+  });
+  expect(authorization.error).toBeNull();
+  return {
+    params,
+    client,
+    context,
+    respond: vi.fn(),
+    req: { type: "req" as const, id: params.idempotencyKey, method: "chat.send", params },
+    sessionMutationAuthorization: authorization.authorization,
+    isWebchatConnect: () => false,
   };
 }
 
@@ -205,32 +230,19 @@ it.each(admissionScenarios)(
       let options: DispatchOptions | undefined;
       let releaseAuthorization: (() => void) | undefined;
       try {
-        const respond = vi.fn();
         const params = {
           // Exercise the ordinary dashboard alias without an explicit agentId.
           sessionKey: scenario === "dashboard" ? "main" : sessionKey,
           message: "Keep this user turn in its session",
           idempotencyKey: runId,
         };
-        const authorization = await resolveSessionMutationAuthorizationAsync({
-          client,
-          context,
-          method: "chat.send",
-          requestParams: params,
-        });
-        releaseAuthorization = authorization.authorization?.release;
-        expect(authorization.error).toBeNull();
-        const sendChat = directDashboard ? handleDirectExternalChatSend : handleChatSend;
         const request = {
-          params,
-          req: { type: "req" as const, id: runId, method: "chat.send", params },
-          respond,
-          context,
-          client,
+          ...(await prepareBindingRequest(params, client, context)),
           hasCurrentClientAuthority,
-          sessionMutationAuthorization: authorization.authorization,
-          isWebchatConnect: () => false,
         };
+        releaseAuthorization = request.sessionMutationAuthorization?.release;
+        const { respond } = request;
+        const sendChat = directDashboard ? handleDirectExternalChatSend : handleChatSend;
         if (scenario === "narrow-first-send") {
           await handleGatewayRequest({
             ...request,
@@ -257,9 +269,7 @@ it.each(admissionScenarios)(
         const prepared = options.replyOptions?.onSessionPrepared;
         const runStarted = options.replyOptions?.onAgentRunStart;
         const capability = options.replyOptions?.skillLibraryAuthoring;
-        if (!owned || !prepared || !runStarted || !capability) {
-          throw new Error("chat.send did not hand off its prepared-session callback");
-        }
+        assert(owned && prepared && runStarted && capability);
         // Initial resolution needs detached entries; later admission must not clone unrelated rows.
         expect.soft(unrelatedCloneCount()).toBeLessThanOrEqual(1);
         const admittedContext = await namespaceRun.admit("embedded");
@@ -285,9 +295,7 @@ it.each(admissionScenarios)(
           const snapshot = await loadReplySessionInitializationSnapshot(creationScope);
           const bindCreation = options.replyOptions?.bindSessionCreation;
           const onCreated = options.replyOptions?.onSessionCreated;
-          if (!bindCreation || !onCreated) {
-            throw new Error("chat.send did not hand off its session creation owner");
-          }
+          assert(bindCreation && onCreated);
           const result = await commitReplySessionInitialization({
             ...creationScope,
             activeSessionKey: sessionKey,
@@ -302,9 +310,7 @@ it.each(admissionScenarios)(
           await upsertSessionEntryCore(scope, preparedEntry);
         }
         const committed = loadExactSessionEntryReadOnly(scope);
-        if (!committed) {
-          throw new Error("session writer did not commit");
-        }
+        assert(committed, "session writer did not commit");
         const binding = {
           sessionKey,
           sessionId: committed.entry.sessionId,
@@ -469,6 +475,8 @@ it.each(
         });
         client.connId = "reaction-source-client";
         const broadcast = vi.fn();
+        const reactionEvents = () =>
+          broadcast.mock.calls.filter(([event]) => event === "session.reaction");
         const context = createBindingContext();
         context.removeChatRun = (runId: string) => {
           sources.get(runId)?.finished.resolve();
@@ -489,9 +497,7 @@ it.each(
           .spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher")
           .mockImplementation(async (options) => {
             const source = sources.get(options.ctx.MessageSid ?? "");
-            if (!source) {
-              throw new Error("Unexpected source dispatch");
-            }
+            assert(source, "Unexpected source dispatch");
             source.entered.resolve(options);
             await source.release.promise;
             return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
@@ -513,24 +519,10 @@ it.each(
           };
           sources.set(runId, source);
           const params = { sessionKey, message, idempotencyKey: runId };
-          const authorization = await resolveSessionMutationAuthorizationAsync({
-            client,
-            context,
-            method: "chat.send",
-            requestParams: params,
-          });
-          source.releaseAuthorization = authorization.authorization?.release;
-          expect(authorization.error).toBeNull();
-          const respond = vi.fn();
-          await handleDirectExternalChatSend({
-            params,
-            req: { type: "req", id: runId, method: "chat.send", params },
-            respond,
-            context,
-            client,
-            sessionMutationAuthorization: authorization.authorization,
-            isWebchatConnect: () => false,
-          });
+          const request = await prepareBindingRequest(params, client, context);
+          source.releaseAuthorization = request.sessionMutationAuthorization?.release;
+          const { respond } = request;
+          await handleDirectExternalChatSend(request);
           expect(respond).toHaveBeenCalledWith(
             true,
             expect.objectContaining({ runId, status: "started" }),
@@ -539,9 +531,7 @@ it.each(
           );
           const options = await source.entered.promise;
           const owned = observeDispatch.mock.calls.at(-1)?.[0];
-          if (!owned || !options.replyOptions?.dashboardReadAdmission) {
-            throw new Error("Direct authenticated chat did not capture its source");
-          }
+          assert(owned && options.replyOptions?.dashboardReadAdmission);
           source.owned = owned;
           source.options = options;
           options.replyOptions.onSessionPrepared?.({
@@ -565,33 +555,26 @@ it.each(
           }
           await initial.owned.userTurn.persist();
           const original = initialRecorder.getAdmissionReceipt();
-          if (!original) {
-            throw new Error("Original prompt did not commit");
-          }
+          assert(original, "Original prompt did not commit");
           if (mode === "queued") {
             initial.owned.admission.cleanupAdmittedRun();
             expect(context.chatQueuedTurns.has("reaction-original-source")).toBe(true);
           }
           const config = getRuntimeConfig();
+          const followupRun = createQueueTestRun({ prompt: "Original prompt" });
+          followupRun.userTurnTranscriptRecorder = initialRecorder;
+          followupRun.run = {
+            ...followupRun.run,
+            ...scope,
+            sessionFile: sessionKey,
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+            config,
+            messageProvider: "webchat",
+          };
           token = mintReplyMessageActionTurnCapability(
             {
-              followupRun: {
-                prompt: "Original prompt",
-                enqueuedAt: 0,
-                userTurnTranscriptRecorder: initialRecorder,
-                run: {
-                  ...scope,
-                  sessionFile: sessionKey,
-                  agentDir: state.agentDir(),
-                  workspaceDir: state.workspaceDir,
-                  config,
-                  provider: "openai",
-                  model: "test",
-                  messageProvider: "webchat",
-                  timeoutMs: 1000,
-                  blockReplyBreak: "message_end",
-                },
-              },
+              followupRun,
               sessionCtx: { Provider: "webchat" },
               // Deliberately offer the original read admission. It must not transfer to this run.
               opts: {
@@ -622,13 +605,6 @@ it.each(
             currentChannelProvider: "webchat",
             messageActionTurnCapability: token,
             runMessageAction: external,
-            getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-            resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
-              resolvedConfig,
-              diagnostics: [],
-              targetStatesByPath: {},
-              hadUnresolvedTargets: false,
-            }),
           });
           const react = (args: Record<string, unknown> = {}) =>
             withGatewayToolCallerIdentity(caller, () =>
@@ -643,9 +619,7 @@ it.each(
               messageId: original.entryId,
             });
             const prepared = await prompt.resolveMessage();
-            if (!prepared) {
-              throw new Error("Steered prompt was not staged");
-            }
+            assert(prepared, "Steered prompt was not staged");
             const manager = guardSessionManager(
               await SessionManager.openAsync(
                 { ...scope, storePath: original.storePath },
@@ -663,9 +637,7 @@ it.each(
             expect(prompt.getAdmissionReceipt()?.entryId).not.toBe(original.entryId);
           }
           const messageId = prompt.getAdmissionReceipt()?.entryId;
-          if (!messageId) {
-            throw new Error("Consumed prompt did not commit");
-          }
+          assert(messageId, "Consumed prompt did not commit");
           // Existing human rows use the same durable store before any agent reaction.
           await setSessionReactionAsync(scope, {
             messageId,
@@ -715,7 +687,7 @@ it.each(
                 ]),
               },
             ]);
-            expect(broadcast.mock.calls.filter(([event]) => event === "session.reaction")).toEqual([
+            expect(reactionEvents()).toEqual([
               [
                 "session.reaction",
                 expect.objectContaining({
@@ -738,9 +710,7 @@ it.each(
               expect(preparationRevoked).toBe(true);
             }
             expect(listSessionReactions(scope, { sessionId })).toEqual(before);
-            expect(broadcast.mock.calls.filter(([event]) => event === "session.reaction")).toEqual(
-              [],
-            );
+            expect(reactionEvents()).toEqual([]);
           }
           probe.mockRestore();
           if (outcome === "allowed") {

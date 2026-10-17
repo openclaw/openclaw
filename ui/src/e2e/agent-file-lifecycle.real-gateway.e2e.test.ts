@@ -44,27 +44,34 @@ const refreshInventoryArgs = [
   JSON.stringify({ agentId: "main", view: "all", refresh: true }),
 ];
 async function refreshInventory() {
+  const expectedInventory = inventoryModel;
   let result = await catalogInstance.cli(refreshInventoryArgs);
   expect(result.code, result.stderr).toBe(0);
   let catalog: ModelCatalogResult = JSON.parse(result.stdout);
-  // Refresh can return the previous inventory while discovery continues.
+  const inventory = () =>
+    catalog.models.filter((model) => model.provider === "ollama").map((model) => model.id);
+  // Publication can precede acquisition settlement; a refresh may still join the old acquisition.
   await expect
     .poll(async () => {
-      if (catalog.pendingProviders?.length) {
+      if (catalog.pendingProviders?.length || !inventory().includes(expectedInventory)) {
         result = await catalogInstance.cli([
           "gateway",
           "call",
           "models.list",
           "--json",
           "--params",
-          JSON.stringify({ agentId: "main", view: "all" }),
+          JSON.stringify({
+            agentId: "main",
+            view: "all",
+            ...(!catalog.pendingProviders?.length ? { refresh: true } : {}),
+          }),
         ]);
         expect(result.code, result.stderr).toBe(0);
         catalog = JSON.parse(result.stdout);
       }
-      return catalog.pendingProviders ?? [];
+      return { inventory: inventory(), pendingProviders: catalog.pendingProviders ?? [] };
     })
-    .toEqual([]);
+    .toEqual({ inventory: [expectedInventory], pendingProviders: [] });
   return result;
 }
 const catalogModels = (id: string) => [

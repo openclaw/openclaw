@@ -2,10 +2,7 @@ import { randomUUID } from "node:crypto";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { subscribePlacementChanges } from "./placement-authority-owner.js";
 import { createPlacementLifecycleWorkerOps } from "./placement-lifecycle-store.js";
@@ -62,9 +59,11 @@ export type { WorkerSessionPlacementRecord, WorkerSessionTurnClaim } from "./pla
 export function createWorkerSessionPlacementStore(
   options: { database?: OpenClawStateDatabase; now?: () => number } = {},
 ) {
-  const path = (options.database ?? openOpenClawStateDatabase()).path;
+  const context = captureOpenClawStateWorkerContext(
+    options.database ? { path: options.database.path } : {},
+  );
+  const path = context.admission.databasePath;
   const now = options.now ?? Date.now;
-  const context = captureOpenClawStateWorkerContext({ path });
   const runtime = { path, instanceId: randomUUID(), now };
   const workspaceResultConflicts = new Map<
     string,

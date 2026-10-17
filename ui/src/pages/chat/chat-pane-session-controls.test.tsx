@@ -319,7 +319,8 @@ describe("chat pane composer controls", () => {
   ])(
     "renders separate footer inputs with a $label catalog",
     ({ cached, connected = true, error, message }) => {
-      const container = document.createElement("div");
+      const container = document.body.appendChild(document.createElement("div"));
+      onTestFinished(() => container.remove());
       const state = makeChatHost({
         connected,
         requestHandlers: {},
@@ -336,9 +337,11 @@ describe("chat pane composer controls", () => {
         agentDefaultPermissionMode: "guarded",
         onModelSetup,
       });
+      controls.composerControls.model.modelPickerOpen = true;
       mountSolid(() => createComponent(ChatPaneModelControl, controls.composerControls), {
         container,
       });
+      flush();
 
       expect(container.querySelectorAll(".chat-composer-model-control")).toHaveLength(1);
       expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();

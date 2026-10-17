@@ -18,6 +18,50 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+function prepare(
+  { root, stateDir }: { root: string; stateDir: string },
+  options: Partial<Parameters<typeof prepareUpdateCandidateRehearsal>[0]> = {},
+) {
+  return prepareUpdateCandidateRehearsal({
+    config: {},
+    stateDir,
+    candidateRoot: root,
+    env: {},
+    ...options,
+  });
+}
+
+async function cleanup(pending: ReturnType<typeof prepare>) {
+  await pending.then(
+    (rehearsal) => rehearsal.cleanup(),
+    () => undefined,
+  );
+}
+
+async function withRehearsal(
+  pending: ReturnType<typeof prepare>,
+  run: (rehearsal: Awaited<typeof pending>) => Promise<void>,
+) {
+  try {
+    await run(await pending);
+  } finally {
+    await cleanup(pending);
+  }
+}
+
+function capacity(available: (target: string) => number | null, totalBytes = 1024 ** 3) {
+  vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => {
+    const availableBytes = available(targetPath);
+    return availableBytes === null
+      ? null
+      : { targetPath, checkedPath: targetPath, availableBytes, totalBytes };
+  });
+}
+
+async function expectSize(file: string, size: number) {
+  expect((await fs.stat(file)).size).toBe(size);
+}
+
 async function fixture(sizeMiB = 0) {
   const root = tempDirs.make("candidate-resources-");
   await materializeUpdateCandidateStateWorker(root);
@@ -31,10 +75,7 @@ async function fixture(sizeMiB = 0) {
   return { root, stateDir, file };
 }
 
-async function withSyntheticSnapshotWorker(
-  body: string,
-  run: (fixture: { root: string; stateDir: string; receipt: string }) => Promise<void>,
-) {
+async function syntheticSnapshotWorker(body: string) {
   const root = tempDirs.make("candidate-progress-");
   const stateDir = path.join(root, "source");
   const receipt = path.join(root, "child.json");
@@ -65,12 +106,13 @@ async function withSyntheticSnapshotWorker(
       ${body}
     `,
   );
-  await run({ root, stateDir, receipt });
+  return { root, stateDir, receipt };
 }
 
-it("renews the snapshot deadline while the worker keeps writing its private copy", async () => {
-  await withSyntheticSnapshotWorker(
-    `
+it.each(["progressing", "stalled"] as const)("settles a %s snapshot worker", async (outcome) => {
+  const { root, stateDir, receipt } = await syntheticSnapshotWorker(
+    outcome === "progressing"
+      ? `
       for (const [index, blocks] of [4, 3, 3].entries()) {
         await fs.appendFile(path.join(scratch, "database.sqlite"), Buffer.alloc(blocks * 1024));
         while (!(await fs.stat(path.join(controlRoot, "continue-" + index)).catch(() => undefined))) {
@@ -78,111 +120,69 @@ it("renews the snapshot deadline while the worker keeps writing its private copy
         }
       }
       process.stdout.write(JSON.stringify({ versions: [], pluginPaths: {} }));
-    `,
-    async ({ root, stateDir }) => {
-      const now = Date.now.bind(Date);
-      let elapsed = 0;
-      vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
-      const started = Date.now();
-      const waitForBytes = observeUpdateCandidateIoProgress();
-      const cancel = new AbortController();
-      const operation = prepareUpdateCandidateRehearsal({
-        config: {},
-        stateDir,
-        candidateRoot: root,
-        timeoutMs: 300_000,
-        signal: AbortSignal.any([cancel.signal, AbortSignal.timeout(10_000)]),
-        env: {},
-      });
-      const prematureExit = operation.then(() => {
-        throw new Error("Snapshot exited before its copy checkpoints were released");
-      });
-      try {
-        for (const [index, blocks] of [4, 7, 10].entries()) {
-          await Promise.race([waitForBytes(blocks * 1024), prematureExit]);
-          elapsed += 200_000;
-          await fs.writeFile(path.join(root, `continue-${index}`), "continue");
-        }
-        const rehearsal = await operation;
-        expect(Date.now() - started).toBeGreaterThan(300_000);
-        expect(
-          (
-            await fs.stat(
-              path.join(rehearsal.stateDir, ".sqlite-snapshot-fixture", "database.sqlite"),
-            )
-          ).size,
-        ).toBe(10 * 1024);
-      } finally {
-        cancel.abort();
-        await operation.then(
-          (rehearsal) => rehearsal.cleanup(),
-          () => undefined,
-        );
-      }
-      await expect(fs.readdir(stateDir)).resolves.toEqual([]);
-    },
-  );
-});
-
-it("reaps a stalled snapshot worker before removing its database and WAL scratch", async () => {
-  await withSyntheticSnapshotWorker(
     `
+      : `
       await fs.writeFile(path.join(scratch, "database.sqlite"), "partial database");
       await fs.writeFile(path.join(scratch, "database.sqlite-wal"), "partial WAL");
       process.on("SIGTERM", () => {});
       setInterval(() => {}, 1000);
       await fs.writeFile(path.join(scratch, "ready"), "ready");
     `,
-    async ({ root, stateDir, receipt }) => {
-      const now = Date.now.bind(Date);
-      let elapsed = 0;
-      vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
-      const waitForBytes = observeUpdateCandidateIoProgress();
-      const cancel = new AbortController();
-      const operation = prepareUpdateCandidateRehearsal({
-        config: {},
-        stateDir,
-        candidateRoot: root,
-        timeoutMs: 300_000,
-        signal: AbortSignal.any([cancel.signal, AbortSignal.timeout(10_000)]),
-        env: {},
-      });
-      const prematureExit = operation.then(() => {
-        throw new Error("Stalled snapshot unexpectedly completed");
-      });
-      try {
-        await Promise.race([
-          waitForBytes(Buffer.byteLength("partial databasepartial WALready")),
-          prematureExit,
-        ]);
-        elapsed = 400_000;
-        await expect(operation).rejects.toThrow(
-          /snapshot made no progress.*Check storage performance/,
-        );
-        const child = z
-          .object({ pid: z.number().int().positive(), directory: z.string() })
-          .parse(JSON.parse(await fs.readFile(receipt, "utf8")));
-        expect(() => process.kill(child.pid, 0)).toThrow();
-        await expect(fs.stat(child.directory)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.readdir(stateDir)).resolves.toEqual([]);
-      } finally {
-        cancel.abort();
-        await operation.catch(() => undefined);
-      }
+  );
+  const now = Date.now.bind(Date);
+  let elapsed = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+  const cancel = new AbortController();
+  const waitForBytes = observeUpdateCandidateIoProgress();
+  const operation = prepare(
+    { root, stateDir },
+    {
+      timeoutMs: 300_000,
+      signal: AbortSignal.any([cancel.signal, AbortSignal.timeout(10_000)]),
     },
   );
+  const prematureExit = operation.then(() => {
+    throw new Error("Snapshot unexpectedly completed");
+  });
+  const started = Date.now();
+  try {
+    if (outcome === "progressing") {
+      for (const [index, blocks] of [4, 7, 10].entries()) {
+        await Promise.race([waitForBytes(blocks * 1024), prematureExit]);
+        elapsed += 200_000;
+        await fs.writeFile(path.join(root, `continue-${index}`), "continue");
+      }
+      const rehearsal = await operation;
+      expect(Date.now() - started).toBeGreaterThan(300_000);
+      await expectSize(
+        path.join(rehearsal.stateDir, ".sqlite-snapshot-fixture/database.sqlite"),
+        10 * 1024,
+      );
+    } else {
+      await Promise.race([
+        waitForBytes(Buffer.byteLength("partial databasepartial WALready")),
+        prematureExit,
+      ]);
+      elapsed = 400_000;
+      await expect(operation).rejects.toThrow(
+        /snapshot made no progress.*Check storage performance/,
+      );
+      const child = z
+        .object({ pid: z.number().int().positive(), directory: z.string() })
+        .parse(JSON.parse(await fs.readFile(receipt, "utf8")));
+      expect(() => process.kill(child.pid, 0)).toThrow();
+      await expect(fs.stat(child.directory)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  } finally {
+    cancel.abort();
+    await cleanup(operation);
+  }
+  await expect(fs.readdir(stateDir)).resolves.toEqual([]);
 });
 
 it("keeps the SQLite startup floor when the caller supplies a smaller timeout", async () => {
   const f = await fixture(8);
-  const rehearsal = await prepareUpdateCandidateRehearsal({
-    config: {},
-    stateDir: f.stateDir,
-    candidateRoot: f.root,
-    timeoutMs: 1,
-    env: {},
-  });
-  try {
+  await withRehearsal(prepare(f, { timeoutMs: 1 }), async (rehearsal) => {
     const db = openNodeSqliteDatabase(
       path.join(rehearsal.stateDir, "agents/main/agent/openclaw-agent.sqlite"),
     );
@@ -190,9 +190,7 @@ it("keeps the SQLite startup floor when the caller supplies a smaller timeout", 
       bytes: 8 * 1024 * 1024,
     });
     db.close();
-  } finally {
-    await rehearsal.cleanup();
-  }
+  });
 });
 
 it.each([false, true])(
@@ -200,18 +198,11 @@ it.each([false, true])(
   async (full) => {
     const f = await fixture();
     const before = await fs.readFile(f.file);
-    vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
-      targetPath,
-      checkedPath: targetPath,
-      availableBytes: !full && targetPath === `${f.stateDir}.update-captures` ? 10 * 1024 ** 3 : 0,
-      totalBytes: 10 * 1024 ** 3,
-    }));
-    const pending = prepareUpdateCandidateRehearsal({
-      config: {},
-      stateDir: f.stateDir,
-      candidateRoot: f.root,
-      env: {},
-    });
+    capacity(
+      (target) => (!full && target === `${f.stateDir}.update-captures` ? 10 * 1024 ** 3 : 0),
+      10 * 1024 ** 3,
+    );
+    const pending = prepare(f);
     if (full) {
       try {
         const outcome = await pending.then(
@@ -223,24 +214,20 @@ it.each([false, true])(
         expect(outcome).toContain(`${f.stateDir}.update-captures`);
         expect(await fs.readdir(f.stateDir)).toEqual(["agents"]);
       } finally {
-        await pending.then(
-          (rehearsal) => rehearsal.cleanup(),
-          () => undefined,
-        );
+        await cleanup(pending);
       }
     } else {
-      const rehearsal = await pending;
-      try {
+      await withRehearsal(pending, async (rehearsal) => {
         expect(
           rehearsal.stateDir.startsWith(
             `${await fs.realpath(f.stateDir)}.update-captures${path.sep}`,
           ),
         ).toBe(true);
-        expect(rehearsal.env.TMPDIR).toBe(rehearsal.stateDir);
-        expect(rehearsal.env.XDG_CACHE_HOME).toBe(path.join(rehearsal.stateDir, "cache"));
-      } finally {
-        await rehearsal.cleanup();
-      }
+        expect(rehearsal.env).toMatchObject({
+          TMPDIR: rehearsal.stateDir,
+          XDG_CACHE_HOME: path.join(rehearsal.stateDir, "cache"),
+        });
+      });
     }
     expect(await fs.readFile(f.file)).toEqual(before);
   },
@@ -256,43 +243,29 @@ it.each([
   const nominated = path.join(f.root, "operator-temp");
   await fs.mkdir(nominated);
   const sibling = `${f.stateDir}.update-captures`;
-  vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => {
-    const availableBytes =
-      targetPath === nominated ? explicit : targetPath === sibling ? state : system;
-    return availableBytes === null
-      ? null
-      : {
-          targetPath,
-          checkedPath: targetPath,
-          availableBytes,
-          totalBytes: 1024 ** 3,
-        };
-  });
-  const rehearsal = await prepareUpdateCandidateRehearsal({
-    config: {},
-    stateDir: f.stateDir,
-    candidateRoot: f.root,
-    env: resolveOwnedManagedUpdateEnv({
-      processEnv: { TMPDIR: nominated },
-      serviceEnv: { TMPDIR: "/tmp", OPENCLAW_STATE_DIR: f.stateDir },
+  capacity((target) => (target === nominated ? explicit : target === sibling ? state : system));
+  await withRehearsal(
+    prepare(f, {
+      env: resolveOwnedManagedUpdateEnv({
+        processEnv: { TMPDIR: nominated },
+        serviceEnv: { TMPDIR: "/tmp", OPENCLAW_STATE_DIR: f.stateDir },
+      }),
     }),
-  });
-  try {
-    const root =
-      kind === "explicit-tmpdir" ? nominated : kind === "state-volume" ? sibling : os.tmpdir();
-    expect(rehearsal.stateDir.startsWith(`${await fs.realpath(root)}${path.sep}`)).toBe(true);
-    expect(rehearsal.snapshotCapacity).toMatchObject({
-      reason: kind,
-      selection: { kind, directory: rehearsal.stateDir },
-      candidates: [
-        { kind: "explicit-tmpdir", directory: nominated, availableBytes: explicit },
-        { kind: "state-volume", directory: sibling, availableBytes: state },
-        { kind: "system-tmpdir", directory: os.tmpdir(), availableBytes: system },
-      ],
-    });
-  } finally {
-    await rehearsal.cleanup();
-  }
+    async (rehearsal) => {
+      const root =
+        kind === "explicit-tmpdir" ? nominated : kind === "state-volume" ? sibling : os.tmpdir();
+      expect(rehearsal.stateDir.startsWith(`${await fs.realpath(root)}${path.sep}`)).toBe(true);
+      expect(rehearsal.snapshotCapacity).toMatchObject({
+        reason: kind,
+        selection: { kind, directory: rehearsal.stateDir },
+        candidates: [
+          { kind: "explicit-tmpdir", directory: nominated, availableBytes: explicit },
+          { kind: "state-volume", directory: sibling, availableBytes: state },
+          { kind: "system-tmpdir", directory: os.tmpdir(), availableBytes: system },
+        ],
+      });
+    },
+  );
 });
 
 it("skips an explicit temporary path that is a file without changing it", async () => {
@@ -305,13 +278,7 @@ it("skips an explicit temporary path that is a file without changing it", async 
     availableBytes: 1024 ** 3,
     totalBytes: 1024 ** 3,
   }));
-  const rehearsal = await prepareUpdateCandidateRehearsal({
-    config: {},
-    stateDir: f.stateDir,
-    candidateRoot: f.root,
-    env: { TMPDIR: nominated },
-  });
-  try {
+  await withRehearsal(prepare(f, { env: { TMPDIR: nominated } }), async (rehearsal) => {
     expect(rehearsal.snapshotCapacity).toMatchObject({
       reason: "state-volume",
       candidates: expect.arrayContaining([
@@ -322,9 +289,7 @@ it("skips an explicit temporary path that is a file without changing it", async 
       ]),
     });
     expect(await fs.readFile(nominated, "utf8")).toBe("preserved");
-  } finally {
-    await rehearsal.cleanup();
-  }
+  });
 });
 
 it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -334,12 +299,7 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     await fs.chmod(f.root, 0o500);
     let rehearsal: Awaited<ReturnType<typeof prepareUpdateCandidateRehearsal>> | undefined;
     try {
-      rehearsal = await prepareUpdateCandidateRehearsal({
-        config: {},
-        stateDir: f.stateDir,
-        candidateRoot: f.root,
-        env: {},
-      });
+      rehearsal = await prepare(f);
       expect(rehearsal.snapshotCapacity).toMatchObject({
         reason: "system-tmpdir",
         candidates: expect.arrayContaining([
@@ -369,17 +329,10 @@ it.each([false, true])(
     await fs.writeFile(payload, "");
     await fs.truncate(payload, 160 * 1024 ** 2);
     const sibling = `${await fs.realpath(f.stateDir)}.update-captures`;
-    vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
-      targetPath,
-      checkedPath: targetPath,
-      availableBytes: !full && targetPath === sibling ? 1024 ** 3 : 128 * 1024 ** 2,
-      totalBytes: 1024 ** 3,
-    }));
+    capacity((target) => (!full && target === sibling ? 1024 ** 3 : 128 * 1024 ** 2));
     const worker = vi.spyOn(exec, "runCommandBuffered");
-    const pending = prepareUpdateCandidateRehearsal({
+    const pending = prepare(f, {
       config: { plugins: { installs: { demo: { source: "npm", installPath: plugin } } } },
-      stateDir: f.stateDir,
-      candidateRoot: f.root,
       env: { TMPDIR: nominated },
     });
     try {
@@ -406,21 +359,15 @@ it.each([false, true])(
             selection: { kind: "state-volume", directory: rehearsal.stateDir },
           },
         });
-        expect(
-          (
-            await fs.stat(
-              path.join(rehearsal.stateDir, "npm/projects/demo/node_modules/demo/payload.bin"),
-            )
-          ).size,
-        ).toBe(160 * 1024 ** 2);
+        await expectSize(
+          path.join(rehearsal.stateDir, "npm/projects/demo/node_modules/demo/payload.bin"),
+          160 * 1024 ** 2,
+        );
       }
     } finally {
-      await pending.then(
-        (rehearsal) => rehearsal.cleanup(),
-        () => undefined,
-      );
+      await cleanup(pending);
     }
-    expect((await fs.stat(payload)).size).toBe(160 * 1024 ** 2);
+    await expectSize(payload, 160 * 1024 ** 2);
     expect(await fs.readdir(nominated)).toEqual([]);
   },
 );

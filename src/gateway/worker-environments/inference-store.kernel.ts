@@ -8,7 +8,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
-import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import type {
   DB as StateDatabase,
   WorkerInferenceTurns,
@@ -127,6 +127,7 @@ export function createWorkerInferenceStoreKernel(options: {
 
   const pruneTerminalTurns = (nowMs: number, preserve?: WorkerInferenceTurnIdentity): void => {
     const utf8 =
+      isPostgresSqlConnection(db) ||
       executeSqliteQueryTakeFirstSync(db, query.selectFrom("pragma_encoding").select("encoding"))
         ?.encoding === "UTF-8";
     const retained = query

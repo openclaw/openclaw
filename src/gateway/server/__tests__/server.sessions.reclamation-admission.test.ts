@@ -299,7 +299,7 @@ test("sessions.delete admits unrelated same-store patches during Worker validati
   }
 });
 
-test("sessions.delete rejects revoked authority while shared database preparation completes", async ({
+test("sessions.delete rejects revoked authority before repairing the same database", async ({
   signal,
 }) => {
   // This test invokes the lifecycle owner directly instead of the foreground RPC dispatcher.
@@ -326,7 +326,7 @@ test("sessions.delete rejects revoked authority while shared database preparatio
       .all(database.path);
   const originalLeases = readLeases();
   expect(originalLeases).toHaveLength(1);
-  // Shared preparation repairs the physical store independently of its caller.
+  // Shared preparation still needs a current caller before repairing the store.
   // Revoking deletion must preserve its session and transcript throughout.
   database.db.exec("DROP INDEX idx_agent_cache_expiry");
   invalidateOpenClawAgentDatabaseValidation(database.path);
@@ -369,10 +369,10 @@ test("sessions.delete rejects revoked authority while shared database preparatio
     await expect(loadSeededTranscriptEvents(transcriptScope)).resolves.toEqual(originalTranscript);
     expect(Atomics.load(validation.gate, 2)).toBeGreaterThan(0);
     expect(Atomics.load(validation.gate, 3)).toBeGreaterThan(0);
-    // Caller refusal leaves the shared preparation and its native owner usable.
-    expect(reclamation.exitCodes).toEqual([]);
-    expect(readLeases()).toEqual(preparingLeases);
-    expect(readRepairIndex()).toEqual({ name: "idx_agent_cache_expiry" });
+    expect(readRepairIndex()).toBeUndefined();
+    // Refused native opening joins broker termination before returning its authority error.
+    expect(reclamation.exitCodes).toEqual([1]);
+    expect(readLeases()).toEqual(originalLeases);
     await closeOpenClawAgentDatabasesAsync();
     // The broker explicitly terminates its shared executor after native close.
     expect(reclamation.exitCodes).toEqual([1]);

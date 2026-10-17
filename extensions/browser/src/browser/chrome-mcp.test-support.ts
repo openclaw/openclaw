@@ -51,7 +51,7 @@ export type ToolCall = {
 
 export type ToolCallMock = {
   mock: {
-    calls: Array<[ToolCall, unknown?, { signal?: AbortSignal; timeout?: number }?]>;
+    calls: Array<[ToolCall, { signal?: AbortSignal; timeout?: number }?]>;
   };
 };
 

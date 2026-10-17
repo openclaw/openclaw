@@ -37,8 +37,14 @@ it("batches bounded inserts while preserving order and subsequent identity rejec
     );
     const writes = trackSqliteStatementExecutions(
       database.db,
-      ["identities", "payloads", "active", "identityReads"],
+      ["identities", "payloads", "active", "identityReads", "ftsIdentities", "ftsContent"],
       (sql) => {
+        if (/^insert into "session_transcript_fts_rows"/i.test(sql)) {
+          return "ftsIdentities";
+        }
+        if (sql.includes('insert into "session_transcript_fts"')) {
+          return "ftsContent";
+        }
         if (/^insert into "transcript_event_identities"/i.test(sql)) {
           return "identities";
         }
@@ -58,7 +64,14 @@ it("batches bounded inserts while preserving order and subsequent identity rejec
         () => expect(appendTranscriptEventsInTransaction(database, scope, rows)).toBe(130),
         { agentId: "main", path: database.path },
       );
-      expect(writes.counts).toEqual({ identities: 3, payloads: 3, active: 3, identityReads: 1 });
+      expect(writes.counts).toEqual({
+        identities: 3,
+        payloads: 3,
+        active: 3,
+        identityReads: 1,
+        ftsIdentities: 3,
+        ftsContent: 3,
+      });
     } finally {
       writes.restore();
     }
@@ -75,6 +88,13 @@ it("batches bounded inserts while preserving order and subsequent identity rejec
       { agentId: "main", path: database.path },
     );
     expect(events().map((event) => event.id)).toEqual([...rows.map((row) => row.id), "tail"]);
+    expect(
+      database.db
+        .prepare(
+          "SELECT message_id FROM session_transcript_fts WHERE session_id = ? AND session_transcript_fts MATCH 'row OR tail' ORDER BY rowid",
+        )
+        .all(scope.sessionId),
+    ).toEqual([...rows.map((row) => row.id), "tail"].map((message_id) => ({ message_id })));
     expect(
       database.db
         .prepare(
@@ -321,6 +341,15 @@ it.each(["commit prefix", "rollback"] as const)(
       const retained = outcome === "commit prefix";
       expect(events().map((event) => event.id)).toEqual(
         retained ? ["root", "one", "two"] : ["root"],
+      );
+      expect(
+        database.db
+          .prepare(
+            "SELECT message_id FROM session_transcript_fts WHERE session_id = ? AND session_transcript_fts MATCH 'root OR one OR two' ORDER BY rowid",
+          )
+          .all(scope.sessionId),
+      ).toEqual(
+        (retained ? ["root", "one", "two"] : ["root"]).map((message_id) => ({ message_id })),
       );
       expect(
         database.db

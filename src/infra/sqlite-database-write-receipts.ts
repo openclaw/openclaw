@@ -256,7 +256,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   function readScopedWriteToken(
     database: DatabaseSync,
     scope: string | readonly SqliteDatabaseWriteScope[],
-    includePending = false,
+    pending?: Set<string> | null,
   ): string | undefined {
     const keys = normalizedWriteScopes(scope);
     const record = owner.admission(database);
@@ -268,7 +268,6 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     if (owner.readRevision(database) === undefined) {
       return undefined;
     }
-    const pending = includePending ? state.pendingWriteScopes.get(database) : undefined;
     return record
       ? scopedWriteToken(record, keys, pending)
       : localScopedWriteToken(database, keys, pending);
@@ -314,11 +313,14 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     connection: EngineConnection,
     scope: string | readonly SqliteDatabaseWriteScope[],
   ): string | undefined {
-    // PG publishes broad invalidation at commit, without native pre-commit scope tracking.
-    if (isPostgresSqlConnection(connection)) {
-      return undefined;
-    }
-    return readScopedWriteToken(sqlPublicationAnchor(connection), scope, true);
+    const database = sqlPublicationAnchor(connection);
+    // PG publishes one broad revision at COMMIT; SQLite tracks native mutation scopes.
+    const pending = isPostgresSqlConnection(connection)
+      ? connection.isTransaction
+        ? null
+        : undefined
+      : state.pendingWriteScopes.get(database);
+    return readScopedWriteToken(database, scope, pending);
   }
 
   /** Host row caches retain a physical identity and receipt without opening SQLite. */

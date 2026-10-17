@@ -16,7 +16,7 @@ type TestCustodianPage = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-function createContext(request: ReturnType<typeof vi.fn>) {
+function createContext(request: Parameters<typeof createCustodianContext>[0]) {
   const calls: string[] = [];
   const setSessionKey = vi.fn((sessionKey: string) => calls.push(`session:${sessionKey}`));
   const setAgent = vi.fn((agentId: string | null) => calls.push(`agent:${agentId}`));
