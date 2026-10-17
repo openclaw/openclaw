@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { ClawHubPackageSearchResult } from "../infra/clawhub-packages.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -24,8 +25,8 @@ function formatPackageSearchLine(entry: ClawHubPackageSearchResult): string {
     pkg.isOfficial && pkg.channel !== "official" ? "official" : undefined,
     pkg.latestVersion ? formatVersionLabel(pkg.latestVersion) : undefined,
   ].filter(Boolean);
-  const summary = pkg.summary ? theme.muted(` — ${pkg.summary}`) : "";
-  return `${pkg.name}  ${theme.muted(flags.join(" | "))}${summary}\n  ${theme.muted(`Install: ${formatCliCommand(`openclaw plugins install ${installSpec}`)}`)}`;
+  const summary = pkg.summary ? theme.muted(` — ${sanitizeTerminalText(pkg.summary)}`) : "";
+  return `${sanitizeTerminalText(pkg.name)}  ${theme.muted(flags.join(" | "))}${summary}\n  ${theme.muted(`Install: ${formatCliCommand(`openclaw plugins install ${sanitizeTerminalText(installSpec)}`)}`)}`;
 }
 
 export async function runPluginsSearchCommand(
