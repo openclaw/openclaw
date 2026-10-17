@@ -1,4 +1,3 @@
-// Gateway multi E2E tests validate multi-gateway runtime behavior.
 import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -60,8 +59,7 @@ async function settleGatewayCleanups(cleanups: Array<() => unknown>) {
 }
 
 async function cleanupGateways(instances: GatewayInstance[], clients: GatewayClient[]) {
-  // A failed client join must not strand Gateway processes or release files
-  // their owners may still use. Keep terminal cleanup with the instance owner.
+  // Failed client cleanup must not release files their Gateway may still use.
   let clientsJoined = false;
   await runQaGatewayFixture(
     async () => {
@@ -84,8 +82,7 @@ describe("gateway multi-instance e2e", () => {
   const acquisitions: Promise<unknown>[] = [];
 
   afterAll(async () => {
-    // Promise.all can reject while its siblings still acquire owners. Join the
-    // original acquisitions before reading either retained cleanup collection.
+    // Join failed acquisitions' siblings before reading their retained owners.
     await Promise.allSettled(acquisitions);
     await cleanupGateways(instances, nodeClients);
   });
@@ -198,9 +195,7 @@ describe("gateway multi-instance e2e", () => {
 
           await managerClient.request("cron.list", { includeDisabled: true });
 
-          // Cron custody is exclusive even when scheduling is disabled. Hand the
-          // database to the offline scheduler only after the Gateway has stopped;
-          // stale in-memory service snapshots are covered by shared-store-runtime.test.ts.
+          // Exclusive cron custody requires stopping the Gateway before the offline scheduler.
           await managerClient.stopAndWait();
           managerClient = undefined;
           await manager.stopGateway();
@@ -247,8 +242,7 @@ try {
           const before = JSON.parse(scheduler.stdout) as {
             state: { lastRunAtMs?: number; lastStatus?: string };
           };
-          expect(before.state.lastRunAtMs).toEqual(expect.any(Number));
-          expect(before.state.lastStatus).toBe("ok");
+          expect(before.state).toMatchObject({ lastRunAtMs: expect.any(Number), lastStatus: "ok" });
 
           await manager.startGateway();
           managerClient = await connectGatewayStatusClient(manager);
@@ -311,8 +305,10 @@ try {
                 return;
               }
               const payload = requireGatewayRecord(event.payload, "node invoke request");
-              expect(payload.id).toEqual(expect.any(String));
-              expect(payload.nodeId).toBe(nodeIdentity.deviceId);
+              expect(payload).toMatchObject({
+                id: expect.any(String),
+                nodeId: nodeIdentity.deviceId,
+              });
               responseWork = responseWork.then(async () => {
                 await writeFile(shiftPath, "shift\n");
                 await waitForFile(shiftReadyPath, AbortSignal.timeout(5_000));
@@ -369,21 +365,14 @@ try {
           expect(elapsedMs).toBeLessThan(500);
           await responseWork;
           expect(instance.logs()).toContain("[clock-shift] offsetMs=1000");
-          console.log(
-            `[real-gateway-node-proof] gatewayProcess=true nodeWebSocket=true wallClockOffsetMs=1000 result=SUCCESS elapsedMs=${elapsedMs}`,
-          );
         },
+        () => responseWork,
         async () => {
-          await runQaGatewayFixture(
-            async () => await responseWork,
-            async () => {
-              await cleanupGateways(
-                instance ? [instance] : [],
-                [operator, node].filter((client): client is GatewayClient => client !== undefined),
-              );
-              await rm(proofRoot, { recursive: true, force: true });
-            },
+          await cleanupGateways(
+            instance ? [instance] : [],
+            [operator, node].filter((client): client is GatewayClient => client !== undefined),
           );
+          await rm(proofRoot, { recursive: true, force: true });
         },
       );
     },

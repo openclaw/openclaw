@@ -8,7 +8,14 @@ import {
 } from "../extensions/qa-lab/api.js";
 import { listConversations } from "../src/config/sessions/conversation-registry.js";
 import type { GatewaySessionRow } from "../src/gateway/session-utils.types.js";
-import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import {
+  closeHttpServer,
+  connectProofClient,
+  listenLoopback,
+  readRequestText,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
 import { createOpenAiResponsesModelConfig } from "./helpers/openai-responses-model-fixture.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
@@ -24,10 +31,8 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
   });
   const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
   let poll: ServerResponse | undefined;
-  const respond = (response: ServerResponse, result: unknown) => {
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ ok: true, result }));
-  };
+  const respond = (response: ServerResponse, result: unknown) =>
+    respondJson(response, { ok: true, result });
   const transport = createServer((request, response) => {
     if (request.url?.startsWith("/v1/") && request.url !== "/v1/responses/compact") {
       const upstream = httpRequest(
@@ -65,19 +70,14 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
         });
         return;
       }
-      let raw = "";
-      for await (const chunk of request) {
-        raw += chunk;
-      }
+      const raw = await readRequestText(request);
       if (request.url === "/v1/responses/compact") {
         compactRequests.push(raw);
-        response.writeHead(200, { "content-type": "application/json" }).end(
-          JSON.stringify({
-            object: "response.compaction",
-            output: [checkpoint(compactRequests.length)],
-            usage: { input_tokens: 1000, output_tokens: 50 },
-          }),
-        );
+        respondJson(response, {
+          object: "response.compaction",
+          output: [checkpoint(compactRequests.length)],
+          usage: { input_tokens: 1000, output_tokens: 50 },
+        });
         return;
       }
       const body = raw ? (JSON.parse(raw) as { text?: string; chat_id?: number }) : {};
@@ -96,15 +96,9 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
       response.writeHead(500).end(String(error));
     });
   });
-  await new Promise<void>((resolve) => {
-    transport.listen(0, "127.0.0.1", resolve);
-  });
-  const address = transport.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Telegram fixture did not bind");
-  }
+  const origin = await listenLoopback(transport);
   const base = createOpenAiResponsesModelConfig({
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl: origin,
     providerId: "history-proof",
     modelId: "history-proof",
     reasoning: false,
@@ -142,7 +136,7 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
         telegram: {
           enabled: true,
           defaultAccount: "direct",
-          apiRoot: `http://127.0.0.1:${address.port}`,
+          apiRoot: origin,
           dmHistoryLimit: 20,
           commands: { native: false, nativeSkills: false },
           streaming: { mode: "off" },
@@ -171,12 +165,10 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
       TELEGRAM_BOT_TOKEN: undefined,
     },
   });
-  let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+  let client: Awaited<ReturnType<typeof connectProofClient>> | undefined;
   try {
     await instance.startGateway();
-    const gateway = await connectGatewayClient({
-      url: instance.url,
-      token: instance.gatewayToken,
+    const gateway = await connectProofClient(instance, {
       role: "operator",
       scopes: ["operator.admin", "operator.read", "operator.write"],
     });
@@ -319,10 +311,7 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
     }
     await instance.cleanup();
     await model.stop();
-    transport.closeAllConnections();
-    await new Promise<void>((resolve) => {
-      transport.close(() => resolve());
-    });
+    await closeHttpServer(transport).catch(() => undefined);
   }
 }
 

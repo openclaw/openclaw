@@ -1,13 +1,19 @@
-// E2E: ordinary embedded Gateway turns preserve raw transcript cursor continuity.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   listSessionEntriesCore,
   loadSessionEntry,
 } from "../src/config/sessions/session-accessor.js";
-import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import {
+  connectProofClient,
+  contentTexts,
+  readRequestText,
+} from "./helpers/gateway-integration-fixtures.js";
 import {
   createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
@@ -53,26 +59,34 @@ it(
     instances.push(instance);
     await instance.startGateway();
 
-    const client = await connectGatewayClient({
-      url: instance.url,
-      token: instance.gatewayToken,
+    const client = await connectProofClient(instance, {
       role: "operator",
       scopes: ["operator.admin", "operator.read", "operator.write"],
     });
     try {
       await runAgentTurn(client, instance, "first cursor turn");
       const storePath = path.join(instance.state.sessionsDir("main"), "sessions.json");
-      const sessionId = await waitForSessionId(storePath);
+      const target = { agentId: "main", sessionKey: SESSION_KEY, storePath };
+      const readSessionId = () =>
+        loadSessionEntry({ ...target, readConsistency: "latest" })?.sessionId;
+      const waitSessionId = () =>
+        vi.waitFor(
+          () => {
+            const value = readSessionId();
+            expect(value).toBeTruthy();
+            return expectDefined(value, `session id was not persisted for ${SESSION_KEY}`);
+          },
+          { interval: 20, timeout: 30_000 },
+        );
+      const sessionId = await waitSessionId();
       expect(
         listSessionEntriesCore({ agentId: "main", storePath }).map((entry) => entry.sessionKey),
         instance.logs(),
       ).toEqual([SESSION_KEY]);
       const readPage = async (cursor?: string) => {
         const page = await readSessionTranscriptRawDelta({
-          agentId: "main",
+          ...target,
           sessionId,
-          sessionKey: SESSION_KEY,
-          storePath,
           cursor,
           maxBytes: 1_000_000,
           maxEvents: 100,
@@ -89,23 +103,17 @@ it(
       const bootstrap = await readPage();
 
       const reset = await runAgentTurn(client, instance, "/new");
-      expect(
-        (reset as { result?: { meta?: { agentMeta?: { sessionId?: string } } } }).result?.meta
-          ?.agentMeta?.sessionId,
-        instance.logs(),
-      ).toBe(sessionId);
-      expect(await waitForSessionId(storePath), instance.logs()).toBe(sessionId);
+      expect(reset, instance.logs()).toMatchObject({
+        result: { meta: { agentMeta: { sessionId } } },
+      });
+      expect(await waitSessionId(), instance.logs()).toBe(sessionId);
       await runAgentTurn(client, instance, "post-reset cursor turn");
       const resumed = await readPage(bootstrap.cursor);
-      expect(
-        resumed.events.some(
-          (row) =>
-            row.event &&
-            typeof row.event === "object" &&
-            (row.event as { type?: unknown }).type === "reset",
-        ),
-      ).toBe(true);
-      const messageTexts = resumed.events.flatMap((row) => readMessageText(row.event));
+      const events = resumed.events.map(({ event }) => asNonArrayRecord(event));
+      expect(events).toContainEqual(expect.objectContaining({ type: "reset" }));
+      const messageTexts = events.flatMap((event) =>
+        event?.type === "message" ? contentTexts(asNonArrayRecord(event.message)?.content) : [],
+      );
       expect(messageTexts).toContain("post-reset cursor turn");
       expect(messageTexts).toContain("cursor settlement response 2");
       expect(messageTexts).not.toContain("first cursor turn");
@@ -116,10 +124,10 @@ it(
   },
 );
 async function runAgentTurn(
-  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  client: Awaited<ReturnType<typeof connectProofClient>>,
   instance: OpenClawTestInstance,
   message: string,
-): Promise<{ runId?: string; status?: string }> {
+) {
   const requestedRunId = randomUUID();
   const started = await client.request<{ runId?: string; status?: string }>("agent", {
     sessionKey: SESSION_KEY,
@@ -140,53 +148,13 @@ async function runAgentTurn(
   return started;
 }
 
-async function waitForSessionId(storePath: string): Promise<string> {
-  let sessionId: string | undefined;
-  await vi.waitFor(
-    () => {
-      sessionId = loadSessionEntry({
-        agentId: "main",
-        readConsistency: "latest",
-        sessionKey: SESSION_KEY,
-        storePath,
-      })?.sessionId;
-      expect(sessionId).toBeTruthy();
-    },
-    { interval: 20, timeout: 30_000 },
-  );
-  if (!sessionId) {
-    throw new Error(`session id was not persisted for ${SESSION_KEY}`);
-  }
-  return sessionId;
-}
-
-function readMessageText(event: unknown): string[] {
-  if (!event || typeof event !== "object" || (event as { type?: unknown }).type !== "message") {
-    return [];
-  }
-  const message = (event as { message?: { content?: unknown } }).message;
-  if (typeof message?.content === "string") {
-    return [message.content];
-  }
-  if (!Array.isArray(message?.content)) {
-    return [];
-  }
-  return message.content.flatMap((part) =>
-    part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string"
-      ? [(part as { text: string }).text]
-      : [],
-  );
-}
-
 async function startMockModelServer(): Promise<OpenAiResponsesModelServer> {
   let responseCount = 0;
   return startOpenAiResponsesModelServer({
     modelId: "cursor-settlement",
     bindError: "cursor settlement model server did not bind",
     onRequest: async (request, response) => {
-      for await (const chunk of request) {
-        void chunk;
-      }
+      await readRequestText(request);
       responseCount += 1;
       writeOpenAiResponsesText(response, {
         text: `cursor settlement response ${responseCount}`,

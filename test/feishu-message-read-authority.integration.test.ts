@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Agent, createServer } from "node:https";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-context.js";
 import { wrapToolWithGatewayCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
@@ -32,6 +32,13 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/
 import type { PluginRuntime } from "../src/plugins/runtime/types.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
 import { loadBundledPluginFacade } from "../src/test-utils/bundled-plugin-public-surface.js";
+import {
+  closeHttpServer,
+  commandSecretFixture,
+  listenLoopback,
+  readRequestText,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "./helpers/tls-fixture.js";
 
 const transport = vi.hoisted(() => ({ agent: undefined as Agent | undefined }));
@@ -111,13 +118,7 @@ function createOriginatingRun(currentChat = CURRENT) {
           messageActionTurnCapability: turnCapability,
           ...toolContext,
           config,
-          getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-          resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
-            resolvedConfig,
-            diagnostics: [],
-            targetStatesByPath: {},
-            hadUnresolvedTargets: false,
-          }),
+          ...commandSecretFixture,
         }),
         {
           agentId: "main",
@@ -177,10 +178,7 @@ beforeAll(async () => {
   }));
   server = createServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM }, (request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-      }
+      const raw = await readRequestText(request);
       const url = new URL(request.url ?? "/", origin);
       const recorded = {
         method: request.method ?? "",
@@ -191,24 +189,20 @@ beforeAll(async () => {
       beforeReply?.(recorded);
       response.setHeader("content-type", "application/json");
       if (url.pathname === AUTH_PATH) {
-        const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+        const body = JSON.parse(raw) as Record<string, unknown>;
         if (
           request.method !== "POST" ||
           body.app_id !== appId ||
           body.app_secret !== "loopback-placeholder"
         ) {
-          response.writeHead(401);
-          response.end(JSON.stringify({ code: 99991663, msg: "invalid fixture application" }));
+          respondJson(response, { code: 99991663, msg: "invalid fixture application" }, 401);
           return;
         }
-        response.end(
-          JSON.stringify({ code: 0, tenant_access_token: `tat_${appId}`, expire: 7200 }),
-        );
+        respondJson(response, { code: 0, tenant_access_token: `tat_${appId}`, expire: 7200 });
         return;
       }
       if (request.method !== "GET" || request.headers.authorization !== `Bearer tat_${appId}`) {
-        response.writeHead(401);
-        response.end(JSON.stringify({ code: 99991663, msg: "unexpected fixture request" }));
+        respondJson(response, { code: 99991663, msg: "unexpected fixture request" }, 401);
         return;
       }
       let data: unknown;
@@ -249,25 +243,15 @@ beforeAll(async () => {
         const id = url.pathname.split("/").at(-1);
         data = { user: { open_id: id, name: id === SELF ? "Current sender" : "Allowed member" } };
       } else {
-        response.writeHead(404);
-        response.end(JSON.stringify({ code: 404, msg: "unhandled fixture route" }));
+        respondJson(response, { code: 404, msg: "unhandled fixture route" }, 404);
         return;
       }
-      response.end(JSON.stringify({ code: 0, data }));
+      respondJson(response, { code: 0, data });
     })().catch((error: unknown) => {
-      response.writeHead(500, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: String(error) }));
+      respondJson(response, { error: String(error) }, 500);
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected loopback TCP listener");
-  }
-  origin = `https://127.0.0.1:${address.port}`;
+  origin = await listenLoopback(server, "https");
 });
 
 afterEach(async () => {
@@ -285,10 +269,7 @@ afterEach(async () => {
 
 afterAll(async () => {
   transport.agent?.destroy();
-  server.closeAllConnections();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
+  await closeHttpServer(server);
   vi.doUnmock("openclaw/plugin-sdk/extension-shared");
   vi.resetModules();
 });
@@ -367,7 +348,21 @@ function createFixture(
         ...overrides,
       }),
     );
-  return { cfg, settings, record, run, dispatch };
+  const retire = {
+    plugin: () => {
+      record.enabled = false;
+    },
+    turn: run.revokeTurn,
+    claim: run.releaseClaim,
+  };
+  const atRequest = (path: string, effect: () => void) => {
+    beforeReply = (request) => {
+      if (request.path === path) {
+        effect();
+      }
+    };
+  };
+  return { cfg, settings, record, run, dispatch, retire, atRequest };
 }
 
 const readCases: Array<{
@@ -459,21 +454,14 @@ it("finds a live peer on later pages through the registered channel-list action"
     { peers: [{ kind: "user", id: OTHER, name: "Other" }] },
   );
   const pages = requests.filter((request) => request.path === PEERS_PATH);
-  expect(pages).toHaveLength(2);
-  expect(pages[0]?.query.get("page_token")).toBeNull();
-  expect(pages[1]?.query.get("page_token")).toBe(PEERS_PAGE_TOKEN);
+  expect(pages.map(({ query }) => query.get("page_token"))).toEqual([null, PEERS_PAGE_TOKEN]);
   expect(contentRequests()).toEqual([PEERS_PATH, PEERS_PATH]);
 });
 
 it("stops live peer pagination when the plugin retires between pages", async () => {
   const fixture = createFixture();
   fixture.settings.allowFrom = ["*"];
-  beforeReply = (request) => {
-    if (request.path !== PEERS_PATH) {
-      return;
-    }
-    fixture.record.enabled = false;
-  };
+  fixture.atRequest(PEERS_PATH, fixture.retire.plugin);
 
   await expect(
     fixture.dispatch("channel-list", { scope: "peers", query: "Other", limit: 1 }),
@@ -487,11 +475,7 @@ it("cancels live peer pagination through the local message tool", async () => {
   setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
   const tool = fixture.run.createTool(fixture.cfg);
   const controller = new AbortController();
-  beforeReply = (request) => {
-    if (request.path === PEERS_PATH) {
-      controller.abort();
-    }
-  };
+  fixture.atRequest(PEERS_PATH, () => controller.abort());
 
   await expect(
     track(
@@ -569,64 +553,30 @@ it.each([
   ["claim", "result"],
 ] as const)("rejects %s retirement at %s", async (owner, phase) => {
   const fixture = createFixture();
-  beforeReply = (request) => {
-    if (request.path !== (phase === "metadata" ? CHAT_PATH : PINS_PATH)) {
-      return;
-    }
-    if (owner === "plugin") {
-      fixture.record.enabled = false;
-    }
-    if (owner === "turn") {
-      fixture.run.revokeTurn();
-    }
-    if (owner === "claim") {
-      fixture.run.releaseClaim();
-    }
-  };
+  fixture.atRequest(phase === "metadata" ? CHAT_PATH : PINS_PATH, fixture.retire[owner]);
   await expect(fixture.dispatch("list-pins", { chatId: ALLOWED })).rejects.toThrow(
     "no longer active",
   );
   expect(contentRequests()).toEqual(phase === "metadata" ? [CHAT_PATH] : [CHAT_PATH, PINS_PATH]);
 });
 
-it.each(["sticker-search", "channel-list", "member-info"] as const)(
-  "rejects a retired local %s result",
-  async (action) => {
-    const fixture = createFixture({ currentChat: action === "member-info" ? DIRECT : CURRENT });
-    let observed: ActionResult | undefined;
-    afterProviderResult = (result) => {
-      observed = result;
-      if (action === "sticker-search") {
-        fixture.run.releaseClaim();
-      }
-      if (action === "channel-list") {
-        fixture.record.enabled = false;
-      }
-      if (action === "member-info") {
-        fixture.run.revokeTurn();
-      }
-    };
-    const params =
-      action === "sticker-search"
-        ? { query: "thumbs" }
-        : action === "member-info"
-          ? { chatId: DIRECT }
-          : {};
-    await expect(fixture.dispatch(action, params)).rejects.toThrow("no longer active");
-    if (action === "sticker-search") {
-      expectResult(observed ?? null, { stickers: [{ fileId: "file_allowed" }] });
-    }
-    if (action === "channel-list") {
-      expectResult(observed ?? null, { groups: [{ id: ALLOWED }], peers: [{ id: SELF }] });
-    }
-    if (action === "member-info") {
-      expectResult(observed ?? null, { members: [{ member_id: SELF }] });
-    }
-    expect(contentRequests()).toEqual(
-      action === "member-info" ? [`/open-apis/im/v1/chats/${DIRECT}`] : [],
-    );
-  },
-);
+it.each([
+  ["sticker-search", "claim", { query: "thumbs" }, { stickers: [{ fileId: "file_allowed" }] }],
+  ["channel-list", "plugin", {}, { groups: [{ id: ALLOWED }], peers: [{ id: SELF }] }],
+  ["member-info", "turn", { chatId: DIRECT }, { members: [{ member_id: SELF }] }],
+] as const)("rejects a retired local %s result", async (action, owner, params, details) => {
+  const fixture = createFixture({ currentChat: action === "member-info" ? DIRECT : CURRENT });
+  let observed: ActionResult | undefined;
+  afterProviderResult = (result) => {
+    observed = result;
+    fixture.retire[owner]();
+  };
+  await expect(fixture.dispatch(action, params)).rejects.toThrow("no longer active");
+  expectResult(observed ?? null, details);
+  expect(contentRequests()).toEqual(
+    action === "member-info" ? [`/open-apis/im/v1/chats/${DIRECT}`] : [],
+  );
+});
 
 it.each(["allowed", "turn", "claim"] as const)(
   "uses the normal local message tool (%s)",
@@ -634,17 +584,11 @@ it.each(["allowed", "turn", "claim"] as const)(
     const fixture = createFixture();
     setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
     const tool = fixture.run.createTool(fixture.cfg);
-    beforeReply = (request) => {
-      if (request.path !== CHAT_PATH) {
-        return;
+    fixture.atRequest(CHAT_PATH, () => {
+      if (mode !== "allowed") {
+        fixture.retire[mode]();
       }
-      if (mode === "turn") {
-        fixture.run.revokeTurn();
-      }
-      if (mode === "claim") {
-        fixture.run.releaseClaim();
-      }
-    };
+    });
     const result = track(
       tool.execute("feishu-read", {
         action: "read",

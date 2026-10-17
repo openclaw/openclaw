@@ -1,4 +1,3 @@
-// Real model HTTP, real exec tool, lifecycle-produced SQLite, and a shipped Gateway restart.
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -6,8 +5,16 @@ import { afterEach, expect, it, vi } from "vitest";
 import { isInternalRuntimeContextCarrierText } from "../extensions/qa-lab/api.js";
 import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import {
+  closeHttpServer,
+  connectProofClient,
+  contentTexts,
+  listenLoopback,
+  readRequestText,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
 import { createOpenAiResponsesModelConfig } from "./helpers/openai-responses-model-fixture.js";
 import {
   writeOpenAiResponsesSse,
@@ -50,25 +57,20 @@ it(
     instance.state.applyEnv();
     await instance.startGateway();
     const effectPath = path.join(instance.homeDir, ".openclaw", "workspace", "replay-effects.txt");
-    const client = await connectGatewayClient({
-      url: instance.url,
-      token: instance.gatewayToken,
+    let client = await connectProofClient(instance, {
       role: "operator",
       scopes: ["operator.admin", "operator.read", "operator.write"],
     });
+    const turn = (message: string, idempotencyKey: string, timeoutMs: number) =>
+      client.request(
+        "agent",
+        { sessionKey: SESSION_KEY, message, deliver: false, idempotencyKey },
+        { expectFinal: true, timeoutMs },
+      );
     try {
-      expect(
-        await client.request(
-          "agent",
-          {
-            sessionKey: SESSION_KEY,
-            message: "START_REPLAY_REQUESTER",
-            deliver: false,
-            idempotencyKey: "start-replay-requester",
-          },
-          { expectFinal: true, timeoutMs: 90_000 },
-        ),
-      ).toMatchObject({ status: "ok" });
+      await expect(
+        turn("START_REPLAY_REQUESTER", "start-replay-requester", 90_000),
+      ).resolves.toMatchObject({ status: "ok" });
       await vi.waitFor(() => expect(model.childStarted()).toBe(true), { timeout: 30_000 });
       model.releaseChild();
       await vi.waitFor(async () => expect(await fs.readFile(effectPath, "utf8")).toBe("effect\n"), {
@@ -108,8 +110,10 @@ it(
     const before = [...loadSubagentRegistryFromSqlite().values()].find(
       (row) => row.task === CHILD_TASK,
     )!;
-    expect(before.execution.outcome).toMatchObject({ status: "ok" });
-    expect(before.completion?.resultText).toBe("CHILD_REPLAY_RESULT");
+    expect(before).toMatchObject({
+      execution: { outcome: { status: "ok" } },
+      completion: { resultText: "CHILD_REPLAY_RESULT" },
+    });
     expect(before.delivery?.payload).toBeDefined();
     expect(before.requesterSettleWake).toBeUndefined();
     closeOpenClawStateDatabaseForTest();
@@ -117,28 +121,17 @@ it(
     closeOpenClawStateDatabaseForTest();
 
     await instance.startGateway();
-    const restoredClient = await connectGatewayClient({
-      url: instance.url,
-      token: instance.gatewayToken,
-    });
+    client = await connectProofClient(instance);
     try {
       // A real same-session round trip is the lane barrier, not a timed sleep.
-      const followup = await restoredClient.request(
-        "agent",
-        {
-          sessionKey: SESSION_KEY,
-          message: "EXPLICIT_FOLLOWUP_AFTER_RESTART",
-          deliver: false,
-          idempotencyKey: "followup-after-restart",
-        },
-        { expectFinal: true, timeoutMs: 30_000 },
-      );
-      expect(followup).toMatchObject({ status: "ok" });
+      await expect(
+        turn("EXPLICIT_FOLLOWUP_AFTER_RESTART", "followup-after-restart", 30_000),
+      ).resolves.toMatchObject({ status: "ok" });
       expect(model.effectCalls()).toBe(1);
       expect(model.failures()).toEqual([]);
       await expect(fs.readFile(effectPath, "utf8")).resolves.toBe("effect\n");
     } finally {
-      await disconnectGatewayClient(restoredClient);
+      await disconnectGatewayClient(client);
       await instance.stopGateway();
     }
     const after = loadSubagentRegistryFromSqlite().get(before.runId)!;
@@ -177,22 +170,6 @@ type ModelInput = {
   output?: unknown;
 };
 
-function modelInputText(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .map((part: unknown) =>
-      typeof part === "object" && part !== null && "text" in part && typeof part.text === "string"
-        ? part.text
-        : "",
-    )
-    .join("\n");
-}
-
 async function startModel() {
   const child = createDeferred();
   const failures: string[] = [];
@@ -202,8 +179,7 @@ async function startModel() {
   const server = createServer((request, response) => {
     void handle(request, response).catch((error: unknown) => {
       failures.push(String(error));
-      response.writeHead(400, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { message: String(error) } }));
+      respondJson(response, { error: { message: String(error) } }, 400);
     });
   });
   async function handle(request: IncomingMessage, response: ServerResponse) {
@@ -211,18 +187,14 @@ async function startModel() {
       response.writeHead(404).end();
       return;
     }
-    const chunks: Buffer[] = [];
-    for await (const chunk of request) {
-      chunks.push(Buffer.from(chunk));
-    }
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { input?: ModelInput[] };
+    const body = JSON.parse(await readRequestText(request)) as { input?: ModelInput[] };
     const input = body.input ?? [];
     const latestUser = input
       .toReversed()
       .find(
         (item) =>
           item.role === "user" &&
-          !isInternalRuntimeContextCarrierText(modelInputText(item.content)),
+          !isInternalRuntimeContextCarrierText(contentTexts(item.content).join("\n")),
       );
     const text = JSON.stringify(latestUser?.content);
     const last = input.at(-1);
@@ -287,26 +259,16 @@ async function startModel() {
       });
     }
   }
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("model listener missing");
-  }
+  const url = await listenLoopback(server);
   return {
-    url: "http://127.0.0.1:" + address.port,
+    url,
     releaseChild: () => child.resolve(undefined),
     childStarted: () => childStarted,
     effectCalls: () => effectCalls,
     failures: () => failures,
     close: async () => {
       child.resolve(undefined);
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeHttpServer(server).catch(() => undefined);
     },
   };
 }
