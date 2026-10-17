@@ -171,7 +171,10 @@ it("publishes a disconnected gateway snapshot without a redraw callback", () => 
   pane.state = state;
   state.client = pane.context.gateway.snapshot.client;
   state.connected = true;
-  const changes: Array<{ connected: boolean; canvas: string | null }> = [];
+  const changes: Array<{
+    connected: boolean;
+    canvas: ChatPageHost["canvasPluginSurfaceUrl"];
+  }> = [];
   const dispose = createRoot((stop) => {
     createEffect(
       () => ({ connected: state.connected, canvas: state.canvasPluginSurfaceUrl }),
