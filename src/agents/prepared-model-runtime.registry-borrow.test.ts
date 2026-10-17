@@ -37,7 +37,10 @@ import * as runtimePlugins from "./runtime-plugins.js";
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-registry-borrow" });
 const { mocks } = fixture;
 
-async function acquireConfiguredRegistryBorrower(source: "owned" | "gateway" = "owned") {
+async function acquireConfiguredRegistryBorrower(
+  resources: AsyncDisposableStack,
+  source: "owned" | "gateway" = "owned",
+) {
   mocks.configuredAgentIds = ["default"];
   const config = {};
   const workspaceDir = "/tmp/unused-workspace";
@@ -87,6 +90,7 @@ async function acquireConfiguredRegistryBorrower(source: "owned" | "gateway" = "
       logger: { info() {}, warn() {}, error() {}, debug() {} },
     });
     setActivePluginRegistry(registry, undefined, "gateway-bindable", workspaceDir);
+    resources.defer(() => clearActivePluginRegistry(registry));
     expect(runInScope(() => loadPreparedInboundPluginRegistry(input, metadata))).toBe(registry);
     expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
   }
@@ -98,7 +102,7 @@ async function acquireConfiguredRegistryBorrower(source: "owned" | "gateway" = "
         ? { allowGatewaySubagentBinding: true, pluginMetadataSnapshot: metadata }
         : {}),
     });
-    const borrower = await acquirePublishedPreparedModelRuntime(input);
+    const borrower = resources.use(await acquirePublishedPreparedModelRuntime(input));
     await borrower.snapshot.loadFullModelCatalog?.();
     return { registry, config, input, borrower, instance, metadata, runInScope };
   });
@@ -126,13 +130,9 @@ describe("prepared registry construction borrows", () => {
     });
     await caller.drain();
     let retired = false;
-    const closing = borrower
-      .run(async () => {
-        await borrower.release();
-      })
-      .then(() => {
-        retired = true;
-      });
+    const closing = borrower.run(borrower.release).then(() => {
+      retired = true;
+    });
     void closing.catch(() => {});
     try {
       await Promise.race([entered.promise, closing]);
@@ -150,32 +150,32 @@ describe("prepared registry construction borrows", () => {
   });
 
   it("rejects admission after construction closes", async () => {
-    const { registry, borrower, instance } = await acquireConfiguredRegistryBorrower();
-    const construction = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
+    await using resources = new AsyncDisposableStack();
+    const { registry, borrower, instance } = await acquireConfiguredRegistryBorrower(resources);
+    const construction = resources.use(
+      new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry),
+    );
     await borrower[Symbol.asyncDispose]();
-    try {
-      construction.retainRegistry(registry);
-      expect(instance.retainedWorkCount).toBeGreaterThan(0);
-      await construction[Symbol.asyncDispose]();
-      expect(instance.retainedWorkCount).toBe(0);
-      expect(() => construction.retainRegistry(registry)).toThrow(
-        "construction resources have been released",
-      );
-      const loads = mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
-      await expect(construction.load({ config: {} }, () => {})).rejects.toThrow(
-        "construction resources have been released",
-      );
-      expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(loads);
-      markPreparedModelRuntimeSnapshotsStale("construction owner closed");
-      expect(isPluginRegistryRetired(registry)).toBe(true);
-    } finally {
-      await construction[Symbol.asyncDispose]();
-      await borrower[Symbol.asyncDispose]();
-    }
+    construction.retainRegistry(registry);
+    expect(instance.retainedWorkCount).toBeGreaterThan(0);
+    await construction[Symbol.asyncDispose]();
+    expect(instance.retainedWorkCount).toBe(0);
+    expect(() => construction.retainRegistry(registry)).toThrow(
+      "construction resources have been released",
+    );
+    const loads = mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
+    await expect(construction.load({ config: {} }, () => {})).rejects.toThrow(
+      "construction resources have been released",
+    );
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(loads);
+    markPreparedModelRuntimeSnapshotsStale("construction owner closed");
+    expect(isPluginRegistryRetired(registry)).toBe(true);
   });
 
   it("retains selected inbound resources until a cancelled initial run inspection settles", async () => {
-    const { registry, input, borrower, instance } = await acquireConfiguredRegistryBorrower();
+    await using resources = new AsyncDisposableStack();
+    const { registry, input, borrower, instance } =
+      await acquireConfiguredRegistryBorrower(resources);
     const inspecting = createDeferred();
     const finishInspection = createDeferred();
     const acquire = runtimePlugins.acquireAgentRuntimePluginRegistry;
@@ -218,14 +218,14 @@ describe("prepared registry construction borrows", () => {
       if (outcome.status === "fulfilled") {
         await outcome.value[Symbol.asyncDispose]();
       }
-      await borrower[Symbol.asyncDispose]();
       inspection.mockRestore();
     }
   });
 
   it("retains borrowed Gateway work through post-facts projection, then releases it", async () => {
+    await using resources = new AsyncDisposableStack();
     const { registry, config, input, borrower, instance, metadata, runInScope } =
-      await acquireConfiguredRegistryBorrower("gateway");
+      await acquireConfiguredRegistryBorrower(resources, "gateway");
     const projecting = createDeferred();
     const finishProjection = createDeferred();
     mocks.buildPreparedModelCatalogSnapshot.mockImplementationOnce(async () => {
@@ -261,8 +261,6 @@ describe("prepared registry construction borrows", () => {
     } finally {
       finishProjection.resolve();
       await settled;
-      await borrower[Symbol.asyncDispose]();
-      await clearActivePluginRegistry(registry);
     }
   });
 });

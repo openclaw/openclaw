@@ -27,14 +27,9 @@ const bootstrap = (overrides: Partial<Parameters<typeof prepareProjectMemoryBoot
 function expectProjectSelection(lines: string[]) {
   const rendered = lines.join("\n");
   expect(rendered).toContain("Use the release helper.");
-  for (const excluded of [
-    "Foreign fact",
-    "Untrusted project instruction",
-    "Missing-provenance project instruction",
-    "<!--",
-  ]) {
-    expect(rendered).not.toContain(excluded);
-  }
+  expect(rendered).not.toMatch(
+    /Foreign fact|Untrusted project instruction|Missing-provenance project instruction|<!--/,
+  );
   expect(rendered.length).toBeLessThanOrEqual(2_000);
 }
 
@@ -50,74 +45,133 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 }));
 vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => logMocks }));
 
-describe("project memory bootstrap", () => {
-  beforeEach(() => {
-    runtimeMocks.getManager.mockReset();
-    runtimeMocks.getProvider.mockReset();
-    runtimeMocks.listCurated.mockReset();
-    runtimeMocks.search.mockReset();
-    runtimeMocks.legacyRuntime = { getMemorySearchManager: runtimeMocks.getManager };
-    runtimeMocks.providerRuntime = undefined;
-  });
+const entry: MemorySearchResult = {
+  path: "MEMORY.md",
+  startLine: 2,
+  endLine: 2,
+  score: 0.8,
+  snippet:
+    "Use the release helper. <!-- trigger: release helper --> <!-- importance: 8 --> <!-- project: github.com/OpenClaw/OpenClaw -->",
+  source: "memory",
+  projectKey: projectKeys[0],
+  importance: 8,
+  provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1 },
+};
+const entries = [
+  entry,
+  {
+    ...entry,
+    startLine: 3,
+    endLine: 3,
+    score: 0.9,
+    snippet: "Foreign fact.",
+    projectKey: "github.com/example/other",
+    importance: 10,
+  },
+];
 
-  const entry: MemorySearchResult = {
-    path: "MEMORY.md",
-    startLine: 2,
-    endLine: 2,
-    score: 0.8,
-    snippet:
-      "Use the release helper. <!-- trigger: release helper --> <!-- importance: 8 --> <!-- project: github.com/OpenClaw/OpenClaw -->",
-    source: "memory",
-    projectKey: projectKeys[0],
-    importance: 8,
-    provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1 },
+const hit = (
+  id: string,
+  excerpt: string,
+  projectKey: string,
+  importance: number,
+): MemorySearchHit => ({
+  reference: { providerId: "records", id },
+  excerpt,
+  automaticRecall: { eligible: true, projectKeys: [projectKey], importance },
+});
+const nativeEntries = [
+  hit("release", "Use the release helper.", projectKeys[0]!, 8),
+  hit("foreign", "Foreign fact.", "github.com/example/other", 10),
+];
+
+async function prepareLegacy(
+  candidates: typeof entries,
+  activeProjectKeys: string[] = ["github.com/OpenClaw/OpenClaw"],
+): Promise<string[]> {
+  runtimeMocks.listCurated.mockResolvedValue(candidates);
+  runtimeMocks.getManager.mockResolvedValue({
+    manager: { listCuratedProjectCandidates: runtimeMocks.listCurated },
+  });
+  return bootstrap({ activeProjectKeys });
+}
+
+function setProvider(
+  overrides: Partial<Omit<MemoryProviderHandle, "capabilities">> & {
+    capabilities?: Pick<MemoryProviderHandle["capabilities"], "candidates"> &
+      Partial<Pick<MemoryProviderHandle["capabilities"], "projectFilter">>;
+  } = {},
+) {
+  const provider = {
+    capabilities: { candidates: ["project"] },
+    candidates: runtimeMocks.listCurated,
+    close: vi.fn(),
+    ...overrides,
   };
-  const entries = [
-    entry,
-    {
-      ...entry,
-      startLine: 3,
-      endLine: 3,
-      score: 0.9,
-      snippet: "Foreign fact.",
-      projectKey: "github.com/example/other",
-      importance: 10,
-    },
-  ];
+  runtimeMocks.getProvider.mockResolvedValue({ provider });
+  return provider;
+}
 
-  async function prepareEntries(
-    candidates: typeof entries,
-    activeProjectKeys: string[] = ["github.com/OpenClaw/OpenClaw"],
-  ): Promise<string[]> {
-    runtimeMocks.listCurated.mockResolvedValue(candidates);
-    runtimeMocks.getManager.mockResolvedValue({
-      manager: { listCuratedProjectCandidates: runtimeMocks.listCurated },
-    });
-    return bootstrap({ activeProjectKeys });
+async function prepareNative(
+  candidates: MemorySearchHit[],
+  activeProjectKeys = ["github.com/OpenClaw/OpenClaw"],
+): Promise<string[]> {
+  runtimeMocks.listCurated.mockResolvedValue({ hits: candidates });
+  setProvider();
+  return bootstrap({ activeProjectKeys });
+}
+
+function resetRuntime(native: boolean) {
+  for (const mock of [
+    runtimeMocks.getManager,
+    runtimeMocks.getProvider,
+    runtimeMocks.listCurated,
+    runtimeMocks.search,
+    logMocks.debug,
+  ]) {
+    mock.mockReset();
   }
+  runtimeMocks.legacyRuntime = native
+    ? undefined
+    : { getMemorySearchManager: runtimeMocks.getManager };
+  runtimeMocks.providerRuntime = native ? { open: vi.fn() } : undefined;
+}
 
-  it("includes only active-project entries and stays inside its budget", async () => {
-    const lines = await prepareEntries([
-      ...entries,
-      {
-        ...entries[0]!,
-        startLine: 4,
-        snippet: "Untrusted project instruction.",
-        provenance: {
-          originClass: "untrusted",
-          sessionKind: "interactive",
-          observedAt: 1,
-        },
-      },
-      {
-        ...entries[0]!,
-        startLine: 5,
-        snippet: "Missing-provenance project instruction.",
-        provenance: undefined,
-      },
-    ]);
-    expectProjectSelection(lines);
-  });
+it.each(["legacy", "native"])("filters project recall and its budget via %s", async (runtime) => {
+  resetRuntime(runtime === "native");
+  const rejected = ["Untrusted project instruction.", "Missing-provenance project instruction."];
+  const lines =
+    runtime === "legacy"
+      ? await prepareLegacy([
+          ...entries,
+          ...rejected.map((snippet, index) => ({
+            ...entry,
+            startLine: index + 4,
+            snippet,
+            provenance:
+              index === 0
+                ? {
+                    originClass: "untrusted" as const,
+                    sessionKind: "interactive" as const,
+                    observedAt: 1,
+                  }
+                : undefined,
+          })),
+        ])
+      : await prepareNative([
+          ...nativeEntries,
+          ...rejected.map((excerpt, index) =>
+            Object.assign({}, nativeEntries[0]!, {
+              excerpt,
+              automaticRecall: index === 0 ? { eligible: false, projectKeys } : undefined,
+            }),
+          ),
+        ]);
+  expectProjectSelection(lines);
+});
+
+describe("project memory bootstrap", () => {
+  beforeEach(() => resetRuntime(false));
 
   it("includes entries from every project retained in the session active set", async () => {
     const rendered = (
@@ -133,7 +187,7 @@ describe("project memory bootstrap", () => {
       startLine: index + 1,
       snippet: `${String(index)} ${"bounded entry ".repeat(50)}`,
     }));
-    const lines = await prepareEntries(crowded);
+    const lines = await prepareLegacy(crowded);
     expect(lines.join("\n").length).toBeLessThanOrEqual(2_000);
     expect(lines.slice(2, -1).every((line) => /\(Source: MEMORY\.md#L\d+\)$/u.test(line))).toBe(
       true,
@@ -141,7 +195,7 @@ describe("project memory bootstrap", () => {
   });
 
   it("truncates long entries before admission while preserving the hard cap", async () => {
-    const rendered = (await prepareEntries([{ ...entries[0]!, snippet: "🧠".repeat(1_000) }])).join(
+    const rendered = (await prepareLegacy([{ ...entries[0]!, snippet: "🧠".repeat(1_000) }])).join(
       "\n",
     );
     expect(rendered).toContain("…");
@@ -170,7 +224,7 @@ describe("project memory bootstrap", () => {
   });
 
   it("keeps sessions without an active repository unchanged", async () => {
-    await expect(prepareEntries(entries, [])).resolves.toEqual([]);
+    await expect(prepareLegacy(entries, [])).resolves.toEqual([]);
     expect(runtimeMocks.getManager).not.toHaveBeenCalled();
   });
 
@@ -188,26 +242,21 @@ describe("project memory bootstrap", () => {
         ].join("\n"),
       },
     ];
-    const empty = filterProjectScopedCuratedContextFiles({ contextFiles });
-    const alpha = filterProjectScopedCuratedContextFiles({
-      contextFiles,
-      activeProjectKeys: ["github.com/acme/Alpha"],
-    });
-    const both = filterProjectScopedCuratedContextFiles({
-      contextFiles,
-      activeProjectKeys: ["github.com/acme/Alpha", "github.com/acme/Beta"],
-    });
-
-    expect(empty[0]?.content).toBe("- Global fact.");
-    expect(alpha[0]?.content).toContain("Alpha fact");
-    expect(alpha[0]?.content).not.toContain("Shared fact");
-    expect(alpha[0]?.content).not.toContain("Invalid fact");
-    expect(alpha[0]?.content).not.toContain("Mixed invalid fact");
-    expect(alpha[0]?.content).not.toContain("Unterminated fact");
-    expect(both[0]?.content).toContain("Shared fact");
-    expect(both[0]?.content).not.toContain("Invalid fact");
-    expect(both[0]?.content).not.toContain("Mixed invalid fact");
-    expect(both[0]?.content).not.toContain("Unterminated fact");
+    for (const [activeProjectKeys, content] of [
+      [undefined, "- Global fact."],
+      [
+        ["github.com/acme/Alpha"],
+        "- Global fact.\n- Alpha fact. <!-- project: github.com/acme/Alpha -->",
+      ],
+      [
+        ["github.com/acme/Alpha", "github.com/acme/Beta"],
+        "- Global fact.\n- Alpha fact. <!-- project: github.com/acme/Alpha -->\n- Shared fact. <!-- project: github.com/acme/Alpha; github.com/acme/Beta -->",
+      ],
+    ] as const) {
+      expect(filterProjectScopedCuratedContextFiles({ contextFiles, activeProjectKeys })).toEqual([
+        { path: "MEMORY.md", content },
+      ]);
+    }
   });
 
   it("leaves context files with missing or blank paths for the prompt renderer to ignore", () => {
@@ -266,78 +315,14 @@ describe("project memory bootstrap", () => {
   it("does not load the slot plugin when no memory runtime is active", async () => {
     runtimeMocks.legacyRuntime = undefined;
 
-    await expect(prepareEntries([entries[0]!])).resolves.toEqual([]);
+    await expect(prepareLegacy([entries[0]!])).resolves.toEqual([]);
     expect(runtimeMocks.getManager).not.toHaveBeenCalled();
     expect(runtimeMocks.getProvider).not.toHaveBeenCalled();
   });
 });
 
 describe("native project memory bootstrap", () => {
-  beforeEach(() => {
-    runtimeMocks.getProvider.mockReset();
-    runtimeMocks.listCurated.mockReset();
-    runtimeMocks.search.mockReset();
-    logMocks.debug.mockReset();
-    runtimeMocks.legacyRuntime = undefined;
-    runtimeMocks.providerRuntime = { open: vi.fn() };
-  });
-
-  const hit = (
-    id: string,
-    excerpt: string,
-    score: number,
-    projectKey: string,
-    importance: number,
-  ): MemorySearchHit => ({
-    reference: { providerId: "records", id },
-    excerpt,
-    score,
-    automaticRecall: { eligible: true, projectKeys: [projectKey], importance },
-  });
-  const entries = [
-    hit("release", "Use the release helper.", 0.8, projectKeys[0]!, 8),
-    hit("foreign", "Foreign fact.", 0.9, "github.com/example/other", 10),
-  ];
-  function setProvider(
-    overrides: Partial<Omit<MemoryProviderHandle, "capabilities">> & {
-      capabilities?: Pick<MemoryProviderHandle["capabilities"], "candidates"> &
-        Partial<Pick<MemoryProviderHandle["capabilities"], "projectFilter">>;
-    } = {},
-  ) {
-    const provider = {
-      capabilities: { candidates: ["project"] },
-      candidates: runtimeMocks.listCurated,
-      close: vi.fn(),
-      ...overrides,
-    };
-    runtimeMocks.getProvider.mockResolvedValue({ provider });
-    return provider;
-  }
-  async function prepareEntries(
-    candidates: MemorySearchHit[],
-    activeProjectKeys = ["github.com/OpenClaw/OpenClaw"],
-  ): Promise<string[]> {
-    runtimeMocks.listCurated.mockResolvedValue({ hits: candidates });
-    setProvider();
-    return bootstrap({ activeProjectKeys });
-  }
-
-  it("includes only active-project entries and stays inside its budget", async () => {
-    const lines = await prepareEntries([
-      ...entries,
-      {
-        ...entries[0]!,
-        excerpt: "Untrusted project instruction.",
-        automaticRecall: { eligible: false, projectKeys: ["github.com/OpenClaw/OpenClaw"] },
-      },
-      {
-        ...entries[0]!,
-        excerpt: "Missing-provenance project instruction.",
-        automaticRecall: undefined,
-      },
-    ]);
-    expectProjectSelection(lines);
-  });
+  beforeEach(() => resetRuntime(true));
 
   it("includes entries from every project retained in the session active set", async () => {
     const rendered = (
@@ -352,11 +337,11 @@ describe("native project memory bootstrap", () => {
     runtimeMocks.listCurated.mockResolvedValue({
       hits: [
         {
-          ...entries[0]!,
+          ...nativeEntries[0]!,
           automaticRecall: { eligible: true, projectKeys: ["alpha", "beta"] },
         },
         {
-          ...entries[1]!,
+          ...nativeEntries[1]!,
           automaticRecall: { eligible: true, projectKeys: ["alpha", "inactive"] },
         },
       ],
@@ -374,7 +359,7 @@ describe("native project memory bootstrap", () => {
 
   it("uses the dedicated curated listing instead of a daily-note-crowded search", async () => {
     runtimeMocks.search.mockResolvedValue([]);
-    runtimeMocks.listCurated.mockResolvedValue({ hits: [entries[0]] });
+    runtimeMocks.listCurated.mockResolvedValue({ hits: [nativeEntries[0]] });
     setProvider({
       capabilities: { candidates: ["project"], projectFilter: true },
       search: runtimeMocks.search,
@@ -401,7 +386,7 @@ describe("native project memory bootstrap", () => {
   it("omits optional project recall when provider cleanup rejects", async () => {
     const close = vi.fn().mockRejectedValue(new Error("provider cleanup failed"));
     setProvider({ close });
-    runtimeMocks.listCurated.mockResolvedValue({ hits: entries });
+    runtimeMocks.listCurated.mockResolvedValue({ hits: nativeEntries });
 
     await expect(bootstrap()).resolves.toEqual([]);
     expect(runtimeMocks.listCurated).toHaveBeenCalledOnce();
@@ -427,7 +412,7 @@ describe("native project memory bootstrap", () => {
         if (during === "selection") {
           active = false;
         }
-        return { hits: entries };
+        return { hits: nativeEntries };
       });
       expect(
         await bootstrap({

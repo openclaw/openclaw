@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindPluginMetadataSnapshotCache, createPluginCache } from "../plugins/plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
@@ -51,17 +50,9 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function fixture(
-  run: (state: {
-    recheck: (options?: { force?: boolean }) => void | Promise<void>;
-    readAuth: () => PreparedModelCatalogAuth;
-    publish: ReturnType<typeof vi.fn<(auth: PreparedModelCatalogAuth) => void>>;
-    refreshAuth: ReturnType<typeof vi.fn>;
-    retirement: AbortController;
-  }) => Promise<void>,
-  savedNativeProfile = false,
-) {
-  await using cache = createPluginCache();
+function fixture(resources: AsyncDisposableStack, savedNativeProfile = false) {
+  const cache = resources.use(createPluginCache());
+  const retirement = new AbortController();
   const metadata = createPluginMetadataSnapshotFixture({
     plugins: [
       {
@@ -83,39 +74,27 @@ async function fixture(
     inlineProviderModels: [],
     configuredCatalogEntries: [],
   };
-  await using _ = {
-    [Symbol.asyncDispose]: retainPreparedPluginGeneration(pluginGeneration),
+  resources.defer(retainPreparedPluginGeneration(pluginGeneration));
+  resources.defer(() => retirement.abort());
+  const profiles: Record<string, { type: "api_key"; provider: string; key: string }> = {
+    "shared:account": { type: "api_key", provider: "shared", key: "synthetic-shared-key" },
   };
-  const config: OpenClawConfig = {};
+  if (savedNativeProfile) {
+    profiles["fixture-cli:saved"] = {
+      type: "api_key",
+      provider: native.id,
+      key: "synthetic-saved-key",
+    };
+  }
+  const keys = Object.values(profiles).map(
+    ({ provider, key }) => [provider, { type: "api_key" as const, key }] as const,
+  );
   let auth: PreparedModelCatalogAuth = {
-    authStore: {
-      version: 1,
-      profiles: {
-        "shared:account": { type: "api_key", provider: "shared", key: "synthetic-shared-key" },
-        ...(savedNativeProfile
-          ? {
-              "fixture-cli:saved": {
-                type: "api_key" as const,
-                provider: native.id,
-                key: "synthetic-saved-key",
-              },
-            }
-          : {}),
-      },
-    },
-    credentials: {
-      shared: { type: "api_key", key: "synthetic-shared-key" },
-      ...(savedNativeProfile
-        ? { [native.id]: { type: "api_key" as const, key: "synthetic-saved-key" } }
-        : {}),
-    },
-    authModes: {
-      shared: "api_key",
-      ...(savedNativeProfile ? { [native.id]: "api_key" as const } : {}),
-    },
+    authStore: { version: 1, profiles },
+    credentials: Object.fromEntries(keys),
+    authModes: Object.fromEntries(keys.map(([provider]) => [provider, "api_key" as const])),
     providerAuthLabels: new Map(),
   };
-  const retirement = new AbortController();
   const refreshAuth = vi.fn(async () => {
     throw new Error("Native login checks must not load durable auth in the catalog worker");
   });
@@ -133,17 +112,13 @@ async function fixture(
       refreshAuth,
     },
     {
-      agentFacts: { input: { config, agentDir: "/tmp/native-login-agent" }, env: {} },
+      agentFacts: { input: { config: {}, agentDir: "/tmp/native-login-agent" }, env: {} },
       retirementSignal: retirement.signal,
     },
     [native.id, "unrelated-cli", "shared"],
     publish,
   );
-  try {
-    await run({ recheck, readAuth, publish, refreshAuth, retirement });
-  } finally {
-    retirement.abort();
-  }
+  return { recheck, readAuth, publish, refreshAuth, retirement };
 }
 
 async function tick(recheck: () => void | Promise<void>) {
@@ -153,88 +128,88 @@ async function tick(recheck: () => void | Promise<void>) {
 }
 
 it("publishes native login recovery on forced admission recheck without waiting for the TTL", async () => {
-  await fixture(async ({ recheck, readAuth, publish, refreshAuth }) => {
-    void recheck();
-    expect(native.probe).not.toHaveBeenCalled();
-    await tick(recheck);
-    expect(refreshAuth).not.toHaveBeenCalled();
-    expect(native.probe).toHaveBeenCalledOnce();
-    expect(publish).not.toHaveBeenCalled();
+  await using resources = new AsyncDisposableStack();
+  const { recheck, readAuth, publish, refreshAuth } = fixture(resources);
+  void recheck();
+  expect(native.probe).not.toHaveBeenCalled();
+  await tick(recheck);
+  expect(refreshAuth).not.toHaveBeenCalled();
+  expect(native.probe).toHaveBeenCalledOnce();
+  expect(publish).not.toHaveBeenCalled();
 
-    native.probe.mockResolvedValue(nativeLogin);
-    await recheck({ force: true });
-    expect(publish).toHaveBeenCalledOnce();
-    expect(readAuth().authModes).toEqual({
-      shared: "api_key",
-      "fixture-cli": { source: "native", mode: "oauth" },
-    });
-    expect(readAuth().credentials?.[native.id]).toEqual({
-      type: "api_key",
-      key: "synthetic-native-presence",
-      nativeAuth: { runtime: "fixture-cli", mode: "oauth" },
-    });
-    await tick(recheck);
-    expect(publish).toHaveBeenCalledOnce();
-
-    native.probe.mockResolvedValue(undefined);
-    await tick(recheck);
-    expect(publish).toHaveBeenCalledTimes(2);
-    expect(readAuth().authModes).toEqual({ shared: "api_key" });
-    expect(readAuth().credentials).toEqual({
-      shared: { type: "api_key", key: "synthetic-shared-key" },
-    });
-    expect(readAuth().authStore.profiles).toEqual({
-      "shared:account": { type: "api_key", provider: "shared", key: "synthetic-shared-key" },
-    });
-    expect(native.unrelatedProbe).not.toHaveBeenCalled();
-    expect(refreshAuth).not.toHaveBeenCalled();
+  native.probe.mockResolvedValue(nativeLogin);
+  await recheck({ force: true });
+  expect(publish).toHaveBeenCalledOnce();
+  expect(readAuth().authModes).toEqual({
+    shared: "api_key",
+    "fixture-cli": { source: "native", mode: "oauth" },
   });
+  expect(readAuth().credentials?.[native.id]).toEqual({
+    type: "api_key",
+    key: "synthetic-native-presence",
+    nativeAuth: { runtime: "fixture-cli", mode: "oauth" },
+  });
+  await tick(recheck);
+  expect(publish).toHaveBeenCalledOnce();
+
+  native.probe.mockResolvedValue(undefined);
+  await tick(recheck);
+  expect(publish).toHaveBeenCalledTimes(2);
+  expect(readAuth().authModes).toEqual({ shared: "api_key" });
+  expect(readAuth().credentials).toEqual({
+    shared: { type: "api_key", key: "synthetic-shared-key" },
+  });
+  expect(readAuth().authStore.profiles).toEqual({
+    "shared:account": { type: "api_key", provider: "shared", key: "synthetic-shared-key" },
+  });
+  expect(native.unrelatedProbe).not.toHaveBeenCalled();
+  expect(refreshAuth).not.toHaveBeenCalled();
 });
 
 it("keeps saved profile credentials authoritative across native login and logout", async () => {
-  await fixture(async ({ recheck, readAuth, publish, refreshAuth }) => {
-    native.probe.mockResolvedValue(nativeLogin);
-    await tick(recheck);
-    native.probe.mockResolvedValue(undefined);
-    await tick(recheck);
-    expect(readAuth().credentials?.[native.id]).toEqual({
-      type: "api_key",
-      key: "synthetic-saved-key",
-    });
-    expect(readAuth().authModes[native.id]).toBe("api_key");
-    expect(publish).not.toHaveBeenCalled();
-    expect(refreshAuth).not.toHaveBeenCalled();
-  }, true);
+  await using resources = new AsyncDisposableStack();
+  const { recheck, readAuth, publish, refreshAuth } = fixture(resources, true);
+  native.probe.mockResolvedValue(nativeLogin);
+  await tick(recheck);
+  native.probe.mockResolvedValue(undefined);
+  await tick(recheck);
+  expect(readAuth().credentials?.[native.id]).toEqual({
+    type: "api_key",
+    key: "synthetic-saved-key",
+  });
+  expect(readAuth().authModes[native.id]).toBe("api_key");
+  expect(publish).not.toHaveBeenCalled();
+  expect(refreshAuth).not.toHaveBeenCalled();
 });
 
 it("coalesces pending login checks and fences their result when the owner retires", async () => {
-  await fixture(async ({ recheck, readAuth, publish, refreshAuth, retirement }) => {
-    const started = createDeferredCore<AbortSignal>();
-    const completed = createDeferredCore();
-    native.probe.mockImplementation(async ({ signal }) => {
-      if (!signal) {
-        throw new Error("Native login checks must carry their owner's cancellation signal");
-      }
-      started.resolve(signal);
-      await completed.promise;
-      return nativeLogin;
-    });
-    try {
-      await tick(recheck);
-      expect(native.probe).toHaveBeenCalledOnce();
-      const signal = await started.promise;
-      await tick(recheck);
-      expect(native.probe).toHaveBeenCalledOnce();
-      retirement.abort();
-      expect(signal.aborted).toBe(true);
-      completed.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(publish).not.toHaveBeenCalled();
-      expect(readAuth().authModes).toEqual({ shared: "api_key" });
-      expect(refreshAuth).not.toHaveBeenCalled();
-    } finally {
-      completed.resolve();
-      await vi.advanceTimersByTimeAsync(0);
+  await using resources = new AsyncDisposableStack();
+  const { recheck, readAuth, publish, refreshAuth, retirement } = fixture(resources);
+  const started = createDeferredCore<AbortSignal>();
+  const completed = createDeferredCore();
+  native.probe.mockImplementation(async ({ signal }) => {
+    if (!signal) {
+      throw new Error("Native login checks must carry their owner's cancellation signal");
     }
+    started.resolve(signal);
+    await completed.promise;
+    return nativeLogin;
   });
+  try {
+    await tick(recheck);
+    expect(native.probe).toHaveBeenCalledOnce();
+    const signal = await started.promise;
+    await tick(recheck);
+    expect(native.probe).toHaveBeenCalledOnce();
+    retirement.abort();
+    expect(signal.aborted).toBe(true);
+    completed.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(publish).not.toHaveBeenCalled();
+    expect(readAuth().authModes).toEqual({ shared: "api_key" });
+    expect(refreshAuth).not.toHaveBeenCalled();
+  } finally {
+    completed.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+  }
 });

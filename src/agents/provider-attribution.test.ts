@@ -446,74 +446,39 @@ describe("provider attribution", () => {
   });
 
   it("classifies Google Gemini and Vertex endpoints separately from custom hosts", () => {
-    expectRecordFields(resolveProviderEndpoint("https://generativelanguage.googleapis.com"), {
-      endpointClass: "google-generative-ai",
-      hostname: "generativelanguage.googleapis.com",
-    });
-
-    expectRecordFields(
-      resolveProviderEndpoint("https://europe-west4-aiplatform.googleapis.com/v1/projects/test"),
-      {
-        endpointClass: "google-vertex",
-        hostname: "europe-west4-aiplatform.googleapis.com",
-        googleVertexRegion: "europe-west4",
-      },
-    );
-
-    expectRecordFields(resolveProviderEndpoint("https://aiplatform.googleapis.com"), {
-      endpointClass: "google-vertex",
-      hostname: "aiplatform.googleapis.com",
-      googleVertexRegion: "global",
-    });
-
-    expectRecordFields(resolveProviderEndpoint("https://aiplatform.eu.rep.googleapis.com"), {
-      endpointClass: "google-vertex",
-      hostname: "aiplatform.eu.rep.googleapis.com",
-      googleVertexRegion: "eu",
-    });
-
-    expectRecordFields(resolveProviderEndpoint("https://aiplatform.us.rep.googleapis.com"), {
-      endpointClass: "google-vertex",
-      hostname: "aiplatform.us.rep.googleapis.com",
-      googleVertexRegion: "us",
-    });
-
-    expectRecordFields(resolveProviderEndpoint("https://discoveryengine.eu.rep.googleapis.com"), {
-      endpointClass: "custom",
-      hostname: "discoveryengine.eu.rep.googleapis.com",
-    });
-
-    expectRecordFields(resolveProviderEndpoint("https://proxy.example.com/google"), {
-      endpointClass: "custom",
-      hostname: "proxy.example.com",
-    });
+    const cases = [
+      ["generativelanguage.googleapis.com", "google-generative-ai"],
+      [
+        "europe-west4-aiplatform.googleapis.com",
+        "google-vertex",
+        "europe-west4",
+        "/v1/projects/test",
+      ],
+      ["aiplatform.googleapis.com", "google-vertex", "global"],
+      ["aiplatform.eu.rep.googleapis.com", "google-vertex", "eu"],
+      ["aiplatform.us.rep.googleapis.com", "google-vertex", "us"],
+      ["discoveryengine.eu.rep.googleapis.com", "custom"],
+      ["proxy.example.com", "custom", undefined, "/google"],
+    ];
+    for (const [hostname, endpointClass, googleVertexRegion, path = ""] of cases) {
+      expectRecordFields(resolveProviderEndpoint("https://" + hostname + path), {
+        endpointClass,
+        hostname,
+        ...(googleVertexRegion ? { googleVertexRegion } : {}),
+      });
+    }
   });
 
   it("does not trust schemeless or embedded trusted-provider substrings", () => {
-    expectRecordFields(resolveProviderEndpoint("api.anthropic.com.attacker.example"), {
-      endpointClass: "custom",
-      hostname: "api.anthropic.com.attacker.example",
-    });
-
-    expectRecordFields(resolveProviderEndpoint("api.openai.com.attacker.example"), {
-      endpointClass: "custom",
-      hostname: "api.openai.com.attacker.example",
-    });
-
-    expectRecordFields(resolveProviderEndpoint("https://attackerapi.openai.com"), {
-      endpointClass: "custom",
-      hostname: "attackerapi.openai.com",
-    });
-
-    expectRecordFields(resolveProviderEndpoint("attacker.example/?target=api.openai.com"), {
-      endpointClass: "custom",
-      hostname: "attacker.example",
-    });
-
-    expectRecordFields(resolveProviderEndpoint("openrouter.ai.attacker.example"), {
-      endpointClass: "custom",
-      hostname: "openrouter.ai.attacker.example",
-    });
+    for (const [url, hostname] of [
+      ["api.anthropic.com.attacker.example", "api.anthropic.com.attacker.example"],
+      ["api.openai.com.attacker.example", "api.openai.com.attacker.example"],
+      ["https://attackerapi.openai.com", "attackerapi.openai.com"],
+      ["attacker.example/?target=api.openai.com", "attacker.example"],
+      ["openrouter.ai.attacker.example", "openrouter.ai.attacker.example"],
+    ]) {
+      expectRecordFields(resolveProviderEndpoint(url), { endpointClass: "custom", hostname });
+    }
   });
 
   it.each([

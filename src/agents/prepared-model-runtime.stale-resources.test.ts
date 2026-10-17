@@ -16,6 +16,7 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { makeModel } from "./embedded-agent-runner/model.test-harness.js";
 import { createContextEngineLogicalTurnLease } from "./harness/context-engine-logical-turn.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -95,11 +96,8 @@ async function withStaleResourceFixture(
               baseUrl: "https://fixture.invalid/v1",
               models: [
                 {
-                  id: "model",
+                  ...makeModel("model"),
                   name: "Fixture model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 8192,
                   maxTokens: 1024,
                 },
@@ -128,15 +126,11 @@ async function withStaleResourceFixture(
             onlyPluginIds: [engineId],
             workspaceDir: state.workspaceDir,
           });
-          const donor = expectDefined(
-            getPluginInstance(
-              expectDefined(
-                root.plugins.find((record) => record.id === engineId),
-                "Gateway context engine record",
-              ),
-            ),
-            "Gateway context engine instance",
+          const record = expectDefined(
+            root.plugins.find((plugin) => plugin.id === engineId),
+            "Gateway context engine record",
           );
+          const donor = expectDefined(getPluginInstance(record), "Gateway context engine instance");
           if (retention === "gateway") {
             await refreshPreparedModelRuntimeSnapshots(config, {
               gatewayLifecycle: true,
@@ -177,16 +171,13 @@ async function withStaleResourceFixture(
                     workspaceDir: state.workspaceDir,
                   }),
               );
-              try {
-                expect(engine.degraded).toBe(false);
-                await expect(
-                  engine
-                    .begin()
-                    .engine.assemble({ sessionId: "stale-resources-session", messages: [] }),
-                ).resolves.toMatchObject({ systemPromptAddition: "live donor" });
-              } finally {
-                await engine.dispose();
-              }
+              await using _ = { [Symbol.asyncDispose]: () => engine.dispose() };
+              expect(engine.degraded).toBe(false);
+              await expect(
+                engine
+                  .begin()
+                  .engine.assemble({ sessionId: "stale-resources-session", messages: [] }),
+              ).resolves.toMatchObject({ systemPromptAddition: "live donor" });
             },
           });
         } finally {

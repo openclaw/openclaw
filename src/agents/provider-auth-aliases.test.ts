@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshot as createBaseSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
-import { buildDeclaredProviderOwnerIndex } from "../plugins/provider-owner-index.js";
 
 const pluginRegistryMocks = vi.hoisted(() => {
-  const loadManifestRegistry = vi.fn();
+  const loadManifestRegistry = vi.fn((..._params: unknown[]) => ({ plugins: [], diagnostics: [] }));
   return {
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
@@ -48,12 +48,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
 }));
 
-import {
-  makeEmptyPluginMetadataOwners,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata.test-support.js";
-import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
-import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -80,66 +75,28 @@ function createPluginManifestRecord(
   };
 }
 
-function createInstalledPluginIndexRecord(
-  plugin: PluginManifestRecord,
-): InstalledPluginIndexRecord {
-  return {
+function createPluginMetadataSnapshot(params: {
+  config?: Parameters<typeof createBaseSnapshot>[0]["config"];
+  plugins: readonly PluginManifestRecord[];
+}): PluginMetadataSnapshot {
+  const snapshot = createBaseSnapshot({
+    config: params.config,
+    manifestRegistry: { plugins: [...params.plugins], diagnostics: [] },
+  });
+  snapshot.index.plugins = params.plugins.map((plugin) => ({
     pluginId: plugin.id,
     manifestPath: plugin.manifestPath,
-    manifestHash: `${plugin.id}:manifest`,
+    manifestHash: plugin.id + ":manifest",
     rootDir: plugin.rootDir,
     origin: plugin.origin,
     enabled: true,
     enabledByDefault: true,
-    startup: {
-      sidecar: false,
-      memory: false,
-      agentHarnesses: [],
-    },
+    startup: { sidecar: false, memory: false, agentHarnesses: [] },
     compat: [],
-  };
-}
-
-function createPluginMetadataSnapshot(params: {
-  config?: Parameters<typeof resolveInstalledPluginIndexPolicyHash>[0];
-  plugins: readonly PluginManifestRecord[];
-}): PluginMetadataSnapshot {
-  const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash,
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: params.plugins.map((plugin) => createInstalledPluginIndexRecord(plugin)),
-    diagnostics: [],
-  };
-  return {
-    policyHash,
-    index,
-    registryIndex: index,
-    registryDiagnostics: [],
-    manifestRegistry: { plugins: [...params.plugins], diagnostics: [] },
-    plugins: params.plugins,
-    diagnostics: [],
-    byPluginId: new Map(params.plugins.map((plugin) => [plugin.id, plugin])),
-    normalizePluginId: (pluginId) => pluginId,
-    declaredProviderOwners: buildDeclaredProviderOwnerIndex(params.plugins),
-    owners: {
-      ...makeEmptyPluginMetadataOwners(),
-      ...buildPluginMetadataProviderFacts(params.plugins),
-    },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: params.plugins.length,
-      manifestPluginCount: params.plugins.length,
-    },
-  };
+  }));
+  Object.assign(snapshot.owners, buildPluginMetadataProviderFacts(params.plugins));
+  snapshot.metrics.indexPluginCount = params.plugins.length;
+  return snapshot;
 }
 
 async function prepareAliasSnapshot(plugins: PluginManifestRecord[]) {
@@ -162,6 +119,8 @@ async function prepareAliasSnapshot(plugins: PluginManifestRecord[]) {
     Object.defineProperties(snapshotReaderSlot, readers);
   }
 }
+
+const expectedEnvAuth = { apiKey: "ALIAS_PROVIDER_KEY", mode: "api_key", source: "env" };
 
 describe("provider auth aliases", () => {
   it("uses the canonical configured provider endpoint for auth aliases", () => {
@@ -229,16 +188,6 @@ describe("provider auth aliases", () => {
 
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
-    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReset();
-    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      snapshot: { plugins: [] },
-    });
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
   });
 
@@ -271,24 +220,18 @@ describe("provider auth aliases", () => {
       aliasPlugin("configured", "config", { shared: "configured" }),
     ]);
     const withoutWorkspace = resolveProviderAuthAliasMap({ metadataSnapshot: snapshot });
-    expect(Object.keys(withoutWorkspace)).toEqual([
-      "duplicate",
-      "middle",
-      "shared",
-      "legacy",
-      "tail",
+    expect(Object.entries(withoutWorkspace)).toEqual([
+      ["duplicate", "first-raw-alias"],
+      ["middle", "first-global"],
+      ["shared", "configured"],
+      ["legacy", "choice-provider"],
+      ["tail", "bundled"],
     ]);
-    expect(withoutWorkspace).toEqual({
-      duplicate: "first-raw-alias",
-      middle: "first-global",
-      shared: "configured",
-      legacy: "choice-provider",
-      tail: "bundled",
-    });
-    const withWorkspace = resolveProviderAuthAliasMap({
+    const trusted = {
       config: { plugins: { allow: ["early-workspace"] } },
       metadataSnapshot: snapshot,
-    });
+    };
+    const withWorkspace = resolveProviderAuthAliasMap(trusted);
     expect(Object.keys(withWorkspace)).toEqual([
       "early-only",
       "shared",
@@ -298,12 +241,7 @@ describe("provider auth aliases", () => {
       "tail",
     ]);
     for (const [alias, target] of Object.entries(withWorkspace)) {
-      expect(
-        resolveProviderIdForAuth(alias, {
-          config: { plugins: { allow: ["early-workspace"] } },
-          metadataSnapshot: snapshot,
-        }),
-      ).toBe(target);
+      expect(resolveProviderIdForAuth(alias, trusted)).toBe(target);
     }
     const proto = resolveProviderAuthAliasMap({
       metadataSnapshot: {
@@ -380,16 +318,9 @@ describe("provider auth aliases", () => {
     } as NodeJS.ProcessEnv;
     const resolveAuth = installAuthFixture(config, env);
 
-    expect(resolveAuth("fixture-provider")).toMatchObject({
-      apiKey: "ALIAS_PROVIDER_KEY",
-      mode: "api_key",
-      source: "env",
-    });
-    expect(resolveAuth("fixture-provider-plan")).toMatchObject({
-      apiKey: "ALIAS_PROVIDER_KEY",
-      mode: "api_key",
-      source: "env",
-    });
+    for (const provider of ["fixture-provider", "fixture-provider-plan"]) {
+      expect(resolveAuth(provider)).toMatchObject(expectedEnvAuth);
+    }
   });
 
   it("reuses env keyRef markers from auth profiles for aliased providers", () => {
@@ -405,8 +336,7 @@ describe("provider auth aliases", () => {
 
     for (const provider of ["fixture-provider", "fixture-provider-plan"]) {
       expect(resolveAuth(provider)).toMatchObject({
-        apiKey: "ALIAS_PROVIDER_KEY",
-        mode: "api_key",
+        ...expectedEnvAuth,
         source: "profile",
         profileId: "fixture-provider:default",
       });
@@ -426,11 +356,7 @@ describe("provider auth aliases", () => {
       }),
     ]);
 
-    expect(resolveAuth("fixture-provider")).toMatchObject({
-      apiKey: "ALIAS_PROVIDER_KEY",
-      mode: "api_key",
-      source: "env",
-    });
+    expect(resolveAuth("fixture-provider")).toMatchObject(expectedEnvAuth);
     expect(resolveAuth("evil-openai")).toMatchObject({
       apiKey: undefined,
       mode: "none",
@@ -453,11 +379,7 @@ describe("provider auth aliases", () => {
         providerAuthAliases: { "openai-compatible": "fixture-provider" },
       },
     ]);
-    expect(resolveAuth("openai-compatible")).toMatchObject({
-      apiKey: "ALIAS_PROVIDER_KEY",
-      mode: "api_key",
-      source: "env",
-    });
+    expect(resolveAuth("openai-compatible")).toMatchObject(expectedEnvAuth);
   });
 });
 
@@ -474,16 +396,7 @@ function createFixtureProviderManifest(): PluginManifestRecord {
 }
 
 function endpointAlias(baseUrls = ["https://openrouter.ai/api/v1"]) {
-  return createPluginManifestRecord({
-    id: "arcee",
-    origin: "bundled",
-    providerAuthAliases: {
-      arcee: {
-        provider: "openrouter",
-        baseUrls,
-      },
-    },
-  });
+  return aliasPlugin("arcee", "bundled", { arcee: { provider: "openrouter", baseUrls } });
 }
 
 function installAuthFixture(
