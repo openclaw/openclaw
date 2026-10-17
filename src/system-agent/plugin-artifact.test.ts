@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   audit: vi.fn(),
   parsed: {} as Record<string, unknown>,
 }));
+const pluginId = "artifact-demo";
 
 vi.mock("../config/config.js", () => ({
   assertConfigWriteAllowedInCurrentMode: () => {},
@@ -69,7 +70,7 @@ describe("exact system-agent plugin artifacts", () => {
     mocks.audit.mockReset();
     mocks.parsed = {};
     ({ runtime, lines } = createSystemAgentTestRuntime());
-    mocks.install.mockResolvedValue({ ok: true, pluginId: "artifact-demo", config: {} });
+    mocks.install.mockResolvedValue({ ok: true, pluginId, config: {} });
   });
   afterEach(async () => {
     vi.unstubAllEnvs();
@@ -80,27 +81,20 @@ describe("exact system-agent plugin artifacts", () => {
     const pkgDir = path.join(fixture, "package");
     await fs.mkdir(path.join(pkgDir, "dist", "control-ui"), { recursive: true });
     await writeJson(pkgDir, "package.json", {
-      name: "artifact-demo",
+      name: pluginId,
       version: "1.0.0",
       type: "module",
       openclaw: { extensions: ["./dist/index.js"] },
       ...packageFields,
     });
     await writeJson(pkgDir, "openclaw.plugin.json", {
-      id: "artifact-demo",
-      name: "Artifact demo",
-      version: "1.0.0",
+      id: pluginId,
       configSchema: { type: "object", properties: {} },
       controlUi: { entry: "dist/control-ui/index.js" },
     });
-    await fs.writeFile(
-      path.join(pkgDir, "dist", "index.js"),
-      "export default {id:'artifact-demo',register(){}};\n",
-    );
-    await fs.writeFile(
-      path.join(pkgDir, "dist", "control-ui", "index.js"),
-      "export default {id:'artifact-demo',activate(){}};\n",
-    );
+    for (const entry of ["index.js", "control-ui/index.js"]) {
+      await fs.writeFile(path.join(pkgDir, "dist", entry), "export default {};\n");
+    }
     const archivePath = await packToArchive({ pkgDir, outDir: fixture, outName: "artifact.tgz" });
     const bytes = await fs.readFile(archivePath);
     return {
@@ -110,12 +104,16 @@ describe("exact system-agent plugin artifacts", () => {
     };
   }
 
-  it("retains reviewed bytes and installs them after the task source changes", async () => {
+  async function prepare() {
     const operation = await pack();
+    return { operation, review: await prepareSystemAgentPluginArtifact(operation) };
+  }
+
+  it("retains reviewed bytes and installs them after the task source changes", async () => {
+    const { operation, review } = await prepare();
     const reviewedBytes = await fs.readFile(operation.path);
-    const review = await prepareSystemAgentPluginArtifact(operation);
     expect(review).toMatchObject({
-      pluginId: "artifact-demo",
+      pluginId,
       nativeControlUi: true,
       sha256: operation.sha256,
     });
@@ -125,7 +123,7 @@ describe("exact system-agent plugin artifacts", () => {
     const applyPluginRuntime = vi.fn(async () => ({
       operationId: "artifact-activation",
       generation: 2,
-      pluginIds: ["artifact-demo"],
+      pluginIds: [pluginId],
     }));
     const installedPath = importPath(`${operation.sha256}.tgz`);
     mocks.install.mockImplementation(async (params) => {
@@ -136,24 +134,17 @@ describe("exact system-agent plugin artifacts", () => {
       expect(params.acknowledgeCapabilities).toEqual({ reviewToken: review.reviewToken });
       await params.beforePersistentEffect();
       params.beforePersistentApply();
-      await params.applyRuntime({
-        config: {},
-        pluginIds: ["artifact-demo"],
-        reason: "install",
-      });
-      return { ok: true, pluginId: "artifact-demo", config: {} };
+      await params.applyRuntime({ config: {}, pluginIds: [pluginId], reason: "install" });
+      return { ok: true, pluginId, config: {} };
     });
     expect(
-      await activate(operation, {
-        beforePersistentApply,
-        deps: { applyPluginRuntime },
-      }),
+      await activate(operation, { beforePersistentApply, deps: { applyPluginRuntime } }),
     ).toMatchObject({ applied: true });
     await expect(fs.access(review.retainedPath)).rejects.toThrow();
     expect(beforePersistentApply).toHaveBeenCalledTimes(3);
     expect(applyPluginRuntime).toHaveBeenCalledExactlyOnceWith({
       config: {},
-      pluginIds: ["artifact-demo"],
+      pluginIds: [pluginId],
       reason: "install",
     });
     expect(lines.join("\n")).toContain(
@@ -162,7 +153,7 @@ describe("exact system-agent plugin artifacts", () => {
     expect(mocks.audit).toHaveBeenCalledWith(
       expect.objectContaining({
         details: expect.objectContaining({
-          pluginId: "artifact-demo",
+          pluginId,
           sha256: operation.sha256,
           sourcePath: installedPath,
         }),
@@ -171,9 +162,8 @@ describe("exact system-agent plugin artifacts", () => {
   });
 
   it("preserves the approved source when the installer reports a late failure", async () => {
-    const operation = await pack();
+    const { operation, review } = await prepare();
     const reviewedBytes = await fs.readFile(operation.path);
-    const review = await prepareSystemAgentPluginArtifact(operation);
     const failure = new Error("registry refresh failed after commit");
     mocks.install.mockRejectedValue(failure);
 
@@ -188,19 +178,24 @@ describe("exact system-agent plugin artifacts", () => {
     expect(mocks.install).toHaveBeenCalledOnce();
   });
 
-  it("rejects a changed retained archive before entering the installer", async () => {
-    const operation = await pack();
-    const review = await prepareSystemAgentPluginArtifact(operation);
-    await fs.writeFile(review.retainedPath, "changed reviewed bytes");
-    await expect(activate(operation)).rejects.toThrow("SHA256 does not match");
+  it.each([
+    ["changed retained archive", "SHA256 does not match"],
+    ["include-owned config", "Install the reviewed archive with openclaw plugins install"],
+  ])("rejects %s before entering the installer", async (failure, message) => {
+    const { operation, review } = await prepare();
+    if (failure === "changed retained archive") {
+      await fs.writeFile(review.retainedPath, "changed reviewed bytes");
+    } else {
+      mocks.parsed = { plugins: { $include: "plugins.json" } };
+    }
+    await expect(activate(operation)).rejects.toThrow(message);
     expect(mocks.install).not.toHaveBeenCalled();
     expect(mocks.audit).not.toHaveBeenCalled();
   });
 
   it("bounds pending imports without removing an installed archive", async () => {
-    const operation = await pack();
+    const { operation } = await prepare();
     const bytes = await fs.readFile(operation.path);
-    await prepareSystemAgentPluginArtifact(operation);
     await activate(operation);
     const installedPath = installedArchive();
     const pendingDir = importPath("pending");
@@ -217,8 +212,7 @@ describe("exact system-agent plugin artifacts", () => {
   });
 
   it("prunes expired reviews and requires a fresh proposal before applying them", async () => {
-    const operation = await pack();
-    const review = await prepareSystemAgentPluginArtifact(operation);
+    const { operation, review } = await prepare();
     const expired = new Date(Date.now() - 2 * 60 * 60_000);
     await fs.utimes(review.retainedPath, expired, expired);
 
@@ -227,17 +221,6 @@ describe("exact system-agent plugin artifacts", () => {
 
     await prepareSystemAgentPluginArtifact(await pack({ version: "2.0.0" }));
     await expect(fs.access(review.retainedPath)).rejects.toThrow();
-  });
-
-  it("refuses include-owned plugin config before installation", async () => {
-    const operation = await pack();
-    await prepareSystemAgentPluginArtifact(operation);
-    mocks.parsed = { plugins: { $include: "plugins.json" } };
-    await expect(activate(operation)).rejects.toThrow(
-      "Install the reviewed archive with openclaw plugins install",
-    );
-    expect(mocks.install).not.toHaveBeenCalled();
-    expect(mocks.audit).not.toHaveBeenCalled();
   });
 
   it.each([

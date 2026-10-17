@@ -26,26 +26,19 @@ let stateDir = "";
 
 type TestConfig = Record<string, unknown>;
 
-function readLastAuditEntry(): Record<string, unknown> {
-  return (listSystemAgentAuditEntriesForTests().at(-1)?.value ?? {}) as Record<string, unknown>;
-}
+const readLastAuditEntry = () => listSystemAgentAuditEntriesForTests().at(-1)?.value ?? {};
 
+// mock-isolation: Rescue must not operate real agents, daemons, CLIs, TUI, or providers.
 const runPluginInstallCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
-// mock-isolation: Keep agent creation and its persistent stores outside rescue approval proof.
 vi.mock("../agents/agent-create.js", () => ({ createAgent: vi.fn() }));
-// mock-isolation: Rescue approval must not manipulate the machine's daemon lifecycle.
 vi.mock("../cli/daemon-cli/lifecycle.js", () => ({
   runDaemonRestart: vi.fn(),
   runDaemonStart: vi.fn(),
   runDaemonStop: vi.fn(),
 }));
-// mock-isolation: Supply external plugin-list output without loading the host CLI registry.
 vi.mock("../cli/plugins-list-command.js", () => ({ runPluginsListCommand: vi.fn() }));
-// mock-isolation: Supply external plugin-search output without loading the host CLI registry.
 vi.mock("../cli/plugins-search-command.js", () => ({ runPluginsSearchCommand: vi.fn() }));
-// mock-isolation: Remote rescue must never initialize the local terminal UI.
 vi.mock("../tui/tui.js", () => ({ runTui: vi.fn() }));
-// mock-isolation: Keep live provider inference outside conversational approval proof.
 vi.mock("./setup-inference.js", () => ({ verifySetupInferenceConfig: vi.fn() }));
 
 const mockConfig = vi.hoisted(() => {
@@ -75,13 +68,10 @@ const mockConfig = vi.hoisted(() => {
   };
   return {
     reset() {
-      state.path = "/tmp/openclaw.json";
       state.config = {};
       state.hash = "mock-hash-0";
     },
-    currentConfig() {
-      return cloneConfig();
-    },
+    currentConfig: cloneConfig,
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
     mutateConfigFile: vi.fn(
       async (params: {
@@ -124,43 +114,16 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 vi.mock("../commands/models/shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../commands/models/shared.js")>();
-  return {
-    ...actual,
-    applyDefaultModelPrimaryUpdate: ({
-      cfg,
-      modelRaw,
-      field,
-    }: {
-      cfg: TestConfig;
-      modelRaw: string;
-      field: "model" | "imageModel";
-    }) => ({
-      ...cfg,
-      agents: {
-        ...(cfg.agents as TestConfig | undefined),
-        defaults: {
-          ...(cfg.agents as { defaults?: TestConfig } | undefined)?.defaults,
-          [field]: { primary: modelRaw },
-        },
-      },
-    }),
-  };
+  // Avoid a plugin-registry scan; model persistence itself is covered by its owner.
+  const update: typeof actual.applyDefaultModelPrimaryUpdate = ({ cfg, modelRaw, field }) => ({
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: { ...cfg.agents?.defaults, [field]: { primary: modelRaw } },
+    },
+  });
+  return { ...actual, applyDefaultModelPrimaryUpdate: update };
 });
-
-vi.mock("../config/model-input.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/model-input.js")>();
-  return {
-    ...actual,
-    resolveAgentModelPrimaryValue: (model?: string | { primary?: string }) =>
-      typeof model === "string" ? model : model?.primary,
-  };
-});
-
-async function makeStateDir(prefix: string): Promise<string> {
-  const dir = path.join(tempRoot, `${prefix}${tempDirId++}`);
-  await fs.mkdir(dir, { recursive: true });
-  return dir;
-}
 
 function commandContext(overrides: Partial<CommandContext> = {}): CommandContext {
   return {
@@ -214,7 +177,8 @@ describe("OpenClaw rescue message", () => {
   });
 
   beforeEach(async () => {
-    stateDir = await makeStateDir("case-");
+    stateDir = path.join(tempRoot, String(tempDirId++));
+    await fs.mkdir(stateDir, { recursive: true });
     resetPluginStateStoreForTests();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     mockConfig.reset();
@@ -259,10 +223,20 @@ describe("OpenClaw rescue message", () => {
     ).resolves.toContain("sandboxing is active");
   });
 
-  it("refuses TUI handoff from remote rescue", async () => {
-    await expectReply("/openclaw talk to agent", "cannot open the local TUI");
-    await expectReply("/openclaw chat", "cannot open the local TUI");
-    expect(runTui).not.toHaveBeenCalled();
+  it.each([
+    ["talk to agent", "cannot open the local TUI", runTui],
+    ["chat", "cannot open the local TUI", runTui],
+    ["connect telegram", "cannot host the interactive channel setup", undefined],
+    [
+      "plugin install clawhub:openclaw-demo",
+      "cannot install plugins from a message channel",
+      runPluginInstallCommandMock,
+    ],
+  ] as const)("refuses remote %s", async (command, reason, effect) => {
+    await expectReply(`/openclaw ${command}`, reason);
+    if (effect) {
+      expect(effect).not.toHaveBeenCalled();
+    }
   });
 
   it("rejects natural language instead of guessing an operation", async () => {
@@ -275,10 +249,6 @@ describe("OpenClaw rescue message", () => {
     );
     expect(runDaemonStop).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
-  });
-
-  it("refuses channel setup from remote rescue with a local pointer", async () => {
-    await expectReply("/openclaw connect telegram", "cannot host the interactive channel setup");
   });
 
   it("refuses doctor repairs without creating a pending approval", async () => {
@@ -345,25 +315,19 @@ describe("OpenClaw rescue message", () => {
   });
 
   it("preserves a new plan created while the consumed plan executes", async () => {
-    let releaseRestart: (() => void) | undefined;
-    let noteRestartEntered: (() => void) | undefined;
-    const restartEntered = new Promise<void>((resolve) => {
-      noteRestartEntered = resolve;
-    });
-    const restartGate = new Promise<void>((resolve) => {
-      releaseRestart = resolve;
-    });
+    const entered = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
     vi.mocked(runDaemonRestart).mockImplementation(async () => {
-      noteRestartEntered?.();
-      await restartGate;
+      entered.resolve();
+      await gate.promise;
       return true;
     });
 
     await runRescue("/openclaw restart gateway", {});
     const approval = runRescue("/openclaw yes", {});
-    await restartEntered;
+    await entered.promise;
     await runRescue("/openclaw start gateway", {});
-    releaseRestart?.();
+    gate.resolve();
     await expect(approval).resolves.toContain("[openclaw] done: gateway.restart");
     await expectReply("/openclaw yes", "[openclaw] done: gateway.start");
     expect(runDaemonRestart).toHaveBeenCalledTimes(1);
@@ -437,38 +401,21 @@ describe("OpenClaw rescue message", () => {
     );
   });
 
-  it("isolates pending approvals by account, channel, and sender", async () => {
-    const original = commandContext();
-
+  it.each([
+    ["account", {}, { accountId: "secondary" }],
+    ["channel", {}, { channelId: "telegram" }],
+    ["sender", {}, { from: "user:other", senderId: "user:other" }],
+    [
+      "destination fallback",
+      { accountId: undefined, to: "bot:primary" },
+      { accountId: undefined, to: "bot:secondary" },
+    ],
+  ] as const)("isolates pending approvals by %s", async (_scope, base, other) => {
+    const original = commandContext(base);
     await runRescue("/openclaw restart gateway", {}, original);
-    for (const isolated of [
-      commandContext({ accountId: "secondary" }),
-      commandContext({ channelId: "telegram" }),
-      commandContext({ from: "user:other", senderId: "user:other" }),
-    ]) {
-      await expectReply("/openclaw yes", noPending, true, isolated);
-    }
+    await expectReply("/openclaw yes", noPending, true, commandContext(other));
     await expectReply("/openclaw yes", "[openclaw] done: gateway.restart", false, original);
     expect(runDaemonRestart).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back to the channel destination when account id is absent", async () => {
-    const original = commandContext({ accountId: undefined, to: "bot:primary" });
-
-    await runRescue("/openclaw restart gateway", {}, original);
-    await expect(
-      runRescue("/openclaw yes", {}, commandContext({ accountId: undefined, to: "bot:secondary" })),
-    ).resolves.toBe(noPending);
-    await expectReply("/openclaw yes", "[openclaw] done: gateway.restart", false, original);
-    expect(runDaemonRestart).toHaveBeenCalledTimes(1);
-  });
-
-  it("refuses plugin install from remote rescue", async () => {
-    await expectReply(
-      "/openclaw plugin install clawhub:openclaw-demo",
-      "cannot install plugins from a message channel",
-    );
-    expect(runPluginInstallCommandMock).not.toHaveBeenCalled();
   });
 
   it("allows plugin list and search from remote rescue", async () => {
@@ -534,13 +481,12 @@ describe("OpenClaw rescue message", () => {
   );
 
   it("does not queue persistent rescue approval when expiry would exceed the Date range", async () => {
-    const tempDir = stateDir;
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(8_640_000_000_000_000));
     try {
       await expectReply("/openclaw restart gateway", "expiry clock is invalid");
 
-      await expect(fs.readdir(path.join(tempDir, "openclaw", "rescue-pending"))).rejects.toThrow(
+      await expect(fs.readdir(path.join(stateDir, "openclaw", "rescue-pending"))).rejects.toThrow(
         /ENOENT/,
       );
     } finally {

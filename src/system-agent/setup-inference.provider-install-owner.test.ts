@@ -33,6 +33,9 @@ const prepareProvider = vi.hoisted(() =>
     typeof import("../plugins/provider-auth-choice.js").prepareAuthChoiceLoadedPluginProvider
   >(),
 );
+const providerId = "fixture-provider";
+const modelRef = `${providerId}/fixture-model`;
+const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
 vi.mock("../plugins/provider-auth-choice.js", () => ({
   prepareAuthChoiceLoadedPluginProvider: prepareProvider,
 }));
@@ -52,15 +55,14 @@ it.each([false, true])(
         env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
       },
       async (state) => {
-        const source: OpenClawConfig = {
+        await state.writeConfig({
           gateway: { mode: "local" },
           agents: {
             defaults: { workspace: state.workspaceDir },
             entries: { main: { workspace: state.workspaceDir } },
           },
           plugins: { entries: {} },
-        };
-        await state.writeConfig(source);
+        });
         const originalBytes = await fs.readFile(state.configPath, "utf8");
         const original = await readConfigFileSnapshot();
         const runningMetadata = resolvePluginMetadataSnapshot({
@@ -98,39 +100,30 @@ it.each([false, true])(
           // Acquisition and auth are synthetic. Discovery, runtime registration,
           // owner fingerprints, activation checks, and final promotion are real.
           await fs.mkdir(pluginRoot, { recursive: true });
-          await fs.writeFile(
-            path.join(projectRoot, "package.json"),
-            JSON.stringify({
-              private: true,
-              dependencies: { "@fixture/provider": "1.0.0" },
-            }),
-          );
-          await fs.writeFile(
-            path.join(pluginRoot, "package.json"),
-            JSON.stringify({
-              name: "@fixture/provider",
-              version: "1.0.0",
-              openclaw: { extensions: ["./index.cjs"] },
-            }),
-          );
-          await fs.writeFile(
-            path.join(pluginRoot, "openclaw.plugin.json"),
-            JSON.stringify({
-              id: "fixture-provider",
-              providers: ["fixture-provider"],
-              configSchema: { type: "object", properties: {}, additionalProperties: false },
-            }),
-          );
+          await writeJson(path.join(projectRoot, "package.json"), {
+            private: true,
+            dependencies: { "@fixture/provider": "1.0.0" },
+          });
+          await writeJson(path.join(pluginRoot, "package.json"), {
+            name: "@fixture/provider",
+            version: "1.0.0",
+            openclaw: { extensions: ["./index.cjs"] },
+          });
+          await writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+            id: providerId,
+            providers: [providerId],
+            configSchema: { type: "object", properties: {}, additionalProperties: false },
+          });
           await fs.writeFile(pluginEntry, pluginSource);
           const config: OpenClawConfig = {
             ...params.config,
             plugins: {
               ...params.config.plugins,
-              entries: { ...params.config.plugins?.entries, "fixture-provider": { enabled: true } },
+              entries: { ...params.config.plugins?.entries, [providerId]: { enabled: true } },
             },
             models: {
               providers: {
-                "fixture-provider": {
+                [providerId]: {
                   baseUrl: "https://provider.example/v1",
                   api: "openai-completions",
                   models: [],
@@ -156,12 +149,12 @@ it.each([false, true])(
           return await consume(
             {
               config,
-              agentModelOverride: "fixture-provider/fixture-model",
+              agentModelOverride: modelRef,
               authProfiles: [],
-              pendingPluginInstalls: { "fixture-provider": trustedRecord },
+              pendingPluginInstalls: { [providerId]: trustedRecord },
               persistAuthProfiles: async () => {},
             },
-            { id: "fixture-provider", label: "Fixture", auth: [] },
+            { id: providerId, label: "Fixture", auth: [] },
           );
         });
         const capture = vi.fn(captureSystemAgentOwnerPluginArtifacts);
@@ -181,7 +174,7 @@ it.each([false, true])(
               durationMs: 1,
               finalAssistantVisibleText: "OK",
               executionTrace: {
-                winnerProvider: "fixture-provider",
+                winnerProvider: providerId,
                 winnerModel: "fixture-model",
               },
             },
@@ -211,8 +204,8 @@ it.each([false, true])(
               prompter: createWizardPrompter(),
               deps: {
                 resolveManifestProviderAuthChoice: () => ({
-                  pluginId: "fixture-provider",
-                  providerId: "fixture-provider",
+                  pluginId: providerId,
+                  providerId,
                   methodId: "key",
                   choiceId: "fixture-provider-key",
                   choiceLabel: "Fixture",
@@ -226,31 +219,27 @@ it.each([false, true])(
             expect(runEmbeddedAgent).toHaveBeenCalledOnce();
             expect(capture).toHaveBeenCalledOnce();
             const staged = capture.mock.results[0]?.value;
-            expect(staged?.ownerPluginIds).toEqual(["fixture-provider"]);
+            expect(staged?.ownerPluginIds).toEqual([providerId]);
             expect(staged?.ownerPluginArtifacts).toEqual([
-              {
-                pluginId: "fixture-provider",
-                fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
-              },
+              { pluginId: providerId, fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) },
             ]);
             expect(
               loaded.mock.calls.some(
                 ([options]) =>
-                  options?.installRecords?.["fixture-provider"]?.acceptedSurfaceIntegrity ===
-                  integrity,
+                  options?.installRecords?.[providerId]?.acceptedSurfaceIntegrity === integrity,
               ),
             ).toBe(true);
             if (replaceDuringProbe) {
-              expect(result).toMatchObject({ ok: false, status: "auth" });
-              if (result.ok) {
-                throw new Error("Replaced provider artifact was accepted");
-              }
-              expect(result.error).toContain("owner plugin runtime changed");
+              expect(result).toMatchObject({
+                ok: false,
+                status: "auth",
+                error: expect.stringContaining("owner plugin runtime changed"),
+              });
               expect(await fs.readFile(state.configPath, "utf8")).toBe(originalBytes);
             } else {
               expect(result).toMatchObject({
                 ok: true,
-                modelRef: "fixture-provider/fixture-model",
+                modelRef,
               });
               // The running generation intentionally retains its pre-install cache.
               const records = await withPluginLifecycleLease(
@@ -263,13 +252,13 @@ it.each([false, true])(
               if (!trustedRecord) {
                 throw new Error("Installer did not prepare a trusted record");
               }
-              expect(records?.["fixture-provider"]).toMatchObject(trustedRecord);
+              expect(records?.[providerId]).toMatchObject(trustedRecord);
             }
             expect(getActivePluginRegistry()).toBe(runningRegistry);
             expect(getCurrentPluginMetadataSnapshot({ config: original.runtimeConfig })).toBe(
               runningMetadata,
             );
-            expect(runningMetadata.byPluginId.has("fixture-provider")).toBe(false);
+            expect(runningMetadata.byPluginId.has(providerId)).toBe(false);
           },
         );
       },

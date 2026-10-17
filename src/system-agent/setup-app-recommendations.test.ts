@@ -156,20 +156,9 @@ describe("setup app recommendation candidates", () => {
       deps: {
         ...emptyCatalogs,
         searchSkills: async () => [
-          skill({}),
-          skill({
-            score: 0.9,
-            installRef: "@other-owner/notes-tools",
-            ownerHandle: "other-owner",
-            displayName: "Other Notes Tools",
-          }),
-          skill({
-            score: 0.8,
-            slug: "legacy-notes-tools",
-            installRef: "legacy-notes-tools",
-            ownerHandle: undefined,
-            displayName: "Ownerless Notes Tools",
-          }),
+          skill(),
+          skill({ ownerHandle: "other-owner", displayName: "Other Notes Tools" }),
+          skill({ ownerHandle: undefined }),
         ],
         complete: completeMatching([{ appLabel: "Notes", candidateId: "@demo-owner/notes-tools" }]),
       },
@@ -217,9 +206,7 @@ describe("setup app recommendation candidates", () => {
       if (query === "Broken") {
         throw new Error("offline");
       }
-      return [
-        skill({ slug: "working", installRef: "@demo-owner/working", displayName: "Working" }),
-      ];
+      return [skill({ slug: "working" })];
     });
     const result = await getSetupAppRecommendations({
       inventorySource: appInventory("Broken", "Working"),
@@ -252,14 +239,14 @@ describe("official catalog candidates", () => {
       },
     });
     assert(result.status === "ok");
-    const discord = result.groups.find((group) => group.app.label === "Discord");
-    const whatsapp = result.groups.find((group) => group.app.label === "WhatsApp");
-    expect(discord?.candidates).toContainEqual(
-      expect.objectContaining({ id: "discord", source: "official-channel" }),
-    );
-    expect(whatsapp?.candidates).toContainEqual(
-      expect.objectContaining({ id: "whatsapp", source: "official-channel" }),
-    );
+    for (const [label, id] of [
+      ["Discord", "discord"],
+      ["WhatsApp", "whatsapp"],
+    ]) {
+      expect(result.groups.find((group) => group.app.label === label)?.candidates).toContainEqual(
+        expect.objectContaining({ id, source: "official-channel" }),
+      );
+    }
   });
 });
 
