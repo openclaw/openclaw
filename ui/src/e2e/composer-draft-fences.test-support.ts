@@ -60,8 +60,21 @@ export async function verifyDurableComposerFences(page: Page) {
         }
         throw new Error("durable draft state did not settle");
       };
-      const owner = { gatewayOwner: "test-gateway", recoveryScope: "test-credential" };
-      const scope = (scopeKey: string) => ({ ...owner, scopeKey });
+      const scope = (scopeKey: string, owner = "test") => ({
+        gatewayOwner: owner + "-gateway",
+        recoveryScope: owner + "-credential",
+        scopeKey,
+      });
+      const statuses = (...records: { status: string }[]) => records.map((record) => record.status);
+      const waitForText = (key: Parameters<typeof draftStore.read>[0], text: () => string) =>
+        waitFor(async () => draftText(await draftStore.read(key)) === text());
+      const loadDraft = async (...seed: Parameters<typeof draftStore.seed>) => {
+        await draftStore.seed(...seed);
+        const state = draftState();
+        const persistence = activate(seed[0], state);
+        await waitFor(async () => state.message === seed[1]);
+        return { state, persistence };
+      };
       const staleScope = scope("stale");
       const initial = await draftStore.seed(staleScope, "newer draft", 10, "initial");
       const fenced = await draftStore.retire(staleScope, 0, 10);
@@ -107,19 +120,16 @@ export async function verifyDurableComposerFences(page: Page) {
       });
 
       const tooLargeBlob = new Blob([new Uint8Array(25 * 1024 * 1024 + 1)]);
+      const oversizedAttachments = [{ blob: tooLargeBlob, mimeType: "application/octet-stream" }];
+      const mentions = [{ profileId: "profile-alex", start: 0, end: 5 }];
       const oversizedScope = scope("oversized");
       const oversized = await draftStore.write(
         oversizedScope,
         {
           revision: 30,
           text: "@Alex oversized",
-          mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
-          attachments: [
-            {
-              blob: tooLargeBlob,
-              mimeType: "application/octet-stream",
-            },
-          ],
+          mentions,
+          attachments: oversizedAttachments,
         },
         { expectedRevision: 0, writeId: "oversized" },
       );
@@ -133,9 +143,8 @@ export async function verifyDurableComposerFences(page: Page) {
       const oversizedPersistence = activate(oversizedScope, oversizedState);
       await waitFor(async () => oversizedState.message === "@Alex oversized");
       // The live composer retains the payload even though storage kept only text.
-      oversizedState.attachments = await chatPersistence.hydrateDurableComposerAttachments([
-        { blob: tooLargeBlob, mimeType: "application/octet-stream" },
-      ]);
+      oversizedState.attachments =
+        await chatPersistence.hydrateDurableComposerAttachments(oversizedAttachments);
       const oversizedSubmission = oversizedPersistence.captureSubmission();
       oversizedPersistence.disconnect();
       await oversizedPersistence.clearSubmittedDraft(oversizedSubmission);
@@ -148,7 +157,7 @@ export async function verifyDurableComposerFences(page: Page) {
         "stale oversized record",
         49,
         "stale-oversized",
-        [{ blob: tooLargeBlob, mimeType: "application/octet-stream" }],
+        oversizedAttachments,
       );
       const oversizeConflictRead = await draftStore.read(oversizeConflictScope);
 
@@ -179,11 +188,7 @@ export async function verifyDurableComposerFences(page: Page) {
       });
       const missingPayloadRead = await draftStore.read(missingPayloadScope);
 
-      const incognitoScope = {
-        gatewayOwner: "incognito-gateway",
-        recoveryScope: "incognito-credential",
-        scopeKey: "incognito-route",
-      };
+      const incognitoScope = scope("incognito-route", "incognito");
       const incognitoState = draftState("normal before incognito");
       const realNow = Date.now;
       const frozenNow = realNow();
@@ -191,10 +196,7 @@ export async function verifyDurableComposerFences(page: Page) {
       await draftStore.retire({ ...incognitoScope, scopeKey: "fence-seed" }, frozenNow + 1_000);
       const incognitoPersistence = activate(incognitoScope, incognitoState, true);
       incognitoPersistence.noteUserMutation();
-      await waitFor(async () => {
-        const read = await draftStore.read(incognitoScope);
-        return read.status === "found" && read.draft.text === "normal before incognito";
-      });
+      await waitForText(incognitoScope, () => "normal before incognito");
       incognitoState.incognito = true;
       await incognitoPersistence.setIncognito(true);
       await waitFor(async () => {
@@ -208,65 +210,48 @@ export async function verifyDurableComposerFences(page: Page) {
       if (incognitoRetainedMessage) {
         incognitoState.message = "normal after incognito";
         incognitoPersistence.noteUserMutation();
-        await waitFor(async () => {
-          const read = await draftStore.read(incognitoScope);
-          return read.status === "found" && read.draft.text === incognitoState.message;
-        });
+        await waitForText(incognitoScope, () => incognitoState.message);
       }
       const incognitoRead = await draftStore.read(incognitoScope);
       Date.now = realNow;
 
-      const clearScope = {
-        gatewayOwner: "clear-gateway",
-        recoveryScope: "clear-credential",
-        scopeKey: "clear-route",
-      };
-      await draftStore.seed(clearScope, "submitted draft", 70, "submitted-draft");
-      const clearState = draftState();
-      const clearPersistence = activate(clearScope, clearState);
-      await waitFor(async () => clearState.message === "submitted draft");
-      clearState.message = "submitted draft after a conflict";
-      clearPersistence.noteUserMutation();
+      const clearScope = scope("clear-route", "clear");
+      const clear = await loadDraft(clearScope, "submitted draft", 70, "submitted-draft");
+      clear.state.message = "submitted draft after a conflict";
+      clear.persistence.noteUserMutation();
       await write(clearScope, 71, "concurrent other-tab write", {
         expectedRevision: 70,
         writeId: "concurrent-writer",
       });
-      const submittedDraft = clearPersistence.captureSubmission();
-      await waitFor(async () => {
-        const read = await draftStore.read(clearScope);
-        return read.status === "found" && read.draft.text === clearState.message;
-      });
-      clearPersistence.disconnect();
-      clearPersistence.selectRoute("another-route");
-      clearState.message = "new route draft";
-      await clearPersistence.clearSubmittedDraft(submittedDraft);
+      const submittedDraft = clear.persistence.captureSubmission();
+      await waitForText(clearScope, () => clear.state.message);
+      clear.persistence.disconnect();
+      clear.persistence.selectRoute("another-route");
+      clear.state.message = "new route draft";
+      await clear.persistence.clearSubmittedDraft(submittedDraft);
       const clearRead = await draftStore.read(clearScope);
 
-      const staleClearScope = {
-        gatewayOwner: "stale-clear-gateway",
-        recoveryScope: "stale-clear-credential",
-        scopeKey: "stale-clear-route",
-      };
-      await draftStore.seed(staleClearScope, "submitted stale draft", 80, "submitted-stale-draft");
-      const staleClearState = draftState("");
-      const staleClearPersistence = activate(staleClearScope, staleClearState);
-      await waitFor(async () => staleClearState.message === "submitted stale draft");
+      const staleClearScope = scope("stale-clear-route", "stale-clear");
+      const staleClear = await loadDraft(
+        staleClearScope,
+        "submitted stale draft",
+        80,
+        "submitted-stale-draft",
+      );
       await write(staleClearScope, 81, "newer other-tab draft", {
         expectedRevision: 80,
         writeId: "newer-other-tab-draft",
       });
-      await staleClearPersistence.clearSubmittedDraft(staleClearPersistence.captureSubmission());
+      await staleClear.persistence.clearSubmittedDraft(staleClear.persistence.captureSubmission());
       const staleClearRead = await draftStore.read(staleClearScope);
 
-      const resetLineageScope = {
-        gatewayOwner: "reset-lineage-gateway",
-        recoveryScope: "reset-lineage-credential",
-        scopeKey: "reset-lineage-route",
-      };
-      await draftStore.seed(resetLineageScope, "cached predecessor", 90, "cached-predecessor");
-      const resetLineageState = draftState("");
-      const resetLineagePersistence = activate(resetLineageScope, resetLineageState);
-      await waitFor(async () => resetLineageState.message === "cached predecessor");
+      const resetLineageScope = scope("reset-lineage-route", "reset-lineage");
+      const resetLineage = await loadDraft(
+        resetLineageScope,
+        "cached predecessor",
+        90,
+        "cached-predecessor",
+      );
       const databaseRequest = indexedDB.open("openclaw-control-ui");
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
         databaseRequest.addEventListener("success", () => resolve(databaseRequest.result), {
@@ -297,12 +282,9 @@ export async function verifyDurableComposerFences(page: Page) {
         );
       });
       database.close();
-      resetLineageState.message = "draft after authoritative deletion";
-      resetLineagePersistence.noteUserMutation();
-      await waitFor(async () => {
-        const read = await draftStore.read(resetLineageScope);
-        return read.status === "found" && read.draft.text === resetLineageState.message;
-      });
+      resetLineage.state.message = "draft after authoritative deletion";
+      resetLineage.persistence.noteUserMutation();
+      await waitForText(resetLineageScope, () => resetLineage.state.message);
       const resetLineageRead = await draftStore.read(resetLineageScope);
 
       const originalNow = Date.now;
@@ -322,43 +304,33 @@ export async function verifyDurableComposerFences(page: Page) {
       );
       Date.now = originalNow;
       return {
-        initial: initial.status,
-        fenced: fenced.status,
-        retired: retired.status,
-        stale: stale.status,
-        retiredRead: retiredRead.status,
-        wrongCredential: wrongCredential.status,
-        wrongGateway: wrongGateway.status,
-        wrongLineage: wrongLineage.status,
-        matchingLineage: matchingLineage.status,
-        localLineage: localLineage.status,
+        fences: statuses(initial, fenced, retired, stale, retiredRead),
+        isolation: statuses(wrongCredential, wrongGateway),
+        lineage: statuses(wrongLineage, matchingLineage, localLineage, missingPredecessor),
         lineageText: draftText(lineageRead),
-        missingPredecessor: missingPredecessor.status,
-        oversized: oversized.status,
-        oversizedRead: oversizedRead.status,
-        oversizedCleared: oversizedCleared.status,
-        oversizedText: draftText(oversizedRead),
-        oversizedMentions: oversizedRead.status === "found" ? oversizedRead.draft.mentions : null,
-        oversizedAttachmentCount:
-          oversizedRead.status === "found" ? oversizedRead.draft.attachments.length : null,
-        oversizeConflict: oversizeConflict.status,
-        oversizeConflictRead: oversizeConflictRead.status,
+        oversized: statuses(oversized, oversizedRead, oversizedCleared),
+        oversizedDraft:
+          oversizedRead.status === "found"
+            ? [
+                oversizedRead.draft.text,
+                oversizedRead.draft.mentions,
+                oversizedRead.draft.attachments.length,
+              ]
+            : null,
+        oversizeConflict: statuses(oversizeConflict, oversizeConflictRead),
         oversizeConflictText: draftText(oversizeConflictRead),
-        missingPayloadErrors,
-        missingPayloadConflicts,
-        missingPayloadRead: missingPayloadRead.status,
+        missingPayload: [missingPayloadErrors, missingPayloadConflicts, missingPayloadRead.status],
         missingPayloadText: draftText(missingPayloadRead),
-        incognitoRetainedMessage,
-        incognitoAfterToggle: incognitoAfterToggle.status,
-        incognitoMessage: incognitoState.message,
-        incognitoRead: incognitoRead.status,
-        incognitoText: draftText(incognitoRead),
-        clearRead: clearRead.status,
-        staleClearRead: staleClearRead.status,
-        staleClearText: draftText(staleClearRead),
-        resetLineageRead: resetLineageRead.status,
-        resetLineageText: draftText(resetLineageRead),
-        expiredRead: expiredRead.status,
+        incognito: statuses(incognitoAfterToggle, incognitoRead),
+        incognitoMessages: [
+          incognitoRetainedMessage,
+          incognitoState.message,
+          draftText(incognitoRead),
+        ],
+        clear: clearRead.status,
+        staleClear: [staleClearRead.status, draftText(staleClearRead)],
+        resetLineage: [resetLineageRead.status, draftText(resetLineageRead)],
+        expired: expiredRead.status,
         active: retained.filter((entry) => entry.status === "found").length,
       };
     },
@@ -370,42 +342,26 @@ export async function verifyDurableComposerFences(page: Page) {
   );
 
   expect(result).toEqual({
-    initial: "persisted",
-    fenced: "conflict",
-    retired: "persisted",
-    stale: "conflict",
-    retiredRead: "not-found",
-    wrongCredential: "not-found",
-    wrongGateway: "not-found",
-    wrongLineage: "conflict",
-    matchingLineage: "persisted",
-    localLineage: "persisted",
+    fences: ["persisted", "conflict", "persisted", "conflict", "not-found"],
+    isolation: ["not-found", "not-found"],
+    lineage: ["conflict", "persisted", "persisted", "conflict"],
     lineageText: "local successor",
-    missingPredecessor: "conflict",
-    oversized: "payload-too-large",
-    oversizedRead: "found",
-    oversizedCleared: "not-found",
-    oversizedText: "@Alex oversized",
-    oversizedMentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
-    oversizedAttachmentCount: 0,
-    oversizeConflict: "conflict",
-    oversizeConflictRead: "found",
+    oversized: ["payload-too-large", "found", "not-found"],
+    oversizedDraft: ["@Alex oversized", [{ profileId: "profile-alex", start: 0, end: 5 }], 0],
+    oversizeConflict: ["conflict", "found"],
     oversizeConflictText: "newer record",
-    missingPayloadErrors: 1,
-    missingPayloadConflicts: 1,
-    missingPayloadRead: "found",
+    missingPayload: [1, 1, "found"],
     missingPayloadText: "newer attachment draft",
-    incognitoRetainedMessage: "normal before incognito",
-    incognitoAfterToggle: "not-found",
-    incognitoMessage: "normal after incognito",
-    incognitoRead: "found",
-    incognitoText: "normal after incognito",
-    clearRead: "not-found",
-    staleClearRead: "found",
-    staleClearText: "newer other-tab draft",
-    resetLineageRead: "found",
-    resetLineageText: "draft after authoritative deletion",
-    expiredRead: "not-found",
+    incognito: ["not-found", "found"],
+    incognitoMessages: [
+      "normal before incognito",
+      "normal after incognito",
+      "normal after incognito",
+    ],
+    clear: "not-found",
+    staleClear: ["found", "newer other-tab draft"],
+    resetLineage: ["found", "draft after authoritative deletion"],
+    expired: "not-found",
     active: 20,
   });
 }

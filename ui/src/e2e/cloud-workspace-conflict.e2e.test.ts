@@ -1,6 +1,7 @@
 // Control UI browser proof covers the cloud-workspace conflict recovery lifecycle.
 import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import type { Page } from "playwright";
+import { assert, beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -87,9 +88,6 @@ function workerRecoverySessionsList(includeError: boolean, failedState = "failed
       generation: 2,
       environmentId: "worker:lost-proof",
       activeOwnerEpoch: 4,
-      workspaceBaseManifestRef: "sha256:workspace-base",
-      remoteWorkspaceDir: "/home/crabbox/workspace",
-      workerBundleHash: "a".repeat(64),
       ...(includeError
         ? {
             recoveryError: workerFailureDiagnostic,
@@ -103,7 +101,23 @@ function workerRecoverySessionsList(includeError: boolean, failedState = "failed
   );
 }
 
-async function capture(page: import("playwright").Page, name: string): Promise<void> {
+type History = NonNullable<Parameters<typeof installMockGateway>[1]>["historyMessages"];
+async function openSession(
+  page: Page,
+  historyMessages: History,
+  roster = workerRecoverySessionsList(false),
+) {
+  const gateway = await installMockGateway(page, {
+    historyMessages,
+    methodResponses: { "sessions.list": roster },
+    sessionKey,
+  });
+  expect((await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey)))?.status()).toBe(
+    200,
+  );
+  return gateway;
+}
+async function capture(page: Page, name: string): Promise<void> {
   if (!proofDir) {
     return;
   }
@@ -117,8 +131,9 @@ async function capture(page: import("playwright").Page, name: string): Promise<v
 suite.define(() => {
   it("shows, dismisses, and reloads durable conflict recovery guidance", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        historyMessages: [
+      const gateway = await openSession(
+        page,
+        [
           {
             role: "custom",
             customType: "cloud-workspace-conflict",
@@ -127,14 +142,8 @@ suite.define(() => {
             timestamp: Date.now() - 500,
           },
         ],
-        methodResponses: {
-          "sessions.list": sessionsList(true),
-        },
-        sessionKey,
-      });
-
-      const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      expect(response?.status()).toBe(200);
+        sessionsList(true),
+      );
 
       const notice = page.locator(".chat-workspace-conflict-notice");
       const sessionRow = page.locator(`[data-session-key="${sessionKey}"]`);
@@ -170,11 +179,7 @@ suite.define(() => {
         .toEqual({ title: "nowrap", summary: "nowrap" });
       for (const item of [title, summary, dismiss]) {
         const [itemBox, noticeBox] = await Promise.all([item.boundingBox(), notice.boundingBox()]);
-        expect(itemBox).not.toBeNull();
-        expect(noticeBox).not.toBeNull();
-        if (!itemBox || !noticeBox) {
-          throw new Error("expected mobile conflict notice layout boxes");
-        }
+        assert(itemBox && noticeBox, "expected mobile conflict notice layout boxes");
         expect(itemBox.x).toBeGreaterThanOrEqual(noticeBox.x);
         expect(itemBox.x + itemBox.width).toBeLessThanOrEqual(noticeBox.x + noticeBox.width);
         expect(itemBox.y).toBeGreaterThanOrEqual(noticeBox.y);
@@ -215,21 +220,14 @@ suite.define(() => {
     "renders durable $customType notices from transcript history",
     async ({ customType, content }) => {
       await suite.withPage(pageOptions, async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          historyMessages: [
-            {
-              role: "custom",
-              customType,
-              content,
-              timestamp: Date.now() - 500,
-            },
-          ],
-          methodResponses: { "sessions.list": workerRecoverySessionsList(false) },
-          sessionKey,
-        });
-
-        const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        expect(response?.status()).toBe(200);
+        const gateway = await openSession(page, [
+          {
+            role: "custom",
+            customType,
+            content,
+            timestamp: Date.now() - 500,
+          },
+        ]);
         const notice = page.locator(".chat-group.other").filter({ hasText: content });
         await notice.waitFor({ timeout: 10_000 });
         expect(await page.locator(".chat-group.assistant").count()).toBe(0);
@@ -250,19 +248,13 @@ suite.define(() => {
       await suite.withPage(
         { ...pageOptions, permissions: ["clipboard-read", "clipboard-write"] },
         async ({ page }) => {
-          const gateway = await installMockGateway(page, {
-            historyMessages: [
-              {
-                role: "assistant",
-                content: [{ type: "text", text: "Remote work completed successfully." }],
-                timestamp: Date.now() - 2_000,
-              },
-            ],
-            methodResponses: { "sessions.list": workerRecoverySessionsList(false) },
-            sessionKey,
-          });
-          const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-          expect(response?.status()).toBe(200);
+          const gateway = await openSession(page, [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Remote work completed successfully." }],
+              timestamp: Date.now() - 2_000,
+            },
+          ]);
           await page.getByText("Remote work completed successfully.").waitFor({ timeout: 10_000 });
           await expect.poll(() => page.getByRole("alert").allTextContents()).toEqual([]);
           await capture(page, "05-before-workspace-recovery-error.png");
@@ -318,24 +310,14 @@ suite.define(() => {
             const bounds = await diagnostic.evaluate((node) => {
               const box = node.getBoundingClientRect();
               return {
-                left: box.left,
-                right: box.right,
-                top: box.top,
-                bottom: box.bottom,
-                viewport: innerWidth,
-                height: innerHeight,
-                scrollWidth: node.scrollWidth,
-                clientWidth: node.clientWidth,
-                scrollHeight: node.scrollHeight,
-                clientHeight: node.clientHeight,
+                edges: [box.left, innerWidth - box.right, box.top, innerHeight - box.bottom],
+                overflowX: node.scrollWidth - node.clientWidth,
+                overflowY: node.scrollHeight - node.clientHeight,
               };
             });
-            expect(bounds.left).toBeGreaterThanOrEqual(0);
-            expect(bounds.right).toBeLessThanOrEqual(bounds.viewport);
-            expect(bounds.top).toBeGreaterThanOrEqual(0);
-            expect(bounds.bottom).toBeLessThanOrEqual(bounds.height);
-            expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth + 1);
-            expect(bounds.scrollHeight).toBeGreaterThan(bounds.clientHeight);
+            expect(Math.min(...bounds.edges)).toBeGreaterThanOrEqual(0);
+            expect(bounds.overflowX).toBeLessThanOrEqual(1);
+            expect(bounds.overflowY).toBeGreaterThan(0);
             await page.keyboard.press("Tab");
             expect(await copy.evaluate((node) => node === document.activeElement)).toBe(true);
             await page.keyboard.press("Tab");

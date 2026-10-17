@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import { assert, beforeEach, expect, it } from "vitest";
 import type {
   SessionCatalog,
   SessionCatalogHost,
@@ -81,6 +81,29 @@ function liveSessions(key: string, displayName: string, updatedAt = Date.now(), 
   };
 }
 
+async function capture(target: Page | Locator, name: string, fullPage = false) {
+  if (captureUiProofEnabled) {
+    await target.screenshot({
+      animations: "disabled",
+      path: path.join(uiProofArtifactDir, name),
+      ...(fullPage ? { fullPage } : {}),
+    });
+  }
+}
+const projectLabel = (section: Locator, key: string) =>
+  section
+    .locator(`[data-session-catalog-project="${key}"] .sidebar-session-catalog-project__label`)
+    .textContent();
+function creator(id: string, label: string): SessionCatalogSession["createdActor"] {
+  return { type: "human", id, identity: { type: "profile", id }, label };
+}
+function offlineHost(hostId: string, label: string) {
+  return makeHost(hostId, label, [], {
+    kind: "node",
+    connected: false,
+    error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
+  });
+}
 async function expectListItems(list: Locator, count: number) {
   expect(
     await list
@@ -192,28 +215,24 @@ suite.define(() => {
       const claudeCatalog = sessionGroups.locator(
         ':scope > [data-session-section="catalog:claude"]',
       );
-      await catalog.waitFor({ state: "visible" });
-      await claudeCatalog.waitFor({ state: "visible" });
-      await expect
-        .poll(() =>
-          catalog
-            .locator(".sidebar-session-catalog-provider-icon")
-            .getAttribute("data-provider-icon"),
-        )
-        .toBe("codex");
-      await expect
-        .poll(() =>
-          claudeCatalog
-            .locator(".sidebar-session-catalog-provider-icon")
-            .getAttribute("data-provider-icon"),
-        )
-        .toBe("claude");
+      for (const [section, provider] of [
+        [catalog, "codex"],
+        [claudeCatalog, "claude"],
+      ] as const) {
+        await section.waitFor({ state: "visible" });
+        await expect
+          .poll(() =>
+            section
+              .locator(".sidebar-session-catalog-provider-icon")
+              .getAttribute("data-provider-icon"),
+          )
+          .toBe(provider);
+      }
       const [liveRowsBox, catalogBox] = await Promise.all([
         liveRows.boundingBox(),
         catalog.boundingBox(),
       ]);
       expect([liveRowsBox, catalogBox]).not.toContain(null);
-      // Guard that catalogs are a separate group without restating the gap token.
       const groupGap = await page.evaluate(() => {
         const sidebar = document.querySelector(".sidebar");
         return sidebar
@@ -222,12 +241,7 @@ suite.define(() => {
       });
       expect(groupGap).toBeGreaterThan(0);
       expect(Math.round(catalogBox!.y - (liveRowsBox!.y + liveRowsBox!.height))).toBe(groupGap);
-      if (captureUiProofEnabled) {
-        await sessionGroups.screenshot({
-          animations: "disabled",
-          path: path.join(uiProofArtifactDir, "06-coding-catalog-spacing.png"),
-        });
-      }
+      await capture(sessionGroups, "06-coding-catalog-spacing.png");
       await assertSessionSectionCountAlignment(page, ["work", "catalog:codex", "catalog:claude"]);
     } finally {
       await page.close();
@@ -246,43 +260,24 @@ suite.define(() => {
       const request = await gateway.waitForRequest("sessions.catalog.list");
       const progressId = (request.params as { progressId?: string })?.progressId;
       expect(progressId).toEqual(expect.any(String));
-      if (!progressId) {
-        throw new Error("catalog request did not opt in to progressive host events");
-      }
+      assert(progressId, "catalog request did not opt in to progressive host events");
       await gateway.emitGatewayEvent("sessions.catalog.host", {
         progressId,
         agentId: "main",
-        catalog: {
-          id: "codex",
-          label: "Codex",
-          capabilities: { continueSession: true, archive: true },
-          hosts: [
-            {
-              hostId: "node:fast",
-              label: "Fast Mac",
-              kind: "node",
-              connected: true,
-              nodeId: "fast",
-              sessions: [
-                makeNativeSession("thread-fast", "Progressive node result", {
-                  canArchive: false,
-                }),
-              ],
-            },
-          ],
-        },
+        catalog: makeCatalog("codex", "Codex", [
+          makeHost(
+            "node:fast",
+            "Fast Mac",
+            [makeNativeSession("thread-fast", "Progressive node result", { canArchive: false })],
+            { kind: "node", nodeId: "fast" },
+          ),
+        ]),
       } satisfies SessionsCatalogHostEvent);
 
       await expandCodingSection(page);
       await page.getByText("Progressive node result", { exact: true }).waitFor();
       expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(1);
-      if (captureUiProofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(uiProofArtifactDir, "05-progressive-host-result.png"),
-        });
-      }
+      await capture(page, "05-progressive-host-result.png", true);
 
       await gateway.resolveDeferred("sessions.catalog.list", { catalogs: [] });
     } finally {
@@ -332,42 +327,24 @@ suite.define(() => {
               makeHost("gateway:local", "Local Codex", [
                 makeNativeSession("thread-local", "Local planning session", {
                   cwd: "/Users/dev/openclaw",
-                  createdActor: {
-                    type: "human",
-                    id: "profile-ada",
-                    identity: { type: "profile", id: "profile-ada" },
-                    label: "Ada",
-                  },
+                  createdActor: creator("profile-ada", "Ada"),
                 }),
                 makeNativeSession("thread-worktree", "Worktree fix session", {
                   cwd: "/Users/dev/openclaw/.claude/worktrees/fix-1",
-                  createdActor: {
-                    type: "human",
-                    id: "profile-zoe",
-                    identity: { type: "profile", id: "profile-zoe" },
-                    label: "Zoe",
-                  },
+                  createdActor: creator("profile-zoe", "Zoe"),
                 }),
                 makeNativeSession("thread-other", "Other project session", {
                   cwd: "/Users/dev/other",
                 }),
               ]),
-              makeHost("node:offline-a", "Offline Workstation", [], {
-                kind: "node",
-                connected: false,
-                error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
-              }),
+              offlineHost("node:offline-a", "Offline Workstation"),
               makeHost(
                 "node:build",
                 "Build Node",
                 [makeNativeSession("thread-remote", "Remote review session")],
                 { kind: "node" },
               ),
-              makeHost("node:offline-b", "Offline Laptop", [], {
-                kind: "node",
-                connected: false,
-                error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
-              }),
+              offlineHost("node:offline-b", "Offline Laptop"),
             ]),
           ],
         },
@@ -453,16 +430,11 @@ suite.define(() => {
         }),
       );
       expect(threadRowMetrics).toHaveLength(4);
-      // Gateway threads and native catalog children must stay density-identical.
-      // Catalog children never carry preview text, so every subtitle-less row —
-      // whichever source it came from — collapses to the same one-line height
-      // instead of reserving a phantom second line.
-      for (const metric of threadRowMetrics) {
-        expect(metric.singleLine).toBe(true);
-        expect(metric.height).toBeCloseTo(30, 1);
-      }
+      // Native and Gateway rows must have the same one-line density.
       for (const metric of threadRowMetrics) {
         expect(metric).toMatchObject({
+          singleLine: true,
+          height: expect.closeTo(30, 1),
           minHeight: "30px",
           nameFontSize: "13px",
           paddingBottom: "4px",
@@ -479,49 +451,24 @@ suite.define(() => {
           JSON.stringify(projectLabelTone, null, 2),
         );
       }
-      expect(
-        await section
-          .locator('[data-session-catalog-project="project:/Users/dev/other"]')
-          .locator(".sidebar-session-catalog-project__label")
-          .textContent(),
-      ).toBe("other");
+      expect(await projectLabel(section, "project:/Users/dev/other")).toBe("other");
       expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(1);
       const toggle = section.locator(".sidebar-session-group-toggle");
       expect(await toggle.getAttribute("title")).toBeNull();
-      // Counts only render while a section is collapsed.
       expect(await section.locator(".sidebar-session-group-count").count()).toBe(0);
 
-      // Header actions are hover-revealed; hover the head so the button
-      // regains pointer events before the click, mirroring the Threads menus.
       await chooseGrouping(section, page, "None");
       await expect.poll(() => projectHeads.count()).toBe(0);
       expect(await section.locator("[data-session-key]").count()).toBe(4);
       await expectListItems(localHostList, 3);
       expect(await readGrouping(page)).toBe("none");
-      if (captureUiProofEnabled) {
-        await section.screenshot({
-          animations: "disabled",
-          path: path.join(uiProofArtifactDir, "04-flat-session-hosts.png"),
-        });
-      }
+      await capture(section, "04-flat-session-hosts.png");
 
-      // Person mode groups adopted (attributed) sessions and leaves native
-      // threads without a creator in the flat tail.
       await chooseGrouping(section, page, "Person");
       await expect.poll(() => projectHeads.count()).toBe(2);
       await expectListItems(localHostList, 3);
-      expect(
-        await section
-          .locator('[data-session-catalog-project="person:profile:profile-ada"]')
-          .locator(".sidebar-session-catalog-project__label")
-          .textContent(),
-      ).toBe("Ada");
-      expect(
-        await section
-          .locator('[data-session-catalog-project="person:profile:profile-zoe"]')
-          .locator(".sidebar-session-catalog-project__label")
-          .textContent(),
-      ).toBe("Zoe");
+      expect(await projectLabel(section, "person:profile:profile-ada")).toBe("Ada");
+      expect(await projectLabel(section, "person:profile:profile-zoe")).toBe("Zoe");
       expect(await readGrouping(page)).toBe("person");
 
       await chooseGrouping(section, page, "Project");
@@ -555,12 +502,7 @@ suite.define(() => {
         ),
       ).not.toContain("catalog-project:codex:gateway:local:project:/Users/dev/openclaw");
 
-      if (captureUiProofEnabled) {
-        await section.screenshot({
-          animations: "disabled",
-          path: path.join(uiProofArtifactDir, "03-content-bearing-session-hosts.png"),
-        });
-      }
+      await capture(section, "03-content-bearing-session-hosts.png");
     } finally {
       await page.close();
     }
@@ -657,12 +599,13 @@ suite.define(() => {
         (request) => (request.params as { agentId?: string } | undefined)?.agentId === "main",
       ),
     ).toBe(true);
-    expect((await gateway.waitForRequest("sessions.catalog.read")).params).toMatchObject({
+    const target = {
       agentId: "main",
       catalogId: "codex",
       hostId: "gateway:local",
       threadId: "thread-1",
-    });
+    };
+    expect((await gateway.waitForRequest("sessions.catalog.read")).params).toMatchObject(target);
     const composer = catalogPane.locator(".agent-chat__composer-combobox > textarea");
     await composer.fill("continue with the final checks /status");
     expect(await catalogPane.locator('.slash-menu[role="listbox"]').count()).toBe(0);
@@ -672,12 +615,7 @@ suite.define(() => {
     );
     await composer.press("Enter");
     const continued = await gateway.waitForRequest("sessions.catalog.continue");
-    expect(continued.params).toEqual({
-      agentId: "main",
-      catalogId: "codex",
-      hostId: "gateway:local",
-      threadId: "thread-1",
-    });
+    expect(continued.params).toEqual(target);
     const sent = await gateway.waitForRequest("chat.send");
     expect(sent.params).toMatchObject({
       sessionKey: "agent:main:adopted-codex",

@@ -9,8 +9,25 @@ import {
 
 const suite = createControlUiE2eSuite({ name: "command palette first open" });
 
-const holdPalette = (page: Page) =>
-  holdModuleResponse(page, controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"));
+type HeldModule = Awaited<ReturnType<typeof holdModuleResponse>>;
+type ColdCase = (page: Page, palette: HeldModule, chat?: HeldModule) => Promise<void>;
+function withColdPalette(sessionKey: string, run: ColdCase, holdChat = false) {
+  const viewport = holdChat ? { height: 844, width: 390 } : { width: 1280, height: 900 };
+  return suite.withPage({ viewport }, async ({ page }) => {
+    await installMockGateway(page, { sessionKey, awaitInitialRoster: !holdChat });
+    const hold = (source: string) =>
+      holdModuleResponse(page, controlUiE2eBuiltModuleRequest(source));
+    const paletteModule = await hold("ui/src/components/command-palette.tsx");
+    const chatModule = holdChat ? await hold("ui/src/pages/chat/route-entry.ts") : undefined;
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await run(page, paletteModule, chatModule);
+    } finally {
+      paletteModule.release();
+      chatModule?.release();
+    }
+  });
+}
 const expectFocused = (input: Locator) =>
   expect.poll(() => input.evaluate((element) => document.activeElement === element)).toBe(true);
 async function expectSelection(
@@ -18,16 +35,13 @@ async function expectSelection(
   expected: { focused?: boolean; start: number; end: number; direction?: string },
 ) {
   expect(
-    await input.evaluate(
-      (element: HTMLTextAreaElement, fields) => ({
-        ...(fields.focused ? { focused: document.activeElement === element } : {}),
-        start: element.selectionStart,
-        end: element.selectionEnd,
-        ...(fields.direction ? { direction: element.selectionDirection } : {}),
-      }),
-      { focused: "focused" in expected, direction: "direction" in expected },
-    ),
-  ).toEqual(expected);
+    await input.evaluate((element: HTMLTextAreaElement) => ({
+      focused: document.activeElement === element,
+      start: element.selectionStart,
+      end: element.selectionEnd,
+      direction: element.selectionDirection,
+    })),
+  ).toMatchObject(expected);
 }
 
 async function readPaletteBackdrop(page: import("playwright").Page) {
@@ -47,85 +61,75 @@ async function readPaletteBackdrop(page: import("playwright").Page) {
 
 suite.define(() => {
   it("loads only on shortcut and preserves continuous typing and the foreground draft at 8x CPU", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const sessionKey = "agent:main:dashboard:cold-continuous";
-      await installMockGateway(page, { sessionKey });
-      const paletteModule = await holdPalette(page);
-      try {
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
-        const foregroundDraft = "Foreground text must remain unchanged";
-        await composer.fill(foregroundDraft);
-        await composer.evaluate((element: HTMLTextAreaElement) =>
-          element.setSelectionRange(3, 12, "backward"),
-        );
-        expect(paletteModule.requests()).toBe(0);
-        expect(await page.locator(".cmd-palette").count()).toBe(0);
-        await page.keyboard.press("ControlOrMeta+K");
-        const input = page.locator(".cmd-palette__input:not([disabled])");
-        await input.waitFor({ state: "visible" });
-        await paletteModule.request;
-        expect(paletteModule.requests()).toBe(1);
-        await expectFocused(input);
-        const cdp = await page.context().newCDPSession(page);
-        await cdp.send("Emulation.setCPUThrottlingRate", { rate: 8 });
-        const keyTargets = await page.evaluateHandle(() => {
-          const escaped: Array<{ key: string; target: string }> = [];
-          const capture = (event: KeyboardEvent) => {
-            const target = event.composedPath()[0];
-            if (
-              event.key.length === 1 &&
-              !(
-                target instanceof HTMLTextAreaElement &&
-                target.classList.contains("cmd-palette__input")
-              )
-            ) {
-              escaped.push({
-                key: event.key,
-                target: target instanceof Element ? target.tagName : "unknown",
-              });
-            }
-          };
-          document.addEventListener("keydown", capture, true);
-          return { escaped, stop: () => document.removeEventListener("keydown", capture, true) };
-        });
-        const typed =
-          "Continuous cold typing must cross the module boundary without a missing character.";
-        const typing = page.keyboard.type(typed, { delay: 4 });
-        await expect.poll(() => input.inputValue()).not.toBe("");
-        paletteModule.release();
-        await typing;
-        const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
-        await loaded.waitFor({ state: "visible" });
-        expect(
-          await keyTargets.evaluate(({ escaped, stop }) => {
-            stop();
-            return escaped;
-          }),
-        ).toEqual([]);
-        await keyTargets.dispose();
-        expect(await loaded.inputValue()).toBe(typed);
-        await expectSelection(loaded, { focused: true, start: typed.length, end: typed.length });
-        expect(await composer.inputValue()).toBe(foregroundDraft);
-        expect(paletteModule.requests()).toBe(1);
-        await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
-        await page.keyboard.press("Escape");
-        await expectFocused(composer);
-        await expectSelection(composer, { start: 3, end: 12, direction: "backward" });
-        expect(await composer.inputValue()).toBe(foregroundDraft);
-        expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        expect(
-          await page.evaluate(() =>
-            [localStorage, sessionStorage].some((storage) =>
-              Object.values(storage).some(
-                (value) => typeof value === "string" && value.includes("Continuous cold typing"),
-              ),
+    const sessionKey = "agent:main:dashboard:cold-continuous";
+    await withColdPalette(sessionKey, async (page, paletteModule) => {
+      const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
+      const foregroundDraft = "Foreground text must remain unchanged";
+      await composer.fill(foregroundDraft);
+      await composer.evaluate((element: HTMLTextAreaElement) =>
+        element.setSelectionRange(3, 12, "backward"),
+      );
+      expect(paletteModule.requests()).toBe(0);
+      expect(await page.locator(".cmd-palette").count()).toBe(0);
+      await page.keyboard.press("ControlOrMeta+K");
+      const input = page.locator(".cmd-palette__input:not([disabled])");
+      await input.waitFor({ state: "visible" });
+      await paletteModule.request;
+      expect(paletteModule.requests()).toBe(1);
+      await expectFocused(input);
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: 8 });
+      const keyTargets = await page.evaluateHandle(() => {
+        const escaped: string[] = [];
+        const capture = (event: KeyboardEvent) => {
+          const target = event.composedPath()[0];
+          if (
+            event.key.length === 1 &&
+            !(
+              target instanceof HTMLTextAreaElement &&
+              target.classList.contains("cmd-palette__input")
+            )
+          ) {
+            escaped.push(event.key);
+          }
+        };
+        document.addEventListener("keydown", capture, true);
+        return { escaped, stop: () => document.removeEventListener("keydown", capture, true) };
+      });
+      const typed =
+        "Continuous cold typing must cross the module boundary without a missing character.";
+      const typing = page.keyboard.type(typed, { delay: 4 });
+      await expect.poll(() => input.inputValue()).not.toBe("");
+      paletteModule.release();
+      await typing;
+      const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
+      await loaded.waitFor({ state: "visible" });
+      expect(
+        await keyTargets.evaluate(({ escaped, stop }) => {
+          stop();
+          return escaped;
+        }),
+      ).toEqual([]);
+      await keyTargets.dispose();
+      expect(await loaded.inputValue()).toBe(typed);
+      await expectSelection(loaded, { focused: true, start: typed.length, end: typed.length });
+      expect(await composer.inputValue()).toBe(foregroundDraft);
+      expect(paletteModule.requests()).toBe(1);
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+      await page.keyboard.press("Escape");
+      await expectFocused(composer);
+      await expectSelection(composer, { start: 3, end: 12, direction: "backward" });
+      expect(await composer.inputValue()).toBe(foregroundDraft);
+      expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      expect(
+        await page.evaluate(() =>
+          [localStorage, sessionStorage].some((storage) =>
+            Object.values(storage).some(
+              (value) => typeof value === "string" && value.includes("Continuous cold typing"),
             ),
           ),
-        ).toBe(false);
-      } finally {
-        paletteModule.release();
-      }
+        ),
+      ).toBe(false);
     });
   });
 
@@ -133,12 +137,9 @@ suite.define(() => {
   it.each(["commit", "dismiss"] as const)(
     "preserves cold composition ownership through %s",
     async (outcome) => {
-      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-        const sessionKey = "agent:main:dashboard:cold-composition-" + outcome;
-        await installMockGateway(page, { sessionKey });
-        const paletteModule = await holdPalette(page);
-        try {
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await withColdPalette(
+        "agent:main:dashboard:cold-composition-" + outcome,
+        async (page, paletteModule) => {
           await page.locator(".shell").waitFor({ state: "visible" });
           const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
           if (outcome === "dismiss") {
@@ -200,27 +201,18 @@ suite.define(() => {
           await loaded.waitFor({ state: "visible" });
           expect(await loaded.inputValue()).toBe("日本");
           await expectSelection(loaded, { focused: true, start: 1, end: 2 });
-        } finally {
-          paletteModule.release();
-        }
-      });
+        },
+      );
     },
   );
 
   it("shows the mobile palette shell while its module loads", async () => {
-    await suite.withPage({ viewport: { height: 844, width: 390 } }, async ({ page }) => {
-      await installMockGateway(page, {
-        // The held chat route module prevents foreground readiness and roster loading.
-        awaitInitialRoster: false,
-      });
-      const paletteModule = await holdPalette(page);
-      // Keep an unrelated route loader present so palette assertions cannot depend on it.
-      const chatModule = await holdModuleResponse(
-        page,
-        controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
-      );
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:dashboard:cold-shell"));
-      try {
+    await withColdPalette(
+      "agent:main:dashboard:cold-shell",
+      async (page, paletteModule, chatModule) => {
+        if (!chatModule) {
+          throw new Error("Expected a held chat route");
+        }
         // Navigation can finish before the shell installs its shortcut handler.
         await page.locator(".shell").waitFor({ state: "visible" });
         await page.keyboard.press("ControlOrMeta+K");
@@ -255,10 +247,8 @@ suite.define(() => {
         const loadedBackdrop = await readPaletteBackdrop(page);
         expect(loadedBackdrop.filter).toBe("none");
         expect(loadedBackdrop.alpha).toBeLessThanOrEqual(0.2);
-      } finally {
-        paletteModule.release();
-        chatModule.release();
-      }
-    });
+      },
+      true,
+    );
   });
 });
