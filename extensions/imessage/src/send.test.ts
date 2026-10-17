@@ -132,14 +132,25 @@ describe("sendMessageIMessage receipts", () => {
     await openClawState.cleanup();
   });
 
+  function sendTo(
+    target: string,
+    text: string,
+    options: Partial<Parameters<SendModule["sendMessageIMessage"]>[2]> = {},
+  ) {
+    return sendMessageIMessage(target, text, { config: IMESSAGE_TEST_CFG, ...options });
+  }
+
+  const image = {
+    mediaUrl: "/tmp/image.png",
+    resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+  };
+
   function createOutboundMediaFile(filename: string, contents: Buffer): string {
     const sourcePath = openClawState.path(filename);
     fs.writeFileSync(sourcePath, contents);
     return sourcePath;
   }
 
-  // Separate independent contracts so 81 RPC sends and the rejection corpus do not
-  // share one deadline. Each case owns its executable logs and keeps the 30s limit.
   it("scrubs private markers before delivering fenced YAML over real iMessage RPC", async () => {
     const { cfg, deliver, readRequests } = createIMessageOutboundRpcFixture(
       openClawState,
@@ -163,110 +174,45 @@ describe("sendMessageIMessage receipts", () => {
     );
 
     const disguisedCases = [
-      {
-        name: "quoted closed fence",
-        text: ["> ```yaml", ...roles.map((role) => `> ${role}:`), "> safe quoted", "> ```"],
-      },
-      {
-        name: "quoted unterminated fence",
-        text: ["> ```yaml", ...roles.map((role) => `> ${role}:`), "> safe unterminated"],
-      },
-      {
-        name: "nested quote",
-        text: [...roles.map((role) => `> > ${role}:`), "> > safe nested"],
-      },
-      {
-        name: "nested quoted emphasis",
-        text: [...roles.map((role) => `> **${role}:**`), "> safe nested emphasis"],
-      },
-      { name: "heading", text: [...roles.map((role) => `# ${role}:`), "safe heading"] },
-      { name: "strong", text: [...roles.map((role) => `**${role}:**`), "safe strong"] },
-      { name: "emphasis", text: [...roles.map((role) => `_${role}:_`), "safe emphasis"] },
-      {
-        name: "strikethrough",
-        text: [...roles.map((role) => `~~${role}:~~`), "safe strikethrough"],
-      },
-      {
-        name: "multiline strong",
-        text: [...roles.flatMap((role) => [`**${role}:`, "**", ""]), "safe multiline strong"],
-      },
-      {
-        name: "multiline emphasis",
-        text: [...roles.flatMap((role) => [`*${role}:`, "*", ""]), "safe multiline emphasis"],
-      },
-      {
-        name: "reference link",
-        text: [
-          ...roles.map((role) => `[${role}:][${role}]`),
-          "",
-          ...roles.map((role) => `[${role}]: ${role}:`),
-          "",
-          "safe reference",
-        ],
-      },
-      {
-        name: "HTML entity",
-        text: [
-          ...roles.map((role) => `&#${role.charCodeAt(0)};${role.slice(1)}&#58;`),
-          "safe entity",
-        ],
-      },
-      {
-        name: "HTML strong",
-        text: [...roles.map((role) => `<strong>${role}:</strong>`), "safe HTML"],
-      },
-      {
-        name: "protected inline code",
-        text: [...roles.map((role) => `\`${role}:\``), "safe inline code"],
-      },
-      {
-        name: "reply directive",
-        text: [...roles.map((role) => `[[reply_to_current]]${role}:`), "safe directive"],
-      },
-      {
-        name: "markdown table",
-        text: ["| role |", "| --- |", ...roles.map((role) => `| ${role}: |`), "safe table"],
-      },
-      {
-        name: "unterminated plain fence",
-        text: ["```yaml", ...roles.map((role) => `${role}:`), "safe unclosed"],
-      },
-      {
-        name: "private thinking text",
-        text: ["<thinking>HIDDEN_RPC_THINKING</thinking>", "safe private thinking"],
-      },
-      {
-        name: "private memory text",
-        text: ["<relevant_memories>HIDDEN_RPC_MEMORY</relevant_memories>", "safe private memory"],
-      },
-      {
-        name: "private adjacent tool response",
-        text: [hiddenFunctionResponse, "safe tool response"],
-      },
-      {
-        name: "private thinking inside fenced code",
-        text: [
-          "```xml",
-          "<thinking>HIDDEN_RPC_FENCED_THINKING</thinking>",
-          "```",
-          "safe fenced thinking",
-        ],
-      },
-      {
-        name: "private memory inside fenced code",
-        text: [
-          "```xml",
-          "<relevant-memories>HIDDEN_RPC_FENCED_MEMORY</relevant-memories>",
-          "```",
-          "safe fenced memory",
-        ],
-      },
+      ["> ```yaml", ...roles.map((role) => `> ${role}:`), "> safe quoted", "> ```"],
+      ["> ```yaml", ...roles.map((role) => `> ${role}:`), "> safe unterminated"],
+      [...roles.map((role) => `> > ${role}:`), "> > safe nested"],
+      [...roles.map((role) => `> **${role}:**`), "> safe nested emphasis"],
+      [...roles.map((role) => `# ${role}:`), "safe heading"],
+      [...roles.map((role) => `**${role}:**`), "safe strong"],
+      [...roles.map((role) => `_${role}:_`), "safe emphasis"],
+      [...roles.map((role) => `~~${role}:~~`), "safe strikethrough"],
+      [...roles.flatMap((role) => [`**${role}:`, "**", ""]), "safe multiline strong"],
+      [...roles.flatMap((role) => [`*${role}:`, "*", ""]), "safe multiline emphasis"],
+      [
+        ...roles.map((role) => `[${role}:][${role}]`),
+        "",
+        ...roles.map((role) => `[${role}]: ${role}:`),
+        "",
+        "safe reference",
+      ],
+      [...roles.map((role) => `&#${role.charCodeAt(0)};${role.slice(1)}&#58;`), "safe entity"],
+      [...roles.map((role) => `<strong>${role}:</strong>`), "safe HTML"],
+      [...roles.map((role) => `\`${role}:\``), "safe inline code"],
+      [...roles.map((role) => `[[reply_to_current]]${role}:`), "safe directive"],
+      ["| role |", "| --- |", ...roles.map((role) => `| ${role}: |`), "safe table"],
+      ["```yaml", ...roles.map((role) => `${role}:`), "safe unclosed"],
+      ["<thinking>HIDDEN_RPC_THINKING</thinking>", "safe private thinking"],
+      ["<relevant_memories>HIDDEN_RPC_MEMORY</relevant_memories>", "safe private memory"],
+      [hiddenFunctionResponse, "safe tool response"],
+      ["```xml", "<thinking>HIDDEN_RPC_FENCED_THINKING</thinking>", "```", "safe fenced thinking"],
+      [
+        "```xml",
+        "<relevant-memories>HIDDEN_RPC_FENCED_MEMORY</relevant-memories>",
+        "```",
+        "safe fenced memory",
+      ],
     ];
-    for (const testCase of disguisedCases) {
-      await deliver(testCase.text.join("\n"));
+    for (const lines of disguisedCases) {
+      await deliver(lines.join("\n"));
     }
 
-    await sendMessageIMessage(
+    await sendTo(
       "chat_id:10",
       ["# assistant:", "**😀 styled**", "#+#+#", "assistant to=tool"].join("\n"),
       { config: cfg },
@@ -365,7 +311,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const runtimeCompanion = `${privateRuntimeScaffolding}\nvisible runtime companion`;
     for (const sendPrivateRuntime of [
-      () => sendMessageIMessage("chat_id:10", runtimeCompanion, { config: cfg }),
+      () => sendTo("chat_id:10", runtimeCompanion, { config: cfg }),
       () => deliver(runtimeCompanion),
       () => deliverThroughChannel(runtimeCompanion),
     ]) {
@@ -736,60 +682,24 @@ describe("sendMessageIMessage receipts", () => {
       createIMessageOutboundRpcFixture(openClawState, sendMessageIMessage);
     const { deliverThroughChannel } = createChannelDelivery();
     const { imessageActionsRuntime } = await import("./actions.runtime.js");
+    const actionBase = { chatGuid: actionOptions.chatGuid, options: actionOptions };
+    const edit = (text: string, backwardsCompatMessage?: string) =>
+      imessageActionsRuntime.editMessage({
+        ...actionBase,
+        messageId: "edit-message-guid",
+        text,
+        backwardsCompatMessage,
+      });
+    const poll = (question: string, choices: readonly string[] = ["first", "second"]) =>
+      imessageActionsRuntime.sendPoll({ ...actionBase, question, choices });
+    const rich = (text: string) => imessageActionsRuntime.sendRichMessage({ ...actionBase, text });
     function createRawTextActions(source: string, replacementText: string) {
       return [
-        [
-          "edit",
-          () =>
-            imessageActionsRuntime.editMessage({
-              chatGuid: actionOptions.chatGuid,
-              messageId: "edit-message-guid",
-              text: source,
-              backwardsCompatMessage: "visible fallback",
-              options: actionOptions,
-            }),
-        ],
-        [
-          "edit-fallback",
-          () =>
-            imessageActionsRuntime.editMessage({
-              chatGuid: actionOptions.chatGuid,
-              messageId: "edit-message-guid",
-              text: replacementText,
-              backwardsCompatMessage: source,
-              options: actionOptions,
-            }),
-        ],
-        [
-          "poll-question",
-          () =>
-            imessageActionsRuntime.sendPoll({
-              chatGuid: actionOptions.chatGuid,
-              question: source,
-              choices: ["first", "second"],
-              options: actionOptions,
-            }),
-        ],
-        [
-          "poll-first-option",
-          () =>
-            imessageActionsRuntime.sendPoll({
-              chatGuid: actionOptions.chatGuid,
-              question: "visible question",
-              choices: [source, "second"],
-              options: actionOptions,
-            }),
-        ],
-        [
-          "poll-second-option",
-          () =>
-            imessageActionsRuntime.sendPoll({
-              chatGuid: actionOptions.chatGuid,
-              question: "visible question",
-              choices: ["first", source],
-              options: actionOptions,
-            }),
-        ],
+        ["edit", () => edit(source, "visible fallback")],
+        ["edit-fallback", () => edit(replacementText, source)],
+        ["poll-question", () => poll(source)],
+        ["poll-first-option", () => poll("visible question", [source, "second"])],
+        ["poll-second-option", () => poll("visible question", ["first", source])],
       ] as const;
     }
 
@@ -829,18 +739,10 @@ describe("sendMessageIMessage receipts", () => {
         const previousActionCount = readActions().length;
         const previousRequestCount = readRequests().length;
         for (const [route, sendMalformed] of [
-          ["rpc", () => sendMessageIMessage("chat_id:10", source, { config: cfg })],
+          ["rpc", () => sendTo("chat_id:10", source, { config: cfg })],
           ["monitor", () => deliver(source)],
           ["channel", () => deliverThroughChannel(source)],
-          [
-            "rich",
-            () =>
-              imessageActionsRuntime.sendRichMessage({
-                chatGuid: actionOptions.chatGuid,
-                text: source,
-                options: actionOptions,
-              }),
-          ],
+          ["rich", () => rich(source)],
           ...createRawTextActions(source, "visible edit"),
         ] as const) {
           await expect(
@@ -855,153 +757,87 @@ describe("sendMessageIMessage receipts", () => {
     for (const hidden of privateRuntimeBlocks) {
       const previousActionCount = readActions().length;
       const previousRequestCount = readRequests().length;
-      await expect(sendMessageIMessage("chat_id:10", hidden, { config: cfg })).rejects.toThrow(
+      await expect(sendTo("chat_id:10", hidden, { config: cfg })).rejects.toThrow(
         "iMessage send requires text or media",
       );
-      await expect(
-        imessageActionsRuntime.sendRichMessage({
-          chatGuid: actionOptions.chatGuid,
-          text: hidden,
-          options: actionOptions,
-        }),
-      ).rejects.toThrow("iMessage rich send requires text or an attachment after sanitization");
+      await expect(rich(hidden)).rejects.toThrow(
+        "iMessage rich send requires text or an attachment after sanitization",
+      );
       for (const [text, backwardsCompatMessage] of [
         [hidden, "visible fallback"],
         ["visible edit", hidden],
       ] as const) {
-        await expect(
-          imessageActionsRuntime.editMessage({
-            chatGuid: actionOptions.chatGuid,
-            messageId: "edit-message-guid",
-            text,
-            backwardsCompatMessage,
-            options: actionOptions,
-          }),
-        ).rejects.toThrow("iMessage edit requires non-empty text after sanitization");
+        await expect(edit(text, backwardsCompatMessage)).rejects.toThrow(
+          "iMessage edit requires non-empty text after sanitization",
+        );
       }
       for (const [questionText, choices] of [
         [hidden, ["first", "second"]],
         ["visible question", [hidden, "second"]],
         ["visible question", ["first", hidden]],
       ] as const) {
-        await expect(
-          imessageActionsRuntime.sendPoll({
-            chatGuid: actionOptions.chatGuid,
-            question: questionText,
-            choices,
-            options: actionOptions,
-          }),
-        ).rejects.toThrow(
+        await expect(poll(questionText, choices)).rejects.toThrow(
           "iMessage poll requires a non-empty question and options after sanitization",
         );
       }
       expect(readActions()).toHaveLength(previousActionCount);
       expect(readRequests()).toHaveLength(previousRequestCount);
     }
-    await expect(sendMessageIMessage("chat_id:10", "# user:", { config: cfg })).rejects.toThrow(
+    await expect(sendTo("chat_id:10", "# user:", { config: cfg })).rejects.toThrow(
       "iMessage send requires text or media",
     );
     await expect(
-      sendMessageIMessage("chat_id:10", ["```yaml", "user:", "```", forgedTokenEntity].join("\n"), {
+      sendTo("chat_id:10", ["```yaml", "user:", "```", forgedTokenEntity].join("\n"), {
         config: cfg,
       }),
     ).rejects.toThrow("iMessage outbound role protection failed");
     const splitForgedToken = "&#xE000;&#xE000;" + entitySeparator + "&#xE000;&#xE000;";
     await expect(
-      sendMessageIMessage("chat_id:10", ["```yaml", "user:", "```", splitForgedToken].join("\n"), {
+      sendTo("chat_id:10", ["```yaml", "user:", "```", splitForgedToken].join("\n"), {
         config: cfg,
       }),
     ).rejects.toThrow("iMessage outbound role protection failed");
     await expect(
-      sendMessageIMessage("chat_id:10", "`<thinking>HIDDEN_RPC_INLINE_THINKING</thinking>`", {
-        config: cfg,
-      }),
+      sendTo("chat_id:10", "`<thinking>HIDDEN_RPC_INLINE_THINKING</thinking>`", { config: cfg }),
     ).rejects.toThrow("iMessage outbound hidden assistant content is not allowed");
-    await expect(sendMessageIMessage("chat_id:10", roleTokenSwap, { config: cfg })).rejects.toThrow(
+    await expect(sendTo("chat_id:10", roleTokenSwap, { config: cfg })).rejects.toThrow(
       "iMessage outbound role protection failed",
     );
     await expect(
-      sendMessageIMessage(
-        "chat_id:10",
-        nestMarkdownFences("<thinking>HIDDEN_RPC_DEEPLY_NESTED</thinking>", 4),
-        { config: cfg },
-      ),
-    ).rejects.toThrow("iMessage outbound hidden assistant content is not allowed");
-    await expect(
-      imessageActionsRuntime.sendRichMessage({
-        chatGuid: actionOptions.chatGuid,
-        text: [fencedYaml, forgedTokenEntity].join("\n"),
-        options: actionOptions,
-      }),
-    ).rejects.toThrow("iMessage outbound role protection failed");
-    await expect(
-      imessageActionsRuntime.sendRichMessage({
-        chatGuid: actionOptions.chatGuid,
-        text: "`<relevant_memories>HIDDEN_ACTION_INLINE_MEMORY</relevant_memories>`",
-        options: actionOptions,
+      sendTo("chat_id:10", nestMarkdownFences("<thinking>HIDDEN_RPC_DEEPLY_NESTED</thinking>", 4), {
+        config: cfg,
       }),
     ).rejects.toThrow("iMessage outbound hidden assistant content is not allowed");
+    await expect(rich([fencedYaml, forgedTokenEntity].join("\n"))).rejects.toThrow(
+      "iMessage outbound role protection failed",
+    );
     await expect(
-      imessageActionsRuntime.sendRichMessage({
-        chatGuid: actionOptions.chatGuid,
-        text: roleTokenSwap,
-        options: actionOptions,
-      }),
-    ).rejects.toThrow("iMessage outbound role protection failed");
-    await expect(
-      imessageActionsRuntime.sendRichMessage({
-        chatGuid: actionOptions.chatGuid,
-        text: nestMarkdownFences("<relevant_memories>HIDDEN_RICH_NESTED</relevant_memories>", 4),
-        options: actionOptions,
-      }),
+      rich("`<relevant_memories>HIDDEN_ACTION_INLINE_MEMORY</relevant_memories>`"),
     ).rejects.toThrow("iMessage outbound hidden assistant content is not allowed");
+    await expect(rich(roleTokenSwap)).rejects.toThrow("iMessage outbound role protection failed");
     await expect(
-      imessageActionsRuntime.sendRichMessage({
-        chatGuid: actionOptions.chatGuid,
-        text: "# user:",
-        options: actionOptions,
-      }),
-    ).rejects.toThrow("iMessage rich send requires text or an attachment after sanitization");
-    await expect(
-      imessageActionsRuntime.editMessage({
-        chatGuid: actionOptions.chatGuid,
-        messageId: "edit-message-guid",
-        text: "user:",
-        options: actionOptions,
-      }),
-    ).rejects.toThrow("iMessage edit requires non-empty text after sanitization");
-    await expect(
-      imessageActionsRuntime.editMessage({
-        chatGuid: actionOptions.chatGuid,
-        messageId: "edit-message-guid",
-        text: "safe edit",
-        backwardsCompatMessage: "system:",
-        options: actionOptions,
-      }),
-    ).rejects.toThrow("iMessage edit requires non-empty text after sanitization");
+      rich(nestMarkdownFences("<relevant_memories>HIDDEN_RICH_NESTED</relevant_memories>", 4)),
+    ).rejects.toThrow("iMessage outbound hidden assistant content is not allowed");
+    await expect(rich("# user:")).rejects.toThrow(
+      "iMessage rich send requires text or an attachment after sanitization",
+    );
+    await expect(edit("user:")).rejects.toThrow(
+      "iMessage edit requires non-empty text after sanitization",
+    );
+    await expect(edit("safe edit", "system:")).rejects.toThrow(
+      "iMessage edit requires non-empty text after sanitization",
+    );
     for (const [questionText, choices] of [
       ["assistant:", ["first", "second"]],
       ["safe question", ["first", "system:"]],
     ] as const) {
-      await expect(
-        imessageActionsRuntime.sendPoll({
-          chatGuid: actionOptions.chatGuid,
-          question: questionText,
-          choices,
-          options: actionOptions,
-        }),
-      ).rejects.toThrow(
+      await expect(poll(questionText, choices)).rejects.toThrow(
         "iMessage poll requires a non-empty question and options after sanitization",
       );
     }
-    await expect(
-      imessageActionsRuntime.sendPoll({
-        chatGuid: actionOptions.chatGuid,
-        question: "Choose one",
-        choices: ["Allow", `Al${rawSeparator}low`],
-        options: actionOptions,
-      }),
-    ).rejects.toThrow("iMessage poll options must remain distinct after sanitization");
+    await expect(poll("Choose one", ["Allow", `Al${rawSeparator}low`])).rejects.toThrow(
+      "iMessage poll options must remain distinct after sanitization",
+    );
 
     for (const [, sendSwappedRole] of createRawTextActions(roleTokenSwap, "visible replacement")) {
       await expect(sendSwappedRole()).rejects.toThrow("iMessage outbound role protection failed");
@@ -1047,10 +883,7 @@ describe("sendMessageIMessage receipts", () => {
         return releaseClose.promise;
       });
       let settled = false;
-      const observed = sendMessageIMessage("chat_id:42", "close proof", {
-        config: IMESSAGE_TEST_CFG,
-        createClient: async () => rpc,
-      }).then(
+      const observed = sendTo("chat_id:42", "close proof", { createClient: async () => rpc }).then(
         (value) => {
           settled = true;
           return { value };
@@ -1082,9 +915,7 @@ describe("sendMessageIMessage receipts", () => {
           await expect(observed).resolves.toMatchObject({
             value: {
               messageId: "p:0/close-proof",
-              receipt: {
-                platformMessageIds: ["p:0/close-proof"],
-              },
+              receipt: { platformMessageIds: ["p:0/close-proof"] },
             },
           });
         }
@@ -1159,7 +990,7 @@ describe("sendMessageIMessage receipts", () => {
       { mode: 0o755 },
     );
     const createRpc = vi.fn(async () => createClient({ guid: "unexpected-rpc" }));
-    const sending = sendMessageIMessage("chat_guid:fixture-chat", "", {
+    const sending = sendTo("chat_guid:fixture-chat", "", {
       config: { channels: { imessage: { accounts: { default: { cliPath, dbPath } } } } },
       mediaUrl: mediaPath,
       resolveAttachmentImpl: async () => ({ path: mediaPath, contentType: "application/pdf" }),
@@ -1218,8 +1049,7 @@ describe("sendMessageIMessage receipts", () => {
       });
     const client = createClient({ success: false, error: "recipient is not registered" });
     let settled = false;
-    const send = sendMessageIMessage("+15551234567", "hello", {
-      config: IMESSAGE_TEST_CFG,
+    const send = sendTo("+15551234567", "hello", {
       client,
     }).catch((error: unknown) => {
       settled = true;
@@ -1266,7 +1096,7 @@ describe("sendMessageIMessage receipts", () => {
       operation: "send-attachment",
     });
     const client = createRejectingClient(rpcError);
-    const rejection = await sendMessageIMessage("chat_id:42", "", {
+    const rejection = await sendTo("chat_id:42", "", {
       config: {
         channels: { imessage: { accounts: { default: { remoteHost: "work@messages-b" } } } },
       },
@@ -1292,8 +1122,7 @@ describe("sendMessageIMessage receipts", () => {
     });
     const client = createRejectingClient(rpcError);
 
-    const rejection = await sendMessageIMessage("chat_id:42", "hello", {
-      config: IMESSAGE_TEST_CFG,
+    const rejection = await sendTo("chat_id:42", "hello", {
       client,
     }).catch((error: unknown) => error);
 
@@ -1304,17 +1133,13 @@ describe("sendMessageIMessage receipts", () => {
   it("drops disabled reply metadata from an attachment send", async () => {
     const client = createClient({ guid: "p:0/plain-guid" });
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/plain-guid" });
-    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
+    const result = await sendTo("chat_guid:chat-1", "", {
       config: {
         channels: { imessage: { actions: { reply: false }, accounts: { default: {} } } },
       },
       client,
       replyToId: "p:0/reply-guid",
-      mediaUrl: "/tmp/image.png",
-      resolveAttachmentImpl: async () => ({
-        path: "/tmp/image.png",
-        contentType: "image/png",
-      }),
+      ...image,
       runCliJson,
     });
     expect(result.messageId).toBe("p:0/plain-guid");
@@ -1334,7 +1159,7 @@ describe("sendMessageIMessage receipts", () => {
     }));
 
     await expect(
-      sendMessageIMessage("chat_id:42", "caption", {
+      sendTo("chat_id:42", "caption", {
         config: {
           channels: {
             imessage: {
@@ -1381,7 +1206,7 @@ describe("sendMessageIMessage receipts", () => {
         timestamp: Date.now(),
       });
       await expect(
-        sendMessageIMessage(target, "hello", {
+        sendTo(target, "hello", {
           config: {
             channels: { imessage: { remoteHost: "qa@example.invalid", accounts: { default: {} } } },
           },
@@ -1410,7 +1235,7 @@ describe("sendMessageIMessage receipts", () => {
     });
 
     await expect(
-      sendMessageIMessage("+15550004567", "hello", {
+      sendTo("+15550004567", "hello", {
         config: {
           channels: {
             imessage: {
@@ -1432,7 +1257,7 @@ describe("sendMessageIMessage receipts", () => {
     const client = createClient({ guid: "p:0/imsg-account-isolation" });
     const createClientForAccount = vi.fn(async () => client);
 
-    await sendMessageIMessage("chat_id:42", "hello", {
+    await sendTo("chat_id:42", "hello", {
       config: {
         channels: {
           imessage: {
@@ -1475,14 +1300,12 @@ describe("sendMessageIMessage receipts", () => {
         await params.use("/tmp/openclaw-imessage-safe/photo.png"),
     );
 
-    const result = await sendMessageIMessage("imessage:+15550004567", "", {
+    const result = await sendTo("imessage:+15550004567", "", {
       config: {
         channels: {
           imessage: {
             accounts: {
-              default: {
-                remoteHost: "work@messages-b",
-              },
+              default: { remoteHost: "work@messages-b" },
             },
           },
         },
@@ -1494,10 +1317,7 @@ describe("sendMessageIMessage receipts", () => {
     });
 
     expect(withRemoteFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        remoteHost: "work@messages-b",
-        localPath: "/gateway/photo.png",
-      }),
+      expect.objectContaining({ remoteHost: "work@messages-b", localPath: "/gateway/photo.png" }),
     );
     expect(getClientMocks(client).request).toHaveBeenCalledWith(
       "send",
@@ -1533,7 +1353,7 @@ describe("sendMessageIMessage receipts", () => {
     const withRemoteFile = vi.fn();
 
     await expect(
-      sendMessageIMessage("chat_id:42", "", {
+      sendTo("chat_id:42", "", {
         config: { channels: { imessage: { cliPath } } },
         mediaUrl: "/gateway/photo.png",
         resolveAttachmentImpl: async () => ({ path: "/gateway/photo.png" }),
@@ -1569,13 +1389,10 @@ describe("sendMessageIMessage receipts", () => {
       stop: vi.fn(async () => {}),
     } as unknown as IMessageRpcClient;
 
-    const send = sendMessageIMessage("chat_id:42", "hello", {
+    const send = sendTo("chat_id:42", "hello", {
       config: {
         channels: {
-          imessage: {
-            ...IMESSAGE_TEST_CFG.channels.imessage,
-            probeTimeoutMs: 10_000,
-          },
+          imessage: { ...IMESSAGE_TEST_CFG.channels.imessage, probeTimeoutMs: 10_000 },
         },
       },
       client,
@@ -1597,8 +1414,7 @@ describe("sendMessageIMessage receipts", () => {
     const client = createClient({ message_id: 12345 });
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageGuid: "p:0/voice-guid" });
 
-    const result = await sendMessageIMessage("chat_guid:chat-1", "", {
-      config: IMESSAGE_TEST_CFG,
+    const result = await sendTo("chat_guid:chat-1", "", {
       client,
       mediaUrl: "/tmp/voice.caf",
       audioAsVoice: true,
@@ -1638,17 +1454,14 @@ describe("sendMessageIMessage receipts", () => {
     const runCliJson = vi.fn();
 
     await expect(
-      sendMessageIMessage("chat_guid:chat-1", "", {
+      sendTo("chat_guid:chat-1", "", {
         config: { channels: { imessage: { sendTransport: "applescript" } } },
         client,
         conversationReadOrigin: "direct-operator",
         mediaUrl: "/tmp/voice.caf",
         audioAsVoice: true,
         replyToId,
-        resolveAttachmentImpl: async () => ({
-          path: "/tmp/voice.caf",
-          contentType: "audio/x-caf",
-        }),
+        resolveAttachmentImpl: async () => ({ path: "/tmp/voice.caf", contentType: "audio/x-caf" }),
         runCliJson,
       }),
     ).rejects.toThrow("voice messages require bridge transport");
@@ -1684,11 +1497,9 @@ describe("sendMessageIMessage receipts", () => {
       const client = createClient({ message_id: 12345 });
       const runCliJson = vi.fn().mockRejectedValueOnce(new Error(error));
 
-      const result = await sendMessageIMessage(target, "", {
-        config: IMESSAGE_TEST_CFG,
+      const result = await sendTo(target, "", {
         client,
-        mediaUrl: "/tmp/image.png",
-        resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+        ...image,
         runCliJson,
       });
 
@@ -1696,11 +1507,7 @@ describe("sendMessageIMessage receipts", () => {
       expect(runCliJson.mock.calls).toEqual([[command]]);
       expect(client["request"]).toHaveBeenCalledWith(
         "send",
-        expect.objectContaining({
-          ...rpcTarget,
-          file: "/tmp/image.png",
-          text: "",
-        }),
+        expect.objectContaining({ ...rpcTarget, file: "/tmp/image.png", text: "" }),
         expect.any(Object),
       );
     },
@@ -1710,11 +1517,10 @@ describe("sendMessageIMessage receipts", () => {
     const client = createClient({ guid: "should-not-send" });
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageGuid: "p:0/bridge-media-guid" });
 
-    await sendMessageIMessage("imessage:+15550004567", "", {
+    await sendTo("imessage:+15550004567", "", {
       config: { channels: { imessage: { sendTransport: "bridge" } } },
       client,
-      mediaUrl: "/tmp/image.png",
-      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      ...image,
       runCliJson,
     });
 
@@ -1750,8 +1556,7 @@ describe("sendMessageIMessage receipts", () => {
       stop: vi.fn(async () => {}),
     } as unknown as IMessageRpcClient;
 
-    const result = await sendMessageIMessage("chat_id:42", "caption", {
-      config: IMESSAGE_TEST_CFG,
+    const result = await sendTo("chat_id:42", "caption", {
       client,
       conversationReadOrigin: "direct-operator",
       replyToId: "p:0/thread-root",
@@ -1777,11 +1582,9 @@ describe("sendMessageIMessage receipts", () => {
 
     let observedError: unknown;
     try {
-      await sendMessageIMessage("+15550004567", "caption", {
-        config: IMESSAGE_TEST_CFG,
+      await sendTo("+15550004567", "caption", {
         client,
-        mediaUrl: "/tmp/image.png",
-        resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+        ...image,
         runCliJson,
         onDeliveryResult,
       });
@@ -1812,9 +1615,7 @@ describe("sendMessageIMessage receipts", () => {
         messageId: "p:0/dm-media-guid",
         messageIds: ["p:0/dm-media-guid"],
         visibleReplySent: true,
-        receipt: expect.objectContaining({
-          platformMessageIds: ["p:0/dm-media-guid"],
-        }),
+        receipt: expect.objectContaining({ platformMessageIds: ["p:0/dm-media-guid"] }),
       }),
     );
     const scope = "default:imessage:+15550004567";
@@ -1834,11 +1635,9 @@ describe("sendMessageIMessage receipts", () => {
     });
 
     await expect(
-      sendMessageIMessage("+15550004567", "caption", {
-        config: IMESSAGE_TEST_CFG,
+      sendTo("+15550004567", "caption", {
         client,
-        mediaUrl: "/tmp/image.png",
-        resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+        ...image,
         runCliJson,
         onDeliveryResult,
       }),
@@ -1852,9 +1651,7 @@ describe("sendMessageIMessage receipts", () => {
         content: "",
         messageId: "p:0/dm-media-guid",
         messageIds: ["p:0/dm-media-guid"],
-        receipt: expect.objectContaining({
-          platformMessageIds: ["p:0/dm-media-guid"],
-        }),
+        receipt: expect.objectContaining({ platformMessageIds: ["p:0/dm-media-guid"] }),
         visibleReplySent: true,
       }),
     );
@@ -1881,28 +1678,11 @@ describe("sendMessageIMessage receipts", () => {
       const client = createClient({ guid: "p:0/caption-guid" });
       const createClientImpl = vi.fn(async () => client);
       const runCliJson = vi.fn().mockResolvedValueOnce(attachment);
-      const result = await sendMessageIMessage(target, "caption", {
-        config: IMESSAGE_TEST_CFG,
+      const result = await sendTo(target, "caption", {
         ...(ownsClient ? { createClient: createClientImpl } : { client }),
-        mediaUrl: "/tmp/image.png",
-        resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+        ...image,
         runCliJson,
       });
-      if (target === "chat_guid:chat-1") {
-        expect(runCliJson.mock.calls).toEqual([
-          [
-            [
-              "send-attachment",
-              "--chat",
-              "chat-1",
-              "--file",
-              "/tmp/image.png",
-              "--transport",
-              "auto",
-            ],
-          ],
-        ]);
-      }
       expect(getClientMocks(client).request).toHaveBeenCalledWith(
         "send",
         expect.objectContaining({ ...rpcTarget, text: "caption" }),
@@ -1934,8 +1714,7 @@ describe("sendMessageIMessage receipts", () => {
       stop: vi.fn(async () => {}),
     } as unknown as IMessageRpcClient;
 
-    const send = sendMessageIMessage("+15551234567", "slow hello", {
-      config: IMESSAGE_TEST_CFG,
+    const send = sendTo("+15551234567", "slow hello", {
       client,
     });
     await requestStarted.promise;
@@ -1965,8 +1744,7 @@ describe("sendMessageIMessage receipts", () => {
       return persisted.promise;
     });
     let completed = false;
-    const send = sendMessageIMessage("chat_id:42", createApprovalText(), {
-      config: IMESSAGE_TEST_CFG,
+    const send = sendTo("chat_id:42", createApprovalText(), {
       client: createClient({ guid: "p:0/durable-approval" }),
       dbPath: openClawState.path("synthetic-chat.db"),
       approvalPrompt: createApprovalPrompt(),
@@ -2000,8 +1778,7 @@ describe("sendMessageIMessage receipts", () => {
     const resolveSentMessageGuidImpl = vi.fn(async () => "p:0/default-db-guid");
     const approvalText = createApprovalText("approval-default");
 
-    const result = await sendMessageIMessage("chat_id:42", approvalText, {
-      config: IMESSAGE_TEST_CFG,
+    const result = await sendTo("chat_id:42", approvalText, {
       approvalPrompt: createApprovalPrompt("approval-default"),
       client,
       cliPath,
@@ -2031,8 +1808,7 @@ describe("sendMessageIMessage receipts", () => {
     const runCliJson = vi.fn();
     const resolveSentMessageGuidImpl = vi.fn(async () => null);
     const rejection = expect(
-      sendMessageIMessage("chat_id:42", createApprovalText("approval-remote"), {
-        config: IMESSAGE_TEST_CFG,
+      sendTo("chat_id:42", createApprovalText("approval-remote"), {
         approvalPrompt: createApprovalPrompt("approval-remote"),
         client,
         cliPath,
@@ -2053,23 +1829,18 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("recovers approval tapback GUIDs when RPC returns an unknown placeholder", async () => {
-    const { response, messageId } = {
-      response: { messageId: "unknown", status: "sent" },
-      messageId: "unknown",
-    };
-    const client = createClient(response);
+    const client = createClient({ messageId: "unknown", status: "sent" });
     const resolveSentMessageGuidImpl = vi.fn(async () => "p:0/recovered-guid");
     const approvalText = createApprovalText();
 
-    const result = await sendMessageIMessage("chat_id:42", approvalText, {
-      config: IMESSAGE_TEST_CFG,
+    const result = await sendTo("chat_id:42", approvalText, {
       approvalPrompt: createApprovalPrompt(),
       client,
       dbPath: "/Users/me/Library/Messages/chat.db",
       resolveSentMessageGuidImpl,
     });
 
-    expect(result.messageId).toBe(messageId);
+    expect(result.messageId).toBe("unknown");
     expect(result.guid).toBe("p:0/recovered-guid");
     await expect(
       resolveIMessageApprovalReactionTargetWithPersistence({
@@ -2096,8 +1867,7 @@ describe("sendMessageIMessage receipts", () => {
     const client = createClient({ status: "sent" });
     const approvalText = createApprovalText();
 
-    const result = await sendMessageIMessage("chat_id:42", approvalText, {
-      config: IMESSAGE_TEST_CFG,
+    const result = await sendTo("chat_id:42", approvalText, {
       approvalPrompt: createApprovalPrompt(),
       client,
     });
