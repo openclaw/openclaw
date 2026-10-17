@@ -268,7 +268,7 @@ it("retains a committed receipt when accounting retargets the manager before pub
   };
   const { manager, compact, persist } = await seedCompaction(scope);
   await upsertSessionEntryCore(replacement, { sessionId: replacement.sessionId, updatedAt: 1 });
-  let committed: CommittedCompactionBoundary | undefined;
+  let committed: Awaited<ReturnType<typeof persist>> | undefined;
   const pending = compact(async (prepared) => {
     committed = await persist(prepared);
     // The independent retarget must not inherit the compaction's physical writer admission.
