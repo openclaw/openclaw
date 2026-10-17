@@ -7,7 +7,7 @@ import {
   captureOpenClawStateWorkerContext,
 } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
-import { readRegistry } from "./registry-read.js";
+import { readWorktreeRegistryCommand } from "./registry-read.js";
 import type { WorktreeTemplateRecord } from "./template-registry.js";
 
 type TemplateOperation = Extract<
@@ -77,7 +77,7 @@ async function runTemplateReadCommand<
 >(env: NodeJS.ProcessEnv, command: Command, commitGuard?: () => void) {
   const context = captureOpenClawStateReadWorkerContext({ env });
   commitGuard?.();
-  const reply = await readRegistry(context, command);
+  const reply = await readWorktreeRegistryCommand(context, command);
   commitGuard?.();
   return reply;
 }

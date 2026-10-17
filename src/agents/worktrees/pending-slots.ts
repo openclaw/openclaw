@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import type { PendingWorktreeSlot } from "./pending-slots.worker.js";
-import { readRegistry } from "./registry-read.js";
+import { readWorktreeRegistryCommand } from "./registry-read.js";
 import { runWorktreeRunEndCommand } from "./registry-run-end.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import type { ManagedWorktreeRecord, WorktreeWorkerAuthority } from "./types.js";
@@ -11,7 +11,7 @@ export async function readWorktreeSlotCount(env: NodeJS.ProcessEnv): Promise<num
   const context = captureWorktreeRunEndContext(env);
   return (
     (
-      await readRegistry(context, {
+      await readWorktreeRegistryCommand(context, {
         type: "worktrees.slotCount",
         input: undefined,
       })
@@ -23,7 +23,7 @@ export async function readPendingWorktrees(env: NodeJS.ProcessEnv): Promise<Pend
   const context = captureWorktreeRunEndContext(env);
   return (
     (
-      await readRegistry(context, {
+      await readWorktreeRegistryCommand(context, {
         type: "worktrees.pendingSlots",
         input: undefined,
       })
