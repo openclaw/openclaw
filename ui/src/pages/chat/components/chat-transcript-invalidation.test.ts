@@ -1029,7 +1029,7 @@ describe("chat transcript invalidation", () => {
         (message) => !("toolCallId" in message && message.toolCallId === "expanded-tool"),
       ),
     });
-    expect(visibilityState.has(expandedToolId)).toBe(false);
+    expect(visibilityState.get(expandedToolId)).toBe(true);
     expect(visibilityState.get(collapsedToolId)).toBe(false);
   });
 });
