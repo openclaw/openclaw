@@ -1,10 +1,14 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as SessionEvents from "../auto-reply/reply/session-event-handoff.js";
+import type * as ChannelMessages from "../channels/message/runtime.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import type * as SessionTranscript from "../config/sessions/transcript.js";
+import type * as DeliveryQueue from "../infra/delivery-queue-sqlite.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import {
   createUpdateRun,
@@ -28,6 +32,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import type * as ManagedMedia from "./managed-image-attachments.js";
 import {
   createGeneratedMediaDeliveryEntry,
   configureRestartSessionEventMocks,
@@ -46,6 +51,7 @@ import {
 import * as restartUpdateRun from "./server-restart-update-run.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import type * as SessionWorker from "./session-utils-store-worker.js";
 
 type RestartSentinel = NonNullable<
   Awaited<ReturnType<typeof import("../infra/restart-sentinel.js").readRestartSentinel>>
@@ -59,16 +65,12 @@ type RecordInboundSessionAndDispatchReplyParams = Parameters<
 };
 type QueueStorage = typeof import("../infra/session-delivery-queue-storage.js");
 type QueueRecovery = typeof import("../infra/session-delivery-queue-recovery.js");
-type AppendAssistantMessageToSessionTranscriptMock =
-  typeof import("../config/sessions/transcript.js").appendAssistantMessageToSessionTranscript;
-type CreateManagedOutgoingMediaBlocksMock =
-  typeof import("./managed-image-attachments.js").createManagedOutgoingMediaBlocks;
-type AttachManagedOutgoingMediaToMessageMock =
-  typeof import("./managed-image-attachments.js").attachManagedOutgoingMediaToMessage;
-type SendDurableMessageBatchCoreMock =
-  typeof import("../channels/message/runtime.js").sendDurableMessageBatchCore;
-type InspectDeliveryQueueReceiptMock =
-  typeof import("../infra/delivery-queue-sqlite.js").inspectDeliveryQueueReceipt;
+type LoadSession = (
+  key: string,
+  options?: Parameters<
+    typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync
+  >[1],
+) => Promise<LoadedSessionEntry>;
 
 const mocks = vi.hoisted(() => {
   const state = {
@@ -101,15 +103,7 @@ const mocks = vi.hoisted(() => {
         threadId: undefined,
       }),
     ),
-    loadSessionEntryAsync:
-      vi.fn<
-        (
-          sessionKey: string,
-          options?: Parameters<
-            typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync
-          >[1],
-        ) => Promise<LoadedSessionEntry>
-      >(),
+    loadSessionEntryAsync: vi.fn<LoadSession>(),
     deliveryContextFromSession: vi.fn<
       typeof import("../utils/delivery-context.read.js").deliveryContextFromSession
     >(() => undefined),
@@ -148,23 +142,11 @@ const mocks = vi.hoisted(() => {
       value: await fn(),
     })),
     withStableDeliveryPreparation: vi.fn(),
-    loadSessionEntryInWorker:
-      vi.fn<
-        typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
-      >(),
-    resolveSessionTarget:
-      vi.fn<
-        typeof import("./session-utils-store-worker.js").resolveGatewaySessionStoreTargetInWorker
-      >(),
+    loadSessionEntryInWorker: vi.fn<typeof SessionWorker.loadGatewaySessionEntryReadOnlyInWorker>(),
+    resolveSessionTarget: vi.fn<typeof SessionWorker.resolveGatewaySessionStoreTargetInWorker>(),
     getRuntimeConfig: vi.fn<typeof import("../config/io.js").getRuntimeConfig>(),
-    captureSessionEventTarget:
-      vi.fn<
-        typeof import("../auto-reply/reply/session-event-handoff.js").captureSessionEventTargetForHost
-      >(),
-    enqueueSessionEvent:
-      vi.fn<
-        typeof import("../auto-reply/reply/session-event-handoff.js").enqueueSessionEventForHost
-      >(),
+    captureSessionEventTarget: vi.fn<typeof SessionEvents.captureSessionEventTargetForHost>(),
+    enqueueSessionEvent: vi.fn<typeof SessionEvents.enqueueSessionEventForHost>(),
     enqueueSessionDelivery: vi.fn(),
     advanceSessionDeliveryAgentRun: vi.fn<QueueStorage["advanceSessionDeliveryAgentRun"]>(
       async () => {},
@@ -178,26 +160,27 @@ const mocks = vi.hoisted(() => {
       async () => {},
     ),
     markSessionDeliverySettlement: vi.fn(async () => {}),
-    appendAssistantMessageToSessionTranscript: vi.fn<AppendAssistantMessageToSessionTranscriptMock>(
-      async (params) => {
-        const { appendRestartSentinelTranscriptReceipt } =
-          await import("./server-restart-sentinel.test-support.js");
-        return appendRestartSentinelTranscriptReceipt(params);
-      },
+    appendAssistantMessageToSessionTranscript: vi.fn<
+      typeof SessionTranscript.appendAssistantMessageToSessionTranscript
+    >(async (params) => {
+      const { appendRestartSentinelTranscriptReceipt } =
+        await import("./server-restart-sentinel.test-support.js");
+      return appendRestartSentinelTranscriptReceipt(params);
+    }),
+    createManagedOutgoingMediaBlocks: vi.fn<typeof ManagedMedia.createManagedOutgoingMediaBlocks>(
+      async (params) =>
+        (params.items ?? []).map((item) => ({
+          type: item.mimeType?.startsWith("audio/") ? "audio" : "image",
+          artifactId: `artifact:${item.url}`,
+          url: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(item.url)}/full`,
+          openUrl: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(item.url)}/full`,
+        })),
     ),
-    createManagedOutgoingMediaBlocks: vi.fn<CreateManagedOutgoingMediaBlocksMock>(async (params) =>
-      (params.items ?? []).map((item) => ({
-        type: item.mimeType?.startsWith("audio/") ? "audio" : "image",
-        artifactId: `artifact:${item.url}`,
-        url: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(item.url)}/full`,
-        openUrl: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(item.url)}/full`,
-      })),
-    ),
-    attachManagedOutgoingMediaToMessage: vi.fn<AttachManagedOutgoingMediaToMessageMock>(
-      async () => true,
-    ),
-    sendDurableMessageBatchCore: vi.fn<SendDurableMessageBatchCoreMock>(),
-    inspectDeliveryQueueReceipt: vi.fn<InspectDeliveryQueueReceiptMock>(),
+    attachManagedOutgoingMediaToMessage: vi.fn<
+      typeof ManagedMedia.attachManagedOutgoingMediaToMessage
+    >(async () => true),
+    sendDurableMessageBatchCore: vi.fn<typeof ChannelMessages.sendDurableMessageBatchCore>(),
+    inspectDeliveryQueueReceipt: vi.fn<typeof DeliveryQueue.inspectDeliveryQueueReceipt>(),
     removeCronRunContinuationSessionIfIdle: vi.fn(async () => {}),
     settleCorrelatedSubagentDelivery: vi.fn(async () => {}),
     loadPendingSessionDelivery: vi.fn(),
@@ -431,21 +414,20 @@ vi.mock("../infra/outbound/delivery-queue-preparation.js", () => ({
   withStableDeliveryPreparation: mocks.withStableDeliveryPreparation,
 }));
 
-vi.mock("../infra/outbound/deliver-prepare.js", () => ({
-  prepareOutboundPayloadBatch: vi.fn(async (params: { payloads: unknown[] }) => ({
-    schemaVersion: 1,
-    sourcePayloadCount: params.payloads.length,
-    channelNormalized: true,
-    entries: params.payloads.map((payload, sourceIndex) => ({
-      sourceIndex,
-      status: "accepted",
-      payload,
-      replyHookChanged: false,
-      messageHookChanged: false,
-      preparedMediaCount: 0,
-    })),
-  })),
-}));
+vi.mock("../infra/outbound/deliver-prepare.js", async () => {
+  const { createUnmodifiedPreparedOutboundBatch } =
+    await import("../infra/outbound/prepared-batch.js");
+  return {
+    prepareOutboundPayloadBatch: vi.fn(
+      async (params: {
+        payloads: Parameters<typeof createUnmodifiedPreparedOutboundBatch>[0];
+      }) => ({
+        ...createUnmodifiedPreparedOutboundBatch(params.payloads),
+        channelNormalized: true,
+      }),
+    ),
+  };
+});
 
 vi.mock("../infra/outbound/deliver-queue-admission.js", () => ({
   stageAndEnqueueOutboundDelivery: vi.fn(
@@ -470,7 +452,7 @@ vi.mock("../infra/outbound/deliver-queue-admission.js", () => ({
 }));
 
 vi.mock("../channels/message/runtime.js", async (importOriginal) => {
-  type SendResult = Awaited<ReturnType<SendDurableMessageBatchCoreMock>>;
+  type SendResult = Awaited<ReturnType<typeof ChannelMessages.sendDurableMessageBatchCore>>;
   mocks.sendDurableMessageBatchCore.mockImplementation(async (params) => {
     try {
       const results = await mocks.deliverOutboundPayloads(params);
@@ -1974,29 +1956,29 @@ describe("scheduleRestartSentinelWake", () => {
     });
   });
 
-  it.each([{ status: "failed", consumed: false }] as const)(
-    "consumes only a targetless CLI outcome without a model wake ($status, $consumed)",
-    async ({ status, consumed }) => {
-      const run = createUpdateRun({ trigger: "cli" });
-      const terminal = finishUpdateRun(run.runId, { status, reason: "original-cli-outcome" });
-      mocks.clearSentinel.mockResolvedValueOnce(consumed);
-      setSentinel({
-        status: "error",
-        message: null,
-        doctorHint: "Run openclaw doctor --non-interactive",
-        stats: { runId: run.runId },
-      });
-      await wakeRestartSentinel();
-      expect(mocks.clearSentinel).toHaveBeenCalledExactlyOnceWith(123, queueContext.environment);
-      expectNoCalls(
-        "enqueueSessionDelivery",
-        "enqueueSessionEvent",
-        "drainPendingSessionDelivery",
-        "deliverOutboundPayloads",
-      );
-      expect(getUpdateRun(run.runId)).toEqual(terminal);
-    },
-  );
+  it("consumes only a targetless CLI outcome without a model wake", async () => {
+    const run = createUpdateRun({ trigger: "cli" });
+    const terminal = finishUpdateRun(run.runId, {
+      status: "failed",
+      reason: "original-cli-outcome",
+    });
+    mocks.clearSentinel.mockResolvedValueOnce(false);
+    setSentinel({
+      status: "error",
+      message: null,
+      doctorHint: "Run openclaw doctor --non-interactive",
+      stats: { runId: run.runId },
+    });
+    await wakeRestartSentinel();
+    expect(mocks.clearSentinel).toHaveBeenCalledExactlyOnceWith(123, queueContext.environment);
+    expectNoCalls(
+      "enqueueSessionDelivery",
+      "enqueueSessionEvent",
+      "drainPendingSessionDelivery",
+      "deliverOutboundPayloads",
+    );
+    expect(getUpdateRun(run.runId)).toEqual(terminal);
+  });
 
   it("preserves an explicit targetless CLI note", async () => {
     const run = createUpdateRun({ trigger: "cli" });
