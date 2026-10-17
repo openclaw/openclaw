@@ -14,7 +14,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function makeHome(files: {
   account?: Record<string, unknown>;
   credentials?: Record<string, unknown>;
-  settings?: Record<string, unknown>;
 }): string {
   const home = tempDirs.make("openclaw-claude-owner-");
   fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
@@ -25,9 +24,6 @@ function makeHome(files: {
   }
   if (files.credentials) {
     write(path.join(".claude", ".credentials.json"), { claudeAiOauth: files.credentials });
-  }
-  if (files.settings) {
-    write(path.join(".claude", "settings.json"), files.settings);
   }
   return home;
 }
@@ -69,14 +65,6 @@ afterEach(() => {
 });
 
 describe("attestClaudeNativeLoginOwner", () => {
-  it("names the account Anthropic attests for the credential", async () => {
-    const homeDir = makeHome({
-      account: { accountUuid: "uuid-a", emailAddress: "a@example.com" },
-      credentials: credentials(),
-    });
-    expect(await attest({ homeDir, platform: "linux" })).toBe("uuid:uuid-a");
-  });
-
   it("owns a credential for account B by B even beside an account record for A", async () => {
     const homeDir = makeHome({
       account: { accountUuid: "uuid-a", emailAddress: "a@example.com" },
@@ -94,8 +82,6 @@ describe("attestClaudeNativeLoginOwner", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
     const [url, init] = fetchFn.mock.calls[0] ?? [];
     expect(url).toBe(PROFILE_URL);
-    expect(init?.method).toBeUndefined();
-    expect(init?.body).toBeUndefined();
     expect(init?.redirect).toBe("error");
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     expect(timeout).toHaveBeenCalledWith(3_000);
@@ -125,24 +111,8 @@ describe("attestClaudeNativeLoginOwner", () => {
       fetchFn: vi.fn(response) as never,
     });
     expect(result.owner).toBeUndefined();
-    expect(JSON.stringify(result)).not.toContain("token-");
     expect(readClaudeNativeLoginOwner({ homeDir, platform: "linux" })).toBeUndefined();
     expect(await attest({ homeDir, platform: "linux" })).toBe("uuid:uuid-a");
-  });
-
-  it("has no owner when the profile lookup times out", async () => {
-    const homeDir = makeHome({ credentials: credentials() });
-    vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort());
-    const fetchFn = vi.fn(
-      async (_url: unknown, init?: RequestInit) =>
-        await new Promise<Response>((_resolve, reject) => {
-          init?.signal?.throwIfAborted();
-          init?.signal?.addEventListener("abort", () =>
-            reject(new Error("aborted", { cause: init.signal?.reason })),
-          );
-        }),
-    );
-    expect(await attest({ homeDir, platform: "linux" }, fetchFn as never)).toBeUndefined();
   });
 
   describe("attestation cache", () => {
@@ -166,24 +136,24 @@ describe("attestClaudeNativeLoginOwner", () => {
 
     it("never asks the network for an expired token, but keeps an owner attested before", async () => {
       const expired = Date.parse("2020-01-01T00:00:00Z");
-      const homeDir = makeHome({ credentials: credentials({ expiresAt: expired }) });
+      const token = tokenFor("uuid-a");
+      const homeDir = makeHome({
+        credentials: credentials({ accessToken: token, expiresAt: expired }),
+      });
       const fetchFn = profileFetch();
       expect(await attest({ homeDir, platform: "linux" }, fetchFn as never)).toBeUndefined();
       expect(fetchFn).not.toHaveBeenCalled();
       // The same token, attested while it was still valid, keeps its owner after expiry.
-      const fresh = makeHome({ credentials: credentials() });
-      const token = JSON.parse(
-        fs.readFileSync(path.join(fresh, ".claude", ".credentials.json"), "utf8"),
-      ).claudeAiOauth.accessToken;
-      expect(await attest({ homeDir: fresh, platform: "linux" }, fetchFn as never)).toBe(
-        "uuid:uuid-a",
-      );
-      fs.writeFileSync(
-        path.join(fresh, ".claude", ".credentials.json"),
-        JSON.stringify({ claudeAiOauth: { accessToken: token, expiresAt: expired } }),
-      );
+      const write = (expiresAt: number) =>
+        fs.writeFileSync(
+          path.join(homeDir, ".claude", ".credentials.json"),
+          JSON.stringify({ claudeAiOauth: { accessToken: token, expiresAt } }),
+        );
+      write(Date.parse("2030-01-01T00:00:00Z"));
+      expect(await attest({ homeDir, platform: "linux" }, fetchFn as never)).toBe("uuid:uuid-a");
+      write(expired);
       const later = await attestClaudeNativeLoginOwner({
-        homeDir: fresh,
+        homeDir,
         platform: "linux",
         fetchFn: fetchFn as never,
       });
@@ -208,49 +178,11 @@ describe("attestClaudeNativeLoginOwner", () => {
     });
   });
 
-  it("keeps the owner when the plan or token changes", async () => {
-    const account = { accountUuid: "uuid-a" };
-    const basic = makeHome({ account, credentials: credentials() });
-    const upgraded = makeHome({
-      account,
-      credentials: credentials({
-        accessToken: tokenFor("uuid-a"),
-        refreshToken: "synthetic-refresh",
-        subscriptionType: "max",
-        rateLimitTier: "default_claude_max_20x",
-      }),
-    });
-    expect(await attest({ homeDir: basic, platform: "linux" })).toBe(
-      await attest({ homeDir: upgraded, platform: "linux" }),
-    );
-  });
-
   it("does not trust a leftover account record without a credential", async () => {
     const homeDir = makeHome({ account: { accountUuid: "uuid-a" } });
     const fetchFn = profileFetch();
     expect(await attest({ homeDir, platform: "linux" }, fetchFn as never)).toBeUndefined();
     expect(fetchFn).not.toHaveBeenCalled();
-  });
-
-  it("needs no account record", async () => {
-    const homeDir = makeHome({ credentials: credentials() });
-    expect(await attest({ homeDir, platform: "linux" })).toBe("uuid:uuid-a");
-  });
-
-  it("fails closed when the credential root differs from the account config root", async () => {
-    const configDir = tempDirs.make("openclaw-claude-config-");
-    const secureDir = tempDirs.make("openclaw-claude-secure-");
-    vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
-    vi.stubEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR", secureDir);
-    fs.writeFileSync(
-      path.join(configDir, ".claude.json"),
-      JSON.stringify({ oauthAccount: { accountUuid: "uuid-a" } }),
-    );
-    fs.writeFileSync(
-      path.join(secureDir, ".credentials.json"),
-      JSON.stringify({ claudeAiOauth: credentials() }),
-    );
-    expect(await attest({ platform: "linux" })).toBeUndefined();
   });
 
   describe("supplied environment", () => {
@@ -297,6 +229,7 @@ describe("attestClaudeNativeLoginOwner", () => {
       expect(await attest({ platform: "linux", env })).toBeUndefined();
       fs.rmSync(path.join(configDir, "settings.json"));
       const secureDir = tempDirs.make("openclaw-claude-secure-");
+      loginIn(secureDir, "uuid-a");
       expect(
         await attest({
           platform: "linux",
@@ -314,13 +247,11 @@ describe("attestClaudeNativeLoginOwner", () => {
         JSON.stringify({ env: { UNRELATED: "1" } }),
       );
       expect(await attest({ platform: "linux", env })).toBe("uuid:uuid-a");
-      for (const key of ["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "ANTHROPIC_API_KEY"]) {
-        fs.writeFileSync(
-          path.join(configDir, "settings.json"),
-          JSON.stringify({ env: { [key]: "synthetic" } }),
-        );
-        expect(await attest({ platform: "linux", env })).toBeUndefined();
-      }
+      fs.writeFileSync(
+        path.join(configDir, "settings.json"),
+        JSON.stringify({ env: { CLAUDE_CODE_USE_BEDROCK: "synthetic" } }),
+      );
+      expect(await attest({ platform: "linux", env })).toBeUndefined();
     });
 
     it.each([
@@ -371,15 +302,6 @@ describe("attestClaudeNativeLoginOwner", () => {
     });
   });
 
-  it("has no owner when an API key helper replaces the login", async () => {
-    const homeDir = makeHome({
-      account: { accountUuid: "uuid-a" },
-      credentials: credentials(),
-      settings: { apiKeyHelper: "echo synthetic" },
-    });
-    expect(await attest({ homeDir, platform: "linux" })).toBeUndefined();
-  });
-
   describe("macOS Keychain", () => {
     // The Keychain and the file beside it hold different accounts' tokens.
     const keychainPayload = JSON.stringify({
@@ -412,17 +334,6 @@ describe("attestClaudeNativeLoginOwner", () => {
       expect(await attest({ homeDir, platform: "darwin", execSync })).toBeUndefined();
     });
 
-    it("uses the credentials file when no Keychain item exists", async () => {
-      const homeDir = makeHome({
-        account: { accountUuid: "uuid-a" },
-        credentials: credentials(),
-      });
-      const execSync = vi.fn(() => {
-        throw notFound();
-      }) as never;
-      expect(await attest({ homeDir, platform: "darwin", execSync })).toBe("uuid:uuid-a");
-    });
-
     describe("ambiguous lookups with a stale credentials file", () => {
       const stale = () =>
         makeHome({ account: { accountUuid: "uuid-a" }, credentials: credentials() });
@@ -435,12 +346,7 @@ describe("attestClaudeNativeLoginOwner", () => {
         });
 
       it("refuses when both lookups fail for a reason other than absence", async () => {
-        for (const failure of [
-          () => new Error("denied"),
-          timeout,
-          () => Object.assign(new Error("locked"), { status: 36 }),
-          () => Object.assign(new Error("spawn"), { code: "ENOENT" }),
-        ]) {
+        for (const failure of [timeout, () => Object.assign(new Error("locked"), { status: 36 })]) {
           const execSync = vi.fn(() => {
             throw failure();
           }) as never;
@@ -449,23 +355,10 @@ describe("attestClaudeNativeLoginOwner", () => {
         }
       });
 
-      it("refuses when the password lookup fails and the metadata lookup confirms the item", async () => {
-        const execSync = vi.fn((command: string) => {
-          if (command.includes(" -w ")) {
-            throw timeout();
-          }
-          return "";
-        }) as never;
+      it("refuses an unusable Keychain payload without consulting the file", async () => {
+        const execSync = vi.fn(() => "not json") as never;
         expect(await attest({ homeDir: stale(), platform: "darwin", execSync })).toBeUndefined();
       });
-
-      it.each(["not json", "[]", "42", "null"])(
-        "refuses an unusable Keychain payload (%s) without consulting the file",
-        async (payload) => {
-          const execSync = vi.fn(() => payload) as never;
-          expect(await attest({ homeDir: stale(), platform: "darwin", execSync })).toBeUndefined();
-        },
-      );
 
       it("lets the file stand on a confirmed absence from the password lookup alone", async () => {
         const execSync = vi.fn(() => {

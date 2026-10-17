@@ -527,10 +527,6 @@ describe("cli credentials", () => {
       vi.stubEnv("HOME", tempHome);
       fs.mkdirSync(path.join(tempHome, ".claude"), { recursive: true });
       fs.writeFileSync(
-        path.join(tempHome, ".claude.json"),
-        JSON.stringify({ oauthAccount: { accountUuid: "uuid-a" } }),
-      );
-      fs.writeFileSync(
         path.join(tempHome, ".claude", ".credentials.json"),
         JSON.stringify({
           claudeAiOauth: {

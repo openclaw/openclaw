@@ -118,17 +118,14 @@ function resolveClaudeCliCredentialsPath(
   return path.join(credentialDir, CLAUDE_CLI_CREDENTIALS_FILE);
 }
 
-function resolveClaudeCliAccountPath(
-  homeDir?: string,
-  env: NodeJS.ProcessEnv = process.env,
-): string {
+function resolveClaudeCliAccountPath(homeDir?: string): string {
   if (homeDir !== undefined) {
-    return path.join(resolveOsHomeRelativePath(homeDir, { env }), ".claude.json");
+    return path.join(resolveOsHomeRelativePath(homeDir), ".claude.json");
   }
-  const configuredDir = env.CLAUDE_CONFIG_DIR;
+  const configuredDir = process.env.CLAUDE_CONFIG_DIR;
   return configuredDir
     ? path.join(path.resolve(configuredDir), ".claude.json")
-    : path.join(resolveOsHomeRelativePath("~", { env }), ".claude.json");
+    : path.join(resolveOsHomeRelativePath("~"), ".claude.json");
 }
 
 function resolveClaudeCliKeychainService(
@@ -265,7 +262,6 @@ export async function attestClaudeNativeLoginOwner(
   options: ClaudeNativeLoginOptions & {
     /** Test seam; production always calls the global fetch on the Anthropic endpoint. */
     fetchFn?: typeof fetch;
-    now?: number;
   } = {},
 ): Promise<{ owner?: string; refreshDueAt?: number }> {
   const token = readClaudeNativeLoginCredential(options);
@@ -275,7 +271,7 @@ export async function attestClaudeNativeLoginOwner(
   const refreshDueAt = token.expires - CLAUDE_NATIVE_LOGIN_REFRESH_MARGIN_MS;
   const fingerprint = fingerprintClaudeNativeLoginToken(token.value);
   const attested = claudeNativeLoginAttestations.get(fingerprint);
-  if (attested || token.expires <= (options.now ?? Date.now())) {
+  if (attested || token.expires <= Date.now()) {
     return { ...(attested ? { owner: attested } : {}), refreshDueAt };
   }
   let owner: string | undefined;
@@ -301,7 +297,6 @@ export async function attestClaudeNativeLoginOwner(
     owner = undefined;
   }
   if (owner) {
-    claudeNativeLoginAttestations.delete(fingerprint);
     claudeNativeLoginAttestations.set(fingerprint, owner);
     if (claudeNativeLoginAttestations.size > CLAUDE_NATIVE_LOGIN_ATTESTATION_LIMIT) {
       const oldest = claudeNativeLoginAttestations.keys().next().value;
@@ -339,7 +334,7 @@ function readClaudeNativeLoginCredential(
   const service = resolveClaudeCliKeychainService(homeDir, env);
   let stored: ClaudeCliCredential | null = null;
   if ((options.platform ?? process.platform) === "darwin") {
-    const password = probeClaudeKeychainPassword(execSyncImpl, service, env);
+    const password = readClaudeKeychain(execSyncImpl, CLAUDE_CLI_KEYCHAIN_TIMEOUT_MS, service, env);
     if (password.state === "ok") {
       stored = parseClaudeCliOauthCredential(password.value.claudeAiOauth);
       if (!stored) {
@@ -416,29 +411,6 @@ function readClaudeApiKeyHelper(
     : null;
 }
 
-function readClaudeKeychain(
-  execSyncImpl: typeof execSync,
-  timeout: number | undefined,
-  service: string,
-  env: NodeJS.ProcessEnv = process.env,
-): Record<string, unknown> | null {
-  try {
-    const account = resolveClaudeCliKeychainAccount(env);
-    const result = execSyncImpl(
-      `${MACOS_SECURITY_PATH} find-generic-password -a "${account}" -w -s "${service}"`,
-      {
-        encoding: "utf8",
-        stdio: ["pipe", "pipe", "pipe"],
-        ...(timeout === undefined ? {} : { timeout }),
-      },
-    );
-    const parsed: unknown = JSON.parse(result.trim());
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 // `security find-generic-password` exits 44 (errSecItemNotFound) only when the item does not
 // exist. A timeout, spawn error, locked keychain or any other status says nothing about it.
 const SECURITY_ITEM_NOT_FOUND_STATUS = 44;
@@ -458,19 +430,21 @@ type KeychainPasswordProbe =
   | { state: "unknown" };
 
 /** Tri-state read of the Keychain login: readable, confirmed absent, or unknown. */
-function probeClaudeKeychainPassword(
+function readClaudeKeychain(
   execSyncImpl: typeof execSync,
+  timeout: number | undefined,
   service: string,
-  env: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv = process.env,
 ): KeychainPasswordProbe {
   let result: string;
   try {
+    const account = resolveClaudeCliKeychainAccount(env);
     result = execSyncImpl(
-      `${MACOS_SECURITY_PATH} find-generic-password -a "${resolveClaudeCliKeychainAccount(env)}" -w -s "${service}"`,
+      `${MACOS_SECURITY_PATH} find-generic-password -a "${account}" -w -s "${service}"`,
       {
         encoding: "utf8",
         stdio: ["pipe", "pipe", "pipe"],
-        timeout: CLAUDE_CLI_KEYCHAIN_TIMEOUT_MS,
+        ...(timeout === undefined ? {} : { timeout }),
       },
     );
   } catch (error) {
@@ -488,7 +462,7 @@ function probeClaudeKeychainPassword(
 function probeClaudeKeychainItem(
   execSyncImpl: typeof execSync,
   service: string,
-  env: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv = process.env,
 ): "present" | "absent" | "unknown" {
   try {
     execSyncImpl(
@@ -502,24 +476,6 @@ function probeClaudeKeychainItem(
     return "present";
   } catch (error) {
     return isKeychainItemNotFound(error) ? "absent" : "unknown";
-  }
-}
-
-function hasClaudeKeychainItem(
-  execSyncImpl: typeof execSync,
-  service: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  try {
-    const account = resolveClaudeCliKeychainAccount(env);
-    execSyncImpl(`${MACOS_SECURITY_PATH} find-generic-password -a "${account}" -s "${service}"`, {
-      encoding: "utf8",
-      timeout: CLAUDE_CLI_KEYCHAIN_TIMEOUT_MS,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    return true;
-  } catch {
-    return false;
   }
 }
 
@@ -548,12 +504,14 @@ function readClaudeCliCredentials(
   const keychainService = resolveClaudeCliKeychainService(options.homeDir);
   const tryKeychain = platform === "darwin" && options.allowKeychainPrompt !== false;
   if (tryKeychain) {
-    const payload = readClaudeKeychain(
+    const keychain = readClaudeKeychain(
       execSyncImpl,
       options.tryKeychainWithoutPrompt ? CLAUDE_CLI_KEYCHAIN_TIMEOUT_MS : undefined,
       keychainService,
     );
-    const credential = parseClaudeCliOauthCredential(payload?.claudeAiOauth);
+    const credential = parseClaudeCliOauthCredential(
+      keychain.state === "ok" ? keychain.value.claudeAiOauth : undefined,
+    );
     if (credential) {
       return withClaudeAccountEmail(credential, options.homeDir);
     }
@@ -572,7 +530,8 @@ function readClaudeCliCredentials(
     options.onStoredCredentialUnreadable &&
     options.tryKeychainWithoutPrompt &&
     (fs.existsSync(credentialsPath) ||
-      (platform === "darwin" && hasClaudeKeychainItem(execSyncImpl, keychainService)))
+      (platform === "darwin" &&
+        probeClaudeKeychainItem(execSyncImpl, keychainService) === "present"))
   ) {
     options.onStoredCredentialUnreadable();
   }

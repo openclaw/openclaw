@@ -237,21 +237,21 @@ async function withReportWorker<T>(
         cliWriter?.assertCurrent();
       };
       const { env: _env, ...workerResolved } = resolved;
+      const target: TranscriptReportWorkerTarget = {
+        resolved: workerResolved,
+        sessionEntryCurrentSource: sessionEntryCurrent?.source,
+        // Account facts only: the worker asks the host to confirm the owner on each commit.
+        ...(cliWriter ? { cliWriter: cliHistoryWriterFacts(cliWriter) } : {}),
+        fence: {
+          expectedLifecycleRevision: fenced.expectedLifecycleRevision,
+          expectedWriterRunId: fenced.expectedWriterRunId,
+        },
+      };
       try {
         const result = await settleReportOperation(
           async () => {
             await prepareSessionEntryReplacementDatabase(options, assertCurrent, execution);
             assertCurrent();
-            const target: TranscriptReportWorkerTarget = {
-              resolved: workerResolved,
-              sessionEntryCurrentSource: sessionEntryCurrent?.source,
-              // Account facts only: the worker asks the host to confirm the owner on each commit.
-              ...(cliWriter ? { cliWriter: cliHistoryWriterFacts(cliWriter) } : {}),
-              fence: {
-                expectedLifecycleRevision: fenced.expectedLifecycleRevision,
-                expectedWriterRunId: fenced.expectedWriterRunId,
-              },
-            };
             const databaseIdentity = execution.fileIdentity?.physicalIdentity;
             if (!databaseIdentity) {
               throw new Error("Transcript report has no prepared native database identity");

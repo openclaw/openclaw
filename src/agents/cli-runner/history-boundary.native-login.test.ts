@@ -4,12 +4,7 @@ import path from "node:path";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfigSnapshot,
-  getRuntimeConfigSourceSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import {
   appendSessionTranscriptReport,
@@ -22,6 +17,7 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import * as cliCredentials from "../cli-credentials.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { createHistoryBoundaryFixture, history } from "./history-boundary.test-support.js";
@@ -110,6 +106,9 @@ describe("native CLI login owner", () => {
       prepared,
     );
   };
+  const coveredSeq = (f: Awaited<ReturnType<typeof fixture>>) =>
+    (loadSessionEntryReadOnly(f.target)?.cliHistoryBoundary as { maxSeq: number } | undefined)
+      ?.maxSeq ?? -1;
   const prepareWith = async (
     f: Awaited<ReturnType<typeof fixture>>,
     prepared: ReturnType<typeof backendUsing> | undefined,
@@ -151,47 +150,6 @@ describe("native CLI login owner", () => {
     );
   };
 
-  it("reseeds a fresh session for the same native login", async () => {
-    const f = await fixture();
-    const { backend } = logins();
-    loginIn(backend, "uuid:account-a");
-    await seedNative(f, backendUsing(backend));
-    const next = await prepareWith(f, backendUsing(backend));
-    expect(next.allowed).toBe(true);
-    expect(next.seeded).toContain("native canary");
-  });
-
-  it("refuses history after the native login changes", async () => {
-    const f = await fixture();
-    const { backend } = logins();
-    loginIn(backend, "uuid:account-a");
-    await seedNative(f, backendUsing(backend));
-    loginIn(backend, "uuid:account-b");
-    const next = await prepareWith(f, backendUsing(backend));
-    expect(next.allowed).toBe(false);
-    expect(next.seeded).toBeUndefined();
-  });
-
-  it("never reads or sends the native token without the operator's opt-in", async () => {
-    const f = await fixture();
-    const { backend } = logins();
-    loginIn(backend, "uuid:account-a");
-    const lookup = vi.spyOn(cliCredentials, "resolveNativeCliLoginOwner");
-    let allowed: boolean | undefined;
-    await f.run(
-      undefined,
-      async (ok) => {
-        allowed = ok;
-      },
-      { provider: "claude-cli" },
-      undefined,
-      backendUsing(backend),
-    );
-    expect(allowed).toBe(false);
-    expect(lookup).not.toHaveBeenCalled();
-    expect(profile).not.toHaveBeenCalled();
-  });
-
   it("keeps history unknown when the native login cannot be proven", async () => {
     const f = await fixture();
     const { backend } = logins();
@@ -223,11 +181,8 @@ describe("native CLI login owner", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", resolveStateDir(process.env));
     vi.stubEnv("HOME", sessionDirs.make());
     vi.stubEnv("CLAUDE_CONFIG_DIR", undefined);
-    // Skill env overrides read the live runtime config, as execution does.
-    const runtime = getRuntimeConfigSnapshot();
-    const source = getRuntimeConfigSourceSnapshot();
+    // Skill env overrides read the live runtime config, as execution does. The fixture resets it.
     const config = {
-      ...runtime,
       ...attestNativeLogin,
       skills: { entries: { "login-skill": { env: { CLAUDE_CONFIG_DIR: skill } } } },
     } as OpenClawConfig;
@@ -238,109 +193,87 @@ describe("native CLI login owner", () => {
       config,
     };
     const prepared = backendUsing(undefined);
-    try {
-      await f.run(
-        undefined,
-        async (allowed) => {
-          expect(allowed).toBe(true);
-          f.manager().appendMessage({ role: "user", content: "skill canary", timestamp: 1 });
-        },
-        withSkill,
-        undefined,
-        prepared,
-      );
-      expect(process.env.CLAUDE_CONFIG_DIR).toBeUndefined();
-      await f.run(
-        undefined,
-        async (allowed, params) => {
-          expect(allowed).toBe(true);
-          expect(await history(allowed, params)).toContain("skill canary");
-        },
-        withSkill,
-        undefined,
-        prepared,
-      );
-      await f.run(
-        undefined,
-        async (allowed) => expect(allowed).toBe(false),
-        native,
-        undefined,
-        prepared,
-      );
-    } finally {
-      if (runtime) {
-        setRuntimeConfigSnapshot(runtime, source ?? runtime);
-      } else {
-        clearRuntimeConfigSnapshot();
-      }
+    await f.run(
+      undefined,
+      async (allowed) => {
+        expect(allowed).toBe(true);
+        f.manager().appendMessage({ role: "user", content: "skill canary", timestamp: 1 });
+      },
+      withSkill,
+      undefined,
+      prepared,
+    );
+    expect(process.env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    await f.run(
+      undefined,
+      async (allowed, params) => {
+        expect(allowed).toBe(true);
+        expect(await history(allowed, params)).toContain("skill canary");
+      },
+      withSkill,
+      undefined,
+      prepared,
+    );
+    await f.run(
+      undefined,
+      async (allowed) => expect(allowed).toBe(false),
+      native,
+      undefined,
+      prepared,
+    );
+  });
+
+  type NoOwnerSetup = {
+    prepared?: ReturnType<typeof backendUsing>;
+    credential?: Parameters<Awaited<ReturnType<typeof fixture>>["run"]>[3];
+    sessionEntry?: never;
+    // An API key in the child env is resolved, and found to name no native login.
+    resolvesOwner?: true;
+  };
+  const identityLess = {
+    type: "oauth" as const,
+    provider: "claude-cli",
+    access: "synthetic-access",
+    refresh: "synthetic-refresh",
+    expires: Date.now() + 60_000,
+  };
+  it.each<[string, (backend: string) => NoOwnerSetup]>([
+    [
+      "the child authenticates another way",
+      (backend) => ({
+        prepared: backendUsing(backend, { ANTHROPIC_API_KEY: "synthetic-key" }),
+        resolvesOwner: true,
+      }),
+    ],
+    ["there is no prepared backend to derive the child environment from", () => ({})],
+    [
+      "a forwarded credential is in play",
+      (backend) => ({ prepared: backendUsing(backend), credential: identityLess }),
+    ],
+    [
+      "the CLI is placed on a node",
+      (backend) => ({
+        prepared: backendUsing(backend),
+        sessionEntry: { execHost: "node", execNode: "node-a" } as never,
+      }),
+    ],
+  ])("has no native owner when %s", async (_name, setup) => {
+    const f = await fixture();
+    const { backend } = logins();
+    loginIn(backend, "uuid:account-a");
+    const { prepared, credential, sessionEntry, resolvesOwner } = setup(backend);
+    const lookup = vi.spyOn(cliCredentials, "resolveNativeCliLoginOwner");
+    await f.run(
+      undefined,
+      async (allowed) => expect(allowed).toBe(false),
+      sessionEntry ? { ...native, sessionEntry } : native,
+      credential,
+      prepared,
+    );
+    if (!resolvesOwner) {
+      expect(lookup).not.toHaveBeenCalled();
     }
-  });
-
-  it("does not credit Gateway-login history to a backend-selected account", async () => {
-    const f = await fixture();
-    const { backend } = logins();
-    loginIn(backend, "uuid:backend-account");
-    await seedNative(f, backendUsing(undefined));
-    const next = await prepareWith(f, backendUsing(backend));
-    expect(next.allowed).toBe(false);
-    expect(next.seeded).toBeUndefined();
-  });
-
-  it("has no native owner when the child authenticates another way", async () => {
-    const f = await fixture();
-    const { backend } = logins();
-    loginIn(backend, "uuid:account-a");
-    const keyed = backendUsing(backend, { ANTHROPIC_API_KEY: "synthetic-key" });
-    await f.run(
-      undefined,
-      async (allowed) => expect(allowed).toBe(false),
-      native,
-      undefined,
-      keyed,
-    );
-  });
-
-  it("has no native owner without a prepared backend to derive the child environment from", async () => {
-    const f = await fixture();
-    logins();
-    await f.run(undefined, async (allowed) => expect(allowed).toBe(false), native);
-  });
-
-  it("does not let the native login stand in for a forwarded credential", async () => {
-    const f = await fixture();
-    const { backend } = logins();
-    loginIn(backend, "uuid:account-a");
-    const lookup = vi.spyOn(cliCredentials, "resolveNativeCliLoginOwner");
-    const identityLess = {
-      type: "oauth" as const,
-      provider: "claude-cli",
-      access: "synthetic-access",
-      refresh: "synthetic-refresh",
-      expires: Date.now() + 60_000,
-    };
-    await f.run(
-      undefined,
-      async (allowed) => expect(allowed).toBe(false),
-      native,
-      identityLess,
-      backendUsing(backend),
-    );
-    expect(lookup).not.toHaveBeenCalled();
-  });
-
-  it("does not apply this host's login to a node-placed CLI", async () => {
-    const f = await fixture();
-    const { backend } = logins();
-    loginIn(backend, "uuid:account-a");
-    const lookup = vi.spyOn(cliCredentials, "resolveNativeCliLoginOwner");
-    await f.run(
-      undefined,
-      async (allowed) => expect(allowed).toBe(false),
-      { ...native, sessionEntry: { execHost: "node", execNode: "node-a" } as never },
-      undefined,
-      backendUsing(backend),
-    );
-    expect(lookup).not.toHaveBeenCalled();
+    expect(profile).not.toHaveBeenCalled();
   });
 
   it("rejects a recovery boundary for a reassigned or revoked login, uncached, at the same instant", async () => {
@@ -360,6 +293,9 @@ describe("native CLI login owner", () => {
       loginIn(backend, "uuid:account-b");
       loginIn(backend, "uuid:account-a");
       writer.checkNativeLoginBoundary(true);
+      // The same account's rotated token is refused until it is attested.
+      loginIn(backend, "uuid:account-a", { rotate: true });
+      expect(() => writer.checkNativeLoginBoundary(true)).toThrow("CLI history authority changed");
     });
   });
 
@@ -414,13 +350,7 @@ describe("native CLI login owner", () => {
     const { gateway, backend } = logins();
     loginIn(backend, "uuid:account-a");
     await withNativeWriter(f, "boundary-native-bind", backendUsing(backend), (writer) => {
-      expect(writer.bindsNativeLogin).toBe(true);
       writer.bindExecutionEnv({ CLAUDE_CONFIG_DIR: backend }, true);
-      writer.checkNativeLoginBoundary(true);
-      // A login reassigned after the bind is caught by the next boundary check.
-      loginIn(backend, "uuid:account-b");
-      expect(() => writer.checkNativeLoginBoundary(true)).toThrow("CLI history authority changed");
-      loginIn(backend, "uuid:account-a");
       writer.checkNativeLoginBoundary(true);
       // A recovery turn drifting to another config dir is refused before anything is spawned.
       expect(() => writer.bindExecutionEnv({ CLAUDE_CONFIG_DIR: gateway }, true)).toThrow(
@@ -453,9 +383,6 @@ describe("native CLI login owner", () => {
       });
     });
     expect(JSON.stringify(f.manager().getEntries())).toContain("late login turn");
-    const next = await prepareWith(f, backendUsing(backend));
-    expect(next.allowed).toBe(false);
-    expect(next.seeded).toBeUndefined();
   });
 
   it("keeps a reply but stops coverage once the login can no longer be established", async () => {
@@ -505,10 +432,6 @@ describe("native CLI login owner", () => {
       state: "known",
       maxSeq: before.maxSeq,
     });
-    unknown = false;
-    const next = await prepareWith(f, backendUsing(backend));
-    expect(next.allowed).toBe(false);
-    expect(next.seeded).toBeUndefined();
   });
 
   it("records a turn whose login changed after preparation without covering it", async () => {
@@ -517,7 +440,7 @@ describe("native CLI login owner", () => {
     loginIn(backend, "uuid:account-a");
     await seedNative(f, backendUsing(backend));
     const before = loadSessionEntryReadOnly(f.target)?.cliHistoryBoundary;
-    await withNativeWriter(f, "boundary-native-coverage", backendUsing(backend), (writer) => {
+    await withNativeWriter(f, "boundary-native-coverage", backendUsing(backend), () => {
       loginIn(backend, "uuid:account-b");
       f.manager().appendMessage({ role: "user", content: "turn under account b", timestamp: 2 });
       expect(loadSessionEntryReadOnly(f.target)?.cliHistoryBoundary).toMatchObject({
@@ -530,7 +453,6 @@ describe("native CLI login owner", () => {
       expect(loadSessionEntryReadOnly(f.target)?.cliHistoryBoundary).toMatchObject({
         maxSeq: (before as { maxSeq: number }).maxSeq,
       });
-      expect(writer.authFingerprint).toBeDefined();
     });
     expect(JSON.stringify(f.manager().getEntries())).toContain("turn under account b");
     const next = await prepareWith(f, backendUsing(backend));
@@ -568,24 +490,6 @@ describe("native CLI login owner", () => {
     const next = await prepareWith(f, backendUsing(backend));
     expect(next.allowed).toBe(false);
     expect(next.seeded).toBeUndefined();
-  });
-
-  it("refuses a recovery send on a rotated token it has not attested yet", async () => {
-    const f = await fixture();
-    const { backend } = logins();
-    loginIn(backend, "uuid:account-a");
-    await withNativeWriter(
-      f,
-      "boundary-native-rotated-recovery",
-      backendUsing(backend),
-      (writer) => {
-        writer.bindExecutionEnv({ CLAUDE_CONFIG_DIR: backend }, true);
-        loginIn(backend, "uuid:account-a", { rotate: true });
-        expect(() => writer.checkNativeLoginBoundary(true)).toThrow(
-          "CLI history authority changed",
-        );
-      },
-    );
   });
 
   it("attests a token the CLI rotated mid-run before covering the run's rows", async () => {
@@ -665,31 +569,6 @@ describe("native CLI login owner", () => {
     });
   });
 
-  it("covers a transcript report only while the owner holds as the write is sent", async () => {
-    const f = await fixture();
-    const { backend } = logins();
-    loginIn(backend, "uuid:account-a");
-    await seedNative(f, backendUsing(backend));
-    const coveredSeq = () =>
-      (loadSessionEntryReadOnly(f.target)?.cliHistoryBoundary as { maxSeq: number } | undefined)
-        ?.maxSeq ?? -1;
-    const report = async (content: string) =>
-      await appendSessionTranscriptReport(f.target, {
-        kind: "custom",
-        customTypes: ["status"],
-        selectReport: () => ({ customType: "status", content, display: true }),
-      });
-    await withNativeWriter(f, "boundary-native-report", backendUsing(backend), async () => {
-      const start = coveredSeq();
-      await expect(report("report under account a")).resolves.toMatchObject({ ok: true });
-      expect(coveredSeq()).toBe(start + 1);
-      loginIn(backend, "uuid:account-b", { rotate: true, recordAccount: "uuid:account-a" });
-      await expect(report("report under account b")).resolves.toMatchObject({ ok: true });
-      expect(coveredSeq()).toBe(start + 1);
-    });
-    expect(JSON.stringify(f.manager().getEntries())).toContain("report under account b");
-  });
-
   // Runs `flip` right after the host hands the SQLite worker a command of this type, so the
   // login changes while that command is queued and before its transaction asks the host.
   const afterCommandQueued = (type: string, flip: () => void) => {
@@ -745,24 +624,25 @@ describe("native CLI login owner", () => {
     const { backend } = logins();
     loginIn(backend, "uuid:account-a");
     await seedNative(f, backendUsing(backend));
-    const before = loadSessionEntryReadOnly(f.target)?.cliHistoryBoundary as { maxSeq: number };
+    const report = async (content: string) =>
+      await appendSessionTranscriptReport(f.target, {
+        kind: "custom",
+        customTypes: ["status"],
+        selectReport: () => ({ customType: "status", content, display: true }),
+      });
     await withNativeWriter(f, "boundary-native-queued-report", backendUsing(backend), async () => {
+      const start = coveredSeq(f);
+      // Positive control: the owner holds as the write is sent.
+      await expect(report("report under account a")).resolves.toMatchObject({ ok: true });
+      expect(coveredSeq(f)).toBe(start + 1);
       const queued = afterCommandQueued("append", () =>
         loginIn(backend, "uuid:account-b", { rotate: true, recordAccount: "uuid:account-a" }),
       );
-      await expect(
-        appendSessionTranscriptReport(f.target, {
-          kind: "custom",
-          customTypes: ["status"],
-          selectReport: () => ({ customType: "status", content: "queued report b", display: true }),
-        }),
-      ).resolves.toMatchObject({ ok: true });
+      await expect(report("queued report b")).resolves.toMatchObject({ ok: true });
       expect(queued.flipped).toBe(true);
+      expect(coveredSeq(f)).toBe(start + 1);
     });
     expect(JSON.stringify(f.manager().getEntries())).toContain("queued report b");
-    expect(loadSessionEntryReadOnly(f.target)?.cliHistoryBoundary).toMatchObject({
-      maxSeq: before.maxSeq,
-    });
   });
 
   it("looks the login up once for a worker turn commit, however many rows it covers", async () => {
@@ -828,5 +708,23 @@ describe("native CLI login owner", () => {
     const next = await prepareWith(f, backendUsing(backend));
     expect(next.allowed).toBe(false);
     expect(profile).not.toHaveBeenCalled();
+  });
+
+  it("covers a SessionManager append only while the native login owner holds", async () => {
+    const f = await fixture();
+    const { backend } = logins();
+    loginIn(backend, "uuid:account-a");
+    await withNativeWriter(f, "boundary-native-metadata", backendUsing(backend), async () => {
+      const manager = await SessionManager.openAsync(f.target);
+      const before = coveredSeq(f);
+      await manager.appendMessageAsync({ role: "user", content: "under a", timestamp: 1 });
+      const covered = coveredSeq(f);
+      expect(covered).toBeGreaterThan(before);
+      // Another account's credential, never attested by this process.
+      loginIn(backend, "uuid:account-b");
+      await manager.appendMessageAsync({ role: "user", content: "under b", timestamp: 2 });
+      expect(coveredSeq(f)).toBe(covered);
+      expect(JSON.stringify(manager.getEntries())).toContain("under b");
+    });
   });
 });

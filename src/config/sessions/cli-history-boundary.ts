@@ -17,6 +17,15 @@ export type CliHistoryWriter = {
   confirmsOwner?: () => boolean;
 };
 
+/** The serializable account facts a worker needs to advance coverage for this writer. */
+export type CliHistoryWriterFacts = Pick<
+  CliHistoryWriter,
+  "runId" | "authFingerprint" | "lifecycleRevision"
+> & {
+  /** The host holds a live owner check the worker must ask for inside its transaction. */
+  confirmOwner?: boolean;
+};
+
 /** The writer as the executing run holds it; workers only ever see the base capability. */
 export type CliExecutionHistoryWriter = CliHistoryWriter & {
   /** True when ownership comes from a native login resolved from the child environment. */
@@ -45,15 +54,6 @@ export const CLI_HISTORY_CHANGED_BEFORE_PREPARATION = "CLI history changed befor
 export function runWithCliHistoryWriter<T>(writer: CliHistoryWriter | undefined, run: () => T): T {
   return writer ? cliHistoryWriter.run(writer, run) : cliHistoryWriter.exit(run);
 }
-
-/** The serializable account facts a worker needs to advance coverage for this writer. */
-export type CliHistoryWriterFacts = Pick<
-  CliHistoryWriter,
-  "runId" | "authFingerprint" | "lifecycleRevision"
-> & {
-  /** The host holds a live owner check the worker must ask for inside its transaction. */
-  confirmOwner?: boolean;
-};
 
 export function cliHistoryWriterFacts(writer: CliHistoryWriter): CliHistoryWriterFacts {
   return {

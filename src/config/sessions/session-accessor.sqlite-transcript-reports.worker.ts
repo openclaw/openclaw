@@ -135,8 +135,7 @@ export function bindSqliteWorkerBackend(
             admit("commit");
             return err(refusal);
           }
-          const coverage = target.cliWriter;
-          const firstSeq = coverage
+          const firstSeq = target.cliWriter
             ? (readTranscriptContextVersionInTransaction(database, resolved.sessionId).rawSeq ??
                 -1) + 1
             : undefined;
@@ -201,7 +200,7 @@ export function bindSqliteWorkerBackend(
             }
           };
           const cliHistoryChanged =
-            coverage && firstSeq !== undefined
+            target.cliWriter && firstSeq !== undefined
               ? advanceCliHistoryBoundaryRangeInTransaction(
                   database,
                   resolved,
@@ -211,7 +210,7 @@ export function bindSqliteWorkerBackend(
                       readTranscriptContextVersionInTransaction(database, resolved.sessionId)
                         .rawSeq ?? -1,
                   },
-                  coverage,
+                  target.cliWriter,
                   authorizeCommit,
                   ownerProbe?.holds,
                 )

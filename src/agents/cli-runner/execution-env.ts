@@ -1,9 +1,5 @@
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import {
-  getInstallationTarget,
-  installationTargetEnv,
-} from "../../infra/installation-target-context.js";
-import {
   CLAUDE_SELECTED_AUTH_ENV_KEYS,
   CLI_BACKEND_PRESERVE_ENV,
   parseCliBackendPreserveEnv,
@@ -54,6 +50,5 @@ export function resolveCliChildEnv(
       }),
     );
   }
-  Object.assign(env, installationTargetEnv(getInstallationTarget()));
   return { env, selectedClaudeClearEnv };
 }

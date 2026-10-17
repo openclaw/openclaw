@@ -698,32 +698,33 @@ describe("Claude native stdio boundary", () => {
     await expect(access(path.join(context.cwd, "fixture.pid"))).rejects.toThrow();
   });
 
-  it("revalidates the admitted owner after native initialization before sending any user input", async ({
-    signal,
-  }) => {
-    let active = true;
-    const reason = new Error("Synthetic admitted owner was released.");
-    const liveSession = createLiveSession();
-    const context = await createContext("revoked-initialize", {
-      liveSession,
-      assertCurrent: () => {
-        if (!active) {
-          throw reason;
-        }
-      },
-    });
-    const running = collect(context);
-    const outcome = running.catch((error: unknown) => error);
-    try {
-      await fixtureReadyBeforeSettlement(context, "initialize.ready", running, signal);
-      active = false;
-    } finally {
-      await writeFile(path.join(context.cwd, "initialize.release"), "release");
-    }
-    expect(await withinTest(outcome, signal)).toBe(reason);
-    expect(liveSession.current()).toBeUndefined();
-    await expect(access(path.join(context.cwd, "user.received"))).rejects.toThrow();
-  });
+  it.for(["assertCurrent", "assertPrivateInputCurrent"] as const)(
+    "revalidates %s after native initialization before sending any user input",
+    async (check, { signal }) => {
+      let active = true;
+      const reason = new Error("Synthetic admitted owner was released.");
+      const liveSession = createLiveSession();
+      const context = await createContext("revoked-initialize", {
+        liveSession,
+        [check]: () => {
+          if (!active) {
+            throw reason;
+          }
+        },
+      });
+      const running = collect(context);
+      const outcome = running.catch((error: unknown) => error);
+      try {
+        await fixtureReadyBeforeSettlement(context, "initialize.ready", running, signal);
+        active = false;
+      } finally {
+        await writeFile(path.join(context.cwd, "initialize.release"), "release");
+      }
+      expect(await withinTest(outcome, signal)).toBe(reason);
+      expect(liveSession.current()).toBeUndefined();
+      await expect(access(path.join(context.cwd, "user.received"))).rejects.toThrow();
+    },
+  );
 
   it("reuses one child while delivering private context and host permissions for each turn", async () => {
     const liveSession = createLiveSession();

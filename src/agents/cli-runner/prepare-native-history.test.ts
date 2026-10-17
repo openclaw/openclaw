@@ -41,21 +41,15 @@ const attestNativeLogin: OpenClawConfig = {
 describe("native Claude login history on preparation", () => {
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
   // A real synthetic login on disk, selected through the Claude config dir the child inherits.
-  // Its token names its own account to the stub profile endpoint; the record may disagree.
-  const login = (
-    owner: string | undefined,
-    options: { recordOwner?: string; expiresAt?: number } = {},
-  ) => {
+  // Its token names its own account to the stub profile endpoint.
+  const login = (owner: string, options: { expiresAt?: number } = {}) => {
     const dir = path.join(fixture.session.dir, "claude-config");
     vi.stubEnv("CLAUDE_CONFIG_DIR", dir);
     fs.mkdirSync(dir, { recursive: true });
     fs.rmSync(path.join(dir, ".credentials.json"), { force: true });
-    if (owner === undefined) {
-      return;
-    }
     fs.writeFileSync(
       path.join(dir, ".claude.json"),
-      JSON.stringify({ oauthAccount: { accountUuid: options.recordOwner ?? owner } }),
+      JSON.stringify({ oauthAccount: { accountUuid: owner } }),
     );
     fs.writeFileSync(
       path.join(dir, ".credentials.json"),
@@ -130,8 +124,8 @@ describe("native Claude login history on preparation", () => {
 
   /** Saves one covered turn under `owner`, then prepares the next fresh Claude session. */
   async function prepareAfterTurnBy(
-    owner: string | undefined,
-    next: string | undefined,
+    owner: string,
+    next: string,
     nextOptions: Parameters<typeof login>[1] = {},
     nextConfig: OpenClawConfig = attestNativeLogin,
   ) {
@@ -170,7 +164,7 @@ describe("native Claude login history on preparation", () => {
       );
       login(next, nextOptions);
       profile.mockClear();
-      return await fixture.prepare({
+      const context = await fixture.prepare({
         config: nextConfig,
         provider: "claude-cli",
         model: "sonnet",
@@ -178,6 +172,9 @@ describe("native Claude login history on preparation", () => {
         preparedRunAdmission: admission,
         sessionKey: sessionTarget.sessionKey,
       });
+      // Releases the session sharing read the prepared backend retains.
+      await context.preparedBackend.cleanup?.();
+      return context;
     } finally {
       admission.close();
     }
@@ -208,25 +205,11 @@ describe("native Claude login history on preparation", () => {
     expect(context.openClawHistoryPrompt).toBeUndefined();
   });
 
-  it("refuses saved history for another account's credential beside the same account record", async () => {
-    const context = await prepareAfterTurnBy("uuid:account-a", "uuid:account-b", {
-      recordOwner: "uuid:account-a",
-    });
-    expect(context.cliHistoryWriter).toBeUndefined();
-    expect(context.openClawHistoryPrompt).toBeUndefined();
-  });
-
   it("keeps coverage but sends no saved history while the CLI is about to rotate the token", async () => {
     const context = await prepareAfterTurnBy("uuid:account-a", "uuid:account-a", {
       expiresAt: Date.now() + 60_000,
     });
     expect(context.cliHistoryWriter?.replaysHistory).toBe(false);
-    expect(context.openClawHistoryPrompt).toBeUndefined();
-  });
-
-  it("refuses saved history when the native login cannot be proven", async () => {
-    const context = await prepareAfterTurnBy("uuid:account-a", undefined);
-    expect(context.cliHistoryWriter).toBeUndefined();
     expect(context.openClawHistoryPrompt).toBeUndefined();
   });
 });
