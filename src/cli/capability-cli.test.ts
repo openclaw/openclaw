@@ -450,6 +450,7 @@ vi.mock("../web-fetch/runtime.js", () => ({
   resolveWebFetchDefinition: vi.fn(),
 }));
 
+// mock-isolation: CLI routing uses fixture fetch results without the network, cache, and secret-owner runtime.
 vi.mock("../agents/tools/web-fetch.js", () => ({
   createWebFetchTool: vi.fn(),
 }));
