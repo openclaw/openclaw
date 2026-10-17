@@ -103,6 +103,7 @@ export function mcpTool(params: {
   description?: string;
   parameters?: AnyAgentTool["parameters"];
   operation?: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
+  serverInstructions?: string;
   execute?: AnyAgentTool["execute"];
 }): AnyAgentTool {
   const tool: AnyAgentTool = {
@@ -124,6 +125,7 @@ export function mcpTool(params: {
       safeServerName: params.safeServerName ?? params.serverName,
       toolName: params.toolName,
       operation: params.operation ?? "tool",
+      ...(params.serverInstructions ? { serverInstructions: params.serverInstructions } : {}),
     },
   });
   return tool;

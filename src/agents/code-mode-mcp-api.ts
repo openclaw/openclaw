@@ -22,6 +22,8 @@ type McpApiToolDoc = {
 export type McpApiServerDoc = {
   identifier: string;
   serverName: string;
+  /** Sanitized initialize instructions; untrusted server text, rendered whole. */
+  instructions?: string;
   tools: McpApiToolDoc[];
 };
 
@@ -57,6 +59,25 @@ function normalizeDocLines(value: string | undefined): string[] {
         .filter(Boolean)
         .slice(0, 12)
     : [];
+}
+
+function renderServerInstructions(instructions: string | undefined): string[] {
+  if (!instructions) {
+    return [];
+  }
+  // Unlike tool summaries, server guidance is never capped: a closing rule (quota,
+  // confirmation) binds as much as the first line.
+  return [
+    "/**",
+    " * Server instructions from the MCP initialize result; they apply only to this namespace.",
+    " *",
+    ...instructions
+      .split(/\r?\n/u)
+      // Keep indentation (nested lists); only the comment terminator is escaped.
+      .map((line) => line.trimEnd().replace(/\*\//gu, "* /"))
+      .map((line) => (line ? ` * ${line}` : " *")),
+    " */",
+  ];
 }
 
 function renderDocComment(
@@ -251,6 +272,7 @@ function renderMcpServerHeader(server: McpApiServerDoc, tools: readonly McpApiTo
     "interface McpPromptsListResult { prompts: unknown[]; nextCursor?: string }",
     "interface McpPromptsGetResult { messages: unknown[]; description?: string }",
     "",
+    ...renderServerInstructions(server.instructions),
     `declare namespace MCP.${server.identifier} {`,
     "  /** Return this TypeScript-style API header. */",
     "  function $api(toolName?: string, options?: { schema?: boolean }): Promise<McpApiHeader>;",

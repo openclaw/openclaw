@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { buildTtsSystemPromptHint } from "../tts/tts-settings.js";
 import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
+import { collectMcpServerInstructions } from "./mcp-server-instructions.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
@@ -43,6 +44,7 @@ export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPr
   if (tools) {
     renderParams.toolNames = tools.map((tool) => tool.name);
     renderParams.messageTool = tools.find((tool) => tool.name.trim().toLowerCase() === "message");
+    renderParams.mcpServerInstructions = collectMcpServerInstructions(tools);
   }
   if (!config) {
     return buildAgentSystemPrompt(renderParams);

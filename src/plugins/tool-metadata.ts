@@ -11,6 +11,8 @@ export type PluginToolMcpMeta = {
   safeServerName: string;
   toolName: string;
   operation: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
+  /** Owning server's initialize instructions; untrusted server text. */
+  serverInstructions?: string;
   excludedFromOpenClawCatalog?: true;
   deniedBySession?: true;
   /** Trusted requester OAuth sign-in bootstrap; exempt from per-call MCP approval. */

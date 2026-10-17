@@ -244,6 +244,12 @@ declaration file, then calls `MCP.<server>.<tool>()` with one object argument.
 `MCP.<server>.$api()` remains available as an inline fallback for a
 single-tool schema response inside the program.
 
+When a server publishes `initialize` instructions, its declaration file and
+every `$api()` header open the namespace with them as a doc comment, whole.
+Serialized `catalog.search(...)` handles include them as `instructions` on the
+first handle of each server in that output. This remote text stays out of the
+system prompt and the `exec` description.
+
 The guest runtime never sees host objects directly. Inputs and outputs cross
 the bridge as JSON-compatible values with explicit size caps.
 

@@ -28,6 +28,7 @@ import {
   formatToolSearchControlError,
   formatToolSearchControlResult,
   ToolSearchRuntime,
+  type ToolSearchMcpServerInstructions,
 } from "./tool-search-runtime.js";
 import {
   MAX_TOOL_SEARCH_BATCH_QUERIES,
@@ -144,11 +145,14 @@ function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandid
 
 function formatToolSearchBatchResponse(
   results: ToolSearchBatchGroup[],
-  networkContent: boolean,
+  runtime: ToolSearchRuntime,
+  parentToolCallId: string,
 ): AgentToolResult<{
   results: ToolSearchBatchGroup[];
   truncated?: true;
+  mcpServerInstructions?: ToolSearchMcpServerInstructions;
 }> {
+  const networkContent = runtime.hasNetworkContent(parentToolCallId);
   const bounded: ToolSearchBatchGroup[] = results.map((result) => {
     const candidates = result.candidates
       .map(compactBatchCandidate)
@@ -161,10 +165,19 @@ function formatToolSearchBatchResponse(
     };
   });
   let truncated = bounded.some((result) => result.truncated);
-  const render = () => ({ results: bounded, ...(truncated ? { truncated: true as const } : {}) });
-  let payload = render();
-  let { text } = renderToolSearchControlText(JSON.stringify(payload, null, 2), networkContent);
-  while (text.length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
+  const candidateIds = () =>
+    bounded.flatMap((group) => group.candidates.map((candidate) => candidate.id));
+  // While candidates are fitted, keep room for `truncated: true` when their servers publish
+  // guidance: guidance that cannot fit even as a marker is reported there.
+  const reserveTruncated = runtime.hasMcpServerInstructions(candidateIds());
+  const render = (reserve = false) => ({
+    results: bounded,
+    ...(truncated || reserve ? { truncated: true as const } : {}),
+  });
+  const measure = () =>
+    renderToolSearchControlText(JSON.stringify(render(reserveTruncated), null, 2), networkContent)
+      .text.length;
+  while (measure() > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
     let removable: ToolSearchBatchGroup | undefined;
     for (const group of bounded) {
       if (group.candidates.length === 0) {
@@ -187,9 +200,25 @@ function formatToolSearchBatchResponse(
     removable.candidates.pop();
     removable.truncated = true;
     truncated = true;
-    payload = render();
-    ({ text } = renderToolSearchControlText(JSON.stringify(payload, null, 2), networkContent));
   }
+  // Candidates keep priority; their servers' guidance shares only the remaining allowance,
+  // whole or as a marker, so remote text never evicts a callable identity or the bound.
+  const guidance = runtime.mcpServerInstructionsFor(render(reserveTruncated), candidateIds(), {
+    parentToolCallId,
+    maxChars: MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS,
+  });
+  if (guidance.omitted) {
+    truncated = true;
+  }
+  const payload: {
+    results: ToolSearchBatchGroup[];
+    truncated?: true;
+    mcpServerInstructions?: ToolSearchMcpServerInstructions;
+  } = {
+    ...render(),
+    ...(guidance.instructions ? { mcpServerInstructions: guidance.instructions } : {}),
+  };
+  const { text } = renderToolSearchControlText(JSON.stringify(payload, null, 2), networkContent);
   const result = textResult(text, payload);
   return networkContent ? attachInternalToolResultContentSource(result, "network") : result;
 }
@@ -294,11 +323,18 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
         const request = readToolSearchRequest(args, config);
         if (request.kind === "single") {
+          const results = await runtime.search(request.search.query, {
+            limit: request.search.limit,
+            parentToolCallId: toolCallId,
+          });
+          const { instructions: mcpServerInstructions } = runtime.mcpServerInstructionsFor(
+            { results },
+            results.map((candidate) => candidate.id),
+            { parentToolCallId: toolCallId },
+          );
+          // Results stay a plain list unless a server publishes guidance for them.
           return formatToolSearchControlResult(
-            await runtime.search(request.search.query, {
-              limit: request.search.limit,
-              parentToolCallId: toolCallId,
-            }),
+            mcpServerInstructions ? { results, mcpServerInstructions } : results,
             runtime,
             { parentToolCallId: toolCallId },
           );
@@ -312,7 +348,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             }),
           })),
         );
-        return formatToolSearchBatchResponse(results, runtime.hasNetworkContent(toolCallId));
+        return formatToolSearchBatchResponse(results, runtime, toolCallId);
       },
     },
     {
@@ -322,12 +358,21 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         "Load the full schema and metadata for one search result when its input is not already clear.",
       parameters: describeParameters,
       prepareArguments: prepareToolSearchDispatcherArguments,
-      execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> =>
-        formatToolSearchControlResult(
-          await runtime.describe(readToolSearchId(args), { parentToolCallId: toolCallId }),
+      execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
+        const description = await runtime.describe(readToolSearchId(args), {
+          parentToolCallId: toolCallId,
+        });
+        const { instructions: mcpServerInstructions } = runtime.mcpServerInstructionsFor(
+          description,
+          [description.id],
+          { parentToolCallId: toolCallId },
+        );
+        return formatToolSearchControlResult(
+          mcpServerInstructions ? { ...description, mcpServerInstructions } : description,
           runtime,
           { parentToolCallId: toolCallId },
-        ),
+        );
+      },
     },
     {
       name: TOOL_CALL_RAW_TOOL_NAME,
@@ -365,8 +410,19 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           }
           // Invocation results need identity, not another copy of the discovery metadata.
           // Keep the full target result in details; forward its already-projected images as content.
+          const invocation = { tool: { id, name, source }, result: modelResult };
+          // A server reached without an earlier discovery response in this run
+          // (an id remembered from an earlier turn) gets its guidance here once.
+          const { instructions: mcpServerInstructions } = runtime.mcpServerInstructionsFor(
+            invocation,
+            [id],
+            {
+              parentToolCallId: toolCallId,
+              undeliveredOnly: true,
+            },
+          );
           const controlResult = formatToolSearchControlResult(
-            { tool: { id, name, source }, result: modelResult },
+            mcpServerInstructions ? { ...invocation, mcpServerInstructions } : invocation,
             runtime,
             { parentToolCallId: toolCallId, images },
           );
