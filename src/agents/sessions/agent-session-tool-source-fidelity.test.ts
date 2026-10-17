@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { streamAnthropic } from "@openclaw/ai/internal/anthropic";
 import { streamOpenAIResponses } from "@openclaw/ai/internal/openai";
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import type { Context, Model, ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -43,6 +43,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 afterEach(resetSecretRedactionRegistryForTest);
 afterEach(resetLogger);
 
+const textContent = (result: Pick<ToolResultMessage, "content"> | undefined) =>
+  result?.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
+
 describe("AgentSession tool source fidelity", () => {
   it.each([
     ["anthropic-messages", "read", ".env"],
@@ -60,11 +63,8 @@ describe("AgentSession tool source fidelity", () => {
       await fs.writeFile(path.join(cwd, filename), fileContent);
       const readTool = createOpenClawReadTool(createReadTool(cwd), { cwd });
       const readControl = await readTool.execute("direct-read-control", { path: filename });
-      const readControlText = readControl.content
-        .flatMap((block) => (block.type === "text" ? [block.text] : []))
-        .join("\n");
+      const readControlText = textContent(readControl);
       expect(readControlText).toBe(fileContent);
-      const tool = readTool;
 
       const model: Model = {
         ...testModel,
@@ -154,7 +154,7 @@ describe("AgentSession tool source fidelity", () => {
         sessionManager,
         settingsManager,
         resourceLoader,
-        customTools: toToolDefinitions([tool]),
+        customTools: toToolDefinitions([readTool]),
       });
       const previousTransform = session.agent.transformContext;
       session.agent.transformContext = async (messages, signal) =>
@@ -175,22 +175,15 @@ describe("AgentSession tool source fidelity", () => {
         const liveToolResult = liveContext?.messages.findLast(
           (message) => message.role === "toolResult",
         );
-        const liveToolText =
-          liveToolResult?.content
-            .flatMap((block) => (block.type === "text" ? [block.text] : []))
-            .join("\n") ?? "";
-        expect(readControlText.includes(fakeSecret)).toBe(true);
-        expect(liveToolResult !== undefined).toBe(true);
-        expect(liveToolResult?.isError).toBe(false);
-        expect(liveToolText.includes(benignMarker)).toBe(true);
-        expect(JSON.stringify(providerPayload).includes(benignMarker)).toBe(true);
+        const liveToolText = textContent(liveToolResult) ?? "";
+        expect(liveToolResult).toMatchObject({ isError: false });
+        for (const marker of [benignMarker, fakeSecret, vendorSecret]) {
+          expect(JSON.stringify(providerPayload)).toContain(marker);
+        }
         for (const secret of [fakeSecret, vendorSecret]) {
-          expect(stored.includes(secret)).toBe(true);
-          expect(liveToolText.includes(secret)).toBe(true);
-          expect(JSON.stringify(providerPayload).includes(secret)).toBe(true);
+          expect(stored).toContain(secret);
         }
         expect(liveToolText).toBe(readControlText);
-        expect(liveToolText).toContain(sourceAssignment);
         const transcript = await SessionManager.openAsync(scope, cwd);
         const storedResult = transcript
           .getBranch()
@@ -199,15 +192,11 @@ describe("AgentSession tool source fidelity", () => {
           role: "toolResult",
           content: [{ type: "text", text: readControlText }],
         });
-        const previousToolText = liveToolText;
         await session.prompt("Continue using the previous read result.");
         const replayedToolResult = liveContext?.messages.findLast(
           (message) => message.role === "toolResult",
         );
-        const replayedToolText = replayedToolResult?.content
-          .flatMap((block) => (block.type === "text" ? [block.text] : []))
-          .join("\n");
-        expect(replayedToolText === previousToolText).toBe(true);
+        expect(textContent(replayedToolResult)).toBe(liveToolText);
       } finally {
         removeGuard();
         session.dispose();

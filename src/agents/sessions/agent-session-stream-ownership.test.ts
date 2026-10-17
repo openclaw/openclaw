@@ -1,8 +1,12 @@
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
-import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import type { Context, Model } from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
 import { runAgentLoop } from "../../../packages/agent-core/src/agent-loop.js";
+import {
+  makeAssistantMessage,
+  model as baseModel,
+} from "../../../packages/agent-core/src/agent-loop.test-support.js";
 import { buildOpenAIResponsesReasoningReplayMetadata } from "../../../packages/ai/src/transports/openai-responses-compaction-replay.js";
 import { convertResponsesMessages } from "../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { processResponsesStream } from "../../../packages/ai/src/transports/openai-responses-stream-internal.js";
@@ -20,35 +24,22 @@ it.each([
   "persists replayable reasoning arriving at %s after an async prefix without freezing its producer",
   async (ciphertextArrival) => {
     const model: Model = {
-      id: "test-model",
+      ...baseModel,
       name: "Test model",
       api: "openai-responses",
       provider: "openai",
       baseUrl: "https://example.test/v1",
       reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 8_192,
       maxTokens: 1_024,
     };
     const replayIdentity = { sessionId: "synthetic-session", authProfileId: "synthetic-profile" };
     const replayMetadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
-    const output: AssistantMessage = {
-      role: "assistant",
-      content: [],
+    const output = {
+      ...structuredClone(makeAssistantMessage([])),
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
-      timestamp: 1,
     };
     const reasoning = {
       type: "reasoning",
@@ -229,12 +220,10 @@ it.each([
       (message) =>
         message.role === "assistant" && message.content.some((block) => block.type === "toolCall"),
     );
-    expect(prefix?.role).toBe("assistant");
     if (prefix?.role !== "assistant") {
       throw new Error("Missing persisted async prefix");
     }
     const thinking = prefix.content[0];
-    expect(thinking).toMatchObject({ type: "thinking" });
     if (thinking?.type !== "thinking") {
       throw new Error("Missing persisted reasoning");
     }

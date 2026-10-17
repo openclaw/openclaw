@@ -38,32 +38,112 @@ import { createSyntheticSourceInfo } from "./source-info.js";
 
 registerAgentSessionLoopTestLifecycle();
 
+type Session = Awaited<ReturnType<typeof createTestSession>>["session"];
+type BoundaryOptions = NonNullable<Parameters<typeof normalizeMessagesForLlmBoundary>[1]>;
+const textBlock = (text: string) => ({ type: "text" as const, text });
+const userBlock = (text: string) => ({ role: "user", content: [textBlock(text)] });
+const operatorText = (content: string, turnScoped: boolean) => ({
+  role: "user",
+  content,
+  operatorMessage: { turnScoped },
+});
+const extension = (content: string) => ({
+  customType: "extension.context",
+  content,
+  display: false,
+});
+
+function installBoundary(session: Session, options: () => BoundaryOptions) {
+  const convert = session.agent.convertToLlm.bind(session.agent);
+  session.agent.convertToLlm = (messages) =>
+    convert(normalizeMessagesForLlmBoundary(messages, options()));
+}
+
+function installPermissionPrompt(session: Session, api: Model["api"] = "anthropic-messages") {
+  installAttemptPermissionPrompt({
+    activeSession: session,
+    attempt: { model: { api } },
+    runAbortSignal: new AbortController().signal,
+    setActiveSessionSystemPrompt: (systemPrompt) => {
+      session.setBaseSystemPrompt(systemPrompt);
+      return systemPrompt;
+    },
+    prepareSystemPromptUpdate: (systemPrompt) => ({ systemPrompt }),
+  });
+}
+
+function holdInitialRequest(
+  nextText: string,
+  thinking: () => Parameters<typeof createAssistant>[1] = () => [],
+) {
+  const requests: Context[] = [];
+  const firstRequest = createDeferredCore();
+  let finishInitialResponse = () => {};
+  streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+    requests.push(context);
+    if (requests.length !== 1) {
+      return createAssistantResultStream(
+        createAssistant(model, [...thinking(), textBlock(nextText)]),
+      );
+    }
+    const stream = createAssistantMessageEventStream();
+    finishInitialResponse = () => {
+      finishInitialResponse = () => {};
+      const message = createAssistant(model, [...thinking(), textBlock("Initial answer")]);
+      stream.push({ type: "done", reason: "stop", message });
+      stream.end();
+    };
+    firstRequest.resolve();
+    return stream;
+  });
+  return { requests, firstRequest, finish: () => finishInitialResponse() };
+}
+
+const quotedContext = (text: string) => ({
+  text,
+  fragments: [{ kind: "conversation-data" as const, text }],
+});
+
+function captureResponses(toolRounds = 0, toolId = (_round: number) => "refresh") {
+  const requests: Context[] = [];
+  streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+    requests.push(context);
+    const callTool = requests.length <= toolRounds;
+    return createAssistantResultStream(
+      createAssistant(
+        model,
+        callTool
+          ? [{ type: "toolCall", id: toolId(requests.length), name: "refresh", arguments: {} }]
+          : [textBlock("Done")],
+        callTool ? "toolUse" : "stop",
+      ),
+    );
+  });
+  return requests;
+}
+
+const refreshResult = () => ({ content: [textBlock("Refreshed")], details: {} });
+const refreshTool = (description: string, execute = async () => refreshResult()) => ({
+  name: "refresh",
+  label: "Refresh",
+  description,
+  parameters: Type.Object({}),
+  execute,
+});
+const queueUpdate = (session: Session, text: string, runtime = false) =>
+  session[agentSessionQueuePromptContext](
+    buildSystemUpdateMessage(text, runtime ? "runtime-context" : "prompt-update", runtime),
+  );
+
 describe("AgentSession operator context ordering", () => {
   it("orders operator context and renews runtime facts after a later extension message", async () => {
-    const requests: Context[] = [];
-    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
-      requests.push(context);
-      return createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done" }]));
-    });
-    const extensionMessage = {
-      customType: "extension.context",
-      content: "Hook context",
-      display: false,
-    };
+    const requests = captureResponses();
+    const extensionMessage = extension("Hook context");
     const loader = createResourceLoader(
       new Map([["before_agent_start", [async () => ({ message: extensionMessage })]]]),
     );
     const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
-    installAttemptPermissionPrompt({
-      activeSession: session,
-      attempt: { model: { api: "anthropic-messages" } },
-      runAbortSignal: new AbortController().signal,
-      setActiveSessionSystemPrompt: (systemPrompt) => {
-        session.setBaseSystemPrompt(systemPrompt);
-        return systemPrompt;
-      },
-      prepareSystemPromptUpdate: (systemPrompt) => ({ systemPrompt }),
-    });
+    installPermissionPrompt(session);
     let queuedExtension = false;
     session.agent.subscribe(async (event) => {
       if (event.type === "turn_end" && !queuedExtension) {
@@ -74,36 +154,30 @@ describe("AgentSession operator context ordering", () => {
         );
       }
     });
-    const convertToLlm = session.agent.convertToLlm.bind(session.agent);
-    session.agent.convertToLlm = (messages) =>
-      convertToLlm(normalizeMessagesForLlmBoundary(messages, { inHistorySystemUpdates: true }));
-    session[agentSessionQueuePromptContext](
-      buildSystemUpdateMessage("Rules changed", "prompt-update", false),
-    );
+    installBoundary(session, () => ({ inHistorySystemUpdates: true }));
+    queueUpdate(session, "Rules changed");
     await session.sendCustomMessage(
       { ...extensionMessage, content: "Queued context" },
       { deliverAs: "nextTurn" },
     );
-    session[agentSessionQueuePromptContext](
-      buildSystemUpdateMessage("Current facts", "runtime-context", true),
-    );
+    queueUpdate(session, "Current facts", true);
 
     await session.prompt("Question");
 
     expect(requests[0]?.messages).toMatchObject([
       { role: "user", content: "Question" },
-      { role: "user", content: [{ type: "text", text: "Queued context" }] },
-      { role: "user", content: [{ type: "text", text: "Hook context" }] },
-      { role: "user", content: "Rules changed", operatorMessage: { turnScoped: false } },
-      { role: "user", content: "Current facts", operatorMessage: { turnScoped: true } },
+      userBlock("Queued context"),
+      userBlock("Hook context"),
+      operatorText("Rules changed", false),
+      operatorText("Current facts", true),
     ]);
     expect(requests).toHaveLength(2);
     expect(requests[1]?.messages.slice(0, requests[0]!.messages.length)).toEqual(
       requests[0]?.messages,
     );
     expect(requests[1]?.messages.slice(-2)).toMatchObject([
-      { role: "user", content: [{ type: "text", text: "Later extension context" }] },
-      { role: "user", content: "Current facts", operatorMessage: { turnScoped: true } },
+      userBlock("Later extension context"),
+      operatorText("Current facts", true),
     ]);
     expect(sessionManager.buildSessionContext().messages.slice(1, 5)).toMatchObject([
       { customType: "extension.context", content: "Queued context" },
@@ -116,75 +190,37 @@ describe("AgentSession operator context ordering", () => {
   it.each([false, true])(
     "renews runtime facts after tool results without crossing a new user: %s",
     async (newUser) => {
-      const requests: Context[] = [];
-      streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
-        requests.push(context);
-        return createAssistantResultStream(
-          createAssistant(
-            model,
-            requests.length === 1
-              ? [{ type: "toolCall", id: "refresh", name: "refresh", arguments: {} }]
-              : [{ type: "text", text: "Done" }],
-            requests.length === 1 ? "toolUse" : "stop",
-          ),
-        );
-      });
+      const requests = captureResponses(1);
       const { session } = await createTestSession({
         customTools: [
-          {
-            name: "refresh",
-            label: "Refresh",
-            description: "Refresh current permissions",
-            parameters: Type.Object({}),
-            execute: async () => {
-              if (newUser) {
-                session.agent.steer({
-                  role: "user",
-                  content: "Start a different task.",
-                  timestamp: 2,
-                });
-              }
-              for (const content of ["First extension context", "Second extension context"]) {
-                await session.sendCustomMessage(
-                  { customType: "extension.context", content, display: false },
-                  { deliverAs: "steer" },
-                );
-              }
-              return { content: [{ type: "text", text: "Refreshed" }], details: {} };
-            },
-          },
+          refreshTool("Refresh current permissions", async () => {
+            if (newUser) {
+              session.agent.steer({
+                role: "user",
+                content: "Start a different task.",
+                timestamp: 2,
+              });
+            }
+            for (const content of ["First extension context", "Second extension context"]) {
+              await session.sendCustomMessage(extension(content), { deliverAs: "steer" });
+            }
+            return refreshResult();
+          }),
         ],
       });
-      const convertToLlm = session.agent.convertToLlm.bind(session.agent);
-      session.agent.convertToLlm = (messages) =>
-        convertToLlm(normalizeMessagesForLlmBoundary(messages, { inHistorySystemUpdates: true }));
+      installBoundary(session, () => ({ inHistorySystemUpdates: true }));
       session.agent.steeringMode = "all";
       session.agent.prepareNextTurn = () => {
         if (session.messages.at(-1)?.role !== "toolResult") {
           return undefined;
         }
-        const cancel = session[agentSessionQueuePromptContext](
-          buildSystemUpdateMessage("Withdrawn update", "prompt-update", false),
-        );
-        session[agentSessionQueuePromptContext](
-          buildSystemUpdateMessage("Permissions changed", "prompt-update", false),
-        );
+        const cancel = queueUpdate(session, "Withdrawn update");
+        queueUpdate(session, "Permissions changed");
         cancel();
         return undefined;
       };
-      installAttemptPermissionPrompt({
-        activeSession: session,
-        attempt: { model: { api: "anthropic-messages" } },
-        runAbortSignal: new AbortController().signal,
-        setActiveSessionSystemPrompt: (systemPrompt) => {
-          session.setBaseSystemPrompt(systemPrompt);
-          return systemPrompt;
-        },
-        prepareSystemPromptUpdate: (systemPrompt) => ({ systemPrompt }),
-      });
-      session[agentSessionQueuePromptContext](
-        buildSystemUpdateMessage("Initial facts", "runtime-context", true),
-      );
+      installPermissionPrompt(session);
+      queueUpdate(session, "Initial facts", true);
 
       await session.prompt("Refresh");
 
@@ -198,12 +234,10 @@ describe("AgentSession operator context ordering", () => {
           content: [{ type: "text", text: "Refreshed" }],
         },
         ...(newUser ? [{ role: "user", content: "Start a different task." }] : []),
-        { role: "user", content: [{ type: "text", text: "First extension context" }] },
-        { role: "user", content: [{ type: "text", text: "Second extension context" }] },
-        { role: "user", content: "Permissions changed", operatorMessage: { turnScoped: false } },
-        ...(newUser
-          ? []
-          : [{ role: "user", content: "Initial facts", operatorMessage: { turnScoped: true } }]),
+        userBlock("First extension context"),
+        userBlock("Second extension context"),
+        operatorText("Permissions changed", false),
+        ...(newUser ? [] : [operatorText("Initial facts", true)]),
       ]);
       expect(session.messages.at(-1)).toMatchObject({
         role: "assistant",
@@ -219,51 +253,12 @@ describe("AgentSession operator context ordering", () => {
   );
 
   it("keeps one Responses runtime-context carrier visible across three tool rounds", async () => {
-    const requests: Context[] = [];
-    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
-      requests.push(context);
-      const callTool = requests.length <= 3;
-      return createAssistantResultStream(
-        createAssistant(
-          model,
-          callTool
-            ? [
-                {
-                  type: "toolCall",
-                  id: `refresh-${requests.length}`,
-                  name: "refresh",
-                  arguments: {},
-                },
-              ]
-            : [{ type: "text", text: "Done" }],
-          callTool ? "toolUse" : "stop",
-        ),
-      );
-    });
+    const requests = captureResponses(3, (round) => `refresh-${round}`);
     const { session } = await createTestSession({
-      customTools: [
-        {
-          name: "refresh",
-          label: "Refresh",
-          description: "Refresh current facts",
-          parameters: Type.Object({}),
-          execute: async () => ({ content: [{ type: "text", text: "Refreshed" }], details: {} }),
-        },
-      ],
+      customTools: [refreshTool("Refresh current facts")],
     });
-    const convertToLlm = session.agent.convertToLlm.bind(session.agent);
-    session.agent.convertToLlm = (messages) =>
-      convertToLlm(normalizeMessagesForLlmBoundary(messages, { inHistorySystemUpdates: true }));
-    installAttemptPermissionPrompt({
-      activeSession: session,
-      attempt: { model: { api: "openai-responses" } },
-      runAbortSignal: new AbortController().signal,
-      setActiveSessionSystemPrompt: (systemPrompt) => {
-        session.setBaseSystemPrompt(systemPrompt);
-        return systemPrompt;
-      },
-      prepareSystemPromptUpdate: (systemPrompt) => ({ systemPrompt }),
-    });
+    installBoundary(session, () => ({ inHistorySystemUpdates: true }));
+    installPermissionPrompt(session, "openai-responses");
     const carrierText = projectRuntimeContextFragments(
       buildInterSessionPromptContext({
         kind: "inter_session",
@@ -272,9 +267,7 @@ describe("AgentSession operator context ordering", () => {
         sourceTool: "sessions_send",
       }).fragments,
     );
-    session[agentSessionQueuePromptContext](
-      buildSystemUpdateMessage(carrierText, "runtime-context", true),
-    );
+    queueUpdate(session, carrierText, true);
 
     await session.prompt("Refresh the facts three times.");
 
@@ -303,30 +296,10 @@ describe("AgentSession operator context ordering", () => {
 
 describe("AgentSession quoted steering context", () => {
   it("keeps every context when all steering messages drain together", async () => {
-    const requests: Context[] = [];
-    const firstRequest = createDeferredCore();
-    let finishInitialResponse = () => {};
-    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
-      requests.push(context);
-      if (requests.length === 1) {
-        const stream = createAssistantMessageEventStream();
-        finishInitialResponse = () => {
-          const message = createAssistant(model, [{ type: "text", text: "Initial answer" }]);
-          stream.push({ type: "done", reason: "stop", message });
-          stream.end();
-        };
-        firstRequest.resolve();
-        return stream;
-      }
-      return createAssistantResultStream(
-        createAssistant(model, [{ type: "text", text: "Steering received" }]),
-      );
-    });
+    const { requests, firstRequest, finish } = holdInitialRequest("Steering received");
     const { session } = await createTestSession();
     session.agent.steeringMode = "all";
-    const convertToLlm = session.agent.convertToLlm.bind(session.agent);
-    session.agent.convertToLlm = (messages) =>
-      convertToLlm(normalizeMessagesForLlmBoundary(messages, { sessionVersion: 4 }));
+    installBoundary(session, () => ({ sessionVersion: 4 }));
     const initialPrompt = session.prompt("An unrelated discussion is active.");
     const deliveries: Array<ReturnType<typeof steerActiveSessionWithOptionalDeliveryWait>> = [];
 
@@ -339,15 +312,12 @@ describe("AgentSession quoted steering context", () => {
           steerActiveSessionWithOptionalDeliveryWait(session, "Use the same color.", {
             isInboundUserMessage: true,
             onQueueAccepted: accepted.resolve,
-            currentInboundContext: {
-              text: contextText,
-              fragments: [{ kind: "conversation-data", text: contextText }],
-            },
+            currentInboundContext: quotedContext(contextText),
           }),
         );
         expect(await accepted.promise).toBe(true);
       }
-      finishInitialResponse();
+      finish();
       await Promise.all([initialPrompt, ...deliveries]);
 
       expect(requests).toHaveLength(2);
@@ -355,7 +325,7 @@ describe("AgentSession quoted steering context", () => {
       expect(steeringRequest).toContain("invitation");
       expect(steeringRequest).toContain("poster");
     } finally {
-      finishInitialResponse();
+      finish();
       await Promise.allSettled([initialPrompt, ...deliveries]);
     }
   });
@@ -368,44 +338,13 @@ describe("AgentSession quoted steering context", () => {
       api: "anthropic-messages",
       provider: "anthropic",
     } satisfies Model;
-    const requests: Context[] = [];
-    const firstRequest = createDeferredCore();
-    let finishInitialResponse = () => {};
-    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
-      requests.push(context);
-      if (requests.length === 1) {
-        const stream = createAssistantMessageEventStream();
-        finishInitialResponse = () => {
-          const message = createAssistant(model, [
-            { type: "thinking", thinking: "signed thought", thinkingSignature: "signature" },
-            { type: "text", text: "Initial answer" },
-          ]);
-          stream.push({ type: "done", reason: "stop", message });
-          stream.end();
-        };
-        firstRequest.resolve();
-        return stream;
-      }
-      return createAssistantResultStream(
-        createAssistant(model, [
-          { type: "thinking", thinking: "signed thought", thinkingSignature: "signature" },
-          { type: "text", text: "Done" },
-        ]),
-      );
-    });
+    const { firstRequest, finish } = holdInitialRequest("Done", () => [
+      { type: "thinking", thinking: "signed thought", thinkingSignature: "signature" },
+    ]);
     const { session, sessionManager } = await createTestSession({ model: claudeModel });
     setSteeringRuntimeContextRetention(session, true);
-    const installBoundary = (target: typeof session) => {
-      const convertToLlm = target.agent.convertToLlm.bind(target.agent);
-      target.agent.convertToLlm = (messages) =>
-        convertToLlm(
-          normalizeMessagesForLlmBoundary(messages, {
-            appendOnlyRuntimeContext: true,
-            sessionVersion: 4,
-          }),
-        );
-    };
-    installBoundary(session);
+    const retainedBoundary = () => ({ appendOnlyRuntimeContext: true, sessionVersion: 4 });
+    installBoundary(session, retainedBoundary);
     const initialPrompt = session.prompt("An unrelated discussion is active.");
     let delivery: ReturnType<typeof steerActiveSessionWithOptionalDeliveryWait> | undefined;
 
@@ -416,27 +355,20 @@ describe("AgentSession quoted steering context", () => {
       delivery = steerActiveSessionWithOptionalDeliveryWait(session, "Use the same color.", {
         isInboundUserMessage: true,
         onQueueAccepted: accepted.resolve,
-        currentInboundContext: {
-          text: contextText,
-          fragments: [{ kind: "conversation-data", text: contextText }],
-        },
+        currentInboundContext: quotedContext(contextText),
       });
       expect(await accepted.promise).toBe(true);
-      finishInitialResponse();
+      finish();
       await Promise.all([initialPrompt, delivery]);
     } finally {
-      finishInitialResponse();
+      finish();
       await Promise.allSettled([initialPrompt, delivery]);
     }
 
     session.dispose();
-    const replayRequests: Context[] = [];
-    streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
-      replayRequests.push(context);
-      return createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done" }]));
-    });
+    const replayRequests = captureResponses();
     const { session: reopened } = await createTestSession({ model: claudeModel, sessionManager });
-    installBoundary(reopened);
+    installBoundary(reopened, retainedBoundary);
     await reopened.prompt("Continue");
 
     const replay = JSON.stringify(replayRequests[0]?.messages);
@@ -468,26 +400,7 @@ describe("AgentSession quoted steering context", () => {
         ],
         diagnostics: [],
       });
-      const requests: Context[] = [];
-      const firstRequest = createDeferredCore();
-      let finishInitialResponse = () => {};
-      streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
-        requests.push(context);
-        if (requests.length === 1) {
-          const stream = createAssistantMessageEventStream();
-          finishInitialResponse = () => {
-            finishInitialResponse = () => {};
-            const message = createAssistant(model, [{ type: "text", text: "Initial answer" }]);
-            stream.push({ type: "done", reason: "stop", message });
-            stream.end();
-          };
-          firstRequest.resolve();
-          return stream;
-        }
-        return createAssistantResultStream(
-          createAssistant(model, [{ type: "text", text: "Quoted reply received" }]),
-        );
-      });
+      const { requests, firstRequest, finish } = holdInitialRequest("Quoted reply received");
       const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
       const queued = vi.spyOn(session.agent, "admitSteeringMessage");
       const registry = createUserTranscriptContextRegistry();
@@ -499,9 +412,7 @@ describe("AgentSession quoted steering context", () => {
         },
       });
       const boundaryOptions = () => ({ sessionVersion, userTranscriptContexts: registry.list() });
-      const convertToLlm = session.agent.convertToLlm.bind(session.agent);
-      session.agent.convertToLlm = (messages) =>
-        convertToLlm(normalizeMessagesForLlmBoundary(messages, boundaryOptions()));
+      installBoundary(session, boundaryOptions);
       const initialPrompt = session.prompt("An unrelated discussion is still active.");
       const deliveries: Array<ReturnType<typeof steerActiveSessionWithOptionalDeliveryWait>> = [];
       const images =
@@ -531,12 +442,9 @@ describe("AgentSession quoted steering context", () => {
               isInboundUserMessage: true,
               waitForTranscriptCommit: useTemplate,
               onQueueAccepted: accepted.resolve,
-              currentInboundContext: {
-                text: contextText,
-                ...(useTemplate
-                  ? {}
-                  : { fragments: [{ kind: "conversation-data", text: contextText }] }),
-              },
+              currentInboundContext: useTemplate
+                ? { text: contextText }
+                : quotedContext(contextText),
               userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
                 input: {
                   text: prompt,
@@ -586,7 +494,7 @@ describe("AgentSession quoted steering context", () => {
             ]);
           }
         }
-        finishInitialResponse();
+        finish();
         await Promise.all([initialPrompt, ...deliveries]);
 
         expect(requests).toHaveLength(3);
@@ -614,7 +522,7 @@ describe("AgentSession quoted steering context", () => {
           });
         }
       } finally {
-        finishInitialResponse();
+        finish();
         await Promise.allSettled([initialPrompt, ...deliveries]);
       }
     },

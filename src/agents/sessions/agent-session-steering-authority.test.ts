@@ -60,6 +60,74 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+type Session = Awaited<ReturnType<typeof createTestSession>>["session"];
+type InjectionOptions = Parameters<ReplyBackendMessageInjectionV2["queueMessage"]>[1];
+const assertAllowed = (assert: () => void) => () => {
+  assert();
+  return true;
+};
+function steerPrepared(
+  session: Session,
+  text: string,
+  guard: () => boolean,
+  prepare?: () => Promise<void>,
+  options?: InjectionOptions,
+) {
+  return session.steer(
+    text,
+    undefined,
+    options?.userTurnTranscriptRecorder,
+    undefined,
+    undefined,
+    undefined,
+    guard,
+    undefined,
+    prepare,
+  );
+}
+
+function createInjection(
+  session: Session,
+  sessionKey?: string,
+  onBackend = () => {},
+  afterPrepare?: () => Promise<void>,
+): ReplyBackendMessageInjectionV2 {
+  return {
+    version: 2,
+    isAvailable: () => true,
+    async queueMessage() {
+      throw new Error("Expected prepared steering");
+    },
+    queueMessageAsync: (text, options, preparation) => {
+      onBackend();
+      return steerActiveSessionWithOptionalDeliveryWait(
+        session,
+        text,
+        options,
+        sessionKey,
+        assertAllowed(() => preparation.assertCurrent()),
+        undefined,
+        afterPrepare
+          ? async () => {
+              await preparation.prepareCurrent();
+              await afterPrepare();
+            }
+          : preparation.prepareCurrent,
+      );
+    },
+  };
+}
+
+function assertQueued(
+  session: Session,
+  enqueue: ReturnType<typeof vi.spyOn>,
+  text: string,
+  accepted: boolean,
+) {
+  expect(enqueue).toHaveBeenCalledTimes(accepted ? 1 : 0);
+  expect(session.getSteeringMessages()).toEqual(accepted ? [text] : []);
+}
+
 it.each(["allowed", "refused", "revoked"] as const)(
   "retains the independent embedded caller guard through real enqueue: %s",
   async (caller) => {
@@ -73,32 +141,12 @@ it.each(["allowed", "refused", "revoked"] as const)(
       assertCurrent() {},
       async prepareCurrent() {},
     };
-    const injection: ReplyBackendMessageInjectionV2 = {
-      version: 2,
-      isAvailable: () => true,
-      async queueMessage() {
-        throw new Error("Expected prepared embedded steering");
-      },
-      queueMessageAsync: (text, options, preparation) =>
-        steerActiveSessionWithOptionalDeliveryWait(
-          session,
-          text,
-          options,
-          undefined,
-          () => {
-            preparation.assertCurrent();
-            return true;
-          },
-          undefined,
-          async () => {
-            await preparation.prepareCurrent();
-            if (caller === "revoked") {
-              entered.resolve();
-              await resume.promise;
-            }
-          },
-        ),
-    };
+    const injection = createInjection(session, undefined, undefined, async () => {
+      if (caller === "revoked") {
+        entered.resolve();
+        await resume.promise;
+      }
+    });
     const sessionId = `independent-caller-${caller}`;
     setActiveEmbeddedRun(sessionId, {
       ...createEmbeddedRunHandle(),
@@ -122,13 +170,10 @@ it.each(["allowed", "refused", "revoked"] as const)(
         resume.resolve();
       }
       await expect(outcome).resolves.toMatchObject({ queued: caller === "allowed" });
+      assertQueued(session, enqueue, "independent caller input", caller === "allowed");
       if (caller === "allowed") {
-        expect(enqueue).toHaveBeenCalledOnce();
-        expect(session.getSteeringMessages()).toEqual(["independent caller input"]);
         expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
       } else {
-        expect(enqueue).not.toHaveBeenCalled();
-        expect(session.getSteeringMessages()).toEqual([]);
         expect(onQueueAccepted).not.toHaveBeenCalledWith(true);
       }
     } finally {
@@ -145,17 +190,7 @@ it("orders final steering preparation through the actual session enqueue", async
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const steer = (text: string, prepare: () => Promise<void>) =>
-    session.steer(
-      text,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      () => true,
-      undefined,
-      prepare,
-    );
+    steerPrepared(session, text, () => true, prepare);
   const first = steer("first", async () => {
     entered.resolve();
     await release.promise;
@@ -220,28 +255,9 @@ it.each([
       const { session } = await createTestSession();
       const enqueue = vi.spyOn(session.agent, "admitSteeringMessage");
       let atBackend = false;
-      const injection: ReplyBackendMessageInjectionV2 = {
-        version: 2,
-        isAvailable: () => true,
-        async queueMessage() {
-          throw new Error("Expected prepared steering");
-        },
-        queueMessageAsync: (text, options, preparation) => {
-          atBackend = true;
-          return steerActiveSessionWithOptionalDeliveryWait(
-            session,
-            text,
-            options,
-            sessionKey,
-            () => {
-              preparation.assertCurrent();
-              return true;
-            },
-            undefined,
-            preparation.prepareCurrent,
-          );
-        },
-      };
+      const injection = createInjection(session, sessionKey, () => {
+        atBackend = true;
+      });
       const handle = {
         ...createEmbeddedRunHandle({ runId: sessionId, toolAuthorityFingerprint: fingerprint }),
         kind: "embedded" as const,
@@ -288,8 +304,7 @@ it.each([
               ).queued;
         expect(changed).toBe(true);
         expect(accepted).toBe(!changePolicy);
-        expect(enqueue).toHaveBeenCalledTimes(changePolicy ? 0 : 1);
-        expect(session.getSteeringMessages()).toEqual(changePolicy ? [] : [run.prompt]);
+        assertQueued(session, enqueue, run.prompt, !changePolicy);
       } finally {
         delayed.mockRestore();
         operation.complete();
@@ -379,34 +394,15 @@ it.each([
         version: 2,
         isAvailable: () => true,
         queueMessage: (text, options, assertOwner) =>
-          session.steer(
-            text,
-            undefined,
-            options?.userTurnTranscriptRecorder,
-            undefined,
-            undefined,
-            undefined,
-            () => {
-              assertOwner();
-              return true;
-            },
-          ),
+          steerPrepared(session, text, assertAllowed(assertOwner), undefined, options),
         ...(change.startsWith("legacy-")
           ? {}
           : {
               queueMessageAsync: (async (text, options, preparation) =>
-                session.steer(
+                steerPrepared(
+                  session,
                   text,
-                  undefined,
-                  options?.userTurnTranscriptRecorder,
-                  undefined,
-                  undefined,
-                  undefined,
-                  () => {
-                    preparation.assertCurrent();
-                    return true;
-                  },
-                  undefined,
+                  assertAllowed(() => preparation.assertCurrent()),
                   async () => {
                     await preparation.prepareCurrent();
                     if (change === "worker-revoked") {
@@ -414,6 +410,7 @@ it.each([
                       await releasePolicy.promise;
                     }
                   },
+                  options,
                 )) satisfies NonNullable<ReplyBackendMessageInjectionV2["queueMessageAsync"]>,
             }),
       };
@@ -440,10 +437,12 @@ it.each([
             ? beginReplyMessageInjectionTarget(target, "steer", options).then(
                 async (attempt) => (await attempt.outcome).status === "accepted",
               )
-            : queueGuardedEmbeddedAgentMessageWithOutcomeAsync("original", "steer", options, () => {
-                assertCurrent();
-                return true;
-              }).then((result) => result.queued);
+            : queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
+                "original",
+                "steer",
+                options,
+                assertAllowed(assertCurrent),
+              ).then((result) => result.queued);
         await awaitGateBeforeSettlement(
           recorderEntered.promise,
           accepted,
@@ -480,10 +479,7 @@ it.each([
           releasePolicy.resolve();
         }
         await expect(accepted).resolves.toBe(change === "legacy-metadata");
-        expect(enqueue).toHaveBeenCalledTimes(change === "legacy-metadata" ? 1 : 0);
-        expect(session.getSteeringMessages()).toEqual(
-          change === "legacy-metadata" ? ["steer"] : [],
-        );
+        assertQueued(session, enqueue, "steer", change === "legacy-metadata");
       } finally {
         releaseRecorder.resolve();
         releasePolicy.resolve();
@@ -547,17 +543,7 @@ it.each([
         notified();
       }
     });
-    const pending = session.steer(
-      "owned enqueue",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      () => callerCurrent,
-      undefined,
-      prepare,
-    );
+    const pending = steerPrepared(session, "owned enqueue", () => callerCurrent, prepare);
     try {
       await awaitGateBeforeSettlement(entered.promise, pending, "Final admission was not entered");
       expect(enqueue).not.toHaveBeenCalled();
