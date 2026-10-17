@@ -1796,7 +1796,7 @@ describe("cron method validation", () => {
       expect(context.cron.update).not.toHaveBeenCalled();
       expectResponseError(respond, {
         code: "INVALID_REQUEST",
-        messageIncludes: "owned by another conversation or account",
+        messageIncludes: "belongs to another conversation or account",
       });
     },
   );
@@ -1871,7 +1871,7 @@ describe("cron method validation", () => {
       expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(updated.payload);
       client = callerClient("ops", "work", "agent:ops:discord:work:direct:user-2");
       await expect(edit({ message: "another session" })).rejects.toThrow(
-        "owned by another conversation or account",
+        "belongs to another conversation or account",
       );
       expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(updated.payload);
       client = callerClient("ops", "work", sessionKey);
@@ -1888,12 +1888,12 @@ describe("cron method validation", () => {
     }
   });
 
-  it("adopts the authorized caller when it caps an ownerless legacy job, then keeps others out", async () => {
+  it("refuses chat edits to an ownerless legacy job's prompt or tools in plain words", async () => {
     const { storePath } = await makeStorePath();
-    const sessionKey = "agent:ops:telegram:group:-1001";
     const legacy = createCronJob({
       enabled: false,
       agentId: "ops",
+      sessionKey: "agent:ops:telegram:group:-1001",
       payload: { kind: "agentTurn", message: "legacy" },
     });
     await saveCronStore(storePath, { version: 1, jobs: [legacy] });
@@ -1905,7 +1905,8 @@ describe("cron method validation", () => {
         "legacy cron repair state",
       ),
     });
-    expect((await loadCronStore(storePath)).jobs[0]?.owner).toBeUndefined();
+    const seeded = expectDefined((await loadCronStore(storePath)).jobs[0], "seeded job");
+    expect(seeded.owner).toBeUndefined();
     const cron = new CronService({
       scheduler: createTestGatewayScheduler(),
       nowMs: () => Date.now(),
@@ -1922,7 +1923,7 @@ describe("cron method validation", () => {
     context.cron.updateWithPrecondition.mockImplementation((...args) =>
       cron.updateWithPrecondition(...args),
     );
-    let client = callerClient("ops", "default", sessionKey);
+    const client = callerClient("ops", "default", "agent:ops:telegram:group:-1001");
     const edit = async (patch: Record<string, unknown>) =>
       await updateCronJobFromAgentTool({
         id: legacy.id,
@@ -1942,29 +1943,16 @@ describe("cron method validation", () => {
         },
       });
     try {
-      await expect(edit({ payload: { message: "prompt only" } })).rejects.toThrow(
-        "Resend the edit with payload.toolsAllow",
-      );
-      await expect(
-        edit({ enabled: true, payload: { kind: "agentTurn", message: "new", toolsAllow: [] } }),
-      ).resolves.toMatchObject({ enabled: true });
-      const adopted = expectDefined((await loadCronStore(storePath)).jobs[0], "adopted job");
-      expect(adopted).toMatchObject({
-        owner: { agentId: "ops", sessionKey, accountId: "default" },
-        payload: { kind: "agentTurn", message: "new", toolsAllow: [] },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: sessionKey,
-          ownerAccountId: "default",
-        },
-      });
-
-      client = callerClient("ops", "default", "agent:ops:telegram:group:-1002");
-      await expect(
-        edit({ payload: { kind: "agentTurn", message: "takeover", toolsAllow: ["exec"] } }),
-      ).rejects.toThrow("Automation not found: cron-1");
-      expect((await loadCronStore(storePath)).jobs[0]).toEqual(adopted);
+      for (const payload of [
+        { message: "prompt only" },
+        { kind: "agentTurn", message: "new", toolsAllow: [] },
+      ]) {
+        await expect(edit({ enabled: true, payload })).rejects.toThrow(
+          "only a Gateway owner or an operator can change its prompt or tools",
+        );
+      }
+      expect((await loadCronStore(storePath)).jobs[0]).toEqual(seeded);
+      await expect(edit({ enabled: true })).resolves.toMatchObject({ enabled: true });
     } finally {
       cron.stop();
     }
@@ -1987,7 +1975,7 @@ describe("cron method validation", () => {
     expect(context.cron.updateWithPrecondition).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "owned by another conversation or account",
+      messageIncludes: "belongs to another conversation or account",
     });
   });
 

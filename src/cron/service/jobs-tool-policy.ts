@@ -1,7 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import {
@@ -226,19 +224,6 @@ function stampScheduledToolPolicy(
     return;
   }
   const policy = scheduledToolPolicy ?? createTrustedCronScheduledToolPolicy();
-  if (policy.mode === "account" && !job.owner?.sessionKey) {
-    // Jobs from before owner attribution have no creator to protect. The caller
-    // scope already admitted this mutation, so adopting the authenticated
-    // caller is the same outcome as delete-and-recreate, without losing state.
-    const ownerAgentId =
-      job.owner?.agentId ?? parseAgentSessionKey(policy.ownerSessionKey)?.agentId;
-    job.owner = {
-      ...job.owner,
-      ...(ownerAgentId ? { agentId: normalizeAgentId(ownerAgentId) } : {}),
-      sessionKey: policy.ownerSessionKey,
-      accountId: job.owner?.accountId ?? policy.ownerAccountId,
-    };
-  }
   if (
     policy.mode === "account" &&
     (job.owner?.sessionKey !== policy.ownerSessionKey ||

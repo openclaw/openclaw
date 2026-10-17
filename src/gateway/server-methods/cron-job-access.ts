@@ -50,32 +50,22 @@ export function resolveCronScopedToolEditRefusal(params: {
     callerScope.sessionKey !== undefined &&
     job.owner?.sessionKey === callerScope.sessionKey &&
     job.owner?.accountId === callerScope.accountId;
-  const foreignOwner = job.owner?.sessionKey !== undefined && !ownedByCaller;
-  const setsToolsAllow = patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow");
-  if (foreignOwner && setsToolsAllow) {
-    return CRON_FOREIGN_OWNER_REFUSAL;
+  // A payload or trigger edit runs with the job's tool authority, so only the
+  // recorded owner may make it; other jobs need a Gateway owner or operator.
+  if (!ownedByCaller) {
+    return job.owner?.sessionKey
+      ? "This automation belongs to another conversation or account. Only its owner, a Gateway " +
+          "owner or an operator can change its prompt or tools; you can create a new automation here instead."
+      : "This automation has no recorded owner, so only a Gateway owner or an operator can change " +
+          "its prompt or tools (for example on the Automations page). You can still enable, " +
+          "disable, reschedule or remove it, or create a new automation here.";
   }
-  if (
-    nextJob.payload.toolsAllow !== undefined ||
-    (ownedByCaller && isLegacyCreatorPromptUpdate(job, patch))
-  ) {
-    return undefined;
-  }
-  if (!job.owner?.sessionKey) {
-    return (
-      "This automation predates tool limits and has no owner yet. Resend the edit with " +
-      "payload.toolsAllow listing the tools it needs (use [] for none); this conversation " +
-      "then becomes its owner."
-    );
-  }
-  return foreignOwner
-    ? CRON_FOREIGN_OWNER_REFUSAL
-    : "Include payload.toolsAllow listing the tools this automation needs (use [] for none).";
+  const needsCap =
+    nextJob.payload.toolsAllow === undefined && !isLegacyCreatorPromptUpdate(job, patch);
+  return needsCap
+    ? "Include payload.toolsAllow listing the tools this automation needs (use [] for none)."
+    : undefined;
 }
-
-const CRON_FOREIGN_OWNER_REFUSAL =
-  "This automation is owned by another conversation or account. Only its owner or an operator " +
-  "can change its prompt or tools; you can create a new automation here instead.";
 
 export function respondRefusedCronAgent(agentId: string | undefined, respond: RespondFn): boolean {
   const refusal = agentId ? readAgentDatabaseAdmissionRefusal(agentId) : undefined;
