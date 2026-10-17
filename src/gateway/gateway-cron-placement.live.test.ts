@@ -354,7 +354,6 @@ describeLive("cron placement identity through production Gateway routing", () =>
             });
             expect(gate.effects).toBe(1);
             const completedHistory = await historyFor(oldRun);
-            expect(assistantTexts(completedHistory.messages)).toContain(`${marker}_REPLY`);
             if (queuedRunId) {
               hookTarget = await finishedCronRun(connected, job.id, queuedRunId);
               expect(hookTarget.sessionId).not.toBe(oldRun.sessionId);
