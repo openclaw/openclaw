@@ -1,5 +1,5 @@
 import { createRoot } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
@@ -42,7 +42,6 @@ function fixture() {
     client,
     sessionKey: "agent:main:one",
   });
-  // These events only read gateway state; new-session delivery is observed at its existing owner.
   const context = { gateway: gateway.gateway } as ApplicationContext;
   const state: ChatPaneMcpAppOwner["state"] = {
     sessionKey: "agent:main:one",
@@ -85,15 +84,16 @@ function fixture() {
       entrypoint: { type: "thread" },
     },
   };
-  const dispatch = <T>(name: string, detail: T) => {
+  const dispatch = (name: string, payload: object, accepted = true, target = element) => {
+    const detail = { sessionKey: state.sessionKey, ...payload };
     const event = new CustomEvent(name, {
       detail,
       bubbles: true,
       composed: true,
       cancelable: true,
     });
-    element.dispatchEvent(event);
-    return event;
+    target.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(accepted);
   };
   return {
     element,
@@ -112,11 +112,11 @@ function fixture() {
   };
 }
 
-function message(sessionKey: string, target: "active" | "new" = "active") {
+function message(target: "active" | "new" = "active") {
   const receipt = createDeferred<boolean>();
   const respond = vi.fn((accepted: boolean) => receipt.resolve(accepted));
   const detail: McpAppMessageEventDetail = {
-    sessionKey,
+    sessionKey: f.state.sessionKey,
     viewId: "view-one",
     target,
     content: [
@@ -128,52 +128,55 @@ function message(sessionKey: string, target: "active" | "new" = "active") {
   return { detail, receipt, respond };
 }
 
-describe("MCP app pane actions", () => {
-  it("claims only the presented matching owner and retains per-launch synchronization", () => {
-    const f = fixture();
-    f.owner.presented = false;
-    expect(f.dispatch(MCP_APP_OPEN_EVENT, f.launch).defaultPrevented).toBe(false);
-    f.owner.presented = true;
-    expect(
-      f.dispatch(MCP_APP_OPEN_EVENT, { ...f.launch, sessionKey: "other" }).defaultPrevented,
-    ).toBe(false);
-    expect(
-      f.dispatch(MCP_APP_OPEN_EVENT, {
-        ...f.launch,
-        owner: createTestGatewayClient(async () => ({})),
-      }).defaultPrevented,
-    ).toBe(false);
-    expect(f.state.handleOpenSidebar).not.toHaveBeenCalled();
-    expect(f.dispatch(MCP_APP_OPEN_EVENT, f.launch).defaultPrevented).toBe(true);
-    expect(f.state.handleOpenSidebar).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        launch: f.launch,
-        fileTab: { id: "mcp-app:parts/tray:app:", label: "Parts tray" },
-      }),
-    );
-    f.owner.launch = f.launch;
-    f.syncLaunch();
-    f.syncLaunch();
-    expect(f.state.handleOpenSidebar).toHaveBeenCalledTimes(2);
-    expect(f.state.handleOpenSidebar).toHaveBeenLastCalledWith(
-      expect.objectContaining({ fileTab: { id: "mcp-app:parts/tray:app", label: "Parts tray" } }),
-    );
-    f.owner.launch = { ...f.launch, deepLink: "/second" };
-    f.syncLaunch();
-    expect(f.state.handleOpenSidebar).toHaveBeenCalledTimes(3);
-  });
+let f: ReturnType<typeof fixture>;
+beforeEach(() => {
+  f = fixture();
+});
 
-  it("acknowledges active message custody only after the captured outbox accepts it", async () => {
-    const f = fixture();
+function expectLaunch(accepted: boolean, overrides: Partial<McpAppOpenDetail> = {}) {
+  f.dispatch(MCP_APP_OPEN_EVENT, { ...f.launch, ...overrides }, accepted);
+}
+
+it("claims only the presented matching owner and retains per-launch synchronization", () => {
+  f.owner.presented = false;
+  expectLaunch(false);
+  f.owner.presented = true;
+  expectLaunch(false, { sessionKey: "other" });
+  expectLaunch(false, { owner: createTestGatewayClient(async () => ({})) });
+  expect(f.state.handleOpenSidebar).not.toHaveBeenCalled();
+  expectLaunch(true);
+  expect(f.state.handleOpenSidebar).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      launch: f.launch,
+      fileTab: { id: "mcp-app:parts/tray:app:", label: "Parts tray" },
+    }),
+  );
+  f.owner.launch = f.launch;
+  f.syncLaunch();
+  f.syncLaunch();
+  expect(f.state.handleOpenSidebar).toHaveBeenCalledTimes(2);
+  expect(f.state.handleOpenSidebar).toHaveBeenLastCalledWith(
+    expect.objectContaining({ fileTab: { id: "mcp-app:parts/tray:app", label: "Parts tray" } }),
+  );
+  f.owner.launch = { ...f.launch, deepLink: "/second" };
+  f.syncLaunch();
+  expect(f.state.handleOpenSidebar).toHaveBeenCalledTimes(3);
+});
+
+it.each([true, false])(
+  "acknowledges and retains active payload only with outbox custody=%s",
+  async (admitted) => {
     const pending = createDeferred();
-    const sent = message(f.state.sessionKey);
+    const sent = message();
     let attachments: readonly ChatAttachment[] = [];
     f.state.handleSendChat = vi.fn((_text, options) => {
       attachments = options?.attachmentsOverride ?? [];
-      options?.onOutboxAdmitted?.();
+      if (admitted) {
+        options?.onOutboxAdmitted?.();
+      }
       return pending.promise;
     });
-    expect(f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail).defaultPrevented).toBe(true);
+    f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail);
     expect(sent.respond).not.toHaveBeenCalled();
     expect(f.state.handleSendChat).toHaveBeenCalledWith(
       "Compare parts",
@@ -183,103 +186,79 @@ describe("MCP app pane actions", () => {
         ]),
       }),
     );
-    f.setCurrent(null);
-    f.cleanup();
-    pending.resolve();
-    expect(await sent.receipt.promise).toBe(true);
-    expect(getChatAttachmentDataUrl(attachments[0]!)).not.toBeNull();
-    releaseChatAttachmentPayloads(attachments);
-  });
-
-  it("releases attachment payloads and reports rejection when no outbox takes custody", async () => {
-    const f = fixture();
-    const sent = message(f.state.sessionKey);
-    let attachments: readonly ChatAttachment[] = [];
-    f.state.handleSendChat = vi.fn(async (_text, options) => {
-      attachments = options?.attachmentsOverride ?? [];
-      throw new Error("rejected");
-    });
-    f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail);
-    expect(await sent.receipt.promise).toBe(false);
-    expect(getChatAttachmentDataUrl(attachments[0]!)).toBeNull();
+    if (admitted) {
+      f.setCurrent(null);
+      f.cleanup();
+      pending.resolve();
+    } else {
+      pending.reject(new Error("rejected"));
+    }
+    expect(await sent.receipt.promise).toBe(admitted);
+    expect(getChatAttachmentDataUrl(attachments[0]!)).toEqual(admitted ? expect.any(String) : null);
     expect(sent.respond).toHaveBeenCalledOnce();
-  });
+    releaseChatAttachmentPayloads(attachments);
+  },
+);
 
-  it("delegates new-conversation delivery and acknowledges its existing owner result", async () => {
-    const f = fixture();
-    const pending = createDeferred<boolean>();
-    const sent = message(f.state.sessionKey, "new");
-    const create = vi
-      .spyOn(appMessages, "sendMcpAppNewConversation")
-      .mockReturnValue(pending.promise);
-    f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail);
-    expect(create).toHaveBeenCalledWith(f.context, "main", sent.detail);
-    expect(f.state.handleSendChat).not.toHaveBeenCalled();
-    expect(sent.respond).not.toHaveBeenCalled();
-    pending.resolve(false);
-    expect(await sent.receipt.promise).toBe(false);
-  });
+it("delegates new-conversation delivery and acknowledges its existing owner result", async () => {
+  const pending = createDeferred<boolean>();
+  const sent = message("new");
+  const create = vi
+    .spyOn(appMessages, "sendMcpAppNewConversation")
+    .mockReturnValue(pending.promise);
+  f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail);
+  expect(create).toHaveBeenCalledWith(f.context, "main", sent.detail);
+  expect(f.state.handleSendChat).not.toHaveBeenCalled();
+  expect(sent.respond).not.toHaveBeenCalled();
+  pending.resolve(false);
+  expect(await sent.receipt.promise).toBe(false);
+});
 
-  it("retains resource attachment, file viewer, and hidden-pane context contracts", () => {
-    const f = fixture();
-    const resource = {
-      type: "resource_link" as const,
-      uri: "cad://part/1",
-      name: "Bolt",
-      title: "Hex/bolt",
-    };
-    expect(
-      f.dispatch(MCP_APP_RESOURCE_MENTION_EVENT, {
-        sessionKey: f.state.sessionKey,
-        serverName: "parts",
-        agentId: "main",
-        resource,
-      }).defaultPrevented,
-    ).toBe(true);
-    expect(f.state.chatAttachments[0]).toMatchObject({ fileName: "Hex-bolt.txt", origin: "file" });
-    const respond = vi.fn();
-    expect(
-      f.dispatch(MCP_APP_FILE_OPEN_EVENT, {
-        sessionKey: f.state.sessionKey,
-        viewId: "view-one",
-        path: "parts/bolt.stl",
-        name: "bolt.stl",
-        respond,
-      }).defaultPrevented,
-    ).toBe(true);
-    expect(f.owner.openFile).toHaveBeenCalledWith("parts/bolt.stl");
-    expect(respond).toHaveBeenCalledWith(true);
-    f.owner.presented = false;
-    const view = document.createElement("mcp-app-view");
-    view.title = "Parts tray";
-    f.element.append(view);
-    view.dispatchEvent(
-      new CustomEvent(MCP_APP_CONTEXT_EVENT, {
-        bubbles: true,
-        composed: true,
-        detail: {
-          sessionKey: f.state.sessionKey,
-          viewId: "view-one",
-          state: { updateId: "revision", content: [{ type: "text", text: "Selected bolt" }] },
-        },
-      }),
-    );
-    expect(readMcpAppContexts(f.client, f.state.sessionKey, "main")).toMatchObject([
-      { title: "Parts tray", viewId: "view-one", state: { updateId: "revision" } },
-    ]);
+it("retains resource attachment, file viewer, and hidden-pane context contracts", () => {
+  const resource = {
+    type: "resource_link" as const,
+    uri: "cad://part/1",
+    name: "Bolt",
+    title: "Hex/bolt",
+  };
+  f.dispatch(MCP_APP_RESOURCE_MENTION_EVENT, { serverName: "parts", agentId: "main", resource });
+  expect(f.state.chatAttachments[0]).toMatchObject({ fileName: "Hex-bolt.txt", origin: "file" });
+  const respond = vi.fn();
+  f.dispatch(MCP_APP_FILE_OPEN_EVENT, {
+    viewId: "view-one",
+    path: "parts/bolt.stl",
+    name: "bolt.stl",
+    respond,
   });
+  expect(f.owner.openFile).toHaveBeenCalledWith("parts/bolt.stl");
+  expect(respond).toHaveBeenCalledWith(true);
+  f.owner.presented = false;
+  const view = document.createElement("mcp-app-view");
+  view.title = "Parts tray";
+  f.element.append(view);
+  f.dispatch(
+    MCP_APP_CONTEXT_EVENT,
+    {
+      viewId: "view-one",
+      state: { updateId: "revision", content: [{ type: "text", text: "Selected bolt" }] },
+    },
+    false,
+    view,
+  );
+  expect(readMcpAppContexts(f.client, f.state.sessionKey, "main")).toMatchObject([
+    { title: "Parts tray", viewId: "view-one", state: { updateId: "revision" } },
+  ]);
+});
 
-  it("retires pane listeners with their owner and reads the current owner after remount", () => {
-    const f = fixture();
-    f.cleanup();
-    expect(f.dispatch(MCP_APP_OPEN_EVENT, f.launch).defaultPrevented).toBe(false);
-    f.dispatch(WIDGET_PROMPT_EVENT, { text: "not delivered" });
-    expect(f.state.handleSendChat).not.toHaveBeenCalled();
-    const next = { ...f.owner, state: { ...f.state, handleSendChat: vi.fn(async () => {}) } };
-    f.setCurrent(next);
-    f.mount();
-    f.dispatch(WIDGET_PROMPT_EVENT, { text: "  delivered once  " });
-    expect(next.state.handleSendChat).toHaveBeenCalledExactlyOnceWith("delivered once");
-    expect(f.state.handleSendChat).not.toHaveBeenCalled();
-  });
+it("retires pane listeners with their owner and reads the current owner after remount", () => {
+  f.cleanup();
+  expectLaunch(false);
+  f.dispatch(WIDGET_PROMPT_EVENT, { text: "not delivered" }, false);
+  expect(f.state.handleSendChat).not.toHaveBeenCalled();
+  const next = { ...f.owner, state: { ...f.state, handleSendChat: vi.fn(async () => {}) } };
+  f.setCurrent(next);
+  f.mount();
+  f.dispatch(WIDGET_PROMPT_EVENT, { text: "  delivered once  " }, false);
+  expect(next.state.handleSendChat).toHaveBeenCalledExactlyOnceWith("delivered once");
+  expect(f.state.handleSendChat).not.toHaveBeenCalled();
 });

@@ -9,7 +9,7 @@ import {
   type ControlUiSessionPullRequests,
 } from "../../../../src/gateway/control-ui-contract.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { projectsForGateway } from "../../lib/projects.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -19,6 +19,7 @@ import {
 } from "../../lib/session-pull-requests.ts";
 import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-owner.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
@@ -48,35 +49,25 @@ function pullRequest(
   };
 }
 
-function createPullRequestPane(sessions: SessionCapability) {
-  const request = vi.fn().mockResolvedValue({ subscribed: true });
-  const partialSessions = sessions as Partial<SessionCapability>;
-  const sessionCapability = {
-    ...sessions,
-    pullRequestSummary: partialSessions.pullRequestSummary ?? vi.fn(() => undefined),
-  } as SessionCapability;
-  const harness = createTestChatPane({
-    client: { request } as unknown as GatewayBrowserClient,
-    sessions: sessionCapability,
-  });
-  harness.pane.context.gateway.snapshot.hello = {
-    auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
-    features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
-  } as never;
-  return { ...harness, request };
-}
-
-function createSummaryPane() {
+function createPullRequestPane(sessions?: SessionCapability) {
   const epoch = {};
   const setPullRequestSummary = vi.fn();
-  return {
-    ...createPullRequestPane({
-      capturePullRequestEpoch: vi.fn(() => epoch),
-      setPullRequestSummary,
-    } as unknown as SessionCapability),
-    epoch,
-    setPullRequestSummary,
-  };
+  const request = vi.fn().mockResolvedValue({ subscribed: true });
+  const harness = createTestChatPane({
+    client: { request } as unknown as GatewayBrowserClient,
+    sessions:
+      sessions ??
+      ({
+        capturePullRequestEpoch: vi.fn(() => epoch),
+        setPullRequestSummary,
+        pullRequestSummary: vi.fn(() => undefined),
+      } as unknown as SessionCapability),
+  });
+  harness.pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+    [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
+    ["operator.read", "operator.write"],
+  );
+  return { ...harness, request, epoch, setPullRequestSummary };
 }
 
 function emitSnapshot(
@@ -132,7 +123,6 @@ function createPublicationPane(
   });
   const client = createGatewayBrowserClientFixture({ request });
   const initial = createInitializationContext();
-  const eventListeners = new Set<GatewayEventListener>();
   const hello = gatewayHelloForMethods(
     [
       "sessions.github.publish",
@@ -151,25 +141,16 @@ function createPublicationPane(
       },
     };
   }
-  const gateway: ApplicationContext["gateway"] = {
-    ...initial.gateway,
-    subscribeEvents: (listener) => {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
-    snapshot: {
-      ...initial.gateway.snapshot,
-      client,
-      phase: "connected",
-      hello,
-      assistantAgentId: agentId,
-      sessionKey,
-      selfUser: {
-        id: "publication-person",
-        identity: { type: "profile", id: "publication-person" },
-      },
-    },
-  };
+  const events = createApplicationGateway({
+    ...initial.gateway.snapshot,
+    client,
+    phase: "connected",
+    hello,
+    assistantAgentId: agentId,
+    sessionKey,
+    selfUser: { id: "publication-person", identity: { type: "profile", id: "publication-person" } },
+  });
+  const gateway = { ...initial.gateway, ...events.gateway, connection: initial.gateway.connection };
   const selection = {
     ...initial.agentSelection,
     state: { selectedId: agentId, scopeId: agentId },
@@ -224,9 +205,7 @@ function createPublicationPane(
     return pane.chatProps!.githubPublication!;
   };
   const emitGatewayEvent = (event: string, payload: unknown) => {
-    for (const listener of eventListeners) {
-      listener({ type: "event", event, payload });
-    }
+    events.publishEvent({ type: "event", event, payload });
   };
   return {
     pane,
@@ -244,10 +223,7 @@ function createPublicationPane(
 
 describe("chat pane pushed pull request state", () => {
   it("keeps the pane quiet for unrelated PR snapshots while publishing its own changes", () => {
-    const { pane, state, emitGatewayEvent } = createPullRequestPane({
-      capturePullRequestEpoch: vi.fn(() => ({})),
-      setPullRequestSummary: vi.fn(),
-    } as unknown as SessionCapability);
+    const { pane, state, emitGatewayEvent } = createPullRequestPane();
     const store = sessionPullRequestsForGateway(pane.context.gateway);
     const otherOwner = {};
     const otherKey = "agent:main:other-pull-request";
@@ -316,7 +292,7 @@ describe("chat pane pushed pull request state", () => {
   it.each(["unavailable", "rate-limited"] as const)(
     "applies retained and replaced repository snapshots during %s",
     async (status) => {
-      const { pane, emitGatewayEvent, epoch, setPullRequestSummary } = createSummaryPane();
+      const { pane, emitGatewayEvent, epoch, setPullRequestSummary } = createPullRequestPane();
       const key = "agent:main:current";
       const repository = { owner: "openclaw", repo: "openclaw" };
       pane.refreshSessionPullRequests();
@@ -430,23 +406,13 @@ describe("chat pane pushed pull request state", () => {
       (await settled()).onConfirm?.();
       await settled();
       expect(
-        request.mock.calls
-          .map(([method]) => method)
-          .filter((method) => method.startsWith("sessions.github.")),
-      ).toEqual([
-        "sessions.github.options",
-        "sessions.github.publish",
-        "sessions.github.status",
-        "sessions.github.confirm",
-      ]);
-      for (const method of ["options", "publish", "status", "confirm"]) {
-        expect
-          .soft(request)
-          .toHaveBeenCalledWith(
-            `sessions.github.${method}`,
-            expect.objectContaining({ sessionKey: "global", agentId: "research" }),
-          );
-      }
+        request.mock.calls.filter(([method]) => method.startsWith("sessions.github.")),
+      ).toEqual(
+        ["options", "publish", "status", "confirm"].map((method) => [
+          `sessions.github.${method}`,
+          expect.objectContaining({ sessionKey: "global", agentId: "research" }),
+        ]),
+      );
     },
   );
 
@@ -485,8 +451,7 @@ describe("chat pane pushed pull request state", () => {
       pane.presented = true;
       const returned = await settled();
 
-      expect(returned.locked).toBe(true);
-      expect(returned.selection).toEqual(unknown.selection);
+      expect([returned.locked, returned.selection]).toEqual([true, unknown.selection]);
       const knownRoster = state.sessionsResult;
       if (!knownRoster) {
         throw new Error("Expected the publication roster to remain available");
@@ -500,8 +465,7 @@ describe("chat pane pushed pull request state", () => {
       expect(pane.chatProps?.githubPublication).toBeUndefined();
       state.sessionsResult = knownRoster;
       const restored = await settled();
-      expect(restored.locked).toBe(true);
-      expect(restored.selection).toEqual(unknown.selection);
+      expect([restored.locked, restored.selection]).toEqual([true, unknown.selection]);
       restored.onPublish?.();
       await settled();
       expect(request.mock.calls.filter(([method]) => method === "sessions.github.publish")).toEqual(
@@ -532,7 +496,8 @@ describe("chat pane pushed pull request state", () => {
   ])(
     "publishes pushed PR summaries: $name",
     async ({ pullRequests, summary, refresh, rateLimited = false }) => {
-      const { pane, request, emitGatewayEvent, epoch, setPullRequestSummary } = createSummaryPane();
+      const { pane, request, emitGatewayEvent, epoch, setPullRequestSummary } =
+        createPullRequestPane();
       pane.refreshSessionPullRequests({ refresh });
       await Promise.resolve();
       await Promise.resolve();
@@ -561,7 +526,8 @@ describe("chat pane pushed pull request state", () => {
   it.each(["session switch", "disconnect", "branch switch"] as const)(
     "retires pane PR state on %s",
     async (change) => {
-      const { pane, state, emitGatewayEvent, epoch, setPullRequestSummary } = createSummaryPane();
+      const { pane, state, emitGatewayEvent, epoch, setPullRequestSummary } =
+        createPullRequestPane();
       pane.refreshSessionPullRequests();
       await Promise.resolve();
       emitSnapshot(emitGatewayEvent, state.sessionKey, {
@@ -659,8 +625,7 @@ it.each([
     options.shared = null;
   }
   const guest = await settled();
-  expect(guest.onSelect).toBeUndefined();
-  expect(guest.onConfirm).toBeUndefined();
+  expect(guest).toMatchObject({ onSelect: undefined, onConfirm: undefined });
   if (access !== "worktree" && access !== "repository") {
     expect(guest.onPublish).toBeUndefined();
     expect(request.mock.calls.some(([method]) => method === "sessions.github.publish")).toBe(false);
@@ -706,7 +671,7 @@ it.each(["incarnation", "sharing", "archive-projection"] as const)(
     }
     state.sessionsResult = { ...state.sessionsResult!, sessions: [row] };
     context.sessions.reconcile(row);
-    // Canonical state changed, but Lit has not committed a replacement button yet.
+    // Invoke the captured action before rendering its replacement.
     idle.onPublish?.();
     expect(
       request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
@@ -715,140 +680,135 @@ it.each(["incarnation", "sharing", "archive-projection"] as const)(
   },
 );
 
-describe("PR refresh wire ownership", () => {
-  it.each([
-    ["identical finals on separate frames", "duplicate"],
-    ["distinct finals in the same burst", "burst"],
-    ["distinct finals after the debounce interval", "spaced"],
-    ["the first live final after history", "history"],
-    ["the first presented final after hidden delivery", "hiddenFirst"],
-    ["a stream announcement followed by its final", "stream"],
-    ["a final whose queued refresh lost its last watch before sync", "loseWatchBeforeSync"],
-    ["a same-session background final", "background"],
-    ["reconnect between final deliveries", "reconnect"],
-    ["explicit history reset between finals", "reset"],
-    ["ordinary history between final replays", "historyBetween"],
-    ["a genuine branch switch before the next final", "branchSwitch"],
-  ] as const)("keeps subscription force scoped for %s", async (_name, mode) => {
-    const texts = ["history", "stream", "background"].includes(mode)
-      ? ["Opened"]
-      : ["Opened", mode === "burst" || mode === "spaced" ? "Merged" : "Opened"];
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    onTestFinished(() => {
-      vi.useRealTimers();
+it.each([
+  ["identical finals on separate frames", "duplicate"],
+  ["distinct finals in the same burst", "burst"],
+  ["distinct finals after the debounce interval", "spaced"],
+  ["the first live final after history", "history"],
+  ["the first presented final after hidden delivery", "hiddenFirst"],
+  ["a stream announcement followed by its final", "stream"],
+  ["a final whose queued refresh lost its last watch before sync", "loseWatchBeforeSync"],
+  ["a same-session background final", "background"],
+  ["reconnect between final deliveries", "reconnect"],
+  ["explicit history reset between finals", "reset"],
+  ["ordinary history between final replays", "historyBetween"],
+  ["a genuine branch switch before the next final", "branchSwitch"],
+] as const)("keeps subscription force scoped for %s", async (_name, mode) => {
+  const texts = ["history", "stream", "background"].includes(mode)
+    ? ["Opened"]
+    : ["Opened", mode === "burst" || mode === "spaced" ? "Merged" : "Opened"];
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  const sessions = makeChatHost().sessions;
+  onTestFinished(() => sessions.dispose());
+  const { pane, state, request, emitGatewayEvent } = createPullRequestPane(sessions);
+  Object.assign(
+    state,
+    makeChatHost({
+      client: state.client,
+      connectionEpoch: state.connectionEpoch,
+      sessionKey: state.sessionKey,
+      sessions: state.sessions,
+    }),
+    { chatMessagesBySession: new Map(), pendingSessionMessageReloadSessionKey: null },
+  );
+  state.refreshSessionPullRequests = (options) => pane.refreshSessionPullRequests(options);
+  state.chatRunId = mode === "background" ? "foreground-run" : "wire-pr-run";
+  const key = state.sessionKey;
+  const otherKey = "agent:main:unrelated";
+  const store = sessionPullRequestsForGateway(pane.context.gateway);
+  const otherOwner = {};
+  store.watch(otherOwner, [otherKey]);
+  onTestFinished(() => store.unwatch(otherOwner));
+  pane.refreshSessionPullRequests();
+  await Promise.resolve();
+  await nextFrame();
+  request.mockClear();
+  const message = (text: string) => ({
+    role: "assistant",
+    content: [{ type: "text", text: `${text} https://github.com/openclaw/openclaw/pull/111532` }],
+  });
+  if (mode === "history") {
+    reduceChatSessionProjection(state, {
+      type: "snapshotLoaded",
+      messages: [message("Opened")],
     });
-    const sessions = makeChatHost().sessions;
-    onTestFinished(() => sessions.dispose());
-    const { pane, state, request, emitGatewayEvent } = createPullRequestPane(sessions);
-    Object.assign(
-      state,
-      makeChatHost({
-        client: state.client,
-        connectionEpoch: state.connectionEpoch,
-        sessionKey: state.sessionKey,
-        sessions: state.sessions,
-      }),
-      {
-        chatMessagesBySession: new Map(),
-        pendingSessionMessageReloadSessionKey: null,
+    reduceChatSessionProjection(state, {
+      type: "runTerminal",
+      runId: "wire-pr-run",
+      status: "completed",
+    });
+    state.chatRunId = null;
+  }
+  if (mode === "stream") {
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "delta",
+        runId: "wire-pr-run",
+        sessionKey: key,
+        deltaText: "Opened https://github.com/openclaw/openclaw/pull/111532 ",
       },
-    );
-    state.refreshSessionPullRequests = (options) => pane.refreshSessionPullRequests(options);
-    state.chatRunId = mode === "background" ? "foreground-run" : "wire-pr-run";
-    const key = state.sessionKey;
-    const otherKey = "agent:main:unrelated";
-    const store = sessionPullRequestsForGateway(pane.context.gateway);
-    const otherOwner = {};
-    store.watch(otherOwner, [otherKey]);
-    onTestFinished(() => store.unwatch(otherOwner));
-    pane.refreshSessionPullRequests();
-    await Promise.resolve();
-    await nextFrame();
-    request.mockClear();
-    const message = (text: string) => ({
-      role: "assistant",
-      content: [{ type: "text", text: `${text} https://github.com/openclaw/openclaw/pull/111532` }],
     });
-    if (mode === "history") {
+    await nextFrame();
+  }
+  for (const [index, text] of texts.entries()) {
+    if (index > 0 && mode === "reconnect") {
+      pane.connectionGeneration += 1;
+      state.connectionEpoch = pane.connectionGeneration;
+    }
+    if (index > 0 && mode === "reset") {
+      resetChatHistoryProjection(state);
+    }
+    if (index > 0 && mode === "historyBetween") {
       reduceChatSessionProjection(state, {
         type: "snapshotLoaded",
         messages: [message("Opened")],
       });
-      reduceChatSessionProjection(state, {
-        type: "runTerminal",
+    }
+    if (index > 0 && mode === "branchSwitch") {
+      const payload = { sessionKey: key, agentId: "main", reason: "branch-switch" };
+      handlePageGatewayEvent(
+        state,
+        { type: "event", event: "sessions.changed", payload },
+        () => false,
+      );
+      emitGatewayEvent("sessions.changed", payload);
+      await nextFrame();
+    }
+    pane.presented = !(mode === "hiddenFirst" && index === 0);
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
         runId: "wire-pr-run",
-        status: "completed",
-      });
-      state.chatRunId = null;
+        sessionKey: key,
+        message: message(text),
+      },
+    });
+    if (index === 0 && mode === "loseWatchBeforeSync") {
+      pane.presented = false;
     }
-    if (mode === "stream") {
-      handlePageGatewayEvent(state, {
-        type: "event",
-        event: "chat",
-        payload: {
-          state: "delta",
-          runId: "wire-pr-run",
-          sessionKey: key,
-          deltaText: "Opened https://github.com/openclaw/openclaw/pull/111532 ",
-        },
-      });
-      await nextFrame();
-    }
-    for (const [index, text] of texts.entries()) {
-      if (index > 0 && mode === "reconnect") {
-        pane.connectionGeneration += 1;
-        state.connectionEpoch = pane.connectionGeneration;
-      }
-      if (index > 0 && mode === "reset") {
-        resetChatHistoryProjection(state);
-      }
-      if (index > 0 && mode === "historyBetween") {
-        reduceChatSessionProjection(state, {
-          type: "snapshotLoaded",
-          messages: [message("Opened")],
-        });
-      }
-      if (index > 0 && mode === "branchSwitch") {
-        const payload = { sessionKey: key, agentId: "main", reason: "branch-switch" };
-        handlePageGatewayEvent(
-          state,
-          { type: "event", event: "sessions.changed", payload },
-          () => false,
-        );
-        emitGatewayEvent("sessions.changed", payload);
-        await nextFrame();
-      }
-      pane.presented = !(mode === "hiddenFirst" && index === 0);
-      handlePageGatewayEvent(state, {
-        type: "event",
-        event: "chat",
-        payload: {
-          state: "final",
-          runId: "wire-pr-run",
-          sessionKey: key,
-          message: message(text),
-        },
-      });
-      if (index === 0 && mode === "loseWatchBeforeSync") {
-        pane.presented = false;
-      }
-      // Preserve separate WebSocket deliveries within the debounce window.
-      await nextFrame();
-      if (mode === "spaced") {
-        await vi.advanceTimersByTimeAsync(5_000);
-      }
-    }
-    await vi.advanceTimersByTimeAsync(5_000);
+    // Preserve separate WebSocket deliveries within the debounce window.
     await nextFrame();
-    const forces = request.mock.calls.filter(
-      ([method, params]) =>
-        method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD &&
-        Array.isArray(params?.refreshSessionKeys) &&
-        params.refreshSessionKeys.length > 0,
-    );
-    for (const [, params] of forces) {
-      expect(params).toEqual({ sessionKeys: [key, otherKey], refreshSessionKeys: [key] });
+    if (mode === "spaced") {
+      await vi.advanceTimersByTimeAsync(5_000);
     }
-    expect(forces).toHaveLength(mode === "spaced" ? 2 : 1);
-  });
+  }
+  await vi.advanceTimersByTimeAsync(5_000);
+  await nextFrame();
+  const forces = request.mock.calls.filter(
+    ([method, params]) =>
+      method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD &&
+      Array.isArray(params?.refreshSessionKeys) &&
+      params.refreshSessionKeys.length > 0,
+  );
+  for (const [, params] of forces) {
+    expect(params).toEqual({ sessionKeys: [key, otherKey], refreshSessionKeys: [key] });
+  }
+  expect(forces).toHaveLength(mode === "spaced" ? 2 : 1);
 });

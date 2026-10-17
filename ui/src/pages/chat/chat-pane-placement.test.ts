@@ -6,9 +6,7 @@ import type {
   WorkerEnvironmentProfileSummary,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
-import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
@@ -16,33 +14,20 @@ import {
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { createPlacementPane, type AsyncRequest } from "./chat-pane-placement.test-support.ts";
 import {
   activePlacementSession as placementSession,
   offlineDeviceSession,
   createTestChatPane,
   createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
 } from "./chat-pane.test-support.ts";
 
 function activePlacementSession() {
   return { ...placementSession(), sessionId: "placement-session" };
 }
 
-type AsyncRequest = (...args: Parameters<GatewayRequestHandler>) => Promise<unknown>;
-function moveFixture(
-  handler: AsyncRequest = async () => ({ ok: true }),
-  scopes = ["operator.read", "operator.write"],
-) {
-  const request = dialogs.mockRequest(handler);
-  const reconcileMutation = vi.fn<SessionCapability["reconcileMutation"]>(async () => ({
-    status: "refreshed",
-  }));
-  const fixture = createTestChatPane({
-    client: createGatewayBrowserClientFixture({ request }),
-    sessions: createSessionCapabilityFixture({ reconcileMutation }),
-  });
-  fixture.pane.context.gateway.snapshot.hello = gatewayHelloForMethods(["sessions.move"], scopes);
-  return { ...fixture, request, reconcileMutation };
+function moveFixture(handler?: AsyncRequest, scopes?: string[]) {
+  return createPlacementPane(dialogs, handler, scopes);
 }
 
 function deviceFixture(
@@ -78,10 +63,14 @@ function selectOption(value: string) {
   option(value)?.click();
   flush();
 }
-function clickButton(label: string) {
-  return [...document.body.querySelectorAll<HTMLButtonElement>("button")]
-    .find((button) => button.textContent?.trim() === label)
-    ?.click();
+function clickButton(label: string, requireButton = false) {
+  const button = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
+    (item) => item.textContent?.trim() === label,
+  );
+  if (requireButton) {
+    expect(button).toBeDefined();
+  }
+  button?.click();
 }
 
 function codexDeviceSession(): GatewaySessionRow {
@@ -174,11 +163,7 @@ async function selectRepositoryWorker() {
 }
 
 function answerWorkerPicker(label: "Continue on worker" | "Cancel") {
-  const button = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
-    (item) => item.textContent?.trim() === label,
-  );
-  expect(button).toBeDefined();
-  button?.click();
+  clickButton(label, true);
 }
 
 describe("chat pane placement", () => {
@@ -271,11 +256,7 @@ describe("chat pane placement", () => {
     expect(document.body.textContent).toContain("Device unavailable");
     expect(document.body.textContent).toContain("Session hosting is disabled");
     selectOption("device:runner");
-    const moveButton = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Move session",
-    );
-    expect(moveButton).toBeDefined();
-    moveButton?.click();
+    clickButton("Move session", true);
     await moving;
 
     expect(request).toHaveBeenCalledWith("sessions.move", {
@@ -294,10 +275,7 @@ describe("chat pane placement", () => {
         if (method === "environments.list") {
           return {
             profiles: [
-              {
-                id: "lifecycle-only",
-                providerId: "crabbox",
-              },
+              { id: "lifecycle-only", providerId: "crabbox" },
               {
                 id: "worker-only",
                 providerId: "crabbox",
@@ -359,11 +337,7 @@ describe("chat pane placement", () => {
     expect(request).toHaveBeenCalledWith(
       "sessions.move",
       expect.objectContaining({
-        target: {
-          kind: "profile",
-          profileId: "aws",
-          machineClass: "beast",
-        },
+        target: { kind: "profile", profileId: "aws", machineClass: "beast" },
       }),
     );
   });
@@ -422,95 +396,75 @@ describe("chat pane placement", () => {
     expect(reconcileMutation).toHaveBeenCalledWith("main");
   });
 
-  it("disables paired-device moves for a runtime that cannot dispatch there", async () => {
-    const { pane, request } = moveFixture(
-      catalogRequest([], [deviceFixture("build-mac", "Build Mac")]),
-      ["operator.admin", "operator.write"],
-    );
-    const session = {
-      ...activePlacementSession(),
-      agentRuntime: {
-        id: "cloud-only",
-        cloudPlacementSupported: true,
-        devicePlacementSupported: false,
-        source: "model",
-      },
-    } satisfies GatewaySessionRow;
-
-    const moving = dialogs.track(startMove(pane, session));
-    await waitForOption("device:build-mac");
-    const device = option("device:build-mac");
-    expect(device?.disabled).toBe(true);
-    expect(device?.textContent).toContain("This runtime does not support paired devices");
-    expect(device?.title).toBe("This runtime does not support paired devices");
-    clickButton("Cancel");
-    await moving;
-
-    expect(request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
-    expect(request).not.toHaveBeenCalledWith("node.list", expect.anything());
-  });
-
-  it("moves a codex session to a supported paired device", async () => {
-    const { pane, request, reconcileMutation } = moveFixture(
-      catalogRequest(
-        [],
-        [
-          {
-            ...deviceFixture("build-mac", "Build Mac"),
-            invocableCommands: ["codex.exec-server.stdio.v1"],
-            requiredNodeCommand: { command: "codex.exec-server.stdio.v1", state: "invocable" },
-          },
-        ],
-      ),
-      ["operator.admin", "operator.write"],
-    );
-    const session = codexDeviceSession();
-    const moving = dialogs.track(startMove(pane, session));
-    await waitForOption("device:build-mac");
-    selectOption("device:build-mac");
-    clickButton("Move session");
-    await moving;
-    expect(request).toHaveBeenCalledWith("sessions.move", {
-      key: session.key,
-      agentId: "main",
-      expected: { generation: 1, environmentId: "worker:one", ownerEpoch: 1 },
-      target: { kind: "device", deviceId: "build-mac" },
-    });
-    expect(reconcileMutation).toHaveBeenCalledWith("main");
-    expect(request).not.toHaveBeenCalledWith("node.list", expect.anything());
-  });
-
-  it("keeps declared remote execution disabled without Gateway command authority", async () => {
-    const { pane, request } = moveFixture(
-      catalogRequest(
-        [],
-        [
-          {
-            ...deviceFixture("build-mac", "Build Mac"),
-            capabilities: ["codex.exec-server.stdio.v1"],
-            invocableCommands: [],
-            requiredNodeCommand: { command: "codex.exec-server.stdio.v1", state: "unauthorized" },
-          },
-        ],
-      ),
-      ["operator.admin", "operator.write"],
-    );
-    const moving = dialogs.track(startMove(pane, codexDeviceSession()));
-    await dialogs.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("environments.list", { runtimeId: "codex" }),
-    );
-    await waitForOption("device:build-mac");
-    expect(option("device:build-mac")?.disabled).toBe(true);
-    expect(option("device:build-mac")?.title).toBe(
-      "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
-    );
-    clickButton("Cancel");
-    await moving;
-    expect(request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
-  });
+  it.each(["unsupported runtime", "supported", "unauthorized command"] as const)(
+    "gates paired-device moves: %s",
+    async (scenario) => {
+      const session =
+        scenario === "unsupported runtime"
+          ? ({
+              ...activePlacementSession(),
+              agentRuntime: {
+                id: "cloud-only",
+                cloudPlacementSupported: true,
+                devicePlacementSupported: false,
+                source: "model",
+              },
+            } satisfies GatewaySessionRow)
+          : codexDeviceSession();
+      const environment = deviceFixture("build-mac", "Build Mac");
+      if (scenario !== "unsupported runtime") {
+        const authorized = scenario === "supported";
+        environment.invocableCommands = authorized ? ["codex.exec-server.stdio.v1"] : [];
+        environment.requiredNodeCommand = {
+          command: "codex.exec-server.stdio.v1",
+          state: authorized ? "invocable" : "unauthorized",
+        };
+        if (!authorized) {
+          environment.capabilities = ["codex.exec-server.stdio.v1"];
+        }
+      }
+      const { pane, request, reconcileMutation } = moveFixture(catalogRequest([], [environment]), [
+        "operator.admin",
+        "operator.write",
+      ]);
+      const moving = dialogs.track(startMove(pane, session));
+      if (scenario === "unauthorized command") {
+        await dialogs.waitFor(() =>
+          expect(request).toHaveBeenCalledWith("environments.list", { runtimeId: "codex" }),
+        );
+      }
+      await waitForOption("device:build-mac");
+      if (scenario === "supported") {
+        selectOption("device:build-mac");
+        clickButton("Move session");
+        await moving;
+        expect(request).toHaveBeenCalledWith("sessions.move", {
+          key: session.key,
+          agentId: "main",
+          expected: { generation: 1, environmentId: "worker:one", ownerEpoch: 1 },
+          target: { kind: "device", deviceId: "build-mac" },
+        });
+        expect(reconcileMutation).toHaveBeenCalledWith("main");
+      } else {
+        const reason =
+          scenario === "unsupported runtime"
+            ? "This runtime does not support paired devices"
+            : "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.";
+        expect(option("device:build-mac")).toMatchObject({ disabled: true, title: reason });
+        if (scenario === "unsupported runtime") {
+          expect(option("device:build-mac")?.textContent).toContain(reason);
+        }
+        clickButton("Cancel");
+        await moving;
+        expect(request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
+      }
+      if (scenario !== "unauthorized command") {
+        expect(request).not.toHaveBeenCalledWith("node.list", expect.anything());
+      }
+    },
+  );
 });
 
-// The ordinary local-session menu uses dispatch, never active-source move or abort.
 describe("local session placement actions", () => {
   function localFixture() {
     const fixture = repositoryRecoveryFixture(undefined);
@@ -556,7 +510,7 @@ describe("local session placement actions", () => {
     },
   );
 
-  it.each(["in-place"] as const)("does not move a superseded active source (%s)", async () => {
+  it("does not move a superseded active source in place", async () => {
     const { pane, request } = localFixture();
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
       ["sessions.move"],
@@ -576,7 +530,6 @@ describe("local session placement actions", () => {
       ["sessions.dispatch"],
       ["operator.admin", "operator.write"],
     );
-    // The catalog's profile explicitly supports the selected runtime.
     const original = request.getMockImplementation()!;
     request.mockImplementation(async (method, ...args) =>
       method === "environments.list"
