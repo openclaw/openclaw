@@ -7,7 +7,7 @@ import {
   fidelityDistribution,
   formatFidelityMarkdown,
   parseFidelityCpuReport,
-  parseFidelityRpcCounts,
+  parseFidelityRpcCensus,
 } from "../../scripts/control-ui-bench-fidelity.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -30,6 +30,10 @@ function benchRun(
   rpcs: Record<string, number> = { "sessions.list": 5 },
 ) {
   return { run, cpu: cpuReport(rows), rpcs };
+}
+
+function rpcCensus(counts: Record<string, number>, complete = true) {
+  return { complete, counts };
 }
 
 function runReport(directory: string) {
@@ -92,7 +96,7 @@ describe("Control UI bench fidelity report", () => {
     const output = formatFidelityMarkdown({
       pass: false,
       scenarios: [
-        compareFidelity("board", report, { connect: 1 }, [
+        compareFidelity("board", report, rpcCensus({ connect: 1 }), [
           benchRun(1, ["10 components/other.ts:1 other"], {}),
         ]),
       ],
@@ -115,17 +119,19 @@ describe("Control UI bench fidelity report", () => {
       "packages/beta/src/lib/view.ts",
       "src/lib/view.ts",
     ]);
-    const report = compareFidelity("board", live, {}, [
+    const report = compareFidelity("board", live, rpcCensus({}), [
       benchRun(1, ["100 packages/alpha/src/lib/view.ts:10 createView"], {}),
     ]);
     expect(report.functions.map((fn) => fn.matchedRuns)).toEqual([0, 1, 0, 0]);
   });
 
   it("reports censored or unmatched frames as unobserved instead of measured zero", () => {
-    const scenario = compareFidelity("board", cpuReport(twentyFunctions), { "sessions.list": 5 }, [
-      benchRun(1, twentyFunctions.slice(0, 15)),
-      benchRun(2, twentyFunctions.slice(0, 14)),
-    ]);
+    const scenario = compareFidelity(
+      "board",
+      cpuReport(twentyFunctions),
+      rpcCensus({ "sessions.list": 5 }),
+      [benchRun(1, twentyFunctions.slice(0, 15)), benchRun(2, twentyFunctions.slice(0, 14))],
+    );
     expect(scenario).toMatchObject({ cpuPass: false, matchedFunctions: 14 });
     expect(scenario.functions[14]).toMatchObject({
       benchShare: null,
@@ -164,7 +170,10 @@ describe("Control UI bench fidelity report", () => {
     const directory = tempDirs.make("openclaw-fidelity-incomplete-");
     const cpu = `profile (1) busy 1000 ms idle 0 ms\n--- inclusive by function (app sources, top 70)\n${twentyFunctions.join("\n")}`;
     writeFileSync(path.join(directory, "live.txt"), cpu);
-    writeFileSync(path.join(directory, "rpcs.json"), JSON.stringify({ "sessions.list": 5 }));
+    writeFileSync(
+      path.join(directory, "rpcs.json"),
+      JSON.stringify(rpcCensus({ "sessions.list": 5 })),
+    );
     writeFileSync(
       path.join(directory, "analyzer.cjs"),
       `process.stdout.write(${JSON.stringify(cpu)});`,
@@ -223,7 +232,7 @@ describe("Control UI bench fidelity report", () => {
       "100 components/panel.tsx:20 renderBeta",
       "90 components/panel.tsx:10 renderAlpha",
     ]);
-    const result = compareFidelity("board", live, {}, [
+    const result = compareFidelity("board", live, rpcCensus({}), [
       benchRun(1, ["90 components/panel.tsx:20 renderAlpha"], {}),
     ]);
     expect(result.functions.map((fn) => fn.matches)).toEqual([["not observed"], ["name"]]);
@@ -232,19 +241,19 @@ describe("Control UI bench fidelity report", () => {
 
   it("requires fifteen distinct locations, not aliases, and rejects fewer than twenty references", () => {
     const live = cpuReport(twentyFunctions);
-    const pass = compareFidelity("board", live, { "sessions.list": 5 }, [
+    const pass = compareFidelity("board", live, rpcCensus({ "sessions.list": 5 }), [
       benchRun(1, twentyFunctions.slice(0, 15)),
       benchRun(2, twentyFunctions.slice(0, 15)),
     ]);
     expect(pass).toMatchObject({ pass: true, cpuPass: true, matchedFunctions: 15 });
-    const fail = compareFidelity("board", live, { "sessions.list": 5 }, [
+    const fail = compareFidelity("board", live, rpcCensus({ "sessions.list": 5 }), [
       benchRun(1, twentyFunctions.slice(0, 14)),
     ]);
     expect(fail).toMatchObject({ pass: false, cpuPass: false, matchedFunctions: 14 });
     const tooShort = cpuReport(twentyFunctions.slice(0, 15));
-    expect(compareFidelity("board", tooShort, {}, [benchRun(1, twentyFunctions)]).cpuPass).toBe(
-      false,
-    );
+    expect(
+      compareFidelity("board", tooShort, rpcCensus({}), [benchRun(1, twentyFunctions)]).cpuPass,
+    ).toBe(false);
   });
 
   it("normalizes by busy time and matches a unique named function after source lines move", () => {
@@ -254,17 +263,19 @@ describe("Control UI bench fidelity report", () => {
       twentyFunctions.map((row) => row.replace(":10", ":25")),
     );
     run.cpu.busyMs = 2000;
-    const result = compareFidelity("chat", live, { "sessions.list": 5 }, [run]);
+    const result = compareFidelity("chat", live, rpcCensus({ "sessions.list": 5 }), [run]);
     expect(result.pass).toBe(true);
     expect(result.functions[0]).toMatchObject({ liveShare: 10, ratio: 0.5, matches: ["name"] });
     expect(result.functions[0]?.benchShare).toEqual({ median: 5, q1: 5, q3: 5, samples: [5] });
     run.cpu.busyMs = 2001;
-    expect(compareFidelity("chat", live, { "sessions.list": 5 }, [run]).cpuPass).toBe(false);
+    expect(compareFidelity("chat", live, rpcCensus({ "sessions.list": 5 }), [run]).cpuPass).toBe(
+      false,
+    );
   });
 
   it("keeps per-run RPC differences visible instead of hiding outliers behind a median", () => {
     const live = cpuReport(twentyFunctions);
-    const result = compareFidelity("board", live, { "sessions.list": 5 }, [
+    const result = compareFidelity("board", live, rpcCensus({ "sessions.list": 5 }), [
       benchRun(1, twentyFunctions),
       benchRun(2, twentyFunctions),
       benchRun(3, twentyFunctions, { "sessions.list": 7 }),
@@ -274,8 +285,56 @@ describe("Control UI bench fidelity report", () => {
     expect(result.rpcs[0]?.bench.samples).toEqual([5, 5, 7]);
     const unexpected = benchRun(1, twentyFunctions);
     unexpected.rpcs = { ...unexpected.rpcs, "chat.history": 2 };
-    expect(compareFidelity("board", live, { "sessions.list": 5 }, [unexpected]).rpcPass).toBe(
-      false,
+    expect(
+      compareFidelity("board", live, rpcCensus({ "sessions.list": 5 }), [unexpected]).rpcPass,
+    ).toBe(false);
+  });
+
+  it("keeps a once-called omitted method unknown even when the census claims completeness", () => {
+    const live = cpuReport(twentyFunctions);
+    const run = benchRun(1, twentyFunctions, { connect: 1, "models.list": 1 });
+    const missing = compareFidelity(
+      "board",
+      live,
+      parseFidelityRpcCensus(rpcCensus({ connect: 1 })),
+      [run],
+    );
+    expect(missing).toMatchObject({
+      cpuPass: true,
+      liveRpcComplete: true,
+      rpcPass: false,
+      pass: false,
+    });
+    expect(missing.rpcs.find((rpc) => rpc.method === "models.list")).toMatchObject({
+      live: null,
+      delta: null,
+      pass: false,
+    });
+    expect(formatFidelityMarkdown({ pass: false, scenarios: [missing] })).toContain(
+      "| models.list | unknown | 1.00 [1.00, 1.00] | unknown | FAIL |",
+    );
+    const explicitZero = compareFidelity(
+      "board",
+      live,
+      parseFidelityRpcCensus(rpcCensus({ connect: 1, "models.list": 0 })),
+      [run],
+    );
+    expect(explicitZero).toMatchObject({ cpuPass: true, rpcPass: true, pass: true });
+  });
+
+  it("cannot pass with a partial census even when every observed method has an accurate count", () => {
+    const live = cpuReport(twentyFunctions);
+    const census = parseFidelityRpcCensus(rpcCensus({ "sessions.list": 5 }, false));
+    const report = compareFidelity("board", live, census, [benchRun(1, twentyFunctions)]);
+    expect(report).toMatchObject({
+      cpuPass: true,
+      liveRpcComplete: false,
+      rpcPass: false,
+      pass: false,
+    });
+    expect(report.rpcs[0]).toMatchObject({ live: 5, delta: 0, pass: true });
+    expect(formatFidelityMarkdown({ pass: false, scenarios: [report] })).toContain(
+      "Live RPC census: incomplete; RPC gate cannot pass.",
     );
   });
 
@@ -288,9 +347,10 @@ describe("Control UI bench fidelity report", () => {
     });
     expect(() => parseFidelityCpuReport("no profile")).toThrow("busy-time");
     expect(() => parseFidelityCpuReport("profile (1) busy 10 ms idle 0 ms")).toThrow("inclusive");
-    expect(() => parseFidelityRpcCounts({ "sessions.list": -1 })).toThrow("invalid");
-    expect(() => parseFidelityRpcCounts({})).toThrow("nonempty");
-    expect(() => compareFidelity("board", cpuReport(twentyFunctions), {}, [])).toThrow(
+    expect(() => parseFidelityRpcCensus(rpcCensus({ "sessions.list": -1 }))).toThrow("invalid");
+    expect(() => parseFidelityRpcCensus({ "sessions.list": 5 })).toThrow("complete:boolean");
+    expect(() => parseFidelityRpcCensus({ counts: {} })).toThrow("complete:boolean");
+    expect(() => compareFidelity("board", cpuReport(twentyFunctions), rpcCensus({}), [])).toThrow(
       "no measured",
     );
   });

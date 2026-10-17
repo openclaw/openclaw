@@ -126,36 +126,51 @@ export async function restoreColdLoadWarmState(
       for (const [key, value] of savedStorage.sessionStorage) {
         sessionStorage.setItem(key, value);
       }
-      const request = indexedDB.open("openclaw-chat-snapshots");
-      const database = await new Promise<IDBDatabase>((resolve, reject) => {
-        request.addEventListener("success", () => resolve(request.result), { once: true });
-        request.addEventListener(
-          "error",
-          () => reject(request.error ?? new Error("Warm-state database open failed")),
-          { once: true },
-        );
-      });
-      try {
-        const names = ["snapshots", "sidebarSnapshots", "snapshotMetadata"] as const;
-        const transaction = database.transaction([...names], "readwrite");
-        const complete = new Promise<void>((resolve, reject) => {
-          transaction.addEventListener("complete", () => resolve(), { once: true });
-          transaction.addEventListener(
-            "abort",
-            () => reject(transaction.error ?? new Error("Warm-state replay aborted")),
+      const databases: Array<{ name: string; records: Record<string, unknown[]> }> = [
+        {
+          name: "openclaw-chat-snapshots",
+          records: {
+            snapshots: savedStorage.snapshots,
+            sidebarSnapshots: savedStorage.sidebarSnapshots,
+            snapshotMetadata: savedStorage.snapshotMetadata,
+          },
+        },
+      ];
+      // The synthetic warm visit has no draft; streaming probes persist typed input here.
+      if ((await indexedDB.databases()).some(({ name }) => name === "openclaw-control-ui")) {
+        databases.push({ name: "openclaw-control-ui", records: { composerDrafts: [] } });
+      }
+      for (const { name, records } of databases) {
+        const request = indexedDB.open(name);
+        const database = await new Promise<IDBDatabase>((resolve, reject) => {
+          request.addEventListener("success", () => resolve(request.result), { once: true });
+          request.addEventListener(
+            "error",
+            () => reject(request.error ?? new Error("Warm-state database open failed")),
             { once: true },
           );
         });
-        for (const name of names) {
-          const store = transaction.objectStore(name);
-          store.clear();
-          for (const record of savedStorage[name]) {
-            store.put(record);
+        try {
+          const transaction = database.transaction(Object.keys(records), "readwrite");
+          const complete = new Promise<void>((resolve, reject) => {
+            transaction.addEventListener("complete", () => resolve(), { once: true });
+            transaction.addEventListener(
+              "abort",
+              () => reject(transaction.error ?? new Error("Warm-state replay aborted")),
+              { once: true },
+            );
+          });
+          for (const [storeName, rows] of Object.entries(records)) {
+            const store = transaction.objectStore(storeName);
+            store.clear();
+            for (const record of rows) {
+              store.put(record);
+            }
           }
+          await complete;
+        } finally {
+          database.close();
         }
-        await complete;
-      } finally {
-        database.close();
       }
       history.replaceState(null, "", deepLink);
     },
