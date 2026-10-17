@@ -21,7 +21,7 @@ explicitly:
 pnpm test ui/src/e2e/team-scale-cold-load.e2e.test.ts --maxWorkers=1
 ```
 
-The selected agent has 300 root sessions plus 54 children, 24 cron sessions and 12 system sessions, with a 200-row shared first page, 30 pinned dashboards (two outside the first page), 34 owners, 120 people, six agent identities (one selected chip), seven UI plugins,
+The selected agent has 300 root sessions plus 54 children, 24 cron sessions and 12 system sessions, with a 200-row shared first page, 30 pinned dashboards, 34 owners, 120 people, six agent identities (one selected chip), seven UI plugins,
 240 transcript messages, 120 cron jobs across enabled, disabled, running and error states, and 12 inline widgets. Six catalog-host events and twelve
 full presence snapshots arrive individually. Catalog notifications exercise the data
 owner; the grouped agent roster does not display catalog rows. Widgets use the production sandbox
@@ -198,8 +198,10 @@ numbers; the fixture E2E opens Online explicitly to verify all 120 people.
 
 ## Live-shape fidelity
 
-The synthetic list owner applies each query's filters and pagination before
-projecting canonical compact/sidebar/dashboard fields. Owner-first prefixes follow
+The synthetic list owner applies each query's filters and canonical Gateway ordering before pagination,
+including pin placement for the default sort and the requested activity clock. All
+30 pins appear in the shared first page; Involving me retains its independent membership.
+It then projects canonical compact/sidebar/dashboard fields. Owner-first prefixes follow
 the Gateway contract independently of the shared page offset. Derived titles and
 last-message previews use the protocol's enrichment bound. Compact cron requests
 page the inventory as 50/50/20; all seven synthetic plugins activate normally.

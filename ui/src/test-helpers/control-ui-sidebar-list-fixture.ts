@@ -4,6 +4,10 @@ import {
   SESSION_SIDEBAR_ROW_FIELDS,
 } from "../../../packages/gateway-protocol/src/session-row-fields.ts";
 import {
+  compareSessionEntryPairs,
+  type SessionEntryPair,
+} from "../../../src/gateway/session-list-order.ts";
+import {
   SESSIONS_LIST_OWNER_LIMIT,
   SESSIONS_LIST_TRANSCRIPT_LIMIT,
 } from "../../../src/shared/session-list-limits.ts";
@@ -38,6 +42,23 @@ export type TeamScaleSidebarListInventory = {
 };
 type TeamScaleSidebarRow = GatewaySessionRow & { updatedAt: number | null };
 type TeamScaleSidebarListResult = SessionsListResult & { sessions: TeamScaleSidebarRow[] };
+
+function sessionEntryPair(row: GatewaySessionRow): SessionEntryPair {
+  return [
+    row.key,
+    {
+      sessionId: row.sessionId ?? row.key,
+      updatedAt: row.updatedAt ?? 0,
+      createdAt: row.createdAt,
+      lastActivityAt: row.lastActivityAt,
+      lastInteractionAt: row.lastInteractionAt,
+      pinnedAt: row.pinned ? row.pinnedAt : undefined,
+      spawnedBy: row.spawnedBy,
+      parentSessionKey: row.parentSessionKey,
+      sidebarRoot: row.sidebarRoot,
+    },
+  ];
+}
 
 /** Owns the synthetic Gateway's changing membership; production code packs its wire rows. */
 export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInventory) {
@@ -77,6 +98,10 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
     } {
       const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = params;
       const key = JSON.stringify(Object.entries(query).toSorted(([a], [b]) => a.localeCompare(b)));
+      const sortBy =
+        query.sortBy === "lastInteractionAt" || query.sortBy === "activity"
+          ? query.sortBy
+          : undefined;
       const eligible = [...rows.values()]
         .filter((row) => {
           if (query.agentId && row.agentId !== query.agentId) {
@@ -136,7 +161,9 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
             `${row.label} ${row.displayName}`.toLowerCase().includes(query.search.toLowerCase())
           );
         })
-        .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.key.localeCompare(b.key));
+        .toSorted((a, b) =>
+          compareSessionEntryPairs(sessionEntryPair(a), sessionEntryPair(b), sortBy),
+        );
       const offset = typeof query.offset === "number" ? query.offset : 0;
       const limit = typeof query.limit === "number" ? query.limit : 200;
       const shared = eligible.slice(offset, offset + limit);

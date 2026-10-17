@@ -63,7 +63,7 @@ async function readStoredWarmState({ sessionKey }: { sessionKey: string }) {
 suite.define(() => {
   const sandbox = useCanvasSandboxFixture();
 
-  it("loads a paged Team roster, off-page pins, plugins, and inline widgets through a deep link", async () => {
+  it("loads a paged Team roster, pinned dashboards, plugins, and inline widgets through a deep link", async () => {
     const fixture = createControlUiTeamScaleFixture({
       baseUrl: suite.server.baseUrl,
       ...sandbox(""),

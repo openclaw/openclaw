@@ -1,12 +1,136 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { CronJobSchema } from "../../../packages/gateway-protocol/src/schema/cron.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { createTeamScaleSidebarListOwner } from "./control-ui-sidebar-list-fixture.ts";
 import { createControlUiTeamScaleFixture } from "./control-ui-team-scale-fixture.ts";
 
 const now = 1_800_000_000_000;
 
 describe("Team-scale Gateway fixture", () => {
+  it("pages session lists using pin placement, stable key ties, and the requested activity clock", () => {
+    const fixture = createControlUiTeamScaleFixture({ now });
+    const rows: GatewaySessionRow[] = [
+      {
+        key: "agent:main:newest",
+        kind: "direct",
+        updatedAt: 900,
+        lastInteractionAt: 100,
+        lastActivityAt: 200,
+      },
+      {
+        key: "agent:main:pin-old",
+        kind: "direct",
+        updatedAt: 100,
+        pinned: true,
+        pinnedAt: 10,
+        parentSessionKey: "agent:main:main",
+        lastInteractionAt: 800,
+      },
+      {
+        key: "agent:main:pin-new",
+        kind: "direct",
+        updatedAt: 50,
+        pinned: true,
+        pinnedAt: 20,
+        lastInteractionAt: 200,
+      },
+      {
+        key: "agent:main:tie-a",
+        kind: "direct",
+        updatedAt: 700,
+        lastInteractionAt: 300,
+        lastActivityAt: 500,
+      },
+      {
+        key: "agent:main:tie-B",
+        kind: "direct",
+        updatedAt: 700,
+        lastInteractionAt: 300,
+        lastActivityAt: 500,
+      },
+      {
+        key: "agent:main:subagent:nested",
+        kind: "direct",
+        updatedAt: 800,
+        pinned: true,
+        pinnedAt: 1_000,
+        spawnedBy: "agent:main:main",
+      },
+      {
+        key: "agent:main:promoted",
+        kind: "direct",
+        updatedAt: 600,
+        pinned: true,
+        pinnedAt: 30,
+        spawnedBy: "agent:main:main",
+        sidebarRoot: true,
+      },
+      {
+        key: "agent:main:false-pin",
+        kind: "direct",
+        updatedAt: 650,
+        pinned: false,
+        pinnedAt: 10_000,
+        lastInteractionAt: 900,
+        lastActivityAt: 800,
+      },
+      { key: "agent:main:created", kind: "direct", updatedAt: null, createdAt: 1_000 },
+    ];
+    const owner = createTeamScaleSidebarListOwner({ ...fixture.sidebarListInput, rows });
+    for (const [sortBy, expected] of [
+      [
+        undefined,
+        [
+          "promoted",
+          "pin-new",
+          "pin-old",
+          "newest",
+          "subagent:nested",
+          "tie-B",
+          "tie-a",
+          "false-pin",
+          "created",
+        ],
+      ],
+      [
+        "lastInteractionAt",
+        [
+          "false-pin",
+          "pin-old",
+          "tie-B",
+          "tie-a",
+          "pin-new",
+          "newest",
+          "created",
+          "promoted",
+          "subagent:nested",
+        ],
+      ],
+      [
+        "activity",
+        [
+          "created",
+          "false-pin",
+          "pin-old",
+          "subagent:nested",
+          "promoted",
+          "tie-B",
+          "tie-a",
+          "newest",
+          "pin-new",
+        ],
+      ],
+    ] as const) {
+      const pages = [0, 3, 6].map((offset) => owner.list({ sortBy, offset, limit: 3 }).result);
+      expect(
+        pages.flatMap((page) => page.sessions.map((row) => row.key)),
+        sortBy ?? "updatedAt",
+      ).toEqual(expected.map((id) => `agent:main:${id}`));
+      expect(pages.map((page) => page.nextOffset)).toEqual([3, 6, null]);
+    }
+  });
+
   it("answers the five boot list shapes from their own filtered and paged inventories", () => {
     const fixture = createControlUiTeamScaleFixture({ now });
     const owner = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
@@ -62,10 +186,7 @@ describe("Team-scale Gateway fixture", () => {
     expect(sidebar).not.toHaveProperty("ownerSessionCounts");
     const sharedKeys = new Set(sidebar.sessions.map((row) => row.key));
     const involvingKeys = new Set(involved.sessions.map((row) => row.key));
-    expect(fixture.pinnedKeys.filter((key) => !sharedKeys.has(key))).toEqual([
-      fixture.pinnedKeys[0],
-      fixture.pinnedKeys[29],
-    ]);
+    expect(fixture.pinnedKeys.every((key) => sharedKeys.has(key))).toBe(true);
     expect(fixture.pinnedKeys.slice(1, 29).every((key) => involvingKeys.has(key))).toBe(true);
     for (const [flag, total] of [
       ["excludeSubagents", 336],
@@ -83,7 +204,7 @@ describe("Team-scale Gateway fixture", () => {
       excludeSystem: true,
     }).result;
     expect(secondPage.sessions).toHaveLength(100);
-    expect(secondPage.sessions[0]?.sessionId).toBe("team-session-173");
+    expect(secondPage.sessions[0]?.sessionId).toBe("team-session-171");
     expect(secondPage).toMatchObject({ offset: 200, nextOffset: null, hasMore: false });
   });
 
