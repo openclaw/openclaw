@@ -9,11 +9,7 @@ import { resolveLinkReaderTarget } from "./link-reader-target.ts";
 const TAG = `test-github-prefetch-${crypto.randomUUID()}`;
 customElements.define(TAG, class extends LinkReaderHovercardProvider {});
 const ISSUE_HREF = "https://github.com/openclaw/openclaw/issues/99815";
-const GITHUB_HOVERCARD_CLOSE_DELAY_MS = 120;
-
-function issuePreviewResponse(overrides: Record<string, unknown> = {}) {
-  return { ...testLinkPreview(), ...overrides };
-}
+const issuePreviewResponse = testLinkPreview;
 
 function createIssueLink() {
   const provider = document.createElement(TAG) as LinkReaderHovercardProvider;
@@ -25,7 +21,9 @@ function createIssueLink() {
   document.body.append(provider);
   const request = vi.fn().mockResolvedValue(issuePreviewResponse());
   provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
-  return { provider, anchor, request };
+  const warm = (signal = new AbortController().signal) =>
+    provider.prefetch(resolveLinkReaderTarget(anchor.href, [TEST_LINK_READER])!, signal);
+  return { provider, anchor, request, warm };
 }
 
 async function hover(anchor: HTMLAnchorElement) {
@@ -51,7 +49,7 @@ describe("GitHub hovercard prefetch subscriptions", () => {
   it.each(["agent", "destination"])(
     "projects inline facts without extra requests until %s changes",
     async (change) => {
-      const { provider, anchor, request } = createIssueLink();
+      const { provider, anchor, request, warm } = createIssueLink();
       anchor.className = "markdown-github-item";
       if (change === "agent") {
         anchor.href = "https://github.com/openclaw/openclaw/pull/142276";
@@ -65,10 +63,7 @@ describe("GitHub hovercard prefetch subscriptions", () => {
           issuePreviewResponse({ url: anchor.href, badge: { label: "Merged", tone: "accent" } }),
         );
       }
-      await provider.prefetch(
-        resolveLinkReaderTarget(anchor.href, [TEST_LINK_READER])!,
-        new AbortController().signal,
-      );
+      await warm();
       if (change === "agent") {
         expect(anchor.dataset.linkReaderTone).toBe("accent");
         expect(other.dataset.linkReaderTone).toBeUndefined();
@@ -97,18 +92,17 @@ describe("GitHub hovercard prefetch subscriptions", () => {
     { phase: "cached", change: "connection" },
     { phase: "cached", change: "principal" },
   ])("retires $phase inline state after $change changes", async ({ phase, change }) => {
-    const { provider, anchor, request } = createIssueLink();
+    const { provider, anchor, request, warm } = createIssueLink();
     anchor.className = "markdown-github-item";
     const client = { request, connected: true, connectionGeneration: 1, recoveryScope: "first" };
     provider.client = client as unknown as GatewayBrowserClient;
-    const target = resolveLinkReaderTarget(anchor.href, [TEST_LINK_READER])!;
     const pending =
       phase === "pending" ? createDeferred<ReturnType<typeof issuePreviewResponse>>() : undefined;
     if (pending) {
       request.mockReturnValueOnce(pending.promise);
     }
     await provider.updateComplete;
-    const loading = provider.prefetch(target, new AbortController().signal);
+    const loading = warm();
     if (!pending) {
       await loading;
       expect(anchor.dataset.linkReaderTone).toBe("positive");
@@ -131,7 +125,7 @@ describe("GitHub hovercard prefetch subscriptions", () => {
       expect(chip.hasAttribute("aria-description")).toBe(false);
       expect(request).toHaveBeenCalledTimes(1);
     }
-    await provider.prefetch(target, new AbortController().signal);
+    await warm();
     expect(chip.dataset.linkReaderTone).toBe("positive");
     expect(request).toHaveBeenCalledTimes(2);
   });
@@ -140,25 +134,24 @@ describe("GitHub hovercard prefetch subscriptions", () => {
     "keeps shared warming alive when the %s consumer leaves",
     async (consumer) => {
       const deferred = createDeferred<ReturnType<typeof issuePreviewResponse>>();
-      const { anchor, provider, request } = createIssueLink();
+      const { anchor, provider, request, warm } = createIssueLink();
       request.mockReturnValue(deferred.promise);
       const firstScope = new AbortController();
-      const target = resolveLinkReaderTarget(ISSUE_HREF, [TEST_LINK_READER])!;
       await provider.updateComplete;
       let first: Promise<unknown> | undefined;
       let survivor: Promise<void>;
       if (consumer === "hover") {
-        survivor = provider.prefetch(target, firstScope.signal);
+        survivor = warm(firstScope.signal);
         expect(hovercard()).toBeNull();
         await hover(anchor);
       } else {
         if (consumer === "prefetch") {
-          first = provider.prefetch(target, firstScope.signal).catch((error: unknown) => error);
+          first = warm(firstScope.signal).catch((error: unknown) => error);
         } else {
           anchor.focus();
           await vi.advanceTimersByTimeAsync(0);
         }
-        survivor = provider.prefetch(target, new AbortController().signal);
+        survivor = warm();
       }
       const transportSignal = request.mock.calls[0]![2].signal as AbortSignal;
       if (consumer === "prefetch") {
@@ -169,7 +162,7 @@ describe("GitHub hovercard prefetch subscriptions", () => {
         } else {
           anchor.blur();
         }
-        await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+        await vi.advanceTimersByTimeAsync(120);
       }
       expect(transportSignal.aborted).toBe(false);
       if (consumer === "hover") {
@@ -187,7 +180,7 @@ describe("GitHub hovercard prefetch subscriptions", () => {
       if (consumer === "hover") {
         firstScope.abort();
         leave(anchor);
-        await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+        await vi.advanceTimersByTimeAsync(120);
         await hover(anchor);
         expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
         expect(request).toHaveBeenCalledTimes(1);
@@ -196,15 +189,14 @@ describe("GitHub hovercard prefetch subscriptions", () => {
   );
 
   it("leaves disconnected previews eligible to warm after reconnect", async () => {
-    const { anchor, provider, request } = createIssueLink();
+    const { anchor, provider, request, warm } = createIssueLink();
     const client = { request, connected: false };
     provider.client = client as unknown as GatewayBrowserClient;
-    const target = resolveLinkReaderTarget(ISSUE_HREF, [TEST_LINK_READER])!;
-    await provider.prefetch(target, new AbortController().signal);
+    await warm();
     expect(request).not.toHaveBeenCalled();
 
     client.connected = true;
-    await provider.prefetch(target, new AbortController().signal);
+    await warm();
     await hover(anchor);
     expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
     expect(request).toHaveBeenCalledTimes(1);
@@ -214,13 +206,10 @@ describe("GitHub hovercard prefetch subscriptions", () => {
     "retires pending prefetch on %s changes",
     async (change) => {
       const old = createDeferred<ReturnType<typeof issuePreviewResponse>>();
-      const { anchor, provider, request } = createIssueLink();
+      const { anchor, provider, request, warm } = createIssueLink();
       request.mockReturnValueOnce(old.promise);
       await provider.updateComplete;
-      const pending = provider.prefetch(
-        resolveLinkReaderTarget(ISSUE_HREF, [TEST_LINK_READER])!,
-        new AbortController().signal,
-      );
+      const pending = warm();
       const signal = request.mock.calls[0]![2].signal as AbortSignal;
       if (change === "agent") {
         provider.agentId = "other";

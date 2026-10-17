@@ -13,19 +13,10 @@ type FilePreviewModalElement = HTMLElementTagNameMap["openclaw-file-preview-moda
 
 let container: HTMLDivElement;
 
-const FILE_PREVIEW_MODAL_ELEMENT_NAME = "openclaw-file-preview-modal";
-
+const previewFile = (path: string, contents: string, size = "1 KB") => ({ path, size, contents });
 const files = [
-  {
-    path: "templates/digest.md",
-    size: "2.1 KB",
-    contents: "Morning digest template",
-  },
-  {
-    path: "filters/auto-senders.txt",
-    size: "418 B",
-    contents: "noreply@example.com",
-  },
+  previewFile("templates/digest.md", "Morning digest template", "2.1 KB"),
+  previewFile("filters/auto-senders.txt", "noreply@example.com", "418 B"),
 ];
 
 type RenderPreviewOptions = {
@@ -35,25 +26,23 @@ type RenderPreviewOptions = {
   layout?: "files" | "document";
 };
 
-async function renderPreview(options: RenderPreviewOptions = {}) {
-  const query = options.query ?? "";
-  const activePath = options.activePath ?? "templates/digest.md";
-  const previewFiles = options.previewFiles ?? files;
-  const modal = document.createElement(FILE_PREVIEW_MODAL_ELEMENT_NAME) as FilePreviewModalElement;
+async function renderPreview({
+  query = "",
+  activePath = files[0]!.path,
+  previewFiles = files,
+  layout = "files",
+}: RenderPreviewOptions = {}) {
+  const modal = document.createElement("openclaw-file-preview-modal");
   modal.files = previewFiles;
   modal.activePath = activePath;
   modal.query = query;
   modal.contextLabel = "in morning-catchup";
-  modal.layout = options.layout ?? "files";
+  modal.layout = layout;
   mountSolid(() => modal, { container });
 
   await modal.updateComplete;
   flush();
   return modal;
-}
-
-function previewText(modal: FilePreviewModalElement): string {
-  return modal.textContent ?? "";
 }
 
 function pressArrowDown(target: EventTarget | null | undefined) {
@@ -86,8 +75,8 @@ describe("openclaw-file-preview-modal", () => {
     const modal = await renderPreview({
       activePath: "SKILL.md",
       previewFiles: [
-        { path: "SKILL.md", size: "1 KB", contents: "Skill instructions" },
-        { path: "README.md", size: "1 KB", contents: "Documentation" },
+        previewFile("SKILL.md", "Skill instructions"),
+        previewFile("README.md", "Documentation"),
       ],
     });
     const reference = document.createElement("div");
@@ -186,8 +175,8 @@ describe("openclaw-file-preview-modal", () => {
     const firstContents = Array.from({ length: 500 }, (_, index) => `first-${index}`).join("\n");
     const secondContents = Array.from({ length: 500 }, (_, index) => `second-${index}`).join("\n");
     const previewFiles = [
-      { path: "first.ts", size: "5 KB", contents: firstContents },
-      { path: "second.ts", size: "5 KB", contents: secondContents },
+      previewFile("first.ts", firstContents, "5 KB"),
+      previewFile("second.ts", secondContents, "5 KB"),
     ];
     const modal = await renderPreview({ activePath: "first.ts", previewFiles });
     const body = modal.querySelector<HTMLElement>(".detail-body");
@@ -227,8 +216,7 @@ describe("openclaw-file-preview-modal", () => {
 
       expect(modal.querySelector(".detail-body")).toBe(body);
       expect(content.firstElementChild).toBe(first);
-      expect(body.scrollTop).toBe(240);
-      expect(body.scrollLeft).toBe(40);
+      expect(body).toMatchObject({ scrollTop: 240, scrollLeft: 40 });
       expect(body.textContent).toContain("Morning digest template");
     },
   );
@@ -238,13 +226,9 @@ describe("openclaw-file-preview-modal", () => {
       layout: "document",
       activePath: "SKILL.md",
       previewFiles: [
-        {
-          path: "SKILL.md",
-          size: "1 KB",
-          contents: "---\nname: guide\n---\n# Guide\n[Notes](notes/a.md)",
-        },
-        { path: "hidden/a.md", size: "1 KB", contents: "Hidden notes" },
-        { path: "notes/a.md", size: "1 KB", contents: "Visible notes" },
+        previewFile("SKILL.md", "---\nname: guide\n---\n# Guide\n[Notes](notes/a.md)"),
+        previewFile("hidden/a.md", "Hidden notes"),
+        previewFile("notes/a.md", "Visible notes"),
       ],
     });
     const select = vi.fn();
@@ -290,8 +274,8 @@ describe("openclaw-file-preview-modal", () => {
       expect(
         modal.querySelector<HTMLElement & { label: string }>("openclaw-modal-dialog")?.label,
       ).toBe("Arquivos de suporte");
-      expect(previewText(modal)).toContain("2 arquivos");
-      expect(previewText(modal)).toContain("Fechar");
+      expect(modal.textContent).toContain("2 arquivos");
+      expect(modal.textContent).toContain("Fechar");
       expect(button.getAttribute("aria-label")).toBe("Copiar arquivo");
       if (copied) {
         write.resolve();
@@ -318,15 +302,13 @@ describe("openclaw-file-preview-modal", () => {
     },
   );
 
-  it.each([["references/notes.constructor", "CONSTRUCTOR"]])(
-    "renders the fallback file-kind label for %s",
-    async (path, label) => {
-      const modal = await renderPreview({
-        activePath: path,
-        previewFiles: [{ path, size: "12 B", contents: "Example file" }],
-      });
+  it("renders the fallback file-kind label for references/notes.constructor", async () => {
+    const path = "references/notes.constructor";
+    const modal = await renderPreview({
+      activePath: path,
+      previewFiles: [previewFile(path, "Example file", "12 B")],
+    });
 
-      expect(modal.querySelector(".chip.accent")?.textContent).toBe(label);
-    },
-  );
+    expect(modal.querySelector(".chip.accent")?.textContent).toBe("CONSTRUCTOR");
+  });
 });
