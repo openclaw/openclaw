@@ -113,12 +113,9 @@ describe("cross-OS installer fetch", () => {
       const healthyMarker = join(dir, "healthy.txt");
       const stalledMarker = join(dir, "stalled.txt");
       const logPath = join(dir, "installer.log");
-      const startedAt = new Date().toISOString();
-      const started = performance.now();
-      const requests: Array<{ url: string | undefined; elapsedMs: number }> = [];
-      let completed = false;
+      const requests: Array<string | undefined> = [];
       const server = createServer((request, response) => {
-        requests.push({ url: request.url, elapsedMs: performance.now() - started });
+        requests.push(request.url);
         response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
         if (request.url === "/healthy") {
           response.end(
@@ -150,24 +147,17 @@ describe("cross-OS installer fetch", () => {
           logPath,
         );
 
-        expect(result.stdout).toContain("OPENCLAW_INSTALLER_PROOF:healthy-complete ");
+        expect(result.stdout, result.stderr).toContain(
+          "OPENCLAW_INSTALLER_PROOF:healthy-complete ",
+        );
         expect(readFileSync(healthyMarker, "utf8")).toBe("tag=proof-target noOnboard=True");
-        expect(requests.map(({ url }) => url)).toEqual(["/healthy", "/stalled"]);
+        expect(requests).toEqual(["/healthy", "/stalled"]);
         expect(result.exitCode).not.toBe(0);
         expect(`${result.stdout}\n${result.stderr}`).toContain("exit 28");
         expect(existsSync(stalledMarker)).toBe(false);
         // Each installer uses a distinct GUID, so the final inventory covers both cleanups.
         expect(installerTempFiles(dir)).toEqual([]);
-        completed = true;
       } finally {
-        if (!completed) {
-          console.error("Windows installer proof failed", {
-            startedAt,
-            elapsedMs: performance.now() - started,
-            requests,
-            commandLog: existsSync(logPath) ? readFileSync(logPath, "utf8") : undefined,
-          });
-        }
         await close(server);
       }
     },
