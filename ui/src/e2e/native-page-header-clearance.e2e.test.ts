@@ -196,7 +196,10 @@ suite.define(() => {
         expect(box.x + box.width).toBeLessThanOrEqual(width);
         expect(box.y + box.height).toBeLessThanOrEqual(height);
         expect(
-          box.x >= intro.x + intro.width || box.y >= intro.y + intro.height,
+          box.x + box.width <= intro.x ||
+            box.x >= intro.x + intro.width ||
+            box.y + box.height <= intro.y ||
+            box.y >= intro.y + intro.height,
           `Agent action ${JSON.stringify(box)} overlaps intro ${JSON.stringify(intro)}`,
         ).toBe(true);
         await action.click({ trial: true });
