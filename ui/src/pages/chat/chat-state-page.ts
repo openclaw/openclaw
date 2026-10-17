@@ -686,5 +686,9 @@ export function createPageState(
     "currentSessionId",
     "chatGoalDraftMode",
     "chatReplyTarget",
+    "chatNewMessagesBelow",
+    "chatReadingHistory",
+    "chatFollowLocked",
+    "chatUserNearBottom",
   ]);
 }

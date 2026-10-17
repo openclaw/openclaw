@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRoot } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { flush } from "../../../test-helpers/solid-settle.ts";
+import { projectChatFields } from "../chat-field-projection.ts";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import {
@@ -528,7 +530,11 @@ describe("chat transcript controller", () => {
     const host = new TranscriptTestHost();
     const container = host.transcriptRoot;
     const policy = makeChatHost({ chatScrollElement: () => container });
-    policy.renderLifecycle.invalidate = () => host.requestRender();
+    const readerStatus = createRoot((dispose) => {
+      onTestFinished(dispose);
+      projectChatFields(policy, ["chatReadingHistory"]);
+      return <output>{policy.chatReadingHistory ? "Reading history" : "Following"}</output>;
+    });
     const onReaderScroll = vi.fn((towardEnd?: boolean) =>
       handleChatScrollTakeover(policy, towardEnd),
     );
@@ -555,7 +561,7 @@ describe("chat transcript controller", () => {
           (row) => (row.kind === "content" ? row.content : null),
           null,
           false,
-          <output>{policy.chatReadingHistory ? "Reading history" : "Following"}</output>,
+          readerStatus,
         );
       });
     try {
@@ -585,8 +591,8 @@ describe("chat transcript controller", () => {
       expect(onSettled).toHaveBeenCalledExactlyOnceWith({ scrollTop: 2420, anchorToEnd: false });
       expect(container.scrollTop).toBe(2420);
       expect(container.querySelector("output")?.textContent).toBe("Reading history");
-      // Reader-policy invalidation owns the single settle commit, even before native scroll delivery.
-      expect.soft(host.committedRenders - initialCommits).toBe(1);
+      // Reader policy updates its binding without a pane commit or native scroll delivery.
+      expect.soft(host.committedRenders - initialCommits).toBe(0);
       expect.soft(retryCommits).toEqual(Array(11).fill(0));
 
       // jsdom does not emit native scroll events for scrollTop writes. Deliver the browser read-back.
