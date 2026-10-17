@@ -33,24 +33,25 @@ const nativeQuote = {
   replyToBody: "quote me",
 };
 
+function configure(overrides: Record<string, unknown>) {
+  setSignalToolResultTestConfig(createSignalToolResultConfig({ autoStart: false, ...overrides }));
+}
+
+function reaction(targetAuthor: string | undefined, extra = {}) {
+  return { reactionMessage: { emoji: "✅", targetAuthor, targetSentTimestamp: 2, ...extra } };
+}
+
+function inboundEnvelope(envelope: Record<string, unknown>) {
+  return { sourceNumber: "+15550001111", sourceName: "Ada", timestamp: 1, ...envelope };
+}
+
 function receiveSingleEnvelope(
   envelope: Record<string, unknown> = {
     timestamp: 1700000000001,
     dataMessage: { message: "quote me" },
   },
 ) {
-  return receiveSignalPayloads({
-    payloads: [
-      {
-        envelope: {
-          sourceNumber: "+15550001111",
-          sourceName: "Ada",
-          timestamp: 1,
-          ...envelope,
-        },
-      },
-    ],
-  });
+  return receiveSignalPayloads({ payloads: [{ envelope: inboundEnvelope(envelope) }] });
 }
 
 function expectNoNativeQuote(options: unknown) {
@@ -66,15 +67,7 @@ function expectNoReplyDeliveryOrRouteUpdate() {
 }
 
 function setReactionNotificationConfig(mode: "all" | "own", extra: Record<string, unknown> = {}) {
-  setSignalToolResultTestConfig(
-    createSignalToolResultConfig({
-      autoStart: false,
-      dmPolicy: "open",
-      allowFrom: ["*"],
-      reactionNotifications: mode,
-      ...extra,
-    }),
-  );
+  configure({ dmPolicy: "open", allowFrom: ["*"], reactionNotifications: mode, ...extra });
 }
 
 describe("monitorSignalProvider tool results", () => {
@@ -84,13 +77,7 @@ describe("monitorSignalProvider tool results", () => {
   ] as const)(
     "quotes final replies after a block: failed=$failed media=$media",
     async ({ failed, media, finalQuoted }) => {
-      setSignalToolResultTestConfig(
-        createSignalToolResultConfig({
-          autoStart: false,
-          replyToMode: "first",
-          streaming: { block: { enabled: true } },
-        }),
-      );
+      configure({ replyToMode: "first", streaming: { block: { enabled: true } } });
       sendMock.mockResolvedValue({ messageId: "1700000000002" });
       if (failed) {
         sendMock.mockRejectedValueOnce(
@@ -105,10 +92,7 @@ describe("monitorSignalProvider tool results", () => {
         return { text: "Final answer" };
       });
 
-      await receiveSingleEnvelope({
-        timestamp: 1700000000001,
-        dataMessage: { message: "quote me" },
-      });
+      await receiveSingleEnvelope();
 
       expect(sendMock).toHaveBeenCalledTimes(2);
       expect(sendMock.mock.calls.map((call) => call[1])).toEqual([
@@ -131,16 +115,8 @@ describe("monitorSignalProvider tool results", () => {
   );
 
   it("passes group inbound quote metadata through group reply mode overrides", async () => {
-    setSignalToolResultTestConfig(
-      createSignalToolResultConfig({
-        autoStart: false,
-        groupPolicy: "open",
-        replyToMode: "off",
-        replyToModeByChatType: { group: "all" },
-      }),
-    );
+    configure({ groupPolicy: "open", replyToMode: "off", replyToModeByChatType: { group: "all" } });
     replyMock.mockResolvedValue({ text: "group reply" });
-
     await receiveSingleEnvelope({
       timestamp: 1700000000001,
       dataMessage: {
@@ -148,7 +124,6 @@ describe("monitorSignalProvider tool results", () => {
         groupInfo: { groupId: "signal-group-id", groupName: "Testing realm" },
       },
     });
-
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock.mock.calls[0]?.[0]).toBe("group:signal-group-id");
     expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
@@ -159,9 +134,7 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("keeps status notices outside the first quote slot", async () => {
-    setSignalToolResultTestConfig(
-      createSignalToolResultConfig({ autoStart: false, replyToMode: "first" }),
-    );
+    configure({ replyToMode: "first" });
     replyMock.mockResolvedValue([
       { text: "working", isStatusNotice: true },
       { text: "final reply" },
@@ -176,10 +149,7 @@ describe("monitorSignalProvider tool results", () => {
 
   it("keeps durable conversation events separate in batched reply mode", async ({ signal }) => {
     setSignalToolResultTestConfig({
-      ...createSignalToolResultConfig({
-        autoStart: false,
-        replyToMode: "batched",
-      }),
+      ...createSignalToolResultConfig({ autoStart: false, replyToMode: "batched" }),
       messages: { visibleReplies: "automatic", inbound: { debounceMs: 10 } },
     });
     replyMock.mockResolvedValue({ text: "reply" });
@@ -198,12 +168,7 @@ describe("monitorSignalProvider tool results", () => {
         await onEvent({
           event: "receive",
           data: JSON.stringify({
-            envelope: {
-              sourceNumber: "+15550001111",
-              sourceName: "Ada",
-              timestamp,
-              dataMessage: { message },
-            },
+            envelope: inboundEnvelope({ timestamp, dataMessage: { message } }),
           }),
         });
       }
@@ -240,7 +205,6 @@ describe("monitorSignalProvider tool results", () => {
         vi.useRealTimers();
       }
     }
-
     expect(replyMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenCalledTimes(2);
     for (const call of sendMock.mock.calls) {
@@ -250,30 +214,22 @@ describe("monitorSignalProvider tool results", () => {
 
   it("does not attach native quote metadata for a different explicit reply target", async () => {
     replyMock.mockResolvedValue({ text: "final reply", replyToId: "1700000000999" });
-
     await receiveSingleEnvelope();
-
     expect(sendMock).toHaveBeenCalledTimes(1);
     expectNoNativeQuote(sendMock.mock.calls[0]?.[2]);
   });
 
   it("does not attach native quote metadata when the reply opts out of the current message", async () => {
     replyMock.mockResolvedValue({ text: "status reply", replyToCurrent: false });
-
     await receiveSingleEnvelope();
-
     expect(sendMock).toHaveBeenCalledTimes(1);
     expectNoNativeQuote(sendMock.mock.calls[0]?.[2]);
   });
 
   it("keeps explicit current-message native quote metadata when reply mode is off", async () => {
-    setSignalToolResultTestConfig(
-      createSignalToolResultConfig({ autoStart: false, replyToMode: "off" }),
-    );
+    configure({ replyToMode: "off" });
     replyMock.mockResolvedValue({ text: "final reply", replyToCurrent: true });
-
     await receiveSingleEnvelope();
-
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock.mock.calls[0]?.[2]).toMatchObject(nativeQuote);
   });
@@ -281,26 +237,16 @@ describe("monitorSignalProvider tool results", () => {
   it("ignores reaction-only dataMessage.reaction events (don’t treat as broken attachments)", async () => {
     await receiveSingleEnvelope({
       dataMessage: {
-        reaction: {
-          emoji: "👍",
-          targetAuthor: "+15550002222",
-          targetSentTimestamp: 2,
-        },
+        reaction: { emoji: "👍", targetAuthor: "+15550002222", targetSentTimestamp: 2 },
         attachments: [{}],
       },
     });
-
     expectNoReplyDeliveryOrRouteUpdate();
   });
 
   it("blocks reaction notifications from unauthorized senders", async () => {
-    setReactionNotificationConfig("all", {
-      dmPolicy: "allowlist",
-      allowFrom: ["+15550007777"],
-    });
-    await receiveSingleEnvelope({
-      reactionMessage: { emoji: "✅", targetAuthor: "+15550002222", targetSentTimestamp: 2 },
-    });
+    setReactionNotificationConfig("all", { dmPolicy: "allowlist", allowFrom: ["+15550007777"] });
+    await receiveSingleEnvelope(reaction("+15550002222"));
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expectNoReplyDeliveryOrRouteUpdate();
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
@@ -322,14 +268,9 @@ describe("monitorSignalProvider tool results", () => {
         dmPolicy: "allowlist",
         allowFrom: ["+15550001111"],
       });
-      await receiveSingleEnvelope({
-        reactionMessage: {
-          emoji: "✅",
-          targetAuthor,
-          targetAuthorUuid: "123e4567-e89b-12d3-a456-426614174000",
-          targetSentTimestamp: 2,
-        },
-      });
+      await receiveSingleEnvelope(
+        reaction(targetAuthor, { targetAuthorUuid: "123e4567-e89b-12d3-a456-426614174000" }),
+      );
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         expect.stringContaining("Signal reaction added"),
         expect.objectContaining({ sessionKey: "agent:main:main" }),
@@ -341,12 +282,10 @@ describe("monitorSignalProvider tool results", () => {
 
   it("processes messages when reaction metadata is present", async () => {
     replyMock.mockResolvedValue({ text: "pong" });
-
     await receiveSingleEnvelope({
       reactionMessage: { emoji: "👍", targetAuthor: "+15550002222", targetSentTimestamp: 2 },
       dataMessage: { message: "ping" },
     });
-
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 });

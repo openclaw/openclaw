@@ -18,15 +18,15 @@ installSignalToolResultTestHooks();
 const { monitorSignalProvider } = await import("./monitor.js");
 
 const {
-  replyMock,
-  sendMock,
-  signalRpcRequestMock,
-  upsertPairingRequestMock,
-  waitForTransportReadyMock,
-  assertSignalDaemonEndpointAvailableMock,
-  signalCheckMock,
-  spawnSignalDaemonMock,
-  streamMock,
+  replyMock: reply,
+  sendMock: send,
+  signalRpcRequestMock: rpc,
+  upsertPairingRequestMock: pair,
+  waitForTransportReadyMock: waitUntilReady,
+  assertSignalDaemonEndpointAvailableMock: probeEndpoint,
+  signalCheckMock: checkSignal,
+  spawnSignalDaemonMock: spawnDaemon,
+  streamMock: stream,
 } = getSignalToolResultTestMocks();
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
@@ -47,19 +47,19 @@ function createMonitorRuntime() {
   };
 }
 
-function setSignalAutoStartConfig(overrides: Record<string, unknown> = {}) {
+function configure(overrides: Record<string, unknown> = {}) {
   setSignalToolResultTestConfig(createSignalToolResultConfig(overrides));
 }
 
 function createAutoAbortController() {
   const abortController = new AbortController();
-  streamMock.mockImplementation(async () => {
+  stream.mockImplementation(async () => {
     abortController.abort();
   });
   return abortController;
 }
 
-async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
+async function runMonitor(opts: MonitorSignalProviderOptions) {
   return monitorSignalProvider({
     runtime: createMonitorRuntime(),
     ...opts,
@@ -67,132 +67,107 @@ async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
 }
 
 describe("monitorSignalProvider autostart", () => {
-  beforeEach(() => setSignalAutoStartConfig());
+  beforeEach(() => configure());
   it("uses the configured private socket for startup, readiness, and receive without HTTP", async () => {
-    setSignalAutoStartConfig({
+    configure({
       transport: {
         kind: "managed-native",
         socketPath: "/private/signal/rpc",
         configPath: "~/.openclaw/signal-cli",
       },
     });
-    waitForTransportReadyMock.mockImplementationOnce(
-      async ({ check }: { check: () => Promise<unknown> }) => {
-        await check();
-      },
-    );
-    const abortController = createAutoAbortController();
-    await runMonitorWithMocks({
-      abortSignal: abortController.signal,
+    waitUntilReady.mockImplementationOnce(async ({ check }: { check: () => Promise<unknown> }) => {
+      await check();
     });
-    expect(assertSignalDaemonEndpointAvailableMock).toHaveBeenCalledWith(
+    const abortController = createAutoAbortController();
+    await runMonitor({ abortSignal: abortController.signal });
+    expect(probeEndpoint).toHaveBeenCalledWith(
       expect.objectContaining({ socketPath: "/private/signal/rpc" }),
     );
-    expect(spawnSignalDaemonMock).toHaveBeenCalledWith(
+    expect(spawnDaemon).toHaveBeenCalledWith(
       expect.objectContaining({
         socketPath: "/private/signal/rpc",
         configPath: "~/.openclaw/signal-cli",
       }),
     );
-    expect(signalCheckMock).toHaveBeenCalledWith("unix:///private/signal/rpc", expect.any(Number));
-    expect(streamMock).toHaveBeenCalledWith(
+    expect(checkSignal).toHaveBeenCalledWith("unix:///private/signal/rpc", expect.any(Number));
+    expect(stream).toHaveBeenCalledWith(
       expect.objectContaining({ baseUrl: "unix:///private/signal/rpc" }),
     );
   });
 
   it("refuses HTTP overrides for an opted-in private transport", async () => {
-    setSignalAutoStartConfig({
+    configure({
       transport: { kind: "managed-native", socketPath: "/private/signal/rpc" },
     });
-    await expect(runMonitorWithMocks({ baseUrl: SIGNAL_BASE_URL })).rejects.toThrow(
+    await expect(runMonitor({ baseUrl: SIGNAL_BASE_URL })).rejects.toThrow(
       "cannot be combined with HTTP endpoint overrides",
     );
-    expect(spawnSignalDaemonMock).not.toHaveBeenCalled();
+    expect(spawnDaemon).not.toHaveBeenCalled();
   });
   it("normalizes an IPv6 override and reports an occupied endpoint before spawning", async () => {
     const abortController = createAutoAbortController();
-    setSignalAutoStartConfig({ httpPort: 8181 });
-    assertSignalDaemonEndpointAvailableMock.mockRejectedValueOnce(
+    configure({ httpPort: 8181 });
+    probeEndpoint.mockRejectedValueOnce(
       new Error("Signal managed native endpoint ::1:8181 is already in use."),
     );
-
     await expect(
-      runMonitorWithMocks({
-        abortSignal: abortController.signal,
-        httpHost: "[::1]",
-      }),
+      runMonitor({ abortSignal: abortController.signal, httpHost: "[::1]" }),
     ).rejects.toThrow("Signal managed native endpoint ::1:8181 is already in use.");
-    expect(assertSignalDaemonEndpointAvailableMock).toHaveBeenCalledWith(
+    expect(probeEndpoint).toHaveBeenCalledWith(
       expect.objectContaining({
         httpHost: "::1",
         httpPort: 8181,
         abortSignal: expect.any(AbortSignal),
       }),
     );
-    expect(spawnSignalDaemonMock).not.toHaveBeenCalled();
-    expect(waitForTransportReadyMock).not.toHaveBeenCalled();
+    expect(spawnDaemon).not.toHaveBeenCalled();
+    expect(waitUntilReady).not.toHaveBeenCalled();
   });
 
   it("cancels the managed endpoint probe when monitoring aborts", async () => {
     const abortController = new AbortController();
     const started = Promise.withResolvers<void>();
-    assertSignalDaemonEndpointAvailableMock.mockImplementationOnce(
-      ({ abortSignal }: { abortSignal: AbortSignal }) => {
-        started.resolve();
-        return rejectOnAbort(abortSignal);
-      },
-    );
-
-    const monitorPromise = runMonitorWithMocks({
-      abortSignal: abortController.signal,
+    probeEndpoint.mockImplementationOnce(({ abortSignal }: { abortSignal: AbortSignal }) => {
+      started.resolve();
+      return rejectOnAbort(abortSignal);
     });
+    const monitorPromise = runMonitor({ abortSignal: abortController.signal });
     await started.promise;
     abortController.abort();
-
     await expect(monitorPromise).resolves.toBeUndefined();
-    expect(spawnSignalDaemonMock).not.toHaveBeenCalled();
+    expect(spawnDaemon).not.toHaveBeenCalled();
   });
 
   it("does not spawn when monitoring aborts as the endpoint probe completes", async () => {
     const abortController = new AbortController();
-    assertSignalDaemonEndpointAvailableMock.mockImplementationOnce(async () => {
+    probeEndpoint.mockImplementationOnce(async () => {
       abortController.abort();
     });
-
-    await expect(
-      runMonitorWithMocks({
-        abortSignal: abortController.signal,
-      }),
-    ).resolves.toBeUndefined();
-    expect(spawnSignalDaemonMock).not.toHaveBeenCalled();
+    await expect(runMonitor({ abortSignal: abortController.signal })).resolves.toBeUndefined();
+    expect(spawnDaemon).not.toHaveBeenCalled();
   });
 
   it("bounds the managed endpoint probe by the startup timeout", async () => {
-    assertSignalDaemonEndpointAvailableMock.mockImplementationOnce(
-      ({ abortSignal }: { abortSignal: AbortSignal }) => rejectOnAbort(abortSignal),
+    probeEndpoint.mockImplementationOnce(({ abortSignal }: { abortSignal: AbortSignal }) =>
+      rejectOnAbort(abortSignal),
     );
-
-    await expect(
-      runMonitorWithMocks({
-        startupTimeoutMs: 1_000,
-      }),
-    ).rejects.toThrow("signal daemon startup timed out after 1000ms while checking its endpoint");
-    expect(spawnSignalDaemonMock).not.toHaveBeenCalled();
+    await expect(runMonitor({ startupTimeoutMs: 1_000 })).rejects.toThrow(
+      "signal daemon startup timed out after 1000ms while checking its endpoint",
+    );
+    expect(spawnDaemon).not.toHaveBeenCalled();
   });
 
   it("does not spawn when the endpoint probe consumes the startup deadline", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    assertSignalDaemonEndpointAvailableMock.mockImplementationOnce(async () => {
+    probeEndpoint.mockImplementationOnce(async () => {
       now.mockReturnValue(2_000);
     });
-
     try {
-      await expect(
-        runMonitorWithMocks({
-          startupTimeoutMs: 1_000,
-        }),
-      ).rejects.toThrow("signal daemon startup timed out after 1000ms before starting");
-      expect(spawnSignalDaemonMock).not.toHaveBeenCalled();
+      await expect(runMonitor({ startupTimeoutMs: 1_000 })).rejects.toThrow(
+        "signal daemon startup timed out after 1000ms before starting",
+      );
+      expect(spawnDaemon).not.toHaveBeenCalled();
     } finally {
       now.mockRestore();
     }
@@ -201,26 +176,20 @@ describe("monitorSignalProvider autostart", () => {
   it("bounds the final readiness request by the shared startup deadline", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const abortController = createAutoAbortController();
-    assertSignalDaemonEndpointAvailableMock.mockImplementationOnce(async () => {
+    probeEndpoint.mockImplementationOnce(async () => {
       now.mockReturnValue(1_900);
     });
-    signalCheckMock.mockImplementationOnce(async () => {
+    checkSignal.mockImplementationOnce(async () => {
       now.mockReturnValue(2_001);
       return { ok: true };
     });
     let readinessResult: unknown;
-    waitForTransportReadyMock.mockImplementationOnce(
-      async ({ check }: { check: () => Promise<unknown> }) => {
-        readinessResult = await check();
-      },
-    );
-
+    waitUntilReady.mockImplementationOnce(async ({ check }: { check: () => Promise<unknown> }) => {
+      readinessResult = await check();
+    });
     try {
-      await runMonitorWithMocks({
-        abortSignal: abortController.signal,
-        startupTimeoutMs: 1_000,
-      });
-      expect(signalCheckMock).toHaveBeenCalledWith(SIGNAL_BASE_URL, 100);
+      await runMonitor({ abortSignal: abortController.signal, startupTimeoutMs: 1_000 });
+      expect(checkSignal).toHaveBeenCalledWith(SIGNAL_BASE_URL, 100);
       expect(readinessResult).toEqual({ ok: false, error: "startup deadline exceeded" });
     } finally {
       now.mockRestore();
@@ -229,17 +198,16 @@ describe("monitorSignalProvider autostart", () => {
 
   it("fails fast when auto-started signal daemon exits during startup", async () => {
     const statusSink = vi.fn();
-    spawnSignalDaemonMock.mockReturnValueOnce(
+    spawnDaemon.mockReturnValueOnce(
       createMockSignalDaemonHandle({
         exited: Promise.resolve({ source: "process", code: 1, signal: null }),
       }),
     );
-    waitForTransportReadyMock.mockImplementationOnce(
-      ({ abortSignal }: { abortSignal?: AbortSignal | null }) => rejectOnAbort(abortSignal),
+    waitUntilReady.mockImplementationOnce(({ abortSignal }: { abortSignal?: AbortSignal | null }) =>
+      rejectOnAbort(abortSignal),
     );
-
     await expect(
-      runMonitorWithMocks({
+      runMonitor({
         autoStart: true,
         baseUrl: SIGNAL_BASE_URL,
         statusSink,
@@ -255,7 +223,7 @@ describe("monitorSignalProvider autostart", () => {
     const exited = Promise.withResolvers<Awaited<SignalDaemonHandle["exited"]>>();
     const stopped = Promise.withResolvers<void>();
     const stopStarted = Promise.withResolvers<void>();
-    spawnSignalDaemonMock.mockReturnValueOnce(
+    spawnDaemon.mockReturnValueOnce(
       createMockSignalDaemonHandle({
         exited: exited.promise,
         stop: vi.fn(() => {
@@ -265,13 +233,13 @@ describe("monitorSignalProvider autostart", () => {
         }),
       }),
     );
-    streamMock.mockImplementationOnce(async () => {
+    stream.mockImplementationOnce(async () => {
       abortController.abort(new Error("stop"));
     });
     // onAbort starts stop before ingress teardown has joined its rejection.
     void stopped.promise.catch(() => undefined);
     const stopError = new Error("daemon stop failed");
-    const outcome = runMonitorWithMocks({ abortSignal: abortController.signal }).then(
+    const outcome = runMonitor({ abortSignal: abortController.signal }).then(
       () => undefined,
       (error: unknown) => error,
     );
@@ -285,17 +253,16 @@ describe("monitorSignalProvider autostart", () => {
   });
 });
 
+function inboundPayload(dataMessage: Record<string, unknown>) {
+  return {
+    envelope: { sourceNumber: "+15550001111", sourceName: "Ada", timestamp: 1, dataMessage },
+  };
+}
+
 function receiveEvent(message: string) {
   return {
     event: "receive",
-    data: JSON.stringify({
-      envelope: {
-        sourceNumber: "+15550001111",
-        sourceName: "Ada",
-        timestamp: 1,
-        dataMessage: { message },
-      },
-    }),
+    data: JSON.stringify(inboundPayload({ message })),
   };
 }
 
@@ -305,7 +272,7 @@ describe("monitorSignalProvider tool results", () => {
     setSignalToolResultTestConfig(
       createSignalToolResultConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),
     );
-    upsertPairingRequestMock
+    pair
       .mockResolvedValueOnce({ code: "PAIRCODE", created: true })
       .mockResolvedValueOnce({ code: "PAIRCODE", created: false });
     await receiveSignalPayloads({
@@ -318,17 +285,17 @@ describe("monitorSignalProvider tool results", () => {
         },
       })),
     });
-    expect(replyMock).not.toHaveBeenCalled();
-    expect(upsertPairingRequestMock).toHaveBeenCalledTimes(2);
-    expect(upsertPairingRequestMock).toHaveBeenCalledWith({
+    expect(reply).not.toHaveBeenCalled();
+    expect(pair).toHaveBeenCalledTimes(2);
+    expect(pair).toHaveBeenCalledWith({
       channel: "signal",
       id: `uuid:${uuid}`,
       accountId: "default",
       meta: { name: "Ada" },
     });
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock.mock.calls[0]?.[0]).toBe(`signal:${uuid}`);
-    expectPairingReplyText(String(sendMock.mock.calls[0]?.[1] ?? ""), {
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]?.[0]).toBe(`signal:${uuid}`);
+    expectPairingReplyText(String(send.mock.calls[0]?.[1] ?? ""), {
       channel: "signal",
       idLine: `Your Signal sender id: uuid:${uuid}`,
       code: "PAIRCODE",
@@ -338,12 +305,9 @@ describe("monitorSignalProvider tool results", () => {
   it("reconnects after stream errors until aborted", async () => {
     vi.useFakeTimers();
     const abortController = new AbortController();
-    streamMock
-      .mockRejectedValueOnce(new Error("stream dropped"))
-      .mockImplementationOnce(async () => {
-        abortController.abort();
-      });
-
+    stream.mockRejectedValueOnce(new Error("stream dropped")).mockImplementationOnce(async () => {
+      abortController.abort();
+    });
     try {
       const monitorPromise = monitorSignalProvider({
         autoStart: false,
@@ -360,9 +324,9 @@ describe("monitorSignalProvider tool results", () => {
       await vi.advanceTimersByTimeAsync(5);
       await monitorPromise;
 
-      expect(streamMock).toHaveBeenCalledTimes(2);
-      expect(streamMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ timeoutMs: 0 }));
-      expect(streamMock).toHaveBeenNthCalledWith(2, expect.objectContaining({ timeoutMs: 0 }));
+      expect(stream).toHaveBeenCalledTimes(2);
+      expect(stream).toHaveBeenNthCalledWith(1, expect.objectContaining({ timeoutMs: 0 }));
+      expect(stream).toHaveBeenNthCalledWith(2, expect.objectContaining({ timeoutMs: 0 }));
     } finally {
       vi.useRealTimers();
     }
@@ -376,16 +340,15 @@ describe("monitorSignalProvider tool results", () => {
       messages: { visibleReplies: "automatic" },
       channels: { signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"] } },
     });
-    replyMock.mockResolvedValue({ text: "accepted reply" });
-    sendMock.mockImplementation(async () => {
+    reply.mockResolvedValue({ text: "accepted reply" });
+    send.mockImplementation(async () => {
       sendStarted.resolve();
       await sendCompleted.promise;
     });
-    streamMock.mockImplementation(async ({ onEvent, abortSignal }) => {
+    stream.mockImplementation(async ({ onEvent, abortSignal }) => {
       onEvent(receiveEvent("accepted message"));
       await waitForAbortSignal(abortSignal);
     });
-
     const monitorPromise = monitorSignalProvider({
       autoStart: false,
       baseUrl: "http://127.0.0.1:8080",
@@ -404,10 +367,9 @@ describe("monitorSignalProvider tool results", () => {
       sendCompleted.resolve();
       await monitorPromise;
     }
-
-    expect(replyMock).toHaveBeenCalledTimes(1);
-    expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock).toHaveBeenCalledWith("+15550001111", "accepted reply", expect.anything());
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith("+15550001111", "accepted reply", expect.anything());
   });
 
   it("does not dispatch a buffered inbound message after the monitor stops", async () => {
@@ -417,12 +379,11 @@ describe("monitorSignalProvider tool results", () => {
       messages: { inbound: { debounceMs: 10 } },
       channels: { signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"] } },
     });
-    replyMock.mockResolvedValue({ text: "late reply" });
-    streamMock.mockImplementation(async ({ onEvent }) => {
+    reply.mockResolvedValue({ text: "late reply" });
+    stream.mockImplementation(async ({ onEvent }) => {
       onEvent(receiveEvent("wait for more"));
       abortController.abort(new Error("monitor stopped"));
     });
-
     try {
       await monitorSignalProvider({
         autoStart: false,
@@ -431,8 +392,8 @@ describe("monitorSignalProvider tool results", () => {
       });
       await vi.advanceTimersByTimeAsync(10);
 
-      expect(replyMock).not.toHaveBeenCalled();
-      expect(sendMock).not.toHaveBeenCalled();
+      expect(reply).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -451,32 +412,20 @@ describe("monitorSignalProvider tool results", () => {
         },
       },
     });
-
-    replyMock.mockResolvedValue({ text: "ok" });
-    signalRpcRequestMock.mockResolvedValue({ data: Buffer.from("hello").toString("base64") });
+    reply.mockResolvedValue({ text: "ok" });
+    rpc.mockResolvedValue({ data: Buffer.from("hello").toString("base64") });
     await receiveSignalPayloads({
       opts: { mediaMaxMb: 2, baseUrl: undefined },
       payloads: [
-        {
-          envelope: {
-            sourceNumber: "+15550001111",
-            sourceName: "Ada",
-            timestamp: 1,
-            dataMessage: {
-              message: "",
-              attachments: [{ id: "attachment-1", size: 1_500_000, contentType: "text/plain" }],
-            },
-          },
-        },
+        inboundPayload({
+          message: "",
+          attachments: [{ id: "attachment-1", size: 1_500_000, contentType: "text/plain" }],
+        }),
       ],
     });
-
-    expect(signalRpcRequestMock).toHaveBeenCalledWith(
+    expect(rpc).toHaveBeenCalledWith(
       "getAttachment",
-      {
-        id: "attachment-1",
-        recipient: "+15550001111",
-      },
+      { id: "attachment-1", recipient: "+15550001111" },
       {
         baseUrl: "http://container:8080",
         timeoutMs: undefined,

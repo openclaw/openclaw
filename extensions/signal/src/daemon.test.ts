@@ -1,4 +1,3 @@
-// Signal tests cover daemon plugin behavior.
 import { EventEmitter, once } from "node:events";
 import { createServer } from "node:net";
 import os from "node:os";
@@ -23,22 +22,25 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ spawnOomScoreAdjusted: spawnMock }));
 
 function createMockChild() {
-  const child = new EventEmitter() as EventEmitter & {
-    pid: number;
-    killed: boolean;
-    stdout: PassThrough;
-    stderr: PassThrough;
-    kill: ReturnType<typeof vi.fn>;
-  };
-  child.pid = 1234;
-  child.killed = false;
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
-  child.kill = vi.fn(() => true);
-  return child;
+  return Object.assign(new EventEmitter(), {
+    pid: 1234,
+    killed: false,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: vi.fn(() => true),
+  });
 }
 
 let child: ReturnType<typeof createMockChild>;
+
+function startDaemon(overrides: Partial<Parameters<typeof spawnSignalDaemon>[0]> = {}) {
+  return spawnSignalDaemon({
+    cliPath: "signal-cli",
+    httpHost: "127.0.0.1",
+    httpPort: 8080,
+    ...overrides,
+  });
+}
 
 beforeEach(() => {
   child = createMockChild();
@@ -56,12 +58,7 @@ afterEach(() => {
 
 describe("spawnSignalDaemon", () => {
   it("starts the opt-in socket daemon without exposing an HTTP listener", () => {
-    spawnSignalDaemon({
-      cliPath: "signal-cli",
-      socketPath: "/private/signal/rpc",
-      httpHost: "127.0.0.1",
-      httpPort: 8080,
-    });
+    startDaemon({ socketPath: "/private/signal/rpc" });
     const args = spawnMock.mock.calls[0]?.[1] as string[];
     expect(args).toContain("--socket");
     expect(args).toContain("/private/signal/rpc");
@@ -85,10 +82,7 @@ describe("spawnSignalDaemon", () => {
 
     try {
       await expect(
-        assertSignalDaemonEndpointAvailable({
-          httpHost: "127.0.0.1",
-          httpPort: address.port,
-        }),
+        assertSignalDaemonEndpointAvailable({ httpHost: "127.0.0.1", httpPort: address.port }),
       ).rejects.toThrow(
         `Signal managed native endpoint 127.0.0.1:${address.port} is unavailable: Port ${address.port} is already in use. Stop the conflicting service, configure this Signal account with a different transport.httpPort, or use external-native for an intentionally operator-managed daemon.`,
       );
@@ -105,27 +99,15 @@ describe("spawnSignalDaemon", () => {
   });
 
   it("defers non-collision bind failures to the operator-selected daemon", async () => {
-    const bindError = Object.assign(new Error("bind EACCES 127.0.0.1:443"), {
-      code: "EACCES",
-    });
+    const bindError = Object.assign(new Error("bind EACCES 127.0.0.1:443"), { code: "EACCES" });
     ensurePortAvailableMock.mockRejectedValueOnce(bindError);
-
     await expect(
-      assertSignalDaemonEndpointAvailable({
-        httpHost: "127.0.0.1",
-        httpPort: 443,
-      }),
+      assertSignalDaemonEndpointAvailable({ httpHost: "127.0.0.1", httpPort: 443 }),
     ).resolves.toBeUndefined();
   });
 
   it("expands home-relative configPath before passing it to signal-cli", () => {
-    spawnSignalDaemon({
-      cliPath: "signal-cli",
-      configPath: "~/.openclaw/signal-cli",
-      httpHost: "127.0.0.1",
-      httpPort: 8080,
-    });
-
+    startDaemon({ configPath: "~/.openclaw/signal-cli" });
     expect(spawnMock).toHaveBeenCalledWith(
       "signal-cli",
       [
@@ -143,17 +125,13 @@ describe("spawnSignalDaemon", () => {
   it("classifies complete UTF-8 output lines through the spawned process", async () => {
     const logs: string[] = [];
     const errors: string[] = [];
-    spawnSignalDaemon({
-      cliPath: "signal-cli",
-      httpHost: "127.0.0.1",
-      httpPort: 8080,
+    startDaemon({
       runtime: {
         log: (...args) => logs.push(args.map(String).join(" ")),
         error: (...args) => errors.push(args.map(String).join(" ")),
         exit: vi.fn(),
       },
     });
-
     const ended = once(child.stderr, "end");
     child.stderr.write(Buffer.from("ER"));
     child.stderr.write(
@@ -167,7 +145,6 @@ describe("spawnSignalDaemon", () => {
     child.stderr.write(utf8Line.subarray(0, splitCodePointAt));
     child.stderr.end(utf8Line.subarray(splitCodePointAt));
     await ended;
-
     expect(errors).toEqual(["signal-cli: ERROR DaemonCommand - startup failed"]);
     expect(logs).toEqual([
       "signal-cli: WARN Manager - retrying",
@@ -177,75 +154,45 @@ describe("spawnSignalDaemon", () => {
     ]);
   });
 
-  it.each(["SEVERE Manager - database exception"])(
-    "surfaces untagged failure output: %s",
-    async (line) => {
-      const error = vi.fn();
-      spawnSignalDaemon({
-        cliPath: "signal-cli",
-        httpHost: "127.0.0.1",
-        httpPort: 8080,
-        runtime: { log: vi.fn(), error, exit: vi.fn() },
-      });
-
-      const ended = once(child.stderr, "end");
-      child.stderr.end(`${line}\n`);
-      await ended;
-
-      expect(error).toHaveBeenCalledWith(`signal-cli: ${line}`);
-    },
-  );
+  it("surfaces untagged failure output", async () => {
+    const error = vi.fn();
+    startDaemon({ runtime: { log: vi.fn(), error, exit: vi.fn() } });
+    const ended = once(child.stderr, "end");
+    child.stderr.end("SEVERE Manager - database exception\n");
+    await ended;
+    expect(error).toHaveBeenCalledWith("signal-cli: SEVERE Manager - database exception");
+  });
 
   it("falls back to SIGKILL when the daemon does not exit after SIGTERM", async () => {
     vi.useFakeTimers();
-    const handle = spawnSignalDaemon({
-      cliPath: "signal-cli",
-      httpHost: "127.0.0.1",
-      httpPort: 8080,
-    });
-
+    const handle = startDaemon();
     const stopPromise = handle.stop();
     expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
-
     await vi.runOnlyPendingTimersAsync();
     expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
-
     child.emit("exit", null, "SIGKILL");
     await stopPromise;
   });
 
   it("reuses the in-flight stop promise across repeated calls", async () => {
-    const handle = spawnSignalDaemon({
-      cliPath: "signal-cli",
-      httpHost: "127.0.0.1",
-      httpPort: 8080,
-    });
-
+    const handle = startDaemon();
     const firstStop = handle.stop();
     const secondStop = handle.stop();
-
     expect(firstStop).toBe(secondStop);
     expect(child.kill).toHaveBeenCalledTimes(1);
-
     child.emit("exit", 0, null);
     await Promise.all([firstStop, secondStop]);
   });
 
   it("does not treat a post-spawn signaling error as process exit", async () => {
-    const handle = spawnSignalDaemon({
-      cliPath: "signal-cli",
-      httpHost: "127.0.0.1",
-      httpPort: 8080,
-    });
+    const handle = startDaemon();
     let resolved = false;
     const stopPromise = handle.stop().then(() => {
       resolved = true;
     });
-
     child.emit("error", new Error("kill EPERM"));
     await Promise.resolve();
     expect(resolved).toBe(false);
-
     child.emit("exit", 0, null);
     await stopPromise;
     expect(resolved).toBe(true);
