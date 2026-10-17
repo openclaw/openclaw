@@ -237,11 +237,7 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
       if (query.includeOwnerSessionCounts) {
         for (const row of eligible) {
           const identity = row.owner?.actor.identity;
-          if (
-            row.archived ||
-            identity?.type !== "profile" ||
-            (query.agentId && row.agentId !== query.agentId)
-          ) {
+          if (row.archived || identity?.type !== "profile") {
             continue;
           }
           const counts = ownerSessionCounts.get(identity.id) ?? {

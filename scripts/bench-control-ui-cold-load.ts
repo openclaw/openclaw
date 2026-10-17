@@ -238,7 +238,6 @@ const { values } = parseArgs({
     "latency-ms": { type: "string", default: "35" },
     "frame-gap-ms": { type: "string", default: "4" },
     "sidebar-view": { type: "string", default: "sessions" },
-    route: { type: "string", default: "board" },
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
   },
 });
@@ -277,10 +276,6 @@ const baselineCpu = values["cpu-profile-compare"]
     ])
   : undefined;
 const cpuRuns: Record<string, ColdLoadCpuTables[]> = {};
-const routeKind = values.route;
-if (routeKind !== "board" && routeKind !== "chat") {
-  throw new Error("Expected route board or chat");
-}
 const runs = Number(values.runs);
 const latencyMs = Number(values["latency-ms"]);
 const frameGapMs = Number(values["frame-gap-ms"]);
@@ -340,7 +335,6 @@ let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
 const results = [];
-let completed = false;
 try {
   const prepared = await prepareControlUiMockGatewayScenario({
     ...fixture.scenario,
@@ -470,11 +464,7 @@ try {
   await page.addInitScript({
     content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
-  const url = controlUiSessionUrl(
-    server.baseUrl,
-    fixture.selectedSessionKey,
-    routeKind === "board" ? "dashboard" : "chat",
-  );
+  const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "dashboard");
   async function settle() {
     try {
       await page
@@ -488,25 +478,21 @@ try {
       if (sidebarView === "online") {
         await page.locator('[data-online-user-id="team-person-120"]').waitFor();
       }
-      if (routeKind === "board") {
-        await page
-          .frameLocator(".board-widget__frame")
-          .frameLocator("iframe")
-          .getByText("Team metric 1", { exact: true })
-          .waitFor();
-      }
+      await page
+        .frameLocator(".board-widget__frame")
+        .frameLocator("iframe")
+        .getByText("Team metric 1", { exact: true })
+        .waitFor();
       await page
         .frameLocator(".chat-tool-card__preview-frame")
         .last()
         .frameLocator("iframe")
         .getByText("Team metric 12", { exact: true })
         .waitFor();
-      if (routeKind === "board") {
-        await page.waitForFunction(() => {
-          const ready = Reflect.get(window, "__readWidgetReadiness")();
-          return ready.firstBoardReadyMs !== null;
-        });
-      }
+      await page.waitForFunction(() => {
+        const ready = Reflect.get(window, "__readWidgetReadiness")();
+        return ready.firstBoardReadyMs !== null;
+      });
       await page.waitForFunction(
         (eventCount) => {
           const state = Reflect.get(window, "__coldLoad")?.read();
@@ -1068,7 +1054,6 @@ try {
     }
   }
   await context.close();
-  completed = true;
 } finally {
   await browser?.close();
   await server.close();
@@ -1085,7 +1070,6 @@ try {
         bundleDir,
         fixture: fixture.counts,
         sidebarView,
-        route: routeKind,
         streamingReply: values["streaming-reply"],
         sidebarListChurn: values["sidebar-list-churn"],
         sidebarLiveChurn: fixture.sidebarLiveChurn,
@@ -1100,8 +1084,6 @@ try {
         latencyMs,
         frameGapMs,
         captureMs,
-        requestedRuns: runs,
-        completed,
         results,
       },
       null,

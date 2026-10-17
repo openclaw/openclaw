@@ -196,6 +196,11 @@ suite.define(() => {
           await sidebar.locator('.sidebar-rail [data-sidebar-entry^="session:"]').count(),
         ).toBe(30);
         await sidebar.locator('[data-sidebar-entry="plugin:team-scale-7/overview"]').waitFor();
+        const activations = await gateway.getRequests("plugins.controlUi.report");
+        expect(activations).toHaveLength(7);
+        expect(activations.every(({ params }) => asRecord(params)?.status === "activated")).toBe(
+          true,
+        );
         await page.evaluate("globalThis.__name = (fn) => fn");
         const onlineWrite = await observeSidebarSnapshotWrite(page, {
           navigationView: "online",

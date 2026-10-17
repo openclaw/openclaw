@@ -43,23 +43,11 @@ Online measurements.
 keep its build identity equal to the checkout head. This preserves a baseline
 bundle while production sources are edited.
 
-The initial warm visit flushes the selected transcript through its cache owner and
-verifies both its persisted snapshot and the sidebar's saved view. Current v8
-persistence trims the transcript to its last 80 messages (whole sequence groups may
-extend that bound), strips replay metadata and retains authoritative pagination.
-Before each measured reload, the bench unloads the app into an empty same-origin
-document, replays the original snapshot records and browser preferences, and restores
-the deep-link URL. It also clears the separate composer draft store: the synthetic
-warm visit starts empty, and streaming input must not become the next reload’s draft.
-This keeps pagehide writes and live events from changing the next
-run's transcript or sidebar, while preserving the browser's HTTP cache. Only the
-subsequent app reload is measured.
-`snapshotSave` records database/projection versions, message count, sidebar shape
-and UTF-8 sizes; its save costs describe the initial warm visit. A missing cache or
-wrong saved view fails setup.
-
-`--route board|chat` selects a dashboard (default) or chat deep link for the same
-session. Chat measurements require inline content, without requiring a board frame.
+The warm visit flushes the transcript through its owner, which trims v8 snapshots to
+80 messages. Before each measured reload, the bench restores that visit's IndexedDB,
+local storage and session storage after unloading the app, preserving the HTTP cache.
+`snapshotSave` records versions, bytes and sidebar shape;
+missing snapshots or the wrong saved sidebar view fail setup.
 
 `--warm-reload --probe-dir /path/to/probes` adds cache/paint diagnostics. The probe directory supplies `loaf-mutation.init.js` and
 `ws-rpc-census.init.js`. The output records cache reads, cached transcript visibility,
@@ -72,8 +60,7 @@ then collect separate traced runs for the storyboard and attribution.
 `--large-snapshot` expands the transcript to 1,100 synthetic messages (about 3 MB),
 including tool results and replay metadata. Combine it with `--warm-reload` to
 exercise a large live history with the current bounded IndexedDB restore. `snapshotSave` reports the persisted
-row count and UTF-8 bytes, synchronous serialization time, and total flush time
-for the initial save through the live cache owner.
+row count and UTF-8 bytes for the initial save through the live cache owner.
 
 The dashboard fixture includes reaction pickers, widget actions, context usage,
 and viewers. Use `--warm-reload` to measure its cached restore. Transaction labels
@@ -196,43 +183,6 @@ missed. The largest source-attributed native getter is `scrollHeight` from
 The Online attempt returned to Sessions after reload and is excluded from these
 numbers; the fixture E2E opens Online explicitly to verify all 120 people.
 
-## Live-shape fidelity
-
-The synthetic list owner applies each query's filters and canonical Gateway ordering before pagination,
-including pin placement for the default sort and the requested activity clock. All
-30 pins appear in the shared first page; Involving me retains its independent membership.
-It then projects canonical compact/sidebar/dashboard fields. Owner-first prefixes follow
-the Gateway contract independently of the shared page offset. Derived titles and
-last-message previews use the protocol's enrichment bound. Compact cron requests
-page the inventory as 50/50/20; all seven synthetic plugins activate normally.
-The bench uses this owner for every query, including non-churn runs.
-
-Compare board and chat reload captures with sanitized live function/RPC inventories:
-
-```sh
-node scripts/control-ui-bench-fidelity.ts \
-  --board <board-artifacts> --board-live <mapped-board-profile.txt> --board-rpcs <board-method-counts.json> \
-  --chat <chat-artifacts> --chat-live <mapped-chat-profile.txt> --chat-rpcs <chat-method-counts.json> \
-  --analyzer <campaign-rig>/bench/cpuprof/cpuprof2.py --output <report-directory>
-```
-
-This reuses the campaign analyzer's source mapping and inclusive CPU accounting;
-it does not add a profiler. Keep raw profiles and adjacent build maps together, or
-pass `--board-assets`/`--chat-assets`. Live RPC JSON has the explicit shape
-`{"complete": true, "counts": {"connect": 1, "sessions.list": 5}}` with sanitized
-method counts. Set `complete` to `false` for partial evidence: it remains reportable
-but cannot pass the RPC gate. Every observed bench method needs an explicit live
-count, including zero; omitted counts stay unknown even when `complete` is `true`. Private capture text and profile preambles are never
-included in the report. The report preserves each run's shares/counts, prints
-median and IQR, and exits nonzero unless at least 15 of the top 20 unique live app
-locations fall within 0.5–2× live share and a complete live RPC census supplies an
-explicit count for every observed bench method, within ±1 in every run.
-It requires a successful capture and every requested reload's metrics/profile pair;
-an aborted capture cannot pass using only its completed iterations. Each benchmark
-frame can match at most one live function, with a unique name taking priority over
-a stale source-line match.
-Functions absent from the analyzer's top-70 output are reported as not observed
-and fail the gate; absence is not a measured zero CPU share. Same-line aliases
-use their maximum inclusive time. Inspect matching locations across revisions: semantic names bridge line
-shifts only when unambiguous. A failed fidelity gate is a measurement limitation,
-not evidence that an application optimization is ineffective.
+Session queries apply canonical ordering, filtering, pagination, owner-first prefixes
+and bounded row enrichment. Cron loads three compact pages (50/50/20). Each run's
+`rpcs` contains per-method requests and bytes; use `--cpu-profile` for restore attribution.

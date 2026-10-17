@@ -3,6 +3,7 @@ import type { CronJob } from "../../../src/cron/types.ts";
 import type { CronCompactJob, CronJobsListResult, GatewaySessionRow } from "../api/types.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
 import { prepareTeamScaleSessionOwnership } from "./control-ui-sidebar-list-fixture.ts";
+import { compactCronJobFixture } from "./cron.ts";
 
 type TeamScaleSession = GatewaySessionRow & { updatedAt: number; sessionId: string };
 
@@ -41,6 +42,10 @@ export function createTeamScaleSessionInventory({
       label: pinned ? `Project dashboard ${index - 269}` : `Project discussion ${index + 1}`,
       displayName: pinned ? `Project dashboard ${index - 269}` : `Project discussion ${index + 1}`,
       updatedAt: now - index * 1_000,
+      lastActivityAt: now - index * 1_000,
+      derivedTitle: `Synthetic project ${index + 1}: implementation review and verification`,
+      unread: index % 7 === 0,
+      snoozedUntil: index >= 160 && index < 220 ? now + 3_600_000 + index * 60_000 : undefined,
       createdAt: now - 86_400_000 - index * 1_000,
       snapshotAt: now,
       owner: { actor: { type: "human", id: owner.id, label: owner.name } },
@@ -72,23 +77,12 @@ export function createTeamScaleSessionInventory({
   const pinnedRows = sessions.slice(-counts.pinned);
   const pinnedKeys = pinnedRows.map((row) => row.key);
   const selectedSessionKey = pinnedKeys[0]!;
-  for (const [index, row] of pinnedRows.entries()) {
-    if (index === 0 || index === pinnedRows.length - 1) {
-      continue;
-    }
+  for (const row of pinnedRows.slice(1, -1)) {
     if (!row.participants?.some((participant) => participant.identity.id === people[0]!.id)) {
       row.participants?.push({
         identity: { type: "profile", id: people[0]!.id },
         label: people[0]!.name,
       });
-    }
-  }
-  for (const [index, row] of sessions.entries()) {
-    row.derivedTitle = `Synthetic project ${index + 1}: implementation review and verification`;
-    row.lastActivityAt = row.updatedAt;
-    row.unread = index % 7 === 0;
-    if (index >= 160 && index < 220) {
-      row.snoozedUntil = now + 3_600_000 + index * 60_000;
     }
   }
   for (
@@ -183,32 +177,9 @@ export function createTeamScaleCronInventory({
     );
     const offset = typeof params.offset === "number" ? params.offset : 0;
     const limit = typeof params.limit === "number" ? params.limit : 50;
-    const jobs = rows.slice(offset, offset + limit).map((job): CronJob | CronCompactJob => {
-      if (params.compact !== true) {
-        return job;
-      }
-      const compact: CronCompactJob = {
-        id: job.id,
-        name: job.name,
-        agentId: job.agentId,
-        enabled: job.enabled,
-        updatedAtMs: job.updatedAtMs,
-        scheduleKind: job.schedule.kind,
-        nextRunAt: new Date(job.state.nextRunAtMs!).toISOString(),
-        nextRunAtMs: job.state.nextRunAtMs!,
-        lastRunAt: new Date(job.state.lastRunAtMs!).toISOString(),
-        lastRunAtMs: job.state.lastRunAtMs!,
-        lastRunStatus: job.state.lastRunStatus!,
-        lastRunError: job.state.lastError ?? null,
-      };
-      if (job.schedule.kind === "every") {
-        compact.schedule = job.schedule;
-      }
-      if (job.state.runningAtMs !== undefined) {
-        compact.runningAtMs = job.state.runningAtMs;
-      }
-      return compact;
-    });
+    const jobs = rows
+      .slice(offset, offset + limit)
+      .map((job) => (params.compact === true ? compactCronJobFixture(job) : job));
     const hasMore = offset + jobs.length < rows.length;
     return {
       jobs,
