@@ -76,26 +76,19 @@ function localContext() {
 
 describe("local gateway request context", () => {
   it("keeps local RPC available without claiming Gateway routing or readiness", async () => {
-    await withLocalGatewayRequestScope(
-      { deps: {} as CliDeps, getRuntimeConfig: () => ({ gateway: { port: 19970 } }) },
-      async () => {
-        const context = getPluginRuntimeGatewayRequestScope()?.context;
+    await withConfig({ gateway: { port: 19970 } }, async () => {
+      const context = localContext();
+      const expectLocalRouting = () => {
         expect(hasInProcessGatewayToolContext()).toBe(true);
         expect(hasGatewayToolRoutingContext()).toBe(false);
-        expect(context?.isConfigReloadSettled()).toBe(false);
-        await withGatewayToolCallerIdentity(
-          {
-            agentId: "main",
-            sessionKey: "agent:main:local",
-            gatewayContextResolver: () => context,
-          },
-          () => {
-            expect(hasInProcessGatewayToolContext()).toBe(true);
-            expect(hasGatewayToolRoutingContext()).toBe(false);
-          },
-        );
-      },
-    );
+      };
+      expectLocalRouting();
+      expect(context.isConfigReloadSettled()).toBe(false);
+      await withGatewayToolCallerIdentity(
+        { agentId: "main", sessionKey: "agent:main:local", gatewayContextResolver: () => context },
+        expectLocalRouting,
+      );
+    });
     expect(hasGatewayToolRoutingContext()).toBe(false);
   });
 
@@ -110,13 +103,9 @@ describe("local gateway request context", () => {
         "Gateway instance unavailable for node.list",
       );
     };
-    await withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => ({}) }, () =>
+    await withConfig({}, () =>
       withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:worker",
-          gatewayContextResolver: resolver,
-        },
+        { agentId: "main", sessionKey: "agent:main:worker", gatewayContextResolver: resolver },
         check,
       ),
     );
@@ -138,8 +127,7 @@ describe("local gateway request context", () => {
   });
 
   it("binds typed agent turns to the embedded context", async () => {
-    const cfg = {};
-    await withConfig(cfg, async () => {
+    await withConfig({}, async () => {
       const context = localContext();
       const payload = { runId: "local-turn", status: "accepted" };
       createAgentTurnService.mockReturnValue({
@@ -169,12 +157,9 @@ describe("local gateway request context", () => {
       .mockResolvedValue(asPublishedOwner(candidate));
 
     await withConfig(cfg, async () => {
-      const context = localContext();
-      const snapshot = await context.loadGatewayModelCatalogSnapshot({ agentId: "worker" });
-      expect(snapshot).toMatchObject({
-        agentId: "worker",
-        workspaceDir: "/tmp/local-model-catalog-workspace",
-      });
+      expect(
+        await localContext().loadGatewayModelCatalogSnapshot({ agentId: "worker" }),
+      ).toMatchObject({ agentId: "worker", workspaceDir: "/tmp/local-model-catalog-workspace" });
     });
 
     expect(loadOwner).toHaveBeenCalledWith({ agentId: "worker", config: cfg, readOnly: true });
@@ -233,24 +218,14 @@ describe("local gateway request context", () => {
       ok: true,
       payload: { models: [expect.objectContaining({ id: "local-auth-model", available: true })] },
     });
-    expect(loggedOut).toMatchObject({
-      ok: true,
-      payload: { models: [] },
-    });
-    expect(refreshAuth).toHaveBeenNthCalledWith(1, {
-      providerIds: ["local-auth-provider"],
-    });
-    expect(refreshAuth).toHaveBeenNthCalledWith(2, {
-      providerIds: ["local-auth-provider"],
-    });
-    expect(loadOwner).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ readOnly: false, refreshFullCatalog: true }),
-    );
-    expect(loadOwner).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ readOnly: false, refreshFullCatalog: true }),
-    );
+    expect(loggedOut).toMatchObject({ ok: true, payload: { models: [] } });
+    for (const call of [1, 2]) {
+      expect(refreshAuth).toHaveBeenNthCalledWith(call, { providerIds: ["local-auth-provider"] });
+      expect(loadOwner).toHaveBeenNthCalledWith(
+        call,
+        expect.objectContaining({ readOnly: false, refreshFullCatalog: true }),
+      );
+    }
     loadOwner.mockRestore();
     readOwner.mockRestore();
   });
@@ -289,34 +264,15 @@ describe("local gateway request context", () => {
       },
     } as OpenClawConfig;
     try {
-      const now = Date.now();
       const storePath = resolveCronJobsStorePath();
+      const createJob = (id: string, agentId?: string) => makeCronJob({ id, name: id, agentId });
       await saveCronStore(storePath, {
         version: 1,
-        jobs: [
-          makeCronJob({
-            id: "worker-job",
-            name: "worker-job",
-            agentId: "worker",
-            schedule: { kind: "every", everyMs: 3_600_000, anchorMs: now },
-            wakeMode: "now",
-            payload: { kind: "agentTurn", message: "remove" },
-            state: { nextRunAtMs: now + 3_600_000 },
-          }),
-          makeCronJob({
-            id: "agentless-system-job",
-            name: "agentless-system-job",
-            schedule: { kind: "every", everyMs: 3_600_000, anchorMs: now },
-            wakeMode: "now",
-            payload: { kind: "agentTurn", message: "keep" },
-            state: { nextRunAtMs: now + 3_600_000 },
-          }),
-        ],
+        jobs: [createJob("worker-job", "worker"), createJob("agentless-system-job")],
       });
       await withConfig(cfg, async () => {
-        const context = localContext();
         await expect(
-          context.cron.removeAgentJobsTransactional("worker", async () => "committed"),
+          localContext().cron.removeAgentJobsTransactional("worker", async () => "committed"),
         ).resolves.toBe("committed");
       });
       expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([

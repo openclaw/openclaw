@@ -72,14 +72,7 @@ describe("live tool probe utils", () => {
       ["read-again output", { text: readAgain, provider: "zai" }, true],
       ["generic conversation", { text: conversation, provider: "zai" }, false],
       ["mistral marker echo", { text: "testMarkerA= testMarkerB=", provider: "mistral" }, true],
-      [
-        "anthropic refusal",
-        {
-          text: readRefusal,
-          provider: "anthropic",
-        },
-        true,
-      ],
+      ["anthropic refusal", { text: readRefusal, provider: "anthropic" }, true],
       ["other-provider refusal", { text: readRefusal }, false],
     ] as const)("%s", (_name, params, expected) => {
       expect(
@@ -109,14 +102,7 @@ describe("live tool probe utils", () => {
       ],
       ["mismatch without policy", { text: mismatch }, false],
       ["valid nonce beats scaffolding", { text: "tool output nonce-c function" }, false],
-      [
-        "anthropic refusal",
-        {
-          text: execRefusal,
-          provider: "anthropic",
-        },
-        true,
-      ],
+      ["anthropic refusal", { text: execRefusal, provider: "anthropic" }, true],
       ["read-again output", { text: readAgain, provider: "zai" }, true],
       [
         "alternate retry wording",
