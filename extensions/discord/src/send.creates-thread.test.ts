@@ -236,22 +236,18 @@ describe("createThreadDiscord", () => {
   });
 
   it.each([
-    { type: ChannelType.GuildForum, status: 403, delivered: "not_delivered" },
-    { type: ChannelType.GuildForum, status: 502, delivered: "unknown" },
+    { status: 403, delivered: "not_delivered" },
+    { status: 502, delivered: "unknown" },
   ])(
-    "reports partial initial delivery for channel $type and HTTP $status",
-    async ({ type, status, delivered }) => {
-      const { opts, postMock } = threadHarness(type);
-      const forum = type === ChannelType.GuildForum;
+    "reports partial initial delivery for a forum and HTTP $status",
+    async ({ status, delivered }) => {
+      const { opts, postMock } = threadHarness(ChannelType.GuildForum);
       postMock.mockResolvedValueOnce({ id: "t1", message: { id: "starter1", channel_id: "t1" } });
-      if (!forum) {
-        postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "t1" });
-      }
       postMock.mockRejectedValue(Object.assign(new Error("send failed"), { status }));
       const error = await send
         .createThreadDiscord(
           "chan1",
-          { name: "thread", content: "a".repeat(forum ? 2001 : 4001) },
+          { name: "thread", content: "a".repeat(2001) },
           { ...opts, retry },
         )
         .catch((failure: unknown) => failure);
@@ -259,21 +255,19 @@ describe("createThreadDiscord", () => {
       expect(hasDiscordMessageCreateAmbiguity(error)).toBe(status === 502);
       expect(error).toMatchObject({
         initialMessageDelivery: {
-          starterMessageDelivered: forum,
+          starterMessageDelivered: true,
           deliveredChunkCount: 1,
-          deliveredMessageIds: [forum ? "starter1" : "msg1"],
+          deliveredMessageIds: ["starter1"],
           failedChunkDelivery: delivered,
           failedChunkIndex: 1,
-          totalChunkCount: forum ? 2 : 3,
+          totalChunkCount: 2,
         },
       });
-      expect(postMock).toHaveBeenCalledTimes((forum ? 1 : 2) + (status === 502 ? 2 : 1));
-      if (forum) {
-        expect(requestBody(postMock)).toEqual({
-          name: "thread",
-          message: { content: "a".repeat(2000) },
-        });
-      }
+      expect(postMock).toHaveBeenCalledTimes(1 + (status === 502 ? 2 : 1));
+      expect(requestBody(postMock)).toEqual({
+        name: "thread",
+        message: { content: "a".repeat(2000) },
+      });
     },
   );
 });

@@ -1,7 +1,6 @@
-// Discord tests cover outbound payload.contract plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordError } from "./internal/rest-errors.js";
 import { RequestClient } from "./internal/rest.js";
 import { discordOutbound } from "./outbound-adapter.js";
@@ -40,6 +39,7 @@ describe("Discord outbound payload contract", () => {
 });
 
 describe("Discord forum outbound payload ownership", () => {
+  afterEach(() => vi.restoreAllMocks());
   function createForumDelivery(params: {
     channelType?: ChannelType;
     channelData: Record<string, unknown>;
@@ -127,29 +127,25 @@ describe("Discord forum outbound payload ownership", () => {
     },
   ])("keeps $label and their complete receipt in their first created thread", async (params) => {
     const delivery = createForumDelivery(params);
-    const globalFetch = vi.spyOn(globalThis, "fetch").mockImplementation(delivery.fetch);
-    try {
-      const result = await delivery.run();
+    vi.spyOn(globalThis, "fetch").mockImplementation(delivery.fetch);
+    const result = await delivery.run();
 
-      expect(delivery.requests.filter((request) => request.startsWith("POST"))).toEqual([
-        "POST /channels/forum1/threads",
-        "POST /channels/thread1/messages",
-        "POST /channels/thread1/messages",
-      ]);
-      expect(result).toMatchObject({
-        target: { kind: "channel", id: "thread1" },
-        receipt: {
-          threadId: "thread1",
-          platformMessageIds: ["starter1", "media1", "media2"],
-          primaryPlatformMessageId: "starter1",
-        },
-      });
-      expect(
-        delivery.onDeliveryResult.mock.calls.map(([progressResult]) => progressResult.messageId),
-      ).toEqual(["starter1", "media1", "media2"]);
-    } finally {
-      globalFetch.mockRestore();
-    }
+    expect(delivery.requests.filter((request) => request.startsWith("POST"))).toEqual([
+      "POST /channels/forum1/threads",
+      "POST /channels/thread1/messages",
+      "POST /channels/thread1/messages",
+    ]);
+    expect(result).toMatchObject({
+      target: { kind: "channel", id: "thread1" },
+      receipt: {
+        threadId: "thread1",
+        platformMessageIds: ["starter1", "media1", "media2"],
+        primaryPlatformMessageId: "starter1",
+      },
+    });
+    expect(
+      delivery.onDeliveryResult.mock.calls.map(([progressResult]) => progressResult.messageId),
+    ).toEqual(["starter1", "media1", "media2"]);
   });
 
   it("still rejects actual interactive components on a forum parent before creating a thread", async () => {
@@ -161,15 +157,11 @@ describe("Discord forum outbound payload ownership", () => {
         },
       },
     });
-    const globalFetch = vi.spyOn(globalThis, "fetch").mockImplementation(delivery.fetch);
-    try {
-      await expect(delivery.run()).rejects.toThrow(
-        "Discord components are not supported in forum-style channels",
-      );
-      expect(delivery.requests.filter((request) => request.startsWith("POST"))).toEqual([]);
-    } finally {
-      globalFetch.mockRestore();
-    }
+    vi.spyOn(globalThis, "fetch").mockImplementation(delivery.fetch);
+    await expect(delivery.run()).rejects.toThrow(
+      "Discord components are not supported in forum-style channels",
+    );
+    expect(delivery.requests.filter((request) => request.startsWith("POST"))).toEqual([]);
   });
 
   it.each([
@@ -189,21 +181,17 @@ describe("Discord forum outbound payload ownership", () => {
       channelType: ChannelType.GuildText,
       channelData: { components, filename: " first.txt " },
     });
-    const globalFetch = vi.spyOn(globalThis, "fetch").mockImplementation(delivery.fetch);
-    try {
-      await delivery.run();
+    vi.spyOn(globalThis, "fetch").mockImplementation(delivery.fetch);
+    await delivery.run();
 
-      const filenames = delivery.fetch.mock.calls.flatMap(([, init]) => {
-        if (!(init?.body instanceof FormData)) {
-          return [];
-        }
-        const file = init.body.get("files[0]");
-        return file && typeof file !== "string" ? [file.name] : [];
-      });
-      expect(filenames).toEqual(["first.txt", "package.json"]);
-    } finally {
-      globalFetch.mockRestore();
-    }
+    const filenames = delivery.fetch.mock.calls.flatMap(([, init]) => {
+      if (!(init?.body instanceof FormData)) {
+        return [];
+      }
+      const file = init.body.get("files[0]");
+      return file && typeof file !== "string" ? [file.name] : [];
+    });
+    expect(filenames).toEqual(["first.txt", "package.json"]);
   });
 
   it("rejects a conflicting Components V2 filename before uploading", async () => {
@@ -217,15 +205,11 @@ describe("Discord forum outbound payload ownership", () => {
         },
       },
     });
-    const globalFetch = vi.spyOn(globalThis, "fetch").mockImplementation(delivery.fetch);
-    try {
-      await expect(delivery.run()).rejects.toThrow(
-        'Component file block expects attachment "declared.txt", but the uploaded file is "other.txt"',
-      );
-      expect(delivery.requests.filter((request) => request.startsWith("POST"))).toEqual([]);
-    } finally {
-      globalFetch.mockRestore();
-    }
+    vi.spyOn(globalThis, "fetch").mockImplementation(delivery.fetch);
+    await expect(delivery.run()).rejects.toThrow(
+      'Component file block expects attachment "declared.txt", but the uploaded file is "other.txt"',
+    );
+    expect(delivery.requests.filter((request) => request.startsWith("POST"))).toEqual([]);
   });
 });
 

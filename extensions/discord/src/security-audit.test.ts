@@ -27,66 +27,55 @@ function createAccount(
   };
 }
 
-type BroadMemberCase = {
-  name: string;
-  config: DiscordAccountConfig;
-  expectedPath?: string;
-  expectFinding: boolean;
-};
+function guildConfig(
+  guild: NonNullable<DiscordAccountConfig["guilds"]>[string],
+  key = "team-space",
+): DiscordAccountConfig {
+  return { groupPolicy: "allowlist", guilds: { [key]: guild } };
+}
 
-const broadMemberCases: BroadMemberCase[] = [
+const broadMemberCases = [
   {
     name: "warns for a whole-guild wildcard target",
-    config: { groupPolicy: "allowlist", guilds: { "*": {} } },
+    config: guildConfig({}, "*"),
     expectedPath: "channels.discord.guilds.*",
     expectFinding: true,
   },
   {
     name: "warns for slug and wildcard channel targets",
-    config: {
-      groupPolicy: "allowlist",
-      guilds: { "team-space": { channels: { "*": { enabled: true } } } },
-    },
+    config: guildConfig({ channels: { "*": { enabled: true } } }),
     expectedPath: "channels.discord.guilds.team-space.channels.*",
     expectFinding: true,
   },
   {
     name: "inherits a narrow guild member restriction",
-    config: {
-      groupPolicy: "allowlist",
-      guilds: {
-        "team-space": {
-          users: ["123456789012345678"],
-          channels: { general: { enabled: true } },
-        },
-      },
-    },
+    config: guildConfig({
+      users: ["123456789012345678"],
+      channels: { general: { enabled: true } },
+    }),
     expectFinding: false,
   },
   {
     name: "treats wildcard users as broad",
-    config: { groupPolicy: "allowlist", guilds: { "team-space": { users: ["*"] } } },
+    config: guildConfig({ users: ["*"] }),
     expectedPath: "channels.discord.guilds.team-space",
     expectFinding: true,
   },
   {
     name: "treats wildcard roles as broad",
-    config: { groupPolicy: "allowlist", guilds: { "team-space": { roles: ["*"] } } },
+    config: guildConfig({ roles: ["*"] }),
     expectedPath: "channels.discord.guilds.team-space",
     expectFinding: true,
   },
   {
     name: "ignores disabled channel targets",
-    config: {
-      groupPolicy: "allowlist",
-      guilds: { "team-space": { channels: { general: { enabled: false } } } },
-    },
+    config: guildConfig({ channels: { general: { enabled: false } } }),
     expectFinding: false,
   },
 ];
 
 async function collectFindings(params: {
-  cfg: OpenClawConfig;
+  cfg?: OpenClawConfig;
   config: DiscordAccountConfig;
   accountId?: string;
   orderedAccountIds?: string[];
@@ -95,7 +84,7 @@ async function collectFindings(params: {
 }) {
   readChannelAllowFromStoreMock.mockResolvedValue(params.storeAllowFrom ?? []);
   return await collectDiscordSecurityAuditFindings({
-    cfg: params.cfg,
+    cfg: params.cfg ?? { channels: { discord: params.config } },
     account: createAccount(params.config, params.accountId),
     accountId: params.accountId ?? "default",
     orderedAccountIds: params.orderedAccountIds ?? ["default"],
@@ -105,11 +94,7 @@ async function collectFindings(params: {
 
 describe("Discord security audit findings", () => {
   it.each(broadMemberCases)("$name", async (testCase) => {
-    const config = testCase.config;
-    const findings = await collectFindings({
-      cfg: { channels: { discord: config } },
-      config,
-    });
+    const findings = await collectFindings({ config: testCase.config });
     const finding = findings.find(
       (entry) => entry.checkId === "channels.discord.allowlisted_groups.broad_members",
     );
@@ -121,10 +106,7 @@ describe("Discord security audit findings", () => {
   });
 
   it("uses the account-specific path for broad member warnings", async () => {
-    const config = {
-      groupPolicy: "allowlist" as const,
-      guilds: { work: {} },
-    } satisfies DiscordAccountConfig;
+    const config = guildConfig({}, "work");
     const findings = await collectFindings({
       cfg: { channels: { discord: { accounts: { work: config } } } },
       config,
@@ -159,26 +141,15 @@ describe("Discord security audit findings", () => {
       expectFinding: false,
     },
   ])("$name", async ({ dm, allowFrom, expectFinding }) => {
-    const cfg = {
-      commands: { native: true },
-      channels: {
-        discord: {
-          enabled: true,
-          token: "t",
-          dm,
-          allowFrom,
-          groupPolicy: "allowlist",
-          guilds: { "123": { channels: { general: { enabled: true } } } },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const discordConfig = cfg.channels?.discord;
-    if (!discordConfig) {
-      throw new Error("discord config required");
-    }
+    // Exercise legacy dm.allowFrom input, which is no longer in the config schema.
+    const config = {
+      ...guildConfig({ channels: { general: { enabled: true } } }, "123"),
+      dm,
+      allowFrom,
+    } as unknown as DiscordAccountConfig;
     const findings = await collectFindings({
-      cfg,
-      config: discordConfig,
+      cfg: { commands: { native: true }, channels: { discord: config } },
+      config,
     });
 
     expect(
@@ -192,8 +163,6 @@ describe("Discord security audit findings", () => {
     {
       name: "warns when Discord allowlists contain name-based entries",
       config: {
-        enabled: true,
-        token: "t",
         allowFrom: ["Alice#1234", " Alice#1234 ", "second.operator", "<@123456789012345678>"],
         guilds: {
           "123": {
@@ -228,8 +197,6 @@ describe("Discord security audit findings", () => {
     {
       name: "marks Discord name-based allowlists as break-glass when dangerous matching is enabled",
       config: {
-        enabled: true,
-        token: "t",
         dangerouslyAllowNameMatching: true,
         allowFrom: ["Alice#1234"],
       } satisfies DiscordAccountConfig,
@@ -243,8 +210,6 @@ describe("Discord security audit findings", () => {
       orderedAccountIds: ["alpha", "beta"],
       hasExplicitAccountPath: true,
       config: {
-        enabled: true,
-        token: "b",
         allowFrom: ["Alice#1234"],
       } satisfies DiscordAccountConfig,
       expectNameBasedSeverity: "warn",
@@ -254,8 +219,6 @@ describe("Discord security audit findings", () => {
     {
       name: "does not warn when Discord allowlists use ID-style entries only",
       config: {
-        enabled: true,
-        token: "t",
         allowFrom: [
           "123456789012345678",
           "<@223456789012345678>",
@@ -278,7 +241,6 @@ describe("Discord security audit findings", () => {
     },
   ])("$name", async (testCase) => {
     const findings = await collectFindings({
-      cfg: { channels: { discord: testCase.config } },
       config: testCase.config,
       accountId: testCase.accountId,
       orderedAccountIds: testCase.orderedAccountIds,

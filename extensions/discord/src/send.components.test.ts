@@ -4,9 +4,15 @@ import {
   MessageFlags,
   type APIContainerComponent,
 } from "discord-api-types/v10";
-import { beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { DiscordComponentMessageSpec } from "./components.js";
 import { createDiscordLoopbackRest, makeDiscordRest, requestBody } from "./send.test-harness.js";
+
+async function loopbackRest(options?: Parameters<typeof createDiscordLoopbackRest>[0]) {
+  const loopback = await createDiscordLoopbackRest(options);
+  onTestFinished(loopback.close);
+  return loopback;
+}
 
 const CFG = {
   channels: { discord: { accounts: { default: {} } } },
@@ -147,7 +153,7 @@ it.each(["send", "edit"] as const)("awaits registry settlement after %s", async 
 
 it("rechecks delivery authority before each retried component post", async () => {
   let authorityActive = true;
-  const loopback = await createDiscordLoopbackRest({
+  const loopback = await loopbackRest({
     status: (request) => {
       if (request.method === "POST") {
         authorityActive = false;
@@ -156,124 +162,112 @@ it("rechecks delivery authority before each retried component post", async () =>
       return 200;
     },
   });
-  try {
-    const revoked = new Error("delivery authority revoked");
-    const onPlatformSendDispatch = vi.fn(async () => {
-      if (!authorityActive) {
-        throw revoked;
-      }
-    });
-    await expect(
-      sendDiscordComponentMessage("channel:789", BUTTON, {
-        ...OPTIONS,
-        rest: loopback.rest,
-        onPlatformSendDispatch,
-      }),
-    ).rejects.toBe(revoked);
-    expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
-    expect(loopback.requests.filter((request) => request.method === "POST")).toHaveLength(1);
-  } finally {
-    await loopback.close();
-  }
+  const revoked = new Error("delivery authority revoked");
+  const onPlatformSendDispatch = vi.fn(async () => {
+    if (!authorityActive) {
+      throw revoked;
+    }
+  });
+  await expect(
+    sendDiscordComponentMessage("channel:789", BUTTON, {
+      ...OPTIONS,
+      rest: loopback.rest,
+      onPlatformSendDispatch,
+    }),
+  ).rejects.toBe(revoked);
+  expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
+  expect(loopback.requests.filter((request) => request.method === "POST")).toHaveLength(1);
 });
 
 it("edits select messages without create nonces and refreshes registry entries", async () => {
-  const loopback = await createDiscordLoopbackRest();
-  try {
-    await editDiscordComponentMessage(
-      "channel:chan-1",
-      "1001",
-      {
-        text: "Updated picker",
-        blocks: [
-          {
-            type: "actions",
-            select: { type: "string", options: [{ label: "One", value: "one" }] },
-          },
-        ],
-      },
-      {
-        ...OPTIONS,
-        rest: loopback.rest,
-        sessionKey: "agent:main:discord:channel:chan-1",
-        agentId: "main",
-      },
-    );
-    const patch = loopback.requests.find((request) => request.method === "PATCH");
-    expect(patch?.path).toBe("/v10/channels/chan-1/messages/1001");
-    const body: { flags?: number; components?: APIContainerComponent[] } = JSON.parse(
-      patch?.body ?? "{}",
-    );
-    expect(body.flags).toBe(MessageFlags.IsComponentsV2);
-    const row = body.components?.[0]?.components.find(
-      (entry) => entry.type === ComponentType.ActionRow,
-    );
-    expect(row?.components[0]?.type).toBe(ComponentType.StringSelect);
-    expect(body).not.toHaveProperty("nonce");
-    expect(body).not.toHaveProperty("enforce_nonce");
-    expect(registerDiscordComponentEntries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageId: "loopback-message",
-        entries: [expect.objectContaining({ sessionKey: "agent:main:discord:channel:chan-1" })],
-      }),
-    );
-  } finally {
-    await loopback.close();
-  }
+  const loopback = await loopbackRest();
+  await editDiscordComponentMessage(
+    "channel:chan-1",
+    "1001",
+    {
+      text: "Updated picker",
+      blocks: [
+        {
+          type: "actions",
+          select: { type: "string", options: [{ label: "One", value: "one" }] },
+        },
+      ],
+    },
+    {
+      ...OPTIONS,
+      rest: loopback.rest,
+      sessionKey: "agent:main:discord:channel:chan-1",
+      agentId: "main",
+    },
+  );
+  const patch = loopback.requests.find((request) => request.method === "PATCH");
+  expect(patch?.path).toBe("/v10/channels/chan-1/messages/1001");
+  const body: { flags?: number; components?: APIContainerComponent[] } = JSON.parse(
+    patch?.body ?? "{}",
+  );
+  expect(body.flags).toBe(MessageFlags.IsComponentsV2);
+  const row = body.components?.[0]?.components.find(
+    (entry) => entry.type === ComponentType.ActionRow,
+  );
+  expect(row?.components[0]?.type).toBe(ComponentType.StringSelect);
+  expect(body).not.toHaveProperty("nonce");
+  expect(body).not.toHaveProperty("enforce_nonce");
+  expect(registerDiscordComponentEntries).toHaveBeenCalledWith(
+    expect.objectContaining({
+      messageId: "loopback-message",
+      entries: [expect.objectContaining({ sessionKey: "agent:main:discord:channel:chan-1" })],
+    }),
+  );
 });
 
 it("preserves link-button emoji in rows and sections", async () => {
-  const loopback = await createDiscordLoopbackRest();
-  try {
-    const docs = {
-      label: "Docs",
-      url: "https://example.test/docs",
-      emoji: { name: "📖" },
-      disabled: true,
-    };
-    const guide = {
-      label: "Guide",
-      url: "https://example.test/guide",
-      emoji: { id: "123456789012345678", name: "guide", animated: true },
-    };
-    await editDiscordComponentMessage(
-      "channel:789",
-      "1003",
-      {
-        blocks: [
-          { type: "actions", buttons: [docs] },
-          {
-            type: "section",
-            text: "Read the guide",
-            accessory: {
-              type: "button",
-              button: { ...guide, style: "link" },
-            },
+  const loopback = await loopbackRest();
+  const docs = {
+    label: "Docs",
+    url: "https://example.test/docs",
+    emoji: { name: "📖" },
+    disabled: true,
+  };
+  const guide = {
+    label: "Guide",
+    url: "https://example.test/guide",
+    emoji: { id: "123456789012345678", name: "guide", animated: true },
+  };
+  await editDiscordComponentMessage(
+    "channel:789",
+    "1003",
+    {
+      blocks: [
+        { type: "actions", buttons: [docs] },
+        {
+          type: "section",
+          text: "Read the guide",
+          accessory: {
+            type: "button",
+            button: { ...guide, style: "link" },
           },
-        ],
-      },
-      { ...OPTIONS, rest: loopback.rest },
-    );
-    const patch = loopback.requests.find((entry) => entry.method === "PATCH");
-    const body: { components?: APIContainerComponent[] } = JSON.parse(patch?.body ?? "{}");
-    const components = body.components?.[0]?.components;
-    const row = components?.find((entry) => entry.type === ComponentType.ActionRow);
-    const section = components?.find((entry) => entry.type === ComponentType.Section);
-    expect(row?.components[0]).toMatchObject({
-      url: "https://example.test/docs",
-      emoji: { name: "📖" },
-      disabled: true,
-    });
-    expect(section?.accessory).toMatchObject({
-      url: "https://example.test/guide",
-      emoji: { id: "123456789012345678", name: "guide", animated: true },
-    });
-    expect(registerDiscordComponentEntries).toHaveBeenCalledWith(
-      expect.objectContaining({ entries: [], modals: [] }),
-    );
-  } finally {
-    await loopback.close();
-  }
+        },
+      ],
+    },
+    { ...OPTIONS, rest: loopback.rest },
+  );
+  const patch = loopback.requests.find((entry) => entry.method === "PATCH");
+  const body: { components?: APIContainerComponent[] } = JSON.parse(patch?.body ?? "{}");
+  const components = body.components?.[0]?.components;
+  const row = components?.find((entry) => entry.type === ComponentType.ActionRow);
+  const section = components?.find((entry) => entry.type === ComponentType.Section);
+  expect(row?.components[0]).toMatchObject({
+    url: "https://example.test/docs",
+    emoji: { name: "📖" },
+    disabled: true,
+  });
+  expect(section?.accessory).toMatchObject({
+    url: "https://example.test/guide",
+    emoji: { id: "123456789012345678", name: "guide", animated: true },
+  });
+  expect(registerDiscordComponentEntries).toHaveBeenCalledWith(
+    expect.objectContaining({ entries: [], modals: [] }),
+  );
 });
 it("forwards the media access capability and delivery callback", async () => {
   const readFile = vi.fn().mockResolvedValue(Buffer.from("pdf"));
