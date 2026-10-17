@@ -273,7 +273,7 @@ describe("official external plugin catalog", () => {
   it("replaces unsigned snapshots without losing a neighboring feed", async () => {
     const snapshotStore = sqliteSnapshotStore();
     const snapshotFor = (pluginName: string, url = FEED_URL) => {
-      const body = JSON.stringify(hostedCatalogFeed({ pluginName }));
+      const body = JSON.stringify(hostedCatalogFeed({ sequence: 1, pluginName }));
       return {
         body,
         metadata: {
