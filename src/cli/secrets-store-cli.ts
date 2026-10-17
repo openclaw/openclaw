@@ -81,6 +81,7 @@ function mapStoreError(error: unknown): SecretStoreCliFailure {
       validation.code === "SECRET_STORE_VALUE_TOO_LARGE" ||
       validation.code === "SECRET_STORE_VALUE_IN_ARGV" ||
       validation.code === "SECRET_STORE_VALUE_EMPTY" ||
+      validation.code === "SECRET_STORE_INPUT_ENCODING" ||
       validation.code === "SECRET_STORE_VALUE_REDACTED" ||
       validation.code === "SECRET_STORE_INVALID_ALLOWED_HOST")
   ) {
