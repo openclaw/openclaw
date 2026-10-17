@@ -3,11 +3,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isControlCommandMessage } from "./command-detection.js";
 import {
+  createCommandTurnContext,
   isExplicitCommandTurn,
   resolveCommandBody,
   resolveCommandTurnContext,
+  type CommandTurnContext,
   type CommandTurnContextInput,
 } from "./command-turn-context.js";
+import { shouldHandleTextCommands } from "./commands-text-routing.js";
 
 /** Returns true when inbound metadata or command text identifies an explicit command turn. */
 export function isExplicitCommandTurnContext(
@@ -39,4 +42,28 @@ export function isExplicitCommandTurnContext(
       botUsername: normalizeOptionalString(input.BotUsername),
     })
   );
+}
+
+/**
+ * Resolves the command turn, treating an authorized control command from a channel that
+ * leaves command source unmarked as an authorized text-slash turn. Where the surface does
+ * not handle text commands, the typed command stays ordinary input.
+ */
+export function resolveExplicitCommandTurnContext(
+  input: CommandTurnContextInput & { Surface?: string; Provider?: string },
+  cfg: OpenClawConfig,
+): CommandTurnContext {
+  const commandTurn = resolveCommandTurnContext(input);
+  if (
+    commandTurn.kind !== "normal" ||
+    !isExplicitCommandTurnContext(input, cfg) ||
+    !shouldHandleTextCommands({ cfg, surface: input.Surface ?? input.Provider ?? "" })
+  ) {
+    return commandTurn;
+  }
+  return createCommandTurnContext("text", {
+    authorized: true,
+    commandName: commandTurn.commandName,
+    body: commandTurn.body,
+  });
 }

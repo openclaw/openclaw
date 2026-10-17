@@ -10,7 +10,10 @@ import {
   type CommandTurnContext,
   type CommandTurnContextInput,
 } from "./command-turn-context.js";
-import { isExplicitCommandTurnContext } from "./command-turn-detection.js";
+import {
+  isExplicitCommandTurnContext,
+  resolveExplicitCommandTurnContext,
+} from "./command-turn-detection.js";
 
 const isExplicit = (input: CommandTurnContextInput) => isExplicitCommandTurnContext(input, {});
 function normalTurn(body: string, visible = body): CommandTurnContextInput {
@@ -157,5 +160,39 @@ describe("resolveCommandTurnContext", () => {
       ),
     ).toBeUndefined();
     expect(isExplicitCommandTurn(undefined)).toBe(false);
+  });
+});
+
+describe("resolveExplicitCommandTurnContext", () => {
+  it("reads an authorized unmarked control command as an authorized text command", () => {
+    expect(
+      resolveExplicitCommandTurnContext(
+        { CommandAuthorized: true, CommandBody: "/login cancel" },
+        {},
+      ),
+    ).toMatchObject({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+      body: "/login cancel",
+    });
+  });
+
+  it("keeps an unauthorized unmarked command a normal turn", () => {
+    expect(
+      resolveExplicitCommandTurnContext(
+        { CommandAuthorized: false, CommandBody: "/login cancel" },
+        {},
+      ),
+    ).toMatchObject({ kind: "normal", authorized: false });
+  });
+
+  it("leaves a marked command turn as the channel resolved it", () => {
+    const input = {
+      CommandSource: "text",
+      CommandAuthorized: false,
+      CommandBody: "/status",
+    } as const;
+    expect(resolveExplicitCommandTurnContext(input, {})).toEqual(resolveCommandTurnContext(input));
   });
 });
