@@ -32,6 +32,7 @@ vi.mock("../infra/device-pairing-worker.js", async (importOriginal) => ({
   }) satisfies typeof import("../infra/device-pairing-worker.js").withCurrentDevicePairingSnapshot,
 }));
 
+// mock-isolation: Use synthetic subscriptions and delivery receipts without external push or storage.
 vi.mock("../infra/push-web.js", () => ({
   deleteWebPushApprovalDeliveryTargets: mocks.deleteTargets,
   withBoundWebPushSubscriptions: (async (stateDir, prepare) =>
@@ -69,6 +70,7 @@ vi.mock("./operator-role-policy.js", async (importOriginal) => ({
   resolveOperatorRolePolicyForAssignment: mocks.rolePolicy,
 }));
 
+// mock-isolation: Control approval visibility without opening session and approval stores.
 vi.mock("./server-methods/approval-record-lookup.js", () => ({
   canAccessApprovalSession: () => true,
   isApprovalRecordVisibleToClient: mocks.visible,

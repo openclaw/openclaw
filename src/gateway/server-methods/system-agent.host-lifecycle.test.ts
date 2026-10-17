@@ -227,10 +227,11 @@ it.for([
         expect(pendingRecords).toHaveLength(1);
         expectPending(0, 1);
         const proposalId = expectDefined(pendingRecords[0], "pending approval").id;
-        expect(await manager.getSnapshot(proposalId)).toMatchObject({
+        const snapshot = await manager.getSnapshot(proposalId);
+        expect(snapshot).toMatchObject({
           request: { proposalHash, ...delegation },
-          decision: undefined,
         });
+        expect(snapshot?.decision).toBeUndefined();
         expect(broadcast).toHaveBeenCalledWith(
           "openclaw.approval.requested",
           expect.objectContaining({ id: proposalId }),

@@ -14,6 +14,7 @@ const transcriptStoreMocks = vi.hoisted(() => ({
     .mockResolvedValue([]),
 }));
 
+// mock-isolation: Control inference completion without contacting providers.
 vi.mock("../../system-agent/inference-fallback.js", () => ({
   verifySystemAgentInferenceWithFallback: inferenceFallbackMocks.verify,
 }));
@@ -60,6 +61,7 @@ function makeEngine() {
 
 const createdEngines = vi.hoisted(() => [] as FakeEngine[]);
 
+// mock-isolation: Observe fixture engine ownership and disposal without provider or database startup.
 vi.mock("../../system-agent/chat-engine.js", () => ({
   SystemAgentWizardAnswerError: class extends Error {},
   SystemAgentChatEngine: function FakeSystemAgentChatEngine(this: FakeEngine) {

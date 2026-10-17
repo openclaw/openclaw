@@ -16,6 +16,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { discardSessionPendingInput } from "../config/sessions/session-pending-input-withdrawal.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as devInstallBranch from "../infra/dev-install-branch.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -113,7 +114,7 @@ function preparationGate() {
   return {
     entered,
     release,
-    async hold<T>(value: T) {
+    async hold<T>(this: void, value: T) {
       entered.resolve();
       await release.promise;
       return value;
@@ -386,7 +387,10 @@ describe("saved message attachment response authority", () => {
     origin = `http://127.0.0.1:${listener.claim.port}`;
   });
 
-  function readerRole(others: "none" | "view", scopes = ["operator.sessions.read"]) {
+  function readerRole(
+    others: "none" | "view",
+    scopes: GatewayOperatorRoleDefinition["scopes"] = ["operator.sessions.read"],
+  ): GatewayOperatorRoleDefinition {
     return { agents: ["main"], sessions: { others }, scopes };
   }
 

@@ -25,8 +25,10 @@ const mocks = vi.hoisted(() => ({
   bindings: vi.fn(),
 }));
 
+// mock-isolation: List fixture-owned configurations without reading operator state.
 vi.mock("./config-validation.js", () => ({ requireValidConfig: mocks.config }));
 
+// mock-isolation: Control provider summaries without loading channel runtimes.
 vi.mock("./agents.providers.js", () => ({
   buildProviderStatusIndex: mocks.status,
   buildProviderSummaryMetadataIndex: mocks.metadata,
@@ -34,6 +36,7 @@ vi.mock("./agents.providers.js", () => ({
   summarizeBindings: mocks.bindings,
 }));
 
+// mock-isolation: Control provenance rows without opening the state database.
 vi.mock("../state/agent-provenance.js", () => ({
   listAgentProvenance: mocks.provenance,
   readAgentProvenanceForDisplay: mocks.displayProvenance,

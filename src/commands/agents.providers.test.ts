@@ -27,22 +27,28 @@ const mocks = vi.hoisted(() => ({
   configuredChannels: vi.fn<() => string[]>(() => []),
   repairs: vi.fn<() => OfficialExternalPluginRepairHint[]>(() => []),
 }));
+// mock-isolation: Resolve synthetic channel IDs without loading plugin runtimes.
 vi.mock("../channels/plugins/index.js", () => ({
   normalizeChannelId: mocks.normalize,
   getChannelPlugin: vi.fn(),
 }));
+// mock-isolation: Use fixture-owned plugin descriptors instead of the installed registry.
 vi.mock("../channels/plugins/read-only.js", () => ({
   listReadOnlyChannelPluginsForConfig: mocks.plugins,
 }));
+// mock-isolation: Control the synthetic default account independently of installed plugins.
 vi.mock("../channels/plugins/helpers.js", () => ({
   resolveChannelDefaultAccountId: mocks.defaultAccount,
 }));
+// mock-isolation: Exercise both visibility decisions with synthetic plugin metadata.
 vi.mock("../channels/plugins/exposure.js", () => ({
   isChannelVisibleInConfiguredLists: mocks.visible,
 }));
+// mock-isolation: Control configured channel inventory without plugin discovery.
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
   listExplicitConfiguredChannelIdsForConfig: mocks.configuredChannels,
 }));
+// mock-isolation: Supply synthetic repair hints without reading installed plugin state.
 vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
   resolveMissingOfficialExternalChannelPluginRepairHints: mocks.repairs,
 }));

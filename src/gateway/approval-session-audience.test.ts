@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   resolveApprovalSessionAudienceWithFallback,
@@ -34,11 +35,14 @@ const prepareRegistry = vi.fn(async () => true);
 const registrySnapshot = {};
 const readSnapshot = vi.fn<() => object | undefined>(() => registrySnapshot);
 
+// mock-isolation: Resolve audience scope from fixture configuration, not operator state.
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => readConfig() }));
+// mock-isolation: Traverse the fixture-owned run graph without loading the live registry.
 vi.mock("../agents/subagents/registry/subagent-registry-read.js", () => ({
   buildLatestSubagentSessionListReadIndex: () => readIndex(),
   getLatestLiveSubagentRunByChildSessionKey: (key: string) => readRun(key),
 }));
+// mock-isolation: Control registry publication and preparation for each lineage scenario.
 vi.mock("../agents/subagents/registry/subagent-registry-state.js", () => ({
   prepareOptionalSubagentSessionListReadCache: () => prepareRegistry(),
   getSubagentSessionListReadSnapshotIdentity: () => readSnapshot(),
@@ -81,7 +85,7 @@ it("reads current memory lineage without creating a missing owner and refuses a 
   const mutate = async (operation: Parameters<NonNullable<typeof actor.storage>["mutate"]>[0]) =>
     expect((await actor.storage!.mutate(operation, authority)).kind).toBe("committed");
   try {
-    const entry = {
+    const entry: InternalSessionEntry = {
       sessionId: "private-child",
       updatedAt: 1,
       incognito: true,

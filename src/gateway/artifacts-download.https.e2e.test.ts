@@ -59,6 +59,7 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
           title: "drawing.svg",
           type: "image",
           mimeType: "image/svg+xml",
+          sizeBytes: undefined,
           bytes: Buffer.from(
             '<svg xmlns="http://www.w3.org/2000/svg"><text>synthetic</text></svg>',
           ),
