@@ -344,15 +344,16 @@ describe("chat header session menu", () => {
           ?.textContent?.replace(/\s+/gu, "")
           .trim(),
       ).toBe(platform === "MacIntel" ? "A/⌘⇧A" : "A/Ctrl+Shift+A");
-      const inactive = await mountMenu();
+      menu.archiveShortcut = false;
+      await menu.updateComplete;
       expect(
-        item(inactive, "Archive session")
-          .querySelector(".session-menu__shortcut")
-          ?.textContent?.trim(),
+        item(menu, "Archive session").querySelector(".session-menu__shortcut")?.textContent?.trim(),
       ).toBe("A");
-      const archived = await mountMenu({ archiveShortcut: true, session: { archived: true } });
+      menu.archiveShortcut = true;
+      menu.session = { ...menu.session, archived: true };
+      await menu.updateComplete;
       expect(
-        archived
+        menu
           .querySelector('[data-value="toggle-archived"] .session-menu__shortcut')
           ?.textContent?.trim(),
       ).toBe("A");
