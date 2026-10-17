@@ -32,148 +32,158 @@ export type ConfigSnapshotStub = {
   sourceConfig: Record<string, unknown>;
 };
 
+const tryRouteCliMock = vi.hoisted(() => vi.fn());
+const loadDotEnvMock = vi.hoisted(() => vi.fn());
+const dotenvModuleImportState = vi.hoisted(() => ({ count: 0 }));
+const existsSyncOverride = vi.hoisted(
+  () =>
+    ({ value: undefined }) as {
+      value: ((target: string) => boolean) | undefined;
+    },
+);
+const assertRuntimeMock = vi.hoisted(() => vi.fn(async () => {}));
+const isCurrentRuntimeSupportedMock = vi.hoisted(() => vi.fn(async () => true));
+const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
+const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
+const listRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn((): unknown[] => []));
+const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
+const hasProviderTransportDispatcherPoolMock = vi.hoisted(() => vi.fn(() => false));
+const stopManagedProviderLocalServicesMock = vi.hoisted(() => vi.fn());
+const closeProviderTransportDispatcherPoolMock = vi.hoisted(() => vi.fn(async () => {}));
+const getActiveMcpLoopbackRuntimeMock = vi.hoisted(() =>
+  vi.fn<() => { port: number } | undefined>(() => undefined),
+);
+const closeMcpLoopbackServerMock = vi.hoisted(() => vi.fn(async () => {}));
+const outputRootHelpMock = vi.hoisted(() => vi.fn());
+const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+const outputPrecomputedBrowserHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+const outputPrecomputedSecretsHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+const outputPrecomputedNodesHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+const outputPrecomputedSubcommandHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+const loadRootHelpRenderOptionsForConfigSensitivePluginsMock = vi.hoisted(() =>
+  vi.fn<() => Promise<RootHelpRenderOptions | null>>(async () => null),
+);
+const tryOutputSetupOnboardConfigureHelpMock = vi.hoisted(() => vi.fn(async () => true));
+const buildProgramMock = vi.hoisted(() => vi.fn());
+const parkCurrentLaunchAgentForMaintenanceMock = vi.hoisted(() => vi.fn(async () => true));
+const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
+const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
+const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
+const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() => vi.fn(async () => ({})));
+const resolvePluginCliRootOwnerIdsMock = vi.hoisted(() => vi.fn());
+const createPluginCliLoadSessionMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    readConfig: <T>(read: () => Promise<T>) => read(),
+    withCache: <T>(run: () => T) => run(),
+    close: vi.fn(),
+  })),
+);
+const loadPluginCliDescriptorsMock = vi.hoisted(() =>
+  vi.fn<
+    () => Promise<
+      Array<{
+        name: string;
+        description: string;
+        hasSubcommands: boolean;
+        machineOutput?: (params: { argv: readonly string[]; stdoutIsTTY: boolean }) => boolean;
+      }>
+    >
+  >(async () => []),
+);
+const resolveManifestCommandAliasOwnerMock = vi.hoisted(() => vi.fn());
+const resolveManifestToolOwnerMock = vi.hoisted(() => vi.fn());
+const resolveManifestCliCommandSurfaceOwnerMock = vi.hoisted(() => vi.fn());
+const restoreRuntimeTerminalStateMock = vi.hoisted(() => vi.fn());
+const hasEnvHttpProxyAgentConfiguredMock = vi.hoisted(() => vi.fn(() => false));
+const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
+const readConfigFileSnapshotMock = vi.hoisted(() =>
+  vi.fn<(options?: ConfigSnapshotReadOptions) => Promise<ConfigSnapshotStub>>(async () =>
+    validConfig({ gateway: { mode: "local" } }),
+  ),
+);
+const readLocalOnboardingStateMock = vi.hoisted(() =>
+  vi.fn<
+    (
+      configPath: string,
+      config: { wizard?: { securityAcknowledgedAt?: string } },
+    ) => Promise<LocalOnboardingState | undefined>
+  >(async () => undefined),
+);
+const setupWizardCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const runRemoteGatewayInferenceOnboardingMock = vi.hoisted(() => vi.fn(async () => {}));
+const runTuiMock = vi.hoisted(() => vi.fn<(opts: unknown) => Promise<void>>(async () => {}));
+const runTuiCliActionMock = vi.hoisted(() =>
+  vi.fn<(target: string | undefined, opts: unknown) => Promise<void>>(async () => {}),
+);
+const probeGatewayConfiguredModelMock = vi.hoisted(() =>
+  vi.fn<typeof import("../commands/onboard-helpers.js").probeGatewayConfiguredModel>(async () => ({
+    kind: "configured",
+  })),
+);
+const readActiveGatewayLockPortMock = vi.hoisted(() =>
+  vi.fn(async (): Promise<number | undefined> => undefined),
+);
+const inspectGatewayTlsCertificateMock = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/tls/gateway.js").inspectGatewayTlsCertificate>(async () => ({
+    ok: false,
+    error: "gateway tls is disabled",
+  })),
+);
+const resolveControlUiLinksMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    httpUrl: "http://127.0.0.1:18789/",
+    wsUrl: "ws://127.0.0.1:18789",
+  })),
+);
+const commanderParseAsyncMock = vi.hoisted(() => vi.fn(async () => {}));
 type GatewayRunCommandHooks = {
   beforeRun?: (opts: { reset?: boolean }) => Promise<void>;
 };
 type CliExecutionBootstrapOptions = {
   beforeStatePreparation?: (snapshot?: ConfigSnapshotStub) => Promise<boolean>;
 };
-
-const mocks = vi.hoisted(() => {
-  const defaults: Array<() => void> = [];
-  function value<T>(read: () => T) {
-    const mock = vi.fn(read);
-    defaults.push(() => {
-      mock.mockReturnValue(read());
-    });
-    return mock;
-  }
-  const progressDoneMock = vi.fn();
-  return {
-    tryRouteCli: vi.fn(),
-    loadDotEnv: vi.fn(),
-    dotenvModuleImportState: { count: 0 },
-    existsSyncOverride: { value: undefined } as {
-      value: ((target: string) => boolean) | undefined;
-    },
-    assertRuntime: vi.fn(async () => {}),
-    isCurrentRuntimeSupported: vi.fn(async () => true),
-    closeActiveMemorySearchManagers: vi.fn(async () => {}),
-    hasMemoryRuntime: value(() => false),
-    listRegisteredAgentHarnesses: value((): unknown[] => []),
-    disposeRegisteredAgentHarnesses: vi.fn(async () => {}),
-    hasProviderTransportDispatcherPool: value(() => false),
-    stopManagedProviderLocalServices: vi.fn(),
-    closeProviderTransportDispatcherPool: vi.fn(async () => {}),
-    getActiveMcpLoopbackRuntime: vi.fn<() => { port: number } | undefined>(() => undefined),
-    closeMcpLoopbackServer: vi.fn(async () => {}),
-    outputRootHelp: vi.fn(),
-    outputPrecomputedRootHelpText: value(() => false),
-    outputPrecomputedBrowserHelpText: value(() => false),
-    outputPrecomputedSecretsHelpText: value(() => false),
-    outputPrecomputedNodesHelpText: value(() => false),
-    outputPrecomputedSubcommandHelpText: value(() => false),
-    loadRootHelpRenderOptionsForConfigSensitivePlugins: vi.fn<
-      () => Promise<RootHelpRenderOptions | null>
-    >(async () => null),
-    tryOutputSetupOnboardConfigureHelp: vi.fn(async () => true),
-    buildProgram: vi.fn(),
-    parkCurrentLaunchAgentForMaintenance: vi.fn(async () => true),
-    getProgramContext: value(() => null),
-    registerCoreCliByName: vi.fn(),
-    registerSubCliByName: vi.fn(),
-    registerPluginCliCommandsFromValidatedConfig: vi.fn(async () => ({})),
-    resolvePluginCliRootOwnerIds: vi.fn(),
-    createPluginCliLoadSession: vi.fn(() => ({
-      readConfig: <T>(read: () => Promise<T>) => read(),
-      withCache: <T>(run: () => T) => run(),
-      close: vi.fn(),
-    })),
-    loadPluginCliDescriptors: vi.fn<
-      () => Promise<
-        Array<{
-          name: string;
-          description: string;
-          hasSubcommands: boolean;
-          machineOutput?: (params: { argv: readonly string[]; stdoutIsTTY: boolean }) => boolean;
-        }>
-      >
-    >(async () => []),
-    resolveManifestCommandAliasOwner: vi.fn(),
-    resolveManifestToolOwner: vi.fn(),
-    resolveManifestCliCommandSurfaceOwner: vi.fn(),
-    restoreRuntimeTerminalState: vi.fn(),
-    hasEnvHttpProxyAgentConfigured: value(() => false),
-    ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
-    readConfigFileSnapshot: vi.fn<
-      (options?: ConfigSnapshotReadOptions) => Promise<ConfigSnapshotStub>
-    >(async () => validConfig({ gateway: { mode: "local" } })),
-    readLocalOnboardingState: vi.fn<
-      (
-        configPath: string,
-        config: { wizard?: { securityAcknowledgedAt?: string } },
-      ) => Promise<LocalOnboardingState | undefined>
-    >(async () => undefined),
-    setupWizardCommand: vi.fn(async () => {}),
-    runRemoteGatewayInferenceOnboarding: vi.fn(async () => {}),
-    runTui: vi.fn<(opts: unknown) => Promise<void>>(async () => {}),
-    runTuiCliAction: vi.fn<(target: string | undefined, opts: unknown) => Promise<void>>(
-      async () => {},
-    ),
-    probeGatewayConfiguredModel: vi.fn<
-      typeof import("../commands/onboard-helpers.js").probeGatewayConfiguredModel
-    >(async () => ({
-      kind: "configured",
-    })),
-    readActiveGatewayLockPort: vi.fn(async (): Promise<number | undefined> => undefined),
-    inspectGatewayTlsCertificate: vi.fn<
-      typeof import("../infra/tls/gateway.js").inspectGatewayTlsCertificate
-    >(async () => ({
-      ok: false,
-      error: "gateway tls is disabled",
-    })),
-    resolveControlUiLinks: value(() => ({
-      httpUrl: "http://127.0.0.1:18789/",
-      wsUrl: "ws://127.0.0.1:18789",
-    })),
-    commanderParseAsync: vi.fn(async () => {}),
-    addGatewayRunCommand: vi.fn<(command: unknown, hooks?: GatewayRunCommandHooks) => unknown>(
-      (command) => command,
-    ),
-    ensureCliExecutionBootstrap: vi.fn<(_opts: CliExecutionBootstrapOptions) => Promise<void>>(
-      async () => {},
-    ),
-    emitCliBanner: vi.fn(),
-    enableConsoleCapture: vi.fn(),
-    progressDone: progressDoneMock,
-    createCliProgress: vi.fn(() => ({ done: progressDoneMock })),
-    loadConfig: vi.fn<
-      (...args: Parameters<typeof import("../config/io.js").readBestEffortConfig>) => OpenClawConfig
-    >(() => ({})),
-    readSourceConfigBestEffort: vi.fn(async () => ({})),
-    startProxy: vi.fn<(config: unknown) => Promise<unknown>>(async () => null),
-    stopProxy: vi.fn<(handle: unknown) => Promise<void>>(async () => {}),
-    flushExitAfterOneShotOutput: vi.fn(),
-    requestExitAfterOneShotOutput: vi.fn(),
-    resetDefaults: () => defaults.forEach((reset) => reset()),
-    maybeRunCliInContainer: vi.fn<
-      (argv: string[]) => { handled: true; exitCode: number } | { handled: false; argv: string[] }
-    >((argv: string[]) => ({ handled: false, argv })),
-  };
-});
+const addGatewayRunCommandMock = vi.hoisted(() =>
+  vi.fn<(command: unknown, hooks?: GatewayRunCommandHooks) => unknown>((command) => command),
+);
+const ensureCliExecutionBootstrapMock = vi.hoisted(() =>
+  vi.fn<(_opts: CliExecutionBootstrapOptions) => Promise<void>>(async () => {}),
+);
+const emitCliBannerMock = vi.hoisted(() => vi.fn());
+const enableConsoleCaptureMock = vi.hoisted(() => vi.fn());
+const progressDoneMock = vi.hoisted(() => vi.fn());
+const createCliProgressMock = vi.hoisted(() => vi.fn(() => ({ done: progressDoneMock })));
+const loadConfigMock = vi.hoisted(() =>
+  vi.fn<
+    (...args: Parameters<typeof import("../config/io.js").readBestEffortConfig>) => OpenClawConfig
+  >(() => ({})),
+);
+const readSourceConfigBestEffortMock = vi.hoisted(() => vi.fn(async () => ({})));
+const startProxyMock = vi.hoisted(() =>
+  vi.fn<(config: unknown) => Promise<unknown>>(async () => null),
+);
+const stopProxyMock = vi.hoisted(() => vi.fn<(handle: unknown) => Promise<void>>(async () => {}));
+const flushExitAfterOneShotOutputMock = vi.hoisted(() => vi.fn());
+const requestExitAfterOneShotOutputMock = vi.hoisted(() => vi.fn());
+const maybeRunCliInContainerMock = vi.hoisted(() =>
+  vi.fn<
+    (argv: string[]) => { handled: true; exitCode: number } | { handled: false; argv: string[] }
+  >((argv: string[]) => ({ handled: false, argv })),
+);
 const serviceEnvSnapshot = captureEnv([
   "OPENCLAW_SERVICE_MARKER",
   "OPENCLAW_SERVICE_KIND",
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
 ]);
+
 vi.mock("commander", () => {
   class MockCommanderError extends Error {
-    constructor(
-      public exitCode: number,
-      public code: string,
-      message: string,
-    ) {
+    exitCode: number;
+    code: string;
+
+    constructor(exitCode: number, code: string, message: string) {
       super(message);
+      this.exitCode = exitCode;
+      this.code = code;
     }
   }
 
@@ -184,161 +194,198 @@ vi.mock("commander", () => {
     exitOverride = vi.fn(() => this);
     description = vi.fn(() => this);
     command = vi.fn(() => new MockCommand());
-    parseAsync = mocks.commanderParseAsync;
+    parseAsync = commanderParseAsyncMock;
   }
 
   return { Command: MockCommand, CommanderError: MockCommanderError };
 });
-vi.mock("./route.js", () => ({ tryRouteCli: mocks.tryRouteCli }));
+
+vi.mock("./route.js", () => ({ tryRouteCli: tryRouteCliMock }));
+
 vi.mock("./gateway-cli/run-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./gateway-cli/run-command.js")>()),
-  addGatewayRunCommand: mocks.addGatewayRunCommand,
+  addGatewayRunCommand: addGatewayRunCommandMock,
 }));
+
 vi.mock("../daemon/launchd.js", () => ({
-  parkCurrentLaunchAgentForMaintenance: mocks.parkCurrentLaunchAgentForMaintenance,
+  parkCurrentLaunchAgentForMaintenance: parkCurrentLaunchAgentForMaintenanceMock,
 }));
+
 vi.mock("./command-execution-startup.js", () => ({
-  ensureCliExecutionBootstrap: mocks.ensureCliExecutionBootstrap,
+  ensureCliExecutionBootstrap: ensureCliExecutionBootstrapMock,
 }));
+
 vi.mock("../version.js", () => ({
   VERSION: "9.9.9-test",
   resolveRuntimeServiceCommit: () => null,
 }));
-vi.mock("./banner.js", () => ({ emitCliBanner: mocks.emitCliBanner }));
+
+vi.mock("./banner.js", () => ({ emitCliBanner: emitCliBannerMock }));
+
 vi.mock("../logging/console.js", async () => ({
   ...(await vi.importActual<typeof import("../logging/console.js")>("../logging/console.js")),
-  enableConsoleCapture: mocks.enableConsoleCapture,
+  enableConsoleCapture: enableConsoleCaptureMock,
 }));
+
 vi.mock("./container-target.js", () => ({
-  maybeRunCliInContainer: mocks.maybeRunCliInContainer,
+  maybeRunCliInContainer: maybeRunCliInContainerMock,
   parseCliContainerArgs: (argv: string[]) => ({ ok: true, container: null, argv }),
 }));
+
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   return {
     ...actual,
     existsSync: (target: Parameters<typeof actual.existsSync>[0]) =>
-      typeof target === "string" && mocks.existsSyncOverride.value
-        ? mocks.existsSyncOverride.value(target)
+      typeof target === "string" && existsSyncOverride.value
+        ? existsSyncOverride.value(target)
         : actual.existsSync(target),
   };
 });
+
 vi.mock("./dotenv.js", () => {
-  mocks.dotenvModuleImportState.count += 1;
-  return { loadCliDotEnv: mocks.loadDotEnv };
+  dotenvModuleImportState.count += 1;
+  return { loadCliDotEnv: loadDotEnvMock };
 });
+
 vi.mock("./one-shot-exit.js", () => ({
-  flushExitAfterOneShotOutput: mocks.flushExitAfterOneShotOutput,
-  requestExitAfterOneShotOutput: mocks.requestExitAfterOneShotOutput,
+  flushExitAfterOneShotOutput: flushExitAfterOneShotOutputMock,
+  requestExitAfterOneShotOutput: requestExitAfterOneShotOutputMock,
 }));
+
 vi.mock("../infra/env.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/env.js")>()),
   normalizeEnv: vi.fn(),
 }));
+
 vi.mock("../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/paths.js")>()),
   pinRuntimePaths: vi.fn(),
 }));
+
 vi.mock("../gateway/control-ui-links.js", () => ({
-  resolveControlUiLinks: mocks.resolveControlUiLinks,
+  resolveControlUiLinks: resolveControlUiLinksMock,
 }));
+
 vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
-  readActiveGatewayLockPort: mocks.readActiveGatewayLockPort,
+  readActiveGatewayLockPort: readActiveGatewayLockPortMock,
 }));
+
 vi.mock("../infra/tls/gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/tls/gateway.js")>()),
-  inspectGatewayTlsCertificate: mocks.inspectGatewayTlsCertificate,
+  inspectGatewayTlsCertificate: inspectGatewayTlsCertificateMock,
 }));
+
 vi.mock("../utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../utils.js")>()),
   pinConfigDir: vi.fn(),
 }));
+
 vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath: vi.fn() }));
+
 vi.mock("../infra/runtime-guard.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/runtime-guard.js")>()),
-  assertSupportedRuntime: mocks.assertRuntime,
-  isCurrentRuntimeSupported: mocks.isCurrentRuntimeSupported,
+  assertSupportedRuntime: assertRuntimeMock,
+  isCurrentRuntimeSupported: isCurrentRuntimeSupportedMock,
 }));
+
 vi.mock("../plugins/memory-runtime.js", () => ({
-  closeActiveMemorySearchManagersCore: mocks.closeActiveMemorySearchManagers,
+  closeActiveMemorySearchManagersCore: closeActiveMemorySearchManagersMock,
 }));
-vi.mock("../plugins/memory-state.js", () => ({ hasMemoryRuntime: mocks.hasMemoryRuntime }));
+
+vi.mock("../plugins/memory-state.js", () => ({ hasMemoryRuntime: hasMemoryRuntimeMock }));
+
 vi.mock("../agents/harness/registry.js", () => ({
-  listRegisteredAgentHarnesses: mocks.listRegisteredAgentHarnesses,
-  disposeRegisteredAgentHarnesses: mocks.disposeRegisteredAgentHarnesses,
+  listRegisteredAgentHarnesses: listRegisteredAgentHarnessesMock,
+  disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock,
 }));
+
 vi.mock("../agents/provider-runtime-lifecycle.js", () => ({
-  stopActiveManagedProviderLocalServices: mocks.stopManagedProviderLocalServices,
-  hasProviderTransportDispatcherPool: mocks.hasProviderTransportDispatcherPool,
+  stopActiveManagedProviderLocalServices: stopManagedProviderLocalServicesMock,
+  hasProviderTransportDispatcherPool: hasProviderTransportDispatcherPoolMock,
 }));
+
 vi.mock("../agents/provider-local-service.js", () => {
-  return { stopManagedProviderLocalServices: mocks.stopManagedProviderLocalServices };
+  return { stopManagedProviderLocalServices: stopManagedProviderLocalServicesMock };
 });
+
 vi.mock("../agents/provider-transport-dispatcher-pool.js", () => {
-  return { closeProviderTransportDispatcherPool: mocks.closeProviderTransportDispatcherPool };
+  return { closeProviderTransportDispatcherPool: closeProviderTransportDispatcherPoolMock };
 });
+
 vi.mock("../gateway/mcp-http.loopback-runtime.js", () => ({
-  getActiveMcpLoopbackRuntime: mocks.getActiveMcpLoopbackRuntime,
+  getActiveMcpLoopbackRuntime: getActiveMcpLoopbackRuntimeMock,
 }));
-vi.mock("../gateway/mcp-http.js", () => ({
-  closeMcpLoopbackServer: mocks.closeMcpLoopbackServer,
-}));
-vi.mock("./program/root-help.js", () => ({ outputRootHelp: mocks.outputRootHelp }));
+
+vi.mock("../gateway/mcp-http.js", () => ({ closeMcpLoopbackServer: closeMcpLoopbackServerMock }));
+
+vi.mock("./program/root-help.js", () => ({ outputRootHelp: outputRootHelpMock }));
+
 vi.mock("./root-help-metadata.js", () => ({
-  outputPrecomputedBrowserHelpText: mocks.outputPrecomputedBrowserHelpText,
-  outputPrecomputedNodesHelpText: mocks.outputPrecomputedNodesHelpText,
-  outputPrecomputedRootHelpText: mocks.outputPrecomputedRootHelpText,
-  outputPrecomputedSecretsHelpText: mocks.outputPrecomputedSecretsHelpText,
-  outputPrecomputedSubcommandHelpText: mocks.outputPrecomputedSubcommandHelpText,
+  outputPrecomputedBrowserHelpText: outputPrecomputedBrowserHelpTextMock,
+  outputPrecomputedNodesHelpText: outputPrecomputedNodesHelpTextMock,
+  outputPrecomputedRootHelpText: outputPrecomputedRootHelpTextMock,
+  outputPrecomputedSecretsHelpText: outputPrecomputedSecretsHelpTextMock,
+  outputPrecomputedSubcommandHelpText: outputPrecomputedSubcommandHelpTextMock,
 }));
+
 vi.mock("./root-help-live-config.js", () => ({
   loadRootHelpRenderOptionsForConfigSensitivePlugins:
-    mocks.loadRootHelpRenderOptionsForConfigSensitivePlugins,
+    loadRootHelpRenderOptionsForConfigSensitivePluginsMock,
 }));
+
 vi.mock("./setup-onboard-configure-help-fast-path.js", () => ({
-  tryOutputSetupOnboardConfigureHelp: mocks.tryOutputSetupOnboardConfigureHelp,
+  tryOutputSetupOnboardConfigureHelp: tryOutputSetupOnboardConfigureHelpMock,
 }));
 
 // mock-isolation: Exercise dispatch without constructing the real Commander program.
-vi.mock("./program/build-program.js", () => ({ buildProgram: mocks.buildProgram }));
-vi.mock("./program/program-context.js", () => ({ getProgramContext: mocks.getProgramContext }));
+vi.mock("./program/build-program.js", () => ({ buildProgram: buildProgramMock }));
+
+vi.mock("./program/program-context.js", () => ({ getProgramContext: getProgramContextMock }));
+
 vi.mock("./program/command-registry-core.js", () => ({
-  registerCoreCliByName: mocks.registerCoreCliByName,
+  registerCoreCliByName: registerCoreCliByNameMock,
 }));
+
 vi.mock("./program/register.subclis.js", () => ({
-  registerSubCliByName: mocks.registerSubCliByName,
+  registerSubCliByName: registerSubCliByNameMock,
 }));
+
 vi.mock("../plugins/cli.js", () => ({
-  registerPluginCliCommandsFromValidatedConfig: mocks.registerPluginCliCommandsFromValidatedConfig,
+  registerPluginCliCommandsFromValidatedConfig: registerPluginCliCommandsFromValidatedConfigMock,
 }));
+
 vi.mock("../plugins/cli-registry-loader.js", () => ({
-  loadPluginCliDescriptors: mocks.loadPluginCliDescriptors,
-  createPluginCliLoadSession: mocks.createPluginCliLoadSession,
-  resolvePluginCliRootOwnerIds: mocks.resolvePluginCliRootOwnerIds,
+  loadPluginCliDescriptors: loadPluginCliDescriptorsMock,
+  createPluginCliLoadSession: createPluginCliLoadSessionMock,
+  resolvePluginCliRootOwnerIds: resolvePluginCliRootOwnerIdsMock,
 }));
+
 vi.mock("../plugins/manifest-command-aliases.runtime.js", () => ({
-  resolveManifestCliCommandSurfaceOwner: mocks.resolveManifestCliCommandSurfaceOwner,
-  resolveManifestCommandAliasOwner: mocks.resolveManifestCommandAliasOwner,
-  resolveManifestToolOwner: mocks.resolveManifestToolOwner,
+  resolveManifestCliCommandSurfaceOwner: resolveManifestCliCommandSurfaceOwnerMock,
+  resolveManifestCommandAliasOwner: resolveManifestCommandAliasOwnerMock,
+  resolveManifestToolOwner: resolveManifestToolOwnerMock,
 }));
+
 vi.mock("../runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../runtime.js")>();
   return {
     ...actual,
-    restoreRuntimeTerminalState: mocks.restoreRuntimeTerminalState,
+    restoreRuntimeTerminalState: restoreRuntimeTerminalStateMock,
   };
 });
+
 vi.mock("../infra/net/proxy-env.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/net/proxy-env.js")>()),
-  hasEnvHttpProxyAgentConfigured: mocks.hasEnvHttpProxyAgentConfigured,
+  hasEnvHttpProxyAgentConfigured: hasEnvHttpProxyAgentConfiguredMock,
 }));
+
 vi.mock("../infra/net/undici-global-dispatcher.js", () => ({
-  ensureGlobalUndiciEnvProxyDispatcher: mocks.ensureGlobalUndiciEnvProxyDispatcher,
+  ensureGlobalUndiciEnvProxyDispatcher: ensureGlobalUndiciEnvProxyDispatcherMock,
 }));
-vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-}));
+
+vi.mock("../config/config.js", () => ({ readConfigFileSnapshot: readConfigFileSnapshotMock }));
 
 // mock-isolation: Dispatcher fixtures replace storage startup; real CLI tests cover selection.
 vi.mock("./database-engine-selection.js", () => ({ prepareCliDatabaseEngine: async () => false }));
@@ -349,7 +396,7 @@ vi.mock("../config/io.factory.js", () => ({
     options: Parameters<typeof import("../config/io.factory.js").createConfigIO>[0] = {},
   ) => ({
     readConfigFileSnapshot: () =>
-      mocks.readConfigFileSnapshot({
+      readConfigFileSnapshotMock({
         isolateEnv: options.env !== undefined && options.env !== process.env,
         observe: options.observe,
         pluginValidation: options.pluginValidation,
@@ -360,28 +407,36 @@ vi.mock("../config/io.factory.js", () => ({
 
 // mock-isolation: Bare-root routing uses fixture receipts rather than operator onboarding state.
 vi.mock("../state/local-onboarding-state.js", () => ({
-  readLocalOnboardingStateForConfigAsync: mocks.readLocalOnboardingState,
+  readLocalOnboardingStateForConfigAsync: readLocalOnboardingStateMock,
 }));
-vi.mock("../commands/onboard.js", () => ({ setupWizardCommand: mocks.setupWizardCommand }));
+
+vi.mock("../commands/onboard.js", () => ({ setupWizardCommand: setupWizardCommandMock }));
+
 vi.mock("../commands/onboard-remote-gateway.js", () => ({
-  runRemoteGatewayInferenceOnboarding: mocks.runRemoteGatewayInferenceOnboarding,
+  runRemoteGatewayInferenceOnboarding: runRemoteGatewayInferenceOnboardingMock,
 }));
+
 vi.mock("../commands/onboard-helpers.js", () => ({
-  probeGatewayConfiguredModel: mocks.probeGatewayConfiguredModel,
+  probeGatewayConfiguredModel: probeGatewayConfiguredModelMock,
 }));
-vi.mock("../tui/tui.js", () => ({ runTui: mocks.runTui }));
-vi.mock("./tui-cli.js", () => ({ runTuiCliAction: mocks.runTuiCliAction }));
-vi.mock("./progress.js", () => ({ createCliProgress: mocks.createCliProgress }));
+
+vi.mock("../tui/tui.js", () => ({ runTui: runTuiMock }));
+
+vi.mock("./tui-cli.js", () => ({ runTuiCliAction: runTuiCliActionMock }));
+
+vi.mock("./progress.js", () => ({ createCliProgress: createCliProgressMock }));
+
 vi.mock("../config/io.js", () => ({
-  readBestEffortConfig: mocks.loadConfig,
-  readBestEffortConfigSnapshot: async (...args: Parameters<typeof mocks.loadConfig>) => ({
-    config: mocks.loadConfig(...args),
+  readBestEffortConfig: loadConfigMock,
+  readBestEffortConfigSnapshot: async (...args: Parameters<typeof loadConfigMock>) => ({
+    config: loadConfigMock(...args),
   }),
-  readSourceConfigBestEffort: mocks.readSourceConfigBestEffort,
+  readSourceConfigBestEffort: readSourceConfigBestEffortMock,
 }));
+
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
-  startProxy: mocks.startProxy,
-  stopProxy: mocks.stopProxy,
+  startProxy: startProxyMock,
+  stopProxy: stopProxyMock,
 }));
 
 async function withCliExitSpies(
@@ -402,7 +457,7 @@ async function withCliExitSpies(
 }
 
 async function runGatewayBeforeHook(opts: { reset?: boolean } = {}): Promise<void> {
-  await mocks.addGatewayRunCommand.mock.calls[0]?.[1]?.beforeRun?.(opts);
+  await addGatewayRunCommandMock.mock.calls[0]?.[1]?.beforeRun?.(opts);
 }
 
 function makeProgram<T>(primary: string | undefined, parseAsync: T) {
@@ -416,71 +471,67 @@ function validConfig(
   return { exists: true, valid: true, sourceConfig, ...overrides };
 }
 
-export const {
-  tryRouteCli: tryRouteCliMock,
-  loadDotEnv: loadDotEnvMock,
-  existsSyncOverride,
-  assertRuntime: assertRuntimeMock,
-  isCurrentRuntimeSupported: isCurrentRuntimeSupportedMock,
-  closeActiveMemorySearchManagers: closeActiveMemorySearchManagersMock,
-  hasMemoryRuntime: hasMemoryRuntimeMock,
-  listRegisteredAgentHarnesses: listRegisteredAgentHarnessesMock,
-  disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock,
-  hasProviderTransportDispatcherPool: hasProviderTransportDispatcherPoolMock,
-  stopManagedProviderLocalServices: stopManagedProviderLocalServicesMock,
-  closeProviderTransportDispatcherPool: closeProviderTransportDispatcherPoolMock,
-  getActiveMcpLoopbackRuntime: getActiveMcpLoopbackRuntimeMock,
-  closeMcpLoopbackServer: closeMcpLoopbackServerMock,
-  outputRootHelp: outputRootHelpMock,
-  outputPrecomputedRootHelpText: outputPrecomputedRootHelpTextMock,
-  outputPrecomputedNodesHelpText: outputPrecomputedNodesHelpTextMock,
-  loadRootHelpRenderOptionsForConfigSensitivePlugins:
-    loadRootHelpRenderOptionsForConfigSensitivePluginsMock,
-  tryOutputSetupOnboardConfigureHelp: tryOutputSetupOnboardConfigureHelpMock,
-  buildProgram: buildProgramMock,
-  parkCurrentLaunchAgentForMaintenance: parkCurrentLaunchAgentForMaintenanceMock,
-  getProgramContext: getProgramContextMock,
-  registerCoreCliByName: registerCoreCliByNameMock,
-  registerSubCliByName: registerSubCliByNameMock,
-  registerPluginCliCommandsFromValidatedConfig: registerPluginCliCommandsFromValidatedConfigMock,
-  resolvePluginCliRootOwnerIds: resolvePluginCliRootOwnerIdsMock,
-  createPluginCliLoadSession: createPluginCliLoadSessionMock,
-  loadPluginCliDescriptors: loadPluginCliDescriptorsMock,
-  resolveManifestCommandAliasOwner: resolveManifestCommandAliasOwnerMock,
-  resolveManifestToolOwner: resolveManifestToolOwnerMock,
-  restoreRuntimeTerminalState: restoreRuntimeTerminalStateMock,
-  hasEnvHttpProxyAgentConfigured: hasEnvHttpProxyAgentConfiguredMock,
-  ensureGlobalUndiciEnvProxyDispatcher: ensureGlobalUndiciEnvProxyDispatcherMock,
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
-  readLocalOnboardingState: readLocalOnboardingStateMock,
-  setupWizardCommand: setupWizardCommandMock,
-  runRemoteGatewayInferenceOnboarding: runRemoteGatewayInferenceOnboardingMock,
-  runTui: runTuiMock,
-  runTuiCliAction: runTuiCliActionMock,
-  probeGatewayConfiguredModel: probeGatewayConfiguredModelMock,
-  inspectGatewayTlsCertificate: inspectGatewayTlsCertificateMock,
-  resolveControlUiLinks: resolveControlUiLinksMock,
-  commanderParseAsync: commanderParseAsyncMock,
-  addGatewayRunCommand: addGatewayRunCommandMock,
-  ensureCliExecutionBootstrap: ensureCliExecutionBootstrapMock,
-  emitCliBanner: emitCliBannerMock,
-  enableConsoleCapture: enableConsoleCaptureMock,
-  progressDone: progressDoneMock,
-  createCliProgress: createCliProgressMock,
-  loadConfig: loadConfigMock,
-  readSourceConfigBestEffort: readSourceConfigBestEffortMock,
-  startProxy: startProxyMock,
-  stopProxy: stopProxyMock,
-  flushExitAfterOneShotOutput: flushExitAfterOneShotOutputMock,
-  requestExitAfterOneShotOutput: requestExitAfterOneShotOutputMock,
-  maybeRunCliInContainer: maybeRunCliInContainerMock,
-} = mocks;
-
 export {
   cliArgs,
   readOnlyCoreOptions,
   tempDirs,
   runCli,
+  tryRouteCliMock,
+  loadDotEnvMock,
+  existsSyncOverride,
+  assertRuntimeMock,
+  isCurrentRuntimeSupportedMock,
+  closeActiveMemorySearchManagersMock,
+  hasMemoryRuntimeMock,
+  listRegisteredAgentHarnessesMock,
+  disposeRegisteredAgentHarnessesMock,
+  hasProviderTransportDispatcherPoolMock,
+  stopManagedProviderLocalServicesMock,
+  closeProviderTransportDispatcherPoolMock,
+  getActiveMcpLoopbackRuntimeMock,
+  closeMcpLoopbackServerMock,
+  outputRootHelpMock,
+  outputPrecomputedRootHelpTextMock,
+  outputPrecomputedNodesHelpTextMock,
+  loadRootHelpRenderOptionsForConfigSensitivePluginsMock,
+  tryOutputSetupOnboardConfigureHelpMock,
+  buildProgramMock,
+  parkCurrentLaunchAgentForMaintenanceMock,
+  getProgramContextMock,
+  registerCoreCliByNameMock,
+  registerSubCliByNameMock,
+  registerPluginCliCommandsFromValidatedConfigMock,
+  resolvePluginCliRootOwnerIdsMock,
+  createPluginCliLoadSessionMock,
+  loadPluginCliDescriptorsMock,
+  resolveManifestCommandAliasOwnerMock,
+  resolveManifestToolOwnerMock,
+  restoreRuntimeTerminalStateMock,
+  hasEnvHttpProxyAgentConfiguredMock,
+  ensureGlobalUndiciEnvProxyDispatcherMock,
+  readConfigFileSnapshotMock,
+  readLocalOnboardingStateMock,
+  setupWizardCommandMock,
+  runRemoteGatewayInferenceOnboardingMock,
+  runTuiMock,
+  runTuiCliActionMock,
+  probeGatewayConfiguredModelMock,
+  inspectGatewayTlsCertificateMock,
+  resolveControlUiLinksMock,
+  commanderParseAsyncMock,
+  addGatewayRunCommandMock,
+  ensureCliExecutionBootstrapMock,
+  emitCliBannerMock,
+  enableConsoleCaptureMock,
+  progressDoneMock,
+  createCliProgressMock,
+  loadConfigMock,
+  readSourceConfigBestEffortMock,
+  startProxyMock,
+  stopProxyMock,
+  flushExitAfterOneShotOutputMock,
+  requestExitAfterOneShotOutputMock,
+  maybeRunCliInContainerMock,
   withCliExitSpies,
   runGatewayBeforeHook,
   makeProgram,
@@ -489,8 +540,9 @@ export {
 
 export function installRunMainTestHooks(): void {
   beforeAll(async () => {
+    expect(dotenvModuleImportState.count).toBe(0);
     const runMainModule = await import("./run-main.js");
-    expect(mocks.dotenvModuleImportState.count).toBe(0);
+    expect(dotenvModuleImportState.count).toBe(0);
     runCli = runMainModule.runCli;
     startupConfig = await import("../commands/config-preflight-snapshot.js");
   });
@@ -508,32 +560,45 @@ export function installRunMainTestHooks(): void {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
-    mocks.existsSyncOverride.value = undefined;
+    existsSyncOverride.value = undefined;
     vi.clearAllMocks();
-    mocks.resetDefaults();
     vi.spyOn(startupConfig, "readConfigSnapshotForEngineSelection").mockResolvedValue(
       createSnapshot({ hash: "fixture", sourceConfig: {} }),
     );
-    mocks.readConfigFileSnapshot.mockResolvedValue(validConfig({ gateway: { mode: "local" } }));
-    mocks.readLocalOnboardingState.mockReset().mockResolvedValue(undefined);
-    mocks.probeGatewayConfiguredModel.mockResolvedValue({ kind: "configured" });
-    mocks.readActiveGatewayLockPort.mockReset().mockResolvedValue(undefined);
-    mocks.inspectGatewayTlsCertificate
+    readConfigFileSnapshotMock.mockResolvedValue(validConfig({ gateway: { mode: "local" } }));
+    readLocalOnboardingStateMock.mockReset().mockResolvedValue(undefined);
+    probeGatewayConfiguredModelMock.mockResolvedValue({ kind: "configured" });
+    readActiveGatewayLockPortMock.mockReset().mockResolvedValue(undefined);
+    inspectGatewayTlsCertificateMock
       .mockReset()
       .mockResolvedValue({ ok: false, error: "gateway tls is disabled" });
-    mocks.loadRootHelpRenderOptionsForConfigSensitivePlugins.mockResolvedValue(null);
-    mocks.tryOutputSetupOnboardConfigureHelp.mockResolvedValue(true);
-    mocks.loadConfig.mockReturnValue({});
-    mocks.startProxy.mockResolvedValue(null);
-    mocks.stopProxy.mockResolvedValue(undefined);
-    mocks.loadPluginCliDescriptors.mockReset().mockResolvedValue([]);
-    mocks.resolvePluginCliRootOwnerIds.mockImplementation(
+    resolveControlUiLinksMock.mockReturnValue({
+      httpUrl: "http://127.0.0.1:18789/",
+      wsUrl: "ws://127.0.0.1:18789",
+    });
+    hasMemoryRuntimeMock.mockReturnValue(false);
+    listRegisteredAgentHarnessesMock.mockReturnValue([]);
+    hasProviderTransportDispatcherPoolMock.mockReturnValue(false);
+    outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
+    outputPrecomputedNodesHelpTextMock.mockReturnValue(false);
+    outputPrecomputedRootHelpTextMock.mockReturnValue(false);
+    outputPrecomputedSecretsHelpTextMock.mockReturnValue(false);
+    outputPrecomputedSubcommandHelpTextMock.mockReturnValue(false);
+    loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockResolvedValue(null);
+    tryOutputSetupOnboardConfigureHelpMock.mockResolvedValue(true);
+    hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(false);
+    loadConfigMock.mockReturnValue({});
+    startProxyMock.mockResolvedValue(null);
+    stopProxyMock.mockResolvedValue(undefined);
+    getProgramContextMock.mockReturnValue(null);
+    loadPluginCliDescriptorsMock.mockReset().mockResolvedValue([]);
+    resolvePluginCliRootOwnerIdsMock.mockImplementation(
       ({ primaryCommand }: { primaryCommand?: string }) =>
         primaryCommand === "googlemeet" ? ["google-meet"] : [],
     );
-    mocks.resolveManifestCommandAliasOwner.mockReturnValue(undefined);
-    mocks.resolveManifestToolOwner.mockReturnValue(undefined);
-    mocks.resolveManifestCliCommandSurfaceOwner.mockReturnValue(undefined);
+    resolveManifestCommandAliasOwnerMock.mockReturnValue(undefined);
+    resolveManifestToolOwnerMock.mockReturnValue(undefined);
+    resolveManifestCliCommandSurfaceOwnerMock.mockReturnValue(undefined);
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
     delete process.env.OPENCLAW_HIDE_BANNER;
     loggingState.forceConsoleToStderr = false;

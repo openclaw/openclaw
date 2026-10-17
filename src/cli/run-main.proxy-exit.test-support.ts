@@ -1,53 +1,62 @@
 import process from "node:process";
-import { expect, it, vi, type MockInstance } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import { registerActiveDebugProxyCapture } from "../proxy-capture/runtime-cleanup.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getPendingCliDisposers } from "./runtime-cleanup.js";
-import * as signalExit from "./signal-exit-barrier.js";
+import {
+  registerSignalExitBarrier,
+  registerSignalExitFinalizer,
+  waitForSignalExitBarriers,
+  waitForCliSignalExit,
+} from "./signal-exit-barrier.js";
 
-export const makeProxyHandle = () => ({
-  proxyUrl: "http://127.0.0.1:19876",
-  stop: vi.fn(async () => {}),
-  kill: vi.fn(),
-});
-
-async function waitForHandler(spy: MockInstance<typeof process.once>, event: string) {
-  await vi.waitFor(() => expect(spy.mock.calls.filter(([name]) => name === event)).toHaveLength(1));
-  const handler = spy.mock.calls.find(([name]) => name === event)?.[1];
-  if (typeof handler !== "function") {
-    throw new Error(`${event} handler was not registered`);
-  }
-  return handler;
+export function makeProxyHandle() {
+  return {
+    proxyUrl: "http://127.0.0.1:19876",
+    stop: vi.fn(async () => {}),
+    kill: vi.fn(),
+  };
 }
 
-export function registerRunMainProxyExitTests(
-  fixture: typeof import("./run-main.test-support.js"),
-): void {
-  const { startProxyMock, stopProxyMock, tryRouteCliMock } = fixture;
-  function prepareCommand() {
-    const handle = makeProxyHandle();
-    const route = createDeferredCore<boolean>();
-    startProxyMock.mockResolvedValueOnce(handle);
-    tryRouteCliMock.mockReturnValueOnce(route.promise);
-    return {
-      handle,
-      route,
-      run: () => fixture.runCli(fixture.cliArgs("plugins", "marketplace", "list")),
-    };
-  }
+export function registerRunMainProxyExitTests({
+  runCli,
+  startProxyMock,
+  stopProxyMock,
+  tryRouteCliMock,
+}: {
+  runCli: (argv: string[]) => Promise<void>;
+  startProxyMock: Mock<(config: unknown) => Promise<unknown>>;
+  stopProxyMock: Mock<(handle: unknown) => Promise<void>>;
+  tryRouteCliMock: Mock;
+}): void {
   it.each([
-    ["SIGINT", 130],
-    ["SIGTERM", 143],
-  ] as const)(
-    "stops the managed proxy and drains capture before %s exit",
-    async (signal, exitCode) => {
+    { signal: "SIGINT" as const, exitCode: 130 },
+    { signal: "SIGTERM" as const, exitCode: 143 },
+  ])(
+    "stops the managed proxy and drains capture before $signal exit",
+    async ({ signal, exitCode }) => {
       const previousExitCode = process.exitCode;
-      const { handle, route, run } = prepareCommand();
+      const handle = makeProxyHandle();
+      startProxyMock.mockResolvedValueOnce(handle);
+      let resolveRoute: (value: boolean) => void = () => {};
+      tryRouteCliMock.mockReturnValueOnce(
+        new Promise<boolean>((resolve) => {
+          resolveRoute = resolve;
+        }),
+      );
+
       const processOnceSpy = vi.spyOn(process, "once");
-      const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-      const companionCleanup = createDeferredCore();
-      const drainCompanion = vi.fn(() => companionCleanup.promise);
-      const unregisterCompanionCleanup = signalExit.registerSignalExitBarrier(drainCompanion);
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number | string) => {
+        void code;
+        return undefined as never;
+      }) as typeof process.exit);
+      let finishCompanionCleanup: (() => void) | undefined;
+      const unregisterCompanionCleanup = registerSignalExitBarrier(
+        () =>
+          new Promise<void>((resolve) => {
+            finishCompanionCleanup = resolve;
+          }),
+      );
       const captureFinished = createDeferredCore();
       const cleanupOrder: string[] = [];
       const captureFinalizer = vi.fn(async () => {
@@ -56,41 +65,61 @@ export function registerRunMainProxyExitTests(
         unregisterCapture();
       });
       const unregisterCapture = registerActiveDebugProxyCapture(captureFinalizer);
-      const retireWorkerSource = vi.fn(async () => void cleanupOrder.push("worker-source"));
-      const unregisterWorkerSource = signalExit.registerSignalExitFinalizer(retireWorkerSource);
-      const runPromise = run();
+      const retireWorkerSource = vi.fn(async () => {
+        cleanupOrder.push("worker-source");
+      });
+      const unregisterWorkerSource = registerSignalExitFinalizer(retireWorkerSource);
+      let runPromise: Promise<unknown> | undefined;
+
       try {
-        const signalHandler = await waitForHandler(processOnceSpy, signal);
+        runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
+        await vi.waitFor(() => {
+          expect(
+            processOnceSpy.mock.calls.some(
+              ([event, listener]) => event === signal && typeof listener === "function",
+            ),
+          ).toBe(true);
+        });
+
+        const signalHandler = processOnceSpy.mock.calls.find(([event]) => event === signal)?.[1];
+        if (typeof signalHandler !== "function") {
+          throw new Error(`${signal} handler was not registered`);
+        }
         signalHandler();
-        await vi.waitFor(() => expect(stopProxyMock).toHaveBeenCalledWith(handle));
+
+        await vi.waitFor(() => {
+          expect(stopProxyMock).toHaveBeenCalledWith(handle);
+        });
         expect(exitSpy).not.toHaveBeenCalled();
-        expect(drainCompanion).toHaveBeenCalled();
-        companionCleanup.resolve();
+        if (!finishCompanionCleanup) {
+          throw new Error("companion signal cleanup did not start");
+        }
+        finishCompanionCleanup();
         await vi.waitFor(() => expect(captureFinalizer).toHaveBeenCalledOnce());
         expect(exitSpy).not.toHaveBeenCalled();
         expect(retireWorkerSource).not.toHaveBeenCalled();
         captureFinished.resolve();
-        expect(await signalExit.waitForCliSignalExit()).toBe(exitCode);
+        expect(await waitForCliSignalExit()).toBe(exitCode);
         expect(process.exitCode).toBe(exitCode);
         expect(exitSpy).not.toHaveBeenCalled();
         expect(cleanupOrder).toEqual(["capture", "worker-source"]);
 
-        route.resolve(true);
+        resolveRoute(true);
         await runPromise;
         expect(stopProxyMock).toHaveBeenCalledTimes(1);
         expect(captureFinalizer).toHaveBeenCalledOnce();
       } finally {
         captureFinished.resolve();
-        companionCleanup.resolve();
-        route.resolve(true);
+        finishCompanionCleanup?.();
+        resolveRoute(true);
         try {
           await runPromise;
         } finally {
           unregisterCompanionCleanup();
           unregisterCapture();
           unregisterWorkerSource();
-          await signalExit.waitForSignalExitBarriers();
-          await signalExit.waitForCliSignalExit();
+          await waitForSignalExitBarriers();
+          await waitForCliSignalExit();
           process.exitCode = previousExitCode;
           exitSpy.mockRestore();
           processOnceSpy.mockRestore();
@@ -100,19 +129,22 @@ export function registerRunMainProxyExitTests(
   );
 
   it("keeps the original signal proxy stop pending through bounded command cleanup", async () => {
-    const { handle, route, run } = prepareCommand();
+    const handle = makeProxyHandle();
+    const route = createDeferredCore<boolean>();
     const stopping = createDeferredCore();
     const resume = createDeferredCore();
+    startProxyMock.mockResolvedValueOnce(handle);
+    tryRouteCliMock.mockReturnValueOnce(route.promise);
     stopProxyMock.mockImplementationOnce(async () => {
       stopping.resolve();
       await resume.promise;
     });
-    const running = run();
+    const running = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
     let barrier: Promise<void> | undefined;
     const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await vi.waitFor(() => expect(tryRouteCliMock).toHaveBeenCalled());
-      barrier = signalExit.waitForSignalExitBarriers();
+      barrier = waitForSignalExitBarriers();
       await stopping.promise;
       vi.useFakeTimers();
       route.resolve(true);
@@ -134,15 +166,35 @@ export function registerRunMainProxyExitTests(
   });
 
   it("synchronously kills the managed proxy during hard process exit", async () => {
-    const { handle, route, run } = prepareCommand();
+    const handle = makeProxyHandle();
+    startProxyMock.mockResolvedValueOnce(handle);
+    let resolveRoute: (value: boolean) => void = () => {};
+    tryRouteCliMock.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        resolveRoute = resolve;
+      }),
+    );
+
     const processOnceSpy = vi.spyOn(process, "once");
     try {
-      const runPromise = run();
-      const exitHandler = await waitForHandler(processOnceSpy, "exit");
+      const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
+      await vi.waitFor(() => {
+        expect(
+          processOnceSpy.mock.calls.reduce(
+            (count, [event]) => count + (event === "exit" ? 1 : 0),
+            0,
+          ),
+        ).toBe(1);
+      });
+
+      const exitHandler = processOnceSpy.mock.calls.find(([event]) => event === "exit")?.[1];
+      if (typeof exitHandler !== "function") {
+        throw new Error("exit handler was not registered");
+      }
       exitHandler(0 as never);
 
       expect(handle.kill).toHaveBeenCalledWith("SIGTERM");
-      route.resolve(true);
+      resolveRoute(true);
       await runPromise;
       expect(stopProxyMock).not.toHaveBeenCalledWith(handle);
     } finally {

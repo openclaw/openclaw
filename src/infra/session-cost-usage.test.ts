@@ -737,12 +737,14 @@ describe("session cost usage", () => {
 
   it("keeps the latest logs when transcript timestamps are out of order", async () => {
     const sessionFile = await writeMessages(
-      ...[
-        ["2026-02-12T10:03:00.000Z", "third"],
-        ["2026-02-12T10:01:00.000Z", "first"],
-        ["2026-02-12T10:04:00.000Z", "fourth"],
-        ["2026-02-12T10:02:00.000Z", "second"],
-      ].map(([timestamp, content]) => user(timestamp, content)),
+      ...(
+        [
+          ["2026-02-12T10:03:00.000Z", "third"],
+          ["2026-02-12T10:01:00.000Z", "first"],
+          ["2026-02-12T10:04:00.000Z", "fourth"],
+          ["2026-02-12T10:02:00.000Z", "second"],
+        ] as const
+      ).map(([timestamp, content]) => user(timestamp, content)),
     );
 
     const logs = await readLogs(sessionFile, 2);

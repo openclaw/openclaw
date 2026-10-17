@@ -16,8 +16,8 @@ import { installDialogPolyfill, submitInputDialog } from "../modal-dialog.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.tsx";
 
-function requiredElement<T extends Element = HTMLElement>(root: ParentNode, selector: string): T {
-  const element = root.querySelector<T>(selector);
+function requiredElement(root: ParentNode, selector: string): HTMLElement {
+  const element = root.querySelector<HTMLElement>(selector);
   expect(element).not.toBeNull();
   return element!;
 }
@@ -72,7 +72,7 @@ describe("AppSidebar group mutation collapsed state", () => {
   }
 
   async function openGroupMenu(sidebar: SidebarLifecycleState) {
-    requiredElement<HTMLButtonElement>(
+    requiredElement(
       sidebar,
       '[data-session-section="category:Alpha"] .sidebar-session-group-actions[aria-haspopup="menu"]',
     ).click();
@@ -119,10 +119,7 @@ describe("AppSidebar group mutation collapsed state", () => {
 
   function confirmButton() {
     return waitForFast(() =>
-      requiredElement<HTMLButtonElement>(
-        document.body,
-        "openclaw-modal-dialog .exec-approval-actions .btn.danger",
-      ),
+      requiredElement(document.body, "openclaw-modal-dialog .exec-approval-actions .btn.danger"),
     );
   }
 

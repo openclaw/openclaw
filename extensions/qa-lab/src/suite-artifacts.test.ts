@@ -147,10 +147,10 @@ describe("suite artifacts", () => {
     const recordedEvidence = recorder.snapshot();
     const before = structuredClone(recordedEvidence);
     const generation = path.join(".crabline-channel-driver-artifacts", "generation-test");
-    const files: Array<[string, string]> = [
+    const files = [
       ["channel-capability-matrix", "crabline-channel-driver-capabilities.json"],
       ["channel-driver-smoke", "crabline-provider-readiness.json"],
-    ];
+    ] as const;
     const transportArtifacts = files.map(([kind, file]) => ({
       kind,
       path: path.join(generation, file),

@@ -68,8 +68,7 @@ function component(request = sequence(page([job()])), presented = true, offline 
     request,
     ...view,
     element,
-    find: <T extends HTMLElement = HTMLElement>(selector: string) =>
-      element.querySelector<T>(selector),
+    find: element.querySelector.bind(element),
     ready: (text = "Check the task") =>
       waitForSolid(() => {
         expect(element.textContent).toContain(text);
