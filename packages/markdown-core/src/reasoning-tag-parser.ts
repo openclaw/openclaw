@@ -384,6 +384,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
   const regions: MarkdownCodeRegion[] = [];
   const textSpans: Array<[number, number]> = [];
   const definitions: Array<{ identifier: string; start: number; end: number }> = [];
+  let unresolvedImageCodeStart: number | undefined;
   const blocks = tree.children ?? [];
   let retainStart = blocks.at(-1)?.position?.start?.offset ?? text.length;
   for (let index = 0; index < blocks.length; index += 1) {
@@ -490,6 +491,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       blockEnd !== undefined &&
       hasUnresolvedImageCode(text, blockStart, blockEnd, regions, regionStart)
     ) {
+      unresolvedImageCodeStart = blockStart;
       retainStart = Math.min(retainStart, blockStart);
     }
   }
@@ -511,6 +513,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
     codeSpans: regions.map(({ start, end }): [number, number] => [start, end]),
     textSpans,
     retainStart,
+    ...(unresolvedImageCodeStart === undefined ? {} : { unresolvedImageCodeStart }),
     completedParagraphs,
     definitions,
     ...(paragraphs ? { paragraphs } : {}),

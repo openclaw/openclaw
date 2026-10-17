@@ -5,7 +5,7 @@ import {
   createProtectionScanState,
 } from "../../../packages/tool-call-repair/src/protection-fast-path.js";
 import { escapeRegExp } from "../regexp.js";
-import { findCodeOwnership, findCodeRegions } from "./code-regions.js";
+import { canReuseMarkdownOwnership, findCodeOwnership, findCodeRegions } from "./code-regions.js";
 
 export type TextProjection = { text: string; delta: string | null };
 type TextProjector = (input: TextProjection) => TextProjection;
@@ -126,13 +126,9 @@ function createCheckpointTransform(
   let ownershipSource = "";
   let ownership: ReturnType<typeof findCodeOwnership> | undefined;
   const resolveOwnership = (text: string) => {
-    if (ownership && text.startsWith(ownershipSource)) {
-      const appended = text.slice(ownershipSource.length);
-      const boundaryContext = ownershipSource.slice(-3) + appended;
-      if (!/[`~\t]| {4}/u.test(boundaryContext)) {
-        ownershipSource = text;
-        return ownership;
-      }
+    if (ownership && canReuseMarkdownOwnership(ownershipSource, text, ownership)) {
+      ownershipSource = text;
+      return ownership;
     }
     ownership = findCodeOwnership(text);
     ownershipSource = text;
