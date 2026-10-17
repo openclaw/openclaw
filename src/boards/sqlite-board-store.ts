@@ -329,7 +329,7 @@ export class SqliteBoardStore implements BoardStore {
     target: BoardSessionTarget,
     consume: (snapshot: BoardSnapshot) => T,
   ): Promise<Awaited<T>> {
-    return this.withSession(
+    return await this.withSession(
       target,
       (store) => store.useSnapshot(target, consume),
       (resolved) =>
@@ -343,7 +343,7 @@ export class SqliteBoardStore implements BoardStore {
     name: string,
     consume: (document: BoardWidgetDocument | undefined) => T,
   ): Promise<Awaited<T>> {
-    return this.withSession(
+    return await this.withSession(
       target,
       (store) => store.useWidgetDocument(target, name, consume),
       (resolved) => this.consumeWidgetDocument(resolved, name, consume),
