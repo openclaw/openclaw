@@ -1,5 +1,5 @@
 import { execFile, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import path, { delimiter, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,7 +11,12 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const runner = path.resolve("scripts/e2e/lib/upgrade-survivor/run.sh");
+const runner = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+const runnerSection = (start: string, end: string) =>
+  runner.slice(runner.indexOf(start), runner.indexOf(end));
+const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
+const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
+const executable = (file: string, body: string) => writeFileSync(file, body, { mode: 0o755 });
 
 it("owns the model endpoint before authoring legacy operator configuration", async () => {
   const root = tempDirs.make("survivor-model-endpoint-");
@@ -26,14 +31,10 @@ it("owns the model endpoint before authoring legacy operator configuration", asy
   if (!address || typeof address === "string") {
     throw new Error("fixture did not bind a TCP listener");
   }
-  const source = readFileSync(runner, "utf8");
-  const setup = source.slice(
-    source.indexOf("apply_baseline_config_recipe()"),
-    source.indexOf("\nprepare_schema_expectation()"),
-  );
-  const phases = source.slice(
-    source.indexOf('if [ "$SCENARIO" = "abandoned-update" ]'),
-    source.indexOf("\nrun_missing_load_path_fixture seed"),
+  const setup = runnerSection("apply_baseline_config_recipe()", "\nprepare_schema_expectation()");
+  const phases = runnerSection(
+    'if [ "$SCENARIO" = "abandoned-update" ]',
+    "\nrun_missing_load_path_fixture seed",
   );
   try {
     const result = await promisify(execFile)(
@@ -94,14 +95,10 @@ it.each([
   { scenario: "mobile-pairing-reconnect", mode: "auto-auth" },
 ])("binds the current registry before $scenario service start ($mode)", ({ scenario, mode }) => {
   const nativeEnabled = scenario === "legacy-operator-state" && mode === "manual";
-  const source = readFileSync(runner, "utf8");
-  const routing = source.slice(
-    source.indexOf("companion_survivor_scenario()"),
-    source.indexOf("\npackage_root()"),
-  );
-  const orchestration = source.slice(
-    source.indexOf("phase seed-state seed_state"),
-    source.indexOf("phase update-candidate update_candidate_for_install_mode"),
+  const routing = runnerSection("companion_survivor_scenario()", "\npackage_root()");
+  const orchestration = runnerSection(
+    "phase seed-state seed_state",
+    "phase update-candidate update_candidate_for_install_mode",
   );
   const result = spawnSync(
     "bash",
@@ -191,15 +188,12 @@ it.each([
   });
   if (scenario === "sqlite-volume") {
     mkdirSync(paths.packageRoot, { recursive: true });
-    writeFileSync(
-      path.join(paths.packageRoot, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "2026.8.1",
-        type: "module",
-        exports: { "./plugin-sdk/cron-store-runtime": "./cron-store-runtime.js" },
-      }),
-    );
+    writeJson(path.join(paths.packageRoot, "package.json"), {
+      name: "openclaw",
+      version: "2026.8.1",
+      type: "module",
+      exports: { "./plugin-sdk/cron-store-runtime": "./cron-store-runtime.js" },
+    });
     // Keep real SQLite persistence behind the fixture's installed SDK boundary.
     symlinkSync(
       fileURLToPath(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.store)),
@@ -212,12 +206,11 @@ it.each([
   const probePath = path.join(root, "probe.mjs");
   const bin = path.join(root, "bin");
   mkdirSync(bin);
-  writeFileSync(
+  executable(
     path.join(bin, "openclaw"),
     '#!/usr/bin/env bash\nexec node --import "$TSX_IMPORT" "$PROBE_SCRIPT" "$@"\n',
-    { mode: 0o755 },
   );
-  writeFileSync(
+  executable(
     path.join(bin, "systemctl"),
     `#!/usr/bin/env bash
   case "$2" in
@@ -226,22 +219,18 @@ it.each([
     *) exit 97 ;;
   esac
 `,
-    { mode: 0o755 },
   );
-  writeFileSync(
-    authoredPath,
-    JSON.stringify({
-      gateway: {
-        mode: "local",
-        auth: {
-          mode: "token",
-          token: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" },
-        },
+  writeJson(authoredPath, {
+    gateway: {
+      mode: "local",
+      auth: {
+        mode: "token",
+        token: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" },
       },
-      plugins: { enabled: true, allow: [], entries: {} },
-      channels: { discord: { enabled: true } },
-    }),
-  );
+    },
+    plugins: { enabled: true, allow: [], entries: {} },
+    channels: { discord: { enabled: true } },
+  });
   const startupModule = pathToFileURL(path.resolve("src/config/sessions/startup-migration.ts"));
   const legacyStoreModule = pathToFileURL(
     path.resolve("src/config/sessions/legacy-store-inspection.ts"),
@@ -297,10 +286,9 @@ if (process.argv[2] === "startup") {
 }
 `,
   );
-  const source = readFileSync(runner, "utf8");
-  const boundary = source.indexOf("phase storage-preflight");
-  const setup = source.slice(0, boundary);
-  const phases = source.slice(boundary);
+  const boundary = runner.indexOf("phase storage-preflight");
+  const setup = runner.slice(0, boundary);
+  const phases = runner.slice(boundary);
   const script = `${setup}
 trap - EXIT ERR INT TERM
 openclaw_e2e_eval_test_state_from_b64() { :; }
@@ -362,7 +350,7 @@ ${phases}
     },
   });
   expect(result.status, result.stdout + result.stderr).toBe(0);
-  expect(JSON.parse(readFileSync(resultPath, "utf8"))).toEqual({
+  expect(readJson(resultPath)).toEqual({
     rows: scenario === "sqlite-volume" ? 15 : 3,
     volume: scenario === "sqlite-volume",
   });
@@ -383,16 +371,12 @@ it.each(["2026.9.2", "2026.9.4"])("preserves Cron ownership on %s", (version) =>
   mkdirSync(state);
   writeFileSync(configPath, "{}");
   if (version === "2026.9.4") {
-    writeFileSync(
-      join(artifacts, "native-assignment-eligibility.json"),
-      JSON.stringify({ status: "required" }),
-    );
+    writeJson(join(artifacts, "native-assignment-eligibility.json"), { status: "required" });
   }
-  const cliPath = join(bin, "openclaw");
   // Model the shipped API boundary: ownerless creation needs an unambiguous
   // roster, an explicit owner must exist, and global listing may fail later.
-  writeFileSync(
-    cliPath,
+  executable(
+    join(bin, "openclaw"),
     `#!${process.execPath}
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
@@ -451,7 +435,6 @@ if (args[0] === "--help") {
 }
 `,
   );
-  chmodSync(cliPath, 0o755);
   const run = (command: string) =>
     spawnSync(process.execPath, [assertions, command], {
       encoding: "utf8",
@@ -483,11 +466,12 @@ if (args[0] === "--help") {
     const result = run(command);
     expect(result.status, result.stderr).toBe(0);
   }
-  expect(JSON.parse(readFileSync(ledgerPath, "utf8")).jobs).toEqual([
+  const ledger = readJson(ledgerPath);
+  expect(ledger.jobs).toEqual([
     { id: "native-survivor-default-owner", name: "survivor-default-owner" },
     { id: "native-survivor-ops-owner", name: "survivor-ops-owner", agentId: "ops" },
   ]);
-  expect(JSON.parse(readFileSync(ledgerPath, "utf8"))).toMatchObject({
+  expect(ledger).toMatchObject({
     approvalsJsonEra: true,
     approvals: {
       agents: {
@@ -496,10 +480,10 @@ if (args[0] === "--help") {
       },
     },
   });
-  const approvals = JSON.parse(readFileSync(ledgerPath, "utf8")).approvals;
+  const approvals = ledger.approvals;
   expect(approvals.defaults).toEqual({ security: "allowlist", ask: "off", askFallback: "deny" });
   expect(approvals.agents["native-proof"]).toEqual(
     version === "2026.9.4" ? { security: "full", ask: "off", askFallback: "deny" } : undefined,
   );
-  expect(JSON.parse(readFileSync(configPath, "utf8")).agents.defaults.systemAgent).toBeUndefined();
+  expect(readJson(configPath).agents.defaults.systemAgent).toBeUndefined();
 });

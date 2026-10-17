@@ -1,21 +1,19 @@
 import { spawnSync } from "node:child_process";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { linkPnpmBootstrapShellTools } from "./test-helpers.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 
 describe("source-server updater bootstrap", () => {
@@ -46,7 +44,9 @@ describe("source-server updater bootstrap", () => {
       ).map((branch) => ({ scenario, branch })),
     ),
   )("keeps checkout and restart boundaries for $scenario on $branch", ({ scenario, branch }) => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-server-bootstrap-"));
+    const root = tempDirs.make("openclaw-server-bootstrap-");
+    const is = (...scenarios: string[]) => scenarios.includes(scenario);
+    const read = (file: string) => readFileSync(join(root, file), "utf8");
     const repo = join(root, "repo");
     const bin = join(root, "bin");
     const temp = join(root, "temp");
@@ -82,8 +82,7 @@ describe("source-server updater bootstrap", () => {
     writeFileSync(join(repo, "pnpm-lock.yaml"), "untouched\n");
     writeFileSync(join(repo, "pnpm-workspace.yaml"), "packages: []\n");
     const executable = (name: string, body: string) => {
-      writeFileSync(join(bin, name), `#!/bin/bash\nset -eu\n${body}\n`);
-      chmodSync(join(bin, name), 0o755);
+      writeFileSync(join(bin, name), `#!/bin/bash\nset -eu\n${body}\n`, { mode: 0o755 });
     };
     executable(
       "git",
@@ -181,105 +180,88 @@ NODE
     if (scenario === "interrupted") {
       mkdirSync(join(repo, ".git/rebase-merge"));
     }
-    try {
-      const result = spawnSync("/bin/bash", [script], {
-        encoding: "utf8",
-        env: {
-          PATH: bin,
-          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-          HOME: root,
-          TMPDIR: temp,
-          FIXTURE: root,
-          TARGET: repo,
-          SCENARIO: scenario,
-          TEST_BRANCH: branch,
-          TARGET_SHA: targetSha,
-          TARGET_PIN: targetPin,
-          NPM_CONFIG_WORKSPACE_DIR: root,
-          npm_config_workspace_dir: root,
-          PNPM_CONFIG_LOCKFILE_DIR: root,
-          pnpm_config_lockfile_dir: root,
-          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: scenario === "explicit-declarations" ? "0" : undefined,
-          // Bootstrap coverage uses the documented operator-owned lifecycle.
-          // Automatic recovery and lifecycle environment are covered separately.
-          OPENCLAW_UPDATE_RESTART_CMD: "",
-        },
-      });
-      const preflightFailure = [
-        "probe-failure",
-        "wrong-version",
-        "missing-pin",
-        "invalid-pin",
-        "invalid-json",
-        "missing-manifest",
-      ].includes(scenario);
-      const lines = (name: string) =>
-        existsSync(join(root, name))
-          ? readFileSync(join(root, name), "utf8").trim().split("\n")
-          : [];
-      if (preflightFailure) {
-        expect(
-          readFileSync(join(repo, ".git/HEAD"), "utf8"),
-          "failed target preflight advanced HEAD",
-        ).toBe(originalHead);
-        expect(readFileSync(join(repo, "package.json"), "utf8")).toBe(originalManifest);
-        expect(lines("git-mutations")).toEqual(["fetch origin main"]);
-        expect(lines("git-calls")).toContain(`show ${targetSha}:package.json`);
-        expect(result.stdout + result.stderr).toContain("no checkout update or restart");
-      }
-      const succeeded = ["success", "explicit-declarations", "hash-pin", "local-pin"].includes(
-        scenario,
-      );
-      expect(result.status, result.stdout + result.stderr).toBe(
-        succeeded
-          ? 0
-          : scenario.endsWith("-failure") && ["install-failure", "build-failure"].includes(scenario)
-            ? 42
-            : 1,
-      );
-      const steps = lines("steps");
-      const beforeFetch = ["missing", "enable-failure", "dirty", "interrupted"].includes(scenario);
-      const beforeProbe =
-        beforeFetch ||
-        ["missing-pin", "invalid-pin", "invalid-json", "missing-manifest"].includes(scenario);
-      expect(steps).toEqual(
-        beforeProbe
-          ? []
-          : succeeded
-            ? ["probe", "install", "build", "nested"]
-            : scenario === "build-failure"
-              ? ["probe", "install", "build"]
-              : ["install-failure", "symlink"].includes(scenario)
-                ? ["probe", "install"]
-                : ["probe"],
-      );
-      if (beforeFetch) {
-        expect(existsSync(join(root, "git-mutations"))).toBe(false);
-      } else if (!preflightFailure) {
-        expect(lines("git-calls")).toContain(`show ${targetSha}:package.json`);
-        expect(lines("git-mutations")).toEqual([
-          "fetch origin main",
-          branch === "main"
-            ? `merge --ff-only ${targetSha}`
-            : `rebase --rebase-merges ${targetSha}`,
-          ...(scenario === "rebase-failure" ? ["rebase --abort"] : []),
-        ]);
-        if (scenario !== "rebase-failure") {
-          expect(readFileSync(join(repo, ".git/HEAD"), "utf8")).toBe(targetSha);
-        }
-      }
-      if (scenario === "missing" || scenario === "enable-failure") {
-        expect(result.stdout + result.stderr).toContain("Corepack");
-      }
-      if (scenario === "rebase-failure") {
-        expect(readFileSync(join(root, "git-mutations"), "utf8")).toContain("rebase --abort");
-      }
-      expect(readFileSync(join(repo, "pnpm-lock.yaml"), "utf8")).toBe("untouched\n");
-      expect(readFileSync(join(repo, "pnpm-workspace.yaml"), "utf8")).toBe("packages: []\n");
-      expect(readdirSync(temp)).toEqual([]);
-      expect(result.stdout.includes("OK abc123")).toBe(succeeded);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
+    const result = spawnSync("/bin/bash", [script], {
+      encoding: "utf8",
+      env: {
+        PATH: bin,
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
+        HOME: root,
+        TMPDIR: temp,
+        FIXTURE: root,
+        TARGET: repo,
+        SCENARIO: scenario,
+        TEST_BRANCH: branch,
+        TARGET_SHA: targetSha,
+        TARGET_PIN: targetPin,
+        NPM_CONFIG_WORKSPACE_DIR: root,
+        npm_config_workspace_dir: root,
+        PNPM_CONFIG_LOCKFILE_DIR: root,
+        pnpm_config_lockfile_dir: root,
+        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: scenario === "explicit-declarations" ? "0" : undefined,
+        // Bootstrap coverage uses the documented operator-owned lifecycle.
+        // Automatic recovery and lifecycle environment are covered separately.
+        OPENCLAW_UPDATE_RESTART_CMD: "",
+      },
+    });
+    const output = result.stdout + result.stderr;
+    const preflightFailure = is(
+      "probe-failure",
+      "wrong-version",
+      "missing-pin",
+      "invalid-pin",
+      "invalid-json",
+      "missing-manifest",
+    );
+    const lines = (name: string) =>
+      existsSync(join(root, name)) ? readFileSync(join(root, name), "utf8").trim().split("\n") : [];
+    if (preflightFailure) {
+      expect(read("repo/.git/HEAD"), "failed target preflight advanced HEAD").toBe(originalHead);
+      expect(read("repo/package.json")).toBe(originalManifest);
+      expect(lines("git-mutations")).toEqual(["fetch origin main"]);
+      expect(lines("git-calls")).toContain(`show ${targetSha}:package.json`);
+      expect(output).toContain("no checkout update or restart");
     }
+    const succeeded = is("success", "explicit-declarations", "hash-pin", "local-pin");
+    expect(result.status, output).toBe(
+      succeeded ? 0 : is("install-failure", "build-failure") ? 42 : 1,
+    );
+    const steps = lines("steps");
+    const beforeFetch = is("missing", "enable-failure", "dirty", "interrupted");
+    const beforeProbe =
+      beforeFetch || is("missing-pin", "invalid-pin", "invalid-json", "missing-manifest");
+    expect(steps).toEqual(
+      beforeProbe
+        ? []
+        : succeeded
+          ? ["probe", "install", "build", "nested"]
+          : scenario === "build-failure"
+            ? ["probe", "install", "build"]
+            : is("install-failure", "symlink")
+              ? ["probe", "install"]
+              : ["probe"],
+    );
+    if (beforeFetch) {
+      expect(existsSync(join(root, "git-mutations"))).toBe(false);
+    } else if (!preflightFailure) {
+      expect(lines("git-calls")).toContain(`show ${targetSha}:package.json`);
+      expect(lines("git-mutations")).toEqual([
+        "fetch origin main",
+        branch === "main" ? `merge --ff-only ${targetSha}` : `rebase --rebase-merges ${targetSha}`,
+        ...(scenario === "rebase-failure" ? ["rebase --abort"] : []),
+      ]);
+      if (scenario !== "rebase-failure") {
+        expect(read("repo/.git/HEAD")).toBe(targetSha);
+      }
+    }
+    if (scenario === "missing" || scenario === "enable-failure") {
+      expect(output).toContain("Corepack");
+    }
+    if (scenario === "rebase-failure") {
+      expect(read("git-mutations")).toContain("rebase --abort");
+    }
+    expect(read("repo/pnpm-lock.yaml")).toBe("untouched\n");
+    expect(read("repo/pnpm-workspace.yaml")).toBe("packages: []\n");
+    expect(readdirSync(temp)).toEqual([]);
+    expect(result.stdout.includes("OK abc123")).toBe(succeeded);
   });
 });
