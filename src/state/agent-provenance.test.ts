@@ -7,6 +7,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   deleteAgentProvenanceForAgent,
   listAgentProvenance,
+  readAgentProvenanceForDisplay,
   recordAgentProvenance,
 } from "./agent-provenance.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
@@ -53,15 +54,25 @@ it("reads absent provenance without creating state and observes its later writer
     async (state) => {
       const options = { env: state.env };
       expect(readAgentProvenance("worker", options)).toBeUndefined();
+      expect(await listAgentProvenance(options)).toEqual([]);
+      expect(await readAgentProvenanceForDisplay(["worker"], options)).toEqual([]);
       expect(fs.existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
 
       const database = openOpenClawStateDatabase(options);
       database.db.exec("DROP TABLE IF EXISTS agent_provenance");
       expect(readAgentProvenance("worker", options)).toBeUndefined();
+      expect(await listAgentProvenance(options)).toEqual([]);
+      expect(await readAgentProvenanceForDisplay(["worker"], options)).toEqual([]);
       expect(tableExists(database.db, "agent_provenance")).toBe(false);
 
       await recordAgentProvenance("worker", { createdVia: "operator" }, { ...options, nowMs: 42 });
       expect(readAgentProvenance("worker", options)?.createdAtMs).toBe(42);
+      expect(await readAgentProvenanceForDisplay(["missing", "WORKER", "worker"], options)).toEqual(
+        [
+          { agentId: "worker", createdVia: "operator", creatorAgentId: null, createdAtMs: 42 },
+          { agentId: "worker", createdVia: "operator", creatorAgentId: null, createdAtMs: 42 },
+        ],
+      );
       database.db.exec("ALTER TABLE agent_provenance RENAME COLUMN created_via TO invalid_kind");
       expect(() => readAgentProvenance("worker", options)).toThrow();
     },

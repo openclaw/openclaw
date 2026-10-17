@@ -874,6 +874,9 @@ try {
   if (values["writer-reads"] || values["cheap-handlers"]) {
     shapes.push({ method: "sessions.github.options", params: { sessionKey: keys[0] } });
   }
+  if (values["writer-reads"]) {
+    shapes.push({ method: "agents.list", params: {} });
+  }
   if (values["cheap-handlers"]) {
     // The UI registers this observer before its reconnect roster bootstrap.
     shapes.unshift({ method: "sessions.subscribe", params: {} });

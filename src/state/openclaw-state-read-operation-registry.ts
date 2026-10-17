@@ -7,6 +7,12 @@ import {
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  agentProvenance: () =>
+    import("./agent-provenance.kernel.js").then((m) => m.agentProvenanceReadOperations),
+  managedImages: () =>
+    import("../gateway/managed-image-record-store.kernel.js").then(
+      (m) => m.managedImageRecordReadOperations,
+    ),
   githubPublications: () =>
     import("./github-publication.read.worker.js").then((m) => m.publicationReadOperations),
   deviceIdentity: () =>
