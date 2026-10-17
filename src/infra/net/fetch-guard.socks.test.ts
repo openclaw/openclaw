@@ -5,6 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import { consumeResponseBytes } from "@openclaw/normalization-core";
 import {
   buildConnector,
   fetch as undiciFetch,
@@ -47,6 +48,26 @@ const mediaRequest = { origin: `http://${TARGET_HOST}`, path: "/media", method: 
 type ProxyFixture = Parameters<Parameters<typeof withProxyFixture>[0]>[0];
 type EnvOptions = Parameters<typeof createHttp1EnvHttpProxyAgent>[0];
 
+async function readProxyPayload(response: Response | UndiciResponse): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("Proxy fixture response has no body");
+  }
+  const chunks: Uint8Array[] = [];
+  try {
+    const result = await consumeResponseBytes({
+      maxBytes: PAYLOAD_BYTES,
+      read: () => reader.read(),
+      onChunk: (chunk) => chunks.push(chunk),
+      onLimit: () => void reader.cancel().catch(() => undefined),
+    });
+    expect(result.truncated).toBe(false);
+    return Buffer.concat(chunks).toString("utf8");
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 function envProxy(
   { socksProxy, certificate }: ProxyFixture,
   options: EnvOptions = {},
@@ -73,7 +94,7 @@ async function expectPayload(
     dispatcher,
     ...(timeout === undefined ? {} : { signal: AbortSignal.timeout(timeout) }),
   });
-  expect(await response.text()).toBe(PAYLOAD);
+  expect(await readProxyPayload(response)).toBe(PAYLOAD);
 }
 
 async function withDispatcher<T>(
@@ -321,7 +342,7 @@ it.each(["flat array", "inherited object"])(
           ...mediaRequest,
           headers: { Authorization: "Bearer fixture-origin-only" },
         });
-        expect(await new UndiciResponse(response.body).text()).toBe(PAYLOAD);
+        expect(await readProxyPayload(new UndiciResponse(response.body))).toBe(PAYLOAD);
         expect(connections).toEqual([`socks:${TARGET_HOST}`]);
       });
     });
@@ -476,7 +497,7 @@ it("preserves maxOrigins admission with an active SOCKS response", () =>
       });
       await expect(
         undiciFetch(TARGET_URL, { dispatcher, signal: AbortSignal.timeout(5_000) }).then((second) =>
-          second.text(),
+          readProxyPayload(second),
         ),
       ).rejects.toMatchObject({ cause: { code: "UND_ERR_MAX_ORIGINS_REACHED" } });
       expect(fixture.originRoutes).toEqual(["proxy"]);
@@ -532,7 +553,7 @@ it.each(["proxy-fetch", "global"])("keeps managed TLS hop-local through %s", asy
         throw new Error("expected configured proxy fetch");
       }
       const response = await fetch(HTTP_URL);
-      expect(await response.text()).toBe(PAYLOAD);
+      expect(await readProxyPayload(response)).toBe(PAYLOAD);
       expect(connections).toEqual([`socks:${TARGET_HOST}`]);
     } finally {
       setGlobalDispatcher(previous);
@@ -585,7 +606,7 @@ it.each([
           for (const bypass of ["", TARGET_HOST, ""]) {
             vi.stubEnv("no_proxy", bypass);
             const response = await composed.request(mediaRequest);
-            expect(await new UndiciResponse(response.body).text()).toBe(PAYLOAD);
+            expect(await readProxyPayload(new UndiciResponse(response.body))).toBe(PAYLOAD);
           }
           expect(originRoutes).toEqual(routes);
           expect(intercepted).toHaveBeenCalledTimes(3);
