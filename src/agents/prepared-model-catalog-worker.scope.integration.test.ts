@@ -7,8 +7,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelsHandlers } from "../gateway/server-methods/models.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
-import type { PreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog-auth.js";
-import { loadPreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
+import {
+  loadGatewayModelCatalogSnapshot as loadPublicCatalog,
+  loadPreparedGatewayModelCatalogSnapshot,
+} from "../gateway/server-model-catalog.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { MINIMAX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
@@ -18,6 +20,7 @@ import type { RuntimeAuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   HARNESS_ID,
+  catalogInput,
   PLUGIN_ID,
   PROVIDER_ID,
   REF_ONLY_API_ENV,
@@ -26,6 +29,7 @@ import {
   UNRELATED_PLUGIN_WORKER_MARKER_ENV,
   UNRELATED_SYNTHETIC_AUTH_ID,
   writeFixturePlugin,
+  writeFixtureFiles,
   writeUnrelatedFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
@@ -56,9 +60,8 @@ describe("prepared model catalog worker plugin scope", () => {
     for (const directory of [pluginDir, agentDir, workspaceDir]) {
       fs.mkdirSync(directory, { recursive: true });
     }
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
+    writeFixtureFiles(pluginDir, {
+      "package.json": {
         name: provider,
         version: "1.0.0",
         type: "commonjs",
@@ -66,35 +69,22 @@ describe("prepared model catalog worker plugin scope", () => {
           extensions: ["./index.cjs"],
           build: { bundledDist: false, runtimeFormat: "cjs" },
         },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "index.cjs"),
-      `module.exports = {
+      },
+      "index.cjs": `module.exports = {
         id: "${provider}",
         register(api) { api.registerProvider(require("./discovery.cjs")); },
       };`,
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "discovery.cjs"),
-      `module.exports = {
+      "discovery.cjs": `module.exports = {
         id: "${provider}", label: "Local fixture", auth: [],
         resolveSyntheticAuth: ({ providerConfig }) => providerConfig
           ? { apiKey: "local-fixture-not-real", source: "local fixture", mode: "api-key" }
           : undefined,
         catalog: { run: () => ({ provider: {
           baseUrl: "http://127.0.0.1:1234/v1", api: "openai-completions",
-          models: [{
-            id: "discovered", name: "Discovered model", input: ["text"], reasoning: false,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 32768, maxTokens: 8192,
-          }],
+          models: [{ id: "discovered", name: "Discovered model" }],
         } }) },
       };`,
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
+      "openclaw.plugin.json": {
         id: provider,
         providers: [provider],
         syntheticAuthRefs: [provider],
@@ -102,8 +92,8 @@ describe("prepared model catalog worker plugin scope", () => {
         providerCatalogEntry: "./discovery.cjs",
         modelCatalog: { discovery: { [provider]: "refreshable" } },
         configSchema: { type: "object", properties: {} },
-      }),
-    );
+      },
+    });
     const config: OpenClawConfig = {
       models: {
         providers: {
@@ -130,7 +120,7 @@ describe("prepared model catalog worker plugin scope", () => {
       unregisterResolvedAgentDir({ agentId: "main", agentDir, env });
     });
     const snapshot = await publishPreparedModelRuntimeSnapshot(
-      { agentId: "main", agentDir, inheritedAuthDir: agentDir, workspaceDir, config, env },
+      catalogInput({ agentDir, workspaceDir, config, env }),
       { provenance: "configured", catalogMode: "static" },
     );
 
@@ -318,14 +308,7 @@ describe("prepared model catalog worker plugin scope", () => {
     };
     replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: { version: 1, profiles: {} } }]);
 
-    const input = {
-      agentId: "main",
-      agentDir,
-      inheritedAuthDir: agentDir,
-      workspaceDir,
-      config,
-      env,
-    };
+    const input = catalogInput({ agentDir, workspaceDir, config, env });
     retireAfterTest(() => {
       unregisterResolvedAgentDir({ agentId: "main", agentDir, env });
     });
@@ -333,20 +316,16 @@ describe("prepared model catalog worker plugin scope", () => {
       provenance: "configured",
       catalogMode: "static",
     });
-    const projectSnapshot = async (
-      full: boolean,
-      providerIds?: readonly string[],
-      refresh?: boolean,
-    ): Promise<PreparedGatewayModelCatalogSnapshot> => {
-      const modelCatalog = full
-        ? await refreshPreparedModelRuntimeCatalog(snapshot, { providerIds, refresh })
-        : snapshot.readFullModelCatalog?.();
-      const owner = materializePreparedModelCatalogOwner(snapshot, modelCatalog);
-      return await loadPreparedGatewayModelCatalogSnapshot({
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => owner,
-      });
-    };
+    const ownerParams = (full: boolean, providerIds?: readonly string[], refresh?: boolean) => ({
+      getConfig: () => config,
+      loadPublishedPreparedModelCatalogOwnerSnapshot: async () =>
+        materializePreparedModelCatalogOwner(
+          snapshot,
+          full
+            ? await refreshPreparedModelRuntimeCatalog(snapshot, { providerIds, refresh })
+            : snapshot.readFullModelCatalog?.(),
+        ),
+    });
     const waitForPublication = async (previous: ModelCatalogSnapshot | undefined) => {
       await expect
         .poll(
@@ -364,27 +343,17 @@ describe("prepared model catalog worker plugin scope", () => {
         .toBe(true);
     };
     const loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] =
-      async (params) => {
-        const {
-          authModes: _authModes,
-          authStore: _authStore,
-          metadataSnapshot: _metadataSnapshot,
-          authMaterializations: _authMaterializations,
-          observationConfig: _observationConfig,
-          isCurrent: _isCurrent,
-          pluginRegistry: _pluginRegistry,
-          ...publicSnapshot
-        } = await projectSnapshot(params?.readOnly === false);
-        return publicSnapshot;
-      };
+      (params) => loadPublicCatalog(ownerParams(params?.readOnly === false));
     registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
-      loadDeferred: async (params) =>
-        await projectSnapshot(
-          params?.readOnly === false,
-          params?.providerDiscoveryProviderIds,
-          params?.refreshFullCatalog === true,
+      loadDeferred: (params) =>
+        loadPreparedGatewayModelCatalogSnapshot(
+          ownerParams(
+            params?.readOnly === false,
+            params?.providerDiscoveryProviderIds,
+            params?.refreshFullCatalog === true,
+          ),
         ),
-      readPrepared: async () => await projectSnapshot(false),
+      readPrepared: () => loadPreparedGatewayModelCatalogSnapshot(ownerParams(false)),
     });
     const respond = vi.fn();
     const context = Object.assign({} as GatewayRequestContext, {

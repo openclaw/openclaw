@@ -26,11 +26,7 @@ import * as agentAuthDiscovery from "./agent-auth-discovery.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { getPreparedModelCatalogWorkerPoolSnapshot } from "./prepared-model-catalog-worker.js";
-import {
-  catalogEntry,
-  writeFixturePlugin,
-  PROVIDER_ID,
-} from "./prepared-model-catalog-worker.test-support.js";
+import { writeFixturePlugin, PROVIDER_ID } from "./prepared-model-catalog-worker.test-support.js";
 import {
   getPreparedModelFullCatalogAuth,
   getPreparedModelRuntimeAuthStore,
@@ -82,29 +78,6 @@ const {
 
 let receipts: FixtureReceiptChannel;
 const createFleetFixture = createCatalogFleetFixture(makeTempDir, () => receipts.broadcastName);
-type FleetFixture = Awaited<ReturnType<typeof createFleetFixture>>;
-
-const loadFleetCatalogs = (fixture: FleetFixture) =>
-  Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
-
-function currentSnapshot(fixture: FleetFixture, index = 0) {
-  const agentId = fixture.agentIds[index]!;
-  return getPreparedModelRuntimeSnapshot({
-    agentId,
-    agentDir: fixture.entries[agentId]!.agentDir,
-    config: fixture.config,
-  })!;
-}
-
-function recordCatalogFailures() {
-  const failures: Array<{ error: Error; modelFactsChanged?: boolean }> = [];
-  const unregister = registerPreparedModelRuntimePublicationListener((event) => {
-    if (event.phase === "catalog-failed") {
-      failures.push(event);
-    }
-  });
-  return { failures, unregister };
-}
 
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
@@ -138,7 +111,7 @@ describe("Gateway catalog worker pool", () => {
     });
     try {
       const fixture = await createFleetFixture(observed.subscribe);
-      await loadFleetCatalogs(fixture);
+      await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
       expect(observed.spawned).toHaveLength(1);
       const { workerFailures } = getPreparedModelCatalogWorkerPoolSnapshot();
       const warnings = workerFailureWarnings().length;
@@ -163,10 +136,16 @@ describe("Gateway catalog worker pool", () => {
         loadPreparedModelRuntimeAuth(fixture.snapshots[0]!, { providerIds: [] }),
       ).rejects.toThrow();
       expect(fixture.snapshots.every((snapshot) => !snapshot.isCurrent())).toBe(true);
-      const replacement = currentSnapshot(fixture);
+      const replacement = getPreparedModelRuntimeSnapshot({
+        agentId: fixture.agentIds[0],
+        agentDir: fixture.entries[fixture.agentIds[0]!]!.agentDir,
+        config: fixture.config,
+      })!;
       expect(replacement).not.toBe(fixture.snapshots[0]);
       const catalog = await loadCompletedFullCatalog(replacement, { refresh: true });
-      expect(catalog.entries).toContainEqual(catalogEntry("plugin-generation-v2"));
+      expect(catalog.entries).toContainEqual(
+        expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v2" }),
+      );
       expect(observed.spawned).toHaveLength(2);
       expect(observed.peakWorkers).toBe(1);
       // The replacement pool restarts its own counters; the failure survives it.
@@ -198,14 +177,23 @@ describe("Gateway catalog worker pool", () => {
         failedTasks.push({ activeTasks: message.activeTasks, pendingTasks: message.pendingTasks });
       }
     };
-    const { failures: catalogFailures, unregister } = recordCatalogFailures();
+    const catalogFailures: Array<{ error: Error; modelFactsChanged?: boolean }> = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase === "catalog-failed") {
+        catalogFailures.push(event);
+      }
+    });
     let renewal: ReturnType<typeof loadCompletedFullCatalog> | undefined;
     let queuedAuth: ReturnType<typeof loadPreparedModelRuntimeAuth> | undefined;
     let queuedCatalog: ReturnType<typeof loadCompletedFullCatalog> | undefined;
     try {
-      const accepted = await loadFleetCatalogs(fixture);
+      const accepted = await Promise.all(
+        fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)),
+      );
       for (const catalog of accepted) {
-        expect(catalog.entries).toContainEqual(catalogEntry("plugin-generation-v1"));
+        expect(catalog.entries).toContainEqual(
+          expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+        );
         expect(catalog.refreshFailed).toBeUndefined();
       }
       expect(observed.spawned).toHaveLength(1);
@@ -267,7 +255,13 @@ describe("Gateway catalog worker pool", () => {
       ]);
       expect(fixture.snapshots.every((snapshot) => !snapshot.isCurrent())).toBe(true);
       fs.rmSync(`${fixture.marker}.hold`);
-      const replacements = fixture.agentIds.map((_, index) => currentSnapshot(fixture, index));
+      const replacements = fixture.agentIds.map((agentId) =>
+        getPreparedModelRuntimeSnapshot({
+          agentId,
+          agentDir: fixture.entries[agentId]!.agentDir,
+          config: fixture.config,
+        })!,
+      );
       for (const [index, replacement] of replacements.entries()) {
         expect(replacement).not.toBe(fixture.snapshots[index]);
         expect(replacement.isCurrent()).toBe(true);
@@ -318,19 +312,31 @@ describe("Gateway catalog worker pool", () => {
       const release = createDeferredCore();
       const resume = () => release.resolve();
       signal.addEventListener("abort", resume, { once: true });
-      const { failures, unregister } = recordCatalogFailures();
+      const failures: Error[] = [];
+      const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+        if (event.phase === "catalog-failed") {
+          failures.push(event.error);
+        }
+      });
       let renewal: ReturnType<typeof loadCompletedFullCatalog> | undefined;
       let termination: MockInstance<Worker["terminate"]> | undefined;
       try {
         const original = fixture.snapshots[0]!;
-        const accepted = (await loadFleetCatalogs(fixture))[0]!;
+        const accepted = (
+          await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)))
+        )[0]!;
         expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
           activeTasks: 0,
           pendingTasks: 0,
         });
         const originalStore = getPreparedModelRuntimeAuthStore(original)!;
         const agentId = fixture.agentIds[0]!;
-        const current = () => currentSnapshot(fixture);
+        const current = () =>
+          getPreparedModelRuntimeSnapshot({
+            agentId,
+            agentDir: original.agentDir,
+            config: fixture.config,
+          })!;
         const entered = observeCatalogEntry(fixture.marker, original.agentDir);
         fs.writeFileSync(`${fixture.marker}.hold`, "");
         const foregroundDeadlines: Array<() => void> = [];
@@ -495,8 +501,13 @@ describe("Gateway catalog worker pool", () => {
     "does not report renewal failure during warm %s",
     async (reason, { signal }) => {
       const fixture = await createFleetFixture(undefined, true);
-      await loadFleetCatalogs(fixture);
-      const { failures, unregister } = recordCatalogFailures();
+      await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
+      const failures: Error[] = [];
+      const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+        if (event.phase === "catalog-failed") {
+          failures.push(event.error);
+        }
+      });
       const entered = observeCatalogEntry(fixture.marker, fixture.snapshots[0]!.agentDir);
       const { workerFailures } = getPreparedModelCatalogWorkerPoolSnapshot();
       const warnings = workerFailureWarnings().length;
@@ -548,7 +559,7 @@ describe("Gateway catalog worker pool", () => {
         loadPreparedModelRuntimeAuth(snapshot, { providerIds: [] }),
       ),
     );
-    await loadFleetCatalogs(fixture);
+    await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
     expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
       workers: 1,
       workersCreated: 1,
@@ -596,7 +607,7 @@ describe("Gateway catalog worker pool", () => {
     "keeps replacement preparation alive when its predecessor %s finishes",
     async (predecessorKind, { signal }) => {
       const fixture = await createFleetFixture();
-      await loadFleetCatalogs(fixture);
+      await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
       const previous = fixture.snapshots[0]!;
       const predecessor =
         predecessorKind === "borrower"
@@ -660,18 +671,26 @@ describe("Gateway catalog worker pool", () => {
         }
         resume.resolve();
         await expect(publication).resolves.toBeUndefined();
-        for (const [index] of fixture.agentIds.entries()) {
-          const current = currentSnapshot(fixture, index);
+        for (const agentId of fixture.agentIds) {
+          const current = getPreparedModelRuntimeSnapshot({
+            agentId,
+            agentDir: fixture.entries[agentId]!.agentDir,
+            config: fixture.config,
+          });
           expect(current?.isCurrent()).toBe(true);
           expect(
             getPreparedModelRuntimeAuthStore(current!)?.profiles[`${PROVIDER_ID}:external`],
           ).toMatchObject({ type: "oauth", access: "v1:A" });
         }
         if (previousCatalog) {
-          const replacement = currentSnapshot(fixture);
+          const replacement = getPreparedModelRuntimeSnapshot({
+            agentId: fixture.agentIds[0],
+            agentDir: previous.agentDir,
+            config: fixture.config,
+          })!;
           expect(replacement).not.toBe(previous);
           expect((await loadCompletedFullCatalog(replacement)).entries).toContainEqual(
-            catalogEntry("plugin-generation-v1"),
+            expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
           );
         }
       } finally {
@@ -708,7 +727,12 @@ describe("Gateway catalog worker pool", () => {
             allowGatewaySubagentBinding: true,
             pluginMetadataSnapshot: fixture.snapshots[0]!.metadataSnapshot,
           });
-        const replacement = () => currentSnapshot(fixture);
+        const replacement = () =>
+          getPreparedModelRuntimeSnapshot({
+            agentId: fixture.agentIds[0],
+            agentDir: fixture.entries[fixture.agentIds[0]!]!.agentDir,
+            config: fixture.config,
+          })!;
         if (shutdown) {
           const retiring = createDeferredCore();
           const resumeTermination = createDeferredCore();
@@ -785,7 +809,7 @@ describe("Gateway catalog worker pool", () => {
   }) => {
     const fixture = await createFleetFixture();
     // Startup discovery must finish before the pool is expected to drain.
-    await loadFleetCatalogs(fixture);
+    await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
     await Promise.all(
       fixture.snapshots.map((snapshot) =>
         loadPreparedModelRuntimeAuth(snapshot, { providerIds: [] }),
