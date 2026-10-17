@@ -177,7 +177,7 @@ export function runUpdateSqliteMigration<T>(
   db: DatabaseSync,
   pathname: string,
   operation: () => T,
-  options?: { retainExclusive?: boolean },
+  options?: { retainExclusive?: boolean; created?: boolean },
 ): T {
   const context = captures.getStore();
   if (!context?.capture) {
@@ -189,7 +189,7 @@ export function runUpdateSqliteMigration<T>(
   }
   const { capture } = context;
   const expected = capture.expected(pathname);
-  if (typeof expected !== "string") {
+  if (typeof expected !== "string" && !(expected === null && options?.created)) {
     return operation();
   }
   const assertCurrent = migrationAuthority(capture, pathname);
@@ -220,7 +220,10 @@ export function runUpdateSqliteMigration<T>(
         // Bracket the captured generation and our first native read with exact
         // payload/identity evidence. WAL-index recovery may reset only -shm.
         const files = readSqliteFiles(pathname);
-        const before = readSqliteGeneration(pathname);
+        if (expected === null && (files.database.size !== 0n || files.journal || files.wal)) {
+          throw new Error("Created SQLite migration family is no longer empty.");
+        }
+        const before = expected === null ? null : readSqliteGeneration(pathname);
         assertCurrent();
         if (before !== expected) {
           throw new Error("SQLite migration source changed after update capture.");
@@ -234,14 +237,15 @@ export function runUpdateSqliteMigration<T>(
         db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK;"); // sqlite-allow-raw -- Bound the migration's native exclusion.
         const currentFiles = readSqliteFiles(pathname);
         assertCurrent();
-        if (!sameSqliteFileGeneration(files, currentFiles)) {
+        // An empty native BEGIN creates its own rollback journal without changing
+        // the main file. No journal or WAL existed before our exclusion attempt.
+        const lockedFiles =
+          before === null ? { ...currentFiles, journal: undefined } : currentFiles;
+        if (!sameSqliteFileGeneration(files, lockedFiles)) {
           throw new Error("SQLite migration source changed after update capture.");
         }
-        const source: MigrationSource = {
-          path: pathname,
-          generation: before,
-          assertCurrent,
-        };
+        const source: MigrationSource | undefined =
+          before === null ? undefined : { path: pathname, generation: before, assertCurrent };
         return captures.run({ capture, source }, () => {
           const result = operation();
           if (isPromiseLike(result)) {

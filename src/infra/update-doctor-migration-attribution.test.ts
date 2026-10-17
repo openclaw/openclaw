@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
@@ -16,13 +17,19 @@ import {
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 
-it.each(["foreign", "reversed"] as const)(
+it.each(["fresh", "foreign", "reversed"] as const)(
   "refuses a %s payload write while acquiring native migration custody",
   async (change) => {
     const pathname = path.join(directories.make("update-migration-custody-"), "state.sqlite");
+    if (change === "fresh") {
+      fs.writeFileSync(pathname, "", { flag: "wx", mode: 0o600 });
+    }
     using database = new DatabaseSync(pathname);
-    database.exec("CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('before')");
-    const expected = readUpdateDatabaseGenerations([pathname])[pathname];
+    if (change !== "fresh") {
+      database.exec("CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('before')");
+    }
+    const expected =
+      change === "fresh" ? null : readUpdateDatabaseGenerations([pathname])[pathname];
     const operation = vi.fn();
     const accept = vi.fn();
     let injected = false;
@@ -39,7 +46,9 @@ it.each(["foreign", "reversed"] as const)(
             "-e",
             `import { DatabaseSync } from 'node:sqlite';
              const db = new DatabaseSync(process.argv[1]);
-             db.exec("UPDATE evidence SET value = 'foreign'");
+             db.exec(process.argv[2] === 'fresh'
+               ? "CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('foreign')"
+               : "UPDATE evidence SET value = 'foreign'");
              if (process.argv[2] === 'reversed') db.exec("UPDATE evidence SET value = 'before'");
              db.close();`,
             pathname,
@@ -60,9 +69,11 @@ it.each(["foreign", "reversed"] as const)(
         runWithUpdateDoctorMigrationCapture(
           { expected: () => expected, assertCurrent() {}, accept, refuse() {} },
           () => {
-            expect(() => runUpdateSqliteMigration(database, pathname, operation)).toThrow(
-              "SQLite migration source changed after update capture",
-            );
+            expect(() =>
+              runUpdateSqliteMigration(database, pathname, operation, {
+                created: change === "fresh",
+              }),
+            ).toThrow("SQLite migration source changed after update capture");
           },
         ),
       );
@@ -71,7 +82,7 @@ it.each(["foreign", "reversed"] as const)(
       expect(operation).not.toHaveBeenCalled();
       expect(accept).not.toHaveBeenCalled();
       expect(database.prepare("SELECT value FROM evidence").get()).toEqual({
-        value: change === "foreign" ? "foreign" : "before",
+        value: change === "reversed" ? "before" : "foreign",
       });
     } finally {
       database.setAuthorizer(null);
