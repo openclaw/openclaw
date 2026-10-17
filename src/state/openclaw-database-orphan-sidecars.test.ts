@@ -1,4 +1,3 @@
-// Orphan-sidecar tests prove fresh database opens preserve recoverable SQLite families.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -38,21 +37,17 @@ function createWalFixture(): { header: Buffer; withFrames: Buffer } {
   const fixtureDir = fs.realpathSync(tempStateDirs.make("openclaw-wal-header-"));
   const databasePath = path.join(fixtureDir, "header.sqlite");
   const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
-    database.exec("CREATE TABLE header_probe (value TEXT);");
-    const wal = fs.readFileSync(`${databasePath}-wal`);
-    if (wal.length <= 32) {
-      throw new Error("SQLite did not write a WAL frame for the header fixture");
-    }
-    return {
-      header: Buffer.from(wal.subarray(0, 32)),
-      withFrames: Buffer.from(wal),
-    };
-  } finally {
-    database.close();
+  using database = new DatabaseSync(databasePath);
+  database.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+  database.exec("CREATE TABLE header_probe (value TEXT);");
+  const wal = fs.readFileSync(`${databasePath}-wal`);
+  if (wal.length <= 32) {
+    throw new Error("SQLite did not write a WAL frame for the header fixture");
   }
+  return {
+    header: Buffer.from(wal.subarray(0, 32)),
+    withFrames: Buffer.from(wal),
+  };
 }
 
 const walFixture = createWalFixture();
@@ -91,106 +86,93 @@ function listQuarantinePaths(sourcePath: string): string[] {
 
 describe("orphan SQLite sidecar admission", () => {
   const recoverableCases = [
-    {
-      label: "real WAL with committed frames",
-      suffix: "-wal",
-      contents: walFixture.withFrames,
-      benignSidecars: [
-        { suffix: "-shm", contents: shmIndexContents },
-        { suffix: "-journal", contents: emptySidecar },
+    [
+      "real WAL with committed frames",
+      "-wal",
+      walFixture.withFrames,
+      [
+        ["-shm", shmIndexContents],
+        ["-journal", emptySidecar],
       ],
-    },
-    {
-      label: "non-empty rollback journal",
-      suffix: "-journal",
-      contents: rollbackJournalContents,
-      benignSidecars: [
-        { suffix: "-wal", contents: walFixture.header },
-        { suffix: "-shm", contents: shmIndexContents },
+    ],
+    [
+      "non-empty rollback journal",
+      "-journal",
+      rollbackJournalContents,
+      [
+        ["-wal", walFixture.header],
+        ["-shm", shmIndexContents],
       ],
-    },
+    ],
   ] as const;
 
-  describe("recoverable sidecars", () => {
-    for (const testCase of recoverableCases) {
-      for (const kind of databaseKinds) {
-        const regression =
-          kind === "state" && testCase.suffix === "-wal" ? " (plugin lifecycle regression)" : "";
-        it(`opens a missing ${kind} database after copying a ${testCase.label}${regression}`, () => {
-          const { databasePath, env } = prepareCase(kind);
-          const sidecars = [
-            { suffix: testCase.suffix, contents: testCase.contents },
-            ...testCase.benignSidecars,
-          ].map((sidecar) => ({
-            contents: sidecar.contents,
-            path: `${databasePath}${sidecar.suffix}`,
-            suffix: sidecar.suffix,
-          }));
-          for (const sidecar of sidecars) {
-            fs.writeFileSync(sidecar.path, sidecar.contents);
-          }
+  for (const [label, suffix, contents, benignSidecars] of recoverableCases) {
+    for (const kind of databaseKinds) {
+      const regression =
+        kind === "state" && suffix === "-wal" ? " (plugin lifecycle regression)" : "";
+      it(`opens a missing ${kind} database after copying a ${label}${regression}`, () => {
+        const { databasePath, env } = prepareCase(kind);
+        for (const [sidecar, bytes] of [[suffix, contents], ...benignSidecars] as const) {
+          fs.writeFileSync(`${databasePath}${sidecar}`, bytes);
+        }
 
-          const database = openDatabase(kind, env);
-          const sourcePath = `${databasePath}${testCase.suffix}`;
-          const quarantinePaths = listQuarantinePaths(sourcePath);
+        const database = openDatabase(kind, env);
+        const sourcePath = `${databasePath}${suffix}`;
+        const quarantinePaths = listQuarantinePaths(sourcePath);
 
-          expect(database.db.isOpen).toBe(true);
-          expect(fs.existsSync(databasePath)).toBe(true);
-          expect(quarantinePaths).toHaveLength(1);
-          const quarantinePath = quarantinePaths.at(0);
-          if (!quarantinePath) {
-            throw new Error(`missing quarantine for ${sourcePath}`);
-          }
-          expect(fs.readFileSync(quarantinePath)).toEqual(testCase.contents);
-          if (fs.existsSync(sourcePath)) {
-            // A successful WAL-mode open may create a new sidecar at the canonical path.
-            expect(fs.readFileSync(sourcePath)).not.toEqual(testCase.contents);
-          }
-          expect(loggerMocks.warn).toHaveBeenCalledOnce();
-          expect(loggerMocks.warn).toHaveBeenCalledWith(
-            expect.stringContaining(quarantinePath),
-            expect.objectContaining({
-              databasePath,
-              copiedSidecars: [{ quarantinePath, sourcePath }],
-            }),
-          );
-          expect(String(loggerMocks.warn.mock.calls[0]?.[0])).toContain(
-            "Committed frames could not be applied because the main database is missing",
-          );
-          expect(String(loggerMocks.warn.mock.calls[0]?.[0])).toContain(
-            "Recovery requires restoring the main database and pairing it with the quarantined file",
-          );
-        });
-      }
+        expect(database.db.isOpen).toBe(true);
+        expect(fs.existsSync(databasePath)).toBe(true);
+        expect(quarantinePaths).toHaveLength(1);
+        const quarantinePath = quarantinePaths.at(0);
+        if (!quarantinePath) {
+          throw new Error(`missing quarantine for ${sourcePath}`);
+        }
+        expect(fs.readFileSync(quarantinePath)).toEqual(contents);
+        if (fs.existsSync(sourcePath)) {
+          // A successful WAL-mode open may create a new sidecar at the canonical path.
+          expect(fs.readFileSync(sourcePath)).not.toEqual(contents);
+        }
+        expect(loggerMocks.warn).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining(quarantinePath),
+          expect.objectContaining({
+            databasePath,
+            copiedSidecars: [{ quarantinePath, sourcePath }],
+          }),
+        );
+        expect(String(loggerMocks.warn.mock.calls[0]?.[0])).toContain(
+          "Committed frames could not be applied because the main database is missing",
+        );
+        expect(String(loggerMocks.warn.mock.calls[0]?.[0])).toContain(
+          "Recovery requires restoring the main database and pairing it with the quarantined file",
+        );
+      });
     }
-  });
+  }
 
   const nonBlockingCases = [
-    { label: "lone SHM index", suffix: "-shm", contents: shmIndexContents },
-    { label: "32-byte header-only WAL", suffix: "-wal", contents: walFixture.header },
-    { label: "zero-byte rollback journal", suffix: "-journal", contents: emptySidecar },
+    ["lone SHM index", "-shm", shmIndexContents],
+    ["32-byte header-only WAL", "-wal", walFixture.header],
+    ["zero-byte rollback journal", "-journal", emptySidecar],
   ] as const;
 
-  describe("non-blocking sidecars", () => {
-    for (const testCase of nonBlockingCases) {
-      for (const kind of databaseKinds) {
-        it(`creates a missing ${kind} database with a ${testCase.label}`, () => {
-          const { databasePath, env } = prepareCase(kind);
-          fs.writeFileSync(`${databasePath}${testCase.suffix}`, testCase.contents);
+  for (const [label, suffix, contents] of nonBlockingCases) {
+    for (const kind of databaseKinds) {
+      it(`creates a missing ${kind} database with a ${label}`, () => {
+        const { databasePath, env } = prepareCase(kind);
+        fs.writeFileSync(`${databasePath}${suffix}`, contents);
 
-          const database = openDatabase(kind, env);
+        const database = openDatabase(kind, env);
 
-          expect(database.db.isOpen).toBe(true);
-          expect(fs.existsSync(databasePath)).toBe(true);
-          expect(database.db.prepare("PRAGMA integrity_check").get()).toEqual({
-            integrity_check: "ok",
-          });
-          expect(listQuarantinePaths(`${databasePath}${testCase.suffix}`)).toEqual([]);
-          expect(loggerMocks.warn).not.toHaveBeenCalled();
+        expect(database.db.isOpen).toBe(true);
+        expect(fs.existsSync(databasePath)).toBe(true);
+        expect(database.db.prepare("PRAGMA integrity_check").get()).toEqual({
+          integrity_check: "ok",
         });
-      }
+        expect(listQuarantinePaths(`${databasePath}${suffix}`)).toEqual([]);
+        expect(loggerMocks.warn).not.toHaveBeenCalled();
+      });
     }
-  });
+  }
 
   it("preserves a same-size quarantine with different contents and copies to a unique suffix", () => {
     const { databasePath, env } = prepareCase("state");

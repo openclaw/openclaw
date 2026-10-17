@@ -8,19 +8,16 @@ import {
   captureTargetDatabaseSchemaContext,
   checkTargetDatabaseSchemasForContexts,
 } from "../cli/update-cli/schema-preflight.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { startSqliteConcurrentWriter } from "../infra/sqlite-concurrent-writer.test-support.js";
 import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
+import { closeDatabases, openRawDatabase } from "./database-preflight-fixtures.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
 } from "./openclaw-agent-db-registry.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "./openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -37,8 +34,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    closeDatabases();
     cleanup();
   });
 });
@@ -58,10 +54,9 @@ function createFixture() {
     main,
     worker,
     paths: [state.path, main.path, worker.path],
-    close() {
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
-    },
+    close: closeDatabases,
+    inspect: (options: Partial<Parameters<typeof preflightOpenClawDatabaseSchemas>[0]> = {}) =>
+      preflightOpenClawDatabaseSchemas({ env, supportedVersions, ...options }),
   };
 }
 
@@ -106,7 +101,7 @@ describe("schema preflight source artifacts", () => {
     openOpenClawStateDatabase({ env });
     closeOpenClawStateDatabaseForTest();
     const pathname = path.join(root, "agent.sqlite");
-    const writer = new (requireNodeSqlite().DatabaseSync)(pathname);
+    using writer = openRawDatabase(pathname);
     writer.exec(`
       CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, app_version TEXT);
       INSERT INTO schema_meta VALUES ('primary', 'before-lock');
@@ -132,7 +127,6 @@ describe("schema preflight source artifacts", () => {
       if (writer.isTransaction) {
         writer.exec("ROLLBACK;");
       }
-      writer.close();
     }
   }, 20_000);
 
@@ -200,11 +194,9 @@ describe("schema preflight source artifacts", () => {
       await writer.waitFor("ready");
       const walBefore = fs.readFileSync(`${fixture.main.path}-wal`);
       for (const inspect of [
-        () => preflightOpenClawDatabaseSchemas({ env: fixture.env, supportedVersions }),
+        () => fixture.inspect(),
         () =>
-          preflightOpenClawDatabaseSchemas({
-            env: fixture.env,
-            supportedVersions,
+          fixture.inspect({
             verifyCurrentSchemaShape: true,
             requireStartupMigrationReadiness: true,
           }),
@@ -284,9 +276,7 @@ describe("schema preflight source artifacts", () => {
           return await prepare(pathname, options);
         },
       );
-      const result = await preflightOpenClawDatabaseSchemas({
-        env: fixture.env,
-        supportedVersions,
+      const result = await fixture.inspect({
         verifyCurrentSchemaShape: true,
         preserveSourceArtifacts: true,
       });

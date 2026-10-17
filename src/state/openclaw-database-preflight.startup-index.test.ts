@@ -12,7 +12,6 @@ import {
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { activateGatewayAgentDatabaseStartup } from "../gateway/server-agent-database-startup.js";
 import { prepareGatewayStartupSessions } from "../gateway/server-startup-session-migration.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   readSqliteDatabaseCleanClose,
   retireSqliteDatabaseAdmissionForPath,
@@ -28,6 +27,7 @@ import {
   readAgentDatabaseAdmissionRefusal,
 } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
+import { openRawDatabase } from "./database-preflight-fixtures.test-support.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -48,7 +48,6 @@ afterEach(async () => {
   setLoggerOverride(null);
   resetLogger();
   vi.restoreAllMocks();
-  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
@@ -87,11 +86,11 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
-  const { DatabaseSync } = requireNodeSqlite();
   for (const agent of agents) {
-    const writer = new DatabaseSync(agent.path);
-    writer.exec("DROP INDEX idx_agent_session_nodes_active;");
-    writer.exec("UPDATE schema_meta SET app_version = '2026.9.1';");
+    const writer = openRawDatabase(agent.path);
+    writer.exec(
+      "DROP INDEX idx_agent_session_nodes_active; UPDATE schema_meta SET app_version = '2026.9.1';",
+    );
     if (damage === "drifted") {
       writer.exec("CREATE INDEX idx_agent_session_nodes_active ON session_nodes(session_key);");
     } else if (damage === "missing table") {
@@ -193,16 +192,14 @@ it.for(["missing", "drifted"] as const)(
       unsubscribe();
     }
     for (const agent of agents) {
-      const reader = new (requireNodeSqlite().DatabaseSync)(agent.path, { readOnly: true });
-      try {
+      {
+        using reader = openRawDatabase(agent.path, { readOnly: true });
         expect(
           reader
             .prepare("SELECT sql FROM sqlite_schema WHERE name='idx_agent_session_nodes_active'")
             .get()?.sql,
         ).toMatch(/WHERE archived_at IS NULL/i);
         expect(reader.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      } finally {
-        reader.close();
       }
       expect(loadSessionEntry(agent.session)).toEqual(agent.entry);
     }

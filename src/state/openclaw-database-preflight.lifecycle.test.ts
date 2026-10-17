@@ -6,16 +6,17 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as sqliteInspection from "../infra/sqlite-readonly-worker.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "./openclaw-agent-db.js";
+  closeDatabases,
+  execSql,
+  trackSettlement,
+} from "./database-preflight-fixtures.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -40,8 +41,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    closeDatabases();
     cleanup();
   });
 });
@@ -79,22 +79,16 @@ it.each([
       openOpenClawAgentDatabase({ agentId: "second", env: initializedEnv }).path,
       openOpenClawAgentDatabase({ agentId: "queued", env: initializedEnv }).path,
     ] as const;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    closeDatabases();
     const { env, statePath } = createPreflightState(path.join(root, "active-state"));
-    const { DatabaseSync } = requireNodeSqlite();
     for (const [index, pathname] of paths.entries()) {
-      const database = new DatabaseSync(pathname);
-      try {
-        database.exec(`PRAGMA journal_mode=${source === "snapshot" ? "WAL" : "DELETE"};`);
-        if (outcome === "failure" && index === 0) {
-          database.exec(
-            "PRAGMA foreign_keys=OFF; CREATE TABLE lifecycle_parent(id INTEGER PRIMARY KEY); CREATE TABLE lifecycle_child(parent_id REFERENCES lifecycle_parent(id)); INSERT INTO lifecycle_child VALUES (42);",
-          );
-        }
-      } finally {
-        database.close();
-      }
+      execSql(
+        pathname,
+        `PRAGMA journal_mode=${source === "snapshot" ? "WAL" : "DELETE"};` +
+          (outcome === "failure" && index === 0
+            ? "PRAGMA foreign_keys=OFF; CREATE TABLE lifecycle_parent(id INTEGER PRIMARY KEY); CREATE TABLE lifecycle_child(parent_id REFERENCES lifecycle_parent(id)); INSERT INTO lifecycle_child VALUES (42);"
+            : ""),
+      );
     }
 
     const marker = (name: string) => path.join(root, name);
@@ -183,7 +177,6 @@ it.each([
         size: "fixture",
       });
     }
-    let settled = false;
     const inspect = () =>
       preflightOpenClawDatabaseSchemas({
         env,
@@ -203,14 +196,7 @@ it.each([
               deadlineOwnedByCaller: true,
             })
           : inspect();
-    void run.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    const settled = trackSettlement(run);
     let childClosures: Promise<void>[] = [];
     try {
       await vi.waitFor(
@@ -220,7 +206,7 @@ it.each([
         },
         { timeout: 10_000 },
       );
-      expect(settled).toBe(false);
+      expect(settled()).toBe(false);
       expect(
         prepare.mock.calls.filter(([pathname]) =>
           sources.includes(path.toNamespacedPath(pathname)),
@@ -264,7 +250,7 @@ it.each([
           await vi.waitFor(() => expect(fs.existsSync(marker("retired-0"))).toBe(true), {
             timeout: 10_000,
           });
-          expect(settled).toBe(false);
+          expect(settled()).toBe(false);
           expect(closedChildren).toBe(0);
           expect(cleanedSnapshots.size).toBe(0);
           expect(fs.existsSync(firstReadLocation)).toBe(true);
@@ -281,7 +267,7 @@ it.each([
           }
           // Drain the first child's result before checking the still-owned peer.
           await setImmediate();
-          expect(settled).toBe(false);
+          expect(settled()).toBe(false);
           if (source === "snapshot") {
             expect(cleanedSnapshots).toEqual(new Set([0]));
             expect(fs.existsSync(secondReadLocation)).toBe(true);
@@ -329,14 +315,14 @@ it.each([
 function createSnapshotCandidates() {
   const { env } = createPreflightState(tempDirs.make("openclaw-preflight-lifecycle-state-"));
   const directory = tempDirs.make("openclaw-preflight-lifecycle-agents-");
-  const { DatabaseSync } = requireNodeSqlite();
   const paths = [0, 1, 2].map((index) => path.join(directory, `agent-${index}.sqlite`));
 
   // Closed WAL families retain the private snapshot recovery path.
   for (const pathname of paths) {
-    const database = new DatabaseSync(pathname);
-    database.exec(`PRAGMA journal_mode=WAL; PRAGMA user_version = ${supportedVersions.agent + 1};`);
-    database.close();
+    execSql(
+      pathname,
+      `PRAGMA journal_mode=WAL; PRAGMA user_version = ${supportedVersions.agent + 1};`,
+    );
     expect(fs.existsSync(`${pathname}-wal`)).toBe(false);
     expect(fs.existsSync(`${pathname}-shm`)).toBe(false);
   }
@@ -344,28 +330,57 @@ function createSnapshotCandidates() {
   return { env, paths };
 }
 
+function observeCandidateSnapshots(
+  fixture: ReturnType<typeof createSnapshotCandidates>,
+  wrap: (
+    prepared: Awaited<ReturnType<typeof snapshots.prepareSqliteReadOnlyLocation>>,
+    ordinal: number,
+    pathname: string,
+  ) => Promise<Awaited<ReturnType<typeof snapshots.prepareSqliteReadOnlyLocation>>>,
+) {
+  const paths = new Set(fixture.paths.map((pathname) => fs.realpathSync.native(pathname)));
+  const prepare = snapshots.prepareSqliteReadOnlyLocation;
+  const preparedPaths: string[] = [];
+  const locations: string[] = [];
+  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
+    async (pathname, options) => {
+      const prepared = await prepare(pathname, options);
+      if (!paths.has(pathname)) {
+        return prepared;
+      }
+      const ordinal = preparedPaths.length;
+      preparedPaths.push(pathname);
+      locations.push(prepared.location);
+      return wrap(prepared, ordinal, pathname);
+    },
+  );
+  return { preparedPaths, locations };
+}
+
+function inspectCandidates(
+  fixture: ReturnType<typeof createSnapshotCandidates>,
+  signal?: AbortSignal,
+) {
+  return preflightOpenClawDatabaseSchemas({
+    env: fixture.env,
+    supportedVersions,
+    requireStartupMigrationReadiness: true,
+    configuredAgentDatabaseCandidatePaths: fixture.paths,
+    signal,
+  });
+}
+
 it("drains started agent snapshots before rejecting cancellation", async () => {
   const fixture = createSnapshotCandidates();
-  const agentPaths = new Set(fixture.paths.map((pathname) => fs.realpathSync.native(pathname)));
-  const prepare = snapshots.prepareSqliteReadOnlyLocation;
   const cleanupRelease = createDeferred();
   const twoCleanupsStarted = createDeferred();
-  const preparedAgentPaths: string[] = [];
-  const preparedAgentLocations: string[] = [];
   const cleanedAgentPaths: string[] = [];
   let cleanupCount = 0;
   let activeAgentSnapshots = 0;
   let peakAgentSnapshots = 0;
 
-  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
-    async (pathname, options) => {
-      const prepared = await prepare(pathname, options);
-      if (!agentPaths.has(pathname)) {
-        return prepared;
-      }
-
-      preparedAgentPaths.push(pathname);
-      preparedAgentLocations.push(prepared.location);
+  const { preparedPaths: preparedAgentPaths, locations: preparedAgentLocations } =
+    observeCandidateSnapshots(fixture, async (prepared, _ordinal, pathname) => {
       activeAgentSnapshots += 1;
       peakAgentSnapshots = Math.max(peakAgentSnapshots, activeAgentSnapshots);
 
@@ -383,28 +398,12 @@ it("drains started agent snapshots before rejecting cancellation", async () => {
           return removed;
         },
       };
-    },
-  );
+    });
 
   const controller = new AbortController();
   const cancellation = new Error("intentional preflight cancellation");
-  let settled = false;
-  const run = preflightOpenClawDatabaseSchemas({
-    env: fixture.env,
-    supportedVersions,
-    requireStartupMigrationReadiness: true,
-    configuredAgentDatabaseCandidatePaths: fixture.paths,
-    signal: controller.signal,
-  });
-
-  void run.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
+  const run = inspectCandidates(fixture, controller.signal);
+  const settled = trackSettlement(run);
 
   let settledBeforeCleanupRelease = true;
   let preparedBeforeCleanupRelease = -1;
@@ -426,7 +425,7 @@ it("drains started agent snapshots before rejecting cancellation", async () => {
     controller.abort(cancellation);
     await Promise.resolve();
 
-    settledBeforeCleanupRelease = settled;
+    settledBeforeCleanupRelease = settled();
     preparedBeforeCleanupRelease = preparedAgentPaths.length;
   } finally {
     cleanupRelease.resolve();
@@ -449,27 +448,14 @@ it("drains started agent snapshots before rejecting cancellation", async () => {
 
 it("drains a concurrent agent snapshot before propagating readiness failure", async () => {
   const fixture = createSnapshotCandidates();
-  const agentPaths = new Set(fixture.paths.map((pathname) => fs.realpathSync.native(pathname)));
-  const prepare = snapshots.prepareSqliteReadOnlyLocation;
   const secondPrepared = createDeferred();
   const peerCleanupStarted = createDeferred();
   const peerCleanupRelease = createDeferred();
   const failingCleanupDone = createDeferred();
-  const preparedAgentPaths: string[] = [];
-  const preparedAgentLocations: string[] = [];
   let peerCleanupFinished = false;
 
-  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
-    async (pathname, options) => {
-      const prepared = await prepare(pathname, options);
-      if (!agentPaths.has(pathname)) {
-        return prepared;
-      }
-
-      const ordinal = preparedAgentPaths.length;
-      preparedAgentPaths.push(pathname);
-      preparedAgentLocations.push(prepared.location);
-
+  const { preparedPaths: preparedAgentPaths, locations: preparedAgentLocations } =
+    observeCandidateSnapshots(fixture, async (prepared, ordinal) => {
       if (ordinal === 0) {
         await secondPrepared.promise;
         return {
@@ -498,25 +484,10 @@ it("drains a concurrent agent snapshot before propagating readiness failure", as
       }
 
       return prepared;
-    },
-  );
+    });
 
-  let settled = false;
-  const run = preflightOpenClawDatabaseSchemas({
-    env: fixture.env,
-    supportedVersions,
-    requireStartupMigrationReadiness: true,
-    configuredAgentDatabaseCandidatePaths: fixture.paths,
-  });
-
-  void run.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
+  const run = inspectCandidates(fixture);
+  const settled = trackSettlement(run);
 
   let settledBeforePeerCleanupRelease = true;
   let preparedBeforePeerCleanupRelease = -1;
@@ -533,7 +504,7 @@ it("drains a concurrent agent snapshot before propagating readiness failure", as
     );
     await Promise.resolve();
 
-    settledBeforePeerCleanupRelease = settled;
+    settledBeforePeerCleanupRelease = settled();
     preparedBeforePeerCleanupRelease = preparedAgentPaths.length;
   } finally {
     secondPrepared.resolve();
