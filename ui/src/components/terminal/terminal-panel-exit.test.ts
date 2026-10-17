@@ -120,7 +120,7 @@ describe("terminal process exit", () => {
     panel.gatewayConnected = false;
     await panel.updateComplete;
     expect(panel.hostedTabs[0]?.closeDisabled).toBe(false);
-    const close = panel.renderRoot.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!;
+    const close = panel.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!;
     expect(close.disabled).toBe(false);
     close.click();
     await panel.updateComplete;

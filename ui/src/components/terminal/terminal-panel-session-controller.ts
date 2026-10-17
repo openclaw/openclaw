@@ -22,6 +22,7 @@ import {
   resolveTerminalPanelOwnerSessionKey,
   type TerminalOperation,
   type TerminalPanelError,
+  type TerminalPanelOpenAction,
   type TerminalPanelSessionHost,
   type TerminalPanelSessionState,
   type TerminalPanelSessionTab,

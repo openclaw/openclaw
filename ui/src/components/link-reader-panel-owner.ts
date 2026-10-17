@@ -528,7 +528,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
     const agentId = props.agentId;
     const sessionKey = props.sessionKey;
     const generation = client?.connectionGeneration;
-    const recoveryScope = client?.recoveryScope;
+    const requestRecoveryScope = client?.recoveryScope;
     if (!target || !tab || !client || !props.available || !panelPresented()) {
       return;
     }
@@ -557,7 +557,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
       props.agentId === agentId &&
       props.sessionKey === sessionKey &&
       client.connectionGeneration === generation &&
-      client.recoveryScope === recoveryScope &&
+      client.recoveryScope === requestRecoveryScope &&
       props.available &&
       panelPresented() &&
       activeTab() === tab &&
@@ -628,7 +628,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
         }
         const next = createReaderReadyView(detail, previous);
         const imageMethod = target.reader.linkReader.imageMethod;
-        const images = imageMethod
+        next.images = imageMethod
           ? new LinkReaderImages(
               client,
               imageMethod,
@@ -639,13 +639,12 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
                 props.agentId === agentId &&
                 props.sessionKey === sessionKey &&
                 client.connectionGeneration === generation &&
-                client.recoveryScope === recoveryScope &&
+                client.recoveryScope === requestRecoveryScope &&
                 state.tabs.includes(tab) &&
                 props.readers.includes(target.reader) &&
                 tab.view === next,
             )
           : undefined;
-        next.images = images;
         setTabView(tab, next);
         if (next.sections.files && previous?.detail.files) {
           void loadDetail("files");

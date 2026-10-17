@@ -69,7 +69,6 @@ describe("raw Canvas frame retention", () => {
               onRetry={() => {}}
               onClose={() => {}}
               onViewRawText={() => {}}
-              onAttachmentUpdate={() => {}}
               onClick={() => {}}
               onKeydown={() => {}}
               attachmentRuntime={{}}
