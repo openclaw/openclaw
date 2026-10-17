@@ -211,7 +211,6 @@ describe("SQLite-backed plugin model catalogs", () => {
   });
 
   it("skips catalog mutation for unrelated credentials and observes a later matching publication", async () => {
-    const agentDir = createAgentDir();
     const relativePath = encodePluginModelCatalogRelativePath("zai");
     const unrelated = catalogContents("zai", "unrelated-provider-test-key");
     const removedKey = "removed-provider-test-key";
@@ -303,7 +302,6 @@ describe("SQLite-backed plugin model catalogs", () => {
   });
 
   it("removes generated model rows whose API semantics cannot be derived", async () => {
-    const agentDir = createAgentDir();
     const relativePath = encodePluginModelCatalogRelativePath("nvidia");
     await replacePersistedPluginModelCatalogs({
       agentDir,
@@ -339,7 +337,6 @@ describe("SQLite-backed plugin model catalogs", () => {
   });
 
   it("leaves malformed persisted catalogs and valid sibling timestamps unchanged", async () => {
-    const agentDir = createAgentDir();
     const validNvidia = catalogContents("nvidia", "NVIDIA_API_KEY");
     const validZai = catalogContents("zai", "ZAI_API_KEY");
     await replacePersistedPluginModelCatalogs({
@@ -403,8 +400,6 @@ describe("SQLite-backed plugin model catalogs", () => {
   });
 
   it("does not create an agent database for a read-only cache miss", () => {
-    const agentDir = createAgentDir();
-
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([]);
     expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
     expect(existsSync(join(agentDir, "plugins"))).toBe(false);
@@ -417,7 +412,6 @@ describe("SQLite-backed plugin model catalogs", () => {
   });
 
   it("imports a released catalog only through explicit migration", () => {
-    const agentDir = createAgentDir();
     const contents = catalogContents("zai", "released-provider-test-key");
     const sourcePath = join(agentDir, encodePluginModelCatalogRelativePath("zai"));
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
@@ -432,7 +426,6 @@ describe("SQLite-backed plugin model catalogs", () => {
   });
 
   it("retires migrated credential recovery data after verifying the canonical catalog", () => {
-    const agentDir = createAgentDir();
     const contents = catalogContents("zai", "retired-released-provider-test-key");
     const sourcePath = join(agentDir, encodePluginModelCatalogRelativePath("zai"));
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
@@ -490,7 +483,6 @@ describe("SQLite-backed plugin model catalogs", () => {
   });
 
   it("detects a released catalog that appears after an earlier empty scan", () => {
-    const agentDir = createAgentDir();
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([]);
 
     const contents = catalogContents("zai", "late-released-provider-test-key");
@@ -506,7 +498,6 @@ describe("SQLite-backed plugin model catalogs", () => {
   });
 
   it("migrates a later provider catalog after an earlier migration completed", () => {
-    const agentDir = createAgentDir();
     const zai = catalogContents("zai", "released-zai-provider-test-key");
     const zaiPath = join(agentDir, encodePluginModelCatalogRelativePath("zai"));
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
@@ -532,7 +523,6 @@ describe("SQLite-backed plugin model catalogs", () => {
   });
 
   it("migrates a changed later sidecar for an already migrated provider", () => {
-    const agentDir = createAgentDir();
     const pluginDir = join(agentDir, "plugins", "zai");
     const sourcePath = join(agentDir, encodePluginModelCatalogRelativePath("zai"));
     const original = catalogContents("zai", "first-released-provider-test-key");
@@ -566,7 +556,6 @@ describe("SQLite-backed plugin model catalogs", () => {
   });
 
   it("recovers a released sidecar that appears after a catalog replacement was planned", async () => {
-    const agentDir = createAgentDir();
     const released = catalogContents("zai", "released-provider-test-key");
     const preplanned = catalogContents("zai", "preplanned-provider-test-key");
     const sourcePath = join(agentDir, encodePluginModelCatalogRelativePath("zai"));
@@ -589,7 +578,6 @@ describe("SQLite-backed plugin model catalogs", () => {
   });
 
   it("treats an already-completed legacy migration as safe to repeat", () => {
-    const agentDir = createAgentDir();
     const contents = catalogContents("zai", "released-provider-test-key");
     const sourcePath = join(agentDir, encodePluginModelCatalogRelativePath("zai"));
     mkdirSync(join(agentDir, "plugins", "zai"), { recursive: true });
@@ -622,7 +610,6 @@ describe("SQLite-backed plugin model catalogs", () => {
     if (process.getuid?.() === 0) {
       return;
     }
-    const agentDir = createAgentDir();
     const contents = catalogContents("zai", "released-provider-test-key");
     const pluginDir = join(agentDir, "plugins", "zai");
     const sourcePath = join(agentDir, encodePluginModelCatalogRelativePath("zai"));
@@ -748,7 +735,6 @@ describe("SQLite-backed plugin model catalogs", () => {
   });
 
   it("recovers a retained atomic migration claim after an interrupted upgrade", () => {
-    const agentDir = createAgentDir();
     const contents = catalogContents("zai", "interrupted-released-provider-test-key");
     const pluginDir = join(agentDir, "plugins", "zai");
     const claimPath = join(pluginDir, "catalog.json.doctor-importing-previous-process");
@@ -763,7 +749,6 @@ describe("SQLite-backed plugin model catalogs", () => {
   });
 
   it("recovers a retained claim before applying a newer canonical provider catalog", () => {
-    const agentDir = createAgentDir();
     const retained = catalogContents("zai", "interrupted-released-provider-test-key");
     const refreshed = catalogContents("zai", "concurrently-refreshed-provider-test-key");
     const pluginDir = join(agentDir, "plugins", "zai");
