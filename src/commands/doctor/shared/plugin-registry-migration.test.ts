@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PluginCandidate } from "../../../plugins/discovery.js";
+import { afterEach, expect, it, vi } from "vitest";
 import { writePersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store-write.js";
 import {
   readPersistedInstalledPluginIndex,
@@ -12,6 +11,10 @@ import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
 } from "../../../plugins/test-helpers/fs-fixtures.js";
+import {
+  createInstalledPluginIndex,
+  createInstalledPluginIndexCandidate,
+} from "../../../plugins/test-helpers/installed-plugin-index.js";
 import * as stateDbReadOnly from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../../test-utils/database-cleanup.js";
@@ -25,44 +28,6 @@ afterEach(async () => {
 
 function makeTempDir() {
   return makeTrackedTempDir("openclaw-plugin-registry-migration", tempDirs);
-}
-
-function createCandidate(rootDir: string): PluginCandidate {
-  fs.writeFileSync(
-    path.join(rootDir, "index.ts"),
-    "throw new Error('runtime entry should not load while migrating plugin registry');\n",
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(rootDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "demo",
-      name: "demo",
-      configSchema: { type: "object" },
-      providers: ["demo"],
-    }),
-    "utf8",
-  );
-  return {
-    idHint: "demo",
-    source: path.join(rootDir, "index.ts"),
-    rootDir,
-    origin: "global",
-  };
-}
-
-function createCurrentIndex(): InstalledPluginIndex {
-  return {
-    version: 1,
-    hostContractVersion: "2026.4.25",
-    compatRegistryVersion: "compat-v1",
-    migrationVersion: 1,
-    policyHash: "policy-v1",
-    generatedAtMs: 1777118400000,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  };
 }
 
 function requireMigratedIndex(
@@ -103,7 +68,7 @@ function insertStalePersistedIndexRow(stateDir: string, installRecordsJson = "{}
       const valueJson = JSON.stringify({
         revision: 123,
         index: {
-          ...createCurrentIndex(),
+          ...createInstalledPluginIndex({ plugins: [] }),
           warning: null,
           migrationVersion: 0,
           policyHash: "stale-policy",
@@ -122,102 +87,95 @@ function insertStalePersistedIndexRow(stateDir: string, installRecordsJson = "{}
   );
 }
 
-describe("doctor plugin registry migration", () => {
-  it("stops migration with the original error when the shared registry read fails", async () => {
-    const stateDir = makeTempDir();
-    const records = { authoritative: { source: "npm", spec: "authoritative@1.0.0" } };
-    insertStalePersistedIndexRow(stateDir, JSON.stringify(records));
-    const error = Object.assign(new Error("database is locked"), {
-      code: "ERR_SQLITE_ERROR",
-      errcode: 5,
-    });
-    const readSpy = vi.spyOn(stateDbReadOnly, "withExistingOpenClawStateDatabaseReadOnly");
-    readSpy.mockImplementationOnce(() => {
-      throw error;
-    });
-    const readConfig = vi.fn(() => ({}));
-    await expect.soft(migrate(stateDir, { readConfig, candidates: [] })).rejects.toBe(error);
-    expect.soft(readConfig).not.toHaveBeenCalled();
-    expect(readSpy).toHaveBeenCalledOnce();
-    readSpy.mockRestore();
-    const row = readRow(stateDir);
-    expect(row).toMatchObject({ updated_at_ms: 123 });
-    const restored = await migrate(stateDir, { readConfig, candidates: [] });
-    expect(requireMigratedIndex(restored).installRecords).toEqual(records);
+it("stops migration with the original error when the shared registry read fails", async () => {
+  const stateDir = makeTempDir();
+  const records = { authoritative: { source: "npm", spec: "authoritative@1.0.0" } };
+  insertStalePersistedIndexRow(stateDir, JSON.stringify(records));
+  const error = Object.assign(new Error("database is locked"), {
+    code: "ERR_SQLITE_ERROR",
+    errcode: 5,
   });
+  const readSpy = vi.spyOn(stateDbReadOnly, "withExistingOpenClawStateDatabaseReadOnly");
+  readSpy.mockImplementationOnce(() => {
+    throw error;
+  });
+  const readConfig = vi.fn(() => ({}));
+  await expect.soft(migrate(stateDir, { readConfig, candidates: [] })).rejects.toBe(error);
+  expect.soft(readConfig).not.toHaveBeenCalled();
+  expect(readSpy).toHaveBeenCalledOnce();
+  readSpy.mockRestore();
+  const row = readRow(stateDir);
+  expect(row).toMatchObject({ updated_at_ms: 123 });
+  const restored = await migrate(stateDir, { readConfig, candidates: [] });
+  expect(requireMigratedIndex(restored).installRecords).toEqual(records);
+});
 
-  it("short-circuits when a current registry file already exists", async () => {
+it.each(["skip-existing", "dry-run"] as const)(
+  "performs %s without reading config",
+  async (status) => {
     const stateDir = makeTempDir();
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
-    await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
+    if (status === "skip-existing") {
+      await writePersistedInstalledPluginIndex(createInstalledPluginIndex({ plugins: [] }), {
+        stateDir,
+      });
+    }
     const readConfig = vi.fn(async () => ({}));
-
-    const result = await migrate(stateDir, { readConfig });
+    const result = await migrate(stateDir, { readConfig, dryRun: status === "dry-run" });
     expect(result).toMatchObject({
-      status: "skip-existing",
+      status,
       migrated: false,
-      preflight: { action: "skip-existing", filePath },
+      preflight: { action: status === "dry-run" ? "initialize" : "skip-existing", filePath },
     });
     expect(readConfig).not.toHaveBeenCalled();
+    if (status === "dry-run") {
+      expect(fs.existsSync(path.join(stateDir, "plugins", "installs.json"))).toBe(false);
+    }
+  },
+);
+
+it("rejects invalid SQLite install records without rewriting the row", async () => {
+  const stateDir = makeTempDir();
+  const installRecordsJson = '{"__proto__":{"source":"bogus"}}';
+  insertStalePersistedIndexRow(stateDir, installRecordsJson);
+
+  await expect(migrate(stateDir, { readConfig: async () => ({}) })).rejects.toThrow(
+    "delete only the config_machine_state row with state_key='plugins.installedIndex'",
+  );
+
+  const row = readRow(stateDir) as { value_json: string; updated_at_ms: number | bigint };
+  expect(row.updated_at_ms).toBe(123);
+  const persistedValue = JSON.parse(row.value_json) as {
+    index: { migrationVersion: number; installRecords: unknown };
+  };
+  expect(persistedValue.index.migrationVersion).toBe(0);
+  expect(JSON.stringify(persistedValue.index.installRecords)).toBe(
+    JSON.stringify(JSON.parse(installRecordsJson)),
+  );
+});
+
+it("builds missing registry state from discovered plugin manifests", async () => {
+  const stateDir = makeTempDir();
+  const pluginDir = path.join(stateDir, "plugins", "demo");
+  fs.mkdirSync(pluginDir, { recursive: true });
+  const candidate = createInstalledPluginIndexCandidate(pluginDir);
+
+  const result = await migrate(stateDir, { candidates: [candidate], config: {} });
+  expect(result).toMatchObject({
+    status: "migrated",
+    migrated: true,
+    preflight: { action: "initialize" },
+  });
+  const current = requireMigratedIndex(result);
+  expect(current).toMatchObject({
+    refreshReason: "migration",
+    migrationVersion: 1,
+    plugins: expect.arrayContaining([expect.objectContaining({ pluginId: "demo" })]),
   });
 
-  it("rejects invalid SQLite install records without rewriting the row", async () => {
-    const stateDir = makeTempDir();
-    const installRecordsJson = '{"__proto__":{"source":"bogus"}}';
-    insertStalePersistedIndexRow(stateDir, installRecordsJson);
-
-    await expect(migrate(stateDir, { readConfig: async () => ({}) })).rejects.toThrow(
-      "delete only the config_machine_state row with state_key='plugins.installedIndex'",
-    );
-
-    const row = readRow(stateDir) as { value_json: string; updated_at_ms: number | bigint };
-    expect(row.updated_at_ms).toBe(123);
-    const persistedValue = JSON.parse(row.value_json) as {
-      index: { migrationVersion: number; installRecords: unknown };
-    };
-    expect(persistedValue.index.migrationVersion).toBe(0);
-    expect(JSON.stringify(persistedValue.index.installRecords)).toBe(
-      JSON.stringify(JSON.parse(installRecordsJson)),
-    );
-  });
-
-  it("supports dry-run preflight without reading config or writing the registry", async () => {
-    const stateDir = makeTempDir();
-    const readConfig = vi.fn(async () => ({}));
-
-    const result = await migrate(stateDir, { dryRun: true, readConfig });
-    expect(result).toMatchObject({
-      status: "dry-run",
-      migrated: false,
-      preflight: { action: "initialize" },
-    });
-    expect(readConfig).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(stateDir, "plugins", "installs.json"))).toBe(false);
-  });
-
-  it("builds missing registry state from discovered plugin manifests", async () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "plugins", "demo");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    const candidate = createCandidate(pluginDir);
-
-    const result = await migrate(stateDir, { candidates: [candidate], config: {} });
-    expect(result).toMatchObject({
-      status: "migrated",
-      migrated: true,
-      preflight: { action: "initialize" },
-    });
-    const current = requireMigratedIndex(result);
-    expect(current).toMatchObject({
-      refreshReason: "migration",
-      migrationVersion: 1,
-      plugins: expect.arrayContaining([expect.objectContaining({ pluginId: "demo" })]),
-    });
-
-    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(persisted).toMatchObject({
-      refreshReason: "migration",
-      plugins: expect.arrayContaining([expect.objectContaining({ pluginId: "demo" })]),
-    });
+  const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+  expect(persisted).toMatchObject({
+    refreshReason: "migration",
+    plugins: expect.arrayContaining([expect.objectContaining({ pluginId: "demo" })]),
   });
 });

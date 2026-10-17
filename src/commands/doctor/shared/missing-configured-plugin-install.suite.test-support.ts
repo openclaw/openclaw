@@ -5,10 +5,10 @@ import type { OpenClawConfig } from "../../../config/types.js";
 import { resolveRegistryUpdateChannel } from "../../../infra/update-channels.js";
 import { resolveClawHubInstallSpecsForUpdateChannel } from "../../../plugins/install-channel-specs.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
-import type { BundledProviderPolicySurface } from "../../../plugins/provider-policy-surface.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { expectObjectFields } from "../../../test-utils/mock-call-assertions.js";
 import { VERSION } from "../../../version.js";
+import type { openaiPolicySurface } from "./missing-configured-plugin-install.fixtures.test-support.js";
 import {
   brokenPluginSnapshot,
   installedRecords,
@@ -17,24 +17,24 @@ import {
   successfulInstall,
 } from "./missing-configured-plugin-install.test-helpers.js";
 
-function expectedNpmInstallSpec(spec: string): string {
+export function expectedNpmInstallSpec(spec: string): string {
   return resolveRegistryUpdateChannel({ currentVersion: VERSION }) === "beta"
     ? `${spec}@${VERSION}`
     : spec;
 }
 
-function expectedClawHubInstallSpec(spec: string): string {
+export function expectedClawHubInstallSpec(spec: string): string {
   return resolveClawHubInstallSpecsForUpdateChannel({
     spec,
     updateChannel: resolveRegistryUpdateChannel({ currentVersion: VERSION }),
   }).installSpec;
 }
 
-function expectedCodexInstallSpec(): string {
+export function expectedCodexInstallSpec(): string {
   return `@openclaw/codex@${VERSION}`;
 }
 
-function mockNpmRegistryTags(tags: { beta?: string; latest: string }): void {
+export function mockNpmRegistryTags(tags: { beta?: string; latest: string }): void {
   mocks.resolveNpmSpecMetadata.mockImplementation(async ({ spec }: { spec: string }) => {
     const selectorIndex = spec.lastIndexOf("@");
     const name = spec.slice(0, selectorIndex);
@@ -46,7 +46,7 @@ function mockNpmRegistryTags(tags: { beta?: string; latest: string }): void {
   });
 }
 
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
   }
@@ -55,7 +55,7 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
   return actual;
 }
 
-function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
+export function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
   const call = mock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`Expected mock call ${callIndex}`);
@@ -63,7 +63,7 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
   return call[argIndex];
 }
 
-function expectedIndexWriteOptions(config: unknown, env: NodeJS.ProcessEnv) {
+export function expectedIndexWriteOptions(config: unknown, env: NodeJS.ProcessEnv) {
   const databasePath = resolveOpenClawStateSqlitePath(env);
   return {
     config,
@@ -77,7 +77,7 @@ function expectedIndexWriteOptions(config: unknown, env: NodeJS.ProcessEnv) {
   };
 }
 
-const mocks = vi.hoisted(() => ({
+export const mocks = vi.hoisted(() => ({
   installPluginFromClawHub: vi.fn(),
   installPluginFromNpmSpec: vi.fn(),
   listChannelPluginCatalogEntries: vi.fn(),
@@ -100,27 +100,7 @@ const mocks = vi.hoisted(() => ({
   resolveOfficialExternalProviderPluginIds: vi.fn(),
   resolveOfficialExternalProviderPluginIdsForEnv: vi.fn(),
   resolveOfficialExternalWebProviderContractPluginIdsForEnv: vi.fn(),
-  resolveDirectBundledProviderPolicySurface: vi.fn(
-    (pluginId: string): BundledProviderPolicySurface | null =>
-      pluginId === "openai"
-        ? {
-            normalizeModelCatalogId: ({ modelId }) => modelId,
-            resolveModelRoutes: ({ requestTransportOverrides }) => ({
-              kind: "routes",
-              routes: [
-                {
-                  api: "openai-responses",
-                  baseUrl: "https://api.openai.com/v1",
-                  authRequirement: "api-key",
-                  requestTransportOverrides: requestTransportOverrides ?? "none",
-                  runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-                },
-              ],
-              defaultRuntimeId: "codex",
-            }),
-          }
-        : null,
-  ),
+  resolveDirectBundledProviderPolicySurface: vi.fn<typeof openaiPolicySurface>(),
   resolveDefaultPluginExtensionsDir: vi.fn(() => "/tmp/openclaw-plugins"),
   resolveDefaultPluginNpmDir: vi.fn(() => "/tmp/openclaw-npm"),
   resolvePluginNpmProjectsDir: vi.fn((npmDir = "/tmp/openclaw-npm") =>
@@ -149,9 +129,9 @@ const mocks = vi.hoisted(() => ({
     >(),
 }));
 
-const { testEnv, tempDirs } = setupPluginInstallTestState();
+export const { testEnv, tempDirs } = setupPluginInstallTestState();
 
-const prepareManagedPluginArtifactConsentHandler = vi.hoisted(() =>
+export const prepareManagedPluginArtifactConsentHandler = vi.hoisted(() =>
   vi.fn<
     typeof import("../../../plugins/capability-consent.js").prepareManagedPluginArtifactConsentHandler
   >(),
@@ -161,7 +141,7 @@ vi.mock("../../../plugins/capability-consent.js", async (importOriginal) => ({
   prepareManagedPluginArtifactConsentHandler,
 }));
 
-function mockCurrentBundledPlugin(
+export function mockCurrentBundledPlugin(
   pluginId: string,
   packageName: string,
   rootDir = `/tmp/bundled/${pluginId}`,
@@ -172,7 +152,7 @@ function mockCurrentBundledPlugin(
   });
 }
 
-async function repairConfiguredPlugins(
+export async function repairConfiguredPlugins(
   cfg: OpenClawConfig,
   env: Record<string, string | undefined> = {},
 ) {
@@ -181,7 +161,7 @@ async function repairConfiguredPlugins(
   return repairMissingConfiguredPluginInstalls({ cfg, env: { ...testEnv, ...env } });
 }
 
-async function useRealInstallIndexWrites() {
+export async function useRealInstallIndexWrites() {
   const actual = await vi.importActual<
     typeof import("../../../plugins/installed-plugin-index-records.js")
   >("../../../plugins/installed-plugin-index-records.js");
@@ -194,7 +174,7 @@ async function useRealInstallIndexWrites() {
   );
 }
 
-function useManifestCatalogResolvers(): void {
+export function useManifestCatalogResolvers(): void {
   mocks.resolveOfficialExternalPluginId.mockImplementation(
     (entry: { id?: string; openclaw?: { plugin?: { id?: string } } }) =>
       entry.openclaw?.plugin?.id ?? entry.id,
@@ -209,7 +189,7 @@ function useManifestCatalogResolvers(): void {
   );
 }
 
-function mockBrokenBraveInstall(
+export function mockBrokenBraveInstall(
   installDir: string,
   recordOverrides: Record<string, unknown>,
 ): Record<string, Record<string, unknown>> {
@@ -316,15 +296,8 @@ vi.mock("../../../infra/install-source-utils.js", async (importOriginal) => ({
   resolveNpmSpecMetadata: mocks.resolveNpmSpecMetadata,
 }));
 
-vi.mock("../../../plugins/clawhub.js", () => ({
-  CLAWHUB_INSTALL_ERROR_CODE: {
-    PACKAGE_NOT_FOUND: "package_not_found",
-    VERSION_NOT_FOUND: "version_not_found",
-    ARTIFACT_UNAVAILABLE: "artifact_unavailable",
-    ARTIFACT_DOWNLOAD_UNAVAILABLE: "artifact_download_unavailable",
-    CLAWHUB_DOWNLOAD_BLOCKED: "clawhub_download_blocked",
-    CLAWHUB_SECURITY_UNAVAILABLE: "clawhub_security_unavailable",
-  },
+vi.mock("../../../plugins/clawhub.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/clawhub.js")>()),
   installPluginFromClawHub: mocks.installPluginFromClawHub,
 }));
 
@@ -365,12 +338,15 @@ vi.mock("../../../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntries: mocks.resolveProviderInstallCatalogEntries,
 }));
 
-vi.mock("../../../plugins/provider-policy-surface.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../plugins/provider-policy-surface.js")>()),
-  // This suite owns install repair. Provider artifact loading and route policy
-  // have dedicated tests, so keep the OpenAI runtime-selection seam in memory.
-  resolveDirectBundledProviderPolicySurface: mocks.resolveDirectBundledProviderPolicySurface,
-}));
+vi.mock("../../../plugins/provider-policy-surface.js", async (importOriginal) => {
+  const { openaiPolicySurface } =
+    await import("./missing-configured-plugin-install.fixtures.test-support.js");
+  mocks.resolveDirectBundledProviderPolicySurface.mockImplementation(openaiPolicySurface);
+  return {
+    ...(await importOriginal<typeof import("../../../plugins/provider-policy-surface.js")>()),
+    resolveDirectBundledProviderPolicySurface: mocks.resolveDirectBundledProviderPolicySurface,
+  };
+});
 
 vi.mock("../../../plugins/doctor-contract-registry.js", async (importOriginal) => {
   const actual =
@@ -386,13 +362,10 @@ vi.mock("../../../plugins/doctor-contract-registry.js", async (importOriginal) =
   };
 });
 
-vi.mock("../../../plugins/update.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../plugins/update.js")>();
-  return {
-    ...actual,
-    updateNpmInstalledPlugins: mocks.updateNpmInstalledPlugins,
-  };
-});
+vi.mock("../../../plugins/update.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/update.js")>()),
+  updateNpmInstalledPlugins: mocks.updateNpmInstalledPlugins,
+}));
 
 export function setupPluginInstallSuite() {
   beforeAll(async () => {
@@ -468,22 +441,3 @@ export function setupPluginInstallSuite() {
 
   afterEach(() => vi.restoreAllMocks());
 }
-
-export {
-  expectedNpmInstallSpec,
-  expectedClawHubInstallSpec,
-  expectedCodexInstallSpec,
-  mockNpmRegistryTags,
-  expectRecordFields,
-  mockCallArg,
-  expectedIndexWriteOptions,
-  mockCurrentBundledPlugin,
-  repairConfiguredPlugins,
-  useRealInstallIndexWrites,
-  useManifestCatalogResolvers,
-  mockBrokenBraveInstall,
-  mocks,
-  testEnv,
-  tempDirs,
-  prepareManagedPluginArtifactConsentHandler,
-};
