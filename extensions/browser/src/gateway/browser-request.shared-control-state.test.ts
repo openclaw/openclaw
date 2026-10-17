@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   stopKnownBrowserProfiles: vi.fn(async () => {}),
   isChromeReachable: vi.fn(async () => false),
   isChromeCdpReady: vi.fn(async () => false),
+  relayModuleLoadError: null as Error | null,
 }));
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => {
@@ -38,6 +39,22 @@ vi.mock("../browser/http-listen.js", () => ({
   listenBrowserHttpServer: vi.fn(async () => createServer()),
 }));
 
+vi.mock("../browser/extension-relay.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../browser/extension-relay.runtime.js")>();
+  return {
+    ...actual,
+    getExtensionRelayModule: Object.assign(
+      async () => {
+        if (mocks.relayModuleLoadError) {
+          throw mocks.relayModuleLoadError;
+        }
+        return await actual.getExtensionRelayModule();
+      },
+      { peek: () => actual.getExtensionRelayModule.peek() },
+    ),
+  };
+});
+
 vi.mock("../browser/server-lifecycle.js", () => ({
   stopKnownBrowserProfiles: mocks.stopKnownBrowserProfiles,
 }));
@@ -60,6 +77,7 @@ const { getBrowserControlState, startBrowserControlServiceFromConfig, stopBrowse
   await import("../control-service.js");
 const { runBrowserProxyCommand } = await import("../node-host/invoke-browser.js");
 const { getBridgeAuthForPort } = await import("../browser/bridge-auth-registry.js");
+const { getFreePort } = await import("../browser/test-port.js");
 const { browserHandlers } = await import("./browser-request.js");
 
 const controlPort = 18_791;
@@ -276,5 +294,61 @@ describe("browser.request local control state", () => {
     expect(getBrowserControlState()).toBeNull();
     setEnabled(false);
     await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser control disabled");
+  });
+
+  it("initializes configured extension relays on HTTP server startup and cleans them up on stop", async () => {
+    const relayPort = await getFreePort();
+    mocks.runtimeConfig = browserConfig({
+      profiles: {
+        openclaw: { cdpPort: controlPort + 9 },
+        chrome: { driver: "extension", cdpPort: relayPort },
+      },
+    });
+    mocks.runtimeSourceConfig = mocks.runtimeConfig;
+
+    const state = expectDefined(await startBrowserControlServerFromConfig(), "browser runtime");
+    const relay = expectDefined(state.extensionRelays?.get("chrome"), "chrome extension relay");
+    expect(relay.port).toBe(relayPort);
+    expect(state.resolved.extensionRelayToken).toEqual(expect.any(String));
+    expect(state.resolved.extensionRelayInternalTokens.chrome).toEqual(expect.any(String));
+
+    await stopBrowserControlServer();
+    expect(state.extensionRelays?.size ?? 0).toBe(0);
+    expect(state.resolved.extensionRelayInternalTokens.chrome).toBeUndefined();
+    expect(getBrowserControlState()).toBeNull();
+  });
+
+  it("closes the HTTP listener and publishes no runtime when the relay module fails to load", async () => {
+    const relayPort = await getFreePort();
+    const { listenBrowserHttpServer } = await import("../browser/http-listen.js");
+    let boundServer: import("node:http").Server | undefined;
+    vi.mocked(listenBrowserHttpServer).mockImplementationOnce(async () => {
+      const server = createServer();
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+      boundServer = server;
+      return server;
+    });
+    mocks.runtimeConfig = browserConfig({
+      profiles: {
+        openclaw: { cdpPort: controlPort + 9 },
+        chrome: { driver: "extension", cdpPort: relayPort },
+      },
+    });
+    mocks.runtimeSourceConfig = mocks.runtimeConfig;
+    mocks.relayModuleLoadError = new Error("relay module unavailable");
+    try {
+      await expect(startBrowserControlServerFromConfig()).rejects.toThrow(
+        "relay module unavailable",
+      );
+    } finally {
+      mocks.relayModuleLoadError = null;
+    }
+
+    const server = expectDefined(boundServer, "browser control listener");
+    expect(server.listening).toBe(false);
+    expect(getBrowserControlState()).toBeNull();
+    expect(getBridgeAuthForPort(controlPort)).toBeUndefined();
   });
 });

@@ -16,6 +16,10 @@ import {
   resolveBrowserControlAuth,
   shouldAutoGenerateBrowserAuth,
 } from "./browser/control-auth.js";
+import {
+  type ConfiguredExtensionRelayStarter,
+  prepareConfiguredExtensionRelays,
+} from "./browser/extension-relay-bootstrap.js";
 import { listenBrowserHttpServer } from "./browser/http-listen.js";
 import { registerBrowserRoutes } from "./browser/routes/index.js";
 import type { BrowserServerState } from "./browser/server-context.js";
@@ -91,7 +95,9 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
   }
 
   let state: BrowserServerState;
+  let startExtensionRelays: ConfiguredExtensionRelayStarter | null;
   try {
+    startExtensionRelays = await prepareConfiguredExtensionRelays(resolved);
     state = await ensureBrowserControlRuntime({
       server,
       port,
@@ -104,6 +110,8 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
     throw err;
   }
   setBridgeAuthForPort(port, browserAuth);
+
+  await startExtensionRelays?.(state, (message) => logServer.warn(message));
 
   const authMode = browserAuth.token ? "token" : browserAuth.password ? "password" : "off";
   logServer.info(`Browser control listening on http://127.0.0.1:${port}/ (auth=${authMode})`);
