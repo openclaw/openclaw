@@ -2478,6 +2478,43 @@
       }
     },
     {
+      "name": "@openclaw/snowflake-provider",
+      "description": "OpenClaw Snowflake Cortex provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "snowflake",
+          "label": "Snowflake Cortex"
+        },
+        "providers": [
+          {
+            "id": "snowflake",
+            "name": "Snowflake Cortex",
+            "docs": "/providers/snowflake",
+            "categories": ["cloud", "llm"],
+            "authChoices": [
+              {
+                "method": "oauth",
+                "choiceId": "snowflake-oauth",
+                "choiceLabel": "Snowflake local browser sign-in",
+                "groupId": "snowflake",
+                "groupLabel": "Snowflake Cortex",
+                "groupHint": "Local application OAuth; configure the Cortex endpoint first",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/snowflake-provider",
+          "npmSpec": "@openclaw/snowflake-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.7"
+        }
+      }
+    },
+    {
       "name": "@openclaw/stepfun-provider",
       "description": "OpenClaw StepFun provider plugin.",
       "source": "official",
