@@ -66,7 +66,7 @@ import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation.ts";
+import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation-view.tsx";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { retainCreatedIncognitoComposerScope } from "./composer-persistence-state.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";

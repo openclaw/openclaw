@@ -333,6 +333,7 @@ describe("unit-fast vitest lane", () => {
   it("keeps untracked tests in their planned fast lane and execution include list", () => {
     const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-untracked-")));
     const mockHelper = "src/hooks/mock-helper.test.ts";
+    const harness = "src/hooks/harness.test.ts";
     const pure = "src/hooks/pure.test.ts";
     const stateful = "src/hooks/stateful.test.ts";
     const quoted = "src/hooks/quoted-[é].test.ts";
@@ -363,6 +364,14 @@ describe("unit-fast vitest lane", () => {
         path.join(cwd, "src/hooks/mock-helper.test-mocks.ts"),
         'import { vi } from "vitest"; export const check = vi.fn();',
       );
+      fs.writeFileSync(
+        path.join(cwd, harness),
+        'import { it } from "vitest"; import { check } from "./shared.test-harness.js"; it("harness", check);',
+      );
+      fs.writeFileSync(
+        path.join(cwd, "src/hooks/shared.test-harness.ts"),
+        'import { vi } from "vitest"; export const check = vi.fn();',
+      );
       expect(spawnSync("git", ["init"], { cwd }).status).toBe(0);
       expect(
         spawnSync("git", ["ls-files", "--error-unmatch", "--", mockHelper, pure, stateful], {
@@ -379,7 +388,7 @@ describe("unit-fast vitest lane", () => {
         const { createUnitFastIsolatedVitestConfig } = await import(${moduleUrl("test/vitest/vitest.unit-fast-isolated.config.ts")});
         const { createScopedVitestConfig } = await import(${moduleUrl("test/vitest/vitest.scoped-config.ts")});
         const fs = await import("node:fs");
-        const specs = createVitestRunSpecs(${JSON.stringify([mockHelper, pure, stateful])}, { baseEnv: {} });
+        const specs = createVitestRunSpecs(${JSON.stringify([harness, mockHelper, pure, stateful])}, { baseEnv: {} });
         const factories = {
           "test/vitest/vitest.unit-fast.config.ts": createUnitFastVitestConfig,
           "test/vitest/vitest.unit-fast-isolated.config.ts": createUnitFastIsolatedVitestConfig,
@@ -406,16 +415,16 @@ describe("unit-fast vitest lane", () => {
       );
       expect(result.status, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({
-        inventory: [mockHelper, pure, quoted, stateful],
-        isolated: [mockHelper, stateful],
+        inventory: [harness, mockHelper, pure, quoted, stateful],
+        isolated: [harness, mockHelper, stateful],
         runs: [
           { config: "test/vitest/vitest.unit-fast.config.ts", include: [pure] },
           {
             config: "test/vitest/vitest.unit-fast-isolated.config.ts",
-            include: [mockHelper, stateful],
+            include: [harness, mockHelper, stateful],
           },
         ],
-        excluded: [mockHelper, pure, quoted, stateful],
+        excluded: [harness, mockHelper, pure, quoted, stateful],
         ignored: null,
         literalMembership: true,
       });

@@ -150,12 +150,7 @@ export async function installPluginFromNpmSpec(
       Object.assign(npmResolution, compatibleResolution, {
         resolvedAt: npmResolution.resolvedAt,
       });
-      compatibilityError = validateNpmResolutionCompatibility({
-        runtime,
-        parsedSpec,
-        expectedPluginId,
-        resolution: npmResolution,
-      });
+      compatibilityError = null;
     }
   }
   if (compatibilityError) {

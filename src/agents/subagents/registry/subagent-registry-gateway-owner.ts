@@ -143,6 +143,7 @@ async function restoreSubagentCompletionSource(
           })
         ) {
           deferredCompletionSources.delete(runtimeKey);
+          return;
         }
       }
     }

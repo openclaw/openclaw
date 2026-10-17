@@ -244,7 +244,16 @@ export function createAgentDatabaseExecution(
             throw new Error("Agent cleanup no longer owns its original execution reference");
           }
         },
-        expectedIdentity ?? fileIdentity,
+        expectedIdentity ??
+          fileIdentity ??
+          (identity.key.startsWith("file:")
+            ? {
+                kind: "file",
+                physicalIdentity: identity.key.slice("file:".length),
+                birthtime: identity.birthtime,
+                nativeLocation: identity.canonicalPath,
+              }
+            : undefined),
         acceptFileIdentity,
         reportTerminal,
         fileIdentity ? undefined : (creationIdentity ?? creatingTarget),

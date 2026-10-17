@@ -453,7 +453,13 @@ function ChatHeaderSessionMenuContent(
       id={menuId}
       lazy
       prewarm={liveProps.prewarm && !liveProps.compact}
-      class={`session-menu chat-header-session-menu${props.compact ? " session-menu--compact chat-header-session-menu--compact" : ""}${props.compact && compactView() === "sharing" ? " chat-header-session-menu--compact-sharing" : ""}`}
+      class={[
+        "session-menu chat-header-session-menu",
+        {
+          "session-menu--compact chat-header-session-menu--compact": props.compact,
+          "chat-header-session-menu--compact-sharing": props.compact && compactView() === "sharing",
+        },
+      ]}
       panelClass="chat-header-session-menu__panel"
       placement="bottom-end"
       label={label()}
