@@ -4,14 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveClickClackAccount } from "../accounts.js";
 import { createClickClackClient } from "../http-client.js";
 import { handleClickClackInbound } from "../inbound.js";
-import {
-  createInboundAuthor,
-  createInboundMessage,
-  createInboundRuntime,
-} from "../inbound.test-support.js";
+import { createInboundMessage, createInboundRuntime } from "../inbound.test-support.js";
 import { setClickClackRuntime } from "../runtime.js";
 import type { ClickClackChannel, ClickClackMessage, CoreConfig } from "../types.js";
-import { discussionChannel } from "./service-test-support.js";
+import { discussionChannel, MANAGED_CONTRACT_FIELDS } from "./service-test-support.js";
 import { ClickClackDiscussionService } from "./service.js";
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -36,67 +32,51 @@ async function startMockClickClack() {
       id: "chn_general",
       route_id: "general-route",
       name: "general",
-      external_managed: false,
-      external_ref: "",
-      external_url: "",
-      sidebar_section: "",
-      archived: false,
-      archived_at: null,
-      created_at: "2026-08-04T00:00:00.000Z",
+      ...MANAGED_CONTRACT_FIELDS,
     }),
   ];
   let createCount = 0;
   async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     if (req.headers.authorization !== "Bearer proof-token") {
-      sendJson(res, 401, { error: "unauthorized" });
-      return;
+      return sendJson(res, 401, { error: "unauthorized" });
     }
     if (req.method === "GET" && url.pathname === "/api/workspaces") {
-      sendJson(res, 200, {
+      return sendJson(res, 200, {
         workspaces: [
           {
             id: "wsp_team",
             route_id: "team-route",
             slug: "team",
             name: "Team",
-            created_at: "2026-08-04T00:00:00.000Z",
           },
         ],
       });
-      return;
     }
     if (req.method === "GET" && url.pathname === "/api/workspaces/wsp_team/channels") {
-      sendJson(res, 200, { channels });
-      return;
+      return sendJson(res, 200, { channels });
     }
     if (req.method === "POST" && url.pathname === "/api/workspaces/wsp_team/channels") {
       createCount += 1;
       const input = await readJson(req);
-      const channel = {
+      const channel = discussionChannel({
+        ...input,
         id: "chn_durable",
         route_id: "durable-route",
-        workspace_id: "wsp_team",
-        ...input,
-        kind: "public",
         archived: false,
         archived_at: null,
-        created_at: "2026-08-04T00:00:01.000Z",
-      } as ClickClackChannel;
+      });
       channels.push(channel);
-      sendJson(res, 200, { channel });
-      return;
+      return sendJson(res, 200, { channel });
     }
     if (req.method === "PATCH" && url.pathname === "/api/channels/chn_durable") {
       const patch = await readJson(req);
       patches.push(patch);
       Object.assign(channels[1]!, patch);
-      sendJson(res, 200, { channel: channels[1] });
-      return;
+      return sendJson(res, 200, { channel: channels[1] });
     }
     if (req.method === "GET" && url.pathname === "/api/channels/chn_durable/messages") {
-      sendJson(res, 200, { messages, oldest_seq: 1, has_older: false });
-      return;
+      return sendJson(res, 200, { messages, oldest_seq: 1, has_older: false });
     }
     sendJson(res, 404, { error: `unexpected ${req.method} ${url.pathname}` });
   }
@@ -173,18 +153,9 @@ describe("ClickClack durable room real-behavior proof", () => {
     const originalExternalRef = remote.channels[1]?.external_ref;
     remote.messages.push(
       createInboundMessage({
-        id: "msg_history",
         workspace_id: "wsp_team",
         channel_id: "chn_durable",
-        author_id: "usr_owner",
-        thread_root_id: "msg_history",
         body: "durable history marker",
-        created_at: "2026-08-04T00:00:02.000Z",
-        author: createInboundAuthor({
-          display_name: "Owner",
-          handle: "owner",
-          created_at: "2026-08-04T00:00:00.000Z",
-        }),
       }),
     );
 
