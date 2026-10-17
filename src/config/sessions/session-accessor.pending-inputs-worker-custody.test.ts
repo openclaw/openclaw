@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
@@ -5,13 +6,13 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
 import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
-import { resolveSessionMutationAuthorizationAsync } from "../../gateway/session-sharing-authorization-async.js";
+import { resolveSessionMutationAuthorizationAsync as authorizeMutation } from "../../gateway/session-sharing-authorization-async.js";
 import {
   roleClient,
   rolePolicyConfig,
   sharingPolicyClient,
 } from "../../gateway/session-sharing.test-utils.js";
-import { withSessionTranscriptWriteLock } from "../../plugin-sdk/session-transcript-runtime.js";
+import { withSessionTranscriptWriteLock as withTranscriptLock } from "../../plugin-sdk/session-transcript-runtime.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { StoreWriterTiming } from "../../shared/store-writer-queue.js";
 import {
@@ -25,23 +26,23 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
-  appendTranscriptMessage,
-  appendTranscriptMessageSync,
-  loadTranscriptEvents,
-  upsertSessionEntryCore,
+  appendTranscriptMessage as appendMessage,
+  appendTranscriptMessageSync as appendSync,
+  loadTranscriptEvents as readTranscript,
+  upsertSessionEntryCore as upsertEntry,
 } from "./session-accessor.js";
 import {
-  bindSessionPendingInputSources,
-  listSessionPendingInputs,
-  stageSessionPendingInput,
+  bindSessionPendingInputSources as bindInputs,
+  listSessionPendingInputs as listInputs,
+  stageSessionPendingInput as stageInput,
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
 import {
-  captureSessionPendingInputWorkerCustody,
-  runWithSessionPendingInputWorkerCustody,
+  captureSessionPendingInputWorkerCustody as captureCustody,
+  runWithSessionPendingInputWorkerCustody as runWithCustody,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
+import { appendExpectedSessionTranscriptTurn as appendTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
@@ -53,9 +54,7 @@ async function finish(receipt: SessionPendingInputReceipt | undefined) {
   await receipt?.settled?.();
 }
 function authorizedInput(
-  authorization: NonNullable<
-    Awaited<ReturnType<typeof resolveSessionMutationAuthorizationAsync>>["authorization"]
-  >,
+  authorization: NonNullable<Awaited<ReturnType<typeof authorizeMutation>>["authorization"]>,
   runId: string,
   content: string,
   assertCurrent = authorization.assertCurrent,
@@ -91,30 +90,23 @@ describe("accepted input worker custody", () => {
       sessionId: "alias-session",
       sessionKey: "agent:alias-agent:pending-inputs",
     };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const input = message("worker-alias", "Continue through worker custody");
-    receipt = await stageSessionPendingInput(scope, {
+    receipt = await stageInput(scope, {
       runId: "worker-alias",
       message: input,
       assertCurrent: () => {},
     });
-    if (!receipt) {
-      throw new Error("Expected aliased pending input custody");
-    }
+    assert(receipt, "Expected aliased pending input custody");
 
-    const custody = receipt.run(() => captureSessionPendingInputWorkerCustody());
-    if (!custody) {
-      throw new Error("Expected captured worker custody");
-    }
+    const custody = receipt.run(() => captureCustody());
+    assert(custody, "Expected captured worker custody");
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
     expect(custody.facts.databasePath).toBe(fs.realpathSync(database.path));
 
     const workerScope = { ...scope, storePath: custody.facts.databasePath };
-    const result = runWithSessionPendingInputWorkerCustody(
-      custody.facts,
-      custody.relocation,
-      custody.assertCurrent,
-      () => appendTranscriptMessageSync(workerScope, { message: receipt!.message }),
+    const result = runWithCustody(custody.facts, custody.relocation, custody.assertCurrent, () =>
+      appendSync(workerScope, { message: receipt!.message }),
     );
     expect(result.value).toMatchObject({ ok: true, value: { appended: true } });
     custody.publish(result.receipt);
@@ -122,10 +114,10 @@ describe("accepted input worker custody", () => {
     await receipt.settled?.();
     receipt = undefined;
 
-    expect(await loadTranscriptEvents(scope)).toContainEqual(
+    expect(await readTranscript(scope)).toContainEqual(
       expect.objectContaining({ message: expect.objectContaining({ content: input.content }) }),
     );
-    expect(await listSessionPendingInputs(scope)).toMatchObject({ items: [], total: 0 });
+    expect(await listInputs(scope)).toMatchObject({ items: [], total: 0 });
   });
 
   it("appends and finishes pending input through the memory session actor", async () => {
@@ -138,22 +130,15 @@ describe("accepted input worker custody", () => {
           sessionId: "incognito-session",
           sessionKey: "agent:incognito-agent:dashboard:incognito-pending-input",
         };
-        await upsertSessionEntryCore(scope, {
-          incognito: true,
-          sessionId: scope.sessionId,
-          updatedAt: 1,
-        });
-        const cfg = {
-          ...rolePolicyConfig(),
-          agents: { entries: { "incognito-agent": {} } },
-        };
+        await upsertEntry(scope, { incognito: true, sessionId: scope.sessionId, updatedAt: 1 });
+        const cfg = { ...rolePolicyConfig(), agents: { entries: { "incognito-agent": {} } } };
         const client = roleClient("view", "incognito-custody");
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog({ env })).release };
         client.connect.scopes = ["operator.admin"];
         const context = createGatewayRequestContext(makeContextParams());
         context.getRuntimeConfig = () => cfg;
         context.getCommittedRuntimeConfig = () => cfg;
-        const resolved = await resolveSessionMutationAuthorizationAsync({
+        const resolved = await authorizeMutation({
           client,
           method: "chat.send",
           requestParams: scope,
@@ -163,17 +148,15 @@ describe("accepted input worker custody", () => {
         const authorization = resolved.authorization!;
         const input = authorizedInput(authorization, "incognito-memory", "Continue in memory");
         try {
-          receipt = await stageSessionPendingInput(scope, input);
+          receipt = await stageInput(scope, input);
           const admitted = receipt;
-          if (!admitted?.runAsync) {
-            throw new Error("Expected incognito pending input custody");
-          }
-          await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 2 });
+          assert(admitted?.runAsync, "Expected incognito pending input custody");
+          await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 2 });
           let effects = 0;
           await expect(
             admitted.runAsync(() => {
               effects++;
-              return appendTranscriptMessage(scope, { message: admitted.message });
+              return appendMessage(scope, { message: admitted.message });
             }),
           ).resolves.toMatchObject({ appended: true });
           client.connect.scopes = ["operator.read", "operator.write"];
@@ -187,12 +170,12 @@ describe("accepted input worker custody", () => {
           await admitted.settled?.();
           receipt = undefined;
 
-          expect(await loadTranscriptEvents(scope)).toContainEqual(
+          expect(await readTranscript(scope)).toContainEqual(
             expect.objectContaining({
               message: expect.objectContaining({ content: input.message.content }),
             }),
           );
-          expect(await listSessionPendingInputs(scope)).toMatchObject({ items: [], total: 0 });
+          expect(await listInputs(scope)).toMatchObject({ items: [], total: 0 });
         } finally {
           await finish(receipt);
           receipt = undefined;
@@ -213,7 +196,7 @@ it("refreshes every collected source after a non-revoking profile change", async
     };
     const first = ensureProfileForEmail("collected-first@example.test");
     const second = ensureProfileForEmail("collected-second@example.test");
-    await upsertSessionEntryCore(scope, {
+    await upsertEntry(scope, {
       sessionId: scope.sessionId,
       updatedAt: 1,
       visibility: "read-only",
@@ -224,7 +207,7 @@ it("refreshes every collected source after a non-revoking profile change", async
       for (const [index, profile] of [first, second].entries()) {
         setUserProfileRole(profile.id, "view");
         await addSessionMember(scope, { identityId: profile.id, addedBy: "another-profile" });
-        const result = await resolveSessionMutationAuthorizationAsync({
+        const result = await authorizeMutation({
           client: sharingPolicyClient({ user: profile.id }),
           method: "chat.send",
           requestParams: scope,
@@ -232,23 +215,16 @@ it("refreshes every collected source after a non-revoking profile change", async
         });
         expect(result.error).toBeNull();
         const authorization = result.authorization!;
-        const receipt = await stageSessionPendingInput(
+        const receipt = await stageInput(
           scope,
           authorizedInput(authorization, `collected-${index}`, `Source ${index}`),
         );
-        if (!receipt) {
-          throw new Error("Expected accepted collected source");
-        }
+        assert(receipt, "Expected accepted collected source");
         receipts.push(receipt);
       }
       setUserProfileRole(second.id, "write");
-      const collected = bindSessionPendingInputSources(
-        receipts,
-        message("collected", "Collected sources"),
-      );
-      if (!collected?.runAsync) {
-        throw new Error("Expected collected input authority");
-      }
+      const collected = bindInputs(receipts, message("collected", "Collected sources"));
+      assert(collected?.runAsync, "Expected collected input authority");
       let executed = 0;
       await collected.runAsync(() => {
         executed++;
@@ -286,14 +262,14 @@ it.each(["turn", "locked"] as const)(
         sessionKey: "agent:main:prepared-custody",
         sessionId: "custody-session",
       };
-      await upsertSessionEntryCore(scope, {
+      await upsertEntry(scope, {
         sessionId: scope.sessionId,
         updatedAt: 1,
         visibility: "read-only",
         createdActor: { type: "human", source: "profile", id: "another-profile" },
       });
       await addSessionMember(scope, { identityId: profileId, addedBy: "another-profile" });
-      const resolved = await resolveSessionMutationAuthorizationAsync({
+      const resolved = await authorizeMutation({
         client,
         method: "chat.send",
         requestParams: scope,
@@ -314,7 +290,7 @@ it.each(["turn", "locked"] as const)(
       let admitted: SessionPendingInputReceipt | undefined;
       let unsettled: SessionPendingInputReceipt | undefined;
       try {
-        admitted = await stageSessionPendingInput(
+        admitted = await stageInput(
           scope,
           authorizedInput(
             authorization,
@@ -324,16 +300,14 @@ it.each(["turn", "locked"] as const)(
           ),
         );
         expect(admitted?.state).toBe("queued");
-        unsettled = await stageSessionPendingInput(scope, {
+        unsettled = await stageInput(scope, {
           runId: "pending-settlement",
           message: { ...admitted!.message, idempotencyKey: "pending-settlement:user" },
           assertCurrent,
           assertAdmittedCurrent: assertCurrent,
           authority: authorization.admittedInputAuthority,
         });
-        if (!unsettled) {
-          throw new Error("Expected accepted settlement custody");
-        }
+        assert(unsettled, "Expected accepted settlement custody");
         const run = <T>(operation: () => T) =>
           admitted!.runAsync ? admitted!.runAsync(operation) : admitted!.run(operation);
         const timing: StoreWriterTiming = {};
@@ -342,12 +316,12 @@ it.each(["turn", "locked"] as const)(
         expect(
           await run(() =>
             writer === "turn"
-              ? appendExpectedSessionTranscriptTurn(scope, {
+              ? appendTurn(scope, {
                   expectedSessionId: scope.sessionId,
                   sessionFile: "synthetic-custody-session.jsonl",
                   messages: [{ message: admitted!.message }],
                 })
-              : withSessionTranscriptWriteLock(scope, (locked) =>
+              : withTranscriptLock(scope, (locked) =>
                   locked.appendMessage({
                     message: {
                       ...admitted!.message,
@@ -380,9 +354,10 @@ it.each(["turn", "locked"] as const)(
         const original = database.db
           .prepare("SELECT entry_json, entry_valid FROM session_nodes WHERE session_key = ?")
           .get(scope.sessionKey);
-        if (typeof original?.entry_json !== "string" || typeof original.entry_valid !== "number") {
-          throw new Error("Expected the synthetic canonical session row");
-        }
+        assert(
+          typeof original?.entry_json === "string" && typeof original.entry_valid === "number",
+          "Expected the synthetic canonical session row",
+        );
         const update = database.db.prepare(
           "UPDATE session_nodes SET entry_json = ?, entry_valid = ? WHERE session_key = ?",
         );
