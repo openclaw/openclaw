@@ -859,7 +859,23 @@ describe("session PR actions through the agent tool and registered Gateway metho
       "upstream before interrupted import",
     );
     expect(await guestGit("rev-parse", "HEAD")).toBe(guestHead);
-    await f.revoke();
+    const transfersBeforeRevocation = reviewTransferBytes.length;
+    let revokedAfterProbe = false;
+    const revokeDuringProbe = vi
+      .spyOn(sandbox.backend!, "runShellCommand")
+      .mockImplementationOnce(async (command) => {
+        expect(command.stdin).toBeUndefined();
+        const result = await runShellCommand(command);
+        expect(result.code).toBe(0);
+        await f.revoke();
+        revokedAfterProbe = true;
+        return result;
+      });
+    await expect(invoke({ action: "refresh_base" })).rejects.toThrow();
+    expect(revokedAfterProbe).toBe(true);
+    expect(revokeDuringProbe).toHaveBeenCalledTimes(1);
+    expect(reviewTransferBytes).toHaveLength(transfersBeforeRevocation);
+    revokeDuringProbe.mockRestore();
     await expect(invoke({ action: "refresh_base" })).rejects.toThrow();
   });
 });
