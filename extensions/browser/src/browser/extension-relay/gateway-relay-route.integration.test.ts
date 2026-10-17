@@ -1,7 +1,6 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import http, { type Server } from "node:http";
-import os from "node:os";
 import path from "node:path";
 import {
   clearRuntimeConfigSnapshot,
@@ -22,19 +21,8 @@ import { buildBrowserExtensionPairing } from "../extension-pairing.js";
 import { getGatewayExtensionRelayModule } from "../extension-relay.runtime.js";
 import { runExtensionRelayDaemon } from "../relay-daemon.js";
 import { getFreePort } from "../test-port.js";
-import {
-  createRelayProof,
-  randomRelayNonce,
-  relayKeyIdFromHex,
-  verifyRelayProof,
-  type BrowserRelayAuthChallenge,
-} from "./auth-v2-crypto.js";
-import {
-  BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
-  BROWSER_RELAY_AUTH_CHALLENGE_PATH,
-  BROWSER_RELAY_AUTH_COMPLETE_PATH,
-} from "./auth-v2.js";
-import { authenticateExtension } from "./relay-coexistence.test-support.js";
+import { BROWSER_RELAY_EXTENSION_SUBPROTOCOL } from "./auth-v2.js";
+import { authenticateExtension, authenticateRelayHttp } from "./relay-coexistence.test-support.js";
 import { RawHttpConnection } from "./relay-http.test-support.js";
 
 const getPluginRuntimeGatewayRequestScopeMock = vi.hoisted(() => vi.fn());
@@ -43,6 +31,13 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 const RELAY_KEY = relayTestKey(8);
+const GATEWAY_AUTH = { mode: "token" as const, token: "gateway-integration-test" };
+const INVENTORY = {
+  type: "tabs",
+  tabs: [
+    { tabId: 7, url: "https://example.test/initial", title: "Coalesced inventory", active: true },
+  ],
+};
 const EXTENSION_HELLO = {
   type: "hello",
   userAgent: "gateway-wakeup-test",
@@ -54,36 +49,8 @@ const EXTENSION_HELLO = {
 async function relayInventory(port: number): Promise<unknown> {
   const connection = await RawHttpConnection.connect(port);
   try {
-    const request = async (pathname: string, body?: object) => {
-      const response = await connection.request(
-        body ? "POST" : "GET",
-        pathname,
-        body ? JSON.stringify(body) : "",
-      );
-      expect(response.status).toBe(200);
-      return JSON.parse(response.body);
-    };
-    const challenge = (await request(BROWSER_RELAY_AUTH_CHALLENGE_PATH, {
-      v: 2,
-      keyId: relayKeyIdFromHex(RELAY_KEY),
-      clientNonce: randomRelayNonce(),
-      role: "cdp",
-      transport: "connection",
-      method: "GET",
-      resource: "/json/list",
-      flow: "json-list",
-    })) as BrowserRelayAuthChallenge;
-    expect(verifyRelayProof(RELAY_KEY, "server", challenge, challenge.serverProof)).toBe(true);
-    const clientProof = createRelayProof(RELAY_KEY, "client", challenge);
-    const accepted = await request(BROWSER_RELAY_AUTH_COMPLETE_PATH, {
-      v: 2,
-      sessionId: challenge.sessionId,
-      clientProof,
-    });
-    expect(
-      verifyRelayProof(RELAY_KEY, "accept", challenge, accepted.acceptProof, clientProof),
-    ).toBe(true);
-    return await request("/json/list");
+    const request = await authenticateRelayHttp(connection, RELAY_KEY, "json-list");
+    return JSON.parse(await request("/json/list"));
   } finally {
     connection.close();
   }
@@ -130,7 +97,7 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
       const stateDir = await fs.realpath(dir);
       const credentials = path.join(stateDir, "credentials");
       const config = {
-        gateway: { auth: { mode: "token" as const, token: "gateway-integration-test" } },
+        gateway: { auth: GATEWAY_AUTH },
         browser: { enabled, profiles: { chrome: { driver, cdpPort: 18799 } } },
       };
       setRuntimeConfigSnapshot(config, config);
@@ -152,55 +119,37 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
   );
 
   it.each([
-    { browserRequestAlreadyWaiting: false, standaloneFirst: false, malformedFrame: false },
-    { browserRequestAlreadyWaiting: true, standaloneFirst: false, malformedFrame: false },
-    { browserRequestAlreadyWaiting: true, standaloneFirst: true, malformedFrame: false },
-    { browserRequestAlreadyWaiting: true, standaloneFirst: true, malformedFrame: true },
-    {
-      browserRequestAlreadyWaiting: false,
-      standaloneFirst: false,
-      malformedFrame: false,
-      saturatedSource: true,
-    },
-    { browserRequestAlreadyWaiting: false, standaloneFirst: false, legacy: "open" },
-    {
-      browserRequestAlreadyWaiting: true,
-      standaloneFirst: true,
-      legacy: "open",
-      malformedFrame: true,
-    },
-    { browserRequestAlreadyWaiting: false, standaloneFirst: false, legacy: "head" },
-    { browserRequestAlreadyWaiting: true, standaloneFirst: true, legacy: "head" },
-  ])(
-    "authenticates Gateway ingress: waiting=$browserRequestAlreadyWaiting standalone=$standaloneFirst malformed=$malformedFrame legacy=$legacy saturated=$saturatedSource",
-    async ({
-      browserRequestAlreadyWaiting,
-      standaloneFirst,
-      malformedFrame,
-      legacy,
-      saturatedSource,
-    }) => {
-      const stateDir = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-relay-wakeup-")),
-      );
-      try {
+    [false, false, false, undefined, false],
+    [true, false, false, undefined, false],
+    [true, true, false, undefined, false],
+    [true, true, true, undefined, false],
+    [false, false, false, undefined, true],
+    [false, false, false, "open", false],
+    [true, true, true, "open", false],
+    [false, false, false, "head", false],
+    [true, true, false, "head", false],
+  ] as const)(
+    "authenticates Gateway ingress: waiting=%s standalone=%s malformed=%s legacy=%s saturated=%s",
+    async (waiting, standalone, malformed, legacy, saturatedSource) =>
+      withTempDir("openclaw-gateway-relay-wakeup-", async (dir) => {
+        const stateDir = await fs.realpath(dir);
+        const credentials = path.join(stateDir, "credentials");
         const gatewayPort = await getFreePort();
         let relayPort = await getFreePort();
         while (relayPort === gatewayPort) {
           relayPort = await getFreePort();
         }
-        await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true });
+        await fs.mkdir(credentials, { recursive: true });
         await fs.writeFile(
-          path.join(stateDir, "credentials", "browser-extension-relay.secret"),
+          path.join(credentials, "browser-extension-relay.secret"),
           `${RELAY_KEY}\n`,
-          { mode: 0o600 },
+          {
+            mode: 0o600,
+          },
         );
 
         const config = {
-          gateway: {
-            port: gatewayPort,
-            auth: { mode: "token" as const, token: "gateway-integration-test" },
-          },
+          gateway: { port: gatewayPort, auth: GATEWAY_AUTH },
           browser: {
             enabled: true,
             extensionRelay: { allowLegacyAuth: Boolean(legacy) },
@@ -212,23 +161,12 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
         await withEnvAsync(
           {
             OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_OAUTH_DIR: path.join(stateDir, "credentials"),
+            OPENCLAW_OAUTH_DIR: credentials,
             OPENCLAW_GATEWAY_PORT: String(gatewayPort),
           },
           async () => {
-            const inventory = {
-              type: "tabs",
-              tabs: [
-                {
-                  tabId: 7,
-                  url: "https://example.test/initial",
-                  title: "Coalesced inventory",
-                  active: true,
-                },
-              ],
-            };
             const coalesced =
-              legacy === "head" ? encodeUpgradeHead([EXTENSION_HELLO, inventory]) : undefined;
+              legacy === "head" ? encodeUpgradeHead([EXTENSION_HELLO, INVENTORY]) : undefined;
             const { handleGatewayExtensionUpgrade } = await getGatewayExtensionRelayModule();
             const gatewayServer = http.createServer((_req, res) => {
               res.writeHead(426);
@@ -257,7 +195,7 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
                 gatewayServer.listen(gatewayPort, "127.0.0.1", resolve);
               });
               expect(getBrowserControlState()).toBeNull();
-              if (standaloneFirst) {
+              if (standalone) {
                 daemon = await runExtensionRelayDaemon({ port: relayPort });
               }
 
@@ -271,7 +209,7 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
                 throw new Error("local pairing did not parse");
               }
 
-              if (browserRequestAlreadyWaiting) {
+              if (waiting) {
                 await startBrowserControlServiceFromConfig();
                 browserAvailable = createBrowserControlContext()
                   .forProfile("chrome")
@@ -330,9 +268,9 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
                 throw new Error("extension relay did not start");
               }
               if (coalesced) {
-                await expect(relayInventory(relayPort)).resolves.toMatchObject(inventory.tabs);
+                await expect(relayInventory(relayPort)).resolves.toMatchObject(INVENTORY.tabs);
               }
-              if (standaloneFirst) {
+              if (standalone) {
                 expect(relay.ownership).toBe("borrowed");
                 if (relay.ownership !== "borrowed") {
                   throw new Error("Expected borrowed relay");
@@ -343,7 +281,7 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
                 });
                 const profile = createBrowserControlContext().forProfile("chrome").profile;
                 expect(new URL(profile.cdpUrl).username).toBe("");
-                if (malformedFrame) {
+                if (malformed) {
                   const closed = once(extension, "close");
                   extension.send("invalid client frame", { mask: false });
                   const [code] = await closed;
@@ -393,9 +331,6 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
             }
           },
         );
-      } finally {
-        await fs.rm(stateDir, { recursive: true, force: true });
-      }
-    },
+      }),
   );
 });

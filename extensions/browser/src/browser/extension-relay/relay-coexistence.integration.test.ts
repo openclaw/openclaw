@@ -37,6 +37,42 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
 });
 
+type DaemonFixture = Parameters<Parameters<typeof withConnectedDaemon>[0]>[0];
+async function withExternal(
+  run: (fixture: DaemonFixture & { external: WebSocket }) => Promise<void>,
+) {
+  await withConnectedDaemon(async (fixture) => {
+    const external = await externalRelayClient(fixture.port, fixture.token);
+    try {
+      await run({ ...fixture, external });
+    } finally {
+      external.terminate();
+    }
+  });
+}
+const expectOwnerAlive = (external: WebSocket) =>
+  expect(externalVersion(external)).resolves.toMatchObject({ result: { product: "Chrome/test" } });
+async function startProfile() {
+  await startBrowserControlServiceFromConfig();
+  return createBrowserControlContext().forProfile("chrome");
+}
+function browserState(port: number, strict = false) {
+  const resolved = resolveBrowserConfig({
+    ...(strict ? { extensionRelay: { allowLegacyAuth: false } } : {}),
+    profiles: { chrome: { driver: "extension", cdpPort: port } },
+  });
+  const state: BrowserServerState = { server: null, port: 0, resolved, profiles: new Map() };
+  const profile = resolveProfile(resolved, "chrome");
+  if (!profile) {
+    throw new Error("Missing fixture profile");
+  }
+  return { state, profile };
+}
+const closeServer = (server: net.Server) =>
+  new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+
 it("reselects its initial fixture port after a bind collision", async (test) => {
   test.signal.throwIfAborted();
   let callbackEntered = false;
@@ -57,9 +93,7 @@ it("reselects its initial fixture port after a bind collision", async (test) => 
       socket.destroy();
     }
     if (competitor.listening) {
-      await new Promise<void>((resolve, reject) => {
-        competitor.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeServer(competitor);
     }
   };
   test.onTestFinished(cleanup);
@@ -91,13 +125,13 @@ it("reselects its initial fixture port after a bind collision", async (test) => 
     },
   );
   expect(refusal).toBe("port-in-use");
-  expect(attemptedPorts).toHaveLength(2);
-  expect(attemptedPorts[1]).not.toBe(attemptedPorts[0]);
   expect(callbackEntered).toBe(true);
   expect(connections).toBe(0);
   expect(socketErrors).toEqual([]);
   expect(sockets.size).toBe(0);
   expect(competitor.listening).toBe(false);
+  expect(attemptedPorts).toHaveLength(2);
+  expect(attemptedPorts[1]).not.toBe(attemptedPorts[0]);
 });
 
 it("retains the fixture port across startup, restart, and joined daemon cleanup", async (test) => {
@@ -111,11 +145,7 @@ it("retains the fixture port across startup, restart, and joined daemon cleanup"
   const competingStarts: boolean[] = [];
   const claimContender = async (port: number) => {
     try {
-      contenderClaim = await acquireTestPortBlock({
-        port,
-        offsets: [0],
-        signal: test.signal,
-      });
+      contenderClaim = await acquireTestPortBlock({ port, offsets: [0], signal: test.signal });
       return true;
     } catch (error) {
       if (extractErrorCode(error) !== "EADDRINUSE") {
@@ -172,9 +202,7 @@ it("retains the fixture port across startup, restart, and joined daemon cleanup"
       } finally {
         try {
           if (contender.listening) {
-            await new Promise<void>((resolve, reject) => {
-              contender.close((error) => (error ? reject(error) : resolve()));
-            });
+            await closeServer(contender);
           }
         } finally {
           await contenderClaim?.release();
@@ -185,13 +213,8 @@ it("retains the fixture port across startup, restart, and joined daemon cleanup"
   try {
     await Promise.race([
       finalDaemonStopped.promise,
-      fixture.then((failure) => {
-        if (failure !== undefined) {
-          throw new Error("Relay fixture failed before its final daemon cleanup joined", {
-            cause: failure,
-          });
-        }
-        throw new Error("Relay fixture finished before its final daemon cleanup joined");
+      fixture.then((cause) => {
+        throw new Error("Relay fixture settled before its final daemon cleanup joined", { cause });
       }),
       waitForAbortSignal(test.signal).then(() => test.signal.throwIfAborted()),
     ]);
@@ -215,39 +238,30 @@ it("retains the fixture port across startup, restart, and joined daemon cleanup"
 });
 
 it("uses a daemon-owned relay without replacing its listener or closing its extension", async () =>
-  withConnectedDaemon(async ({ port, token, extension }) => {
-    const external = await externalRelayClient(port, token);
-    try {
-      for (const mismatch of [
-        { port, profile: "wrong-profile", token },
-        { port, profile: "chrome", token: relayTestKey(10) },
-      ]) {
-        await expect(
-          RelayOwnerClient.connect({ ...mismatch, signal: new AbortController().signal }),
-        ).rejects.toThrow();
-      }
-      await startBrowserControlServiceFromConfig();
+  withExternal(async ({ port, token, extension, external }) => {
+    for (const mismatch of [
+      { port, profile: "wrong-profile", token },
+      { port, profile: "chrome", token: relayTestKey(10) },
+    ]) {
       await expect(
-        createBrowserControlContext().forProfile("chrome").ensureBrowserAvailable(),
-      ).resolves.toBeUndefined();
-      const tabs = await createBrowserControlContext().forProfile("chrome").listTabs();
-      expect(tabs).toEqual([
-        expect.objectContaining({
-          targetId: "fixture-target",
-          url: "https://example.com/fixture",
-        }),
-      ]);
-      await stopBrowserControlService();
-      await expect(externalVersion(external)).resolves.toMatchObject({
-        result: { product: "Chrome/test" },
-      });
-      expect(extension.readyState).toBe(WebSocket.OPEN);
-      // A second daemon must still see the original listener, not a free port.
-      const contender = await runExtensionRelayDaemon({ port });
-      await expect(contender.done).resolves.toBe("port-in-use");
-    } finally {
-      external.terminate();
+        RelayOwnerClient.connect({ ...mismatch, signal: new AbortController().signal }),
+      ).rejects.toThrow();
     }
+    const profile = await startProfile();
+    await expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
+    const tabs = await profile.listTabs();
+    expect(tabs).toEqual([
+      expect.objectContaining({
+        targetId: "fixture-target",
+        url: "https://example.com/fixture",
+      }),
+    ]);
+    await stopBrowserControlService();
+    await expectOwnerAlive(external);
+    expect(extension.readyState).toBe(WebSocket.OPEN);
+    // A second daemon must still see the original listener, not a free port.
+    const contender = await runExtensionRelayDaemon({ port });
+    await expect(contender.done).resolves.toBe("port-in-use");
   }));
 
 it("keeps remote captures on the exact grant across renderer attachment, then revokes them", async () =>
@@ -259,8 +273,7 @@ it("keeps remote captures on the exact grant across renderer attachment, then re
       signal: new AbortController().signal,
     });
     try {
-      await startBrowserControlServiceFromConfig();
-      await createBrowserControlContext().forProfile("chrome").listTabs();
+      await (await startProfile()).listTabs();
       const reference = await client.capture("fixture-target");
       await expect(reference.resolve()).resolves.toBe("fixture-target");
       setTarget("replacement-target");
@@ -295,14 +308,7 @@ it("keeps remote captures on the exact grant across renderer attachment, then re
 
 it("coalesces real borrowed acquisitions while independently cancelling one caller", async () =>
   withConnectedDaemon(async ({ port }) => {
-    const resolved = resolveBrowserConfig({
-      profiles: { chrome: { driver: "extension", cdpPort: port } },
-    });
-    const state: BrowserServerState = { server: null, port: 0, resolved, profiles: new Map() };
-    const profile = resolveProfile(resolved, "chrome");
-    if (!profile) {
-      throw new Error("Missing fixture profile");
-    }
+    const { state, profile } = browserState(port);
     const controller = new AbortController();
     const first = ensureExtensionRelayForProfile(state, profile, controller.signal);
     const cancelled = expect(first).rejects.toThrow("caller cancelled");
@@ -324,41 +330,32 @@ it("coalesces real borrowed acquisitions while independently cancelling one call
 it.each(["port", "name"] as const)(
   "retires borrowed access on configured profile %s drift without stopping the old daemon",
   async (change) =>
-    withConnectedDaemon(async ({ port, token }) => {
-      const external = await externalRelayClient(port, token);
-      try {
-        await startBrowserControlServiceFromConfig();
-        const oldProfile = createBrowserControlContext().forProfile("chrome");
-        const oldRelay = getBrowserControlState()?.extensionRelays?.get("chrome");
-        const replacementPort = change === "port" ? await getFreePort() : port;
-        const replacementName = change === "name" ? "other-profile" : "chrome";
-        const config = {
-          browser: {
-            profiles: {
-              [replacementName]: { driver: "extension" as const, cdpPort: replacementPort },
-            },
+    withExternal(async ({ port, external }) => {
+      const oldProfile = await startProfile();
+      const oldRelay = getBrowserControlState()?.extensionRelays?.get("chrome");
+      const replacementPort = change === "port" ? await getFreePort() : port;
+      const replacementName = change === "name" ? "other-profile" : "chrome";
+      const config = {
+        browser: {
+          profiles: {
+            [replacementName]: { driver: "extension" as const, cdpPort: replacementPort },
           },
-        };
-        setRuntimeConfigSnapshot(config, config);
-        const current = createBrowserControlContext().forProfile(replacementName);
-        expect(current.profile.cdpPort).toBe(replacementPort);
-        await expect(oldProfile.isTransportAvailable()).rejects.toThrow();
-        await expect
-          .poll(() => getBrowserControlState()?.extensionRelays?.get("chrome") !== oldRelay)
-          .toBe(true);
-        await expect(externalVersion(external)).resolves.toMatchObject({
-          result: { product: "Chrome/test" },
-        });
-      } finally {
-        external.terminate();
-      }
+        },
+      };
+      setRuntimeConfigSnapshot(config, config);
+      const current = createBrowserControlContext().forProfile(replacementName);
+      expect(current.profile.cdpPort).toBe(replacementPort);
+      await expect(oldProfile.isTransportAvailable()).rejects.toThrow();
+      await expect
+        .poll(() => getBrowserControlState()?.extensionRelays?.get("chrome") !== oldRelay)
+        .toBe(true);
+      await expectOwnerAlive(external);
     }),
 );
 
 it("releases its old lease on key drift and refuses to reconfigure the daemon owner", async () =>
   withConnectedDaemon(async ({ stateDir }) => {
-    await startBrowserControlServiceFromConfig();
-    const profile = createBrowserControlContext().forProfile("chrome");
+    const profile = await startProfile();
     await fs.writeFile(
       path.join(stateDir, "credentials", "browser-extension-relay.secret"),
       relayTestKey(14),
@@ -368,33 +365,24 @@ it("releases its old lease on key drift and refuses to reconfigure the daemon ow
   }));
 
 it("waits for the actual native detach acknowledgement before borrowed cleanup completes", async () =>
-  withConnectedDaemon(async ({ port, token, holdDetach }) => {
-    const external = await externalRelayClient(port, token);
+  withExternal(async ({ external, holdDetach }) => {
     const hold = holdDetach();
     try {
-      await startBrowserControlServiceFromConfig();
-      await createBrowserControlContext().forProfile("chrome").listTabs();
+      await (await startProfile()).listTabs();
       let completed = false;
       const stopping = stopBrowserControlService();
-      void stopping.then(
-        () => {
-          completed = true;
-        },
-        () => {
-          completed = true;
-        },
-      );
+      const markCompleted = () => {
+        completed = true;
+      };
+      void stopping.then(markCompleted, markCompleted);
       await hold.entered;
       expect(completed).toBe(false);
-      await expect(externalVersion(external)).resolves.toMatchObject({
-        result: { product: "Chrome/test" },
-      });
+      await expectOwnerAlive(external);
       hold.release();
       await stopping;
       expect(completed).toBe(true);
     } finally {
       hold.release();
-      external.terminate();
     }
   }));
 
@@ -446,24 +434,14 @@ it("fences a captured operation when profile stop advances the generation but re
 it("reports an explicit stricter policy conflict without reconfiguring the existing owner", async () =>
   withConnectedDaemon(
     async ({ port, token }) => {
-      const resolved = resolveBrowserConfig({
-        extensionRelay: { allowLegacyAuth: false },
-        profiles: { chrome: { driver: "extension", cdpPort: port } },
-      });
-      const state: BrowserServerState = { server: null, port: 0, resolved, profiles: new Map() };
-      const profile = resolveProfile(resolved, "chrome");
-      if (!profile) {
-        throw new Error("Missing fixture profile");
-      }
+      const { state, profile } = browserState(port, true);
       const external = await externalRelayClient(port, token);
       try {
         await expect(ensureExtensionRelayForProfile(state, profile)).rejects.toThrow(
           "Existing relay permits legacy authentication",
         );
         expect(state.extensionRelays?.size).toBe(0);
-        await expect(externalVersion(external)).resolves.toMatchObject({
-          result: { product: "Chrome/test" },
-        });
+        await expectOwnerAlive(external);
       } finally {
         external.terminate();
         await stopExtensionRelays(state);

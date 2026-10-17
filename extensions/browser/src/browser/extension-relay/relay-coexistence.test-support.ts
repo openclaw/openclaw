@@ -23,48 +23,58 @@ import {
 } from "./auth-v2.js";
 import { RawHttpConnection } from "./relay-http.test-support.js";
 
-const INITIAL_PORT_SELECTION_ATTEMPTS = 3;
 const FIXTURE_TAB = {
   tabId: 1,
   url: "https://example.com/fixture",
   title: "Fixture",
   active: true,
 };
+const FRAME = {
+  name: "",
+  loaderId: "loader",
+  url: FIXTURE_TAB.url,
+  securityOrigin: "https://example.com",
+  mimeType: "text/html",
+};
+
+async function exchange(extension: WebSocket, message: object, timeoutMs?: number) {
+  const received = once(extension, "message", {
+    signal: timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs),
+  });
+  extension.send(JSON.stringify(message));
+  const [raw] = await received;
+  return JSON.parse(rawDataToString(raw));
+}
 
 export async function authenticateExtension(
   extension: WebSocket,
   token: string,
   okTimeoutMs?: number,
 ) {
-  const challengeMessage = once(extension, "message");
-  extension.send(
-    JSON.stringify({
-      type: "auth.hello",
-      v: 2,
-      keyId: relayKeyIdFromHex(token),
-      clientNonce: randomRelayNonce(),
-    }),
-  );
-  const [raw] = await challengeMessage;
-  const challenge = JSON.parse(rawDataToString(raw));
-  const authenticated = once(extension, "message", {
-    signal: okTimeoutMs === undefined ? undefined : AbortSignal.timeout(okTimeoutMs),
+  const challenge = await exchange(extension, {
+    type: "auth.hello",
+    v: 2,
+    keyId: relayKeyIdFromHex(token),
+    clientNonce: randomRelayNonce(),
   });
-  extension.send(
-    JSON.stringify({
+  const ok = await exchange(
+    extension,
+    {
       type: "auth.response",
       v: 2,
       sessionId: challenge.sessionId,
       clientProof: createRelayProof(token, "client", challenge),
-    }),
+    },
+    okTimeoutMs,
   );
-  const [ok] = await authenticated;
-  expect(JSON.parse(rawDataToString(ok))).toMatchObject({ type: "auth.ok", v: 2 });
+  expect(ok).toMatchObject({ type: "auth.ok", v: 2 });
 }
 
-/** An ordinary external v2 client: HTTP authentication/discovery/upgrade on one socket. */
-export async function externalRelayClient(port: number, token: string): Promise<WebSocket> {
-  const connection = await RawHttpConnection.connect(port);
+export async function authenticateRelayHttp(
+  connection: RawHttpConnection,
+  token: string,
+  flow: "cdp" | "json-list",
+) {
   const request = async (pathname: string, body?: unknown) => {
     const response = await connection.request(
       body === undefined ? "GET" : "POST",
@@ -75,31 +85,38 @@ export async function externalRelayClient(port: number, token: string): Promise<
     expect(response.status).toBe(200);
     return response.body;
   };
+  const challenge = JSON.parse(
+    await request(BROWSER_RELAY_AUTH_CHALLENGE_PATH, {
+      v: 2,
+      keyId: relayKeyIdFromHex(token),
+      clientNonce: randomRelayNonce(),
+      role: "cdp",
+      transport: "connection",
+      method: flow === "cdp" ? "SEQUENCE" : "GET",
+      resource: flow === "cdp" ? "/json/version -> /cdp" : "/json/list",
+      flow,
+    }),
+  ) as BrowserRelayAuthChallenge;
+  expect(verifyRelayProof(token, "server", challenge, challenge.serverProof)).toBe(true);
+  const clientProof = createRelayProof(token, "client", challenge);
+  const accepted = JSON.parse(
+    await request(BROWSER_RELAY_AUTH_COMPLETE_PATH, {
+      v: 2,
+      sessionId: challenge.sessionId,
+      clientProof,
+    }),
+  ) as { acceptProof: string };
+  expect(verifyRelayProof(token, "accept", challenge, accepted.acceptProof, clientProof)).toBe(
+    true,
+  );
+  return request;
+}
+
+/** An ordinary external v2 client: HTTP authentication/discovery/upgrade on one socket. */
+export async function externalRelayClient(port: number, token: string): Promise<WebSocket> {
+  const connection = await RawHttpConnection.connect(port);
   try {
-    const challenge = JSON.parse(
-      await request(BROWSER_RELAY_AUTH_CHALLENGE_PATH, {
-        v: 2,
-        keyId: relayKeyIdFromHex(token),
-        clientNonce: randomRelayNonce(),
-        role: "cdp",
-        transport: "connection",
-        method: "SEQUENCE",
-        resource: "/json/version -> /cdp",
-        flow: "cdp",
-      }),
-    ) as BrowserRelayAuthChallenge;
-    expect(verifyRelayProof(token, "server", challenge, challenge.serverProof)).toBe(true);
-    const clientProof = createRelayProof(token, "client", challenge);
-    const accepted = JSON.parse(
-      await request(BROWSER_RELAY_AUTH_COMPLETE_PATH, {
-        v: 2,
-        sessionId: challenge.sessionId,
-        clientProof,
-      }),
-    ) as { acceptProof: string };
-    expect(verifyRelayProof(token, "accept", challenge, accepted.acceptProof, clientProof)).toBe(
-      true,
-    );
+    const request = await authenticateRelayHttp(connection, token, "cdp");
     await request("/json/version");
     const authenticated = connection.takeSocket();
     const ws = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
@@ -116,10 +133,7 @@ export async function externalRelayClient(port: number, token: string): Promise<
 }
 
 export async function externalVersion(ws: WebSocket): Promise<unknown> {
-  const response = once(ws, "message");
-  ws.send(JSON.stringify({ id: 1, method: "Browser.getVersion" }));
-  const [raw] = await response;
-  return JSON.parse(rawDataToString(raw));
+  return exchange(ws, { id: 1, method: "Browser.getVersion" });
 }
 
 export async function withConnectedDaemon(
@@ -163,8 +177,8 @@ export async function withConnectedDaemon(
         { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_OAUTH_DIR: credentials },
         async () => {
           const start = async (mayReselectPort = false) => {
-            const attempts = mayReselectPort ? INITIAL_PORT_SELECTION_ATTEMPTS : 1;
-            for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            const attempts = mayReselectPort ? 3 : 1;
+            for (let attempt = 1; ; attempt += 1) {
               portClaim ??= await acquireTestPortBlock({ offsets: [0] });
               const port = portClaim.port;
               const config = {
@@ -190,7 +204,6 @@ export async function withConnectedDaemon(
                 `Relay fixture startup failed: expected port ${port}, got ${started.port ?? "no listener"} (${String(reason)})`,
               );
             }
-            throw new Error("Relay fixture exhausted its initial port selections");
           };
           const started = await start(true);
           const port = started.port;
@@ -242,14 +255,7 @@ export async function withConnectedDaemon(
                     : command.method === "Page.getFrameTree"
                       ? {
                           frameTree: {
-                            frame: {
-                              id: nativeTarget,
-                              name: "",
-                              loaderId: "loader",
-                              url: FIXTURE_TAB.url,
-                              securityOrigin: "https://example.com",
-                              mimeType: "text/html",
-                            },
+                            frame: { id: nativeTarget, ...FRAME },
                           },
                         }
                       : {};
@@ -282,9 +288,7 @@ export async function withConnectedDaemon(
                   entered,
                   release: () => {
                     detachHeld = false;
-                    for (const reply of detachReplies.splice(0)) {
-                      reply();
-                    }
+                    detachReplies.splice(0).forEach((reply) => reply());
                   },
                 };
               },

@@ -1,6 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-// Extension relay bridge: CDP target synthesis and extension command routing.
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
 import {
@@ -20,6 +19,12 @@ function response(socket: FakeSocket, id: number) {
 function events(socket: FakeSocket, method: string) {
   return socket.frames().filter((frame) => frame.method === method);
 }
+
+function frames(socket: FakeSocket, type: string) {
+  return socket.frames().filter((frame) => frame.type === type);
+}
+
+const attached = (socket: FakeSocket) => events(socket, "Target.attachedToTarget");
 
 function deliver(receiver: { onMessage(raw: string): void }, message: unknown) {
   receiver.onMessage(JSON.stringify(message));
@@ -44,11 +49,31 @@ function sendResult(receiver: { onMessage(raw: string): void }, seq: unknown, re
   deliver(receiver, { type: "result", seq, result });
 }
 
-function readyBridge() {
+function readyBridge(reply?: Parameters<typeof wireExtension>[1], tabs = defaultTabs()) {
   const bridge = createBridge();
-  const extension = wireExtension(bridge);
-  sendHello(extension.handlers);
+  const extension = wireExtension(bridge, reply);
+  sendHello(extension.handlers, tabs);
   return { bridge, ...extension };
+}
+
+function candidate(bridge: ExtensionRelayBridge) {
+  const socket = new FakeSocket();
+  return { socket, handlers: bridge.attachExtensionSocket(socket) };
+}
+
+function candidateHello(
+  receiver: { onMessage(raw: string): void },
+  userAgent: string,
+  browserVersion: string,
+  tabs?: ReturnType<typeof defaultTabs>,
+) {
+  deliver(receiver, {
+    type: "hello",
+    userAgent,
+    browserVersion,
+    extensionVersion: "2.0.0",
+    ...(tabs === undefined ? {} : { tabs }),
+  });
 }
 
 function targetInfos(...ids: string[]) {
@@ -69,6 +94,16 @@ async function attachClient(bridge: ExtensionRelayBridge) {
   sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
   await flush();
   return { client, cdp };
+}
+
+async function attachClients(bridge: ExtensionRelayBridge) {
+  const first = connectClient(bridge);
+  const second = connectClient(bridge);
+  for (const { cdp } of [first, second]) {
+    sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
+  }
+  await flush();
+  return { first: first.client, firstCdp: first.cdp, second: second.client, secondCdp: second.cdp };
 }
 
 async function holdCdpCommand(
@@ -106,14 +141,10 @@ describe("ExtensionRelayBridge", () => {
       const { extension, client } = await holdCdpCommand(bridge, method, { awaitPromise: true });
       await vi.advanceTimersByTimeAsync(17_000);
       expect(response(client, 2)).toBeUndefined();
-      const command = extension.socket
-        .frames()
-        .find((frame) => frame.type === "cdp" && frame.method === method);
+      const command = events(extension.socket, method).find((frame) => frame.type === "cdp");
       sendResult(extension.handlers, command?.seq, { result: { value: true } });
       await vi.advanceTimersByTimeAsync(0);
-      expect(response(client, 2)).toMatchObject({
-        result: { result: { value: true } },
-      });
+      expect(response(client, 2)).toMatchObject({ result: { result: { value: true } } });
     },
   );
 
@@ -178,7 +209,6 @@ describe("ExtensionRelayBridge", () => {
       .then((result) => {
         ready = result;
       });
-
     await vi.advanceTimersByTimeAsync(1_000);
     expect(ready).toBe(false);
     deliver(pending.handlers, { type: "tabs", tabs: defaultTabs });
@@ -189,15 +219,11 @@ describe("ExtensionRelayBridge", () => {
       closeCode: 4001,
       closeReason: "expected valid hello",
     });
-    expect(bridge.extensionConnected).toBe(false);
-    expect(bridge.accessibleTabs()).toEqual([]);
-
+    expect([bridge.extensionConnected, bridge.accessibleTabs()]).toEqual([false, []]);
     const replacement = wireExtension(bridge);
     sendHello(replacement.handlers);
     await connected;
-
-    expect(ready).toBe(true);
-    expect(bridge.extensionConnected).toBe(true);
+    expect([ready, bridge.extensionConnected]).toEqual([true, true]);
     bridge.dispose();
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -206,9 +232,7 @@ describe("ExtensionRelayBridge", () => {
     vi.useFakeTimers();
     const bridge = createBridge();
     const waiting = bridge.waitForExtensionConnection(new AbortController().signal, 8_000);
-
     bridge.dispose();
-
     await expect(waiting).resolves.toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -219,18 +243,14 @@ describe("ExtensionRelayBridge", () => {
     const previous = wireExtension(bridge);
     sendHello(previous.handlers);
     await vi.advanceTimersByTimeAsync(40_000);
-
     const replacement = wireExtension(bridge);
     sendHello(replacement.handlers);
     expect(previous.socket.closed).toBe(true);
-
     await vi.advanceTimersByTimeAsync(40_000);
     deliver(previous.handlers, { type: "pong" });
     previous.handlers.onClose();
     await vi.advanceTimersByTimeAsync(19_999);
-    expect(replacement.socket.closed).toBe(false);
-    expect(bridge.extensionConnected).toBe(true);
-
+    expect([replacement.socket.closed, bridge.extensionConnected]).toEqual([false, true]);
     await vi.advanceTimersByTimeAsync(1);
     expect(replacement.socket).toMatchObject({
       closed: true,
@@ -240,27 +260,23 @@ describe("ExtensionRelayBridge", () => {
     expect(bridge.extensionConnected).toBe(false);
   });
 
-  it("creates a tab inside the group and returns its synthetic target", async () => {
+  it.each([false, true])("creates a grouped target with explicit focus=%s", async (focus) => {
     const { bridge, socket } = readyBridge();
-
-    const { client, cdp } = await attachClient(bridge);
-    sendCommand(cdp, 2, "Target.createTarget", { url: "https://new.test" });
+    const { client, cdp } = focus ? connectClient(bridge) : await attachClient(bridge);
+    const params = { url: "https://new.test", ...(focus ? { focus } : {}) };
+    sendCommand(cdp, 2, "Target.createTarget", params);
     await flush();
-
-    const reply = response(client, 2);
-    expect(reply?.result).toMatchObject({ targetId: "target-999" });
-    expect(socket.frames().find((frame) => frame.type === "createTab")).toMatchObject({
-      url: "https://new.test",
-      background: true,
-      focus: false,
+    expect(response(client, 2)?.result).toMatchObject({ targetId: "target-999" });
+    expect(frames(socket, "createTab")[0]).toMatchObject({
+      url: params.url,
+      background: !focus,
+      focus,
     });
   });
 
   it("does not auto-attach a foreign extension page", async () => {
-    const bridge = new ExtensionRelayBridge();
-    const { socket, handlers } = wireExtension(bridge);
-    sendHello(handlers, [
-      { tabId: 1, url: "https://example.com", title: "Example", active: true },
+    const { bridge, socket } = readyBridge(undefined, [
+      ...defaultTabs(),
       {
         tabId: 2,
         url: "chrome-extension://abcdefghijklmnopabcdefghijklmnop/options.html",
@@ -268,41 +284,26 @@ describe("ExtensionRelayBridge", () => {
         active: false,
       },
     ]);
-
-    const { client, cdp } = connectClient(bridge);
-    sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
-    await flush();
-
-    expect(socket.frames().filter((frame) => frame.type === "attach")).toEqual([
-      expect.objectContaining({ tabId: 1 }),
-    ]);
-    expect(
-      client.frames().find((frame) => frame.method === "Target.attachedToTarget"),
-    ).toMatchObject({
-      params: { targetInfo: { targetId: "target-1" } },
-    });
+    const { client } = await attachClient(bridge);
+    expect(frames(socket, "attach")).toEqual([expect.objectContaining({ tabId: 1 })]);
+    expect(attached(client)[0]).toMatchObject({ params: { targetInfo: { targetId: "target-1" } } });
   });
 
   it("announces initial targets before acknowledging auto-attach", async () => {
-    const bridge = createBridge();
     let attach: Extract<RelayToExtensionMessage, { type: "attach" }> | undefined;
-    const extension = wireExtension(bridge, (message) => {
+    const { bridge, handlers } = readyBridge((message) => {
       if (message.type === "attach") {
         attach = message;
         return null;
       }
       return replyFor(message);
     });
-    sendHello(extension.handlers);
-
     const { client, cdp } = connectClient(bridge);
     sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
     await flush();
-
     expect(attach).toBeDefined();
     expect(response(client, 1)).toBeUndefined();
-
-    sendResult(extension.handlers, attach?.seq, { targetId: "target-1" });
+    sendResult(handlers, attach?.seq, { targetId: "target-1" });
     await flush();
     expect(client.frames()).toEqual([
       expect.objectContaining({
@@ -319,8 +320,7 @@ describe("ExtensionRelayBridge", () => {
     "binds an atomic creation reply to its current owner: %s",
     async (lifecycle) => {
       const bridge = createBridge();
-      const socket = new FakeSocket();
-      const extension = bridge.attachExtensionSocket(socket);
+      const { socket, handlers: extension } = candidate(bridge);
       sendHello(extension, []);
       const { client, cdp } = connectClient(bridge);
       sendCommand(cdp, 1, "Target.createTarget", { url: "" });
@@ -328,13 +328,11 @@ describe("ExtensionRelayBridge", () => {
       expect(command).toMatchObject({ type: "createTab", url: "about:blank" });
       sendResult(extension, command?.seq, { tabId: 99, targetId: "created-target" });
       // Resolve the old promise, then replace its owner before its continuation.
-
       if (lifecycle === "replaced extension") {
         sendHello(wireExtension(bridge).handlers, []);
       }
       await flush();
-
-      expect(socket.frames().filter((frame) => frame.type === "attach")).toEqual([]);
+      expect(frames(socket, "attach")).toEqual([]);
       if (lifecycle === "active") {
         expect(client.frames().map((frame) => frame.method ?? frame.id)).toEqual([
           "Target.attachedToTarget",
@@ -344,143 +342,80 @@ describe("ExtensionRelayBridge", () => {
       } else {
         expect(client.frames()).toEqual([]);
         expect(bridge.accessibleTabs()).toEqual([]);
-        expect(socket.frames().filter((frame) => frame.type === "detach")).toEqual([]);
+        expect(frames(socket, "detach")).toEqual([]);
       }
     },
   );
 
-  it("honors an explicit Target.createTarget focus request", async () => {
-    const { bridge, socket } = readyBridge();
-
-    const { client, cdp } = connectClient(bridge);
-    sendCommand(cdp, 1, "Target.createTarget", { url: "https://focused.test", focus: true });
-    await flush();
-
-    expect(response(client, 1)?.result).toMatchObject({
-      targetId: "target-999",
-    });
-    expect(socket.frames().find((frame) => frame.type === "createTab")).toMatchObject({
-      url: "https://focused.test",
-      background: false,
-      focus: true,
-    });
-  });
-
   it("rejects isolated browser contexts (real profile only)", async () => {
     const { bridge } = readyBridge();
-
     const { client, cdp } = connectClient(bridge);
     sendCommand(cdp, 1, "Target.createBrowserContext");
     await flush();
-
     const reply = response(client, 1);
     expect(reply?.error).toBeTruthy();
   });
 
-  it("reports malformed CDP client JSON instead of leaving the client waiting", () => {
-    const bridge = createBridge();
-    const { client, cdp } = connectClient(bridge);
-
-    cdp.onMessage("{");
-
-    expect(client.frames()).toEqual([
-      { id: null, error: { code: -32700, message: "Parse error" } },
-    ]);
-  });
-
-  it("reports invalid CDP client requests instead of leaving the client waiting", () => {
-    const bridge = createBridge();
-    const { client, cdp } = connectClient(bridge);
-
-    deliver(cdp, { id: 7, sessionId: "session-1", params: {} });
-
-    expect(client.frames()).toEqual([
-      {
-        id: 7,
-        sessionId: "session-1",
-        error: { code: -32600, message: "Invalid request" },
-      },
-    ]);
+  it.each([
+    { name: "malformed JSON", raw: "{", id: null, error: { code: -32700, message: "Parse error" } },
+    {
+      name: "invalid request",
+      raw: JSON.stringify({ id: 7, sessionId: "session-1", params: {} }),
+      id: 7,
+      sessionId: "session-1",
+      error: { code: -32600, message: "Invalid request" },
+    },
+  ])("reports $name instead of leaving the client waiting", ({ name: _name, raw, ...expected }) => {
+    const { client, cdp } = connectClient(createBridge());
+    cdp.onMessage(raw);
+    expect(client.frames()).toEqual([expected]);
   });
 
   it("keeps the active extension while a candidate is pending, malformed, or closed", () => {
-    const bridge = createBridge();
-    const active = wireExtension(bridge);
-    sendHello(active.handlers);
-
-    const pendingSocket = new FakeSocket();
-    const pending = bridge.attachExtensionSocket(pendingSocket);
-    expect(active.socket.closed).toBe(false);
+    const { bridge, socket: active } = readyBridge();
+    const { handlers: pending } = candidate(bridge);
+    expect(active.closed).toBe(false);
     expect(bridge.identity?.browserVersion).toBe("Chrome/144.0.0.0");
-
     pending.onClose();
     sendHello(pending);
     expect(bridge.extensionConnected).toBe(true);
-    expect(active.socket.closed).toBe(false);
-
-    const malformedSocket = new FakeSocket();
-    const malformed = bridge.attachExtensionSocket(malformedSocket);
-    deliver(malformed, {
-      type: "hello",
-      userAgent: "candidate",
-      browserVersion: "Chrome/145.0.0.0",
-      extensionVersion: "2.0.0",
-    });
+    expect(active.closed).toBe(false);
+    const { socket: malformedSocket, handlers: malformed } = candidate(bridge);
+    candidateHello(malformed, "candidate", "Chrome/145.0.0.0");
     expect(malformedSocket).toMatchObject({
       closed: true,
       closeCode: 4001,
       closeReason: "expected valid hello",
     });
     expect(bridge.identity?.browserVersion).toBe("Chrome/144.0.0.0");
-    expect(active.socket.closed).toBe(false);
+    expect(active.closed).toBe(false);
   });
 
   it("rejects an older candidate when a newer candidate promotes first", () => {
-    const bridge = createBridge();
-    const active = wireExtension(bridge);
-    sendHello(active.handlers);
-
-    const firstSocket = new FakeSocket();
-    const first = bridge.attachExtensionSocket(firstSocket);
-    const secondSocket = new FakeSocket();
-    const second = bridge.attachExtensionSocket(secondSocket);
-    expect(active.socket.closed).toBe(false);
-
-    deliver(second, {
-      type: "hello",
-      userAgent: "second",
-      browserVersion: "Chrome/146.0.0.0",
-      extensionVersion: "2.0.0",
-      tabs: [],
-    });
-    expect(active.socket.closed).toBe(true);
+    const { bridge, socket: activeSocket, handlers: active } = readyBridge();
+    const { socket: firstSocket, handlers: first } = candidate(bridge);
+    const { socket: secondSocket, handlers: second } = candidate(bridge);
+    expect(activeSocket.closed).toBe(false);
+    candidateHello(second, "second", "Chrome/146.0.0.0", []);
+    expect(activeSocket.closed).toBe(true);
     expect(firstSocket.closed).toBe(false);
     expect(secondSocket.closed).toBe(false);
     expect(bridge.identity?.browserVersion).toBe("Chrome/146.0.0.0");
-
-    deliver(first, {
-      type: "hello",
-      userAgent: "first",
-      browserVersion: "Chrome/145.0.0.0",
-      extensionVersion: "2.0.0",
-      tabs: [],
-    });
+    candidateHello(first, "first", "Chrome/145.0.0.0", []);
     expect(firstSocket).toMatchObject({
       closed: true,
       closeCode: 4000,
       closeReason: "superseded by newer extension connection",
     });
     expect(bridge.identity?.browserVersion).toBe("Chrome/146.0.0.0");
-
     first.onClose();
-    active.handlers.onClose();
+    active.onClose();
     expect(bridge.extensionConnected).toBe(true);
     expect(secondSocket.closed).toBe(false);
   });
 
   it("answers the Puppeteer connect bootstrap without protocol errors", async () => {
     const { bridge } = readyBridge();
-
     const { client, cdp } = connectClient(bridge);
     const bootstrap: Array<{ id: number; method: string; params?: Record<string, unknown> }> = [
       { id: 1, method: "Browser.getVersion" },
@@ -496,7 +431,6 @@ describe("ExtensionRelayBridge", () => {
       deliver(cdp, message);
     }
     await flush();
-
     for (const message of bootstrap) {
       const reply = response(client, message.id);
       expect(reply, `response for ${message.method}`).toBeTruthy();
@@ -507,23 +441,18 @@ describe("ExtensionRelayBridge", () => {
       product: "Chrome/144.0.0.0",
     });
     const contexts = response(client, 4);
-
     expect(contexts?.result).toEqual({ browserContextIds: [] });
   });
 
   it("invalidates captured operation identity when another extension reconnects", async () => {
-    const bridge = createBridge();
-    const original = wireExtension(bridge);
-    sendHello(original.handlers);
+    const { bridge } = readyBridge();
     const cdp = bridge.attachCdpClientSocket(new FakeSocket());
     sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
     await flush();
     const resolveTarget = bridge.captureOperationTarget("target-1");
-
     const replacement = wireExtension(bridge);
     sendHello(replacement.handlers);
     await flush();
-
     expect(resolveTarget?.()).toBeUndefined();
     expect(bridge.captureOperationTarget("target-1")?.()).toBe("target-1");
   });
@@ -533,44 +462,33 @@ describe("ExtensionRelayBridge target enumeration", () => {
   it.each(["target_closed", "canceled_by_user"])(
     "honors subscriptions and cancellation after native %s",
     async (reason) => {
-      const bridge = createBridge();
       let targetId = "original-target";
-      const extension = wireExtension(bridge, (message) =>
+      const { bridge, handlers, socket } = readyBridge((message) =>
         message.type === "attach"
           ? { type: "result", seq: message.seq, result: { targetId } }
           : replyFor(message),
       );
-      sendHello(extension.handlers);
-      const { client: first, cdp: firstCdp } = connectClient(bridge);
-      const { client: second, cdp: secondCdp } = connectClient(bridge);
-      for (const cdp of [firstCdp, secondCdp]) {
-        sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
-      }
-      await flush();
-      const original = first.frames().find((frame) => frame.method === "Target.attachedToTarget");
+      const { first, firstCdp, second, secondCdp } = await attachClients(bridge);
+      const original = attached(first)[0];
       const sessionId = (original?.params as { sessionId?: string } | undefined)?.sessionId;
       expect(typeof sessionId).toBe("string");
       sendCommand(firstCdp, 2, "Target.detachFromTarget", { sessionId });
       await flush();
-
       targetId = "replacement-target";
-      deliver(extension.handlers, { type: "detached", tabId: 1, reason });
+      deliver(handlers, { type: "detached", tabId: 1, reason });
       await flush();
-      deliver(extension.handlers, {
+      deliver(handlers, {
         type: "tabs",
         tabs: [{ tabId: 1, url: "https://example.com/next", title: "Next", active: true }],
       });
       await flush();
-
       const recovered = reason === "target_closed";
-      expect(events(first, "Target.attachedToTarget")).toHaveLength(1);
-      const attached = events(second, "Target.attachedToTarget");
-      expect(attached).toHaveLength(recovered ? 2 : 1);
-      expect(extension.socket.frames().filter((frame) => frame.type === "attach")).toHaveLength(
-        recovered ? 2 : 1,
-      );
+      expect(attached(first)).toHaveLength(1);
+      const secondAttached = attached(second);
+      expect(secondAttached).toHaveLength(recovered ? 2 : 1);
+      expect(frames(socket, "attach")).toHaveLength(recovered ? 2 : 1);
       if (recovered) {
-        expect(attached[1]?.params).toMatchObject({
+        expect(secondAttached[1]?.params).toMatchObject({
           sessionId: expect.not.stringMatching(`^${sessionId}$`),
           targetInfo: { targetId: "replacement-target" },
         });
@@ -579,9 +497,7 @@ describe("ExtensionRelayBridge target enumeration", () => {
       await flush();
       expect(response(second, 3)?.error).toBeDefined();
       expect(
-        extension.socket
-          .frames()
-          .filter((frame) => frame.type === "cdp" && frame.method === "Runtime.evaluate"),
+        events(socket, "Runtime.evaluate").filter((frame) => frame.type === "cdp"),
       ).toHaveLength(0);
     },
   );
@@ -589,48 +505,37 @@ describe("ExtensionRelayBridge target enumeration", () => {
   it.each(["client close", "tab removal", "user cancellation"])(
     "rechecks recovery recipients after %s while native attachment is pending",
     async (ending) => {
-      const bridge = createBridge();
       const recovery = createDeferred<RelayToExtensionMessage>();
       let attachAttempts = 0;
-      const extension = wireExtension(bridge, (message) => {
+      const { bridge, handlers } = readyBridge((message) => {
         if (message.type === "attach" && ++attachAttempts > 1) {
           recovery.resolve(message);
           return null;
         }
         return replyFor(message);
       });
-      sendHello(extension.handlers);
-      const { client: first, cdp: firstCdp } = connectClient(bridge);
-      const { client: second, cdp: secondCdp } = connectClient(bridge);
-      for (const cdp of [firstCdp, secondCdp]) {
-        sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
-      }
-      await flush();
-      deliver(extension.handlers, { type: "detached", tabId: 1, reason: "target_closed" });
+      const { first, firstCdp, second } = await attachClients(bridge);
+      deliver(handlers, { type: "detached", tabId: 1, reason: "target_closed" });
       const pending = await recovery.promise;
       const closing = ending === "client close" ? firstCdp.onClose() : Promise.resolve();
       if (ending === "tab removal") {
-        deliver(extension.handlers, { type: "tabs", tabs: [] });
+        deliver(handlers, { type: "tabs", tabs: [] });
       } else if (ending === "user cancellation") {
-        deliver(extension.handlers, { type: "detached", tabId: 1, reason: "canceled_by_user" });
+        deliver(handlers, { type: "detached", tabId: 1, reason: "canceled_by_user" });
       }
-      deliver(extension.handlers, replyFor(pending));
+      deliver(handlers, replyFor(pending));
       await closing;
       await flush();
-
-      expect(events(first, "Target.attachedToTarget")).toHaveLength(1);
-      expect(events(second, "Target.attachedToTarget")).toHaveLength(
-        ending === "client close" ? 2 : 1,
-      );
+      expect(attached(first)).toHaveLength(1);
+      expect(attached(second)).toHaveLength(ending === "client close" ? 2 : 1);
       expect(attachAttempts).toBe(2);
     },
   );
 
   it("includes a tab discovered while another native attachment is pending", async () => {
-    const bridge = createBridge();
     const firstAttach = createDeferred<RelayToExtensionMessage>();
     const nextStep = createDeferred<Record<string, unknown>>();
-    const extension = wireExtension(bridge, (message) => {
+    const { bridge, handlers } = readyBridge((message) => {
       if (message.type !== "attach") {
         return replyFor(message);
       }
@@ -641,7 +546,6 @@ describe("ExtensionRelayBridge target enumeration", () => {
       }
       return null;
     });
-    sendHello(extension.handlers);
     const client = new FakeSocket();
     const send = client.send.bind(client);
     client.send = (data) => {
@@ -651,173 +555,149 @@ describe("ExtensionRelayBridge target enumeration", () => {
     const cdp = bridge.attachCdpClientSocket(client);
     sendCommand(cdp, 1, "Target.getTargets");
     const first = await firstAttach.promise;
-    deliver(extension.handlers, {
+    deliver(handlers, {
       type: "tabs",
       tabs: [
         { tabId: 1, url: "https://one.example", title: "One", active: true },
         { tabId: 2, url: "https://two.example", title: "Two", active: false },
       ],
     });
-    deliver(extension.handlers, replyFor(first));
+    deliver(handlers, replyFor(first));
     const second = await nextStep.promise;
     expect(second).toMatchObject({ type: "attach", tabId: 2 });
-    sendResult(extension.handlers, second.seq, { targetId: "target-2" });
+    sendResult(handlers, second.seq, { targetId: "target-2" });
     await flush();
     expect(response(client, 1)).toMatchObject(targetInfos("target-1", "target-2"));
   });
 
   it("repairs reconnect attach without undoing a later explicit detach", async () => {
     const bridge = createBridge();
-    const initialSocket = new FakeSocket();
-    const initial = bridge.attachExtensionSocket(initialSocket);
+    const { socket: initialSocket, handlers: initial } = candidate(bridge);
     sendHello(initial);
-
     const { client, cdp } = connectClient(bridge);
     sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
-    expect(initialSocket.frames().filter((frame) => frame.type === "attach")).toHaveLength(1);
-
+    expect(frames(initialSocket, "attach")).toHaveLength(1);
     const replacement = wireExtension(bridge);
     sendHello(replacement.handlers);
     await flush();
-
-    expect(replacement.socket.frames().filter((frame) => frame.type === "attach")).toEqual([
-      expect.objectContaining({ tabId: 1 }),
-    ]);
+    expect(frames(replacement.socket, "attach")).toEqual([expect.objectContaining({ tabId: 1 })]);
     sendCommand(cdp, 2, "Target.getTargets");
     await flush();
     expect(response(client, 2)?.result).toMatchObject(targetInfos("target-1").result);
-
     const { client: peer, cdp: peerCdp } = connectClient(bridge);
     sendCommand(peerCdp, 1, "Target.setAutoAttach", { autoAttach: true });
     await flush();
-    const attached = client
-      .frames()
-      .findLast((frame) => frame.method === "Target.attachedToTarget");
-    const sessionId = (attached?.params as { sessionId?: string } | undefined)?.sessionId;
+    const sessionId = (attached(client).at(-1)?.params as { sessionId?: string } | undefined)
+      ?.sessionId;
     expect(typeof sessionId).toBe("string");
     sendCommand(cdp, 3, "Target.detachFromTarget", { sessionId });
     await flush();
-    const attachedEventCount = events(client, "Target.attachedToTarget").length;
-    const peerAttachedEventCount = events(peer, "Target.attachedToTarget").length;
+    const attachedEventCount = attached(client).length;
+    const peerAttachedEventCount = attached(peer).length;
     const afterDetach = wireExtension(bridge);
     sendHello(afterDetach.handlers, [
       { tabId: 1, url: "https://example.com", title: "Updated", active: true },
     ]);
     await flush();
-
-    expect(afterDetach.socket.frames().filter((frame) => frame.type === "attach")).toHaveLength(1);
-    expect(events(client, "Target.attachedToTarget")).toHaveLength(attachedEventCount);
-    expect(events(peer, "Target.attachedToTarget")).toHaveLength(peerAttachedEventCount + 1);
+    expect(frames(afterDetach.socket, "attach")).toHaveLength(1);
+    expect(attached(client)).toHaveLength(attachedEventCount);
+    expect(attached(peer)).toHaveLength(peerAttachedEventCount + 1);
     sendCommand(cdp, 4, "Target.getTargets");
     await flush();
-    expect(afterDetach.socket.frames().filter((frame) => frame.type === "attach")).toHaveLength(1);
+    expect(frames(afterDetach.socket, "attach")).toHaveLength(1);
     expect(response(client, 4)?.result).toMatchObject({
       targetInfos: [expect.objectContaining({ targetId: "target-1", attached: true })],
     });
-    expect(events(client, "Target.attachedToTarget")).toHaveLength(attachedEventCount);
-
+    expect(attached(client)).toHaveLength(attachedEventCount);
     deliver(afterDetach.handlers, { type: "tabs", tabs: [] });
     deliver(afterDetach.handlers, {
       type: "tabs",
       tabs: [{ tabId: 1, url: "https://reused.example", title: "Reused", active: true }],
     });
     await flush();
-    expect(events(client, "Target.attachedToTarget")).toHaveLength(attachedEventCount + 1);
+    expect(attached(client)).toHaveLength(attachedEventCount + 1);
   });
 
   it("does not project a disconnected zero-tab extension as authoritative empty", async () => {
-    const bridge = createBridge();
-    const extension = wireExtension(bridge);
-    sendHello(extension.handlers, []);
-    extension.handlers.onClose();
+    const { bridge, handlers } = readyBridge(undefined, []);
+    handlers.onClose();
     const { client, cdp } = connectClient(bridge);
-
     sendCommand(cdp, 1, "Target.getTargets");
     await flush();
-
     expect(response(client, 1)).toMatchObject({
       error: { message: expect.stringMatching(/extension.*disconnected/i) },
     });
   });
 
   it("rejects discovery when the previous native retirement fails", async () => {
-    const bridge = createBridge();
     const retirement = createDeferred<Extract<RelayToExtensionMessage, { type: "detach" }>>();
-    const extension = wireExtension(bridge, (message) => {
+    const { bridge, handlers } = readyBridge((message) => {
       if (message.type === "detach") {
         retirement.resolve(message);
         return null;
       }
       return replyFor(message);
     });
-    sendHello(extension.handlers);
     const { client, cdp } = connectClient(bridge);
     sendCommand(cdp, 1, "Target.getTargets");
     const detach = await retirement.promise;
     sendCommand(cdp, 2, "Target.getTargets");
-    deliver(extension.handlers, {
+    deliver(handlers, {
       type: "error",
       seq: detach.seq,
       message: "native detach failed",
     });
     await flush();
-
     expect(response(client, 2)).toMatchObject({
       error: { message: "Target identities are unavailable" },
     });
   });
 
   it("publishes a shared recovered attachment to every waiting auto-attach client", async () => {
-    const bridge = createBridge();
     let attachAttempts = 0;
-    const extension = wireExtension(bridge, (message) => {
+    const { bridge, socket } = readyBridge((message) => {
       if (message.type === "attach" && attachAttempts++ === 0) {
         return { type: "error", seq: message.seq, message: "first client lost its claim" };
       }
       return replyFor(message);
     });
-    sendHello(extension.handlers);
-    const { client: first, cdp: firstCdp } = connectClient(bridge);
-    sendCommand(firstCdp, 1, "Target.setAutoAttach", { autoAttach: true });
-    await flush();
-
-    const { client: second, cdp: secondCdp } = connectClient(bridge);
-    sendCommand(secondCdp, 1, "Target.setAutoAttach", { autoAttach: true });
-    await flush();
-    expect(second.frames().some((frame) => frame.method === "Target.attachedToTarget")).toBe(true);
-    expect(first.frames().some((frame) => frame.method === "Target.attachedToTarget")).toBe(true);
-    const firstAttachedEventCount = events(first, "Target.attachedToTarget").length;
-
+    const { client: first, cdp: firstCdp } = await attachClient(bridge);
+    const { client: second } = await attachClient(bridge);
+    expect(attached(second).length > 0).toBe(true);
+    expect(attached(first).length > 0).toBe(true);
+    const firstAttachedEventCount = attached(first).length;
     sendCommand(firstCdp, 2, "Target.getTargets");
     await flush();
-
-    expect(extension.socket.frames().filter((frame) => frame.type === "attach")).toHaveLength(2);
+    expect(frames(socket, "attach")).toHaveLength(2);
     expect(response(first, 2)?.error).toBeUndefined();
-    expect(events(first, "Target.attachedToTarget")).toHaveLength(firstAttachedEventCount);
+    expect(attached(first)).toHaveLength(firstAttachedEventCount);
   });
 
   it("skips a permanent Chrome refusal but retries that tab on the next enumeration", async () => {
-    const bridge = createBridge();
     let refused = true;
-    const extension = wireExtension(bridge, (message) =>
-      message.type === "attach" && message.tabId === 2 && refused
-        ? { type: "error", seq: message.seq, message: "The extensions gallery cannot be scripted." }
-        : replyFor(message),
+    const { bridge } = readyBridge(
+      (message) =>
+        message.type === "attach" && message.tabId === 2 && refused
+          ? {
+              type: "error",
+              seq: message.seq,
+              message: "The extensions gallery cannot be scripted.",
+            }
+          : replyFor(message),
+      [
+        ...defaultTabs(),
+        {
+          tabId: 2,
+          url: "https://chromewebstore.google.com/detail/x/abc",
+          title: "Chrome Web Store",
+          active: false,
+        },
+      ],
     );
-    sendHello(extension.handlers, [
-      { tabId: 1, url: "https://example.com", title: "Example", active: true },
-      {
-        tabId: 2,
-        url: "https://chromewebstore.google.com/detail/x/abc",
-        title: "Chrome Web Store",
-        active: false,
-      },
-    ]);
     const { client, cdp } = connectClient(bridge);
     sendCommand(cdp, 1, "Target.getTargets");
     await flush();
     expect(response(client, 1)).toMatchObject(targetInfos("target-1"));
-
     refused = false;
     sendCommand(cdp, 2, "Target.getTargets");
     await flush();
@@ -829,8 +709,7 @@ it.each(["attach", "createTab"])(
   "does not acknowledge close before a pending %s and its native detach finish",
   async (operation) => {
     const bridge = createBridge();
-    const extensionSocket = new FakeSocket();
-    const extension = bridge.attachExtensionSocket(extensionSocket);
+    const { socket: extensionSocket, handlers: extension } = candidate(bridge);
     sendHello(extension, operation === "attach" ? defaultTabs() : []);
     const { client: clientSocket, cdp: client } = connectClient(bridge);
     sendCommand(
@@ -839,7 +718,7 @@ it.each(["attach", "createTab"])(
       operation === "attach" ? "Target.setAutoAttach" : "Target.createTarget",
       operation === "attach" ? { autoAttach: true } : { url: "about:blank" },
     );
-    const command = extensionSocket.frames().find((frame) => frame.type === operation);
+    const command = frames(extensionSocket, operation)[0];
     expect(command).toBeDefined();
     let finished = false;
     const closing = client.onClose().then(() => {
@@ -848,11 +727,9 @@ it.each(["attach", "createTab"])(
     await flush();
     expect(finished).toBe(false);
     sendResult(extension, command?.seq, { tabId: 1, targetId: "target-1" });
-    await vi.waitFor(() =>
-      expect(extensionSocket.frames().some((frame) => frame.type === "detach")).toBe(true),
-    );
+    await vi.waitFor(() => expect(frames(extensionSocket, "detach").length > 0).toBe(true));
     expect(finished).toBe(false);
-    const detach = extensionSocket.frames().find((frame) => frame.type === "detach");
+    const detach = frames(extensionSocket, "detach")[0];
     sendResult(extension, detach?.seq, {});
     await closing;
     expect(finished).toBe(true);
