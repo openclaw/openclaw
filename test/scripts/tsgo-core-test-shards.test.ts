@@ -296,6 +296,7 @@ afterEach(() => lifetime.cleanup());
 
 it.runIf(process.platform !== "win32").each([
   ["mixed CI", ["--ci-graphs-json", '["scripts", "test-root"]'], [0, 1, 2, 3]],
+  ["selected CI", ["--ci-graphs-json", '["test-root-tooling", "test-root-e2e"]'], [0, 2]],
   ["even stripe", ["--root-stripe", "2/2"], [1, 3]],
 ] as const)(
   "executes assigned root partitions serially through %s",
@@ -537,7 +538,7 @@ exec ${JSON.stringify(native)} "$@"
         noncoreConsumer,
         "export type { ExtensionValue } from '../extensions/example/value.js';\n",
       );
-      for (const graph of TSGO_CI_ADDITIONAL_GRAPHS) {
+      for (const graph of expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS)) {
         write(
           graph.config,
           JSON.stringify({
@@ -652,10 +653,15 @@ if (process.argv[2] === "boundary") {
         expect(extensionPlan.status, extensionPlan.stderr).toBe(0);
         expect(JSON.parse(extensionPlan.stdout.trim())).toEqual({
           mode: "changed",
-          names: ["extensions", "extensions-test", "scripts", "test-root"],
+          names: [
+            "extensions",
+            "extensions-test",
+            "scripts",
+            ...TSGO_ROOT_TEST_SHARDS.map(({ name }) => name),
+          ],
         });
         const discovery = compilerEvents();
-        expect(discovery).toHaveLength(serial ? 4 : 1);
+        expect(discovery).toHaveLength(serial ? 7 : 1);
         expect(discovery.every((args) => args.includes(serial ? "--listFilesOnly" : "--api"))).toBe(
           true,
         );

@@ -9,6 +9,7 @@ import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
+  expandTsgoExecutionGraphs,
   findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
   TSGO_CI_ADDITIONAL_GRAPHS,
@@ -236,7 +237,7 @@ export async function inspectCiTsgoCheckGraphs(
   const cwd = realpathSync(options.cwd ?? repoRoot);
   const inspect = async (query: GraphQuery) => {
     const graphs = options.scope === "noncore" ? [] : await validateCoreGraphs(cwd, query);
-    for (const graph of TSGO_CI_ADDITIONAL_GRAPHS) {
+    for (const graph of expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS)) {
       const files = (await query.files(graph.config, graph.name, cwd)).map((file) =>
         normalizeFilePath(file, cwd),
       );
@@ -254,7 +255,7 @@ export async function inspectCiTsgoCheckGraphs(
   try {
     const configs = [
       ...(options.scope === "noncore" ? [] : TSGO_CORE_GRAPHS),
-      ...TSGO_CI_ADDITIONAL_GRAPHS,
+      ...expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS),
     ];
     const snapshot = await api.createSnapshot({
       openProjects: configs.map(({ config }) => path.resolve(cwd, config)),

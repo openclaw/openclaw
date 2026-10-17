@@ -132,6 +132,14 @@ paired-device image is provisioned.
 
 Eligible core-source and core-test PRs use targeted type checks when every selected compiler input exists in the checkout. Deleted Markdown files and UI stylesheets do not prevent narrowing for accompanying code changes. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted compiler inputs keep the full type-check coverage.
 
+Scoped PR plans inspect the four root-test partitions separately and select every
+partition that consumes a changed input, including type-only imports. A change
+used only by tooling tests checks that partition; shared setup can select all
+four. Full checks retain the aggregate root alias. Missing or duplicate compiler
+inventories retain full coverage. Selected partitions keep their original stripe
+identities when four admitted core rows are available; smaller plans run only the
+selected partitions serially in the central row.
+
 Preflight passes the complete changed-path manifest between steps as a local JSON
 file, so large PRs do not lose test-planning inputs to Actions output or environment
 size limits. Frozen targets that predate this transport retain their bounded JSON
