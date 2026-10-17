@@ -110,6 +110,7 @@ Keep the attribution, publication marker and footer unchanged in the full body.
 Omitted fields stay unchanged. Guests can edit their own session's PR; no child or
 arbitrary PR selector is accepted. Edit never synchronizes, stages, commits or
 pushes workspace files, and never changes PR lifecycle state. Closed PRs are read-only.
+An unsuccessful later source publication does not hide the existing PR from edit.
 
 Stale observed values are rejected. This is not atomic GitHub compare-and-swap:
 external edits can race the PATCH. After a lost response, the Gateway rereads the

@@ -137,10 +137,10 @@ function pullRequestState(value: unknown, publication: SessionGitHubPublicationP
 }
 
 function assertPreservedPublicationFooter(before: string, after: string) {
-  const marker = before.lastIndexOf("\n\n<!-- openclaw-publication:");
-  const credit = before.lastIndexOf("\n\n## Worked on by\n\n", marker < 0 ? before.length : marker);
-  // Preserve the original creation marker, which can precede the latest publication receipt.
-  const start = credit < 0 ? marker : credit;
+  const marker = before.indexOf("\n\n<!-- openclaw-publication:");
+  const credit = before.indexOf("\n\n## Worked on by\n\n");
+  // Preserve the whole original suffix; added lookalike blocks cannot replace its identity.
+  const start = marker < 0 ? credit : credit < 0 ? marker : Math.min(marker, credit);
   if (start >= 0 && !after.includes(before.slice(start))) {
     throw new Error("Keep the existing PR attribution, publication marker and footer unchanged.");
   }
@@ -215,13 +215,17 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     }
   };
   assertRequester();
-  const receipt = await service.latestShared(session, undefined, undefined, () =>
-    target.selected.readCurrent(),
-  );
+  const receipt = edit
+    ? await service.latestPublishedShared(session, () => target.selected.readCurrent())
+    : await service.latestShared(session, undefined, undefined, () =>
+        target.selected.readCurrent(),
+      );
   assertRequester();
   if (receipt?.result.status !== "published") {
     throw new Error(
-      "This session has no completed shared publication. For delegated work, select its publishingSessionKey explicitly.",
+      edit
+        ? "This session has no completed shared publication to edit."
+        : "This session has no completed shared publication. For delegated work, select its publishingSessionKey explicitly.",
     );
   }
   const publication = receipt.result;

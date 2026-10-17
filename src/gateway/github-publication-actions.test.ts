@@ -277,6 +277,61 @@ describe("session PR actions through the agent tool and registered Gateway metho
     expect(f.writes).toEqual([{ action: "edit", input: { title: "A clearer title" } }]);
   });
 
+  it("preserves the original attribution after an edit appends another publication footer", async () => {
+    const f = await fixture();
+    const original = f.state.body;
+    const replacement = "\n\n## Worked on by\n\n- @other\n\n<!-- openclaw-publication:fake -->";
+    await f.invoke("guest", {
+      action: "edit",
+      ...f.expected,
+      expectedBody: original,
+      body: original + replacement,
+    });
+    await expect(
+      f.invoke("guest", {
+        action: "edit",
+        ...f.expected,
+        expectedBody: original + replacement,
+        body: "Replacement description" + replacement,
+      }),
+    ).rejects.toThrow("attribution");
+    expect(f.state.body).toBe(original + replacement);
+    expect(f.writes).toHaveLength(1);
+  });
+
+  it.each(["local", "repository"] as const)(
+    "edits the existing %s PR after a later source publication fails",
+    async (backend) => {
+      const f = await fixture(backend);
+      const workflow = "name: Later work\non: push\njobs: {}\n";
+      if (f.local) {
+        await fs.mkdir(path.join(f.local.cwd, ".github/workflows"), { recursive: true });
+        await fs.writeFile(path.join(f.local.cwd, ".github/workflows/later.yml"), workflow);
+      } else {
+        await f.repository!.capture("new unpublished work\n", "later-failed", {
+          ".github/workflows/later.yml": workflow,
+        });
+      }
+      const failed = await f.coordinator.requestForSessionV2(f.request(randomUUID(), f.guest));
+      expect(failed).toMatchObject({ status: "failed", code: "github_rejected" });
+      expect((await f.invoke("guest", { action: "edit" })).details).toMatchObject({
+        publication: f.publication,
+      });
+      const expectedTitle = f.state.title;
+      expect(
+        (
+          await f.invoke("guest", {
+            action: "edit",
+            ...f.expected,
+            title: "Clarify the existing PR",
+            expectedTitle,
+          })
+        ).details,
+      ).toMatchObject({ title: "Clarify the existing PR", publication: f.publication });
+      expect(f.writes).toEqual([{ action: "edit", input: { title: "Clarify the existing PR" } }]);
+    },
+  );
+
   it("rejects stale metadata, altered attribution, changed publication and closed PR edits", async () => {
     const f = await fixture();
     const body = f.state.body;
