@@ -895,7 +895,7 @@ Use `trusted` only when the embedded document genuinely needs same-origin behavi
 
 Absolute external `http(s)` embed URLs stay blocked by default, except for the dedicated [YouTube video card](/web/control-ui/chat#youtube-videos). To let `[embed url="https://..."]` load other third-party pages, set `gateway.controlUi.allowExternalEmbedUrls: true`.
 
-Widgets created by `show_widget` load through the authenticated Gateway connection in every sandbox mode, including while settings are loading. In `strict` mode, their content remains visible but scripted interactions are disabled.
+Widgets created by `show_widget` load through the authenticated Gateway connection in every sandbox mode, including while settings are loading. In `strict` mode, their content remains visible but scripted interactions are disabled. Authenticated conversation readers, including guests, receive the configured sandbox policy without needing general operator read access. Bootstrap does not grant access to plugin modules or configuration settings that their scopes do not allow.
 
 When a live widget moves into the assistant's final reply, Chrome and Edge 133+
 and Firefox 144+ preserve its playback and local interaction state. Browsers
