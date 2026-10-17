@@ -6,7 +6,7 @@ import {
 } from "@openclaw/ai/internal/openai";
 import type { FirstStreamEventInternalOptions } from "@openclaw/ai/internal/runtime";
 import type { Model } from "@openclaw/llm-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -51,6 +51,7 @@ beforeAll(async () => {
   });
 });
 
+beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
 afterEach(() => {
   vi.useRealTimers();
   server.listener.closeAllConnections();
@@ -116,30 +117,48 @@ async function openRequest(api: Api, modelRequestTimeoutMs?: number, runTimeoutM
   return { request, closed, accepted, firstText, onTimeout, controller, completion };
 }
 
+type Request = Awaited<ReturnType<typeof openRequest>>;
+
+async function withRequest(
+  signal: AbortSignal,
+  api: Api,
+  check: (stream: Request) => Promise<void>,
+  providerMs?: number,
+  runMs?: number,
+) {
+  const stream = await openRequest(api, providerMs, runMs);
+  try {
+    await check(stream);
+  } finally {
+    stream.controller.abort();
+    await withinTest(stream.completion, signal);
+  }
+}
+
+function received(stream: Request, signal: AbortSignal) {
+  return withinTest(
+    awaitGateBeforeSettlement(stream.request.promise, stream.completion, "request never sent"),
+    signal,
+  );
+}
+
+async function expectDeadline(stream: Request, signal: AbortSignal, ms: number) {
+  await vi.advanceTimersByTimeAsync(ms - 1);
+  expect(stream.onTimeout).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(stream.onTimeout).toHaveBeenCalledOnce();
+  expect(await withinTest(stream.completion, signal)).toBe(stream.onTimeout.mock.calls[0]?.[0]);
+}
+
 describe("provider header deadline", () => {
   it.for(Object.keys(providers) as Api[])(
     "aborts a local %s request with no response headers at 300 seconds",
-    async (api, { signal }) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const stream = await openRequest(api);
-      try {
-        const response = await withinTest(
-          awaitGateBeforeSettlement(
-            stream.request.promise,
-            stream.completion,
-            "request never sent",
-          ),
-          signal,
-        );
-        expect(response.headersSent).toBe(false);
-        await vi.advanceTimersByTimeAsync(299_999);
-        expect(stream.onTimeout).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
+    async (api, { signal }) =>
+      withRequest(signal, api, async (stream) => {
+        expect((await received(stream, signal)).headersSent).toBe(false);
+        await expectDeadline(stream, signal, 300_000);
         expect(stream.onTimeout).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ message: "LLM idle timeout (300s): no response from model" }),
-        );
-        expect(await withinTest(stream.completion, signal)).toBe(
-          stream.onTimeout.mock.calls[0]?.[0],
         );
         await withinTest(stream.closed.promise, signal);
         if (api === "openai-responses") {
@@ -164,11 +183,7 @@ describe("provider header deadline", () => {
             }),
           );
         }
-      } finally {
-        stream.controller.abort();
-        await withinTest(stream.completion, signal);
-      }
-    },
+      }),
   );
 
   it.for([
@@ -176,38 +191,23 @@ describe("provider header deadline", () => {
     { providerMs: 900_000, runMs: undefined, expectedMs: 900_000 },
   ])(
     "keeps the header budget at $expectedMs ms",
-    async ({ providerMs, runMs, expectedMs }, { signal }) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const stream = await openRequest("openai-responses", providerMs, runMs);
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            stream.request.promise,
-            stream.completion,
-            "request never sent",
-          ),
-          signal,
-        );
-        await vi.advanceTimersByTimeAsync(expectedMs - 1);
-        expect(stream.onTimeout).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-        expect(stream.onTimeout).toHaveBeenCalledOnce();
-        expect(await withinTest(stream.completion, signal)).toBe(
-          stream.onTimeout.mock.calls[0]?.[0],
-        );
-      } finally {
-        stream.controller.abort();
-        await withinTest(stream.completion, signal);
-      }
-    },
+    async ({ providerMs, runMs, expectedMs }, { signal }) =>
+      withRequest(
+        signal,
+        "openai-responses",
+        async (stream) => {
+          await received(stream, signal);
+          await expectDeadline(stream, signal, expectedMs);
+        },
+        providerMs,
+        runMs,
+      ),
   );
 
   it("allows a local completions stream to pause after its first event and deliver its reply", async ({
     signal,
-  }) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const stream = await openRequest("openai-completions");
-    try {
+  }) =>
+    withRequest(signal, "openai-completions", async (stream) => {
       const response = await withinTest(stream.request.promise, signal);
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write(
@@ -225,18 +225,12 @@ describe("provider header deadline", () => {
       });
       await vi.advanceTimersByTimeAsync(600_000);
       expect(stream.onTimeout).not.toHaveBeenCalled();
-    } finally {
-      stream.controller.abort();
-      await withinTest(stream.completion, signal);
-    }
-  });
+    }));
 
   it.for(["anthropic-messages", "ollama"] as const)(
     "allows local %s prompt evaluation after headers without an outward event",
-    async (api, { signal }) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const stream = await openRequest(api);
-      try {
+    async (api, { signal }) =>
+      withRequest(signal, api, async (stream) => {
         const response = await withinTest(stream.request.promise, signal);
         response.writeHead(200, {
           "content-type": api === "ollama" ? "application/x-ndjson" : "text/event-stream",
@@ -245,17 +239,11 @@ describe("provider header deadline", () => {
         await withinTest(stream.accepted.promise, signal);
         await vi.advanceTimersByTimeAsync(600_000);
         expect(stream.onTimeout).not.toHaveBeenCalled();
-      } finally {
-        stream.controller.abort();
-        await withinTest(stream.completion, signal);
-      }
-    },
+      }),
   );
 
-  it("preserves the OpenAI first-SSE deadline after headers", async ({ signal }) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const stream = await openRequest("openai-responses");
-    try {
+  it("preserves the OpenAI first-SSE deadline after headers", async ({ signal }) =>
+    withRequest(signal, "openai-responses", async (stream) => {
       const response = await withinTest(stream.request.promise, signal);
       await vi.advanceTimersByTimeAsync(200_000);
       response.writeHead(200, { "content-type": "text/event-stream" });
@@ -269,9 +257,5 @@ describe("provider header deadline", () => {
       );
       await withinTest(stream.completion, signal);
       await withinTest(stream.closed.promise, signal);
-    } finally {
-      stream.controller.abort();
-      await withinTest(stream.completion, signal);
-    }
-  });
+    }));
 });

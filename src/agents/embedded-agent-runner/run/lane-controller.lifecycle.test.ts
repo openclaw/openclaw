@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -19,46 +19,13 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 
 type LaneParams = RunEmbeddedAgentParams & { sessionFile: string };
 
-const completedResult: EmbeddedAgentRunResult = {
-  payloads: [],
-  meta: {
-    durationMs: 0,
-    agentMeta: { sessionId: "session-1", provider: "openai", model: "gpt-test" },
-  },
-};
+const completedResult: EmbeddedAgentRunResult = { meta: { durationMs: 0 } };
 
-function deferredTaskQueue() {
-  let release: (() => void) | undefined;
-  const enqueue = vi.fn(
-    async <T>(task: () => Promise<T>, _options?: CommandQueueEnqueueOptions): Promise<T> =>
-      await new Promise<T>((resolve, reject) => {
-        release = () => {
-          void task().then(resolve, reject);
-        };
-      }),
-  );
-  return {
-    enqueue,
-    release: () => {
-      if (!release) {
-        throw new Error("Expected queued task release callback");
-      }
-      release();
-    },
-  };
-}
-
-function createController(options: {
-  lifecycleGeneration: string;
-  initialQueuedLifecycleGeneration?: string;
-  enqueue?: LaneParams["enqueue"];
-  trigger?: LaneParams["trigger"];
-  abortSignal?: AbortSignal;
-  runId?: string;
-  params?: Pick<LaneParams, "agentId" | "sessionKey" | "swarmExecutionLane">;
-  inputProvenance?: LaneParams["inputProvenance"];
-}) {
-  let lifecycleGeneration = options.lifecycleGeneration;
+function createController(
+  options: Partial<LaneParams> & { initialQueuedLifecycleGeneration?: string },
+) {
+  const { initialQueuedLifecycleGeneration, ...overrides } = options;
+  let lifecycleGeneration = options.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
   const runId = options.runId ?? "run-1";
   let params: LaneParams = {
     admittedRunContext: createTestAdmittedRunContext(runId),
@@ -71,19 +38,15 @@ function createController(options: {
     timeoutMs: 30_000,
     runId,
     lifecycleGeneration,
-    trigger: options.trigger,
-    inputProvenance: options.inputProvenance,
-    enqueue: options.enqueue,
-    abortSignal: options.abortSignal,
-    ...options.params,
+    enqueue: options.enqueue ?? (async (task) => await task()),
+    ...overrides,
   };
   setRuntimeConfigSnapshot(params.config ?? {});
   const controller = createEmbeddedRunLaneController({
     getLifecycleGeneration: () => lifecycleGeneration,
     getParams: () => params,
     globalLane: "global-lane",
-    initialQueuedLifecycleGeneration:
-      options.initialQueuedLifecycleGeneration ?? lifecycleGeneration,
+    initialQueuedLifecycleGeneration: initialQueuedLifecycleGeneration ?? lifecycleGeneration,
     sessionLane: "session:agent:main:session-1",
     setLifecycleGeneration: (next) => {
       lifecycleGeneration = next;
@@ -95,53 +58,70 @@ function createController(options: {
   return {
     controller,
     getLifecycleGeneration: () => lifecycleGeneration,
-    getParams: () => params,
   };
 }
 
+function createQueuedController(options: Parameters<typeof createController>[0]) {
+  let release: (() => void) | undefined;
+  const state = createController({
+    ...options,
+    enqueue: async <T>(task: () => Promise<T>) =>
+      await new Promise<T>((resolve, reject) => {
+        release = () => {
+          void task().then(resolve, reject);
+        };
+      }),
+  });
+  const run = state.controller.enqueueGlobal(async () => completedResult);
+  return {
+    ...state,
+    run,
+    release: () => {
+      if (!release) {
+        throw new Error("Expected queued task release callback");
+      }
+      release();
+    },
+  };
+}
+
+async function expectStaleRun(run: Promise<EmbeddedAgentRunResult>, runId: string) {
+  await expect(run).rejects.toMatchObject({
+    name: "AbortError",
+    message: "Agent run belongs to a stale gateway lifecycle",
+  });
+  expect(getAgentRunContext(runId)).toBeUndefined();
+}
+
 describe("createEmbeddedRunLaneController lifecycle admission", () => {
-  beforeEach(() => {
-    resetAgentEventsForTest();
-  });
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-  });
+  beforeEach(() => resetAgentEventsForTest());
+  afterEach(() => clearRuntimeConfigSnapshot());
 
   it("marks user session work as foreground", async () => {
-    const trigger = "user" as const;
-    const expected = "foreground";
     const priorities: Array<CommandQueueEnqueueOptions["priority"]> = [];
-    const enqueue: LaneParams["enqueue"] = async (task, options) => {
-      priorities.push(options?.priority);
-      return await task();
-    };
-    const generation = getAgentEventLifecycleGeneration();
     const { controller } = createController({
-      lifecycleGeneration: generation,
-      enqueue,
-      trigger,
+      trigger: "user",
+      enqueue: async (task, options) => {
+        priorities.push(options?.priority);
+        return await task();
+      },
     });
-
     await controller.enqueueSession(async () => undefined);
-
-    expect(priorities).toEqual([expected]);
+    expect(priorities).toEqual(["foreground"]);
   });
 
   it("applies the current swarm capacity only to global execution admission", async () => {
     const capacities: Array<number | undefined> = [];
     let maxConcurrent = 32;
     const { controller } = createController({
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
       enqueue: async (task, options) => {
         capacities.push(options?.maxConcurrent);
         return await task();
       },
-      params: {
-        swarmExecutionLane: {
-          lane: "subagent:swarm:group",
-          get maxConcurrent() {
-            return maxConcurrent;
-          },
+      swarmExecutionLane: {
+        lane: "subagent:swarm:group",
+        get maxConcurrent() {
+          return maxConcurrent;
         },
       },
     });
@@ -153,10 +133,9 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
   it("preserves the selected agent for sessionless admitted runtime events", async () => {
     const runId = "sessionless-owned-run";
     const { controller } = createController({
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      enqueue: async (task) => await task(),
       runId,
-      params: { agentId: "research", sessionKey: undefined },
+      agentId: "research",
+      sessionKey: undefined,
     });
     const events: Array<{ agentId?: string; sessionKey?: string }> = [];
     const unsubscribe = onAgentRuntimeEvent((event) => events.push(event));
@@ -176,21 +155,14 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
   });
 
   it("rebinds inter-session user work that was queued before lifecycle rotation", async () => {
-    const queue = deferredTaskQueue();
-    const generation = getAgentEventLifecycleGeneration();
-    const state = createController({
-      lifecycleGeneration: generation,
-      enqueue: queue.enqueue as LaneParams["enqueue"],
+    const state = createQueuedController({
       trigger: "user",
       inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
       runId: "inter-session-across-restart",
     });
-    const run = state.controller.enqueueGlobal(async () => completedResult);
-
     const currentGeneration = rotateAgentEventLifecycleGeneration();
-    queue.release();
-    await run;
-
+    state.release();
+    await state.run;
     expect(state.getLifecycleGeneration()).toBe(currentGeneration);
     expect(getAgentRunContext("inter-session-across-restart")).toMatchObject({
       lifecycleGeneration: currentGeneration,
@@ -198,64 +170,43 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
   });
 
   it("rejects background work queued across lifecycle rotation", async () => {
-    const queue = deferredTaskQueue();
-    const generation = getAgentEventLifecycleGeneration();
-    const { controller } = createController({
-      lifecycleGeneration: generation,
-      enqueue: queue.enqueue as LaneParams["enqueue"],
+    const state = createQueuedController({
       trigger: "cron",
       runId: "background-across-restart",
     });
-    const run = controller.enqueueGlobal(async () => completedResult);
-
     rotateAgentEventLifecycleGeneration();
-    queue.release();
-
-    await expect(run).rejects.toMatchObject({
-      name: "AbortError",
-      message: "Agent run belongs to a stale gateway lifecycle",
-    });
-    expect(getAgentRunContext("background-across-restart")).toBeUndefined();
+    state.release();
+    await expectStaleRun(state.run, "background-across-restart");
   });
 
   it("does not claim a rebound generation after queued work was aborted", async () => {
-    const queue = deferredTaskQueue();
     const abortController = new AbortController();
-    const generation = getAgentEventLifecycleGeneration();
-    const { controller } = createController({
-      lifecycleGeneration: generation,
-      enqueue: queue.enqueue as LaneParams["enqueue"],
+    const state = createQueuedController({
       trigger: "user",
       runId: "aborted-across-restart",
       abortSignal: abortController.signal,
     });
-    const run = controller.enqueueGlobal(async () => completedResult);
-
     rotateAgentEventLifecycleGeneration();
     abortController.abort();
-    queue.release();
-
-    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    state.release();
+    await expect(state.run).rejects.toMatchObject({ name: "AbortError" });
     expect(getAgentRunContext("aborted-across-restart")).toBeUndefined();
   });
 
   it("rejects stale descendants admitted only after lifecycle rotation", async () => {
     const staleGeneration = getAgentEventLifecycleGeneration();
     const currentGeneration = rotateAgentEventLifecycleGeneration();
-    const enqueue: LaneParams["enqueue"] = async (task) => await task();
     const { controller } = createController({
       lifecycleGeneration: staleGeneration,
       initialQueuedLifecycleGeneration: currentGeneration,
-      enqueue,
       trigger: "user",
       runId: "stale-descendant",
     });
 
-    await expect(controller.enqueueGlobal(async () => completedResult)).rejects.toMatchObject({
-      name: "AbortError",
-      message: "Agent run belongs to a stale gateway lifecycle",
-    });
-    expect(getAgentRunContext("stale-descendant")).toBeUndefined();
+    await expectStaleRun(
+      controller.enqueueGlobal(async () => completedResult),
+      "stale-descendant",
+    );
   });
 
   it("does not replace a newer same-id run context", async () => {
@@ -266,11 +217,9 @@ describe("createEmbeddedRunLaneController lifecycle admission", () => {
       sessionId: "new-session",
       lifecycleGeneration: currentGeneration,
     });
-    const enqueue: LaneParams["enqueue"] = async (task) => await task();
     const { controller } = createController({
       lifecycleGeneration: staleGeneration,
       initialQueuedLifecycleGeneration: staleGeneration,
-      enqueue,
       trigger: "user",
       runId: "shared-run",
     });

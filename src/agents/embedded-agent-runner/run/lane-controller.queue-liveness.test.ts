@@ -38,6 +38,8 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 const CONTEXT_TTL_MS = 30 * 60 * 1000;
 const SESSION_LANE = "queued-run-context-session";
 const GLOBAL_LANE = "queued-run-context-global";
+const registeredAt = 1_000;
+const admissionAt = registeredAt + CONTEXT_TTL_MS + 1;
 
 function createRunResult(): EmbeddedAgentRunResult {
   return { meta: { durationMs: 1 } };
@@ -101,8 +103,6 @@ afterEach(() => {
 
 describe("queued embedded run context liveness", () => {
   test("retains context past the TTL while worker placement admission is pending", async () => {
-    const registeredAt = 1_000;
-    const admissionAt = registeredAt + CONTEXT_TTL_MS + 1;
     const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
     const replyOperation = createReplyOperation({
       sessionId: "queued-session",
@@ -118,20 +118,14 @@ describe("queued embedded run context liveness", () => {
       sessionKey: "agent:main:subagent:queued",
     });
 
-    let admitPlacement: (() => void) | undefined;
-    let markPlacementEntered: (() => void) | undefined;
-    const placementAdmission = new Promise<void>((resolve) => {
-      admitPlacement = resolve;
-    });
-    const placementEntered = new Promise<void>((resolve) => {
-      markPlacementEntered = resolve;
-    });
+    const placementAdmission = createDeferred();
+    const placementEntered = createDeferred();
     const uninstallPlacement = installSessionPlacementAdmissionProvider({
       assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
       executeLocalTurn: async (_claim, runLocal) => await runLocal(),
       executeTurn: async (_claim, _params, runLocal) => {
-        markPlacementEntered?.();
-        await placementAdmission;
+        placementEntered.resolve();
+        await placementAdmission.promise;
         return await runLocal();
       },
     });
@@ -140,7 +134,7 @@ describe("queued embedded run context liveness", () => {
     );
 
     try {
-      await placementEntered;
+      await placementEntered.promise;
       expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
 
       clock.mockReturnValue(admissionAt);
@@ -153,7 +147,7 @@ describe("queued embedded run context liveness", () => {
         sessionKey: "agent:main:subagent:queued",
       });
 
-      admitPlacement?.();
+      placementAdmission.resolve();
       await run;
       expect(replyOperation.phase).toBe("queued");
       expect(getAgentRunContext(params.runId)).toMatchObject({
@@ -168,7 +162,7 @@ describe("queued embedded run context liveness", () => {
       expect(sweepStaleRunContexts()).toBe(1);
       expect(getAgentRunContext(params.runId)).toBeUndefined();
     } finally {
-      admitPlacement?.();
+      placementAdmission.resolve();
       uninstallPlacement();
       await run.catch(() => {});
       replyOperation.complete();
@@ -176,8 +170,6 @@ describe("queued embedded run context liveness", () => {
   });
 
   test("releases remote queue ownership at worker admission, not after worker completion", async () => {
-    const registeredAt = 1_000;
-    const admissionAt = registeredAt + CONTEXT_TTL_MS + 1;
     const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
     const onLaneWait = vi.fn();
     const { controller, params } = createRunController({ onLaneWait });
@@ -256,7 +248,6 @@ describe("queued embedded run context liveness", () => {
   ])(
     "releases $queue queue ownership immediately when a waiting run is aborted",
     async ({ blockedLane }) => {
-      const registeredAt = 1_000;
       const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
       const abort = new AbortController();
       const { controller, params } = createRunController({ abortSignal: abort.signal });
@@ -290,7 +281,6 @@ describe("queued embedded run context liveness", () => {
   );
 
   test("releases ownership when a custom queue rejects admission synchronously", async () => {
-    const registeredAt = 1_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
     const { controller, params } = createRunController({
       enqueue: () => {
@@ -312,8 +302,6 @@ describe("queued embedded run context liveness", () => {
   });
 
   test("rebinds queued foreground work after its retired context expires", async () => {
-    const registeredAt = 1_000;
-    const admissionAt = registeredAt + CONTEXT_TTL_MS + 1;
     const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
     const { controller, params } = createRunController({ trigger: "user" });
     registerAgentRunContext(params.runId, {
@@ -360,7 +348,6 @@ describe("queued embedded run context liveness", () => {
   test.each(["local", "remote"] as const)(
     "rejects %s execution when its lifecycle rotates during placement admission",
     async (execution) => {
-      const registeredAt = 1_000;
       const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
       const { controller, params } = createRunController({ trigger: "user" });
       registerAgentRunContext(params.runId, {
@@ -418,7 +405,6 @@ describe("queued embedded run context liveness", () => {
   );
 
   test("rejects queued background work from a retired lifecycle", async () => {
-    const registeredAt = 1_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
     const { controller, params } = createRunController({ trigger: "cron" });
     registerAgentRunContext(params.runId, {
