@@ -313,6 +313,52 @@ describe("compaction-safeguard runtime registry", () => {
 });
 
 describe("compaction-safeguard recent-turn preservation", () => {
+  it.each(["user", "assistant", "toolResult", "section budget"])(
+    "summarizes recent %s context before its preservation section would truncate it",
+    async (source) => {
+      const tailFact = "Keep the existing publication approval requirement.";
+      const longText = `${"context ".repeat(90)}${tailFact}`;
+      const messages: AgentMessage[] = [userMessage("initial request", 1)];
+      if (source === "user") {
+        messages[0] = userMessage(longText, 1);
+      } else if (source === "assistant") {
+        messages.push(castAgentMessage(timestampedTextAssistant(longText, 2)));
+      } else {
+        const count = source === "section budget" ? 50 : 1;
+        const toolCalls = Array.from({ length: count }, (_, index) => ({
+          type: "toolCall",
+          id: `call_${index}`,
+          name: "read",
+          arguments: {},
+        }));
+        messages.push(castAgentMessage({ role: "assistant", content: toolCalls, timestamp: 2 }));
+        messages.push(
+          ...toolCalls.map((toolCall, index) =>
+            toolResultMessage(
+              toolCall.id,
+              source === "section budget" ? `${"x".repeat(500)}${tailFact}` : longText,
+              { timestamp: index + 3 },
+            ),
+          ),
+        );
+      }
+      messages.push(userMessage("continue", 100));
+      mockSummarizeCompactionHistory.mockImplementation(async ({ messages: received }) => {
+        expect(JSON.stringify(received)).toContain(tailFact);
+        return structuredSummary({ rules: tailFact, asks: "continue" });
+      });
+      const sessionManager = createQualityGuardSessionManager({ recentTurnsPreserve: 2 });
+      const event = createCompactionEvent({ preparation: { messagesToSummarize: messages } });
+
+      const { result } = await runCompactionScenario(sessionManager, event, {
+        latestUnresolvedUserRequest: true,
+      });
+
+      expect(expectCompactionResult(result).summary).toContain(tailFact);
+      expect(mockSummarizeCompactionHistory).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each([
     {
       name: "paired recent tool results",
@@ -866,8 +912,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
       audit: { identifiers: [], latestAsk: undefined },
     },
   ])(
-    "audits all-preserved turns containing $name without summarization",
+    "audits oversized all-preserved turns containing $name after summarization",
     async ({ messages, tokensBefore, ownerRequest, expected, absent, audit }) => {
+      mockSummarizeCompactionHistory.mockResolvedValue(structuredSummary({ asks: expected[0] }));
       const sessionManager = createQualityGuardSessionManager({ recentTurnsPreserve: 12 });
       const { result } = await runCompactionScenario(
         sessionManager,
@@ -881,7 +928,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       for (const text of absent) {
         expect(summary).not.toContain(text);
       }
-      expect(mockSummarizeCompactionHistory).not.toHaveBeenCalled();
+      expect(mockSummarizeCompactionHistory).toHaveBeenCalledTimes(1);
       if (audit) {
         expect(mockAuditSummaryQuality).toHaveBeenCalledTimes(1);
         const input = requireRecord(mockCallArg(mockAuditSummaryQuality));

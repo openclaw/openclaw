@@ -916,6 +916,17 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         recentTurnsPreserve,
       });
       const preservedTurnsSectionLocal = buildPreservedTurnsSection(preservedRecentMessages);
+      const preservedTextWouldTruncate = preservedRecentMessages.some((message) => {
+        const rendered = [
+          extractMessageText(message),
+          formatNonTextPlaceholder((message as { content?: unknown }).content),
+        ]
+          .filter(Boolean)
+          .join("\n");
+        return rendered.length > MAX_RECENT_TURN_TEXT_CHARS;
+      });
+      const preservationWouldTruncate =
+        preservedTextWouldTruncate || Boolean(preservedTurnsSectionLocal.truncatedLoss);
       const latestPreparedAsk = extractLatestUserAsk(baseMessagesToSummarize);
       const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
       const includePreservedContext =
@@ -928,6 +939,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // summary to update or non-preserved/split-turn work to summarize.
       const reconciliationMessages =
         previousSummary ||
+        preservationWouldTruncate ||
         includePreservedContext ||
         summaryTargetMessages.length > 0 ||
         turnPrefixMessages.length > 0
