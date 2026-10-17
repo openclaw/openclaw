@@ -39,6 +39,12 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     onResolvedTarget?: (selected: SessionStoreTarget, physical: SessionStoreTarget) => void;
   },
 ): SessionStoreTarget[] {
+  let registeredDatabases: ReturnType<typeof readSessionStoreRegistryRows> | undefined;
+  const readRegistry = () =>
+    (registeredDatabases ??= readSessionStoreRegistryRows(
+      options.registeredDatabases,
+      options.env,
+    ));
   const reportDiagnostic = (diagnostic: SessionStoreTargetCollisionDiagnostic) => {
     if (options.onDiagnostic) {
       options.onDiagnostic(diagnostic);
@@ -82,7 +88,9 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       agentId: target.agentId,
       defaultAgentId: options.defaultAgentId,
       env: options.env,
-      registeredDatabases: options.registeredDatabases,
+      get registeredDatabases() {
+        return readRegistry();
+      },
       isSameDatabasePath,
       readCandidates: options.readCandidates,
     });
@@ -150,7 +158,7 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
         ? []
         : [
             ...new Set(
-              readSessionStoreRegistryRows(options.registeredDatabases, options.env)
+              readRegistry()
                 .filter((entry) => isSameDatabasePath(entry.path, sqlitePath))
                 .map((entry) => normalizeAgentId(entry.agentId)),
             ),
