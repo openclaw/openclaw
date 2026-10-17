@@ -32,9 +32,9 @@ export class GatewayNodeLifecycleDispatchTracker {
   }
 
   async drain(timeoutMs = NODE_LIFECYCLE_DISPATCH_DRAIN_TIMEOUT_MS): Promise<boolean> {
-    const deadlineAt = Date.now() + Math.max(0, timeoutMs);
+    const deadlineAt = performance.now() + Math.max(0, timeoutMs);
     while (this.active.size > 0) {
-      const remainingMs = deadlineAt - Date.now();
+      const remainingMs = deadlineAt - performance.now();
       if (remainingMs <= 0) {
         return false;
       }
