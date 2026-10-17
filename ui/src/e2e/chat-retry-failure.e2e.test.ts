@@ -40,18 +40,44 @@ async function capture(
   }
 }
 
+type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
+const prompt = "Review the remaining call sites and summarize the changes.";
+function paragraph(page: Page, text: string) {
+  return page.locator(".chat-thread").getByRole("paragraph").filter({ hasText: text });
+}
+async function openRun(page: Page) {
+  const gateway = await installMockGateway(page, { sessionKey });
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+  await page.locator(".agent-chat__input textarea").fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+  const send = await gateway.waitForRequest("chat.send");
+  assert(isRecord(send.params) && typeof send.params.idempotencyKey === "string");
+  return { gateway, runId: send.params.idempotencyKey };
+}
+async function receipt(
+  gateway: Gateway,
+  runId: string,
+  message: unknown,
+  messageId: string,
+  messageSeq: number,
+) {
+  await gateway.emitGatewayEvent("session.message", {
+    sessionKey,
+    runId,
+    clientRunId: runId,
+    message,
+    messageId,
+    messageSeq,
+    hasActiveRun: true,
+    activeRunIds: [runId],
+  });
+}
+
 suite.define(() => {
   it("preserves restart partials and a neutral durable recovery notice through reload", async () => {
     await suite.withPage({ viewport: { width: 1160, height: 850 } }, async ({ page }) => {
       // Synthetic Gateway I/O: this proves the UI contract, not an actual Gateway restart.
-      const gateway = await installMockGateway(page, { sessionKey });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const prompt = "Review the remaining call sites and summarize the changes.";
-      await page.locator(".agent-chat__input textarea").fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-      const send = await gateway.waitForRequest("chat.send");
-      assert(isRecord(send.params) && typeof send.params.idempotencyKey === "string");
-      const runId = send.params.idempotencyKey;
+      const { gateway, runId } = await openRun(page);
       const successorRunId = "restart-recovery-successor";
       const now = Date.now();
       const historyMessages = [
@@ -99,16 +125,7 @@ suite.define(() => {
       });
       await partialOutput.waitFor();
       await gateway.setHistoryMessages(historyMessages.slice(0, 2));
-      await gateway.emitGatewayEvent("session.message", {
-        sessionKey,
-        runId,
-        clientRunId: runId,
-        message: historyMessages[1],
-        messageId: "restart-partial",
-        messageSeq: 2,
-        hasActiveRun: true,
-        activeRunIds: [runId],
-      });
+      await receipt(gateway, runId, historyMessages[1], "restart-partial", 2);
       await gateway.emitGatewayEvent("chat", {
         sessionKey,
         runId,
@@ -123,16 +140,7 @@ suite.define(() => {
 
       // Recovery is admitted by the Gateway's durable system input, never a UI retry/send.
       await gateway.setHistoryMessages(historyMessages.slice(0, 3));
-      await gateway.emitGatewayEvent("session.message", {
-        sessionKey,
-        runId: successorRunId,
-        clientRunId: successorRunId,
-        message: historyMessages[2],
-        messageId: "restart-recovery-input",
-        messageSeq: 3,
-        hasActiveRun: true,
-        activeRunIds: [successorRunId],
-      });
+      await receipt(gateway, successorRunId, historyMessages[2], "restart-recovery-input", 3);
       const notice = thread
         .locator(".chat-notice")
         .filter({ hasText: "System · restart recovery" });
@@ -181,15 +189,7 @@ suite.define(() => {
   it("keeps recovery in the claw row and retires it when the run resumes", async () => {
     await suite.withPage({ viewport: { width: 1160, height: 850 } }, async ({ page }) => {
       await page.clock.install();
-      const gateway = await installMockGateway(page, { sessionKey });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await page
-        .locator(".agent-chat__input textarea")
-        .fill("Review the remaining call sites and summarize the changes.");
-      await page.getByRole("button", { name: "Send message" }).click();
-      const send = await gateway.waitForRequest("chat.send");
-      assert(isRecord(send.params) && typeof send.params.idempotencyKey === "string");
-      const runId = send.params.idempotencyKey;
+      const { gateway, runId } = await openRun(page);
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
       await pauseVirtualClock(page);
       const now = await page.evaluate(() => Date.now());
@@ -242,25 +242,14 @@ suite.define(() => {
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
       await gateway.emitChatFinal({ runId, text: "The review is complete." });
       await page.clock.runFor(32);
-      await page
-        .locator(".chat-thread")
-        .getByRole("paragraph")
-        .filter({ hasText: "The review is complete." })
-        .waitFor();
+      await paragraph(page, "The review is complete.").waitFor();
       expect(await page.locator(".chat-run-failure, .chat-error").count()).toBe(0);
     });
   });
 
   it("renders one durable terminal notice, preserves partial output and offers safe recovery", async () => {
     await suite.withPage({ viewport: { width: 1160, height: 850 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, { sessionKey });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const prompt = "Review the remaining call sites and summarize the changes.";
-      await page.locator(".agent-chat__input textarea").fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-      const send = await gateway.waitForRequest("chat.send");
-      assert(isRecord(send.params) && typeof send.params.idempotencyKey === "string");
-      const runId = send.params.idempotencyKey;
+      const { gateway, runId } = await openRun(page);
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
       const now = Date.now();
       const historyMessages = [
@@ -286,21 +275,8 @@ suite.define(() => {
         },
       ];
       await gateway.setHistoryMessages(historyMessages.slice(0, 2));
-      await gateway.emitGatewayEvent("session.message", {
-        sessionKey,
-        runId,
-        clientRunId: runId,
-        message: historyMessages[1],
-        messageId: "partial",
-        messageSeq: 2,
-        hasActiveRun: true,
-        activeRunIds: [runId],
-      });
-      await page
-        .locator(".chat-thread")
-        .getByRole("paragraph")
-        .filter({ hasText: partial })
-        .waitFor();
+      await receipt(gateway, runId, historyMessages[1], "partial", 2);
+      await paragraph(page, partial).waitFor();
       expect(await page.locator(".chat-run-failure").count()).toBe(0);
       await gateway.setSessionsListResponse({
         sessions: [
@@ -334,11 +310,7 @@ suite.define(() => {
       expect(await notice.count()).toBe(1);
       expect(await page.locator(".chat-error").count()).toBe(0);
       expect(await notice.textContent()).not.toContain("⚠");
-      await page
-        .locator(".chat-thread")
-        .getByRole("paragraph")
-        .filter({ hasText: partial })
-        .waitFor();
+      await paragraph(page, partial).waitFor();
       const copy = notice.getByRole("button", { name: "Copy error", exact: true });
       const retryButton = notice.getByRole("button", { name: "Try again", exact: true });
       const copyOpacity = () => copy.evaluate((node) => getComputedStyle(node).opacity);
@@ -354,10 +326,7 @@ suite.define(() => {
       expect(
         Math.abs(titleBox.y + titleBox.height / 2 - retryBox.y - retryBox.height / 2),
       ).toBeLessThan(1);
-      await capture(page, "after", [
-        notice,
-        page.locator(".chat-thread").getByRole("paragraph").filter({ hasText: partial }),
-      ]);
+      await capture(page, "after", [notice, paragraph(page, partial)]);
       await notice.hover();
       await expect.poll(copyOpacity).toBe("1");
       const copyIcon = copy.locator(".chat-copy-btn__icon-copy svg");

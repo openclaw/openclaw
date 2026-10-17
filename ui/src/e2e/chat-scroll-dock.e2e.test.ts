@@ -63,6 +63,58 @@ function expectDockClear(report: Record<string, DockGeometry>): void {
   }
 }
 
+type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
+
+function history(
+  prefix: string,
+  length: number,
+  timestamp: number,
+  detail = "transcript line\n",
+  assistantFirst = true,
+) {
+  return Array.from({ length }, (_, index) => ({
+    content: [{ text: prefix + " " + index + "\n" + detail.repeat(3), type: "text" }],
+    role: (index % 2 === 0) === assistantFirst ? "assistant" : "user",
+    timestamp: timestamp + index,
+  }));
+}
+
+async function publishPr(gateway: Gateway, key: string, withChecks = false) {
+  await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+    sessions: {
+      [key]: {
+        pullRequests: [
+          {
+            number: 144615,
+            owner: "openclaw",
+            repo: "openclaw",
+            branch: "fix/clawhub-publish-metadata-2026-9-4",
+            title: "fix: publish ClawHub metadata",
+            url: "https://github.com/openclaw/openclaw/pull/144615",
+            state: "open",
+            additions: 295,
+            deletions: 57,
+            ...(withChecks
+              ? {
+                  checks: { state: "failing", passed: 60, failed: 1, skipped: 0, running: 0 },
+                  checksUrl: "https://github.com/openclaw/openclaw/pull/144615/checks",
+                }
+              : {}),
+          },
+        ],
+        rateLimited: false,
+        status: "ready",
+      },
+    },
+  });
+}
+
+async function capture(page: Page, dir: string | null, name: string) {
+  if (dir) {
+    await page.screenshot({ path: path.join(dir, name + ".png") });
+  }
+}
+
 suite.define(() => {
   it.each([
     { reducedMotion: "reduce", paragraphs: 1 },
@@ -90,16 +142,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         sessionKey,
         featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-        historyMessages: Array.from({ length: 30 }, (_, index) => ({
-          role: index % 2 ? "assistant" : "user",
-          content: [
-            {
-              type: "text",
-              text: "Reading context " + index + "\n" + "Earlier findings.\n".repeat(3),
-            },
-          ],
-          timestamp: index + 1,
-        })),
+        historyMessages: history("Reading context", 30, 1, "Earlier findings.\n", false),
         inFlightRun: { runId, text: initialText },
         sessionInfo: { key: sessionKey, activeRunIds: [runId], hasActiveRun: true },
         methodResponses: {
@@ -150,9 +193,7 @@ suite.define(() => {
         expect(
           await card.evaluate((element) => element.getBoundingClientRect().height),
         ).toBeGreaterThan(200);
-        if (proofDir) {
-          await page.screenshot({ path: path.join(proofDir, "01-following.png") });
-        }
+        await capture(page, proofDir, "01-following");
         const threadBounds = await thread.boundingBox();
         if (!threadBounds) {
           throw new Error("Expected a visible transcript");
@@ -172,9 +213,7 @@ suite.define(() => {
         }
         await expect.poll(() => thread.textContent()).toContain("Streaming finding 12.");
         await waitForChatScrollIdle(page);
-        if (proofDir) {
-          await page.screenshot({ path: path.join(proofDir, "02-after-stream.png") });
-        }
+        await capture(page, proofDir, "02-after-stream");
         expect(
           samples.every((entry) => !entry.open),
           JSON.stringify(samples),
@@ -194,9 +233,7 @@ suite.define(() => {
         await card.locator("summary").click();
         await waitForChatScrollIdle(page);
         expect(await card.getAttribute("open")).toBe("");
-        if (proofDir) {
-          await page.screenshot({ path: path.join(proofDir, "03-latest.png") });
-        }
+        await capture(page, proofDir, "03-latest");
         // Streaming follows the end after an explicit return and manual reopen.
         for (let line = 17; line <= 20; line++) {
           await streamLine(line);
@@ -228,11 +265,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const baseTs = Date.now() - 100_000;
-    const historyMessages = Array.from({ length: 41 }, (_, index) => ({
-      content: [{ text: `Dock history ${index}\n${"transcript line\n".repeat(3)}`, type: "text" }],
-      role: index % 2 === 0 ? "assistant" : "user",
-      timestamp: baseTs + index,
-    }));
+    const historyMessages = history("Dock history", 41, baseTs);
     const gateway = await installMockGateway(page, {
       featureMethods: [
         "chat.metadata",
@@ -261,36 +294,12 @@ suite.define(() => {
       report.initial = await dockGeometry(page);
 
       const watchedKey = await waitForWatchedSessionKey(gateway);
-      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-        sessions: {
-          [watchedKey]: {
-            pullRequests: [
-              {
-                number: 144615,
-                owner: "openclaw",
-                repo: "openclaw",
-                branch: "fix/clawhub-publish-metadata-2026-9-4",
-                title: "fix: publish ClawHub metadata",
-                url: "https://github.com/openclaw/openclaw/pull/144615",
-                state: "open",
-                additions: 295,
-                deletions: 57,
-                checks: { state: "failing", passed: 60, failed: 1, skipped: 0, running: 0 },
-                checksUrl: "https://github.com/openclaw/openclaw/pull/144615/checks",
-              },
-            ],
-            rateLimited: false,
-            status: "ready",
-          },
-        },
-      });
+      await publishPr(gateway, watchedKey, true);
       await openDetailsPullRequests(page);
       await page.locator(".chat-pr").first().waitFor();
       await waitForChatScrollIdle(page);
       report.afterPr = await dockGeometry(page);
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "00-after-pr.png") });
-      }
+      await capture(page, proofDir, "00-after-pr");
 
       // A late media/markdown layout can grow the mounted reply in the same
       // task as the final wheel event, before ResizeObserver publishes its size.
@@ -305,9 +314,7 @@ suite.define(() => {
       });
       await waitForChatScrollIdle(page);
       report.afterLateLayout = await dockGeometry(page);
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "01-late-layout.png") });
-      }
+      await capture(page, proofDir, "01-late-layout");
       expectDockClear({ afterLateLayout: report.afterLateLayout });
 
       const card = page.locator('[data-progress-card-placement="details"]');
@@ -342,9 +349,7 @@ suite.define(() => {
         await waitForChatScrollIdle(page);
       }
       await expect.poll(() => card.getAttribute("open")).toBe("");
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "01-expanded-at-bottom.png") });
-      }
+      await capture(page, proofDir, "01-expanded-at-bottom");
 
       await closeChatDetails(page);
       await scrollChatThreadToTop(page);
@@ -353,8 +358,8 @@ suite.define(() => {
       await card.locator("summary").click();
       if (proofDir) {
         await waitForChatScrollIdle(page);
-        await page.screenshot({ path: path.join(proofDir, "02-reading-history.png") });
       }
+      await capture(page, proofDir, "02-reading-history");
       await expect.poll(() => card.getAttribute("open")).toBeNull();
       await waitForChatScrollIdle(page);
       expect(await page.locator(".chat-thread").evaluate((thread) => thread.scrollTop)).toBe(0);
@@ -370,9 +375,7 @@ suite.define(() => {
       await waitForChatScrollIdle(page);
       report.afterManualOpen = await dockGeometry(page);
       expectDockClear(report);
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "03-returned-to-bottom.png") });
-      }
+      await capture(page, proofDir, "03-returned-to-bottom");
 
       // Interrupt an active Latest return with an explicit keyboard close.
       const thread = page.locator(".chat-thread");
@@ -405,13 +408,7 @@ suite.define(() => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const baseTs = Date.now() - 100_000;
-    const historyMessages = Array.from({ length: 30 }, (_, index) => ({
-      content: [
-        { text: `Stream history ${index}\n${"transcript line\n".repeat(3)}`, type: "text" },
-      ],
-      role: index % 2 === 0 ? "assistant" : "user",
-      timestamp: baseTs + index,
-    }));
+    const historyMessages = history("Stream history", 30, baseTs);
     const runId = "dock-growing-run";
     const runHistory: unknown[] = [
       ...historyMessages,
@@ -461,27 +458,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByText("Stream history 29").waitFor({ timeout: 10_000 });
       const watchedKey = await waitForWatchedSessionKey(gateway);
-      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-        sessions: {
-          [watchedKey]: {
-            pullRequests: [
-              {
-                number: 144615,
-                owner: "openclaw",
-                repo: "openclaw",
-                branch: "fix/clawhub-publish-metadata-2026-9-4",
-                title: "fix: publish ClawHub metadata",
-                url: "https://github.com/openclaw/openclaw/pull/144615",
-                state: "open",
-                additions: 295,
-                deletions: 57,
-              },
-            ],
-            rateLimited: false,
-            status: "ready",
-          },
-        },
-      });
+      await publishPr(gateway, watchedKey);
       await openDetailsPullRequests(page);
       await page.locator(".chat-pr").first().waitFor();
       await expect
@@ -493,6 +470,15 @@ suite.define(() => {
       const rowKey = await runRow.getAttribute("data-virtual-row-key");
       let sequence = 0;
       let text = "";
+      const emitTool = (data: Record<string, unknown>) =>
+        gateway.emitGatewayEvent("agent", {
+          data,
+          runId,
+          seq: ++sequence,
+          sessionKey: "agent:main:main",
+          stream: "tool",
+          ts: Date.now(),
+        });
       for (let step = 1; step <= 4; step += 1) {
         const before = await dockGeometry(page);
         text =
@@ -519,31 +505,17 @@ suite.define(() => {
         expect(preamble.scrollHeight - before.scrollHeight).toBe(
           preamble.rowHeight - before.rowHeight,
         );
-        await gateway.emitGatewayEvent("agent", {
-          data: {
-            phase: "start",
-            name: "exec",
-            toolCallId: `dock-tool-${step}`,
-            args: { command: `echo check-${step}` },
-          },
-          runId,
-          seq: ++sequence,
-          sessionKey: "agent:main:main",
-          stream: "tool",
-          ts: Date.now(),
+        await emitTool({
+          phase: "start",
+          name: "exec",
+          toolCallId: `dock-tool-${step}`,
+          args: { command: `echo check-${step}` },
         });
-        await gateway.emitGatewayEvent("agent", {
-          data: {
-            phase: "result",
-            name: "exec",
-            toolCallId: `dock-tool-${step}`,
-            result: { content: [{ type: "text", text: "Check complete." }] },
-          },
-          runId,
-          seq: ++sequence,
-          sessionKey: "agent:main:main",
-          stream: "tool",
-          ts: Date.now(),
+        await emitTool({
+          phase: "result",
+          name: "exec",
+          toolCallId: `dock-tool-${step}`,
+          result: { content: [{ type: "text", text: "Check complete." }] },
         });
         runHistory.push(
           {
