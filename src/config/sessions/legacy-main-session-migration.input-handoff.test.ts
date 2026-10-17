@@ -5,13 +5,10 @@ import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
-import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
+import { createLegacyMainSessionHandoff } from "./legacy-main-session-migration.handoff-fixture.test-support.js";
 import {
-  databasePath,
   readClaim,
   recordHarnessDeletions,
-  seedClaim,
   setupLegacyMainSessionMigrationTests,
   type ClaimTarget,
 } from "./legacy-main-session-migration.test-support.js";
@@ -40,35 +37,10 @@ function createInputHandoff(sharedStore = false) {
     agents: { entries: { ops: {} } },
     ...(storePath ? { session: { store: storePath } } : {}),
   });
-  const entry = { sessionId: "input-handoff-generation", updatedAt: 100 };
-  const events = [
-    { type: "session", version: 3, id: entry.sessionId, timestamp: new Date(1).toISOString() },
-  ];
-  const source: ClaimTarget = {
-    databaseAgentId: "main",
-    databasePath: storePath ?? databasePath(fixture.stateDir, "main"),
-    key: "agent:main:chat",
-  };
-  const destination: ClaimTarget = {
-    databaseAgentId: sharedStore ? "main" : "ops",
-    databasePath: storePath ?? databasePath(fixture.stateDir, "ops"),
-    key: "agent:ops:chat",
-  };
-  seedClaim({ ...source, entry, events });
-  const scope = (target: ClaimTarget) => ({
-    agentId: target.key === source.key ? "main" : "ops",
-    env: fixture.env,
-    storePath: target.databasePath,
-    sessionKey: target.key,
-    sessionId: entry.sessionId,
-  });
-  const options = (target: ClaimTarget) => ({
-    agentId: target.databaseAgentId,
-    env: fixture.env,
-    path: target.databasePath,
-  });
+  const handoff = createLegacyMainSessionHandoff(fixture, "input-handoff-generation", storePath);
+  const { scope, withDatabase } = handoff;
   const rows = (target: ClaimTarget) =>
-    runOpenClawAgentWriteTransaction(({ db }) => {
+    withDatabase(target, ({ db }) => {
       const read = (table: string, order: string) =>
         db
           .prepare(`SELECT * FROM ${table} WHERE session_key = ? ORDER BY ${order}`)
@@ -77,7 +49,7 @@ function createInputHandoff(sharedStore = false) {
         pending: read("session_pending_inputs", "seq").map(({ seq: _seq, ...row }) => row),
         completions: read("session_input_completions", "idempotency_key"),
       };
-    }, options(target));
+    });
   const accept = async (
     target: ClaimTarget,
     runId: string,
@@ -126,42 +98,29 @@ function createInputHandoff(sharedStore = false) {
     return receipt;
   };
   const setCompletedAt = (target: ClaimTarget, completedAt: number) =>
-    runOpenClawAgentWriteTransaction(({ db }) => {
+    withDatabase(target, ({ db }) => {
       db.prepare("UPDATE session_input_completions SET completed_at = ? WHERE session_key = ?").run(
         completedAt,
         target.key,
       );
-    }, options(target));
-  const migrate = () =>
-    migrateLegacyMainSessionKeys({ cfg: fixture.cfg, env: fixture.env, mode: "doctor-fix" });
-  return {
-    source,
-    destination,
-    entry,
-    events,
-    scope,
-    options,
-    rows,
-    accept,
-    setCompletedAt,
-    migrate,
-  };
+    });
+  return { ...handoff, rows, accept, setCompletedAt };
 }
 
 describe("legacy main session input handoff", () => {
   it.each([false, true])(
-    "preserves accepted and consumed inputs (shared store: %s)",
+    "preserves accepted and consumed inputs (shared: %s)",
     async (sharedStore) => {
       const f = createInputHandoff(sharedStore);
       const queued = await f.accept(f.source, "queued");
       const cancelled = await f.accept(f.source, "cancelled", { disposition: "cancelled" });
       const consumed = await f.accept(f.source, "consumed", { collected: true });
       // A crash can leave the persisted row queued after its process-local owner has disappeared.
-      runOpenClawAgentWriteTransaction(({ db }) => {
+      f.withDatabase(f.source, ({ db }) => {
         db.prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?").run(
           queued.inputId,
         );
-      }, f.options(f.source));
+      });
       const before = f.rows(f.source);
       expect(before.pending).toHaveLength(3);
       const consumedByEventId = before.pending[2]!.consumed_event_id;
@@ -211,7 +170,7 @@ describe("legacy main session input handoff", () => {
       await f.accept(f.source, "private-result", { completion: source });
       f.setCompletedAt(f.source, retainDestination ? 100 : 200);
       if (destination) {
-        seedClaim({ ...f.destination, entry: f.entry, events: f.events });
+        f.seed(f.destination);
         await f.accept(f.destination, "private-result", { completion: destination });
         f.setCompletedAt(f.destination, retainDestination ? 200 : 100);
       }
@@ -235,7 +194,7 @@ describe("legacy main session input handoff", () => {
   );
 
   it.each(["pending input", "completion"] as const)(
-    "retains source evidence when a %s changes during deletion preparation",
+    "retains source evidence on %s deletion races",
     async (kind) => {
       const f = createInputHandoff();
       await f.accept(f.source, "accepted", { completion: interrupted });

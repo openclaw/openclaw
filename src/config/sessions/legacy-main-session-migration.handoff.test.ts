@@ -6,7 +6,7 @@ import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admi
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabaseByPath,
-  runOpenClawAgentWriteTransaction,
+  runOpenClawAgentWriteTransaction as writeTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import {
@@ -20,22 +20,23 @@ import {
 } from "./legacy-main-session-migration.test-support.js";
 import { deleteSessionEntryLifecycle } from "./session-accessor.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
-import { readSessionTranscriptHistoryAnchorPage } from "./session-accessor.sqlite-history.test-support.js";
+import { readSessionTranscriptHistoryAnchorPage as readHistoryPage } from "./session-accessor.sqlite-history.test-support.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { rotateTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { appendTranscriptEventInTransaction as appendEvent } from "./session-accessor.sqlite-transcript-store.js";
 import { readVerifiedSessionColdArchive } from "./session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
 
 const { createFixture } = setupLegacyMainSessionMigrationTests();
+type Fixture = ReturnType<typeof createFixture>;
 
-function repair(fixture: ReturnType<typeof createFixture>) {
-  return migrateLegacyMainSessionKeys({ cfg: fixture.cfg, env: fixture.env, mode: "doctor-fix" });
+function repair({ cfg, env }: Fixture, mode: "doctor-fix" | "detect" = "doctor-fix") {
+  return migrateLegacyMainSessionKeys({ cfg, env, mode });
 }
 
 function claim(
-  fixture: ReturnType<typeof createFixture>,
+  fixture: Fixture,
   agentId: string,
   key = `agent:${agentId}:chat`,
   pathname = databasePath(fixture.stateDir, agentId),
@@ -45,38 +46,33 @@ function claim(
 
 function transaction<T>(
   target: ClaimTarget,
-  run: Parameters<typeof runOpenClawAgentWriteTransaction<T>>[0],
+  run: Parameters<typeof writeTransaction<T>>[0],
   env?: NodeJS.ProcessEnv,
 ) {
-  return runOpenClawAgentWriteTransaction(run, {
-    agentId: target.databaseAgentId,
-    path: target.databasePath,
-    env,
-  });
+  const { databaseAgentId: agentId, databasePath: pathname } = target;
+  return writeTransaction(run, { agentId, path: pathname, env });
 }
 
-function message(
-  id: string,
-  role: string,
-  content: string,
-  parentId: string | null = null,
-  idempotencyKey?: string,
-) {
-  return {
-    type: "message",
-    id,
-    parentId,
-    message: { role, content, ...(idempotencyKey ? { idempotencyKey } : {}) },
-  };
+function message(id: string, role: string, content: string, parent?: string, key?: string) {
+  const body = { role, content, ...(key ? { idempotencyKey: key } : {}) };
+  return { type: "message", id, parentId: parent ?? null, message: body };
 }
 
 function archiveCold(store: string) {
+  const session = { store, maintenance: { coldStorage: { enabled: true, afterDays: 30 } } };
   return runSessionColdStorageMaintenance({
-    config: {
-      agents: { entries: { main: {} } },
-      session: { store, maintenance: { coldStorage: { enabled: true, afterDays: 30 } } },
-    },
+    config: { agents: { entries: { main: {} } }, session },
   });
+}
+
+function historyScope(fixture: Fixture, target: ClaimTarget, sessionId: string) {
+  const { databaseAgentId: agentId, databasePath: storePath, key: sessionKey } = target;
+  return { agentId, storePath, sessionKey, sessionId, env: fixture.env };
+}
+
+function updateWindow(target: ClaimTarget, assignments: string, env: NodeJS.ProcessEnv) {
+  const sql = `UPDATE session_windows SET ${assignments} WHERE session_key = ?`;
+  transaction(target, ({ db }) => db.prepare(sql).run(target.key), env);
 }
 
 describe("legacy main session history handoff", () => {
@@ -100,109 +96,90 @@ describe("legacy main session history handoff", () => {
       expectedDatabaseIdentity,
       target: { canonicalKey: source.key, storeKeys: [source.key] },
     };
-
-    await expect(
-      deleteSessionEntryLifecycle({
-        ...deletion,
-        agentId: destination.databaseAgentId,
-        storePath: destination.databasePath,
-      }),
-    ).resolves.toMatchObject({ deleted: false, expectedEntryMismatch: true });
+    const remove = ({ databaseAgentId: agentId, databasePath: storePath }: ClaimTarget) =>
+      deleteSessionEntryLifecycle({ ...deletion, agentId, storePath });
+    await expect(remove(destination)).resolves.toMatchObject({
+      deleted: false,
+      expectedEntryMismatch: true,
+    });
     expect([readClaim(source), readClaim(destination)]).toEqual(before);
-    await expect(
-      deleteSessionEntryLifecycle({
-        ...deletion,
-        agentId: source.databaseAgentId,
-        storePath: source.databasePath,
-      }),
-    ).resolves.toMatchObject({ deleted: true });
+    await expect(remove(source)).resolves.toMatchObject({ deleted: true });
     expect(readClaim(destination)).toEqual(before[1]);
   });
 
-  it("cleans a foreign logical claim from its physical partition without bypassing active work", async () => {
-    const fixture = createFixture();
-    const storePath = path.join(fixture.stateDir, "shared.json");
-    fixture.cfg = {
-      agents: {
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, beta: {} },
-      },
-      session: { store: storePath },
-    };
-    const sourcePath = path.join(fixture.stateDir, "shared.beta.sqlite");
-    const destinationPath = path.join(fixture.stateDir, "shared.sqlite");
-    const source = claim(fixture, "beta", "agent:main:chat", sourcePath);
-    const destination = claim(fixture, "ops", "agent:ops:chat", destinationPath);
-    const sibling = { ...destination, key: "agent:ops:keep" };
-    seedClaim(sibling);
-    const entry = seedClaim({ ...source, events: [{ kind: "repeat" }, { kind: "repeat" }] });
-    const sourceBefore = readClaim(source);
-    const siblingBefore = readClaim(sibling);
-    const admission = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [source.key, entry.sessionId],
-      assertAllowed: () => {},
-    });
-    try {
-      await expect(repair(fixture)).rejects.toThrow("competing work is in flight");
-      expect(readClaim(source)).toEqual(sourceBefore);
-    } finally {
-      admission.release();
-    }
-
-    const repaired = await repair(fixture);
-    const retry = await repair(fixture);
-
-    expect(repaired.complete).toBe(true);
-    expect(retry.ledgerComplete).toBe(true);
-    expect(readClaim(source)).toBeUndefined();
-    expect(readClaim(destination)?.entry).toMatchObject(entry);
-    expect(readClaim(destination)?.events).toEqual(sourceBefore?.events);
-    expect(readClaim(sibling)).toEqual(siblingBefore);
-    expect(fs.existsSync(path.join(fixture.stateDir, "shared.main.sqlite"))).toBe(false);
-  });
-
-  it("imports a new fixed-store destination at its planned path and owner on the first attempt", async () => {
-    const fixture = createFixture();
-    const storePath = path.join(fixture.stateDir, "shared.json");
-    fixture.cfg.session = { store: storePath };
-    const source = claim(fixture, "main");
-    const sibling = { ...source, key: "agent:other:keep" };
-    const entry = seedClaim({ ...source, events: [{ kind: "repeat" }, { kind: "repeat" }] });
-    seedClaim(sibling);
-    const sourceBefore = readClaim(source);
-    const siblingBefore = readClaim(sibling);
-    const destinationPath = path.join(fixture.stateDir, "shared.sqlite");
-    const destination = claim(fixture, "ops", "agent:ops:chat", destinationPath);
-
-    const result = await repair(fixture);
-    const retry = await repair(fixture);
-
-    expect(result.complete).toBe(true);
-    expect(outcomeKinds(result)).toContain("migrated-cross-store");
-    expect(retry.ledgerComplete).toBe(true);
-    expect(readClaim(source)).toBeUndefined();
-    expect(readClaim(destination)?.entry).toMatchObject(entry);
-    expect(readClaim(destination)?.events).toEqual(sourceBefore?.events);
-    expect(readClaim(sibling)).toEqual(siblingBefore);
-    expect(fs.existsSync(path.join(fixture.stateDir, "shared.ops.sqlite"))).toBe(false);
-    expect(fs.existsSync(storePath)).toBe(false);
-    expect(
-      transaction(source, (database) => readTranscriptEventRows(database, entry.sessionId)),
-    ).toEqual([]);
-  });
+  it.each(["foreign partition", "new destination"])(
+    "hands off a fixed-store claim: %s",
+    async (kind) => {
+      const fixture = createFixture();
+      const foreign = kind === "foreign partition";
+      const storePath = path.join(fixture.stateDir, "shared.json");
+      fixture.cfg.session = { store: storePath };
+      if (foreign) {
+        fixture.cfg.agents = {
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, beta: {} },
+        };
+      }
+      const destinationPath = path.join(fixture.stateDir, "shared.sqlite");
+      const foreignPath = path.join(fixture.stateDir, "shared.beta.sqlite");
+      const source = foreign
+        ? claim(fixture, "beta", "agent:main:chat", foreignPath)
+        : claim(fixture, "main");
+      const destination = claim(fixture, "ops", "agent:ops:chat", destinationPath);
+      const sibling = foreign
+        ? { ...destination, key: "agent:ops:keep" }
+        : { ...source, key: "agent:other:keep" };
+      if (foreign) {
+        seedClaim(sibling);
+      }
+      const entry = seedClaim({ ...source, events: [{ kind: "repeat" }, { kind: "repeat" }] });
+      if (!foreign) {
+        seedClaim(sibling);
+      }
+      const sourceBefore = readClaim(source);
+      const siblingBefore = readClaim(sibling);
+      if (foreign) {
+        const admission = await beginSessionWorkAdmission({
+          scope: storePath,
+          identities: [source.key, entry.sessionId],
+          assertAllowed: () => {},
+        });
+        try {
+          await expect(repair(fixture)).rejects.toThrow("competing work is in flight");
+          expect(readClaim(source)).toEqual(sourceBefore);
+        } finally {
+          admission.release();
+        }
+      }
+      const result = await repair(fixture);
+      const retry = await repair(fixture);
+      expect(result.complete).toBe(true);
+      expect(retry.ledgerComplete).toBe(true);
+      expect(readClaim(source)).toBeUndefined();
+      expect(readClaim(destination)?.entry).toMatchObject(entry);
+      expect(readClaim(destination)?.events).toEqual(sourceBefore?.events);
+      expect(readClaim(sibling)).toEqual(siblingBefore);
+      const unusedPartition = foreign ? "main" : "ops";
+      const unusedPath = path.join(fixture.stateDir, `shared.${unusedPartition}.sqlite`);
+      expect(fs.existsSync(unusedPath)).toBe(false);
+      if (!foreign) {
+        expect(outcomeKinds(result)).toContain("migrated-cross-store");
+        expect(fs.existsSync(storePath)).toBe(false);
+        const events = transaction(source, (db) => readTranscriptEventRows(db, entry.sessionId));
+        expect(events).toEqual([]);
+      }
+    },
+  );
 
   it("preserves anchored history and recorded idempotency ownership across stores", async () => {
     const fixture = createFixture();
-    const sourcePath = databasePath(fixture.stateDir, "main");
-    const destinationPath = databasePath(fixture.stateDir, "ops");
+    const sourceTarget = claim(fixture, "main");
+    const destination = claim(fixture, "ops");
     const sessionId = "identity-transfer";
-    const sourceKey = "agent:main:chat";
-    const source = { agentId: "main", path: sourcePath, sessionId, sessionKey: sourceKey };
+    const { databasePath: pathname, key: sessionKey } = sourceTarget;
+    const source = { agentId: "main", path: pathname, sessionId, sessionKey };
     seedClaim({
-      databaseAgentId: "main",
-      databasePath: sourcePath,
-      key: sourceKey,
+      ...sourceTarget,
       entry: { sessionId, updatedAt: 100 },
       events: [
         { type: "session", version: 3, id: sessionId },
@@ -210,21 +187,18 @@ describe("legacy main session history handoff", () => {
         message("earlier-answer", "assistant", "Earlier answer.", "question", "answer-key"),
       ],
     });
-    const expectedIdentities = runOpenClawAgentWriteTransaction(
-      (database) => {
-        appendTranscriptEventInTransaction(
-          database,
-          source,
-          message("latest-answer", "assistant", "Latest answer.", "earlier-answer", "answer-key"),
-          { allowStoredAlias: true, idempotencyKeyMode: "relocate-owner" },
-        );
-        return database.db
-          .prepare("SELECT * FROM transcript_event_identities WHERE session_id = ? ORDER BY seq")
-          .all(sessionId);
-      },
-      { agentId: "main", path: sourcePath },
-    );
-    const before = readClaim(claim(fixture, "main"));
+    const expectedIdentities = transaction(sourceTarget, (database) => {
+      appendEvent(
+        database,
+        source,
+        message("latest-answer", "assistant", "Latest answer.", "earlier-answer", "answer-key"),
+        { allowStoredAlias: true, idempotencyKeyMode: "relocate-owner" },
+      );
+      return database.db
+        .prepare("SELECT * FROM transcript_event_identities WHERE session_id = ? ORDER BY seq")
+        .all(sessionId);
+    });
+    const before = readClaim(sourceTarget);
     expect(expectedIdentities).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ event_id: "earlier-answer", message_idempotency_key: null }),
@@ -235,20 +209,13 @@ describe("legacy main session history handoff", () => {
       ]),
     );
 
-    const result = await repair(fixture);
-
-    expect(result.complete).toBe(true);
-    const scope = {
-      agentId: "ops",
-      env: fixture.env,
-      storePath: destinationPath,
-      sessionId,
-      sessionKey: "agent:ops:chat",
-    };
+    expect(await repair(fixture)).toMatchObject({ complete: true });
     expect(
-      readSessionTranscriptHistoryAnchorPage(scope, { messageId: "question", maxMessages: 3 }),
+      readHistoryPage(historyScope(fixture, destination, sessionId), {
+        messageId: "question",
+        maxMessages: 3,
+      }),
     ).toMatchObject({ found: true });
-    const destination = claim(fixture, "ops", scope.sessionKey);
     expect(readClaim(destination)?.events).toEqual(before?.events);
     expect(
       transaction(destination, (database) =>
@@ -273,7 +240,7 @@ describe("legacy main session history handoff", () => {
     const destination = claim(fixture, "ops");
     const entry = { sessionId: "identity-conflict", updatedAt: 100 };
     const events = [
-      message("answer", "assistant", "Unchanged answer bytes.", null, "recorded-owner"),
+      message("answer", "assistant", "Unchanged answer bytes.", undefined, "recorded-owner"),
     ];
     seedClaim({ ...source, entry, events });
     const beforeCopy = phase === "before-copy" || phase === "destination-watermark-missing";
@@ -317,11 +284,7 @@ describe("legacy main session history handoff", () => {
     }
     const { committed } = await recordHarnessDeletions(
       async () => {
-        const migration = migrateLegacyMainSessionKeys({
-          cfg: fixture.cfg,
-          env: fixture.env,
-          mode: beforeCopy ? "detect" : "doctor-fix",
-        });
+        const migration = repair(fixture, beforeCopy ? "detect" : "doctor-fix");
         if (beforeCopy || phase === "during-delete") {
           expect((await migration).complete).toBe(false);
         } else {
@@ -342,12 +305,10 @@ describe("legacy main session history handoff", () => {
     "preserves every retained generation through a %s cross-store handoff",
     async (kind) => {
       const fixture = createFixture();
-      const sourcePath = databasePath(fixture.stateDir, "main");
-      const destinationPath = databasePath(fixture.stateDir, "ops");
-      const sourceKey = "agent:main:chat";
       const canonicalKey = "agent:ops:chat";
       const source = claim(fixture, "main");
       const destination = claim(fixture, "ops");
+      const destinationPath = destination.databasePath;
       const ids = ["retained-first", "retained-previous", "current"];
       const entries = ids.map((sessionId, index) => ({
         sessionId,
@@ -376,8 +337,9 @@ describe("legacy main session history handoff", () => {
       for (const [index, entry] of entries.entries()) {
         seedClaim({ ...source, entry, events: events[index] });
       }
-      const snapshot = (agentId: string, pathname: string) =>
-        runOpenClawAgentWriteTransaction(
+      const snapshot = (target: ClaimTarget) =>
+        transaction(
+          target,
           ({ db }) => ({
             windows: db.prepare("SELECT * FROM session_windows ORDER BY session_id").all(),
             events: db.prepare("SELECT * FROM transcript_events ORDER BY session_id, seq").all(),
@@ -385,22 +347,13 @@ describe("legacy main session history handoff", () => {
               .prepare("SELECT * FROM transcript_event_identities ORDER BY session_id, event_id")
               .all(),
           }),
-          { agentId, path: pathname, env: fixture.env },
-        );
-      if (kind === "cold") {
-        transaction(
-          source,
-          ({ db }) => {
-            db.prepare(
-              "UPDATE session_windows SET transcript_updated_at = 1 WHERE session_key = ?",
-            ).run(sourceKey);
-          },
           fixture.env,
         );
+      if (kind === "cold") {
+        updateWindow(source, "transcript_updated_at = 1", fixture.env);
       }
-      const before = snapshot("main", sourcePath);
-      expect(before.windows).toHaveLength(3);
-      expect(before.events).toHaveLength(9);
+      const before = snapshot(source);
+      expect([before.windows.length, before.events.length]).toEqual([3, 9]);
       if (kind === "utf16") {
         fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
         {
@@ -416,38 +369,33 @@ describe("legacy main session history handoff", () => {
       }
       if (kind === "existing-current") {
         seedClaim({ ...destination, entry: entries[2], events: events[2] });
-        transaction(
+        updateWindow(
           destination,
-          ({ db }) => {
-            db.prepare(
-              "UPDATE session_windows SET row_transcript_json = NULL, row_transcript_updated_at = NULL WHERE session_key = ?",
-            ).run(canonicalKey);
-          },
+          "row_transcript_json = NULL, row_transcript_updated_at = NULL",
           fixture.env,
         );
       }
-      const existingBefore =
-        kind === "existing-current" ? snapshot("ops", destinationPath) : undefined;
+      const existingBefore = kind === "existing-current" ? snapshot(destination) : undefined;
       if (kind === "cold") {
-        const archived = await archiveCold(sourcePath);
+        const archived = await archiveCold(source.databasePath);
         expect(archived.archivedTranscripts).toBeGreaterThan(0);
       }
 
       expect(await repair(fixture)).toMatchObject({ complete: true });
-      const after = snapshot("ops", destinationPath);
-      expect(after.windows).toEqual(
-        before.windows.map(
+      const after = snapshot(destination);
+      expect(after).toEqual({
+        windows: before.windows.map(
           (window) =>
             existingBefore?.windows.find(
               (existing) => existing.session_id === window.session_id,
             ) ?? { ...window, session_key: canonicalKey },
         ),
-      );
-      expect(after.events).toEqual(
-        kind === "utf16"
-          ? before.events.map((event) => ({ ...event, event_utf8_bytes: null }))
-          : before.events,
-      );
+        events:
+          kind === "utf16"
+            ? before.events.map((event) => ({ ...event, event_utf8_bytes: null }))
+            : before.events,
+        identities: before.identities,
+      });
       expect(after.events.filter((event) => event.seq === 2)).toEqual(
         ids.map(() =>
           expect.objectContaining({
@@ -461,25 +409,18 @@ describe("legacy main session history handoff", () => {
           }),
         ),
       );
-      expect(after.identities).toEqual(before.identities);
-      expect(snapshot("main", sourcePath)).toEqual({ windows: [], events: [], identities: [] });
+      expect(snapshot(source)).toEqual({ windows: [], events: [], identities: [] });
       expect(readClaim(destination)?.entry).toMatchObject(entries[2]!);
       for (const [index, sessionId] of ids.entries()) {
         expect(
-          readSessionTranscriptHistoryAnchorPage(
-            {
-              agentId: "ops",
-              env: fixture.env,
-              storePath: destinationPath,
-              sessionKey: canonicalKey,
-              sessionId,
-            },
-            { messageId: `message-${index}`, maxMessages: 2 },
-          ).found,
+          readHistoryPage(historyScope(fixture, destination, sessionId), {
+            messageId: `message-${index}`,
+            maxMessages: 2,
+          }).found,
         ).toBe(true);
       }
       expect(await repair(fixture)).toMatchObject({ ledgerComplete: true });
-      expect(snapshot("ops", destinationPath)).toEqual(after);
+      expect(snapshot(destination)).toEqual(after);
     },
   );
 
@@ -490,8 +431,9 @@ describe("legacy main session history handoff", () => {
     const sourceKey = "agent:main:chat";
     const canonicalKey = "agent:ops:chat";
     const sessionId = "cold-in-place";
+    const source = claim(fixture, "main", sourceKey, storePath);
     seedClaim({
-      ...claim(fixture, "main", sourceKey, storePath),
+      ...source,
       entry: { sessionId, updatedAt: 1 },
       events: [
         { type: "session", version: 3, id: sessionId, timestamp: new Date(1).toISOString() },
@@ -502,24 +444,22 @@ describe("legacy main session history handoff", () => {
       ],
     });
     const options = { agentId: "main", path: storePath, env: fixture.env };
-    runOpenClawAgentWriteTransaction(({ db }) => {
-      db.prepare("UPDATE session_windows SET transcript_updated_at = 1 WHERE session_id = ?").run(
-        sessionId,
-      );
-    }, options);
+    const ageTranscript =
+      "UPDATE session_windows SET transcript_updated_at = 1 WHERE session_id = ?";
+    transaction(source, ({ db }) => db.prepare(ageTranscript).run(sessionId), fixture.env);
     const archived = await archiveCold(storePath);
     expect(archived.archivedTranscripts).toBe(1);
     const snapshot = (key: string) =>
-      runOpenClawAgentWriteTransaction(
-        (database) => ({
+      writeTransaction((database) => {
+        const { db } = database;
+        return {
           entry: readExactSessionEntryRowForCanonicalRepair(database, key)?.entry,
-          windows: database.db.prepare("SELECT * FROM session_windows ORDER BY session_id").all(),
-          events: database.db.prepare("SELECT * FROM transcript_events ORDER BY seq").all(),
-          archive: readSessionColdTranscript(database.db, sessionId),
-          generation: database.db.prepare("SELECT * FROM transcript_rewrite_watermarks").get(),
-        }),
-        options,
-      );
+          windows: db.prepare("SELECT * FROM session_windows ORDER BY session_id").all(),
+          events: db.prepare("SELECT * FROM transcript_events ORDER BY seq").all(),
+          archive: readSessionColdTranscript(db, sessionId),
+          generation: db.prepare("SELECT * FROM transcript_rewrite_watermarks").get(),
+        };
+      }, options);
     const before = snapshot(sourceKey);
     expect(before.events).toEqual([]);
     if (!before.archive) {

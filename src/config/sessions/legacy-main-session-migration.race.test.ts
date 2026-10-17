@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import {
@@ -69,7 +68,22 @@ afterEach(() => {
   race.queued = undefined;
   resetAgentRunRegistryForTest();
 });
-const { tempDirs } = setupLegacyMainSessionMigrationTests();
+const { createFixture } = setupLegacyMainSessionMigrationTests();
+
+async function holdWriter(agentId: string, dbPath: string, env: NodeJS.ProcessEnv, label: string) {
+  const entered = createDeferred();
+  const resume = createDeferred();
+  const pending = runExclusiveSqliteSessionWrite(
+    { agentId, path: dbPath, env },
+    async () => {
+      entered.resolve();
+      await resume.promise;
+    },
+    label,
+  );
+  await entered.promise;
+  return { pending, resume: () => resume.resolve() };
+}
 
 function claim(agentId: string, dbPath: string, env: NodeJS.ProcessEnv, key: string) {
   const options = { agentId, path: dbPath, env };
@@ -95,7 +109,7 @@ function claim(agentId: string, dbPath: string, env: NodeJS.ProcessEnv, key: str
       { allowStoredAlias: true },
     );
   const append = (id: string) => write((database) => appendTo(database, id));
-  const seed = () => {
+  const seed = () =>
     write((database) => {
       const entry = {
         sessionId: "race-session",
@@ -109,7 +123,6 @@ function claim(agentId: string, dbPath: string, env: NodeJS.ProcessEnv, key: str
       replaceSessionOwnerInTransaction(database, key, entry.owner);
       appendTo(database, "event-1");
     });
-  };
   return { read, seed, append, write };
 }
 
@@ -126,6 +139,13 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
         agents: { entries: { ops: {} } },
         ...(inPlace ? { session: { store: opsPath } } : {}),
       };
+      const migrate = (beforePersistentApply?: () => void) =>
+        migrateLegacyMainSessionKeys({
+          cfg,
+          env: state.env,
+          mode: "doctor-fix",
+          beforePersistentApply,
+        });
       await state.writeConfig(cfg);
       const source = claim(sourceAgentId, sourcePath, state.env, "agent:main:chat");
       const destination = claim("ops", opsPath, state.env, "agent:ops:chat");
@@ -135,10 +155,8 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
       const beforePersistentApply = resolveAdmittedRunActiveAssertion(
         await admission.admit("embedded"),
       )!;
-      const entered = createDeferred();
-      const resume = createDeferred();
       const queued = createDeferred();
-      let blocker: Promise<void> | undefined;
+      let blocker: Awaited<ReturnType<typeof holdWriter>> | undefined;
       let migration: Promise<unknown> | undefined;
       const readLedger = () =>
         withExistingOpenClawStateDatabaseReadOnly(
@@ -156,19 +174,12 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
           race.afterDelete = () => admission.close();
         } else {
           const blockedPath = boundary === "cleanup queue" ? mainPath : opsPath;
-          blocker = runExclusiveSqliteSessionWrite(
-            {
-              agentId: boundary === "cleanup queue" ? "main" : "ops",
-              path: blockedPath,
-              env: state.env,
-            },
-            async () => {
-              entered.resolve();
-              await resume.promise;
-            },
+          blocker = await holdWriter(
+            boundary === "cleanup queue" ? "main" : "ops",
+            blockedPath,
+            state.env,
             "session-migration.legacy-main-in-place",
           );
-          await entered.promise;
           race.queued = (pathname) => {
             if (pathname === blockedPath) {
               race.queued = undefined;
@@ -176,12 +187,7 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
             }
           };
         }
-        migration = migrateLegacyMainSessionKeys({
-          cfg,
-          env: state.env,
-          mode: "doctor-fix",
-          beforePersistentApply,
-        }).then(
+        migration = migrate(beforePersistentApply).then(
           (result) => ({ result }),
           (error: unknown) => ({ error }),
         );
@@ -198,7 +204,7 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
           );
           beforePersistentApply();
           admission.close();
-          resume.resolve();
+          blocker?.resume();
         }
         expect
           .soft(await migration)
@@ -217,12 +223,7 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
             expect.soft(fs.existsSync(opsPath)).toBe(false);
           }
         }
-        const recovered = await migrateLegacyMainSessionKeys({
-          cfg,
-          env: state.env,
-          mode: "doctor-fix",
-        });
-        expect(recovered.complete).toBe(true);
+        expect((await migrate()).complete).toBe(true);
         expect(source.read()).toBeUndefined();
         const recoveredClaim = destination.read();
         expect([recoveredClaim?.events, recoveredClaim?.entry.owner]).toEqual([
@@ -233,8 +234,8 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
       } finally {
         race.queued = undefined;
         race.afterDelete = undefined;
-        resume.resolve();
-        await blocker;
+        blocker?.resume();
+        await blocker?.pending;
         await migration;
         admission.close();
       }
@@ -246,49 +247,32 @@ async function runCleanupRace(
   mutateSource: (source: ReturnType<typeof claim>) => void,
   boundary: "copy" | "cleanup" = "cleanup",
 ) {
-  const root = fs.realpathSync.native(tempDirs.make("openclaw-legacy-main-race-"));
-  const stateDir = path.join(root, "state");
-  fs.mkdirSync(stateDir, { recursive: true });
+  const { stateDir, env, cfg } = createFixture();
   const mainPath = databasePath(stateDir, "main");
   const opsPath = databasePath(stateDir, "ops");
-  const env = { ...process.env, OPENCLAW_AGENT_DIR: undefined, OPENCLAW_STATE_DIR: stateDir };
   const source = claim("main", mainPath, env, "agent:main:chat");
   const destination = claim("ops", opsPath, env, "agent:ops:chat");
   source.seed();
-  const resume = createDeferred();
-  let blocker: Promise<void> | undefined;
+  let blocker: Awaited<ReturnType<typeof holdWriter>> | undefined;
   if (boundary === "cleanup") {
     race.beforeDelete = () => mutateSource(source);
   } else {
-    const entered = createDeferred();
-    blocker = runExclusiveSqliteSessionWrite(
-      { agentId: "ops", path: opsPath, env },
-      async () => {
-        entered.resolve();
-        await resume.promise;
-      },
-      "session.import.batch",
-    );
-    await entered.promise;
+    blocker = await holdWriter("ops", opsPath, env, "session.import.batch");
     race.queued = (pathname) => {
       if (pathname === opsPath) {
         race.queued = undefined;
         mutateSource(source);
-        resume.resolve();
+        blocker?.resume();
       }
     };
   }
 
   try {
-    const result = await migrateLegacyMainSessionKeys({
-      cfg: { agents: { entries: { ops: {} } } },
-      env,
-      mode: "doctor-fix",
-    });
+    const result = await migrateLegacyMainSessionKeys({ cfg, env, mode: "doctor-fix" });
     return { source, destination, result };
   } finally {
-    resume.resolve();
-    await blocker;
+    blocker?.resume();
+    await blocker?.pending;
   }
 }
 
@@ -314,16 +298,14 @@ it.each(["copy", "cleanup"] as const)(
 it("preserves both claims when the source entry becomes locked before cleanup", async () => {
   const { source, destination, result } = await runCleanupRace((target) => {
     target.write((database) => {
-      const current = readExactSessionEntryRowForCanonicalRepair(
-        database,
-        "agent:main:chat",
-      )?.entry;
+      const key = "agent:main:chat";
+      const current = readExactSessionEntryRowForCanonicalRepair(database, key)?.entry;
       if (!current) {
         throw new Error("missing race source entry");
       }
       writeSessionEntry(
         database,
-        "agent:main:chat",
+        key,
         { ...current, modelSelectionLocked: true },
         { allowStoredAliases: true, previousEntry: current },
       );

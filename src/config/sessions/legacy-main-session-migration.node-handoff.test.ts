@@ -8,16 +8,10 @@ import {
   writeSessionProgressCard,
 } from "../../session-cards/progress-card-store.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "../../state/openclaw-agent-board-schema.js";
-import {
-  runOpenClawAgentWriteTransaction,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
 import { ensureSessionParticipantsSchema } from "../../state/openclaw-agent-session-participants-schema.js";
-import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
+import { createLegacyMainSessionHandoff } from "./legacy-main-session-migration.handoff-fixture.test-support.js";
 import {
-  databasePath,
   readClaim,
-  seedClaim,
   setupLegacyMainSessionMigrationTests,
   type ClaimTarget,
 } from "./legacy-main-session-migration.test-support.js";
@@ -28,38 +22,11 @@ const rekey = (rows: Record<string, SQLOutputValue>[], sessionKey: string) =>
   rows.map((row) => ({ ...row, session_key: sessionKey }));
 
 function createNodeHandoff(existingCanonical = false) {
-  const fixture = createFixture();
-  const entry = { sessionId: "node-artifact-handoff", updatedAt: 100 };
-  const events = [
-    { type: "session", version: 3, id: entry.sessionId, timestamp: new Date(1).toISOString() },
-    {
-      type: "message",
-      id: "question",
-      parentId: null,
-      timestamp: new Date(2).toISOString(),
-      message: { role: "user", content: "Retain this conversation and its board." },
-    },
-  ];
-  const source: ClaimTarget = {
-    databaseAgentId: "main",
-    databasePath: databasePath(fixture.stateDir, "main"),
-    key: "agent:main:chat",
-  };
-  const destination: ClaimTarget = {
-    databaseAgentId: "ops",
-    databasePath: databasePath(fixture.stateDir, "ops"),
-    key: "agent:ops:chat",
-  };
-  seedClaim({ ...source, entry, events });
+  const handoff = createLegacyMainSessionHandoff(createFixture(), "node-artifact-handoff");
+  const { destination, withDatabase } = handoff;
   if (existingCanonical) {
-    seedClaim({ ...destination, entry, events });
+    handoff.seed(destination);
   }
-  const withDatabase = <T>(target: ClaimTarget, run: (database: OpenClawAgentDatabase) => T) =>
-    runOpenClawAgentWriteTransaction(run, {
-      agentId: target.databaseAgentId,
-      path: target.databasePath,
-      env: fixture.env,
-    });
   const artifacts = (target: ClaimTarget) =>
     withDatabase(target, ({ db }) => {
       const tables = new Set(
@@ -139,13 +106,7 @@ function createNodeHandoff(existingCanonical = false) {
         fromSource ? 30 : 20,
       );
     });
-  const migrate = () =>
-    migrateLegacyMainSessionKeys({
-      cfg: fixture.cfg,
-      env: fixture.env,
-      mode: "doctor-fix",
-    });
-  return { source, destination, entry, withDatabase, artifacts, seedArtifacts, migrate };
+  return { ...handoff, artifacts, seedArtifacts };
 }
 
 describe("legacy main session node artifact handoff", () => {
@@ -177,14 +138,12 @@ describe("legacy main session node artifact handoff", () => {
     expect(await f.migrate()).toMatchObject({ complete: true });
 
     expect(f.artifacts(f.destination)).toEqual({
-      tabs: rekey(before.tabs, f.destination.key),
-      widgets: rekey(before.widgets, f.destination.key),
-      progress: rekey(before.progress, f.destination.key),
+      ...Object.fromEntries(
+        Object.entries(before).map(([key, rows]) => [key, rekey(rows, f.destination.key)]),
+      ),
       heartbeat: rekey(before.heartbeat, f.destination.key).map((row) =>
         Object.assign({}, row, { run_session_key: f.destination.key }),
       ),
-      suggestions: rekey(before.suggestions, f.destination.key),
-      participants: rekey(before.participants, f.destination.key),
       members: [],
     });
     expect(readClaim(f.source)).toBeUndefined();
@@ -289,17 +248,14 @@ describe("legacy main session node artifact handoff", () => {
               get(`SELECT revision, sha256, updated_at, length(html) AS bytes
               FROM board_widgets WHERE session_key = ? AND name = 'status'`);
             const widgetBefore = readWidget();
-            changedRows = Number(
+            const mutation =
               artifact === "widget"
-                ? db
-                    .prepare(
-                      "UPDATE board_widgets SET html = ? WHERE session_key = ? AND name = 'status'",
-                    )
-                    .run(changedHtml, target.key).changes
-                : db
-                    .prepare(`INSERT INTO session_members (session_key, identity_id, added_by, added_at)
-                  VALUES (?, 'late-member', 'owner', 30)`)
-                    .run(target.key).changes,
+                ? "UPDATE board_widgets SET html = ? WHERE session_key = ? AND name = 'status'"
+                : "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, 'late-member', 'owner', 30)";
+            changedRows = Number(
+              db
+                .prepare(mutation)
+                .run(...(artifact === "widget" ? [changedHtml, target.key] : [target.key])).changes,
             );
             expect(readNode()).toEqual(nodeBefore);
             expect(readWidget()).toEqual(widgetBefore);
