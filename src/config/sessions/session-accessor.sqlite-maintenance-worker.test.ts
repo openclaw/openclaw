@@ -716,7 +716,7 @@ it("invalidates the retained maintenance age when a worker commits a backdate", 
     // Managed commit receipts must invalidate the retained Worker age fact even
     // when that caller deliberately delegates scheduling to a later write.
     await patchSessionEntryCore(managedVictim, () => ({ sessionId: "managed", updatedAt: 1 }), {
-      replaceSessionEntrySync: true,
+      replaceEntry: true,
       workerGuard: {},
       skipMaintenance: true,
     });
