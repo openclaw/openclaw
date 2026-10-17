@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer } from "node:http";
 import path from "node:path";
+import { text } from "node:stream/consumers";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -77,13 +78,6 @@ describe("registered mcp.authLogin", () => {
   let discoveryEntered = createDeferredCore();
   let releaseDiscovery: Deferred | undefined;
   const requests: string[] = [];
-  async function readBody(request: IncomingMessage) {
-    let body = "";
-    for await (const chunk of request) {
-      body += chunk;
-    }
-    return body;
-  }
   const endpoint = createServer((request, response) => {
     void (async () => {
       const json = (value: unknown, code = 200) =>
@@ -116,11 +110,11 @@ describe("registered mcp.authLogin", () => {
           token_endpoint_auth_methods_supported: ["none"],
         });
       } else if (url.pathname === "/register") {
-        const metadata = JSON.parse(await readBody(request));
+        const metadata = JSON.parse(await text(request));
         registeredRedirect = metadata.redirect_uris[0];
         json({ ...metadata, client_id: "fixture-client" });
       } else if (url.pathname === "/token") {
-        const params = new URLSearchParams(await readBody(request));
+        const params = new URLSearchParams(await text(request));
         tokenEntered.resolve();
         if (releaseToken) {
           await releaseToken.promise;
@@ -152,7 +146,7 @@ describe("registered mcp.authLogin", () => {
             .end();
           return;
         }
-        const body = await readBody(request);
+        const body = await text(request);
         if (!body) {
           response.writeHead(405).end();
           return;

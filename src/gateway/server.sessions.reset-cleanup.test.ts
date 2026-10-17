@@ -53,7 +53,7 @@ import {
   sessionHookMocks,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const { retireSessionMcpRuntime: retireMcp, disposeSessionMcpRuntime: disposeMcp } =
   bundleMcpRuntimeMocks;
 
@@ -62,16 +62,19 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
-async function seedMainSession(entries: Record<string, InternalSessionEntry> = {}) {
+async function seedMainSession(
+  entries: Record<string, InternalSessionEntry> = {},
+  runState?: "active" | "timed-out",
+) {
   const seeded = await createSessionStoreDir();
   await writeSingleLineSession(seeded.dir, "sess-main", "hello");
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main"), ...entries } });
-  return seeded;
-}
-async function seedWaitingActiveMainSession() {
-  const seeded = await seedActiveMainSession();
-  embeddedRunMock.activeIds.add("sess-main");
-  embeddedRunMock.waitResults.set("sess-main", true);
+  if (runState) {
+    if (runState === "active") {
+      embeddedRunMock.activeIds.add("sess-main");
+    }
+    embeddedRunMock.waitResults.set("sess-main", runState === "active");
+  }
   return seeded;
 }
 
@@ -184,7 +187,7 @@ test("sessions.reset retires an unbound memory session without host session SQL"
 });
 
 test("sessions.reset aborts active runs and clears queues", async () => {
-  const { storePath } = await seedWaitingActiveMainSession();
+  const { storePath } = await seedMainSession({}, "active");
   const parentGrant = RESET_PARENT_GRANT_FIXTURE;
   const preferences = {
     responseUsage: "tokens",
@@ -266,8 +269,7 @@ test("sessions.reset aborts active runs and clears queues", async () => {
 });
 
 test("sessions.reset watches reply-backed MCP retirement after an active-run timeout", async () => {
-  await seedActiveMainSession();
-  embeddedRunMock.waitResults.set("sess-main", false);
+  await seedMainSession({}, "timed-out");
   const waitCallCountsAtRetirement: number[] = [];
   retireMcp.mockImplementation(async () => {
     waitCallCountsAtRetirement.push(embeddedRunMock.waitCalls.length);
@@ -297,8 +299,7 @@ test("sessions.reset watches reply-backed MCP retirement after an active-run tim
 });
 
 test("sessions.reset keeps watching a replacement registered after waiter settlement", async () => {
-  await seedActiveMainSession();
-  embeddedRunMock.waitResults.set("sess-main", false);
+  await seedMainSession({}, "timed-out");
 
   const reset = await resetMainSession();
   expect(reset.ok).toBe(false);
@@ -319,8 +320,7 @@ test("sessions.reset keeps watching a replacement registered after waiter settle
 });
 
 test("sessions.reset reuses the watcher while prior MCP retirement is still disposing", async () => {
-  await seedActiveMainSession();
-  embeddedRunMock.waitResults.set("sess-main", false);
+  await seedMainSession({}, "timed-out");
   const { promise: firstRetirementReleased, resolve: releaseFirstRetirement } = createDeferred();
   const { promise: firstRetirementStarted, resolve: markFirstRetirementStarted } = createDeferred();
   let heldFirstRetirement = false;
@@ -397,7 +397,7 @@ test("sessions.reset clears retained native conversations from every execution o
       };
     });
   try {
-    await seedWaitingActiveMainSession();
+    await seedMainSession({}, "active");
     const response = await resetMainSession();
     expect(response.ok).toBe(true);
     expect(current.has("sess-main")).toBe(false);
@@ -414,7 +414,7 @@ test("sessions.reset clears retained native conversations from every execution o
 test.each([false, true])(
   "sessions.reset interrupts only non-initiating work (initiator: %s)",
   async (initiator) => {
-    const { storePath } = await seedActiveMainSession();
+    const { storePath } = await seedMainSession();
     let interrupted = false;
     let releaseAdmission = () => {};
     const admission = await admitMainWork(storePath, () => {
@@ -435,7 +435,7 @@ test.each([false, true])(
 );
 
 test("sessions.reset rejects an active lifecycle mutation without interrupting admitted work", async () => {
-  const { storePath } = await seedActiveMainSession();
+  const { storePath } = await seedMainSession();
   let interrupted = false;
   const admissionLease = await admitMainWork(storePath, () => {
     interrupted = true;
@@ -490,7 +490,6 @@ test("sessions.reset finishes after lifecycle rotation during destructive cleanu
     lifecycleCurrent = false;
   });
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
-
   const reset = await performGatewaySessionReset({
     key: "main",
     reason: "new",
@@ -524,7 +523,6 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
     await hookReleased;
   });
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
-
   const resetPromise = performGatewaySessionReset({
     key: sessionKey,
     reason: "new",

@@ -166,21 +166,9 @@ async function performSessionReset(params: {
   reason: "new" | "reset";
   commandSource: string;
   assertCurrent?: () => void;
-  onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }) {
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
   return performGatewaySessionReset({ ...params, workerPlacementContext: {} });
-}
-
-function expectResetErrorMessage(
-  reset: Awaited<ReturnType<typeof performSessionReset>>,
-  message: string,
-) {
-  expect(reset.ok).toBe(false);
-  if (reset.ok) {
-    throw new Error("expected reset to fail");
-  }
-  expect(reset.error.message).toBe(message);
 }
 
 function isCommandHookEvent(event: unknown, action: string): event is CommandNewHookEvent {
@@ -329,7 +317,7 @@ test.each([
       reason: "reset",
       commandSource: "gateway:sessions.reset",
     });
-    expectResetErrorMessage(reset, message);
+    expect(reset).toMatchObject({ ok: false, error: { message } });
   });
 });
 
@@ -673,7 +661,6 @@ test("sessions.reset preserves cli session bindings for spawned subagents (Tak H
   expect(nextEntry).toMatchObject({
     sessionId: "sess-spawned-child",
     claudeCliSessionId: "claude-cli-child-session",
-    cliSessionIds: { "claude-cli": "claude-cli-child-session" },
   });
   expect(nextEntry?.agentHarnessId).toBeUndefined();
   expect(nextEntry?.cliSessionIds).toEqual({
