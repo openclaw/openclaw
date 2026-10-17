@@ -39,23 +39,14 @@ beforeEach(async () => {
 afterEach(() => resetPendingAskUserQuestionsForTest());
 
 describe("credential prompt dispatch boundary", () => {
-  it.for<
-    [
-      name: string,
-      link: boolean,
-      route: boolean,
-      failure: boolean,
-      terminal: boolean,
-      deny: boolean,
-    ]
-  >([
+  it.for([
     ["quiet group link", true, false, false, false, false],
     ["quiet group blocker", false, false, false, false, false],
     ["queued transport failure", true, false, true, false, false],
     ["routed transport failure", true, true, true, false, false],
     ["terminal before delivery", true, false, false, true, false],
     ["explicit send-policy denial", true, false, false, false, true],
-  ])(
+  ] as const)(
     "settles the producer's %s without plaintext controls",
     async ([_name, link, route, failure, terminal, deny], { signal }) => {
       setNoAbort();

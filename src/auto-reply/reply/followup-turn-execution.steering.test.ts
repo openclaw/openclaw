@@ -33,6 +33,7 @@ import {
   collectRuntimeMetadata,
   createOverflowSummaryRetrySource,
 } from "./queue/delivery-context.js";
+import type { ReplyToolAuthorityOverlay } from "./reply-run-registry.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
   createReplyOperation,
@@ -46,6 +47,33 @@ const state = getFollowupTurnTestState();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(resetFollowupTurnTestState);
 
+function executeTurn(turn: AdmittedFollowupTurn, defaultModel = "claude") {
+  return executeFollowupTurn({
+    turn,
+    defaults: { typing: createTypingController(), typingMode: "never", defaultModel },
+    onToolResult: vi.fn(async () => {}),
+    onCompactionNoticePayload: vi.fn(async () => {}),
+  });
+}
+
+function sessionState(key: string, storePath: string, initial: SessionEntry) {
+  let entry = initial;
+  return {
+    kind: "session" as const,
+    key,
+    storePath,
+    current: () => entry,
+    publish: (next: SessionEntry | undefined) => {
+      if (next) {
+        entry = next;
+      }
+    },
+    adopt: (next: SessionEntry) => {
+      entry = next;
+    },
+  };
+}
+
 describe("queued turn steering", () => {
   it.each(["gateway", "collected", "overflow"] as const)(
     "accepts successive Gateway steers into a %s followup after an older source completed",
@@ -53,7 +81,7 @@ describe("queued turn steering", () => {
       const root = tempDirs.make("openclaw-followup-steering-");
       const storePath = path.join(root, "sessions.json");
       const sessionKey = "agent:main:queued-steering";
-      let entry: SessionEntry = {
+      const entry: SessionEntry = {
         sessionId: "session",
         updatedAt: 1,
         restartRecoveryTerminalRunIds: ["previous-input"],
@@ -75,20 +103,7 @@ describe("queued turn steering", () => {
       await actor.bind();
       const turn = createTurn({
         operation,
-        session: {
-          kind: "session",
-          key: sessionKey,
-          storePath,
-          current: () => entry,
-          publish: (next) => {
-            if (next) {
-              entry = next;
-            }
-          },
-          adopt: (next) => {
-            entry = next;
-          },
-        },
+        session: sessionState(sessionKey, storePath, entry),
       });
       turn.queued.messageId = "queued-human-input";
       turn.queued.originatingChannel = "webchat";
@@ -172,7 +187,7 @@ describe("queued turn steering", () => {
             session: {
               agentId: "main",
               cfg: {},
-              entry,
+              entry: turn.session.current(),
               sessionKey,
               storePath,
               clientRunId,
@@ -211,16 +226,7 @@ describe("queued turn steering", () => {
         };
       });
       try {
-        await executeFollowupTurn({
-          turn,
-          defaults: {
-            typing: createTypingController(),
-            typingMode: "never",
-            defaultModel: "claude",
-          },
-          onToolResult: vi.fn(async () => {}),
-          onCompactionNoticePayload: vi.fn(async () => {}),
-        });
+        await executeTurn(turn);
         expect(queueMessage.mock.calls.map(([text]) => text)).toEqual(steeringMessages);
         expect(replyRunRegistry.getSourceTurnId(sessionKey)).toBe(sourceTurnId);
       } finally {
@@ -267,63 +273,47 @@ describe("queued turn steering", () => {
         disableTools: false,
         traceAuthorized: false,
       };
-      await expect(
+      const inject = async (
+        text: string,
+        toolAuthorityOverlay: ReplyToolAuthorityOverlay = overlay,
+      ) =>
         (
-          await beginReplyMessageInjectionTarget(target!, "Use the revised request", {
+          await beginReplyMessageInjectionTarget(target!, text, {
             isInboundUserMessage: true,
-            toolAuthorityOverlay: overlay,
+            toolAuthorityOverlay,
           })
-        ).outcome,
+        ).outcome;
+      await expect(inject("Use the revised request")).resolves.toMatchObject({
+        status: "accepted",
+      });
+      await expect(
+        inject("Same permissions from another profile", {
+          ...overlay,
+          operatorAuthority: createAdmittedRunOperatorAuthority({
+            ...overlay.operatorAuthority,
+            profileId: "maintainer",
+          }),
+        }),
       ).resolves.toMatchObject({ status: "accepted" });
       await expect(
-        (
-          await beginReplyMessageInjectionTarget(target!, "Same permissions from another profile", {
-            isInboundUserMessage: true,
-            toolAuthorityOverlay: {
-              ...overlay,
-              operatorAuthority: createAdmittedRunOperatorAuthority({
-                ...overlay.operatorAuthority,
-                profileId: "maintainer",
-              }),
-            },
-          })
-        ).outcome,
-      ).resolves.toMatchObject({ status: "accepted" });
-      await expect(
-        (
-          await beginReplyMessageInjectionTarget(target!, "Change tool permissions", {
-            isInboundUserMessage: true,
-            toolAuthorityOverlay: { ...overlay, disableTools: true },
-          })
-        ).outcome,
+        inject("Change tool permissions", { ...overlay, disableTools: true }),
       ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       for (const incomingOperator of [
         undefined,
         createAdmittedRunOperatorAuthority({ ...operatorAuthority, scopes: ["operator.admin"] }),
       ]) {
         await expect(
-          (
-            await beginReplyMessageInjectionTarget(
-              target!,
-              "Different original operator authority",
-              {
-                isInboundUserMessage: true,
-                toolAuthorityOverlay: { ...overlay, operatorAuthority: incomingOperator },
-              },
-            )
-          ).outcome,
+          inject("Different original operator authority", {
+            ...overlay,
+            operatorAuthority: incomingOperator,
+          }),
         ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       }
       expect(queueMessage).toHaveBeenCalledTimes(2);
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
     try {
-      await executeFollowupTurn({
-        turn,
-        defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
-        onToolResult: vi.fn(async () => {}),
-        onCompactionNoticePayload: vi.fn(async () => {}),
-      });
+      await executeTurn(turn);
     } finally {
       operation.complete();
     }
@@ -478,7 +468,7 @@ describe("queued ingress acceptance", () => {
           sessionId: "queued-session",
           storePath: path.join(testState.agentDir("main"), "openclaw-agent.sqlite"),
         };
-        let entry: SessionEntry = { sessionId: target.sessionId, updatedAt: 1 };
+        const entry: SessionEntry = { sessionId: target.sessionId, updatedAt: 1 };
         await replaceSessionEntry(target, entry);
         const upstreamAbort = new AbortController();
         const operation = createReplyOperation({
@@ -500,20 +490,7 @@ describe("queued ingress acceptance", () => {
         });
         const turn: AdmittedFollowupTurn = createTurn({
           operation,
-          session: {
-            kind: "session",
-            key: target.sessionKey,
-            storePath: target.storePath,
-            current: () => entry,
-            publish: (next) => {
-              if (next) {
-                entry = next;
-              }
-            },
-            adopt: (next) => {
-              entry = next;
-            },
-          },
+          session: sessionState(target.sessionKey, target.storePath, entry),
         });
         turn.queued.run = {
           ...turn.queued.run,
@@ -583,16 +560,7 @@ describe("queued ingress acceptance", () => {
                 await lifecycle.onAdopted();
               },
             }).turnAdoptionLifecycle;
-            const result = await executeFollowupTurn({
-              turn,
-              defaults: {
-                typing: createTypingController(),
-                typingMode: "never",
-                defaultModel: "test-model",
-              },
-              onToolResult: async () => {},
-              onCompactionNoticePayload: async () => {},
-            });
+            const result = await executeTurn(turn, "test-model");
             if (result.execution.outcome.kind === "rejected") {
               replies.push(result.execution.outcome.payload);
             }

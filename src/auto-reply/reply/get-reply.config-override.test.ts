@@ -463,26 +463,22 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       "openai:metered",
     );
   });
-  it.each([["turn override", undefined, "off"]] as const)(
-    "honors %s and clears fallback reasoning during primary probes",
-    async (_name, thinking, expected) => {
-      const { sessionKey } = await mockAutoFallbackSession();
-      mockFallbackDirectiveResult(sessionKey, {
-        resolvedThinkLevel: "off",
-        resolvedReasoningLevel: thinking === undefined ? undefined : "on",
-      });
-      const prepared = await expectPreparedReply(
-        makeReasoningModelConfig(thinking),
-        thinking === undefined ? { thinkingLevelOverride: "off" } : undefined,
-      );
-      expect(prepared).toMatchObject({
-        provider: "openai",
-        model: "gpt-5.5",
-        resolvedThinkLevel: expected,
-        resolvedReasoningLevel: "off",
-      });
-    },
-  );
+  it("honors turn overrides and clears fallback reasoning during primary probes", async () => {
+    const { sessionKey } = await mockAutoFallbackSession();
+    mockFallbackDirectiveResult(sessionKey, {
+      resolvedThinkLevel: "off",
+      resolvedReasoningLevel: undefined,
+    });
+    const prepared = await expectPreparedReply(makeReasoningModelConfig(), {
+      thinkingLevelOverride: "off",
+    });
+    expect(prepared).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.5",
+      resolvedThinkLevel: "off",
+      resolvedReasoningLevel: "off",
+    });
+  });
   it("uses the policy-selected model defaults when the primary probe is filtered out", async () => {
     const { sessionKey } = await mockAutoFallbackSession();
     mockFallbackDirectiveResult(sessionKey, { resolvedThinkLevel: "off" });
