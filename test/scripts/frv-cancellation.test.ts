@@ -299,11 +299,8 @@ describe("FRV cancellation tree", () => {
   });
   it("previews without mutations and rejects a plan not uploaded by its exact producer", async () => {
     const fixture = cancellationFixture();
-    expect(
-      (await cancelReleaseTree("77", fixture.client, { dryRun: true })).cancellation.map(
-        (run) => run.state,
-      ),
-    ).toEqual(["would-cancel", "would-cancel"]);
+    const preview = await cancelReleaseTree("77", fixture.client, { dryRun: true });
+    expect(preview.cancellation.map((run) => run.state)).toEqual(["would-cancel", "would-cancel"]);
     expect(fixture.sent).toEqual([]);
     fixture.upload.conclusion = "failure";
     await expect(cancelReleaseTree("77", fixture.client)).rejects.toThrow(
