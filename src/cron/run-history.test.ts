@@ -27,7 +27,11 @@ import {
   readCronRunRecordsInDatabase,
   recordCronRunInDatabase,
 } from "./store/run-history.kernel.js";
-import type { CronRunHistoryWrite, CronRunRecord } from "./store/run-history.types.js";
+import type {
+  CronJsonValue,
+  CronRunHistoryWrite,
+  CronRunRecord,
+} from "./store/run-history.types.js";
 import {
   prepareCronRunReceiptWriteSchema,
   type CronRunReceiptWriteSchema,
@@ -64,9 +68,18 @@ function historyRecord(id: string, fields: Partial<CronRunRecord> = {}): CronRun
     jobId: "job",
     createdAt: 0,
     status: "succeeded",
-    detail: { kind: "cron-run", storeKey: "store", status: "ok", runId: id },
+    detail: runDetail("store", { runId: id }),
     ...fields,
   };
+}
+function runDetail(storeKey: string, fields: Record<string, CronJsonValue> = {}) {
+  return { kind: "cron-run", storeKey, status: "ok", ...fields };
+}
+function expectTimestamps(records: CronRunRecord[], id: string, expected: (number | undefined)[]) {
+  const row = records.find((record) => record.id === id);
+  expect(
+    row && [row.createdAt, row.startedAt, row.endedAt, row.lastEventAt, row.cleanupAfter],
+  ).toEqual(expected);
 }
 
 function pruneHistory(
@@ -155,7 +168,7 @@ it("seeks linked runs before pagination without confusing public ids or ambiguou
       jobId,
       createdAt: runAtMs,
       endedAt: runAtMs + 1,
-      detail: { kind: "cron-run", storeKey: "store", status: "ok", runId: id, sessionId, runAtMs },
+      detail: runDetail("store", { runId: id, sessionId, runAtMs }),
     });
   const target = record("target", "target-session", 10);
   const records = [
@@ -198,8 +211,8 @@ it("seeks linked runs before pagination without confusing public ids or ambiguou
   expect(seek("target", records, () => false)).toEqual([]);
 });
 
-it("retains history across worker reads, isolates stores, and recovers only an exact receipt", async () => {
-  await withHistoryState(async (storeKey) => {
+it("retains history across worker reads, isolates stores, and recovers only an exact receipt", () =>
+  withHistoryState(async (storeKey) => {
     runOpenClawStateWriteTransaction(({ db }) => {
       recordCronRunInDatabase(db, outcome(storeKey, "first"));
       recordCronRunInDatabase(db, outcome(storeKey, "second"));
@@ -270,11 +283,10 @@ it("retains history across worker reads, isolates stores, and recovers only an e
     expect(delivered.entries).toMatchObject([
       { runId: "third", summary: "Fresh delivery result", deliveryStatus: "delivered" },
     ]);
-  });
-});
+  }));
 
-it("pages large history without reading off-page payloads or changing completion order", async () => {
-  await withHistoryState(async (storeKey) => {
+it("pages large history without reading off-page payloads or changing completion order", () =>
+  withHistoryState(async (storeKey) => {
     const payload = "diagnostic-payload:" + "x".repeat(16 * 1024);
     runOpenClawStateWriteTransaction(({ db }) => {
       const insert = db.prepare(
@@ -290,21 +302,17 @@ it("pages large history without reading off-page payloads or changing completion
           1000 + Math.floor(index / 2),
           100 + Math.floor(index / 2),
           index === 0 ? 9000 : 3000 + Math.floor(index / 2),
-          JSON.stringify({
-            kind: "cron-run",
-            storeKey,
-            status: "ok",
-            runId: `public-${id}`,
-            sessionId: `session-${id}`,
-            runAtMs: 100 + Math.floor(index / 2),
-            summary: `Summary ${id}`,
-            diagnostics: {
-              summary: index === 7 ? "diagnostic-only-needle" : "Run diagnostics",
-              entries: [{ ts: 1, source: "tool", severity: "error", message: payload }],
-            },
-            delivery: { intended: { channel: "test-channel" } },
-            scriptState: "recovery-only:" + payload,
-          }),
+          JSON.stringify(
+            runDetail(storeKey, {
+              runId: `public-${id}`,
+              diagnostics: {
+                summary: index === 7 ? "diagnostic-only-needle" : "Run diagnostics",
+                entries: [{ ts: 1, source: "tool", severity: "error", message: payload }],
+              },
+              delivery: { intended: { channel: "test-channel" } },
+              scriptState: "recovery-only:" + payload,
+            }),
+          ),
         );
       }
       for (const [id, partition] of [
@@ -317,12 +325,7 @@ it("pages large history without reading off-page payloads or changing completion
           10_000,
           10_000,
           11_000,
-          JSON.stringify({
-            kind: "cron-run",
-            storeKey: partition,
-            status: "ok",
-            runId: id,
-          }),
+          JSON.stringify(runDetail(partition, { runId: id })),
         );
       }
     });
@@ -395,11 +398,10 @@ it("pages large history without reading off-page payloads or changing completion
         reads.restore();
       }
     });
-  });
-});
+  }));
 
-it("bounds quiet evaluations separately without evicting payload history or active recovery markers", async () => {
-  await withHistoryDatabase((db) => {
+it("bounds quiet evaluations separately without evicting payload history or active recovery markers", () =>
+  withHistoryDatabase((db) => {
     const schema = prepareCronRunReceiptWriteSchema(db);
     const insert = db.prepare(
       "INSERT INTO task_runs (task_id, runtime, owner_key, scope_kind, task, delivery_status, notify_policy, source_id, created_at, ended_at, cleanup_after, status, detail_json) VALUES (?, 'cron', '', 'system', 'job', 'not_applicable', 'silent', ?, ?, ?, ?, ?, ?)",
@@ -461,11 +463,10 @@ it("bounds quiet evaluations separately without evicting payload history or acti
       expect(pruneRecords(records, 3000)).toEqual(new Set());
       expect(pruneRecords(records, 7 * DAY)).toEqual(new Set(["0"]));
     }
-  });
-});
+  }));
 
-it("retains history when worker pruning fails and retries after storage recovers", async () => {
-  await withHistoryState(async (storeKey) => {
+it("retains history when worker pruning fails and retries after storage recovers", () =>
+  withHistoryState(async (storeKey) => {
     await recordCronRun(outcome(storeKey, "worker"));
     const before = await readCronRunHistoryPage({ storeKey });
     expect(before.total).toBe(1);
@@ -490,11 +491,10 @@ it("retains history when worker pruning fails and retries after storage recovers
     }
     await maintain();
     expect((await readCronRunHistoryPage({ storeKey })).entries).toEqual([]);
-  });
-});
+  }));
 
-it("retains legacy identities and raw details without inventing a store partition", async () => {
-  await withHistoryDatabase((db) => {
+it("retains legacy identities and raw details without inventing a store partition", () =>
+  withHistoryDatabase((db) => {
     const rawDetail = '{ "kind": "cron-run", "status": "ok", "future": [1, 2] }';
     const insert = db.prepare(
       "INSERT INTO task_runs (task_id, runtime, owner_key, scope_kind, task, delivery_status, notify_policy, source_id, run_id, created_at, status, detail_json) VALUES (?, 'cron', '', 'system', 'job', 'not_applicable', 'silent', ?, ?, ?, ?, ?)",
@@ -556,11 +556,10 @@ it("retains legacy identities and raw details without inventing a store partitio
       { owner_kind: "flow", owner_id: "legacy-null" },
       { owner_kind: "task", owner_id: "retired-task" },
     ]);
-  });
-});
+  }));
 
-it("normalizes released lifecycle rows before history, recovery, and retention", async () => {
-  await withHistoryDatabase((db, storeKey) => {
+it("normalizes released lifecycle rows before history, recovery, and retention", () =>
+  withHistoryDatabase((db, storeKey) => {
     const insert = db.prepare(
       "INSERT INTO task_runs (task_id, runtime, owner_key, scope_kind, task, delivery_status, notify_policy, source_id, run_id, agent_id, child_session_key, created_at, started_at, ended_at, last_event_at, status, error, terminal_summary, detail_json) VALUES (?, 'cron', '', 'system', 'job', 'not_applicable', 'silent', 'job', ?, '', '', 200, 100, ?, ?, ?, '', '', ?)",
     );
@@ -571,40 +570,24 @@ it("normalizes released lifecycle rows before history, recovery, and retention",
         null,
         null,
         status,
-        JSON.stringify({
-          kind: "cron-run",
-          status: "ok",
-          storeKey,
-        }),
+        JSON.stringify(runDetail(storeKey)),
       );
     }
     insert.run("clamped", "cron:job:100:clamped", 80, 70, "succeeded", null);
     insert.run("running", "", null, 300, "running", null);
     const records = readCronRunRecordsInDatabase(db);
     for (const status of ["succeeded", "failed", "timed_out", "cancelled", "lost"]) {
+      expectTimestamps(records, status, [100, 100, 200, undefined, undefined]);
       expect(records.find((row) => row.id === status)).toMatchObject({
-        createdAt: 100,
-        startedAt: 100,
-        endedAt: 200,
         agentId: undefined,
         sessionKey: undefined,
         error: undefined,
         summary: "",
       });
     }
-    expect(records.find((row) => row.id === "clamped")).toMatchObject({
-      createdAt: 70,
-      startedAt: 100,
-      endedAt: 100,
-      lastEventAt: 100,
-    });
-    expect(records.find((row) => row.id === "running")).toMatchObject({
-      createdAt: 100,
-      startedAt: 100,
-      endedAt: undefined,
-      lastEventAt: 300,
-      runId: undefined,
-    });
+    expectTimestamps(records, "clamped", [70, 100, 100, 100, undefined]);
+    expectTimestamps(records, "running", [100, 100, undefined, 300, undefined]);
+    expect(records.find((row) => row.id === "running")?.runId).toBeUndefined();
     expect(recover(db, storeKey, "succeeded", 100).finalized?.entry.ts).toBe(200);
     expect(
       projectCronRunHistoryPage(records, { storeKey, jobId: "job" }).entries.map(
@@ -616,11 +599,10 @@ it("normalizes released lifecycle rows before history, recovery, and retention",
     expect(readCronRunRecordsInDatabase(db).map((row) => row.id)).not.toContain("lost");
     expect(pruneHistory(db, 200 + 7 * DAY, schema)).toBe(5);
     expect(readCronRunRecordsInDatabase(db).map((row) => row.id)).toEqual(["running"]);
-  });
-});
+  }));
 
-it("rejects corrupt released enums before reading or pruning history", async () => {
-  await withHistoryDatabase((db) => {
+it("rejects corrupt released enums before reading or pruning history", () =>
+  withHistoryDatabase((db) => {
     const columns = [
       ["status", "succeeded", "status"],
       ["scope_kind", "system", "scope kind"],
@@ -640,22 +622,16 @@ it("rejects corrupt released enums before reading or pruning history", async () 
       db.prepare(`UPDATE task_runs SET ${column} = ?`).run(original!);
     }
     expect(readCronRunRecordsInDatabase(db)).toHaveLength(1);
-  });
-});
+  }));
 
-it("normalizes native SQLite bigint timestamps without rounding unsafe values", async () => {
-  await withHistoryDatabase((db) => {
+it("normalizes native SQLite bigint timestamps without rounding unsafe values", () =>
+  withHistoryDatabase((db) => {
     const insert = db.prepare(
       "INSERT INTO task_runs (task_id, runtime, owner_key, scope_kind, task, delivery_status, notify_policy, created_at, started_at, ended_at, last_event_at, cleanup_after, status) VALUES (?, 'cron', '', 'system', 'job', 'not_applicable', 'silent', ?, ?, 30, ?, ?, 'succeeded')",
     );
     insert.run("safe", 10, 20, 40, 50);
-    insert.run(
-      "unsafe",
-      9007199254740992n,
-      -9007199254740992n,
-      9007199254740992n,
-      9007199254740992n,
-    );
+    const unsafe = 9007199254740992n;
+    insert.run("unsafe", unsafe, -unsafe, unsafe, unsafe);
     const nativeDb = requireNativeSqliteDatabase(db);
     const prepare = nativeDb.prepare.bind(nativeDb);
     // Exercise the native integer mode supported by the released row decoder.
@@ -666,22 +642,9 @@ it("normalizes native SQLite bigint timestamps without rounding unsafe values", 
     });
     try {
       const records = readCronRunRecordsInDatabase(db);
-      expect(records.find((row) => row.id === "safe")).toMatchObject({
-        createdAt: 10,
-        startedAt: 20,
-        endedAt: 30,
-        lastEventAt: 40,
-        cleanupAfter: 50,
-      });
-      expect(records.find((row) => row.id === "unsafe")).toMatchObject({
-        createdAt: 0,
-        startedAt: undefined,
-        endedAt: 30,
-        lastEventAt: undefined,
-        cleanupAfter: undefined,
-      });
+      expectTimestamps(records, "safe", [10, 20, 30, 40, 50]);
+      expectTimestamps(records, "unsafe", [0, undefined, 30, undefined, undefined]);
     } finally {
       nativeBigInts.mockRestore();
     }
-  });
-});
+  }));

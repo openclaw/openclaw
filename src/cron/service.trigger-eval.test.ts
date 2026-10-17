@@ -170,14 +170,12 @@ async function expectRejectedWrite(jobId: string, write: () => Promise<unknown>)
   }
 }
 
-async function finishWatcherRun(params: {
-  h: Harness;
-  jobId: string;
-  run: ReturnType<typeof runWhenDue>;
-  complete: () => void;
-  recover: boolean;
-  editAfterTask?: () => Promise<void>;
-}) {
+async function finishWatcherRun(
+  params: Awaited<ReturnType<typeof pendingWatcher>> & {
+    recover: boolean;
+    editAfterTask?: () => Promise<void>;
+  },
+) {
   const { h, jobId } = params;
   if (!params.recover) {
     params.complete();
@@ -251,11 +249,6 @@ async function finishWatcherRun(params: {
   expect(h.cron.getJob(jobId)?.state.runningAtMs).toBeUndefined();
 }
 
-type PendingWatcher = Pick<
-  Parameters<typeof finishWatcherRun>[0],
-  "h" | "jobId" | "run" | "complete"
->;
-
 async function pendingEvaluation(overrides: Partial<CronJobCreate>) {
   const started = createDeferred<AbortSignal>();
   const evaluation = createDeferred<Awaited<ReturnType<Evaluator>>>();
@@ -277,10 +270,7 @@ async function pendingEvaluation(overrides: Partial<CronJobCreate>) {
   return { h, jobId: job.id, run, signal: await started.promise, resolve: evaluation.resolve };
 }
 
-async function withPendingWatcher(
-  overrides: Partial<CronJobCreate>,
-  exercise: (pending: PendingWatcher) => Promise<void>,
-) {
+async function pendingWatcher(overrides: Partial<CronJobCreate>) {
   const started = createDeferred();
   const completion = createDeferred();
   const evaluateCronTrigger = vi.fn(async () =>
@@ -299,27 +289,25 @@ async function withPendingWatcher(
       ? { runScriptJob: runPayload }
       : { evaluateCronTrigger, runIsolatedAgentJob: runPayload },
   );
-  let run: ReturnType<typeof runWhenDue> | undefined;
-  try {
-    const job = await h.cron.add(
-      watcher({
-        trigger: { script: "fire", once: true },
-        delivery: { mode: "none" },
-        state: { triggerState: { owner: "original" } },
-        ...overrides,
-      }),
-    );
-    run = runWhenDue(h.cron, job.id);
-    await started.promise;
-    await exercise({ h, jobId: job.id, run, complete: () => completion.resolve() });
+  const job = await h.cron.add(
+    watcher({
+      trigger: { script: "fire", once: true },
+      delivery: { mode: "none" },
+      state: { triggerState: { owner: "original" } },
+      ...overrides,
+    }),
+  );
+  const run = runWhenDue(h.cron, job.id);
+  h.beforeStop.push(async () => {
+    completion.resolve();
+    await run.catch(() => undefined);
     expect(runPayload).toHaveBeenCalledOnce();
     if (!script) {
       expect(evaluateCronTrigger).toHaveBeenCalledOnce();
     }
-  } finally {
-    completion.resolve();
-    await run?.catch(() => undefined);
-  }
+  });
+  await started.promise;
+  return { h, jobId: job.id, run, complete: () => completion.resolve() };
 }
 
 describe("cron trigger evaluation", () => {
@@ -481,49 +469,47 @@ describe("cron trigger evaluation", () => {
   });
 
   it("recovers the once lifecycle after a failed state edit", async () => {
-    await withPendingWatcher({}, async (pending) => {
-      const { h, jobId } = pending;
-      await expectRejectedWrite(jobId, () =>
-        h.cron.update(jobId, { state: { triggerState: { owner: "uncommitted edit" } } }),
-      );
-      expect((await readStoredJob(h.storePath, jobId))?.state.triggerState).toEqual({
-        owner: "original",
-      });
-      await finishWatcherRun({ ...pending, recover: true });
-      expect(h.cron.getJob(jobId)).toMatchObject({
-        enabled: false,
-        state: { triggerState: { owner: "completed evaluation" }, triggerEvalCount: 1 },
-      });
-      expect(h.cron.getJob(jobId)?.state.nextRunAtMs).toBeUndefined();
+    const pending = await pendingWatcher({});
+    const { h, jobId } = pending;
+    await expectRejectedWrite(jobId, () =>
+      h.cron.update(jobId, { state: { triggerState: { owner: "uncommitted edit" } } }),
+    );
+    expect((await readStoredJob(h.storePath, jobId))?.state.triggerState).toEqual({
+      owner: "original",
     });
+    await finishWatcherRun({ ...pending, recover: true });
+    expect(h.cron.getJob(jobId)).toMatchObject({
+      enabled: false,
+      state: { triggerState: { owner: "completed evaluation" }, triggerEvalCount: 1 },
+    });
+    expect(h.cron.getJob(jobId)?.state.nextRunAtMs).toBeUndefined();
   });
 
   it("preserves a replacement made after a legacy terminal result", async () => {
-    await withPendingWatcher({ agentId: "alpha" }, async (pending) => {
-      const { h, jobId } = pending;
-      await finishWatcherRun({
-        ...pending,
-        recover: true,
-        editAfterTask: async () => {
-          expect(readHistory(h.storePath, jobId)[0]?.nextRunAtMs).toBeUndefined();
-          const updated = await h.cron.update(jobId, {
-            agentId: "beta",
-            trigger: { script: "replacement", once: true },
-            state: { triggerState: { owner: "later edit" } },
-          });
-          expect(updated.enabled).toBe(true);
-          expect(updated.state.nextRunAtMs).toEqual(expect.any(Number));
-        },
-      });
-      const stored = h.cron.getJob(jobId);
-      expect(stored).toMatchObject({
-        enabled: true,
-        agentId: "beta",
-        trigger: { script: "replacement", once: true },
-        state: { triggerState: { owner: "later edit" }, nextRunAtMs: expect.any(Number) },
-      });
-      expectUnevaluated(stored);
+    const pending = await pendingWatcher({ agentId: "alpha" });
+    const { h, jobId } = pending;
+    await finishWatcherRun({
+      ...pending,
+      recover: true,
+      editAfterTask: async () => {
+        expect(readHistory(h.storePath, jobId)[0]?.nextRunAtMs).toBeUndefined();
+        const updated = await h.cron.update(jobId, {
+          agentId: "beta",
+          trigger: { script: "replacement", once: true },
+          state: { triggerState: { owner: "later edit" } },
+        });
+        expect(updated.enabled).toBe(true);
+        expect(updated.state.nextRunAtMs).toEqual(expect.any(Number));
+      },
     });
+    const stored = h.cron.getJob(jobId);
+    expect(stored).toMatchObject({
+      enabled: true,
+      agentId: "beta",
+      trigger: { script: "replacement", once: true },
+      state: { triggerState: { owner: "later edit" }, nextRunAtMs: expect.any(Number) },
+    });
+    expectUnevaluated(stored);
   });
 
   it.each(["trigger", "state", "script"] as const)(
@@ -532,42 +518,38 @@ describe("cron trigger evaluation", () => {
       const originalTrigger = { script: "return original", once: true };
       const originalPayload = { kind: "script" as const, script: "return original" };
       const originalState = { owner: "original" };
-      await withPendingWatcher(
-        {
-          trigger: field === "script" ? undefined : originalTrigger,
-          ...(field === "script" ? { payload: originalPayload } : {}),
-        },
-        async (pending) => {
-          const { h, jobId } = pending;
-          if (field === "trigger") {
-            await h.cron.update(jobId, {
-              trigger: { script: "return replacement", once: true },
-              state: { triggerState: { owner: "latest edit" } },
-            });
-            await h.cron.update(jobId, { trigger: originalTrigger });
-          } else if (field === "state") {
-            await h.cron.update(jobId, { state: { triggerState: { owner: "latest edit" } } });
-            await h.cron.update(jobId, { state: { triggerState: originalState } });
-          } else {
-            await h.cron.update(jobId, {
-              payload: { kind: "script", script: "return replacement" },
-            });
-            await h.cron.update(jobId, { payload: originalPayload });
-          }
-          await finishWatcherRun({ ...pending, recover: field !== "state" });
-          const stored = h.cron.getJob(jobId);
-          expect(stored?.enabled).toBe(true);
-          expect(stored?.state.nextRunAtMs).toEqual(expect.any(Number));
-          expect(stored?.state.triggerState).toEqual(field === "state" ? originalState : undefined);
-          if (field === "script") {
-            expect(stored?.payload).toMatchObject(originalPayload);
-            expect((await readStoredJob(h.storePath, jobId))?.state.triggerState).toBeUndefined();
-          } else {
-            expect(stored?.trigger).toEqual(originalTrigger);
-            expectUnevaluated(stored);
-          }
-        },
-      );
+      const pending = await pendingWatcher({
+        trigger: field === "script" ? undefined : originalTrigger,
+        ...(field === "script" ? { payload: originalPayload } : {}),
+      });
+      const { h, jobId } = pending;
+      if (field === "trigger") {
+        await h.cron.update(jobId, {
+          trigger: { script: "return replacement", once: true },
+          state: { triggerState: { owner: "latest edit" } },
+        });
+        await h.cron.update(jobId, { trigger: originalTrigger });
+      } else if (field === "state") {
+        await h.cron.update(jobId, { state: { triggerState: { owner: "latest edit" } } });
+        await h.cron.update(jobId, { state: { triggerState: originalState } });
+      } else {
+        await h.cron.update(jobId, {
+          payload: { kind: "script", script: "return replacement" },
+        });
+        await h.cron.update(jobId, { payload: originalPayload });
+      }
+      await finishWatcherRun({ ...pending, recover: field !== "state" });
+      const stored = h.cron.getJob(jobId);
+      expect(stored?.enabled).toBe(true);
+      expect(stored?.state.nextRunAtMs).toEqual(expect.any(Number));
+      expect(stored?.state.triggerState).toEqual(field === "state" ? originalState : undefined);
+      if (field === "script") {
+        expect(stored?.payload).toMatchObject(originalPayload);
+        expect((await readStoredJob(h.storePath, jobId))?.state.triggerState).toBeUndefined();
+      } else {
+        expect(stored?.trigger).toEqual(originalTrigger);
+        expectUnevaluated(stored);
+      }
     },
   );
 

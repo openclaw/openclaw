@@ -120,20 +120,15 @@ describe("cron run diagnostics", () => {
     });
   });
 
-  it("does not warn for wildcard toolsAllow or configured web_search providers", () => {
-    expect(
-      missingWebSearchProvider({
-        toolsAllow: ["*"],
-        hasWebSearchProvider: false,
-      }),
-    ).toBeUndefined();
-    expect(
-      missingWebSearchProvider({
-        toolsAllow: ["web_search"],
-        hasWebSearchProvider: true,
-      }),
-    ).toBeUndefined();
-  });
+  it.each([
+    ["wildcard toolsAllow", { toolsAllow: ["*"], hasWebSearchProvider: false }],
+    ["configured provider", { toolsAllow: ["web_search"], hasWebSearchProvider: true }],
+  ] satisfies Array<[string, Parameters<typeof missingWebSearchProvider>[0]]>)(
+    "does not warn for %s",
+    (_name, options) => {
+      expect(missingWebSearchProvider(options)).toBeUndefined();
+    },
+  );
 
   it("extracts fatal agent result payloads and meta errors", () => {
     const diagnostics = diagnosticsFromResult(

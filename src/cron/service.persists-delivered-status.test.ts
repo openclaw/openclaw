@@ -1,5 +1,7 @@
+import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { text } from "node:stream/consumers";
 import { promisify } from "node:util";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -58,10 +60,18 @@ const noFailureNotification = {
   lastFailureNotificationDeliveryStatus: "not-requested",
   lastFailureNotificationDeliveryError: undefined,
 } as const;
+const destination = { channel: "forum", to: "123" };
+const commandOk = { status: "ok", summary: "HOOKSCHED_PAYLOAD" } as const;
+const commandError = { status: "error", error: "command exited with code 1" } as const;
+const deliveryRejected = {
+  status: "ok",
+  delivered: false,
+  deliveryError: "delivery rejected",
+} as const;
 const verifiedDelivery = {
   delivered: true,
-  resolved: { ok: true, channel: "forum", to: "123" },
-  messageToolSentTo: [{ channel: "forum", to: "123" }],
+  resolved: { ok: true, ...destination },
+  messageToolSentTo: [destination],
 };
 
 function expectFields(actual: object | undefined, expected: object) {
@@ -97,12 +107,7 @@ async function createCommandWebhook(
   const requests: string[] = [];
   const bodyReceived = createDeferred<string>();
   const server = createServer((request, response) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk) => {
-      body += chunk;
-    });
-    request.on("end", () => {
+    void text(request).then((body) => {
       requests.push(body);
       bodyReceived.resolve(body);
       if (options.responseStatus !== undefined) {
@@ -119,16 +124,10 @@ async function createCommandWebhook(
       }
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  await once(server.listen(0, "127.0.0.1"), "listening");
   const address = server.address() as AddressInfo;
-  const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
-    async () => {},
-  );
-  const runCronFailureRepair = vi.fn<NonNullable<CronServiceDeps["runCronFailureRepair"]>>(
-    async () => {},
-  );
+  const sendCronFailureAlert = vi.fn(async () => {});
+  const runCronFailureRepair = vi.fn(async () => {});
   const enqueueSystemEvent = vi.fn();
   const { cron, clock, finished } = await createScheduledService({
     sendCronFailureAlert,
@@ -182,25 +181,13 @@ async function createCommandWebhook(
       });
       expect(event).toMatchObject({ status: "ok", delivered, deliveryStatus: status });
     },
-    close: async () => {
+    [Symbol.asyncDispose]: async () => {
       options.beforeClose?.();
       cron.stop();
       server.closeAllConnections();
       await promisify(server.close.bind(server))();
     },
   };
-}
-
-async function withWebhook(
-  options: Parameters<typeof createCommandWebhook>[0],
-  exercise: (fixture: Awaited<ReturnType<typeof createCommandWebhook>>) => Promise<void>,
-) {
-  const fixture = await createCommandWebhook(options);
-  try {
-    await exercise(fixture);
-  } finally {
-    await fixture.close();
-  }
 }
 
 function agentJob(name: string, overrides: Partial<CronAddInput> = {}): CronAddInput {
@@ -211,7 +198,7 @@ function agentJob(name: string, overrides: Partial<CronAddInput> = {}): CronAddI
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "test" },
-    delivery: { mode: "announce", channel: "forum", to: "123" },
+    delivery: { mode: "announce", ...destination },
     ...overrides,
   };
 }
@@ -243,11 +230,14 @@ async function createScheduledService(deps: Partial<CronServiceDeps> = {}, start
   return {
     cron,
     storePath,
-    cleanup,
     clock,
     finished: finished.promise,
     events,
     tick: () => onTimer(state),
+    [Symbol.asyncDispose]: async () => {
+      cron.stop();
+      await cleanup();
+    },
   };
 }
 
@@ -258,37 +248,33 @@ describe("CronService persists delivered status", () => {
   ] as const)(
     "records command webhook delivery through a real HTTP server: %s",
     async (_name, responseStatus, expectedStatus, clockJumpMs) => {
-      const execution = gate({ status: "ok" as const, summary: "HOOKSCHED_PAYLOAD" });
-      await withWebhook(
-        {
-          oneShot: true,
-          responseStatus,
-          ...(clockJumpMs > 0
-            ? {
-                timeoutSeconds: 1,
-                runCommandJob: execution.run,
-              }
-            : {}),
-        },
-        async (h) => {
-          const run = h.run();
-          if (clockJumpMs > 0) {
-            await execution.entered;
-            vi.setSystemTime(Date.now() + clockJumpMs);
-            execution.release();
-          }
-          await run;
-          const event = await h.finished;
-          expect(h.requests).toHaveLength(1);
-          await h.expectRequest({ action: "finished", status: "ok", summary: "HOOKSCHED_PAYLOAD" });
-          h.expectDelivery(event, responseStatus === 204, expectedStatus);
-          expect(h.sendCronFailureAlert).toHaveBeenCalledTimes(responseStatus === 503 ? 1 : 0);
-          if (responseStatus === 503) {
-            expect(h.state()?.lastDeliveryError).toContain("HTTP 503");
-            expect(event.deliveryError).toContain("HTTP 503");
-          }
-        },
-      );
+      const execution = gate(commandOk);
+      await using h = await createCommandWebhook({
+        oneShot: true,
+        responseStatus,
+        ...(clockJumpMs > 0
+          ? {
+              timeoutSeconds: 1,
+              runCommandJob: execution.run,
+            }
+          : {}),
+      });
+      const run = h.run();
+      if (clockJumpMs > 0) {
+        await execution.entered;
+        vi.setSystemTime(Date.now() + clockJumpMs);
+        execution.release();
+      }
+      await run;
+      const event = await h.finished;
+      expect(h.requests).toHaveLength(1);
+      await h.expectRequest({ action: "finished", ...commandOk });
+      h.expectDelivery(event, responseStatus === 204, expectedStatus);
+      expect(h.sendCronFailureAlert).toHaveBeenCalledTimes(responseStatus === 503 ? 1 : 0);
+      if (responseStatus === 503) {
+        expect(h.state()?.lastDeliveryError).toContain("HTTP 503");
+        expect(event.deliveryError).toContain("HTTP 503");
+      }
     },
   );
 
@@ -298,90 +284,74 @@ describe("CronService persists delivered status", () => {
       if (cause === "cancellation") {
         vi.useRealTimers();
       }
-      await withWebhook(
-        {
-          timeoutSeconds: cause === "deadline" ? 1 : 0,
-        },
-        async (h) => {
-          const run = h.run();
-          await h.expectRequest();
-          if (cause === "deadline") {
-            let settled = false;
-            void h.finished.then(() => {
-              settled = true;
-            });
-            await vi.advanceTimersByTimeAsync(999);
-            expect(settled).toBe(false);
-            await vi.advanceTimersByTimeAsync(1);
-          } else {
-            const cancelledAt = performance.now();
-            expect(abortActiveCronTaskRuns("Cancelled by operator.")).toBe(1);
-            await h.finished;
-            expect(performance.now() - cancelledAt).toBeLessThan(1_000);
-          }
-          const event = await h.finished;
-          await run;
-          const diagnostic =
-            cause === "deadline" ? "webhook delivery timed out" : "webhook delivery cancelled";
-          h.expectDelivery(event, undefined, "unknown");
-          expect(event.summary).toBe("HOOKSCHED_PAYLOAD");
-          expect(event.deliveryError).toContain(diagnostic);
-          if (cause === "cancellation") {
-            expect(event.deliveryError).toContain("Cancelled by operator.");
-          }
-          expect(h.state()?.runningAtMs).toBeUndefined();
-          expect(h.state()?.lastDeliveryError).toContain(diagnostic);
-        },
-      );
+      await using h = await createCommandWebhook({
+        timeoutSeconds: cause === "deadline" ? 1 : 0,
+      });
+      const run = h.run();
+      await h.expectRequest();
+      if (cause === "deadline") {
+        let settled = false;
+        void h.finished.then(() => {
+          settled = true;
+        });
+        await vi.advanceTimersByTimeAsync(999);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+      } else {
+        const cancelledAt = performance.now();
+        expect(abortActiveCronTaskRuns("Cancelled by operator.")).toBe(1);
+        await h.finished;
+        expect(performance.now() - cancelledAt).toBeLessThan(1_000);
+      }
+      const event = await h.finished;
+      await run;
+      const diagnostic =
+        cause === "deadline" ? "webhook delivery timed out" : "webhook delivery cancelled";
+      h.expectDelivery(event, undefined, "unknown");
+      expect(event.summary).toBe("HOOKSCHED_PAYLOAD");
+      expect(event.deliveryError).toContain(diagnostic);
+      if (cause === "cancellation") {
+        expect(event.deliveryError).toContain("Cancelled by operator.");
+      }
+      expect(h.state()?.runningAtMs).toBeUndefined();
+      expect(h.state()?.lastDeliveryError).toContain(diagnostic);
     },
   );
 
   it.each([0, 9])(
     "counts a completed core failure after webhook cancellation with %s prior failures",
     async (consecutiveErrors) => {
-      await withWebhook(
-        {
-          timeoutSeconds: 0,
-          runCommandJob: async () => ({
-            status: "error",
-            error: "command exited with code 1",
-            ...(consecutiveErrors === 0
-              ? { errorClassification: { kind: "permanent" as const } }
-              : {}),
-          }),
-        },
-        async (h) => {
-          await h.cron.update(h.job.id, {
-            state: { consecutiveErrors },
-            failureAlert: { after: 1, channel: "telegram", to: "123" },
-          });
-          h.clock.setTime(h.job.state.nextRunAtMs!);
-          const run = h.run("due");
-          await h.expectRequest({
-            status: "error",
-            error: "command exited with code 1",
-          });
-          expect(abortActiveCronTaskRuns("Cancelled during webhook delivery.")).toBe(1);
-          await run;
-          expect(await h.finished).toMatchObject({
-            status: "error",
-            error: "command exited with code 1",
-            deliveryStatus: "unknown",
-          });
-          const updated = await h.cron.readJob(h.job.id);
-          expect(updated?.state.consecutiveErrors).toBe(consecutiveErrors + 1);
-          expect(updated?.state.lastDeliveryError).toContain("Cancelled during webhook delivery.");
-          expect(updated?.enabled).toBe(consecutiveErrors === 0);
-          if (consecutiveErrors === 9) {
-            expect(updated?.state.autoDisabled).toMatchObject({
-              reason: "consecutive-failures",
-              consecutiveErrors: 10,
-            });
-          } else {
-            expect(h.sendCronFailureAlert).toHaveBeenCalledOnce();
-          }
-        },
-      );
+      await using h = await createCommandWebhook({
+        timeoutSeconds: 0,
+        runCommandJob: async () => ({
+          ...commandError,
+          ...(consecutiveErrors === 0
+            ? { errorClassification: { kind: "permanent" as const } }
+            : {}),
+        }),
+      });
+      await h.cron.update(h.job.id, {
+        state: { consecutiveErrors },
+        failureAlert: { after: 1, channel: "telegram", to: "123" },
+      });
+      h.clock.setTime(h.job.state.nextRunAtMs!);
+      const run = h.run("due");
+      await h.expectRequest(commandError);
+      expect(abortActiveCronTaskRuns("Cancelled during webhook delivery.")).toBe(1);
+      await run;
+      expect(await h.finished).toMatchObject({ ...commandError, deliveryStatus: "unknown" });
+      const updated = await h.cron.readJob(h.job.id);
+      expect(updated?.state.consecutiveErrors).toBe(consecutiveErrors + 1);
+      expect(updated?.state.lastDeliveryError).toContain("Cancelled during webhook delivery.");
+      expect(updated?.enabled).toBe(consecutiveErrors === 0);
+      if (consecutiveErrors === 9) {
+        expect(updated?.state.autoDisabled).toMatchObject({
+          reason: "consecutive-failures",
+          consecutiveErrors: 10,
+        });
+      } else {
+        expect(h.sendCronFailureAlert).toHaveBeenCalledOnce();
+      }
     },
   );
 
@@ -400,46 +370,39 @@ describe("CronService persists delivered status", () => {
           release: cleanup.run,
         };
       });
-      await withWebhook(
-        {
-          oneShot: true,
-          responseStatus,
-          holdResponse: true,
-          beforeClose: cleanup.release,
-          runCommandJob: vi.fn(async () => ({
-            status: "ok" as const,
-            summary: "HOOKSCHED_PAYLOAD",
-          })),
-        },
-        async (h) => {
-          const runPromise = h.run();
-          await cleanup.entered;
-          expect(abortActiveCronTaskRuns("Cancelled after webhook acceptance.")).toBe(1);
+      await using h = await createCommandWebhook({
+        oneShot: true,
+        responseStatus,
+        holdResponse: true,
+        beforeClose: cleanup.release,
+        runCommandJob: vi.fn(async () => commandOk),
+      });
+      const runPromise = h.run();
+      await cleanup.entered;
+      expect(abortActiveCronTaskRuns("Cancelled after webhook acceptance.")).toBe(1);
 
-          const event = await h.finished;
-          cleanup.release();
-          await runPromise;
-          expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
-          expect(h.requests).toHaveLength(1);
-          await h.expectRequest();
-          h.expectDelivery(
-            event,
-            responseStatus === 200,
-            responseStatus === 200 ? "delivered" : "not-delivered",
-          );
-          if (responseStatus === 200) {
-            expect(event.deliveryError).toBeUndefined();
-          } else {
-            expect(event.deliveryError).toContain("Webhook request failed with HTTP 503");
-            expect(event.deliveryError).toContain("Cancelled after webhook acceptance.");
-          }
-          expect(h.state()?.lastDeliveryError).toBe(event.deliveryError);
-          expect(h.state()?.autoDisabled).toBeUndefined();
-          expect(h.sendCronFailureAlert).not.toHaveBeenCalled();
-          expect(h.runCronFailureRepair).not.toHaveBeenCalled();
-          expect(h.enqueueSystemEvent).not.toHaveBeenCalled();
-        },
+      const event = await h.finished;
+      cleanup.release();
+      await runPromise;
+      expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
+      expect(h.requests).toHaveLength(1);
+      await h.expectRequest();
+      h.expectDelivery(
+        event,
+        responseStatus === 200,
+        responseStatus === 200 ? "delivered" : "not-delivered",
       );
+      if (responseStatus === 200) {
+        expect(event.deliveryError).toBeUndefined();
+      } else {
+        expect(event.deliveryError).toContain("Webhook request failed with HTTP 503");
+        expect(event.deliveryError).toContain("Cancelled after webhook acceptance.");
+      }
+      expect(h.state()?.lastDeliveryError).toBe(event.deliveryError);
+      expect(h.state()?.autoDisabled).toBeUndefined();
+      expect(h.sendCronFailureAlert).not.toHaveBeenCalled();
+      expect(h.runCronFailureRepair).not.toHaveBeenCalled();
+      expect(h.enqueueSystemEvent).not.toHaveBeenCalled();
     },
   );
 
@@ -517,31 +480,28 @@ describe("CronService persists delivered status", () => {
       event: {},
     },
   ] satisfies DeliveryCase[])("persists and emits $name", async (scenario) => {
-    const { cron, clock, tick, finished } = await createScheduledService({
+    await using h = await createScheduledService({
       runIsolatedAgentJob: vi.fn(async () => ({
         status: "ok" as const,
         summary: "done",
         ...scenario.result,
       })),
     });
-    try {
-      const added = await cron.add(
-        agentJob(scenario.name, {
-          ...("delivery" in scenario ? { delivery: scenario.delivery } : {}),
-          ...("failureAlert" in scenario ? { failureAlert: scenario.failureAlert } : {}),
-        }),
-      );
-      clock.setTime(added.state.nextRunAtMs! + 5);
-      await tick();
-      const event = await finished;
-      const updated = (await cron.list({ includeDisabled: true })).find(
-        (entry) => entry.id === added.id,
-      );
-      expectFields(updated?.state, scenario.state);
-      expectFields(event, scenario.event);
-    } finally {
-      cron.stop();
-    }
+    const { cron, clock, tick, finished } = h;
+    const added = await cron.add(
+      agentJob(scenario.name, {
+        ...("delivery" in scenario ? { delivery: scenario.delivery } : {}),
+        ...("failureAlert" in scenario ? { failureAlert: scenario.failureAlert } : {}),
+      }),
+    );
+    clock.setTime(added.state.nextRunAtMs! + 5);
+    await tick();
+    const event = await finished;
+    const updated = (await cron.list({ includeDisabled: true })).find(
+      (entry) => entry.id === added.id,
+    );
+    expectFields(updated?.state, scenario.state);
+    expectFields(event, scenario.event);
   });
 
   it.each([
@@ -550,22 +510,14 @@ describe("CronService persists delivered status", () => {
   ] as const)(
     "authors completion from the admitted delivery policy: %s",
     async (_name, admittedBestEffort, edits, expectedCompletionStatus) => {
-      const execution = gate({
-        status: "ok" as const,
-        delivered: false,
-        deliveryError: "delivery rejected",
-      });
-      const { cron, finished, cleanup } = await createScheduledService({
+      const execution = gate(deliveryRejected);
+      await using h = await createScheduledService({
         runIsolatedAgentJob: vi.fn(execution.run),
       });
+      const { cron, finished } = h;
       const job = await cron.add({
         ...agentJob(`admitted-policy-${admittedBestEffort}`),
-        delivery: {
-          mode: "announce",
-          channel: "forum",
-          to: "123",
-          bestEffort: admittedBestEffort,
-        },
+        delivery: { mode: "announce", ...destination, bestEffort: admittedBestEffort },
       });
 
       const run = cron.run(job.id, "force");
@@ -589,63 +541,52 @@ describe("CronService persists delivered status", () => {
         lastError: undefined,
         lastDeliveryError: "delivery rejected",
       });
-      cron.stop();
-      await cleanup();
     },
   );
-});
-
-describe("cron payload conversion", () => {
   it("persists payload kind conversions without reopening the tool allowlist", async () => {
-    const { cron, storePath } = await createScheduledService(
+    await using h = await createScheduledService(
       { cronEnabled: false, runIsolatedAgentJob: vi.fn() },
       false,
     );
 
-    try {
-      const job = await cron.add({
-        ...agentJob("convert payload", { enabled: false, delivery: undefined }),
-        payload: { kind: "agentTurn", message: "before", toolsAllow: ["read"] },
-      });
-      const expectPayload = async (payload: CronJob["payload"]) => {
-        const expected = { ...payload, toolsAllow: ["read"] };
-        expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(expected);
-        return expected;
-      };
-      const command = { kind: "command" as const, argv: ["echo", "ready"] };
-      const updated = await cron.update(job.id, {
-        payload: { ...command, env: undefined },
-      });
-      expect(updated.payload).toEqual(await expectPayload(command));
+    const { cron, storePath } = h;
+    const job = await cron.add({
+      ...agentJob("convert payload", { enabled: false, delivery: undefined }),
+      payload: { kind: "agentTurn", message: "before", toolsAllow: ["read"] },
+    });
+    const expectPayload = async (payload: CronJob["payload"]) => {
+      const expected = { ...payload, toolsAllow: ["read"] };
+      expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(expected);
+      return expected;
+    };
+    const command = { kind: "command" as const, argv: ["echo", "ready"] };
+    const updated = await cron.update(job.id, {
+      payload: { ...command, env: undefined },
+    });
+    expect(updated.payload).toEqual(await expectPayload(command));
 
-      await cron.update(job.id, { payload: { kind: "script", script: "return {};" } });
-      await expectPayload({
-        kind: "script",
-        script: "return {};",
-        timeoutSeconds: 300,
-        toolBudget: 50,
-      });
-      const agent = { kind: "agentTurn", message: "after" } as const;
-      await cron.update(job.id, { payload: agent });
-      await expectPayload(agent);
+    await cron.update(job.id, { payload: { kind: "script", script: "return {};" } });
+    await expectPayload({
+      kind: "script",
+      script: "return {};",
+      timeoutSeconds: 300,
+      toolBudget: 50,
+    });
+    const agent = { kind: "agentTurn", message: "after" } as const;
+    await cron.update(job.id, { payload: agent });
+    await expectPayload(agent);
 
-      expect(() =>
-        normalizeCronJobPatch({
-          payload: { kind: "command", argv: ["echo"], env: null },
-        }),
-      ).toThrow("command env");
-      await expectPayload(agent);
+    expect(() =>
+      normalizeCronJobPatch({
+        payload: { kind: "command", argv: ["echo"], env: null },
+      }),
+    ).toThrow("command env");
+    await expectPayload(agent);
 
-      const configured = { kind: "command", argv: ["echo"], env: { MODE: "test" } } as const;
-      await cron.update(job.id, { payload: { ...configured, argv: [...configured.argv] } });
-      await expectPayload({ ...configured, argv: [...configured.argv] });
-    } finally {
-      cron.stop();
-    }
+    const configured = { kind: "command", argv: ["echo"], env: { MODE: "test" } } as const;
+    await cron.update(job.id, { payload: { ...configured, argv: [...configured.argv] } });
+    await expectPayload({ ...configured, argv: [...configured.argv] });
   });
-});
-
-describe("CronService persists delivery suppression", () => {
   it("persists scheduled suppression in state, history, and events and clears it after delivery", async () => {
     const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>();
     runIsolatedAgentJob.mockResolvedValue({
@@ -654,41 +595,38 @@ describe("CronService persists delivery suppression", () => {
       deliveryAttempted: true,
       deliverySuppressionReason: "channel_transform",
     });
-    const { cron, storePath, clock, tick, events, finished } = await createScheduledService({
+    await using h = await createScheduledService({
       runIsolatedAgentJob,
     });
-    try {
-      const job = await cron.add(agentJob("suppression-readback"));
-      const readHistory = () =>
-        readCronRunHistoryPageForTests({
-          storeKey: cronStoreKey(storePath),
-          jobId: job.id,
-        }).entries;
-      const suppressed = { deliverySuppressionReason: "channel_transform" };
-      clock.setTime(job.state.nextRunAtMs!);
-      await tick();
-      expect((await finished).status).toBe("ok");
-      const persisted = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
-      expect.soft(persisted?.state).toMatchObject({
-        lastRunStatus: "ok",
-        lastDelivered: false,
-        lastDeliveryStatus: "not-delivered",
-        ...suppressed,
-        lastDeliveryError: undefined,
-      });
-      expect.soft(events).toEqual([expect.objectContaining(suppressed)]);
-      expect.soft(readHistory()).toEqual([expect.objectContaining(suppressed)]);
+    const { cron, storePath, clock, tick, events, finished } = h;
+    const job = await cron.add(agentJob("suppression-readback"));
+    const readHistory = () =>
+      readCronRunHistoryPageForTests({
+        storeKey: cronStoreKey(storePath),
+        jobId: job.id,
+      }).entries;
+    const suppressed = { deliverySuppressionReason: "channel_transform" };
+    clock.setTime(job.state.nextRunAtMs!);
+    await tick();
+    expect((await finished).status).toBe("ok");
+    const persisted = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
+    expect.soft(persisted?.state).toMatchObject({
+      lastRunStatus: "ok",
+      lastDelivered: false,
+      lastDeliveryStatus: "not-delivered",
+      ...suppressed,
+      lastDeliveryError: undefined,
+    });
+    expect.soft(events).toEqual([expect.objectContaining(suppressed)]);
+    expect.soft(readHistory()).toEqual([expect.objectContaining(suppressed)]);
 
-      runIsolatedAgentJob.mockResolvedValue({ status: "ok", delivered: true });
-      clock.setTime(clock.clock.now() + 1);
-      await cron.run(job.id, "force");
-      expect(
-        (await loadCronStore(storePath)).jobs[0]?.state.deliverySuppressionReason,
-      ).toBeUndefined();
-      expect(events.at(-1)?.deliverySuppressionReason).toBeUndefined();
-      expect(readHistory()[0]?.deliverySuppressionReason).toBeUndefined();
-    } finally {
-      cron.stop();
-    }
+    runIsolatedAgentJob.mockResolvedValue({ status: "ok", delivered: true });
+    clock.setTime(clock.clock.now() + 1);
+    await cron.run(job.id, "force");
+    expect([
+      (await loadCronStore(storePath)).jobs[0]?.state.deliverySuppressionReason,
+      events.at(-1)?.deliverySuppressionReason,
+      readHistory()[0]?.deliverySuppressionReason,
+    ]).toEqual([undefined, undefined, undefined]);
   });
 });

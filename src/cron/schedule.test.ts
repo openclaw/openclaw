@@ -52,29 +52,27 @@ describe("cron schedule", () => {
       expectOccurrences({ kind: "cron", expr, tz }, now, next, previous);
     });
 
-    it("skips nonexistent future occurrences but preserves historical timezone rules", () => {
-      expectOccurrences(
-        { kind: "cron", expr: "30 2 * 3 SUN#2", tz: "America/New_York" },
+    it.each([
+      [
+        "skips nonexistent future occurrences but preserves historical timezone rules",
+        "30 2 * 3 SUN#2",
         "2026-01-01T00:00:00.000Z",
-        undefined,
         "2006-03-12T07:30:00.000Z",
-      );
-    });
-
-    it("never spills a nonexistent year-limited reminder into another year", () => {
-      expectOccurrences(
-        { kind: "cron", expr: "0 30 2 14 3 * 2027", tz: "America/New_York" },
+      ],
+      [
+        "never spills a nonexistent year-limited reminder into another year",
+        "0 30 2 14 3 * 2027",
         "2026-07-01T00:00:00.000Z",
-      );
-    });
-
-    it("recovers the first occurrence of a year-limited reminder during its repeated hour", () => {
-      expectOccurrences(
-        { kind: "cron", expr: "0 30 1 1 11 * 2026", tz: "America/New_York" },
-        "2026-11-01T06:15:00.000Z",
         undefined,
+      ],
+      [
+        "recovers the first occurrence of a year-limited reminder during its repeated hour",
+        "0 30 1 1 11 * 2026",
+        "2026-11-01T06:15:00.000Z",
         "2026-11-01T05:30:00.000Z",
-      );
+      ],
+    ] as const)("%s", (_name, expr, now, previous) => {
+      expectOccurrences({ kind: "cron", expr, tz: "America/New_York" }, now, undefined, previous);
     });
 
     it.each([
