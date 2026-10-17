@@ -324,6 +324,7 @@ export function failPendingAgentDatabase(
     createAgentDatabaseInspectionRefusal({ ...refusal, reason: formatErrorMessage(cause), cause }),
   );
   current.refusals = refusals;
+  sessionChanges.emit({ all: true, scope: { agentId: refusal.agentId, topology: true } });
 }
 
 export function listAgentDatabaseAdmissionRefusals(

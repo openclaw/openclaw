@@ -17,6 +17,7 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
   createAgentDatabaseInspectionRefusal,
+  failPendingAgentDatabase,
   preparePendingAgentDatabase,
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
@@ -42,6 +43,7 @@ import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
 import { readSessionMessagesPageWithStatsAsync } from "./session-transcript-readers.js";
+import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -127,54 +129,70 @@ it("refreshes omitted cold previews after a history read without revoking sharin
   return run;
 });
 
-it("keeps projection reads outside borrowed startup admission and admits completed recovery", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = {
-      agents: {
-        entries: { main: {}, worker: {} },
-        defaults: { sessionStore: { agentId: "main" } },
-      },
-    };
-    const query = { agentId: "worker", key: "agent:worker:recovering" };
-    const unaffected = { agentId: "main", key: "agent:main:unchanged" };
-    replaceSessionEntrySync(
-      { agentId: unaffected.agentId, sessionKey: unaffected.key },
-      { sessionId: "unchanged", updatedAt: 1 },
-    );
-    replaceSessionEntrySync(
-      { agentId: query.agentId, sessionKey: query.key },
-      { sessionId: "recovering", updatedAt: 1 },
-    );
-    const path = resolveOpenClawAgentSqlitePath({ agentId: query.agentId });
-    closeOpenClawAgentDatabaseByPath(path, query.agentId);
-    const refusal = createAgentDatabaseInspectionRefusal({
-      agentId: query.agentId,
-      paths: [path],
-      pending: true,
-      reason: "Startup preparation is still pending",
-    });
-    recordAgentDatabaseAdmissions([refusal], { source: "startup" });
-    const projection = await createSessionRowProjection({ cfg });
-    try {
-      expect(projection.snapshot(query).row).toBeNull();
-      let beforeRecovery = 0;
-      await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {
-        sessionChanges.emit({ all: true, scope: "config" });
-        expect(projection.capture(query)).toBeUndefined();
+it.each(["recover", "fail"] as const)(
+  "keeps projection reads outside borrowed startup admission and publishes its %s outcome",
+  async (outcome) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = {
+        agents: {
+          entries: { main: {}, worker: {} },
+          defaults: { sessionStore: { agentId: "main" } },
+        },
+      };
+      const query = { agentId: "worker", key: "agent:worker:recovering" };
+      const unaffected = { agentId: "main", key: "agent:main:unchanged" };
+      replaceSessionEntrySync(
+        { agentId: unaffected.agentId, sessionKey: unaffected.key },
+        { sessionId: "unchanged", updatedAt: 1 },
+      );
+      replaceSessionEntrySync(
+        { agentId: query.agentId, sessionKey: query.key },
+        { sessionId: "recovering", updatedAt: 1 },
+      );
+      const path = resolveOpenClawAgentSqlitePath({ agentId: query.agentId });
+      closeOpenClawAgentDatabaseByPath(path, query.agentId);
+      const refusal = createAgentDatabaseInspectionRefusal({
+        agentId: query.agentId,
+        paths: [path],
+        pending: true,
+        reason: "Startup preparation is still pending",
+      });
+      recordAgentDatabaseAdmissions([refusal], { source: "startup" });
+      const projection = await createSessionRowProjection({ cfg });
+      try {
         await projection.ensureMaterialized();
         expect(projection.snapshot(query).row).toBeNull();
-        expect(listOpenClawAgentDatabasesForTest().some((db) => db.path === path)).toBe(false);
-        beforeRecovery = projection.materializedCount;
-      });
-      await projection.ensureMaterialized();
-      expect(projection.snapshot(query).row?.sessionId).toBe("recovering");
-      expect(projection.snapshot(unaffected).row?.sessionId).toBe("unchanged");
-      expect(projection.materializedCount - beforeRecovery).toBe(1);
-    } finally {
-      projection.dispose();
-    }
-  });
-});
+        await expect(
+          listProjectedSessions({ projection, opts: { agentId: query.agentId } }),
+        ).rejects.toThrow("Startup preparation is still pending");
+        if (outcome === "fail") {
+          failPendingAgentDatabase(refusal, new Error("Startup inspection failed"), {});
+          await projection.ensureMaterialized();
+          await expect(
+            listProjectedSessions({ projection, opts: { agentId: query.agentId } }),
+          ).rejects.toThrow("Startup inspection failed");
+          expect(projection.snapshot(unaffected).row?.sessionId).toBe("unchanged");
+          return;
+        }
+        let beforeRecovery = 0;
+        await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {
+          sessionChanges.emit({ all: true, scope: "config" });
+          expect(projection.capture(query)).toBeUndefined();
+          await projection.ensureMaterialized();
+          expect(projection.snapshot(query).row).toBeNull();
+          expect(listOpenClawAgentDatabasesForTest().some((db) => db.path === path)).toBe(false);
+          beforeRecovery = projection.materializedCount;
+        });
+        await projection.ensureMaterialized();
+        expect(projection.snapshot(query).row?.sessionId).toBe("recovering");
+        expect(projection.snapshot(unaffected).row?.sessionId).toBe("unchanged");
+        expect(projection.materializedCount - beforeRecovery).toBe(1);
+      } finally {
+        projection.dispose();
+      }
+    });
+  },
+);
 
 it("refreshes previews after reconciliation without metadata mutation or clean-read SQLite", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
