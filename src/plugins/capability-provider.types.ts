@@ -270,7 +270,7 @@ export class WorkerProviderError extends Error {
   }
 }
 
-export type WorkerRecipePreparation = {
+type WorkerRecipePreparation = {
   source: "devcontainer" | "script" | "detected" | "none";
   ignoredPropertiesNote?: string;
   note?: string;

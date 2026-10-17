@@ -5,10 +5,7 @@ import {
   normalizeTrimmedStringList,
 } from "../../packages/normalization-core/src/string-normalization.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import {
-  PLUGIN_MANIFEST_CONTRACT_KEYS,
-  TRANSCRIPT_SOURCE_LOCATOR_FIELDS,
-} from "./manifest-contract-keys.js";
+import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type {
   DecisionProviderCapabilities,
   PluginManifest,
@@ -186,6 +183,7 @@ export function normalizeManifestTranscriptSources(
   value: unknown,
   ownedProviders: readonly string[] = [],
 ): Record<string, PluginManifestTranscriptSource> | undefined {
+  const locatorKeys = ["accountId", "guildId", "channelId", "meetingUrl"] as const;
   return normalizeNamedMetadataRecord(value, (entry, id) => {
     if (!ownedProviders.includes(id)) {
       return undefined;
@@ -196,7 +194,7 @@ export function normalizeManifestTranscriptSources(
       isRecord(raw) &&
       Object.entries(raw).every(
         ([key, mode]) =>
-          TRANSCRIPT_SOURCE_LOCATOR_FIELDS.some((locator) => locator === key) &&
+          locatorKeys.some((locator) => locator === key) &&
           (mode === "optional" || mode === "required"),
       )
         ? Object.fromEntries(Object.entries(raw))

@@ -3,7 +3,6 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal } from "solid-js";
-import { TRANSCRIPT_SOURCE_LOCATOR_FIELDS } from "../../../../src/plugins/manifest-contract-keys.js";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -25,7 +24,8 @@ import { createSettingsStatus } from "./settings-status.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 registerEnglishCatalog(registerTranscriptsEnglish);
 
-const SOURCE_FIELDS = ["title", ...TRANSCRIPT_SOURCE_LOCATOR_FIELDS, "sessionId"] as const;
+const LOCATOR_FIELDS = ["accountId", "guildId", "channelId", "meetingUrl"] as const;
+const SOURCE_FIELDS = ["title", ...LOCATOR_FIELDS, "sessionId"] as const;
 type SourceProvider = TranscriptsStatusResult["providers"][number];
 
 function supportsAutoStartSetup(provider: SourceProvider | undefined): boolean {
@@ -193,7 +193,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
         delete source[key];
       }
     }
-    const missing = TRANSCRIPT_SOURCE_LOCATOR_FIELDS.find(
+    const missing = LOCATOR_FIELDS.find(
       (key) => locatorRequirements()?.[key] === "required" && !normalizeOptionalString(source[key]),
     );
     if (missing) {
@@ -248,7 +248,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
     const fields = () =>
       [
         "title",
-        ...TRANSCRIPT_SOURCE_LOCATOR_FIELDS.filter(
+        ...LOCATOR_FIELDS.filter(
           (key) => locatorRequirements()?.[key] || source?.[key] !== undefined,
         ),
         "sessionId",
@@ -371,10 +371,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
               ? source.title
               : (normalizeOptionalString(source?.providerId) ?? t("transcripts.unknown"))
           }
-          description={[
-            provider?.name,
-            ...TRANSCRIPT_SOURCE_LOCATOR_FIELDS.map((key) => source?.[key]),
-          ]
+          description={[provider?.name, ...LOCATOR_FIELDS.map((key) => source?.[key])]
             .filter((value) => typeof value === "string" && value)
             .join(" · ")}
           control={
@@ -546,7 +543,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                   <SettingsRow
                     title={item.title ?? item.source.providerId}
                     description={[
-                      ...TRANSCRIPT_SOURCE_LOCATOR_FIELDS.map((key) => item.source[key]),
+                      ...LOCATOR_FIELDS.map((key) => item.source[key]),
                       item.startDiagnostic
                         ? t(`meetingCapture.startDiagnostics.${item.startDiagnostic}`)
                         : undefined,
