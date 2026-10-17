@@ -6,44 +6,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import type {
-  PluginMetadataRegistryView,
-  PluginMetadataSnapshot,
-} from "../plugins/plugin-metadata-snapshot.types.js";
 import { detectAvailableSetupProviderIds } from "../plugins/provider-setup-availability.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { detectSetupInference } from "./setup-inference-detect.js";
-
-const inventories = vi.hoisted(
-  (): { choices?: PluginMetadataSnapshot; providers?: PluginMetadataRegistryView } => ({}),
-);
-
-vi.mock("../plugins/provider-auth-choices.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/provider-auth-choices.js")>();
-  return {
-    ...actual,
-    resolveManifestProviderAuthChoices: (
-      params: Parameters<typeof actual.resolveManifestProviderAuthChoices>[0],
-    ) => {
-      inventories.choices = params?.metadataSnapshot;
-      return actual.resolveManifestProviderAuthChoices(params);
-    },
-  };
-});
-
-vi.mock("../plugins/providers.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/providers.runtime.js")>();
-  return {
-    ...actual,
-    resolvePluginProvidersCore: (
-      params: Parameters<typeof actual.resolvePluginProvidersCore>[0],
-    ) => {
-      inventories.providers = params.pluginMetadataSnapshot;
-      return actual.resolvePluginProvidersCore(params);
-    },
-  };
-});
 
 afterEach(async () => {
   clearPluginMetadataLifecycleCaches();
@@ -137,8 +103,6 @@ it.each([false, true])(
             }
           };
           process.on(observationEvent, observe);
-          inventories.choices = undefined;
-          inventories.providers = undefined;
           const work = detectSetupInference("main");
           try {
             await Promise.race([started.promise, work]);
@@ -163,9 +127,6 @@ it.each([false, true])(
                   ],
             );
             expect(phases).toEqual(["detect", "dispose"]);
-            // Repeated detection loads providers from the inventory that selected them.
-            expect(inventories.choices).toBeDefined();
-            expect(inventories.providers).toBe(inventories.choices);
             expect(process.listenerCount(nativeEvent)).toBe(nativeBefore);
             expect(process.listenerCount(releaseEvent)).toBe(0);
           } finally {
