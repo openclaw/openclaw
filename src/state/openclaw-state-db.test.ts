@@ -45,7 +45,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
 import { snapshotPreflightSourceManifest } from "./openclaw-database-preflight.test-support.js";
-import { recordOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.test-support.js";
 import { recordOpenClawStateDatabaseOpenFailure } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -754,15 +754,13 @@ describe("openclaw state database", () => {
       const generation = generationBound ? before : undefined;
       const reason = "previously verified damage outside Workshop";
       if (refusal === "persisted") {
-        expect(
-          recordOpenClawDatabaseQuarantine({
-            env: options.env,
-            kind: "state",
-            path: databasePath,
-            reason,
-            generation,
-          }),
-        ).toBe(true);
+        seedOpenClawDatabaseQuarantine({
+          env: options.env,
+          kind: "state",
+          path: databasePath,
+          reason,
+          generation,
+        });
       } else {
         const error = new Error(reason);
         error.name = "SqliteIntegrityError";
