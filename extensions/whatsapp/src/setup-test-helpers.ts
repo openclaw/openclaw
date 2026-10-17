@@ -1,4 +1,3 @@
-// Whatsapp helper module supports setup test helpers behavior.
 import { expect } from "vitest";
 
 type WhatsAppSetupConfig = {
@@ -33,13 +32,7 @@ const WHATSAPP_ACCESS_NOTE_TITLE = "WhatsApp DM access";
 const WHATSAPP_LOGIN_NOTE_TITLE = "WhatsApp";
 
 export function createWhatsAppRootAllowFromConfig(): WhatsAppSetupConfig {
-  return {
-    channels: {
-      whatsapp: {
-        allowFrom: [WHATSAPP_OWNER_NUMBER_E164],
-      },
-    },
-  };
+  return { channels: { whatsapp: { allowFrom: [WHATSAPP_OWNER_NUMBER_E164] } } };
 }
 
 export function createWhatsAppOwnerAllowlistHarness<T extends WizardPromptHarness>(
@@ -71,9 +64,7 @@ export function createWhatsAppLinkingHarness<T extends WizardPromptHarness>(
 }
 
 export function createWhatsAppWorkAccountConfig(
-  params: {
-    defaultAccount?: string;
-  } = {},
+  params: { defaultAccount?: string } = {},
 ): WhatsAppSetupConfig {
   return {
     channels: {
@@ -81,11 +72,7 @@ export function createWhatsAppWorkAccountConfig(
         ...(params.defaultAccount ? { defaultAccount: params.defaultAccount } : {}),
         dmPolicy: "disabled",
         allowFrom: [WHATSAPP_OWNER_NUMBER_E164],
-        accounts: {
-          work: {
-            authDir: "/tmp/work",
-          },
-        },
+        accounts: { work: { authDir: "/tmp/work" } },
       },
     },
   };
@@ -103,19 +90,16 @@ export function createWhatsAppAllowlistModeInput(): {
 
 function expectWhatsAppDmAccess(
   cfg: WhatsAppSetupConfig,
-  expected: {
-    selfChatMode: boolean;
-    dmPolicy: string;
-    allowFrom?: string[];
-  },
+  selfChatMode: boolean,
+  dmPolicy: string,
+  allowFrom?: string[],
 ): void {
-  expect(cfg.channels?.whatsapp?.selfChatMode).toBe(expected.selfChatMode);
-  expect(cfg.channels?.whatsapp?.dmPolicy).toBe(expected.dmPolicy);
-  if ("allowFrom" in expected) {
-    expect(cfg.channels?.whatsapp?.allowFrom).toEqual(expected.allowFrom);
-  } else {
-    expect(cfg.channels?.whatsapp?.allowFrom).toBeUndefined();
-  }
+  const whatsapp = cfg.channels?.whatsapp;
+  expect([whatsapp?.selfChatMode, whatsapp?.dmPolicy, whatsapp?.allowFrom]).toEqual([
+    selfChatMode,
+    dmPolicy,
+    allowFrom,
+  ]);
 }
 
 export function expectWhatsAppWorkAccountOpenAccess(cfg: WhatsAppSetupConfig): void {
@@ -137,11 +121,7 @@ export function expectWhatsAppOwnerAllowlistSetup(
   cfg: WhatsAppSetupConfig,
   harness: WizardPromptHarness,
 ): void {
-  expectWhatsAppDmAccess(cfg, {
-    selfChatMode: true,
-    dmPolicy: "allowlist",
-    allowFrom: [WHATSAPP_OWNER_NUMBER],
-  });
+  expectWhatsAppDmAccess(cfg, true, "allowlist", [WHATSAPP_OWNER_NUMBER]);
   expectWhatsAppOwnerNumberPrompt(harness);
 }
 
@@ -149,38 +129,23 @@ export function expectWhatsAppSeparatePhoneDisabledSetup(
   cfg: WhatsAppSetupConfig,
   harness: WizardPromptHarness,
 ): void {
-  expectWhatsAppDmAccess(cfg, {
-    selfChatMode: false,
-    dmPolicy: "disabled",
-  });
+  expectWhatsAppDmAccess(cfg, false, "disabled");
   expect(harness.text).not.toHaveBeenCalled();
 }
 
 export function expectWhatsAppAllowlistModeSetup(cfg: WhatsAppSetupConfig): void {
-  expectWhatsAppDmAccess(cfg, {
-    selfChatMode: false,
-    dmPolicy: "allowlist",
-    allowFrom: [WHATSAPP_OWNER_NUMBER, "*"],
-  });
+  expectWhatsAppDmAccess(cfg, false, "allowlist", [WHATSAPP_OWNER_NUMBER, "*"]);
 }
 
 export function expectWhatsAppPersonalPhoneSetup(cfg: WhatsAppSetupConfig): void {
-  expectWhatsAppDmAccess(cfg, {
-    selfChatMode: true,
-    dmPolicy: "allowlist",
-    allowFrom: [WHATSAPP_PERSONAL_NUMBER],
-  });
+  expectWhatsAppDmAccess(cfg, true, "allowlist", [WHATSAPP_PERSONAL_NUMBER]);
 }
 
 export function expectWhatsAppOpenPolicySetup(
   cfg: WhatsAppSetupConfig,
   harness: WizardPromptHarness,
 ): void {
-  expectWhatsAppDmAccess(cfg, {
-    selfChatMode: false,
-    dmPolicy: "open",
-    allowFrom: ["*", WHATSAPP_OWNER_NUMBER],
-  });
+  expectWhatsAppDmAccess(cfg, false, "open", ["*", WHATSAPP_OWNER_NUMBER]);
   expect(harness.select).toHaveBeenCalledTimes(2);
   expect(harness.text).not.toHaveBeenCalled();
 }

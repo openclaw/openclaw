@@ -77,6 +77,30 @@ function seedSources(oauthDir: string): Map<string, string> {
   return originals;
 }
 
+function expectFiles(directory: string, originals: Map<string, string>, suffix = "") {
+  for (const [name, bytes] of originals) {
+    expect(fs.readFileSync(path.join(directory, `${name}${suffix}`), "utf8")).toBe(bytes);
+  }
+}
+
+function interruptCleanup(shouldInterrupt: (name: string) => boolean, removeFirst = true) {
+  const backupSource = migrationSdk.backupLegacyStateSource;
+  return vi.spyOn(migrationSdk, "backupLegacyStateSource").mockImplementation(async (params) => {
+    const backup = await backupSource(params);
+    return {
+      ...backup,
+      removeSource(markSourceRemoved) {
+        if (removeFirst) {
+          backup.removeSource(markSourceRemoved);
+        }
+        if (shouldInterrupt(path.basename(params.filePath))) {
+          throw new Error("interrupted credential cleanup");
+        }
+      },
+    };
+  });
+}
+
 describe("WhatsApp legacy credential import", () => {
   it.each(["missing", "expired"] as const)(
     "preserves all source bytes when offline host authority is %s",
@@ -99,9 +123,7 @@ describe("WhatsApp legacy credential import", () => {
         );
       }
       expect(fs.readdirSync(input.oauthDir).toSorted()).toEqual(authFiles.toSorted());
-      for (const [name, bytes] of originals) {
-        expect(fs.readFileSync(path.join(input.oauthDir, name), "utf8")).toBe(bytes);
-      }
+      expectFiles(input.oauthDir, originals);
     },
   );
 
@@ -121,33 +143,19 @@ describe("WhatsApp legacy credential import", () => {
       const targetDir = path.join(input.oauthDir, "whatsapp", "default");
 
       expect(await migration.detectLegacyState(input)).not.toBeNull();
-      const backupSource = migrationSdk.backupLegacyStateSource;
-      const interrupted = vi
-        .spyOn(migrationSdk, "backupLegacyStateSource")
-        .mockImplementation(async (params) => {
-          const backup = await backupSource(params);
-          return {
-            ...backup,
-            removeSource(markSourceRemoved) {
-              backup.removeSource(markSourceRemoved);
-              if (path.basename(params.filePath) === interruptedName) {
-                throw new Error("interrupted after credential cleanup");
-              }
-            },
-          };
-        });
+      const interrupted = interruptCleanup((name) => name === interruptedName);
       try {
         await expect(migration.migrateLegacyState(input)).rejects.toThrow(
-          "interrupted after credential cleanup",
+          "interrupted credential cleanup",
         );
       } finally {
         interrupted.mockRestore();
       }
       expect((await migration.migrateLegacyState(input)).warnings).toEqual([]);
-      for (const [name, bytes] of originals) {
-        expect(fs.readFileSync(path.join(targetDir, name), "utf8")).toBe(bytes);
+      expectFiles(targetDir, originals);
+      expectFiles(input.oauthDir, originals, ".migrated");
+      for (const name of originals.keys()) {
         const backupPath = path.join(input.oauthDir, `${name}.migrated`);
-        expect(fs.readFileSync(backupPath, "utf8")).toBe(bytes);
         if (process.platform !== "win32") {
           expect(fs.statSync(backupPath).mode & 0o777).toBe(0o600);
         }
@@ -169,21 +177,7 @@ describe("WhatsApp legacy credential import", () => {
     async (phase) => {
       const input = fixture();
       const originals = seedSources(input.oauthDir);
-      const backupSource = migrationSdk.backupLegacyStateSource;
-      const interrupted = vi
-        .spyOn(migrationSdk, "backupLegacyStateSource")
-        .mockImplementation(async (params) => {
-          const backup = await backupSource(params);
-          return {
-            ...backup,
-            removeSource(markSourceRemoved) {
-              if (phase === "partial-cleanup") {
-                backup.removeSource(markSourceRemoved);
-              }
-              throw new Error("interrupted credential cleanup");
-            },
-          };
-        });
+      const interrupted = interruptCleanup(() => true, phase === "partial-cleanup");
       try {
         await expect(migration.migrateLegacyState(input)).rejects.toThrow(
           "interrupted credential cleanup",
@@ -192,9 +186,7 @@ describe("WhatsApp legacy credential import", () => {
         interrupted.mockRestore();
       }
       const targetDir = path.join(input.oauthDir, "whatsapp", "default");
-      for (const [name, bytes] of originals) {
-        expect(fs.readFileSync(path.join(targetDir, name), "utf8")).toBe(bytes);
-      }
+      expectFiles(targetDir, originals);
       fs.rmSync(targetDir, { recursive: true });
 
       const result = await migration.migrateLegacyState(input);
@@ -205,8 +197,8 @@ describe("WhatsApp legacy credential import", () => {
       ]);
       expect(result.warningDisposition).toBeUndefined();
       expect(fs.existsSync(targetDir)).toBe(false);
+      expectFiles(input.oauthDir, originals, ".migrated");
       for (const [name, bytes] of originals) {
-        expect(fs.readFileSync(path.join(input.oauthDir, `${name}.migrated`), "utf8")).toBe(bytes);
         const source = path.join(input.oauthDir, name);
         if (fs.existsSync(source)) {
           expect(fs.readFileSync(source, "utf8")).toBe(bytes);
@@ -239,10 +231,8 @@ describe("WhatsApp legacy credential import", () => {
       expect(result.warningDisposition).toBe(incomplete ? undefined : "recoverable");
       expect(fs.readdirSync(targetDir)).toEqual(before);
       expect(fs.readFileSync(path.join(targetDir, targetName), "utf8")).toBe("canonical-bytes");
-      for (const [name, bytes] of originals) {
-        expect(fs.readFileSync(path.join(input.oauthDir, name), "utf8")).toBe(bytes);
-        expect(fs.readFileSync(path.join(input.oauthDir, `${name}.migrated`), "utf8")).toBe(bytes);
-      }
+      expectFiles(input.oauthDir, originals);
+      expectFiles(input.oauthDir, originals, ".migrated");
     },
   );
 
@@ -258,10 +248,8 @@ describe("WhatsApp legacy credential import", () => {
     expect(result.warnings).toEqual([expect.stringContaining("restore the original creds.json")]);
     expect(result.warningDisposition).toBeUndefined();
     expect(fs.existsSync(path.join(input.oauthDir, "whatsapp"))).toBe(false);
-    for (const [name, bytes] of originals) {
-      expect(fs.readFileSync(path.join(input.oauthDir, name), "utf8")).toBe(bytes);
-      expect(fs.readFileSync(path.join(input.oauthDir, `${name}.migrated`), "utf8")).toBe(bytes);
-    }
+    expectFiles(input.oauthDir, originals);
+    expectFiles(input.oauthDir, originals, ".migrated");
   });
 
   it.each([false, true])(
@@ -310,8 +298,6 @@ describe("WhatsApp legacy credential import", () => {
     expect(await migration.detectLegacyState(input)).toBeNull();
     expect(await migration.migrateLegacyState(input)).toEqual({ changes: [], warnings: [] });
     expect(fs.readdirSync(input.oauthDir).toSorted()).toEqual(authFiles.toSorted());
-    for (const [name, bytes] of originals) {
-      expect(fs.readFileSync(path.join(input.oauthDir, name), "utf8")).toBe(bytes);
-    }
+    expectFiles(input.oauthDir, originals);
   });
 });
