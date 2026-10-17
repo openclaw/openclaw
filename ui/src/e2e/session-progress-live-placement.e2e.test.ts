@@ -1,3 +1,4 @@
+import type { ProgressCardStepStatus } from "@openclaw/gateway-protocol";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
@@ -12,7 +13,6 @@ import {
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
-  installMockGateway,
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
@@ -21,6 +21,11 @@ import {
   openChatSidePanelType,
   restoreChatAsMain,
 } from "./chat-side-panel.test-support.ts";
+import {
+  installProgressGateway as installProgress,
+  progressMethods,
+  updateCard,
+} from "./session-progress.test-support.ts";
 
 async function expectInsideDetails(item: Locator): Promise<void> {
   const inside = await item.evaluate((node) => {
@@ -43,6 +48,18 @@ const placement = (root: Page | Locator, name = "details") =>
 async function expectPlacement(root: Locator, name: string, count: number) {
   await expect.poll(() => placement(root, name).count()).toBe(count);
 }
+async function openProgress(page: Page, sessionKey: string) {
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+  const card = placement(page);
+  await openChatDetails(page);
+  await expect.poll(() => card.isVisible()).toBe(true);
+  return card;
+}
+async function reloadProgress(page: Page, card: Locator) {
+  await page.reload();
+  await openChatDetails(page);
+  await expect.poll(() => card.isVisible()).toBe(true);
+}
 async function expectOpen(card: Locator, open: boolean) {
   await expect.poll(() => card.getAttribute("open")).toBe(open ? "" : null);
 }
@@ -50,64 +67,57 @@ async function expectOpen(card: Locator, open: boolean) {
 suite.define(() => {
   it("collapses enabled runs and preserves manual disclosure through finals", async () => {
     const sessionKey = "agent:main:progress-final-expand";
-    const context = await suite.newBrowserContext(desktop);
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      featureMethods: [
-        "chat.metadata",
-        "chat.send",
-        "chat.startup",
-        "config.get",
-        "progressCard.get",
-      ],
-      methodResponses: {
-        "progressCard.get": { card: null },
-        "sessions.list": chatSessionListResponse([
-          {
-            key: sessionKey,
-            kind: "direct",
-            label: "Progress final expansion",
-            updatedAt: 1,
-          },
-        ]),
-      },
-      sessionKey,
-    });
-    const card = placement(page);
-    const setProgressCard = async (
-      revision: number,
-      markdown: string,
-      steps: Array<{ status: "completed" | "in_progress" | "pending"; step: string }>,
-    ) => {
-      await gateway.setMethodResponse("progressCard.get", {
-        card: { markdown, revision, sessionKey, steps, updatedAt: Date.now() },
+    await suite.withPage(desktop, async ({ page }) => {
+      const gateway = await installProgress(page, {
+        sessionKey,
+        featureMethods: [
+          "chat.metadata",
+          "chat.send",
+          "chat.startup",
+          "config.get",
+          "progressCard.get",
+        ],
       });
-      await gateway.emitGatewayEvent("progressCard.changed", { revision, sessionKey });
-      await expect.poll(() => card.textContent()).toContain(markdown);
-      await openChatDetails(page);
-    };
-    const send = async (message: string) => {
-      const requestCount = (await gateway.getRequests("chat.send")).length;
-      await page.locator(".agent-chat__composer-combobox textarea").fill(message);
-      await page.getByRole("button", { name: "Send message" }).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("chat.send")).length)
-        .toBe(requestCount + 1);
-      const requests = await gateway.getRequests("chat.send");
-      return requireString(
-        requireRecord(requests[requestCount]!.params).idempotencyKey,
-        "chat send idempotency key",
-      );
-    };
+      const card = placement(page);
+      const setProgressCard = async (
+        revision: number,
+        markdown: string,
+        statuses: [ProgressCardStepStatus, ProgressCardStepStatus],
+        run = "first",
+      ) => {
+        await updateCard(gateway, {
+          markdown,
+          revision,
+          sessionKey,
+          updatedAt: Date.now(),
+          steps: [
+            { step: `Inspect ${run} run`, status: statuses[0] },
+            { step: `Verify ${run} run`, status: statuses[1] },
+          ],
+        });
+        await expect.poll(() => card.textContent()).toContain(markdown);
+        await openChatDetails(page);
+      };
+      const send = async (message: string) => {
+        const requestCount = (await gateway.getRequests("chat.send")).length;
+        await page.locator(".agent-chat__composer-combobox textarea").fill(message);
+        await page.getByRole("button", { name: "Send message" }).click();
+        await expect
+          .poll(async () => (await gateway.getRequests("chat.send")).length)
+          .toBe(requestCount + 1);
+        const requests = await gateway.getRequests("chat.send");
+        return requireString(
+          requireRecord(requests[requestCount]!.params).idempotencyKey,
+          "chat send idempotency key",
+        );
+      };
 
-    try {
       await page.goto(
         `${suite.server.baseUrl}settings/appearance?section=__appearance__#settings-appearance-chat`,
       );
       await waitForControlUiSettingsTakeover(page);
       const settingRow = page
-        .locator(".settings-row")
-        .filter({
+        .locator(".settings-row", {
           has: page.locator(".settings-row__title", {
             hasText: "Collapse task progress by default on desktop",
           }),
@@ -120,18 +130,12 @@ suite.define(() => {
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const runOneId = await send("Run the first progress cycle");
-      await setProgressCard(1, "Run one started", [
-        { status: "in_progress", step: "Inspect first run" },
-        { status: "pending", step: "Verify first run" },
-      ]);
+      await setProgressCard(1, "Run one started", ["in_progress", "pending"]);
       await expectOpen(card, false);
 
       await card.locator("summary").click();
       await expectOpen(card, true);
-      await setProgressCard(2, "Run one revised", [
-        { status: "completed", step: "Inspect first run" },
-        { status: "in_progress", step: "Verify first run" },
-      ]);
+      await setProgressCard(2, "Run one revised", ["completed", "in_progress"]);
       await expectOpen(card, true);
 
       await card.locator("summary").click();
@@ -147,10 +151,7 @@ suite.define(() => {
         .waitFor();
       await expectOpen(card, false);
 
-      await setProgressCard(3, "Run one final card revision", [
-        { status: "completed", step: "Inspect first run" },
-        { status: "completed", step: "Verify first run" },
-      ]);
+      await setProgressCard(3, "Run one final card revision", ["completed", "completed"]);
       await expectOpen(card, false);
 
       await card.locator("summary").click();
@@ -160,15 +161,9 @@ suite.define(() => {
       await openChatDetails(page);
       await expectOpen(card, true);
 
-      await setProgressCard(4, "Run two started", [
-        { status: "in_progress", step: "Inspect second run" },
-        { status: "pending", step: "Verify second run" },
-      ]);
+      await setProgressCard(4, "Run two started", ["in_progress", "pending"], "second");
       await expectOpen(card, true);
-    } finally {
-      await page.close();
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("keeps one live card placement and a compact transcript receipt", async () => {
@@ -181,8 +176,22 @@ suite.define(() => {
     ];
 
     await suite.withPage(desktop, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+      const gateway = await installProgress(page, {
+        sessionKey,
+        card: {
+          markdown: "**Implementation** is moving.",
+          revision: 2,
+          sessionKey,
+          steps: plan,
+          updatedAt,
+        },
+        row: {
+          label: "Progress placement",
+          hasActiveRun: true,
+          activeRunIds: ["stale-run"],
+          status: "completed",
+          updatedAt,
+        },
         historyMessages: [
           {
             id: "progress-receipt",
@@ -204,40 +213,17 @@ suite.define(() => {
             ],
           },
         ],
-        methodResponses: {
-          "progressCard.get": {
-            card: {
-              markdown: "**Implementation** is moving.",
-              revision: 2,
-              sessionKey,
-              steps: plan,
-              updatedAt,
-            },
-          },
-          "sessions.list": chatSessionListResponse([
-            {
-              key: sessionKey,
-              kind: "direct",
-              label: "Progress placement",
-              hasActiveRun: true,
-              activeRunIds: ["stale-run"],
-              status: "completed",
-              updatedAt,
-            },
-          ]),
-        },
-        sessionKey,
       });
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
       await openChatDetails(page);
 
-      const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
-      expect(await placement(visiblePane, "composer").count()).toBe(0);
-      expect(await visiblePane.locator(".chat-footer .chat-prs").count()).toBe(0);
+      const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+      expect(await placement(pane, "composer").count()).toBe(0);
+      expect(await pane.locator(".chat-footer .chat-prs").count()).toBe(0);
       const expectVisibleLastActivity = async () => {
-        const card = placement(visiblePane);
+        const card = placement(pane);
         const timestamp = card.locator("time");
         await expect
           .poll(() => timestamp.getAttribute("datetime"))
@@ -257,9 +243,9 @@ suite.define(() => {
         );
       };
       await page.setViewportSize({ height: 900, width: 1600 });
-      await expectPlacement(visiblePane, "details", 1);
-      const pausedStep = visiblePane.locator(".session-progress-card__step--paused");
-      await expect.poll(() => placement(visiblePane).getAttribute("open")).toBe("");
+      await expectPlacement(pane, "details", 1);
+      const pausedStep = pane.locator(".session-progress-card__step--paused");
+      await expect.poll(() => placement(pane).getAttribute("open")).toBe("");
       await page.evaluate(
         ({ gatewayUrl, settingsKey }) => {
           localStorage.setItem(
@@ -274,7 +260,7 @@ suite.define(() => {
       );
       await page.reload();
       await openChatDetails(page);
-      const detailsCard = placement(visiblePane);
+      const detailsCard = placement(pane);
       await expectOpen(detailsCard, false);
       await expect
         .poll(() => detailsCard.locator(".session-progress-card__current").textContent())
@@ -283,43 +269,43 @@ suite.define(() => {
       await expectOpen(detailsCard, true);
       await expect.poll(() => pausedStep.getAttribute("aria-label")).toBe("Implement, paused");
       await expect
-        .poll(() => visiblePane.locator(".session-progress-card .session-run-spinner").count())
+        .poll(() => pane.locator(".session-progress-card .session-run-spinner").count())
         .toBe(0);
       await expectVisibleLastActivity();
 
       await page.setViewportSize({ height: 900, width: 1280 });
       await openChatSidePanelType(page, "Side chat");
-      await openChatDetails(visiblePane);
-      await expectPlacement(visiblePane, "details", 1);
-      await expectPlacement(visiblePane, "rail", 0);
-      await expect.poll(() => visiblePane.locator(".session-progress-card").count()).toBe(1);
+      await openChatDetails(pane);
+      await expectPlacement(pane, "details", 1);
+      await expectPlacement(pane, "rail", 0);
+      await expect.poll(() => pane.locator(".session-progress-card").count()).toBe(1);
 
-      const receipt = visiblePane.locator(".chat-thread .chat-progress-card-receipt");
+      const receipt = pane.locator(".chat-thread .chat-progress-card-receipt");
       await expect
         .poll(() => receipt.textContent())
         .toContain("Progress updated — 1/3 · Implement");
       await expect.poll(() => receipt.locator(".chat-tool-msg-body").count()).toBe(0);
       await expect
-        .poll(() => visiblePane.locator(".chat-thread").textContent())
+        .poll(() => pane.locator(".chat-thread").textContent())
         .not.toContain("Implementation is moving.");
       await expectVisibleLastActivity();
 
-      const sidePanel = visiblePane.locator(".sidebar-region__right-runtime .side-panel");
+      const sidePanel = pane.locator(".sidebar-region__right-runtime .side-panel");
       await focusChatSidePanel(page);
-      await expectPlacement(visiblePane, "details", 1);
-      await expectPlacement(visiblePane, "rail", 0);
+      await expectPlacement(pane, "details", 1);
+      await expectPlacement(pane, "rail", 0);
       await selectChatLayoutAction(page, "Restore split");
       await restoreChatAsMain(page);
-      await openChatDetails(visiblePane);
+      await openChatDetails(pane);
 
       await page.setViewportSize({ height: 900, width: 560 });
-      await expectPlacement(visiblePane, "details", 1);
-      await expectPlacement(visiblePane, "rail", 0);
+      await expectPlacement(pane, "details", 1);
+      await expectPlacement(pane, "rail", 0);
       const sideHeader = sidePanel.locator('[data-region-header="side"]');
 
       await expect
         .poll(() =>
-          visiblePane.evaluate((element) => {
+          pane.evaluate((element) => {
             const header = element.querySelector(".sidebar-region__header")!;
             const details = element.querySelector(".chat-details")!;
             return details.getBoundingClientRect().top >= header.getBoundingClientRect().bottom;
@@ -328,9 +314,9 @@ suite.define(() => {
         .toBe(true);
       await selectChatLayoutAction(page, "Minimize side panel");
       await sideHeader.waitFor({ state: "hidden" });
-      await openChatDetails(visiblePane);
-      await expect.poll(() => visiblePane.locator(".session-progress-card").count()).toBe(1);
-      await expect.poll(() => placement(visiblePane).isVisible()).toBe(true);
+      await openChatDetails(pane);
+      await expect.poll(() => pane.locator(".session-progress-card").count()).toBe(1);
+      await expect.poll(() => placement(pane).isVisible()).toBe(true);
       await expectVisibleLastActivity();
     });
   });
@@ -344,44 +330,26 @@ suite.define(() => {
         (_, index) => `| Gate ${index + 1} | Detailed state for gate ${index + 1} |`,
       ),
     ].join("\n");
-    const variants = [
-      { name: "markdown-only", steps: undefined },
-      {
-        name: "markdown-and-plan",
-        steps: Array.from({ length: 8 }, (_, index) => ({
-          status: index < 3 ? ("completed" as const) : ("pending" as const),
-          step: `Plan step ${index + 1}`,
-        })),
-      },
-    ];
-
-    for (const variant of variants) {
-      const sessionKey = `agent:main:progress-${variant.name}`;
+    for (const withPlan of [false, true]) {
+      const sessionKey = `agent:main:progress-${withPlan ? "markdown-and-plan" : "markdown-only"}`;
+      const steps = withPlan
+        ? Array.from({ length: 8 }, (_, index) => ({
+            status: index < 3 ? "completed" : "pending",
+            step: `Plan step ${index + 1}`,
+          }))
+        : undefined;
       await suite.withPage(
         { ...desktop, viewport: { height: 700, width: 980 } },
         async ({ page }) => {
-          const gateway = await installMockGateway(page, {
-            featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-            methodResponses: {
-              "progressCard.get": {
-                card: {
-                  markdown,
-                  revision: 1,
-                  sessionKey,
-                  steps: variant.steps,
-                  updatedAt: 1,
-                },
-              },
-              "sessions.list": chatSessionListResponse([
-                {
-                  key: sessionKey,
-                  kind: "direct",
-                  label: `Progress ${variant.name}`,
-                  updatedAt: 1,
-                },
-              ]),
-            },
+          const gateway = await installProgress(page, {
             sessionKey,
+            card: {
+              markdown,
+              revision: 1,
+              sessionKey,
+              steps,
+              updatedAt: 1,
+            },
           });
 
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -406,7 +374,7 @@ suite.define(() => {
           expect(await body.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
           expect(await page.evaluate(() => window.scrollY)).toBe(0);
 
-          if (variant.steps) {
+          if (steps) {
             const lastStep = card.locator(".session-progress-card__step:last-child");
             await lastStep.scrollIntoViewIfNeeded();
             await expectInsideDetails(lastStep);
@@ -423,36 +391,24 @@ suite.define(() => {
   });
 
   it.each([
-    {
-      name: "active",
-      colorScheme: "dark" as const,
-      width: 560,
-      status: "in_progress",
-      active: true,
-    },
-    {
-      name: "note-only",
-      colorScheme: "light" as const,
-      width: 390,
-      status: undefined,
-      active: false,
-    },
-  ])(
-    "hides $name progress locally without clearing the saved card",
-    async ({ name, colorScheme, width, status, active }) => {
+    [true, "dark", 560],
+    [false, "light", 390],
+  ] as const)(
+    "hides progress locally without clearing the saved card (active=%s, %s, %s px)",
+    async (active, colorScheme, width) => {
       const sessionKey = "agent:main:progress-dismiss";
       const updatedAt = Date.now() - (active ? 60_000 : 22 * 60 * 60_000);
-      const plan = status
+      const plan = active
         ? [
-            { step: "Inspect the workspace", status },
-            { step: "Verify the change", status: status === "completed" ? "completed" : "pending" },
+            { step: "Inspect the workspace", status: "in_progress" },
+            { step: "Verify the change", status: "pending" },
           ]
         : undefined;
       const initialCard = {
         revision: 3,
         sessionKey,
         steps: plan,
-        markdown: status ? undefined : "The workspace review is waiting for a decision.",
+        markdown: active ? undefined : "The workspace review is waiting for a decision.",
         updatedAt,
       };
       const sessions = chatSessionListResponse([
@@ -468,11 +424,10 @@ suite.define(() => {
       await suite.withPage(
         { colorScheme, locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width } },
         async ({ page }) => {
-          const gateway = await installMockGateway(page, {
-            agentModel: "example/demo-model",
-            models: [
-              { id: "demo-model", name: "Demo model", provider: "example", contextWindow: 128000 },
-            ],
+          const gateway = await installProgress(page, {
+            sessionKey,
+            card: initialCard,
+            roster: sessions,
             sessionInfo: {
               key: sessionKey,
               hasActiveRun: active,
@@ -483,25 +438,11 @@ suite.define(() => {
               ? { inFlightRun: { runId: "progress-run", text: "Checking the workspace." } }
               : {}),
             historyMessages: [
-              chatMessage("user", "Review the workspace and verify the change."),
               chatMessage("assistant", "The task progress card tracks the workspace checks."),
             ],
-            featureMethods: [
-              "chat.metadata",
-              "chat.startup",
-              "progressCard.get",
-              "progressCard.refresh",
-            ],
-            methodResponses: {
-              "progressCard.get": { card: initialCard },
-              "sessions.list": sessions,
-            },
-            sessionKey,
+            featureMethods: [...progressMethods, "progressCard.refresh"],
           });
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-          const card = placement(page);
-          await openChatDetails(page);
-          await expect.poll(() => card.isVisible()).toBe(true);
+          const card = await openProgress(page, sessionKey);
           if ((await card.getAttribute("open")) === null) {
             await card.locator("summary").click();
           }
@@ -512,25 +453,19 @@ suite.define(() => {
 
           expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
 
-          if (name === "active") {
+          if (active) {
             const latestCard = { ...initialCard, revision: 4, updatedAt: updatedAt + 1 };
-            await gateway.setMethodResponse("progressCard.get", { card: latestCard });
-            await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 4 });
+            await updateCard(gateway, latestCard);
             await gateway.waitForRequest("progressCard.get", { after: 1 });
             await expect.poll(() => card.count()).toBe(0);
             const peer = await page.context().newPage();
             try {
-              const peerGateway = await installMockGateway(peer, {
+              const peerGateway = await installProgress(peer, {
                 sessionKey,
-                featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-                methodResponses: {
-                  "progressCard.get": { card: latestCard },
-                  "sessions.list": sessions,
-                },
+                card: latestCard,
+                roster: sessions,
               });
-              await peer.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-              await openChatDetails(peer);
-              await expect.poll(() => placement(peer).isVisible()).toBe(true);
+              await openProgress(peer, sessionKey);
               expect(await peerGateway.getRequests("progressCard.put")).toHaveLength(0);
               expect(await card.count()).toBe(0);
             } finally {
@@ -540,9 +475,7 @@ suite.define(() => {
 
           await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill("draft");
           expect(await card.count()).toBe(0);
-          await page.reload();
-          await openChatDetails(page);
-          await expect.poll(() => card.isVisible()).toBe(true);
+          await reloadProgress(page, card);
           expect(await card.textContent()).toContain(
             plan?.[0]?.step ?? "The workspace review is waiting for a decision.",
           );
@@ -554,9 +487,7 @@ suite.define(() => {
           await card.getByRole("menuitem", { name: "Hide this card", exact: true }).press("Enter");
           await expect.poll(() => card.count()).toBe(0);
           expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
-          await page.reload();
-          await openChatDetails(page);
-          await expect.poll(() => card.isVisible()).toBe(true);
+          await reloadProgress(page, card);
         },
       );
     },
@@ -573,21 +504,13 @@ suite.define(() => {
     await suite.withPage(
       { ...desktop, viewport: { height: 900, width: 560 } },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get", "progressCard.put"],
-          methodResponses: {
-            "progressCard.get": { card: initialCard },
-            "progressCard.put": { card: null },
-            "sessions.list": chatSessionListResponse([
-              { key: sessionKey, kind: "direct", label: "Workspace review", updatedAt: 1 },
-            ]),
-          },
+        const gateway = await installProgress(page, {
           sessionKey,
+          card: initialCard,
+          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get", "progressCard.put"],
+          methodResponses: { "progressCard.put": { card: null } },
         });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const card = placement(page);
-        await openChatDetails(page);
-        await expect.poll(() => card.isVisible()).toBe(true);
+        const card = await openProgress(page, sessionKey);
         await card.getByRole("button", { name: "Task progress options" }).click();
         const clear = card.locator('[data-value="clear"]');
         await expect.poll(() => clear.isVisible()).toBe(true);
@@ -618,44 +541,25 @@ suite.define(() => {
         viewport: { height: 900, width: 560 },
       },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-          hasMultipleSessionSharingIdentities: true,
-          methodResponses: {
-            "progressCard.get": {
-              card: {
-                revision: 1,
-                sessionKey,
-                steps: [{ step: "Completed work", status: "completed" }],
-                updatedAt: 1,
-              },
-            },
-            "sessions.list": chatSessionListResponse([
-              {
-                key: sessionKey,
-                kind: "direct",
-                label: "Restricted progress",
-                sharingRole: "viewer",
-                updatedAt: 1,
-                visibility: "suggest",
-              },
-            ]),
-          },
+        const gateway = await installProgress(page, {
           sessionKey,
+          card: {
+            revision: 1,
+            sessionKey,
+            steps: [{ step: "Completed work", status: "completed" }],
+            updatedAt: 1,
+          },
+          row: { label: "Restricted progress", sharingRole: "viewer", visibility: "suggest" },
+          hasMultipleSessionSharingIdentities: true,
         });
 
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const card = placement(page);
-        await openChatDetails(page);
-        await expect.poll(() => card.isVisible()).toBe(true);
+        const card = await openProgress(page, sessionKey);
         expect(await card.locator('[data-value="clear"]').count()).toBe(0);
         await card.getByRole("button", { name: "Task progress options" }).click();
         await card.getByRole("menuitem", { name: "Hide this card", exact: true }).click();
         await expect.poll(() => card.count()).toBe(0);
         expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
-        await page.reload();
-        await openChatDetails(page);
-        await expect.poll(() => card.isVisible()).toBe(true);
+        await reloadProgress(page, card);
       },
     );
   });

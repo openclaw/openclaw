@@ -10,21 +10,18 @@ import {
 import { progressSubmitScenario } from "./session-progress-submit.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const progressSelector = '[data-progress-card-placement="details"]';
 
 function observeDetailsSubmit(page: Page) {
   return page.locator(".agent-chat__composer-combobox textarea").evaluateHandle((textarea) => {
     const pane = textarea.closest("openclaw-chat-pane")!;
-    const card = pane.querySelector<HTMLDetailsElement>(
-      '[data-progress-card-placement="details"]',
-    )!;
+    const getCard = () =>
+      pane.querySelector<HTMLDetailsElement>('[data-progress-card-placement="details"]');
+    const card = getCard()!;
     const details = pane.querySelector<HTMLElement>(".chat-details")!;
     const composer = pane.querySelector<HTMLElement>(".agent-chat__input")!;
-    let stopped = false;
+    let frameId = 0;
     const sample = (source: string) => {
-      const current = pane.querySelector<HTMLDetailsElement>(
-        '[data-progress-card-placement="details"]',
-      );
+      const current = getCard();
       const bounds = current?.getBoundingClientRect();
       const input = composer.getBoundingClientRect();
       return {
@@ -43,38 +40,29 @@ function observeDetailsSubmit(page: Page) {
     const samples: ReturnType<typeof sample>[] = [];
     const mutations = new MutationObserver(() => samples.push(sample("mutation")));
     const resize = new ResizeObserver(() => samples.push(sample("resize")));
-    textarea.addEventListener(
-      "keydown",
-      function start(event) {
-        if ((event as KeyboardEvent).key !== "Enter") {
-          return;
-        }
-        textarea.removeEventListener("keydown", start, true);
-        samples.push(sample("keydown"));
-        mutations.observe(details, { attributes: true, childList: true, subtree: true });
-        mutations.observe(pane.querySelector(".agent-chat__composer-shell")!, {
-          attributes: true,
-          childList: true,
-          subtree: true,
-        });
-        resize.observe(card);
-        resize.observe(composer);
-        const frame = () => {
-          if (!stopped) {
-            samples.push(sample("frame"));
-            requestAnimationFrame(frame);
-          }
-        };
-        requestAnimationFrame(frame);
-      },
-      { capture: true },
-    );
+    function start(event: Event) {
+      if ((event as KeyboardEvent).key !== "Enter") {
+        return;
+      }
+      textarea.removeEventListener("keydown", start, true);
+      samples.push(sample("keydown"));
+      for (const target of [details, pane.querySelector(".agent-chat__composer-shell")!]) {
+        mutations.observe(target, { attributes: true, childList: true, subtree: true });
+      }
+      resize.observe(card);
+      resize.observe(composer);
+      const frame = () => {
+        samples.push(sample("frame"));
+        frameId = requestAnimationFrame(frame);
+      };
+      frameId = requestAnimationFrame(frame);
+    }
+    textarea.addEventListener("keydown", start, { capture: true });
     return {
       async finish() {
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        });
-        stopped = true;
+        await new Promise<number>(requestAnimationFrame);
+        await new Promise<number>(requestAnimationFrame);
+        cancelAnimationFrame(frameId);
         mutations.disconnect();
         resize.disconnect();
         return samples;
@@ -85,16 +73,16 @@ function observeDetailsSubmit(page: Page) {
 
 suite.define(() => {
   it.each([
-    { name: "collapsed desktop", mobile: false, expanded: false, multiline: false },
-    { name: "Details-closed desktop", mobile: false, expanded: false, multiline: false },
-    { name: "expanded desktop", mobile: false, expanded: true, multiline: false },
-    { name: "multiline desktop", mobile: false, expanded: false, multiline: true },
-    { name: "collapsed mobile", mobile: true, expanded: false, multiline: false },
-    { name: "expanded mobile", mobile: true, expanded: true, multiline: false },
-    { name: "active run default mode", mobile: false, expanded: false, multiline: false },
-  ])(
-    "keeps task progress steady through Enter, streaming, and refresh: $name",
-    async ({ name, mobile, expanded, multiline }) => {
+    ["collapsed desktop", false, false, false, true],
+    ["Details-closed desktop", false, false, false, true],
+    ["expanded desktop", false, true, false, false],
+    ["multiline desktop", false, false, true, false],
+    ["collapsed mobile", true, false, false, false],
+    ["expanded mobile", true, true, false, true],
+    ["active run default mode", false, false, false, false],
+  ] as const)(
+    "keeps task progress steady through Enter, streaming, and refresh: %s",
+    async (name, mobile, expanded, multiline, reset) => {
       const contextOptions = {
         viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 },
         isMobile: mobile,
@@ -103,8 +91,18 @@ suite.define(() => {
       await suite.withPage(contextOptions, async ({ page }) => {
         const scenario = progressSubmitScenario(name === "active run default mode");
         const gateway = await installMockGateway(page, scenario);
+        const updateProgress = async (revision: number | null) => {
+          const baseline = scenario.methodResponses["progressCard.get"].card;
+          await gateway.setMethodResponse("progressCard.get", {
+            card: revision === null ? null : { ...baseline, revision },
+          });
+          await gateway.emitGatewayEvent("progressCard.changed", {
+            sessionKey: scenario.sessionKey,
+            revision,
+          });
+        };
         await page.goto(`${suite.server.baseUrl}chat`);
-        const card = page.locator(progressSelector);
+        const card = page.locator('[data-progress-card-placement="details"]');
         await card.waitFor({ state: "attached" });
         expect(await page.locator(".chat-details:popover-open").count()).toBe(0);
         expect(await page.locator('[data-progress-card-placement="composer"]').count()).toBe(0);
@@ -117,11 +115,7 @@ suite.define(() => {
         }
         await waitForChatScrollIdle(page);
         const textarea = page.locator(".agent-chat__composer-combobox textarea");
-        await textarea.fill(
-          multiline
-            ? "Please continue.\nCheck the changes.\nShare the result."
-            : "Please continue the review.",
-        );
+        await textarea.fill(multiline ? "Continue.\nCheck.\nReport." : "Continue the review.");
         await waitForChatScrollIdle(page);
         const observation = await observeDetailsSubmit(page);
         await textarea.press("Enter");
@@ -134,18 +128,10 @@ suite.define(() => {
           state: "delta",
           message: chatMessage("assistant", "Checking the workspace."),
         });
-        await gateway.setMethodResponse("progressCard.get", {
-          card: { ...scenario.methodResponses["progressCard.get"].card, revision: 2 },
-        });
-        await gateway.emitGatewayEvent("progressCard.changed", {
-          sessionKey: scenario.sessionKey,
-          revision: 2,
-        });
-        await gateway.emitChatFinal({ runId, text: "The review is complete." });
-        await page
-          .locator(".chat-bubble")
-          .getByText("The review is complete.", { exact: true })
-          .waitFor();
+        await updateProgress(2);
+        const reply = "The review is complete.";
+        await gateway.emitChatFinal({ runId, text: reply });
+        await page.locator(".chat-bubble").getByText(reply, { exact: true }).waitFor();
         await expect
           .poll(async () => (await gateway.getRequests("progressCard.get")).length)
           .toBeGreaterThan(1);
@@ -159,7 +145,7 @@ suite.define(() => {
         for (const sample of samples) {
           expect(sample).toMatchObject({
             retained: true,
-            open: initial.open,
+            open: detailsOpen ? expanded : true,
             reveal: initial.reveal,
             detailsOpen,
             queueRows: 0,
@@ -168,28 +154,12 @@ suite.define(() => {
             expect(Math.abs(sample[dimension] - initial[dimension])).toBeLessThanOrEqual(1);
           }
         }
-        expect(initial.open).toBe(detailsOpen ? expanded : true);
-        expect(initial.detailsOpen).toBe(detailsOpen);
         expect(await textarea.inputValue()).toBe("");
         expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-        if (
-          name === "collapsed desktop" ||
-          name === "Details-closed desktop" ||
-          name === "expanded mobile"
-        ) {
-          await gateway.setMethodResponse("progressCard.get", { card: null });
-          await gateway.emitGatewayEvent("progressCard.changed", {
-            sessionKey: scenario.sessionKey,
-            revision: null,
-          });
+        if (reset) {
+          await updateProgress(null);
           await card.waitFor({ state: "detached" });
-          await gateway.setMethodResponse("progressCard.get", {
-            card: { ...scenario.methodResponses["progressCard.get"].card, revision: 4 },
-          });
-          await gateway.emitGatewayEvent("progressCard.changed", {
-            sessionKey: scenario.sessionKey,
-            revision: 4,
-          });
+          await updateProgress(4);
           await card.waitFor({ state: "attached" });
           expect(await page.locator(".chat-details:popover-open").count()).toBe(
             detailsOpen ? 1 : 0,
