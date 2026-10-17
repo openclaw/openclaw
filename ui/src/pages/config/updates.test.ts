@@ -71,7 +71,7 @@ function waitingUpdate(campaign: Pick<Campaign, "forceAtMs"> & Partial<Campaign>
   } satisfies NonNullable<UpdatesViewOverrides["update"]>;
 }
 
-function nativeSettings(snapshot: ReturnType<typeof createNativeDeviceSettingsSnapshot>) {
+function nativeSettings(snapshot: NativeDeviceSettingsCapability["snapshot"]) {
   return {
     snapshot,
     subscribe: () => () => undefined,
@@ -316,8 +316,10 @@ describe("renderUpdates", () => {
 
   it("keeps Mac updater controls native and available independently of Gateway admin access", () => {
     const nativeListeners = new Set<Parameters<NativeDeviceSettingsCapability["subscribe"]>[0]>();
+    const snapshot = createNativeDeviceSettingsSnapshot();
     const nativeDeviceSettings = {
-      ...nativeSettings(createNativeDeviceSettingsSnapshot()),
+      ...nativeSettings(snapshot),
+      snapshot,
       subscribe: (listener) => {
         nativeListeners.add(listener);
         return () => {

@@ -49,16 +49,18 @@ async function withState(run: (state: OpenClawTestState) => Promise<void>, fileL
     scenario: "minimal" as const,
     ...(fileLog ? { env: { OPENCLAW_TEST_FILE_LOG: "1" } } : {}),
   };
-  await withOpenClawTestState(options, (state) =>
-    run(state).finally(async () => {
+  await withOpenClawTestState(options, async (state) => {
+    try {
+      await run(state);
+    } finally {
       vi.useRealTimers();
       vi.restoreAllMocks();
       if (fileLog) {
         await flushLogger();
         setLoggerOverride(null);
       }
-    }),
-  );
+    }
+  });
 }
 
 function createEntryFixture(
