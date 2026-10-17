@@ -52,14 +52,10 @@ function createDeadlinePlugin(params: {
   };
 }
 
-async function collectDeadlineSnapshot(params: {
-  timeoutMs: number;
-  audience?: "public" | "admin";
-}) {
+async function collectDeadlineSnapshot(params: { audience?: "public" | "admin" } = {}) {
   return await collectGatewayHealthSnapshot({
     audience: params.audience ?? "admin",
     probe: true,
-    timeoutMs: params.timeoutMs,
   });
 }
 
@@ -101,7 +97,7 @@ describe("gateway health collection deadline", () => {
     readSessionStoreSummaryReadOnly.mockReset();
     testConfig = {};
     healthPluginsForTest = [];
-    await collectGatewayHealthSnapshot({ audience: "admin", probe: false, timeoutMs: 50 });
+    await collectGatewayHealthSnapshot({ audience: "admin", probe: false });
   });
 
   afterEach(() => {
@@ -114,11 +110,11 @@ describe("gateway health collection deadline", () => {
     const probe = vi.fn(async () => ({ ok: true }));
     healthPluginsForTest = [createDeadlinePlugin({ accountIds: ["default"], probe })];
     readSessionStoreSummaryReadOnly.mockImplementationOnce(() => {
-      vi.advanceTimersByTime(50);
+      vi.advanceTimersByTime(7_000);
       return { count: 0, recent: [], byAgent: new Map() };
     });
 
-    const snap = await collectDeadlineSnapshot({ timeoutMs: 50 });
+    const snap = await collectDeadlineSnapshot();
     const channel = snap.channels["deadline-test"];
 
     expect(snap.sessions.path).toBe(
@@ -126,11 +122,11 @@ describe("gateway health collection deadline", () => {
     );
     expect(channel?.probe).toEqual({
       timedOut: true,
-      error: "health collection timed out after 50ms",
+      error: "health collection timed out after 7000ms",
     });
     expect(channel?.accounts?.default?.probe).toEqual({
       timedOut: true,
-      error: "health collection timed out after 50ms",
+      error: "health collection timed out after 7000ms",
     });
     expect(probe).not.toHaveBeenCalled();
   }, 1_000);
@@ -165,11 +161,11 @@ describe("gateway health collection deadline", () => {
           },
         },
       ];
-      const collecting = scope.track(() => collectDeadlineSnapshot({ timeoutMs: 50, audience }));
+      const collecting = scope.track(() => collectDeadlineSnapshot({ audience }));
       try {
         await flushHealthPreparation();
         await enteredSummary.promise;
-        await vi.advanceTimersByTimeAsync(50);
+        await vi.advanceTimersByTimeAsync(7_000);
         const result = await collecting;
         expect(result.channels[channelId]?.probe).toEqual(
           retained
@@ -178,7 +174,7 @@ describe("gateway health collection deadline", () => {
                 error:
                   "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
               }
-            : { timedOut: true, error: "health collection timed out after 50ms" },
+            : { timedOut: true, error: "health collection timed out after 7000ms" },
         );
         expect(JSON.stringify(result)).not.toContain("/Users/synthetic");
       } finally {
@@ -221,9 +217,9 @@ describe("gateway health collection deadline", () => {
     ];
 
     try {
-      snapshotPromise = scope.track(() => collectDeadlineSnapshot({ timeoutMs: 50 }));
+      snapshotPromise = scope.track(() => collectDeadlineSnapshot());
       await flushHealthPreparation();
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(7_000);
       const snap = await snapshotPromise;
       const channel = snap.channels["deadline-test"];
 
@@ -231,7 +227,7 @@ describe("gateway health collection deadline", () => {
       expect(maxActive).toBeLessThanOrEqual(5);
       expect(channel?.probe).toEqual({
         timedOut: true,
-        error: "health collection timed out after 50ms",
+        error: "health collection timed out after 7000ms",
       });
       for (const accountId of accountIds.slice(1)) {
         expect(channel?.accounts?.[accountId]?.probe).toMatchObject({ ok: true });
@@ -278,18 +274,18 @@ describe("gateway health collection deadline", () => {
       }),
     ];
 
-    const snapshotPromise = collectDeadlineSnapshot({ timeoutMs: 50, audience: "public" });
+    const snapshotPromise = collectDeadlineSnapshot({ audience: "public" });
     try {
       await flushHealthPreparation();
       expect(started).toEqual(accountIds.slice(0, 5));
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(7_000);
       const snap = await snapshotPromise;
       const channel = snap.channels["deadline-test"];
 
       expect(started).toEqual(accountIds.slice(0, 5));
       for (const accountId of accountIds) {
         expect(channel?.accounts?.[accountId]?.probe).toEqual({
-          error: "health collection timed out after 50ms",
+          error: "health collection timed out after 7000ms",
           timedOut: true,
         });
       }
@@ -297,7 +293,7 @@ describe("gateway health collection deadline", () => {
       for (const release of releaseProbes) {
         release();
       }
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(7_000);
       await snapshotPromise;
     }
   }, 1_000);
@@ -326,17 +322,17 @@ describe("gateway health collection deadline", () => {
       }),
     ];
 
-    const firstSnapshot = collectDeadlineSnapshot({ timeoutMs: 50 });
+    const firstSnapshot = collectDeadlineSnapshot();
     try {
       await flushHealthPreparation();
       expect(started).toEqual(accountIds);
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(7_000);
       await firstSnapshot;
 
-      const secondSnapshot = collectDeadlineSnapshot({ timeoutMs: 50 });
+      const secondSnapshot = collectDeadlineSnapshot();
       await flushHealthPreparation();
       expect(started).toEqual(accountIds);
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(7_000);
       const second = await secondSnapshot;
 
       expect(started).toEqual(accountIds);
@@ -344,7 +340,7 @@ describe("gateway health collection deadline", () => {
       expect(maxActive).toBe(5);
       for (const accountId of accountIds) {
         expect(second.channels["deadline-test"]?.accounts?.[accountId]?.probe).toEqual({
-          error: "health collection timed out after 50ms",
+          error: "health collection timed out after 7000ms",
           timedOut: true,
         });
       }
@@ -352,7 +348,7 @@ describe("gateway health collection deadline", () => {
       for (const release of releaseProbes) {
         release();
       }
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(7_000);
       await firstSnapshot;
     }
     expect(active).toBe(0);
