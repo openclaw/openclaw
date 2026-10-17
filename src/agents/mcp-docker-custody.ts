@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { readProcessIdentity } from "@openclaw/proc-safe/identity";
 import { z } from "zod";
 import { resolveStateDir } from "../config/state-dir.js";
@@ -374,6 +375,7 @@ export async function prepareMcpDockerLaunch(
         return (closing ??= (async () => {
           const changed = () => onChange?.();
           let watcher: FSWatcher | undefined;
+          let cidWatcher: FSWatcher | undefined;
           let watchError: Error | undefined;
           let pendingWarning = false;
 
@@ -401,13 +403,23 @@ export async function prepareMcpDockerLaunch(
               if (watchError) {
                 throw watchError;
               }
+              if (!cidWatcher) {
+                try {
+                  // Docker creates an empty CID file before pulling. macOS does
+                  // not report its later content write through a directory watch.
+                  cidWatcher = watch(cidfile, changed);
+                  cidWatcher.on("error", (error) => {
+                    watchError = error;
+                    changed();
+                  });
+                } catch (error) {
+                  if (extractErrorCode(error) !== "ENOENT") {
+                    throw error;
+                  }
+                }
+              }
               const bytes = await fs.readFile(cidfile, "utf8").catch((error: unknown) => {
-                if (
-                  error &&
-                  typeof error === "object" &&
-                  "code" in error &&
-                  error.code === "ENOENT"
-                ) {
+                if (extractErrorCode(error) === "ENOENT") {
                   return "";
                 }
                 throw error;
@@ -440,6 +452,7 @@ export async function prepareMcpDockerLaunch(
             );
             throw error;
           } finally {
+            cidWatcher?.close();
             watcher?.close();
             if (confirmed) {
               try {
