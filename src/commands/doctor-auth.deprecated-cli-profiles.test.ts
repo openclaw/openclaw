@@ -1,5 +1,3 @@
-// Doctor deprecated CLI profile tests cover legacy auth profile migration and warnings.
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createApiKeyCredential,
@@ -8,9 +6,8 @@ import {
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { makePrompter } from "./doctor-auth-flat-profiles.test-support.js";
 import { maybeRepairLegacyOAuthProfileIds } from "./doctor-auth-legacy-oauth.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
-import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 
 const resolvePluginProvidersMock = vi.fn<() => ProviderPlugin[]>(() => []);
 const authProfileStoreMock = vi.hoisted(() => ({
@@ -63,40 +60,31 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
 }));
 
-function makePrompter(confirmValue: boolean): DoctorPrompter {
-  const repairMode: DoctorRepairMode = {
-    shouldRepair: confirmValue,
-    shouldForce: false,
-    nonInteractive: false,
-    canPrompt: true,
-    updateInProgress: false,
-  };
+function oauthProfile(access = "token-a", refresh = "token-r") {
   return {
-    confirm: vi.fn().mockResolvedValue(confirmValue),
-    confirmAutoFix: vi.fn().mockResolvedValue(confirmValue),
-    confirmAggressiveAutoFix: vi.fn().mockResolvedValue(confirmValue),
-    confirmRuntimeRepair: vi.fn().mockResolvedValue(confirmValue),
-    select: vi.fn().mockResolvedValue(""),
-    shouldRepair: repairMode.shouldRepair,
-    shouldForce: repairMode.shouldForce,
-    repairMode,
+    type: "oauth" as const,
+    provider: "anthropic",
+    access,
+    refresh,
+    expires: Date.now() + 60_000,
   };
 }
 
-function requireAuthConfig(config: OpenClawConfig): NonNullable<OpenClawConfig["auth"]> {
-  if (!config.auth) {
-    throw new Error("expected repaired auth config");
-  }
-  return config.auth;
+function useProvider(options: Partial<ProviderPlugin>) {
+  resolvePluginProvidersMock.mockReturnValue([
+    { id: "anthropic", label: "Anthropic", auth: [], ...options },
+  ]);
 }
 
-function requireFirstMockArg<T>(mock: { mock: { calls: T[][] } }, label: string): T {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  const [arg] = call;
-  return expectDefined(arg, "arg test invariant");
+function authConfig(profileId: string, email?: string): OpenClawConfig {
+  return {
+    auth: {
+      profiles: {
+        [profileId]: { provider: "anthropic", mode: "oauth", ...(email ? { email } : {}) },
+      },
+      order: { anthropic: [profileId] },
+    },
+  };
 }
 
 beforeEach(() => {
@@ -143,109 +131,52 @@ describe("maybeRepairLegacyOAuthProfileIds", () => {
     authProfileStoreMock.store = {
       version: 1,
       profiles: {
-        "anthropic:user@example.com": {
-          type: "oauth",
-          provider: "anthropic",
-          access: "token-a",
-          refresh: "token-r",
-          expires: Date.now() + 60_000,
-          email: "user@example.com",
-        },
+        "anthropic:user@example.com": { ...oauthProfile(), email: "user@example.com" },
       },
       lastGood: {
         anthropic: "anthropic:user@example.com",
       },
     };
 
-    resolvePluginProvidersMock.mockReturnValue([
-      {
-        id: "anthropic",
-        label: "Anthropic",
-        auth: [],
-        oauthProfileIdRepairs: [{ legacyProfileId: "anthropic:default" }],
-      },
-    ]);
+    useProvider({ oauthProfileIdRepairs: [{ legacyProfileId: "anthropic:default" }] });
     repairMocks.repairOAuthProfileIdMismatch.mockReturnValue({
       migrated: true,
       changes: ["Auth: migrate anthropic:default → anthropic:user@example.com"],
-      config: {
-        auth: {
-          profiles: {
-            "anthropic:user@example.com": {
-              provider: "anthropic",
-              mode: "oauth",
-              email: "user@example.com",
-            },
-          },
-          order: {
-            anthropic: ["anthropic:user@example.com"],
-          },
-        },
-      },
+      config: authConfig("anthropic:user@example.com", "user@example.com"),
     });
 
     const { config: next } = await maybeRepairLegacyOAuthProfileIds(
-      {
-        auth: {
-          profiles: {
-            "anthropic:default": { provider: "anthropic", mode: "oauth" },
-          },
-          order: {
-            anthropic: ["anthropic:default"],
-          },
-        },
-      } as OpenClawConfig,
+      authConfig("anthropic:default"),
       makePrompter(true),
     );
 
-    expect(repairMocks.repairOAuthProfileIdMismatch).toHaveBeenCalledOnce();
-    const repairCall = requireFirstMockArg(
-      repairMocks.repairOAuthProfileIdMismatch,
-      "OAuth profile repair",
-    ) as {
-      cfg?: OpenClawConfig;
-      store?: AuthProfileStore;
-      provider?: unknown;
-      legacyProfileId?: unknown;
-    };
-    expect(repairCall.cfg?.auth?.profiles?.["anthropic:default"]).toEqual({
+    expect(repairMocks.repairOAuthProfileIdMismatch).toHaveBeenCalledExactlyOnceWith({
+      cfg: authConfig("anthropic:default"),
+      store: authProfileStoreMock.store,
+      provider: "anthropic",
+      legacyProfileId: "anthropic:default",
+    });
+    expect(repairMocks.repairOAuthProfileIdMismatch.mock.calls[0]?.[0].store).toBe(
+      authProfileStoreMock.store,
+    );
+    expect(next.auth?.profiles?.["anthropic:default"]).toBeUndefined();
+    expect(next.auth?.profiles?.["anthropic:user@example.com"]).toEqual({
       provider: "anthropic",
       mode: "oauth",
+      email: "user@example.com",
     });
-    expect(repairCall.store).toBe(authProfileStoreMock.store);
-    expect(repairCall.provider).toBe("anthropic");
-    expect(repairCall.legacyProfileId).toBe("anthropic:default");
-    const auth = requireAuthConfig(next);
-    expect(auth.profiles?.["anthropic:default"]).toBeUndefined();
-    const repairedProfile = auth.profiles?.["anthropic:user@example.com"];
-    expect(repairedProfile?.provider).toBe("anthropic");
-    expect(repairedProfile?.mode).toBe("oauth");
-    expect(repairedProfile?.email).toBe("user@example.com");
-    expect(auth.order?.anthropic).toEqual(["anthropic:user@example.com"]);
+    expect(next.auth?.order?.anthropic).toEqual(["anthropic:user@example.com"]);
   });
 
   it("removes a provider-declared retired auth profile and config references", async () => {
     authProfileStoreMock.store = {
       version: 1,
       profiles: {
-        "anthropic:claude-cli": {
-          type: "oauth",
-          provider: "anthropic",
-          access: "copied-native-access",
-          refresh: "copied-native-refresh",
-          expires: Date.now() + 60_000,
-        },
+        "anthropic:claude-cli": oauthProfile("copied-native-access", "copied-native-refresh"),
         "anthropic:managed": createApiKeyCredential("anthropic", "managed-key"),
       },
     };
-    resolvePluginProvidersMock.mockReturnValue([
-      {
-        id: "anthropic",
-        label: "Anthropic",
-        auth: [],
-        deprecatedProfileIds: ["anthropic:claude-cli"],
-      },
-    ]);
+    useProvider({ deprecatedProfileIds: ["anthropic:claude-cli"] });
     providerPolicyMocks.applyConfigDefaults.mockImplementation(({ config }) => ({
       ...config,
       agents: {
@@ -310,14 +241,7 @@ describe("maybeRepairLegacyOAuthProfileIds", () => {
   it("removes config-only retired profile references", async () => {
     const cfg: OpenClawConfig = { auth: { order: { anthropic: ["anthropic:claude-cli"] } } };
 
-    resolvePluginProvidersMock.mockReturnValue([
-      {
-        id: "anthropic",
-        label: "Anthropic",
-        auth: [],
-        deprecatedProfileIds: ["anthropic:claude-cli"],
-      },
-    ]);
+    useProvider({ deprecatedProfileIds: ["anthropic:claude-cli"] });
 
     const prompter = makePrompter(true);
     const { config: next, retiredProfileCleanupPlans } = await maybeRepairLegacyOAuthProfileIds(
@@ -344,23 +268,10 @@ describe("maybeRepairLegacyOAuthProfileIds", () => {
       candidateMocks.stores.set(secondaryAgentDir, {
         version: 1,
         profiles: {
-          "anthropic:claude-cli": {
-            type: "oauth",
-            provider: "anthropic",
-            access: "copied-native-access",
-            refresh: "copied-native-refresh",
-            expires: Date.now() + 60_000,
-          },
+          "anthropic:claude-cli": oauthProfile("copied-native-access", "copied-native-refresh"),
         },
       });
-      resolvePluginProvidersMock.mockReturnValue([
-        {
-          id: "anthropic",
-          label: "Anthropic",
-          auth: [],
-          deprecatedProfileIds: ["anthropic:claude-cli"],
-        },
-      ]);
+      useProvider({ deprecatedProfileIds: ["anthropic:claude-cli"] });
 
       const result = await maybeRepairLegacyOAuthProfileIds({}, makePrompter(accepted));
 
@@ -379,26 +290,15 @@ describe("maybeRepairLegacyOAuthProfileIds", () => {
 
   it("strips provider-controlled terminal escapes from repair prompts", async () => {
     authProfileStoreMock.store = createAuthProfileStoreFixture({
-      "anthropic:user@example.com": {
-        type: "oauth",
-        provider: "anthropic",
-        access: "token-a",
-        refresh: "token-r",
-        expires: Date.now() + 60_000,
-        email: "user@example.com",
-      },
+      "anthropic:user@example.com": { ...oauthProfile(), email: "user@example.com" },
     });
 
-    resolvePluginProvidersMock.mockReturnValue([
-      {
-        id: "anthropic",
-        label: "\u001b[31mAnthropic\u001b[0m",
-        auth: [],
-        oauthProfileIdRepairs: [
-          { legacyProfileId: "anthropic:default", promptLabel: "\u001b[2JBad\u0007 Label" },
-        ],
-      },
-    ]);
+    useProvider({
+      label: "\u001b[31mAnthropic\u001b[0m",
+      oauthProfileIdRepairs: [
+        { legacyProfileId: "anthropic:default", promptLabel: "\u001b[2JBad\u0007 Label" },
+      ],
+    });
     repairMocks.repairOAuthProfileIdMismatch.mockReturnValue({
       migrated: true,
       changes: ["Auth: migrate anthropic:default to anthropic:user@example.com"],

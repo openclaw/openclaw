@@ -1,8 +1,7 @@
-// Doctor legacy-state e2e tests cover yes-mode state migrations without interactive prompts.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ProviderPlugin } from "../plugins/types.js";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   arrangeLegacyStateMigrationTest,
   confirm,
@@ -36,34 +35,20 @@ vi.mock("../plugins/providers.runtime.js", async () => {
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
 let healthCommand: typeof import("./health.js").healthCommand;
-type MaintenancePhase = "loading" | "loaded" | "entered" | "settled" | "rejected";
-let observeMaintenance: ((phase: MaintenancePhase) => void) | undefined;
+
+async function expectNixRefusal(options: Parameters<typeof doctorCommand>[1]) {
+  mockDoctorConfigSnapshot();
+  await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
+    await expect(doctorCommand(createDoctorRuntime(), options)).rejects.toThrow(
+      "OPENCLAW_NIX_MODE=1",
+    );
+  });
+  expect(transformConfigFile).not.toHaveBeenCalled();
+}
 
 describe("doctor command", () => {
   beforeEach(async () => {
-    observeMaintenance = undefined;
     vi.resetModules();
-    vi.doMock("./doctor-maintenance.js", async (importOriginal) => {
-      const loading = observeMaintenance;
-      loading?.("loading");
-      const actual = await importOriginal<typeof import("./doctor-maintenance.js")>();
-      loading?.("loaded");
-      return {
-        ...actual,
-        beginDoctorMaintenance: (params: Parameters<typeof actual.beginDoctorMaintenance>[0]) => {
-          const observe = observeMaintenance;
-          observe?.("entered");
-          const pending = actual.beginDoctorMaintenance(params);
-          if (observe) {
-            void pending.then(
-              () => observe("settled"),
-              () => observe("rejected"),
-            );
-          }
-          return pending;
-        },
-      };
-    });
     vi.doUnmock("../flows/doctor-health-contributions.js");
     // Prepare the real owners and nested check descriptors as fixture code;
     // detectors and repairs still run inside the unchanged command deadline.
@@ -78,78 +63,26 @@ describe("doctor command", () => {
     providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([]);
   });
 
-  afterEach(() => {
-    observeMaintenance = undefined;
-    vi.doUnmock("./doctor-maintenance.js");
-  });
-
-  it("runs legacy state migrations in yes mode without prompting", async ({ signal }) => {
-    const startedAt = performance.now();
-    const maintenance: { phase: MaintenancePhase; elapsedMs: number }[] = [];
-    let migrationCalls: (() => number) | undefined;
-    let doctorSettled = false;
-    observeMaintenance = (phase) => {
-      maintenance.push({ phase, elapsedMs: Math.round(performance.now() - startedAt) });
-    };
-    const reportInterruption = () => {
-      console.error("Doctor yes-mode interrupted before test settlement", {
-        maintenance,
-        legacyMigrationCalls: migrationCalls?.(),
-        doctorSettled,
-      });
-    };
-    signal.addEventListener("abort", reportInterruption, { once: true });
-    try {
-      const {
-        doctorCommand: doctorCommandValue,
-        runtime,
-        runLegacyStateMigrations,
-      } = await arrangeLegacyStateMigrationTest();
-      migrationCalls = () => runLegacyStateMigrations.mock.calls.length;
-      try {
-        await (
-          doctorCommandValue as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>
-        )(runtime, { yes: true });
-      } finally {
-        doctorSettled = true;
-      }
-
-      expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
-      expect(confirm).not.toHaveBeenCalled();
-    } finally {
-      signal.removeEventListener("abort", reportInterruption);
-      observeMaintenance = undefined;
-    }
+  it("runs legacy state migrations in yes mode without prompting", async () => {
+    const {
+      doctorCommand: runDoctor,
+      runtime,
+      runLegacyStateMigrations,
+    } = await arrangeLegacyStateMigrationTest();
+    await (runDoctor as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(
+      runtime,
+      { yes: true },
+    );
+    expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
+    expect(confirm).not.toHaveBeenCalled();
   }, 30_000);
 
   it("refuses doctor repair mode in Nix before repair side effects", async () => {
-    const savedEnv = captureEnv(["OPENCLAW_NIX_MODE"]);
-    process.env.OPENCLAW_NIX_MODE = "1";
-    try {
-      mockDoctorConfigSnapshot();
-      await expect(doctorCommand(createDoctorRuntime(), { repair: true })).rejects.toThrow(
-        "OPENCLAW_NIX_MODE=1",
-      );
-    } finally {
-      savedEnv.restore();
-    }
-
-    expect(transformConfigFile).not.toHaveBeenCalled();
+    await expectNixRefusal({ repair: true });
   });
 
   it("refuses doctor gateway token generation in Nix before config writes", async () => {
-    const savedEnv = captureEnv(["OPENCLAW_NIX_MODE"]);
-    process.env.OPENCLAW_NIX_MODE = "1";
-    try {
-      mockDoctorConfigSnapshot();
-      await expect(
-        doctorCommand(createDoctorRuntime(), { generateGatewayToken: true }),
-      ).rejects.toThrow("OPENCLAW_NIX_MODE=1");
-    } finally {
-      savedEnv.restore();
-    }
-
-    expect(transformConfigFile).not.toHaveBeenCalled();
+    await expectNixRefusal({ generateGatewayToken: true });
   });
 
   it("skips gateway restarts in non-interactive mode", async () => {
@@ -170,11 +103,7 @@ describe("doctor command", () => {
   it("migrates anthropic oauth config profile id when only email profile exists", async () => {
     mockDoctorConfigSnapshot({
       config: {
-        auth: {
-          profiles: {
-            "anthropic:default": { provider: "anthropic", mode: "oauth" },
-          },
-        },
+        auth: { profiles: { "anthropic:default": { provider: "anthropic", mode: "oauth" } } },
       },
     });
 
@@ -201,13 +130,9 @@ describe("doctor command", () => {
       },
     ]);
 
-    const savedEnv = captureEnv(["OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE"]);
-    process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE = "1";
-    try {
-      await doctorCommand(createDoctorRuntime(), { yes: true });
-    } finally {
-      savedEnv.restore();
-    }
+    await withEnvAsync({ OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1" }, () =>
+      doctorCommand(createDoctorRuntime(), { yes: true }),
+    );
 
     const committed = await Promise.all(
       transformConfigFile.mock.results.flatMap((result) =>

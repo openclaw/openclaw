@@ -29,6 +29,9 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 
+const anthropicProfile = () => ({ provider: "anthropic", mode: "api_key" }) as const;
+const apiKeyProfile = (key: string) => ({ type: "api_key" as const, provider: "anthropic", key });
+
 async function runDoctor(env: NodeJS.ProcessEnv) {
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
@@ -153,30 +156,18 @@ afterEach(() => {
 
 describe("doctor auth-profile consumers", () => {
   it.each([
-    {
-      name: "unoccupied destination and padded references",
-      interactive: false,
-      occupied: false,
-      renamed: "anthropic:work",
-      reference: " claude-cli:work ",
-    },
-    {
-      name: "occupied destination",
-      interactive: false,
-      occupied: true,
-      renamed: "anthropic:cli-work",
-      reference: "claude-cli:work",
-    },
-    {
-      name: "interactive Doctor command",
-      interactive: true,
-      occupied: false,
-      renamed: "anthropic:work",
-      reference: "claude-cli:work",
-    },
-  ])(
-    "preserves selected accounts with an $name, an older installed plugin, and on repeat",
-    async ({ interactive, occupied, renamed, reference }) => {
+    [
+      "unoccupied destination and padded references",
+      false,
+      false,
+      "anthropic:work",
+      " claude-cli:work ",
+    ],
+    ["occupied destination", false, true, "anthropic:cli-work", "claude-cli:work"],
+    ["interactive Doctor command", true, false, "anthropic:work", "claude-cli:work"],
+  ] as const)(
+    "preserves selected accounts with an %s, an older installed plugin, and on repeat",
+    async (_name, interactive, occupied, renamed, reference) => {
       await withOpenClawTestState(
         {
           prefix: "openclaw-doctor-auth-consumers-",
@@ -243,10 +234,8 @@ describe("doctor auth-profile consumers", () => {
             },
             auth: {
               profiles: {
-                "claude-cli:work": { provider: "anthropic", mode: "api_key" },
-                ...(occupied
-                  ? { "anthropic:work": { provider: "anthropic", mode: "api_key" as const } }
-                  : {}),
+                "claude-cli:work": anthropicProfile(),
+                ...(occupied ? { "anthropic:work": anthropicProfile() } : {}),
               },
               order: { anthropic: ["claude-cli:work"] },
             },
@@ -346,13 +335,7 @@ describe("doctor auth-profile consumers", () => {
           if (interactive) {
             await state.writeJson("agents/main/agent/auth-profiles.json", {
               version: 1,
-              profiles: {
-                "claude-cli:work": {
-                  type: "api_key",
-                  provider: "anthropic",
-                  key: "synthetic-work-key",
-                },
-              },
+              profiles: { "claude-cli:work": apiKeyProfile("synthetic-work-key") },
             });
           }
           runAuthProfileWriteTransaction(
@@ -362,20 +345,10 @@ describe("doctor auth-profile consumers", () => {
                 {
                   version: 1,
                   profiles: {
-                    [interactive ? "anthropic:control" : "claude-cli:work"]: {
-                      type: "api_key",
-                      provider: "anthropic",
-                      key: interactive ? "synthetic-control-key" : "synthetic-work-key",
-                    },
-                    ...(occupied
-                      ? {
-                          "anthropic:work": {
-                            type: "api_key",
-                            provider: "anthropic",
-                            key: "synthetic-other-key",
-                          },
-                        }
-                      : {}),
+                    [interactive ? "anthropic:control" : "claude-cli:work"]: apiKeyProfile(
+                      interactive ? "synthetic-control-key" : "synthetic-work-key",
+                    ),
+                    ...(occupied ? { "anthropic:work": apiKeyProfile("synthetic-other-key") } : {}),
                   },
                 },
                 undefined,

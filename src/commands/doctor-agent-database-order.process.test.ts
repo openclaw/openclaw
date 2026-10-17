@@ -35,57 +35,42 @@ beforeAll(() => {
 afterAll(() => fixtures.cleanup());
 const CHILD_TIMEOUT_MS = 60_000;
 
-function seedHistoricalSharedDatabase(pathname: string): void {
+function seedHistoricalDatabase(pathname: string, agentId?: string): void {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
-  const database = new DatabaseSync(pathname);
-  try {
-    database.exec("BEGIN;");
-    // Exact schema and metadata written by v2026.7.35, before deletion history existed.
-    database.exec(
-      fs.readFileSync(
-        new URL("../../test/fixtures/sqlite/openclaw-state-schema-v1.sql", import.meta.url),
-        "utf8",
+  using database = new DatabaseSync(pathname);
+  database.exec("BEGIN;");
+  // Exact schema bytes from v2026.7.35, before deletion history existed.
+  database.exec(
+    fs.readFileSync(
+      new URL(
+        `../../test/fixtures/sqlite/openclaw-${agentId ? "agent" : "state"}-schema-v1.sql`,
+        import.meta.url,
       ),
-    );
-    database.exec("PRAGMA user_version = 1;");
-    database
-      .prepare("INSERT INTO schema_meta VALUES ('primary', 'global', 1, NULL, NULL, 1, 1)")
-      .run();
-    database.exec("COMMIT;");
-  } finally {
-    database.close();
-  }
-}
-
-function seedHistoricalAgentDatabase(pathname: string, agentId: string): void {
-  fs.mkdirSync(path.dirname(pathname), { recursive: true });
-  const database = new DatabaseSync(pathname);
-  try {
-    database.exec("BEGIN;");
-    // Exact schema bytes from v2026.7.35, whose agent databases used user_version=1.
-    database.exec(
-      fs.readFileSync(
-        new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v1.sql", import.meta.url),
-        "utf8",
-      ),
-    );
-    database.exec("PRAGMA user_version = 1;");
+      "utf8",
+    ),
+  );
+  database.exec("PRAGMA user_version = 1;");
+  if (agentId) {
     database
       .prepare("INSERT INTO schema_meta VALUES ('primary', 'agent', 1, ?, NULL, 1, 1)")
       .run(agentId);
-    database.exec("COMMIT;");
-  } finally {
-    database.close();
+  } else {
+    database
+      .prepare("INSERT INTO schema_meta VALUES ('primary', 'global', 1, NULL, NULL, 1, 1)")
+      .run();
   }
+  database.exec("COMMIT;");
 }
 
 function readDatabase<T>(pathname: string, read: (database: DatabaseSync) => T): T {
-  const database = new DatabaseSync(pathname, { readOnly: true });
-  try {
-    return read(database);
-  } finally {
-    database.close();
-  }
+  using database = new DatabaseSync(pathname, { readOnly: true });
+  return read(database);
+}
+
+function readJsonColumn(pathname: string, sql: string, column: string) {
+  return readDatabase(pathname, (database) =>
+    JSON.parse(String(database.prepare(sql).get()?.[column])),
+  );
 }
 
 // Let the file worker limit bound these full Doctor process runs.
@@ -172,24 +157,20 @@ it.for(["current", "historical-v1", "lost-journal"] as const)(
       env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV] = doctorResultPath;
     }
     if (sharedState === "historical-v1") {
-      seedHistoricalSharedDatabase(sharedDatabasePath);
+      seedHistoricalDatabase(sharedDatabasePath);
     } else {
       openOpenClawStateDatabase({ env });
       closeOpenClawStateDatabaseForTest();
       if (sharedState === "lost-journal") {
-        const database = new DatabaseSync(sharedDatabasePath);
-        try {
-          database.exec("DROP TABLE agent_deletion_journal;");
-        } finally {
-          database.close();
-        }
+        using database = new DatabaseSync(sharedDatabasePath);
+        database.exec("DROP TABLE agent_deletion_journal;");
       }
     }
     agentIds.forEach((agentId, index) =>
-      seedHistoricalAgentDatabase(agentDatabasePaths[index]!, agentId),
+      seedHistoricalDatabase(agentDatabasePaths[index]!, agentId),
     );
     // Custom session stores are inspected before repair without being registered by runtime opens.
-    seedHistoricalAgentDatabase(customDatabasePath, "main");
+    seedHistoricalDatabase(customDatabasePath, "main");
     for (const [index, agentId] of agentIds.entries()) {
       fs.writeFileSync(
         path.join(path.dirname(agentDatabasePaths[index]!), "auth-profiles.json"),
@@ -300,25 +281,15 @@ it.for(["current", "historical-v1", "lost-journal"] as const)(
       expect(sessionMigration).toBeGreaterThan(authMigration);
 
       const readPersistedState = () => ({
-        sharedAuth: readDatabase(sharedDatabasePath, (database) =>
-          JSON.parse(
-            String(
-              database
-                .prepare(
-                  "SELECT value_json FROM config_machine_state WHERE state_key = 'authProfiles.store'",
-                )
-                .get()?.value_json,
-            ),
-          ),
+        sharedAuth: readJsonColumn(
+          sharedDatabasePath,
+          "SELECT value_json FROM config_machine_state WHERE state_key = 'authProfiles.store'",
+          "value_json",
         ),
-        workerAuth: readDatabase(agentDatabasePaths[1]!, (database) =>
-          JSON.parse(
-            String(
-              database
-                .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'")
-                .get()?.store_json,
-            ),
-          ),
+        workerAuth: readJsonColumn(
+          agentDatabasePaths[1]!,
+          "SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'",
+          "store_json",
         ),
         sessions: readDatabase(customDatabasePath, (database) =>
           database

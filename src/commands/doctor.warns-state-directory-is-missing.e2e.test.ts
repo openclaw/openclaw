@@ -1,4 +1,3 @@
-// Doctor missing-state e2e tests cover warning output when the state directory is absent.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,19 +16,6 @@ import "./doctor.fast-path-mocks.js";
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
 
-const OPENAI_PROVIDER_ID = "openai";
-const LEGACY_CODEX_PROVIDER_ID = "openai-codex";
-const CODEX_PROFILE_ID = "openai:user@example.com";
-const CODEX_PROFILE_EMAIL = "user@example.com";
-
-function configCodexOAuthProfile() {
-  return {
-    provider: OPENAI_PROVIDER_ID,
-    mode: "oauth",
-    email: CODEX_PROFILE_EMAIL,
-  };
-}
-
 function mockAuthProfileStore(profiles: Record<string, unknown> = {}): void {
   ensureAuthProfileStore.mockReturnValue({
     version: 1,
@@ -37,26 +23,19 @@ function mockAuthProfileStore(profiles: Record<string, unknown> = {}): void {
   });
 }
 
-function mockCodexProviderSnapshot(params: {
-  provider: Record<string, unknown>;
-  withConfigOAuth?: boolean;
-}): void {
+function mockCodexProviderSnapshot(provider: Record<string, unknown>): void {
   mockDoctorConfigSnapshot({
     config: {
-      models: {
-        providers: {
-          [LEGACY_CODEX_PROVIDER_ID]: params.provider,
+      models: { providers: { "openai-codex": provider } },
+      auth: {
+        profiles: {
+          "openai:user@example.com": {
+            provider: "openai",
+            mode: "oauth",
+            email: "user@example.com",
+          },
         },
       },
-      ...(params.withConfigOAuth
-        ? {
-            auth: {
-              profiles: {
-                [CODEX_PROFILE_ID]: configCodexOAuthProfile(),
-              },
-            },
-          }
-        : {}),
     },
   });
 }
@@ -65,13 +44,32 @@ function execRef(id: string) {
   return { source: "exec" as const, provider: "default", id };
 }
 
-function mockExecGateway(gateway: NonNullable<OpenClawConfig["gateway"]>): void {
+const execHealthMessage =
+  "Gateway health checks skipped because gateway credentials use an exec SecretRef.";
+
+async function expectExecGatewayProbe(
+  gateway: NonNullable<OpenClawConfig["gateway"]>,
+  skipped: boolean,
+  env: Record<string, string> = {},
+): Promise<void> {
   mockDoctorConfigSnapshot({
     config: {
       gateway,
       secrets: { providers: { default: { source: "exec", command: process.execPath } } },
     },
   });
+  callGateway.mockClear();
+  await withEnvAsync(env, runDoctorNonInteractive);
+  if (skipped) {
+    expect(callGateway).not.toHaveBeenCalled();
+    requireTerminalNote({ title: "Gateway", messageIncludes: execHealthMessage });
+  } else {
+    expect(
+      terminalNoteMock.mock.calls.some(
+        ([message, title]) => title === "Gateway" && String(message).includes(execHealthMessage),
+      ),
+    ).toBe(false);
+  }
 }
 
 async function runDoctorNonInteractive(): Promise<void> {
@@ -177,11 +175,8 @@ describe("doctor command", () => {
 
   it("does not warn for a custom OpenAI proxy override", async () => {
     mockCodexProviderSnapshot({
-      provider: {
-        api: "openai-responses",
-        baseUrl: "https://custom.example.com",
-      },
-      withConfigOAuth: true,
+      api: "openai-responses",
+      baseUrl: "https://custom.example.com",
     });
     mockAuthProfileStore();
 
@@ -192,12 +187,9 @@ describe("doctor command", () => {
 
   it("does not warn for header-only OpenAI overrides", async () => {
     mockCodexProviderSnapshot({
-      provider: {
-        baseUrl: "https://custom.example.com",
-        headers: { "X-Custom-Auth": "token-123" },
-        models: [{ id: "gpt-5.4" }],
-      },
-      withConfigOAuth: true,
+      baseUrl: "https://custom.example.com",
+      headers: { "X-Custom-Auth": "token-123" },
+      models: [{ id: "gpt-5.4" }],
     });
     mockAuthProfileStore();
 
@@ -242,225 +234,110 @@ describe("doctor command", () => {
   });
 
   it("skips token-mode exec token probes even when env password is set", async () => {
-    mockExecGateway({
-      mode: "local",
-      auth: {
-        mode: "token",
-        token: execRef("gateway/token"),
-      },
-    });
-
-    callGateway.mockClear();
-    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "fallback-password" }, runDoctorNonInteractive);
-
-    expect(callGateway).not.toHaveBeenCalled();
-    requireTerminalNote({
-      title: "Gateway",
-      messageIncludes:
-        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-    });
+    await expectExecGatewayProbe(
+      { mode: "local", auth: { mode: "token", token: execRef("gateway/token") } },
+      true,
+      { OPENCLAW_GATEWAY_PASSWORD: "fallback-password" },
+    );
   });
 
   it("skips gateway health probes for ambiguous exec SecretRefs", async () => {
-    mockExecGateway({
-      mode: "local",
-      auth: {
-        token: execRef("gateway/token"),
-        password: execRef("gateway/password"),
+    await expectExecGatewayProbe(
+      {
+        mode: "local",
+        auth: { token: execRef("gateway/token"), password: execRef("gateway/password") },
       },
-    });
-
-    callGateway.mockClear();
-    await runDoctorNonInteractive();
-
-    expect(callGateway).not.toHaveBeenCalled();
-    requireTerminalNote({
-      title: "Gateway",
-      messageIncludes:
-        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-    });
+      true,
+    );
   });
 
   it("skips remote exec token probes even when env token fallback is set", async () => {
-    mockExecGateway({
-      mode: "remote",
-      remote: {
-        url: "https://gateway.example.test",
-        token: execRef("gateway/remote-token"),
+    await expectExecGatewayProbe(
+      {
+        mode: "remote",
+        remote: { url: "https://gateway.example.test", token: execRef("gateway/remote-token") },
       },
-    });
-
-    callGateway.mockClear();
-    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "fallback-token" }, runDoctorNonInteractive);
-
-    expect(callGateway).not.toHaveBeenCalled();
-    requireTerminalNote({
-      title: "Gateway",
-      messageIncludes:
-        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-    });
+      true,
+      { OPENCLAW_GATEWAY_TOKEN: "fallback-token" },
+    );
   });
 
   it("skips remote probes when local fallback credentials use exec", async () => {
-    mockExecGateway({
-      mode: "remote",
-      auth: {
-        mode: "password",
-        token: execRef("gateway/token"),
+    await expectExecGatewayProbe(
+      {
+        mode: "remote",
+        auth: { mode: "password", token: execRef("gateway/token") },
+        remote: { url: "https://gateway.example.test" },
       },
-      remote: {
-        url: "https://gateway.example.test",
-      },
-    });
-
-    callGateway.mockClear();
-    await runDoctorNonInteractive();
-
-    expect(callGateway).not.toHaveBeenCalled();
-    requireTerminalNote({
-      title: "Gateway",
-      messageIncludes:
-        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-    });
+      true,
+    );
   });
 
   it("keeps gateway health probes for non-token auth with exec SecretRefs", async () => {
-    mockExecGateway({
-      mode: "local",
-      auth: {
-        mode: "password",
-        password: "configured-password",
-        token: execRef("gateway/token"),
+    await expectExecGatewayProbe(
+      {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: "configured-password",
+          token: execRef("gateway/token"),
+        },
       },
-    });
-
-    await runDoctorNonInteractive();
-
-    const skippedGatewayHealth = terminalNoteMock.mock.calls.some(([message, title]) => {
-      return (
-        title === "Gateway" &&
-        String(message).includes(
-          "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-        )
-      );
-    });
-    expect(skippedGatewayHealth).toBe(false);
+      false,
+    );
   });
 
   it("keeps gateway health probes when env token wins over an exec password ref", async () => {
-    mockExecGateway({
-      mode: "local",
-      auth: {
-        password: execRef("gateway/password"),
-      },
-    });
-
-    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "fallback-token" }, runDoctorNonInteractive);
-
-    const skippedGatewayHealth = terminalNoteMock.mock.calls.some(([message, title]) => {
-      return (
-        title === "Gateway" &&
-        String(message).includes(
-          "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-        )
-      );
-    });
-    expect(skippedGatewayHealth).toBe(false);
+    await expectExecGatewayProbe(
+      { mode: "local", auth: { password: execRef("gateway/password") } },
+      false,
+      { OPENCLAW_GATEWAY_TOKEN: "fallback-token" },
+    );
   });
 
   it("skips password-mode probes when configured password is an exec SecretRef", async () => {
-    mockExecGateway({
-      mode: "local",
-      auth: {
-        mode: "password",
-        password: execRef("gateway/password"),
-      },
-    });
-
-    callGateway.mockClear();
-    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "fallback-password" }, runDoctorNonInteractive);
-
-    expect(callGateway).not.toHaveBeenCalled();
-    requireTerminalNote({
-      title: "Gateway",
-      messageIncludes:
-        "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-    });
+    await expectExecGatewayProbe(
+      { mode: "local", auth: { mode: "password", password: execRef("gateway/password") } },
+      true,
+      { OPENCLAW_GATEWAY_PASSWORD: "fallback-password" },
+    );
   });
 
   it("keeps remote gateway health probes when env token wins over an exec password ref", async () => {
-    mockExecGateway({
-      mode: "remote",
-      auth: {
-        mode: "password",
+    await expectExecGatewayProbe(
+      {
+        mode: "remote",
+        auth: { mode: "password" },
+        remote: {
+          url: "https://gateway.example.test",
+          password: execRef("gateway/remote-password"),
+        },
       },
-      remote: {
-        url: "https://gateway.example.test",
-        password: execRef("gateway/remote-password"),
-      },
-    });
-
-    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "fallback-token" }, runDoctorNonInteractive);
-
-    const skippedGatewayHealth = terminalNoteMock.mock.calls.some(([message, title]) => {
-      return (
-        title === "Gateway" &&
-        String(message).includes(
-          "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-        )
-      );
-    });
-    expect(skippedGatewayHealth).toBe(false);
+      false,
+      { OPENCLAW_GATEWAY_TOKEN: "fallback-token" },
+    );
   });
 
   it("keeps remote gateway health probes when env password wins over an exec token ref", async () => {
-    mockExecGateway({
-      mode: "remote",
-      auth: {
-        mode: "token",
+    await expectExecGatewayProbe(
+      {
+        mode: "remote",
+        auth: { mode: "token" },
+        remote: { url: "https://gateway.example.test", token: execRef("gateway/remote-token") },
       },
-      remote: {
-        url: "https://gateway.example.test",
-        token: execRef("gateway/remote-token"),
-      },
-    });
-
-    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "fallback-password" }, runDoctorNonInteractive);
-
-    const skippedGatewayHealth = terminalNoteMock.mock.calls.some(([message, title]) => {
-      return (
-        title === "Gateway" &&
-        String(message).includes(
-          "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-        )
-      );
-    });
-    expect(skippedGatewayHealth).toBe(false);
+      false,
+      { OPENCLAW_GATEWAY_PASSWORD: "fallback-password" },
+    );
   });
 
   it("keeps local gateway health probes when only dormant remote refs use exec", async () => {
-    mockExecGateway({
-      mode: "local",
-      auth: {
-        mode: "token",
-        token: "configured-token",
+    await expectExecGatewayProbe(
+      {
+        mode: "local",
+        auth: { mode: "token", token: "configured-token" },
+        remote: { url: "https://gateway.example.test", token: execRef("gateway/remote-token") },
       },
-      remote: {
-        url: "https://gateway.example.test",
-        token: execRef("gateway/remote-token"),
-      },
-    });
-
-    await runDoctorNonInteractive();
-
-    const skippedGatewayHealth = terminalNoteMock.mock.calls.some(([message, title]) => {
-      return (
-        title === "Gateway" &&
-        String(message).includes(
-          "Gateway health checks skipped because gateway credentials use an exec SecretRef.",
-        )
-      );
-    });
-    expect(skippedGatewayHealth).toBe(false);
+      false,
+    );
   });
 });
