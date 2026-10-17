@@ -8,6 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
@@ -107,6 +108,27 @@ afterEach(() => {
   );
   vi.restoreAllMocks();
 });
+
+function removeState(
+  stateDir: string,
+  configPath: string,
+  runtime: Parameters<typeof removeStateAndLinkedPaths>[1],
+  paths: Partial<Parameters<typeof removeStateAndLinkedPaths>[0]> = {},
+  options?: Parameters<typeof removeStateAndLinkedPaths>[2],
+) {
+  return removeStateAndLinkedPaths(
+    {
+      stateDir,
+      configPath,
+      oauthDir: path.join(stateDir, "credentials"),
+      configInsideState: true,
+      oauthInsideState: true,
+      ...paths,
+    },
+    runtime,
+    options,
+  );
+}
 
 function expectedTrashSourcePath(targetPath: string): string {
   return path.join(fsSync.realpathSync(path.dirname(targetPath)), path.basename(targetPath));
@@ -231,14 +253,8 @@ describe("cleanup path removals", () => {
     await fs.mkdir(stateDir);
     await fs.writeFile(configPath, "{}");
     await fs.writeFile(markerPath, "remove me");
-    let continueRemoval = () => {};
-    const removalMayContinue = new Promise<void>((resolve) => {
-      continueRemoval = resolve;
-    });
-    let markRemovalStarted = () => {};
-    const removalStarted = new Promise<void>((resolve) => {
-      markRemovalStarted = resolve;
-    });
+    const { promise: removalMayContinue, resolve: continueRemoval } = createDeferred();
+    const { promise: removalStarted, resolve: markRemovalStarted } = createDeferred();
     const realRm = fs.rm;
     const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
       if (target === markerPath) {
@@ -254,16 +270,7 @@ describe("cleanup path removals", () => {
     };
 
     try {
-      const cleanup = removeStateAndLinkedPaths(
-        {
-          stateDir,
-          configPath,
-          oauthDir: path.join(stateDir, "credentials"),
-          configInsideState: true,
-          oauthInsideState: true,
-        },
-        runtime,
-      );
+      const cleanup = removeState(stateDir, configPath, runtime);
       await removalStarted;
 
       await expect(
@@ -303,14 +310,8 @@ describe("cleanup path removals", () => {
       await fs.mkdir(stateDir);
       await fs.writeFile(markerPath, "remove me");
       await fs.writeFile(configPath, "{}\n");
-      let continueRemoval = () => {};
-      const removalMayContinue = new Promise<void>((resolve) => {
-        continueRemoval = resolve;
-      });
-      let markLinkedRemovalStarted = () => {};
-      const linkedRemovalStarted = new Promise<void>((resolve) => {
-        markLinkedRemovalStarted = resolve;
-      });
+      const { promise: removalMayContinue, resolve: continueRemoval } = createDeferred();
+      const { promise: linkedRemovalStarted, resolve: markLinkedRemovalStarted } = createDeferred();
       const realRm = fs.rm;
       const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
         if (target === configPath) {
@@ -326,16 +327,7 @@ describe("cleanup path removals", () => {
       };
 
       try {
-        const cleanup = removeStateAndLinkedPaths(
-          {
-            stateDir,
-            configPath,
-            oauthDir: path.join(stateDir, "credentials"),
-            configInsideState: false,
-            oauthInsideState: true,
-          },
-          runtime,
-        );
+        const cleanup = removeState(stateDir, configPath, runtime, { configInsideState: false });
         await linkedRemovalStarted;
 
         const held = expectDefined(cleanupLock, "cleanup ownership");
@@ -397,18 +389,9 @@ describe("cleanup path removals", () => {
     });
 
     try {
-      await expect(
-        removeStateAndLinkedPaths(
-          {
-            stateDir,
-            configPath,
-            oauthDir: path.join(stateDir, "credentials"),
-            configInsideState: true,
-            oauthInsideState: true,
-          },
-          runtime,
-        ),
-      ).rejects.toThrow(/interrupted by a new state operation/);
+      await expect(removeState(stateDir, configPath, runtime)).rejects.toThrow(
+        /interrupted by a new state operation/,
+      );
       await expect(fs.readFile(recreatedPath, "utf8")).resolves.toBe("active");
     } finally {
       rmdirSpy.mockRestore();
@@ -439,18 +422,9 @@ describe("cleanup path removals", () => {
         return held;
       });
 
-      await expect(
-        removeStateAndLinkedPaths(
-          {
-            stateDir,
-            configPath,
-            oauthDir: path.join(stateDir, "credentials"),
-            configInsideState: true,
-            oauthInsideState: true,
-          },
-          runtime,
-        ),
-      ).rejects.toThrow(/interrupted by a new state operation/);
+      await expect(removeState(stateDir, configPath, runtime)).rejects.toThrow(
+        /interrupted by a new state operation/,
+      );
       const current = await fs.lstat(target, { bigint: true });
       expect(current.ino).not.toBe(previous.ino);
       expect(await fs.readdir(target)).toEqual([]);
@@ -476,16 +450,11 @@ describe("cleanup path removals", () => {
       await fs.writeFile(configPath, "{}");
 
       await expect(
-        removeStateAndLinkedPaths(
-          {
-            stateDir,
-            configPath,
-            oauthDir: linkedLockDir,
-            configInsideState: false,
-            oauthInsideState: false,
-          },
-          runtime,
-        ),
+        removeState(stateDir, configPath, runtime, {
+          oauthDir: linkedLockDir,
+          configInsideState: false,
+          oauthInsideState: false,
+        }),
       ).rejects.toThrow(/linked cleanup path.*active state lock/);
       expect(await fs.readFile(marker, "utf8")).toBe("retained");
       expect(await fs.lstat(alias).then((entry) => entry.isSymbolicLink())).toBe(true);
@@ -519,16 +488,7 @@ describe("cleanup path removals", () => {
       await fs.writeFile(marker, "retained");
       await fs.writeFile(configPath, "{}");
 
-      const removal = removeStateAndLinkedPaths(
-        {
-          stateDir,
-          configPath,
-          oauthDir: path.join(stateDir, "credentials"),
-          configInsideState: false,
-          oauthInsideState: true,
-        },
-        runtime,
-      );
+      const removal = removeState(stateDir, configPath, runtime, { configInsideState: false });
       await expect(removal).rejects.toBeInstanceOf(Error);
       expect(await fs.readFile(marker, "utf8")).toBe("retained");
       expect(await fs.readFile(configPath, "utf8")).toBe("{}");
@@ -551,16 +511,7 @@ describe("cleanup path removals", () => {
       await fs.symlink(stateDir, stateAlias, "dir");
 
       await expect(
-        removeStateAndLinkedPaths(
-          {
-            stateDir: stateAlias,
-            configPath,
-            oauthDir: path.join(stateAlias, "credentials"),
-            configInsideState: false,
-            oauthInsideState: true,
-          },
-          runtime,
-        ),
+        removeState(stateAlias, configPath, runtime, { configInsideState: false }),
       ).resolves.toBe(true);
 
       await expect(fs.access(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
@@ -594,16 +545,11 @@ describe("cleanup path removals", () => {
 
     try {
       await expect(
-        removeStateAndLinkedPaths(
-          {
-            stateDir,
-            configPath,
-            oauthDir,
-            configInsideState: false,
-            oauthInsideState: false,
-          },
-          runtime,
-        ),
+        removeState(stateDir, configPath, runtime, {
+          oauthDir,
+          configInsideState: false,
+          oauthInsideState: false,
+        }),
       ).rejects.toThrow(/Failed to remove non-preserved OpenClaw state/);
 
       await expect(fs.readFile(configPath, "utf8")).resolves.toBe("{}\n");
@@ -625,15 +571,11 @@ describe("cleanup path removals", () => {
     await fs.writeFile(configPath, "{}");
 
     await expect(
-      removeStateAndLinkedPaths(
-        {
-          stateDir,
-          configPath,
-          oauthDir: path.join(stateDir, "credentials"),
-          configInsideState: false,
-          oauthInsideState: true,
-        },
+      removeState(
+        stateDir,
+        configPath,
         runtime,
+        { configInsideState: false },
         { preservePaths: [workspaceDir] },
       ),
     ).rejects.toThrow(/overlaps the active state lock/);
@@ -656,17 +598,7 @@ describe("cleanup path removals", () => {
     const remove = vi.spyOn(fs, "rm");
 
     await expect(
-      removeStateAndLinkedPaths(
-        {
-          stateDir,
-          configPath,
-          oauthDir: path.join(stateDir, "credentials"),
-          configInsideState: true,
-          oauthInsideState: true,
-        },
-        runtime,
-        { preservePaths: [workspaceDir] },
-      ),
+      removeState(stateDir, configPath, runtime, {}, { preservePaths: [workspaceDir] }),
     ).rejects.toBe(error);
 
     expect(inspect).toHaveBeenNthCalledWith(1, workspaceDir);
@@ -692,17 +624,7 @@ describe("cleanup path removals", () => {
       await fs.writeFile(configPath, "{}");
       await fs.writeFile(cacheFile, "remove me");
 
-      await removeStateAndLinkedPaths(
-        {
-          stateDir,
-          configPath,
-          oauthDir: path.join(stateDir, "credentials"),
-          configInsideState: true,
-          oauthInsideState: true,
-        },
-        runtime,
-        { preservePaths: [workspaceDir] },
-      );
+      await removeState(stateDir, configPath, runtime, {}, { preservePaths: [workspaceDir] });
 
       await expect(fs.readFile(workspaceFile, "utf8")).resolves.toBe("keep me");
       await expect(fs.stat(configPath)).rejects.toThrow();

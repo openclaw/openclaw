@@ -44,15 +44,36 @@ import {
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
+function writeConfig(
+  home: string,
+  config: Record<string, unknown> = { gateway: { mode: "local" }, plugins: { enabled: false } },
+) {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw/openclaw.json");
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  return configPath;
+}
+
+async function retiredDatabase(revoke = false) {
+  const databasePath = openOpenClawStateDatabase({ env: process.env }).path;
+  await closeOpenClawStateDatabaseAsync();
+  if (revoke) {
+    revokeSqliteDatabaseAdmissionsForPath(databasePath);
+  }
+  return databasePath;
+}
+
+function databaseFamily(databasePath: string) {
+  return ["", "-wal", "-shm"].map((suffix) => {
+    const pathname = databasePath + suffix;
+    return fs.existsSync(pathname) ? fs.readFileSync(pathname) : null;
+  });
+}
+
 it("preserves a proven schema failure while completing plugin metadata", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
-    const configPath =
-      process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw/openclaw.json");
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local" } }));
-    const pathname = openOpenClawStateDatabase({ env: process.env }).path;
-    await closeOpenClawStateDatabaseAsync();
-    revokeSqliteDatabaseAdmissionsForPath(pathname);
+    writeConfig(home, { gateway: { mode: "local" } });
+    const pathname = await retiredDatabase(true);
     const database = new DatabaseSync(pathname);
     try {
       database.exec(
@@ -91,18 +112,12 @@ it.each([
   "unavailable integrity check",
 ])("preserves failed %s during startup admission", async (phase) => {
   await withDoctorConfigPreflightHome(async (home) => {
-    const configPath =
-      process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw/openclaw.json");
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        gateway: { mode: "local" },
-        plugins: { enabled: false },
-        ...(phase === "initial config read" ? { $include: "missing.json" } : {}),
-        ...(phase === "invalid include directive" ? { $include: 42 } : {}),
-      }),
-    );
+    const configPath = writeConfig(home, {
+      gateway: { mode: "local" },
+      plugins: { enabled: false },
+      ...(phase === "initial config read" ? { $include: "missing.json" } : {}),
+      ...(phase === "invalid include directive" ? { $include: 42 } : {}),
+    });
     if (phase === "invalid authored JSON") {
       fs.writeFileSync(configPath, "{ invalid authored JSON");
     }
@@ -217,15 +232,8 @@ it.each([
 
 it("waits through temporary schema custody before reading startup configuration once", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
-    const configPath =
-      process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw/openclaw.json");
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } }),
-    );
-    const databasePath = openOpenClawStateDatabase({ env: process.env }).path;
-    await closeOpenClawStateDatabaseAsync();
+    const configPath = writeConfig(home);
+    const databasePath = await retiredDatabase();
     const before = fs.readFileSync(databasePath);
     const marker = resolveGatewayStateOwnerPath(databasePath);
     fs.mkdirSync(path.dirname(marker), { recursive: true });
@@ -273,16 +281,8 @@ it("overlaps config discovery with schema admission and drains both before repor
   signal,
 }) => {
   await withDoctorConfigPreflightHome(async (home) => {
-    const configPath =
-      process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw/openclaw.json");
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } }),
-    );
-    const { path: databasePath } = openOpenClawStateDatabase({ env: process.env });
-    await closeOpenClawStateDatabaseAsync();
-    revokeSqliteDatabaseAdmissionsForPath(databasePath);
+    writeConfig(home);
+    await retiredDatabase(true);
     const env = { ...process.env };
     const stateDir = env.OPENCLAW_STATE_DIR;
     const schemaEntered = createDeferred();
@@ -349,23 +349,11 @@ it("overlaps config discovery with schema admission and drains both before repor
 
 it("shares startup validation and discovery reads, then releases them before readiness guards", async () => {
   await withDoctorConfigPreflightHome(async (home) => {
-    const stateDir = process.env.OPENCLAW_STATE_DIR ?? path.join(home, ".openclaw");
-    const configPath = process.env.OPENCLAW_CONFIG_PATH ?? path.join(stateDir, "openclaw.json");
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } }),
-    );
+    writeConfig(home);
     const options = { env: process.env };
-    const { path: databasePath } = openOpenClawStateDatabase(options);
-    await closeOpenClawStateDatabaseAsync();
-    revokeSqliteDatabaseAdmissionsForPath(databasePath);
+    const databasePath = await retiredDatabase(true);
     const writer = new DatabaseSync(databasePath);
-    const family = () =>
-      ["", "-wal", "-shm"].map((suffix) => {
-        const pathname = databasePath + suffix;
-        return fs.existsSync(pathname) ? fs.readFileSync(pathname) : null;
-      });
+    const family = () => databaseFamily(databasePath);
     const readIndex = () =>
       readPersistedInstalledPluginIndexRowSync({ env: process.env })?.value_json;
     try {
@@ -479,12 +467,7 @@ it.each([
       fs.writeFileSync(identityPath, identityRaw);
     }
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-    const databaseFamily = () =>
-      ["", "-wal", "-shm"].map((suffix) => {
-        const pathname = databasePath + suffix;
-        return fs.existsSync(pathname) ? fs.readFileSync(pathname) : null;
-      });
-    const before = databaseFamily();
+    const before = databaseFamily(databasePath);
     if (legacyIdentity) {
       await expect(
         runStartupConfigPreflight({ gateway: true, observe: false }),
@@ -505,15 +488,17 @@ it.each([
           deferredPluginMigrations: await readDeferredPluginMigrationsAsync(),
         }),
       );
-      expect(result.snapshot.valid).toBe(true);
-      expect(result.snapshot.hash).toBe(initial.hash);
-      expect(result.snapshot.raw).toBe(activeRaw);
-      expect(result.snapshot.sourceConfig).toMatchObject(source);
-      expect(result.snapshot.config.gateway?.port).toBe(18991);
+      expect(result.snapshot).toMatchObject({
+        valid: true,
+        hash: initial.hash,
+        raw: activeRaw,
+        sourceConfig: source,
+        config: { gateway: { port: 18991 } },
+      });
       expect(result.snapshot.config).not.toHaveProperty("canvasHost");
     }
     expect(fs.readFileSync(configPath, "utf8")).toBe(activeRaw);
     expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backupRaw);
-    expect(databaseFamily()).toEqual(before);
+    expect(databaseFamily(databasePath)).toEqual(before);
   });
 });

@@ -208,54 +208,38 @@ describe("promptAuthConfig", () => {
     expect(result.agents?.defaults?.model).toEqual({ primary: "anthropic/claude-sonnet-4-6" });
   });
 
-  it.each([
-    { source: "manifest", provider: "github-copilot", preferred: "github-copilot", scoped: false },
-  ])(
-    "loads the $source catalog after provider setup",
-    async ({ source, provider, preferred, scoped }) => {
-      const existingConfig: OpenClawConfig = {
-        models: { providers: { existing: providerModels("old") } },
-      };
-      mocks.promptAuthChoiceGrouped.mockResolvedValue(provider);
-      mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue(preferred);
-      mocks.applyAuthChoice.mockResolvedValue({
-        config:
-          source === "manifest"
-            ? { ...existingConfig, plugins: { entries: { [provider]: { enabled: true } } } }
-            : {
-                models: {
-                  providers: {
-                    ...existingConfig.models?.providers,
-                    [provider]: providerModels("new"),
-                  },
-                },
-              },
-      });
-      if (source === "manifest") {
-        mocks.loadStaticManifestCatalogRowsForList.mockReturnValueOnce([
-          {
-            ref: `${provider}/new`,
-            mergeKey: `${provider}/new`,
-            provider,
-            id: "new",
-            name: "New",
-            source: "manifest",
-            input: ["text"],
-            reasoning: false,
-            status: "available",
-          },
-        ]);
-      }
-      mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
-      await promptAuthConfig(existingConfig, makeRuntime(), noopPrompter);
-      expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
-      expect(promptModelAllowlistOptions()).toMatchObject({
-        preferredProvider: provider,
-        loadCatalog: true,
-        providerScopedCatalog: scoped,
-      });
-    },
-  );
+  it("loads the manifest catalog after provider setup", async () => {
+    const provider = "github-copilot";
+    const existingConfig: OpenClawConfig = {
+      models: { providers: { existing: providerModels("old") } },
+    };
+    mocks.promptAuthChoiceGrouped.mockResolvedValue(provider);
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue(provider);
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: { ...existingConfig, plugins: { entries: { [provider]: { enabled: true } } } },
+    });
+    mocks.loadStaticManifestCatalogRowsForList.mockReturnValueOnce([
+      {
+        ref: `${provider}/new`,
+        mergeKey: `${provider}/new`,
+        provider,
+        id: "new",
+        name: "New",
+        source: "manifest",
+        input: ["text"],
+        reasoning: false,
+        status: "available",
+      },
+    ]);
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+    await promptAuthConfig(existingConfig, makeRuntime(), noopPrompter);
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
+    expect(promptModelAllowlistOptions()).toMatchObject({
+      preferredProvider: provider,
+      loadCatalog: true,
+      providerScopedCatalog: false,
+    });
+  });
 
   it("returns to auth selection when plugin install onboarding asks for a retry", async () => {
     mocks.promptAuthChoiceGrouped
@@ -303,108 +287,95 @@ describe("promptAuthConfig", () => {
     });
   });
 
-  it.each<
-    [
-      name: string,
-      defaultModel: AgentModelConfig | undefined,
-      agentModel: AgentModelConfig | undefined,
-      existingPrimary: string | undefined,
-      explicit: boolean,
-      override: boolean,
-    ]
-  >([
-    ["no recommendation", undefined, undefined, undefined, false, false],
-    [
-      "initialize legacy agent",
-      undefined,
-      { fallbacks: ["agent/fallback"] },
-      undefined,
-      false,
-      true,
-    ],
-    [
-      "initialize shared primary",
-      { fallbacks: ["shared/fallback"] },
-      undefined,
-      undefined,
-      false,
-      true,
-    ],
-  ])(
-    "provider auth: %s",
-    async (_name, defaultModel, agentModel, existingPrimary, explicit, override) => {
-      const recommended = "configure-provider/recommended";
-      const method: ProviderAuthMethod = {
-        id: "api-key",
-        label: "Configure provider",
-        kind: "api_key",
-        run: async () => ({
-          profiles: [],
-          ...(override ? { defaultModel: recommended } : {}),
-          configPatch: {
-            agents: {
-              defaults: {
-                ...(override ? { model: { primary: recommended } } : {}),
-                models: { [recommended]: { alias: "Recommended" } },
-              },
-            },
-            models: {
-              providers: {
-                "configure-provider": providerModels("recommended"),
-              },
+  it.each<{
+    name: string;
+    defaultModel?: AgentModelConfig;
+    agentModel?: AgentModelConfig;
+    override: boolean;
+  }>([
+    { name: "no recommendation", override: false },
+    {
+      name: "initialize legacy agent",
+      agentModel: { fallbacks: ["agent/fallback"] },
+      override: true,
+    },
+    {
+      name: "initialize shared primary",
+      defaultModel: { fallbacks: ["shared/fallback"] },
+      override: true,
+    },
+  ])("provider auth: $name", async ({ defaultModel, agentModel, override }) => {
+    const recommended = "configure-provider/recommended";
+    const method: ProviderAuthMethod = {
+      id: "api-key",
+      label: "Configure provider",
+      kind: "api_key",
+      run: async () => ({
+        profiles: [],
+        ...(override ? { defaultModel: recommended } : {}),
+        configPatch: {
+          agents: {
+            defaults: {
+              ...(override ? { model: { primary: recommended } } : {}),
+              models: { [recommended]: { alias: "Recommended" } },
             },
           },
-        }),
-      };
-      const provider: ProviderPlugin = {
-        id: "configure-provider",
-        label: "Configure provider",
-        auth: [method],
-        ...(override
-          ? { wizard: { setup: { modelSelection: { promptWhenAuthChoiceProvided: true } } } }
-          : {}),
-      };
-      mocks.promptAuthChoiceGrouped.mockResolvedValue("provider-plugin:configure-provider:api-key");
-      mocks.applyAuthChoice.mockImplementationOnce(applyProviderAuthChoice);
-      mocks.resolveProviderPluginChoiceCore.mockReturnValue({ provider, method });
-      mocks.promptModelAllowlist.mockResolvedValue({
-        models: [recommended],
-        scopeKeys: [recommended],
-      });
-      const config = agentConfig(
-        {
-          model: defaultModel,
-          models: { "shared/available": { alias: "Existing" } },
-          modelPolicy: { allow: ["shared/available"] },
+          models: {
+            providers: {
+              "configure-provider": providerModels("recommended"),
+            },
+          },
         },
-        agentModel,
-        explicit,
-      );
-      const result = await promptAuthConfig(config, makeRuntime(), noopPrompter, target);
+      }),
+    };
+    const provider: ProviderPlugin = {
+      id: "configure-provider",
+      label: "Configure provider",
+      auth: [method],
+      ...(override
+        ? { wizard: { setup: { modelSelection: { promptWhenAuthChoiceProvided: true } } } }
+        : {}),
+    };
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("provider-plugin:configure-provider:api-key");
+    mocks.applyAuthChoice.mockImplementationOnce(applyProviderAuthChoice);
+    mocks.resolveProviderPluginChoiceCore.mockReturnValue({ provider, method });
+    mocks.promptModelAllowlist.mockResolvedValue({
+      models: [recommended],
+      scopeKeys: [recommended],
+    });
+    const config = agentConfig(
+      {
+        model: defaultModel,
+        models: { "shared/available": { alias: "Existing" } },
+        modelPolicy: { allow: ["shared/available"] },
+      },
+      agentModel,
+      false,
+    );
+    const result = await promptAuthConfig(config, makeRuntime(), noopPrompter, target);
 
-      const initializesPrimary = !existingPrimary && override;
-      const initializesAgent = initializesPrimary && (explicit || agentModel !== undefined);
-      const expectedAgentModel =
-        typeof agentModel === "string" ? { primary: agentModel } : agentModel;
-      expect(resolveAgentEffectiveModelPrimary(result, "ops")).toBe(
-        existingPrimary ?? (override ? recommended : undefined),
-      );
-      expect(result.agents?.entries?.OPS?.model).toEqual(
-        initializesAgent ? { ...expectedAgentModel, primary: recommended } : expectedAgentModel,
-      );
-      expect(result.agents?.defaults?.model).toEqual(
-        initializesPrimary && !initializesAgent
-          ? { ...(typeof defaultModel === "object" ? defaultModel : {}), primary: recommended }
-          : defaultModel,
-      );
-      expect(result.agents?.entries?.OPS?.modelPolicy?.allow).toEqual([
-        "shared/available",
-        recommended,
-      ]);
-      expect(result.agents?.defaults?.modelPolicy).toEqual(config.agents?.defaults?.modelPolicy);
-      expect(result.agents?.entries?.ops).toBeUndefined();
-    },
-  );
+    const initializesPrimary = override;
+    const initializesAgent = initializesPrimary && agentModel !== undefined;
+    const expectedAgentModel =
+      typeof agentModel === "string" ? { primary: agentModel } : agentModel;
+    expect(resolveAgentEffectiveModelPrimary(result, "ops")).toBe(
+      override ? recommended : undefined,
+    );
+    expect(result.agents?.entries?.OPS?.model).toEqual(
+      initializesAgent ? { ...expectedAgentModel, primary: recommended } : expectedAgentModel,
+    );
+    expect(result.agents?.defaults?.model).toEqual(
+      initializesPrimary && !initializesAgent
+        ? { ...(typeof defaultModel === "object" ? defaultModel : {}), primary: recommended }
+        : defaultModel,
+    );
+    expect(result.agents?.entries?.OPS?.modelPolicy?.allow).toEqual([
+      "shared/available",
+      recommended,
+    ]);
+    expect(result.agents?.defaults?.modelPolicy).toEqual(config.agents?.defaults?.modelPolicy);
+    expect(result.agents?.entries?.ops).toBeUndefined();
+  });
 
   it.each<
     [

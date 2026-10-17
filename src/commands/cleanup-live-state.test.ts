@@ -118,6 +118,32 @@ async function startLiveStateOwner(state: OpenClawTestState): Promise<ChildProce
   return child;
 }
 
+async function makeState(prefix: string, env?: NodeJS.ProcessEnv) {
+  const state = await createOpenClawTestState({
+    prefix,
+    env,
+    layout: "split",
+    scenario: "minimal",
+    applyEnv: true,
+  });
+  testStates.add(state);
+  return state;
+}
+
+function quietRuntime() {
+  const runtime = createNonExitingRuntime();
+  vi.spyOn(runtime, "log").mockImplementation(() => {});
+  vi.spyOn(runtime, "error").mockImplementation(() => {});
+  return runtime;
+}
+
+function runCleanup(uninstall: boolean, runtime: ReturnType<typeof createNonExitingRuntime>) {
+  const options = { yes: true, nonInteractive: true };
+  return uninstall
+    ? uninstallCommand(runtime, { ...options, state: true })
+    : resetCommand(runtime, { ...options, scope: "full" });
+}
+
 async function readFiles(paths: readonly string[]): Promise<Buffer[]> {
   return await Promise.all(paths.map((filePath) => fs.readFile(filePath)));
 }
@@ -140,14 +166,9 @@ describe("destructive cleanup with a live unmanaged state owner", () => {
       },
       { scenario: "unrelated constructor warning", agentId: "123", warningPath: undefined },
     ])("handles $scenario before removal", async ({ agentId, warningPath }) => {
-      const state = await createOpenClawTestState({
-        prefix: "openclaw-cleanup-workspace-warning-",
-        layout: "split",
-        scenario: "minimal",
-        applyEnv: true,
-        env: { OPENCLAW_TEST_MISSING_WORKSPACE: undefined },
+      const state = await makeState("openclaw-cleanup-workspace-warning-", {
+        OPENCLAW_TEST_MISSING_WORKSPACE: undefined,
       });
-      testStates.add(state);
       await state.writeConfig({
         ...(!warningPath
           ? { env: { vars: { constructor: "${OPENCLAW_TEST_MISSING_WORKSPACE}" } } }
@@ -202,43 +223,13 @@ describe("destructive cleanup with a live unmanaged state owner", () => {
   });
 
   it.each([
-    {
-      command: "unmanaged reset --scope full",
-      nixMode: false,
-      preservesWorkspace: false,
-      serviceChecks: 1,
-      aggregatesFailure: false,
-      run: (runtime: ReturnType<typeof createNonExitingRuntime>) =>
-        resetCommand(runtime, { scope: "full", yes: true, nonInteractive: true }),
-    },
-    {
-      command: "Nix reset --scope full",
-      nixMode: true,
-      preservesWorkspace: false,
-      serviceChecks: 0,
-      aggregatesFailure: false,
-      run: (runtime: ReturnType<typeof createNonExitingRuntime>) =>
-        resetCommand(runtime, { scope: "full", yes: true, nonInteractive: true }),
-    },
-    {
-      command: "uninstall --state",
-      nixMode: false,
-      preservesWorkspace: true,
-      serviceChecks: 0,
-      aggregatesFailure: true,
-      run: (runtime: ReturnType<typeof createNonExitingRuntime>) =>
-        uninstallCommand(runtime, { state: true, yes: true, nonInteractive: true }),
-    },
+    { command: "unmanaged reset --scope full", nixMode: false, serviceChecks: 1, uninstall: false },
+    { command: "Nix reset --scope full", nixMode: true, serviceChecks: 0, uninstall: false },
+    { command: "uninstall --state", nixMode: false, serviceChecks: 0, uninstall: true },
   ])(
     "refuses $command until the SQLite owner exits",
-    async ({ aggregatesFailure, nixMode, preservesWorkspace, run, serviceChecks }) => {
-      const state = await createOpenClawTestState({
-        prefix: "openclaw-cleanup-live-state-",
-        layout: "split",
-        scenario: "minimal",
-        applyEnv: true,
-      });
-      testStates.add(state);
+    async ({ nixMode, uninstall, serviceChecks }) => {
+      const state = await makeState("openclaw-cleanup-live-state-");
       configState.isNixMode = nixMode;
       const workspacePath = path.join(state.workspaceDir, "project.bin");
       await state.writeConfig({
@@ -255,16 +246,19 @@ describe("destructive cleanup with a live unmanaged state owner", () => {
       const liveBytes = await readFiles(livePaths);
       const configBytes = await fs.readFile(state.configPath);
 
-      const blockedRuntime = createNonExitingRuntime();
-      vi.spyOn(blockedRuntime, "log").mockImplementation(() => {});
-      vi.spyOn(blockedRuntime, "error").mockImplementation(() => {});
-      if (aggregatesFailure) {
-        await expect(run(blockedRuntime)).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      const blockedRuntime = quietRuntime();
+      if (uninstall) {
+        await expect(runCleanup(uninstall, blockedRuntime)).rejects.toMatchObject({
+          name: "ExitError",
+          code: 1,
+        });
         expect(blockedRuntime.error).toHaveBeenCalledWith(
           expect.stringMatching(/Gateway|state directory/i),
         );
       } else {
-        await expect(run(blockedRuntime)).rejects.toThrow(/Gateway|state directory/i);
+        await expect(runCleanup(uninstall, blockedRuntime)).rejects.toThrow(
+          /Gateway|state directory/i,
+        );
       }
       expect(gatewayService.isLoaded).toHaveBeenCalledTimes(serviceChecks);
       expect(owner.exitCode).toBeNull();
@@ -273,12 +267,10 @@ describe("destructive cleanup with a live unmanaged state owner", () => {
       await expect(fs.readFile(state.configPath)).resolves.toEqual(configBytes);
 
       await stopLiveStateOwner(owner);
-      const offlineRuntime = createNonExitingRuntime();
-      vi.spyOn(offlineRuntime, "log").mockImplementation(() => {});
-      vi.spyOn(offlineRuntime, "error").mockImplementation(() => {});
-      await expect(run(offlineRuntime)).resolves.toBeUndefined();
+      const offlineRuntime = quietRuntime();
+      await expect(runCleanup(uninstall, offlineRuntime)).resolves.toBeUndefined();
 
-      if (preservesWorkspace) {
+      if (uninstall) {
         await expect(fs.readFile(workspacePath)).resolves.toEqual(Buffer.from([0, 1, 2, 3, 255]));
         await expect(fs.access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
         for (const filePath of livePaths) {
@@ -292,13 +284,7 @@ describe("destructive cleanup with a live unmanaged state owner", () => {
   );
 
   it("preserves state when workspace configuration is invalid", async () => {
-    const state = await createOpenClawTestState({
-      prefix: "openclaw-cleanup-invalid-config-",
-      layout: "split",
-      scenario: "minimal",
-      applyEnv: true,
-    });
-    testStates.add(state);
+    const state = await makeState("openclaw-cleanup-invalid-config-");
     const workspaceDir = state.statePath("nested-workspace");
     const workspacePath = path.join(workspaceDir, "project.bin");
     const markerPath = await state.writeText("keep.txt", "preserved");
@@ -309,13 +295,9 @@ describe("destructive cleanup with a live unmanaged state owner", () => {
       `{"agents":{"entries":{"main":{"workspace":${JSON.stringify(workspaceDir)}}}`,
     );
     const configBytes = await fs.readFile(state.configPath);
-    const runtime = createNonExitingRuntime();
-    vi.spyOn(runtime, "log").mockImplementation(() => {});
-    vi.spyOn(runtime, "error").mockImplementation(() => {});
+    const runtime = quietRuntime();
 
-    await expect(
-      uninstallCommand(runtime, { state: true, yes: true, nonInteractive: true }),
-    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+    await expect(runCleanup(true, runtime)).rejects.toMatchObject({ name: "ExitError", code: 1 });
 
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("workspace configuration could not be resolved"),

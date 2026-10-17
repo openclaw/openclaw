@@ -88,7 +88,8 @@ async function runGatewayPrompt(params: {
 }
 
 async function runTrustedProxyPrompt(params: {
-  textQueue: Array<string | undefined>;
+  textQueue?: Array<string | undefined>;
+  proxies?: string;
   bind?: "loopback" | "lan";
   tailscaleMode?: "off" | "serve" | "funnel";
   baseConfig?: OpenClawConfig;
@@ -96,6 +97,13 @@ async function runTrustedProxyPrompt(params: {
 }) {
   return runGatewayPrompt({
     ...params,
+    textQueue: params.textQueue ?? [
+      "18789",
+      "x-forwarded-user",
+      "",
+      "",
+      params.proxies ?? "127.0.0.1",
+    ],
     selectQueue: [params.bind ?? "loopback", "trusted-proxy", params.tailscaleMode ?? "off"],
   });
 }
@@ -123,37 +131,35 @@ async function authorizeConfiguredProxy(config: OpenClawConfig, remoteAddress = 
 }
 
 describe("promptGatewayConfig", () => {
-  it.each(["token"] as const)(
-    "keeps existing auth policy through the real %s config builder",
-    async (mode) => {
-      const policy = {
-        allowTailscale: false,
-        rateLimit: { maxAttempts: 3, exemptLoopback: false },
-        identityScopes: { "operator@example.test": ["operator.read" as const] },
-      };
-      const result = await runGatewayPrompt({
-        baseConfig: {
-          gateway: {
-            auth: {
-              ...policy,
-              mode: "token",
-              token: "old-token",
-              password: "old-password",
-              trustedProxy: { userHeader: "old-header" },
-            },
+  it("keeps existing auth policy through the real token config builder", async () => {
+    const mode = "token";
+    const policy = {
+      allowTailscale: false,
+      rateLimit: { maxAttempts: 3, exemptLoopback: false },
+      identityScopes: { "operator@example.test": ["operator.read" as const] },
+    };
+    const result = await runGatewayPrompt({
+      baseConfig: {
+        gateway: {
+          auth: {
+            ...policy,
+            mode: "token",
+            token: "old-token",
+            password: "old-password",
+            trustedProxy: { userHeader: "old-header" },
           },
         },
-        selectQueue: ["loopback", mode, "off", "plaintext"],
-        textQueue: ["18789", `  new-${mode}  `],
-      });
+      },
+      selectQueue: ["loopback", mode, "off", "plaintext"],
+      textQueue: ["18789", `  new-${mode}  `],
+    });
 
-      expect(result.config.gateway?.auth).toEqual({
-        ...policy,
-        mode,
-        token: "new-token",
-      });
-    },
-  );
+    expect(result.config.gateway?.auth).toEqual({
+      ...policy,
+      mode,
+      token: "new-token",
+    });
+  });
 
   it.each([undefined, "undefined"])("generates a token for prompt value %j", async (token) => {
     const result = await runGatewayPrompt({
@@ -176,81 +182,71 @@ describe("promptGatewayConfig", () => {
     expect(mocks.password).toHaveBeenCalledOnce();
   });
 
-  it.each(["serve"] as const)(
-    "configures proxy headers and disables incompatible Tailscale %s",
-    async (tailscaleMode) => {
-      const result = await runTrustedProxyPrompt({
-        bind: "lan",
-        tailscaleMode,
-        textQueue: [
-          "18789",
-          "x-forwarded-user",
-          "x-forwarded-proto,x-forwarded-host",
-          "nick@example.com",
-          "10.0.1.10,192.168.1.5",
-        ],
-      });
+  it("configures proxy headers and disables incompatible Tailscale serve", async () => {
+    const result = await runTrustedProxyPrompt({
+      bind: "lan",
+      tailscaleMode: "serve",
+      textQueue: [
+        "18789",
+        "x-forwarded-user",
+        "x-forwarded-proto,x-forwarded-host",
+        "nick@example.com",
+        "10.0.1.10,192.168.1.5",
+      ],
+    });
 
-      expect(result.config.gateway?.auth).toEqual({
-        mode: "trusted-proxy",
-        trustedProxy: {
-          userHeader: "x-forwarded-user",
-          requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
-          allowUsers: ["nick@example.com"],
-        },
-      });
-      expect(result.config.gateway?.bind).toBe("lan");
-      expect(result.config.gateway?.trustedProxies).toEqual(["10.0.1.10", "192.168.1.5"]);
-      expect(result.config.gateway?.tailscale).toEqual({ mode: "off" });
-    },
-  );
+    expect(result.config.gateway?.auth).toEqual({
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "x-forwarded-user",
+        requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
+        allowUsers: ["nick@example.com"],
+      },
+    });
+    expect(result.config.gateway?.bind).toBe("lan");
+    expect(result.config.gateway?.trustedProxies).toEqual(["10.0.1.10", "192.168.1.5"]);
+    expect(result.config.gateway?.tailscale).toEqual({ mode: "off" });
+  });
 
-  it.each([["10.42.0.1, ", false]])(
-    "validates trusted proxy input %j (valid=%s)",
-    async (input, valid) => {
-      await runTrustedProxyPrompt({
-        textQueue: ["18789", "x-forwarded-user", "", "", "10.42.0.1"],
-      });
-      const prompt = mocks.text.mock.calls.find(
-        ([options]) => options.message === "Trusted proxy IPs (comma-separated)",
-      )?.[0];
-      expect(prompt?.validate).toBeTypeOf("function");
-      expect(prompt.validate(input)).toEqual(
-        valid ? undefined : expect.stringMatching(/IPv4.*IPv6.*CIDR/),
-      );
-    },
-  );
+  it("rejects an empty entry in trusted proxy input", async () => {
+    await runTrustedProxyPrompt({
+      textQueue: ["18789", "x-forwarded-user", "", "", "10.42.0.1"],
+    });
+    const prompt = mocks.text.mock.calls.find(
+      ([options]) => options.message === "Trusted proxy IPs (comma-separated)",
+    )?.[0];
+    expect(prompt?.validate).toBeTypeOf("function");
+    expect(prompt.validate("10.42.0.1, ")).toEqual(expect.stringMatching(/IPv4.*IPv6.*CIDR/));
+  });
 
-  it.each([["::ffff:127.0.0.0/104", "127.0.0.1"]])(
-    "accepts runtime auth after consent for loopback proxy %s",
-    async (proxies, remoteAddress) => {
-      vi.stubEnv("OPENCLAW_LOCALE", "en");
-      const result = await runTrustedProxyPrompt({
-        textQueue: ["18789", "x-forwarded-user", "x-forwarded-proto", "", proxies],
-        confirmResult: true,
-      });
-      expect(result.config.gateway?.auth?.trustedProxy?.allowLoopback).toBe(true);
-      const prompt = mocks.text.mock.calls.find(
-        ([options]) => options.message === "Trusted proxy IPs (comma-separated)",
-      )?.[0];
-      expect(prompt.validate(proxies)).toBeUndefined();
-      expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("Any local process"),
-        expect.any(String),
-      );
-      expect(await authorizeConfiguredProxy(result.config, remoteAddress)).toEqual({
-        ok: true,
-        method: "trusted-proxy",
-        user: "operator@example.test",
-      });
-    },
-  );
+  it("accepts runtime auth after consent for a mapped loopback proxy", async () => {
+    const proxies = "::ffff:127.0.0.0/104";
+    vi.stubEnv("OPENCLAW_LOCALE", "en");
+    const result = await runTrustedProxyPrompt({
+      textQueue: ["18789", "x-forwarded-user", "x-forwarded-proto", "", proxies],
+      confirmResult: true,
+    });
+    expect(result.config.gateway?.auth?.trustedProxy?.allowLoopback).toBe(true);
+    const prompt = mocks.text.mock.calls.find(
+      ([options]) => options.message === "Trusted proxy IPs (comma-separated)",
+    )?.[0];
+    expect(prompt.validate(proxies)).toBeUndefined();
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Any local process"),
+      expect.any(String),
+    );
+    expect(await authorizeConfiguredProxy(result.config, "127.0.0.1")).toEqual({
+      ok: true,
+      method: "trusted-proxy",
+      user: "operator@example.test",
+    });
+  });
 
   it("rejects proxy attribution through an IPv4 catch-all", async () => {
     const proxies = "::ffff:0:0/96";
     const result = await runTrustedProxyPrompt({
-      textQueue: ["18789", "x-forwarded-user", "", "", proxies],
+      proxies,
       confirmResult: true,
     });
     expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
@@ -266,7 +262,7 @@ describe("promptGatewayConfig", () => {
   it("does not grant loopback consent for an unmatched IPv6 zone", async () => {
     const proxies = "::1%LO0";
     const result = await runTrustedProxyPrompt({
-      textQueue: ["18789", "x-forwarded-user", "", "", proxies],
+      proxies,
     });
     expect(mocks.confirm).not.toHaveBeenCalled();
     expect(result.config.gateway?.auth?.trustedProxy?.allowLoopback).toBeUndefined();
@@ -279,7 +275,7 @@ describe("promptGatewayConfig", () => {
   it("warns and rejects auth when loopback consent is refused", async () => {
     vi.stubEnv("OPENCLAW_LOCALE", "en");
     const result = await runTrustedProxyPrompt({
-      textQueue: ["18789", "x-forwarded-user", "", "", "127.0.0.1"],
+      proxies: "127.0.0.1",
       confirmResult: false,
     });
     expect(result.config.gateway?.auth?.trustedProxy?.allowLoopback).toBeUndefined();
@@ -303,40 +299,33 @@ describe("promptGatewayConfig", () => {
     });
   });
 
-  it.each([{ proxies: "127.0.0.1", answer: false, expected: undefined }])(
-    "preserves or explicitly revokes loopback consent on rerun: $proxies/$answer",
-    async ({ proxies, answer, expected }) => {
-      const baseConfig: OpenClawConfig = {
-        gateway: {
-          auth: {
-            mode: "trusted-proxy",
-            trustedProxy: {
-              userHeader: "x-old-user",
-              allowLoopback: true,
-              deviceAutoApprove: { enabled: false, scopes: [] },
-            },
+  it("explicitly revokes loopback consent on rerun", async () => {
+    const baseConfig: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-old-user",
+            allowLoopback: true,
+            deviceAutoApprove: { enabled: false, scopes: [] },
           },
         },
-      };
-      const original = structuredClone(baseConfig);
-      const result = await runTrustedProxyPrompt({
-        baseConfig,
-        textQueue: ["18789", "x-forwarded-user", "", "", proxies],
-        confirmResult: answer,
-      });
-      expect(result.config.gateway?.auth?.trustedProxy).toEqual({
-        userHeader: "x-forwarded-user",
-        allowLoopback: expected,
-        deviceAutoApprove: { enabled: false, scopes: [] },
-      });
-      expect(baseConfig).toEqual(original);
-      if (proxies === "127.0.0.1") {
-        expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: true }));
-      } else {
-        expect(mocks.confirm).not.toHaveBeenCalled();
-      }
-    },
-  );
+      },
+    };
+    const original = structuredClone(baseConfig);
+    const result = await runTrustedProxyPrompt({
+      baseConfig,
+      proxies: "127.0.0.1",
+      confirmResult: false,
+    });
+    expect(result.config.gateway?.auth?.trustedProxy).toEqual({
+      userHeader: "x-forwarded-user",
+      allowLoopback: undefined,
+      deviceAutoApprove: { enabled: false, scopes: [] },
+    });
+    expect(baseConfig).toEqual(original);
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: true }));
+  });
 
   it("does not revive dormant trusted-proxy consent when switching modes", async () => {
     const result = await runTrustedProxyPrompt({
@@ -353,7 +342,7 @@ describe("promptGatewayConfig", () => {
           },
         },
       },
-      textQueue: ["18789", "x-forwarded-user", "", "", "127.0.0.1"],
+      proxies: "127.0.0.1",
     });
     expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
     expect(result.config.gateway?.auth).toEqual({
