@@ -369,16 +369,12 @@ export abstract class ChatPaneStateOwner {
     return this.chatState.projectRunActivity(this.state);
   }
   readonly composerCapabilities = new ChatComposerCapabilityHost();
-  protected readonly transcript = createChatTranscript(
-    () => this.invalidate(),
-    () => this.paneId,
-    {
-      geometryEventTarget: this.element,
-      onViewportResize: () => this.chatState.handleTranscriptResize(),
-      canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
-      onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
-    },
-  );
+  readonly transcript = createChatTranscript(() => this.paneId, {
+    geometryEventTarget: this.element,
+    onViewportResize: () => this.chatState.handleTranscriptResize(),
+    canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
+    onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
+  });
   protected get progressCards() {
     return sessionProgressCardsForGateway(this.context.gateway);
   }

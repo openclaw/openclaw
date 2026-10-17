@@ -188,7 +188,9 @@ it.each(["pending", "committed"] as const)(
         measure();
       });
     }
-    host.invalidate();
+    host.style.width = "780px";
+    session.syncViewportGeometry();
+    notification.mockClear();
     if (phase === "pending") {
       measure();
     }
@@ -223,19 +225,22 @@ it.each([
     });
     observer.observe(viewport, { box: "border-box" });
     const updates = vi.spyOn(host, "render");
+    const publications = vi.fn();
+    const stop = host.transcript.subscribe(publications);
     try {
       slot.style.cssText = `box-sizing: ${boxSizing}; width: 620.25px; height: 460.5px; flex: none; padding: 20px 0; border: 3px solid transparent; transform: scale(${scale})`;
       session.syncViewportGeometry();
       const rect = { width: Math.round(width), height: Math.round(height) };
       expect(session["virtualizer"].scrollRect).toEqual(rect);
       await host.updateComplete;
-      const requests = vi.spyOn(host, "invalidate");
+      publications.mockClear();
       await settleLayout();
       expect(observed).toEqual([{ width, height }]);
       expect(session["virtualizer"].scrollRect).toEqual(rect);
-      expect(requests).not.toHaveBeenCalled();
+      expect(publications).not.toHaveBeenCalled();
       expect(updates).toHaveBeenCalledTimes(1);
     } finally {
+      stop();
       observer.disconnect();
     }
   },

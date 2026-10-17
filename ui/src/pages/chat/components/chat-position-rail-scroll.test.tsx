@@ -92,13 +92,9 @@ describe("conversation position rail scroll rendering", () => {
     const container = host.transcriptRoot;
     const performUpdate = vi.spyOn(host, "performUpdate");
     const recordViewport = vi.spyOn(TranscriptEndAnchor.prototype, "recordViewport");
-    const transcript = (host.transcript = createChatTranscript(
-      () => host.requestRender(),
-      () => "rail-notification",
-      {
-        canFollowEnd: () => false,
-      },
-    ));
+    const transcript = (host.transcript = createChatTranscript(() => "rail-notification", {
+      canFollowEnd: () => false,
+    }));
     const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
       kind: "content",
       key: `row-${index}`,

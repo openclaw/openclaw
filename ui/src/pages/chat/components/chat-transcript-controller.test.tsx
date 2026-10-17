@@ -114,10 +114,7 @@ describe("chat transcript controller", () => {
     stubAnimationFrames();
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
     const host = new TranscriptTestHost();
-    const transcript = (host.transcript = createChatTranscript(
-      () => host.requestRender(),
-      () => "native-measured-tail",
-    ));
+    const transcript = (host.transcript = createChatTranscript(() => "native-measured-tail"));
     const rows = numberedContentRows(6);
     const scroller = document.createElement("div");
     scroller.className = "chat-thread";
@@ -535,14 +532,10 @@ describe("chat transcript controller", () => {
     const onReaderScroll = vi.fn((towardEnd?: boolean) =>
       handleChatScrollTakeover(policy, towardEnd),
     );
-    const transcript = (host.transcript = createChatTranscript(
-      () => host.requestRender(),
-      () => "restore-retry",
-      {
-        canFollowEnd: () => !policy.chatFollowLocked,
-        onReaderScroll,
-      },
-    ));
+    const transcript = (host.transcript = createChatTranscript(() => "restore-retry", {
+      canFollowEnd: () => !policy.chatFollowLocked,
+      onReaderScroll,
+    }));
     const rows = numberedContentRows(40);
     let scrollHeight = 600;
     Object.defineProperties(container, {
@@ -780,7 +773,7 @@ describe("chat transcript controller", () => {
     "retires an end index without losing newer native movement (%s px)",
     async (nativeGrowth) => {
       const flushFrames = stubAnimationFrames();
-      const transcript = createChatTranscript(vi.fn(), () => `retired-end-index-${nativeGrowth}`, {
+      const transcript = createChatTranscript(() => `retired-end-index-${nativeGrowth}`, {
         canFollowEnd: () => false,
       });
       const content = numberedContentRows(12);
@@ -905,7 +898,7 @@ describe("chat transcript controller", () => {
       const onViewportResize = vi.fn(() =>
         scheduleCommittedChatScroll(policy, false, false, { source: "resize" }),
       );
-      const transcript = createChatTranscript(vi.fn(), () => `height-resize-${locked}`, {
+      const transcript = createChatTranscript(() => `height-resize-${locked}`, {
         onViewportResize,
         canFollowEnd: () => !policy.chatFollowLocked,
         onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
@@ -1014,8 +1007,7 @@ describe("chat transcript controller", () => {
     "keeps disclosure anchoring after a plain owner geometry commit unless interrupted=%s",
     async (interrupt) => {
       const geometryEventTarget = document.body.appendChild(document.createElement("div"));
-      const notify = vi.fn();
-      const transcript = createChatTranscript(notify, () => `disclosure-${interrupt}`, {
+      const transcript = createChatTranscript(() => `disclosure-${interrupt}`, {
         geometryEventTarget,
       });
       const rows: TestContentRow[] = [

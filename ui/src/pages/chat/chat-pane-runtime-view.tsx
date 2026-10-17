@@ -124,6 +124,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const goals = state && projectOwner(chatGoalOperations(state), (owner) => owner);
     const resources = projectOwner(runtime.activeSessionResources, (owner) => owner);
     const discussion = projectOwner(runtime.sessionDiscussion, (owner) => owner.snapshot);
+    const transcript = projectOwner(runtime.transcript, (owner) => owner);
     const companion = projectOwner(runtime.sessionCompanionThreads, (owner) => owner);
     const boardProvider = createMemo(() => {
       revision();
@@ -195,6 +196,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         goals?.read();
         resources.read();
         discussion.read();
+        transcript.read();
         companion.read();
         board().forEach((source) => source.read());
         i18nRevision();
