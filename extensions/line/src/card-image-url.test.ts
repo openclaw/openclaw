@@ -31,15 +31,27 @@ const imageUrl = "https://example.com/cover.jpg";
 const videoUrl = "https://example.com/clip.mp4";
 const image: messagingApi.FlexImage = { type: "image", url: imageUrl };
 const action: messagingApi.MessageAction = { type: "message", label: "Choose", text: "choose" };
-const caption: messagingApi.FlexBox = {
-  type: "box",
-  layout: "vertical",
-  contents: [{ type: "text", text: "Original caption" }],
-};
+const flexText = (text: string): messagingApi.FlexText => ({ type: "text", text });
+const box = (
+  contents: messagingApi.FlexComponent[],
+  layout: messagingApi.FlexBox["layout"] = "vertical",
+): messagingApi.FlexBox => ({ type: "box", layout, contents });
+const flex = (altText: string, contents: messagingApi.FlexContainer): messagingApi.FlexMessage => ({
+  type: "flex",
+  altText,
+  contents,
+});
+const caption = box([flexText("Original caption")]);
+const invalidImage = "http://example.com/cover.jpg";
+const warning = expect.objectContaining({
+  type: "text",
+  text: "Image unavailable: URL must use HTTPS.",
+});
 
 function videoMessage(
   url: string,
   altContent: messagingApi.FlexComponent,
+  overrides: Partial<messagingApi.FlexVideo> = {},
 ): messagingApi.FlexMessage {
   return {
     type: "flex",
@@ -47,7 +59,14 @@ function videoMessage(
     contents: {
       type: "bubble",
       size: "mega",
-      hero: { type: "video", url, previewUrl: imageUrl, altContent, aspectRatio: "20:13" },
+      hero: {
+        type: "video",
+        url,
+        previewUrl: imageUrl,
+        altContent,
+        aspectRatio: "20:13",
+        ...overrides,
+      },
       body: caption,
     },
   };
@@ -128,11 +147,7 @@ const cases: Array<{
 for (const url of ["http://example.com/cover.jpg", "cover.jpg"]) {
   cases.push({
     name: `omits an image-card hero with unsupported URL ${JSON.stringify(url)}`,
-    message: () => ({
-      type: "flex",
-      altText: "Product",
-      contents: createImageCard(url, "Product", "Caption"),
-    }),
+    message: () => flex("Product", createImageCard(url, "Product", "Caption")),
     verify: (message) => {
       const card = bubble(message);
       expect(card.hero).toBeUndefined();
@@ -140,7 +155,7 @@ for (const url of ["http://example.com/cover.jpg", "cover.jpg"]) {
         expect.arrayContaining([
           expect.objectContaining({ type: "text", text: "Product" }),
           expect.objectContaining({ type: "text", text: "Caption" }),
-          expect.objectContaining({ type: "text", text: "Image unavailable: URL must use HTTPS." }),
+          warning,
         ]),
       );
     },
@@ -150,13 +165,8 @@ for (const url of ["http://example.com/cover.jpg", "cover.jpg"]) {
 cases.push(
   {
     name: "keeps action-card controls when the image is unavailable",
-    message: () => ({
-      type: "flex",
-      altText: "Menu",
-      contents: createActionCard("Menu", "Choose", [action], {
-        imageUrl: "http://example.com/cover.jpg",
-      }),
-    }),
+    message: () =>
+      flex("Menu", createActionCard("Menu", "Choose", [action], { imageUrl: invalidImage })),
     verify: (message) => {
       const card = bubble(message);
       expect(card.hero).toBeUndefined();
@@ -171,66 +181,39 @@ cases.push(
         title: "Song",
         imageUrl: "http://example.com/cover.jpg",
       });
-      return {
-        type: "flex",
-        altText: card.altText,
-        contents: card.contents as messagingApi.FlexContainer,
-      };
+      return flex(card.altText, card.contents as messagingApi.FlexContainer);
     },
     verify: (message) => {
       const card = bubble(message);
       expect(card.hero).toBeUndefined();
-      expect(card.body?.contents).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: "text", text: "Image unavailable: URL must use HTTPS." }),
-        ]),
-      );
+      expect(card.body?.contents).toEqual(expect.arrayContaining([warning]));
       expect(card.footer?.contents.length).toBeGreaterThan(0);
     },
   },
   {
     name: "removes nested invalid images and baseline icons without losing their siblings",
-    message: () => ({
-      type: "flex",
-      altText: "Nested media",
-      contents: {
+    message: () =>
+      flex("Nested media", {
         type: "bubble",
-        body: {
-          type: "box",
-          layout: "vertical",
-          contents: [
-            {
-              type: "box",
-              layout: "baseline",
-              contents: [
-                { type: "icon", url: "http://example.com/icon.png" },
-                { type: "icon", url: imageUrl },
-                { type: "text", text: "Label" },
-              ],
-            },
-            {
-              type: "box",
-              layout: "vertical",
-              contents: [{ type: "image", url: "http://example.com/cover.jpg" }],
-            },
-            image,
-          ],
-        },
-      },
-    }),
+        body: box([
+          box(
+            [
+              { type: "icon", url: "http://example.com/icon.png" },
+              { type: "icon", url: imageUrl },
+              flexText("Label"),
+            ],
+            "baseline",
+          ),
+          box([{ type: "image", url: invalidImage }]),
+          image,
+        ]),
+      }),
     verify: (message) =>
       expect(bubble(message).body?.contents).toEqual([
-        {
-          type: "box",
-          layout: "baseline",
-          contents: [
-            { type: "icon", url: imageUrl },
-            { type: "text", text: "Label" },
-          ],
-        },
-        { type: "box", layout: "vertical", contents: [] },
+        box([{ type: "icon", url: imageUrl }, flexText("Label")], "baseline"),
+        box([]),
         image,
-        expect.objectContaining({ type: "text", text: "Image unavailable: URL must use HTTPS." }),
+        warning,
       ]),
   },
   {
@@ -262,51 +245,30 @@ cases.push(
   },
   {
     name: "invalid video preview uses the existing image alternative",
-    message: () => {
-      const message = videoMessage(videoUrl, image);
-      const hero = bubble(message).hero;
-      if (hero?.type !== "video") {
-        throw new Error("Expected video fixture");
-      }
-      hero.previewUrl = "http://example.com/cover.jpg";
-      return message;
-    },
+    message: () => videoMessage(videoUrl, image, { previewUrl: invalidImage }),
     verify: (message) => expect(bubble(message).hero).toEqual(image),
   },
   {
     name: "retains a video alternative box when a nested image is removed",
     message: () =>
-      videoMessage(videoUrl, {
-        type: "box",
-        layout: "vertical",
-        contents: [
-          { type: "text", text: "Alternative caption" },
-          { type: "image", url: "http://example.com/cover.jpg" },
-        ],
-      }),
+      videoMessage(
+        videoUrl,
+        box([flexText("Alternative caption"), { type: "image", url: invalidImage }]),
+      ),
     verify: (message) =>
       expect(bubble(message).hero).toMatchObject({
         type: "video",
         url: videoUrl,
         previewUrl: imageUrl,
-        altContent: {
-          type: "box",
-          layout: "vertical",
-          contents: [{ type: "text", text: "Alternative caption" }],
-        },
+        altContent: box([flexText("Alternative caption")]),
       }),
   },
   {
     name: "retains allowed HTTP action links on valid video media",
-    message: () => {
-      const message = videoMessage(videoUrl, image);
-      const hero = bubble(message).hero;
-      if (hero?.type !== "video") {
-        throw new Error("Expected video fixture");
-      }
-      hero.action = { type: "uri", label: "Open", uri: "http://example.com/action" };
-      return message;
-    },
+    message: () =>
+      videoMessage(videoUrl, image, {
+        action: { type: "uri", label: "Open", uri: "http://example.com/action" },
+      }),
     verify: (message) =>
       expect(bubble(message).hero).toMatchObject({
         type: "video",
@@ -444,11 +406,7 @@ for (const shape of ["bubble", "carousel"] as const) {
       expect(after).toHaveLength(before.length);
       for (const [index, card] of after.entries()) {
         expect(Buffer.byteLength(JSON.stringify(card), "utf8")).toBeLessThanOrEqual(30_000);
-        expect(card.body?.contents[0]).toEqual({
-          type: "box",
-          layout: "baseline",
-          contents: [{ type: "text", text: "Original title" }],
-        });
+        expect(card.body?.contents[0]).toEqual(box([flexText("Original title")], "baseline"));
         expect(card.body?.contents.slice(1, 21)).toEqual(before[index]?.body?.contents.slice(1));
         expect(card.footer).toEqual(before[index]?.footer);
       }

@@ -81,6 +81,10 @@ function delivery(messageIds: readonly string[], threadId = "c1") {
   });
 }
 
+function partialDelivery(messageIds: string[]) {
+  return { messageIds, receipt: { platformMessageIds: messageIds }, visibleReplySent: true };
+}
+
 function refusal(status: number, monthlyLimit = false) {
   const statusText = monthlyLimit ? "Too Many Requests" : "provider rejection";
   return new HTTPFetchError(`${status} - ${statusText}`, {
@@ -178,11 +182,7 @@ it("preserves all finalized receipts when its delivery observer rejects", async 
     throw new Error("expected a partial LINE delivery error");
   }
   expect(caught.cause).toBe(failure);
-  expect(caught.deliveryResult).toMatchObject({
-    messageIds: ["m-first", "m-second"],
-    receipt: { platformMessageIds: ["m-first", "m-second"] },
-    visibleReplySent: true,
-  });
+  expect(caught.deliveryResult).toMatchObject(partialDelivery(["m-first", "m-second"]));
   expect(mocks.pushMessageLine).toHaveBeenCalledTimes(2);
   expect(onDeliveryResult).toHaveBeenCalledTimes(2);
 });
@@ -427,11 +427,7 @@ it.each([false, true])(
     ).rejects.toMatchObject({
       code: "CHANNEL_PARTIAL_DELIVERY",
       cause: rejection,
-      deliveryResult: {
-        messageIds: ["m-media"],
-        receipt: { platformMessageIds: ["m-media"] },
-        visibleReplySent: true,
-      },
+      deliveryResult: partialDelivery(["m-media"]),
     });
     expect(mocks.pushMessageLine).toHaveBeenCalledOnce();
     expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledOnce();
@@ -465,11 +461,7 @@ it.each([false, true])(
     expect(caught).toMatchObject({
       code: "CHANNEL_PARTIAL_DELIVERY",
       cause: rejection,
-      deliveryResult: {
-        messageIds: ["accepted-first", "accepted-child"],
-        receipt: { platformMessageIds: ["accepted-first", "accepted-child"] },
-        visibleReplySent: true,
-      },
+      deliveryResult: partialDelivery(["accepted-first", "accepted-child"]),
     });
   },
 );

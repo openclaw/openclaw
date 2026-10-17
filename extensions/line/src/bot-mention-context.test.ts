@@ -42,13 +42,22 @@ type MentionCase = {
   patterns?: string[];
   requireMention?: boolean;
   eventKind?: "location" | "postback";
-  expected: {
-    WasMentioned: boolean | undefined;
-    ExplicitlyMentionedBot: boolean | undefined;
-    GroupRequireMention: boolean | undefined;
-    ImplicitMentionKinds: string[] | undefined;
-  };
+  expected: ReturnType<typeof mentionFacts>;
 };
+
+function mentionFacts(
+  mentioned: boolean | undefined,
+  explicit: boolean | undefined,
+  required: boolean | undefined = mentioned === undefined ? undefined : true,
+  implicit: string[] | undefined = mentioned === undefined ? undefined : [],
+) {
+  return {
+    WasMentioned: mentioned,
+    ExplicitlyMentionedBot: explicit,
+    GroupRequireMention: required,
+    ImplicitMentionKinds: implicit,
+  };
+}
 
 const nativeBotMention: webhook.TextMessageContent["mention"] = {
   mentionees: [{ index: 0, length: 4, type: "user", userId: "bot", isSelf: true }],
@@ -59,130 +68,70 @@ const cases: MentionCase[] = [
     name: "native bot mention in a group",
     text: "@bot hello",
     mention: nativeBotMention,
-    expected: {
-      WasMentioned: true,
-      ExplicitlyMentionedBot: true,
-      GroupRequireMention: true,
-      ImplicitMentionKinds: [],
-    },
+    expected: mentionFacts(true, true),
   },
   {
     name: "native bot mention in a room",
     source: { type: "room", roomId: "room", userId: "sender" },
     text: "@bot hello",
     mention: nativeBotMention,
-    expected: {
-      WasMentioned: true,
-      ExplicitlyMentionedBot: true,
-      GroupRequireMention: true,
-      ImplicitMentionKinds: [],
-    },
+    expected: mentionFacts(true, true),
   },
   {
     name: "native all-members mention",
     text: "@all hello",
     mention: { mentionees: [{ index: 0, length: 4, type: "all" }] },
-    expected: {
-      WasMentioned: true,
-      ExplicitlyMentionedBot: true,
-      GroupRequireMention: true,
-      ImplicitMentionKinds: [],
-    },
+    expected: mentionFacts(true, true),
   },
   {
     name: "configured pattern without a native mention",
     text: "hello helper",
     patterns: ["\\bhelper\\b"],
-    expected: {
-      WasMentioned: true,
-      ExplicitlyMentionedBot: false,
-      GroupRequireMention: true,
-      ImplicitMentionKinds: [],
-    },
+    expected: mentionFacts(true, false),
   },
   {
     name: "quote of a message the bot sent",
     quote: true,
-    expected: {
-      WasMentioned: true,
-      ExplicitlyMentionedBot: false,
-      GroupRequireMention: true,
-      ImplicitMentionKinds: ["quoted_bot"],
-    },
+    expected: mentionFacts(true, false, true, ["quoted_bot"]),
   },
   {
     name: "disabled quote policy in an always-on group",
     quote: true,
     quotedBot: false,
     requireMention: false,
-    expected: {
-      WasMentioned: false,
-      ExplicitlyMentionedBot: false,
-      GroupRequireMention: false,
-      ImplicitMentionKinds: ["quoted_bot"],
-    },
+    expected: mentionFacts(false, false, false, ["quoted_bot"]),
   },
   {
     name: "ordinary message in an always-on group",
     requireMention: false,
-    expected: {
-      WasMentioned: false,
-      ExplicitlyMentionedBot: false,
-      GroupRequireMention: false,
-      ImplicitMentionKinds: [],
-    },
+    expected: mentionFacts(false, false, false),
   },
   {
     name: "mention of another member",
     text: "@pal hello",
     mention: { mentionees: [{ index: 0, length: 4, type: "user", userId: "pal", isSelf: false }] },
     requireMention: false,
-    expected: {
-      WasMentioned: false,
-      ExplicitlyMentionedBot: false,
-      GroupRequireMention: false,
-      ImplicitMentionKinds: [],
-    },
+    expected: mentionFacts(false, false, false),
   },
   {
     name: "authorized command bypass",
     text: "/status",
-    expected: {
-      WasMentioned: true,
-      ExplicitlyMentionedBot: false,
-      GroupRequireMention: true,
-      ImplicitMentionKinds: [],
-    },
+    expected: mentionFacts(true, false),
   },
   {
     name: "non-text message without native mention metadata",
     eventKind: "location",
-    expected: {
-      WasMentioned: false,
-      ExplicitlyMentionedBot: false,
-      GroupRequireMention: true,
-      ImplicitMentionKinds: [],
-    },
+    expected: mentionFacts(false, false),
   },
   {
     name: "direct message without group mention facts",
     source: { type: "user", userId: "sender" },
-    expected: {
-      WasMentioned: undefined,
-      ExplicitlyMentionedBot: undefined,
-      GroupRequireMention: undefined,
-      ImplicitMentionKinds: undefined,
-    },
+    expected: mentionFacts(undefined, undefined),
   },
   {
     name: "postback without message mention facts",
     eventKind: "postback",
-    expected: {
-      WasMentioned: undefined,
-      ExplicitlyMentionedBot: undefined,
-      GroupRequireMention: undefined,
-      ImplicitMentionKinds: undefined,
-    },
+    expected: mentionFacts(undefined, undefined),
   },
 ];
 

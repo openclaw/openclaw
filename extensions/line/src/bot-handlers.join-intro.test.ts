@@ -1,4 +1,5 @@
 import type { messagingApi, webhook } from "@line/bot-sdk";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -116,10 +117,7 @@ describe("LINE group join introductions", () => {
       await handleLineWebhookEvents([joinEvent(source)], context);
 
       expect(reportJoin).toHaveBeenCalledTimes(1);
-      const params = reportJoin.mock.calls[0]?.[0];
-      if (!params) {
-        throw new Error("Expected a LINE join introduction");
-      }
+      const params = expectDefined(reportJoin.mock.calls[0]?.[0], "LINE join introduction");
       expect(params).toMatchObject({
         cfg: context.cfg,
         channel: "line",
@@ -156,10 +154,7 @@ describe("LINE group join introductions", () => {
       createContext(),
     );
 
-    const params = reportJoin.mock.calls[0]?.[0];
-    if (!params) {
-      throw new Error("Expected a LINE join introduction");
-    }
+    const params = expectDefined(reportJoin.mock.calls[0]?.[0], "LINE join introduction");
     await expect(params.resolveRoomContext({ messageLimit: 100 })).resolves.toEqual({
       historyUnavailable: true,
     });
@@ -184,32 +179,26 @@ describe("LINE group join introductions", () => {
     expect(context.processMessage).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "an empty account allowlist", config: { groupAllowFrom: [] } },
-    { name: "an empty group override", config: { groups: { [groupId]: { allowFrom: [] } } } },
-    { name: "a missing access group", config: { groupAllowFrom: ["accessGroup:missing"] } },
-    { name: "an empty access group", config: { groupAllowFrom: ["accessGroup:empty"] } },
-    {
-      name: "an access group for another channel",
-      config: { groupAllowFrom: ["accessGroup:other"] },
-    },
-    {
-      name: "an unsupported access group",
-      config: { groupAllowFrom: ["accessGroup:unsupported"] },
-    },
-    { name: "an entry normalized to empty", config: { groupAllowFrom: ["line:user:"] } },
-    {
-      name: "empty wildcard defaults inherited by a named group",
-      config: { groups: { "*": { allowFrom: [] }, [groupId]: { requireMention: false } } },
-    },
-    {
-      name: "disabled wildcard defaults inherited by a named group",
-      config: { groups: { "*": { enabled: false }, [groupId]: { requireMention: false } } },
-    },
-    { name: "disabled group policy", config: { groupPolicy: "disabled" as const } },
-    { name: "a disabled group", config: { groups: { [groupId]: { enabled: false } } } },
-    { name: "disabled wildcard groups", config: { groups: { "*": { enabled: false } } } },
-  ])("reports denied admission for $name without reading metadata", async ({ config }) => {
+  it.each<[string, LineAccountConfig]>([
+    ["an empty account allowlist", { groupAllowFrom: [] }],
+    ["an empty group override", { groups: { [groupId]: { allowFrom: [] } } }],
+    ["a missing access group", { groupAllowFrom: ["accessGroup:missing"] }],
+    ["an empty access group", { groupAllowFrom: ["accessGroup:empty"] }],
+    ["an access group for another channel", { groupAllowFrom: ["accessGroup:other"] }],
+    ["an unsupported access group", { groupAllowFrom: ["accessGroup:unsupported"] }],
+    ["an entry normalized to empty", { groupAllowFrom: ["line:user:"] }],
+    [
+      "empty wildcard defaults inherited by a named group",
+      { groups: { "*": { allowFrom: [] }, [groupId]: { requireMention: false } } },
+    ],
+    [
+      "disabled wildcard defaults inherited by a named group",
+      { groups: { "*": { enabled: false }, [groupId]: { requireMention: false } } },
+    ],
+    ["disabled group policy", { groupPolicy: "disabled" as const }],
+    ["a disabled group", { groups: { [groupId]: { enabled: false } } }],
+    ["disabled wildcard groups", { groups: { "*": { enabled: false } } }],
+  ])("reports denied admission for %s without reading metadata", async (_name, config) => {
     await handleLineWebhookEvents([joinEvent(sources[0])], createContext(config));
 
     expect(reportJoin).toHaveBeenCalledWith(
@@ -218,29 +207,23 @@ describe("LINE group join introductions", () => {
     expect(getGroupSummary).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "open policy without an allowlist",
-      config: { groupPolicy: "open" as const, groupAllowFrom: [] },
-    },
-    { name: "a static LINE audience", config: { groupAllowFrom: ["accessGroup:operators"] } },
-    { name: "a shared static audience", config: { groupAllowFrom: ["accessGroup:shared"] } },
-    {
-      name: "a direct sender beside a missing group",
-      config: { groupAllowFrom: ["accessGroup:missing", userId] },
-    },
-    {
-      name: "a named group overrides empty wildcard defaults",
-      config: {
+  it.each<[string, LineAccountConfig]>([
+    ["open policy without an allowlist", { groupPolicy: "open" as const, groupAllowFrom: [] }],
+    ["a static LINE audience", { groupAllowFrom: ["accessGroup:operators"] }],
+    ["a shared static audience", { groupAllowFrom: ["accessGroup:shared"] }],
+    ["a direct sender beside a missing group", { groupAllowFrom: ["accessGroup:missing", userId] }],
+    [
+      "a named group overrides empty wildcard defaults",
+      {
         groupAllowFrom: [],
         groups: { "*": { allowFrom: [] }, [groupId]: { allowFrom: [userId] } },
       },
-    },
-    {
-      name: "a named group overrides disabled wildcard defaults",
-      config: { groups: { "*": { enabled: false }, [groupId]: { enabled: true } } },
-    },
-  ])("admits senderless joins for $name", async ({ config }) => {
+    ],
+    [
+      "a named group overrides disabled wildcard defaults",
+      { groups: { "*": { enabled: false }, [groupId]: { enabled: true } } },
+    ],
+  ])("admits senderless joins for %s", async (_name, config) => {
     const context = createContext(config);
     await handleLineWebhookEvents([joinEvent(sources[0])], context);
 
