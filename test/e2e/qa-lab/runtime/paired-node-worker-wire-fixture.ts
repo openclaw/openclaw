@@ -419,9 +419,7 @@ export async function createPairedNodeWorkerHost(
   const invokeErrors: unknown[] = [];
   const commands: string[] = [];
   const frames: NodeInvokeRequestPayload[] = [];
-  const identity = loadOrCreateDeviceIdentity({
-    path: path.join(options.root, `${label}-identity.sqlite`),
-  });
+  const identity = loadOrCreateDeviceIdentity({ env: nodeEnv });
 
   const inventory = () => ({
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],

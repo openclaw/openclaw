@@ -43,7 +43,9 @@ describe("Gateway Code Mode clock rollback", () => {
             GATEWAY_CLIENT_MODES.TEST +
             "-" +
             process.platform +
-            "-none-operator.sqlite",
+            "-none-operator",
+          "client",
+          "credentials.sqlite",
         ),
       });
       const token = nextGatewayId("code-mode-clock-token");

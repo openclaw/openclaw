@@ -53,6 +53,13 @@ function fixture(name: string) {
 }
 
 describe("async local identity boundary", () => {
+  it("rejects unsupported identity paths before dispatching to the credential worker", async () => {
+    const options = { path: path.resolve("/synthetic", "identity.sqlite") };
+    await expect(createIdentity(options)).rejects.toThrow("client/credentials.sqlite");
+    await expect(readIdentity(options)).rejects.toThrow("client/credentials.sqlite");
+    expect(boundary.run).not.toHaveBeenCalled();
+  });
+
   it("keeps existing-only lookup non-creating", async () => {
     const { env } = fixture("existing-only");
     boundary.run.mockResolvedValue({ kind: "identity", identity: null });

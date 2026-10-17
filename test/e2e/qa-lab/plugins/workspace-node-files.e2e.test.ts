@@ -209,12 +209,16 @@ describe("node workspace document access", () => {
         owner = await connectGatewayClient({
           ...connection,
           scopes: ["operator.admin", "operator.read", "operator.write", "operator.pairing"],
-          deviceIdentity: loadOrCreateDeviceIdentity({ path: state.path("owner.sqlite") }),
+          deviceIdentity: loadOrCreateDeviceIdentity({
+            path: state.path("owner", "client", "credentials.sqlite"),
+          }),
         });
         reader = await connectGatewayClient({
           ...connection,
           scopes: ["operator.read"],
-          deviceIdentity: loadOrCreateDeviceIdentity({ path: state.path("reader.sqlite") }),
+          deviceIdentity: loadOrCreateDeviceIdentity({
+            path: state.path("reader", "client", "credentials.sqlite"),
+          }),
         });
         const setup = await owner.request<{ setupCode: string; setupId: string }>(
           "device.pair.setupCode",

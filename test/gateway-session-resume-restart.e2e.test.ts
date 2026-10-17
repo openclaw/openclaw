@@ -369,7 +369,7 @@ function connectInstance(
       mode: "backend",
       scopes: ["operator.admin", "operator.read", "operator.write"],
       deviceIdentity: loadOrCreateDeviceIdentity({
-        path: instance.state.path("device.sqlite"),
+        path: instance.state.path("device", "client", "credentials.sqlite"),
       }),
     },
     {

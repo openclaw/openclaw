@@ -57,7 +57,7 @@ async function configureAuth() {
 }
 
 async function openBrowser(port: number, instanceId: string) {
-  const identityPath = path.join(tempDirs.make("hello-browser-"), "device.sqlite");
+  const identityPath = path.join(tempDirs.make("hello-browser-"), "client", "credentials.sqlite");
   const socket = await openWs(port, {
     origin,
     "x-forwarded-for": "203.0.113.50",

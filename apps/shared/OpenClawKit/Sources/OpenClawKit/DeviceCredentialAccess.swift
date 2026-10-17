@@ -126,7 +126,8 @@ public enum DeviceCredentialAccess {
         _ operation: ClientCredentialOperation,
         owner: OpenClawClientCredentialStore) throws -> ClientCredentialResult
     {
-        if operation.kind == .identityCreate, let candidate = operation.identity {
+        let candidate = operation.kind == .identityCreate ? operation.identity : nil
+        if let candidate {
             _ = try DeviceIdentityStore.material(
                 deviceId: candidate.deviceID,
                 publicKeyPEM: candidate.publicKeyPEM,
@@ -134,7 +135,29 @@ public enum DeviceCredentialAccess {
                 createdAtMs: candidate.createdAtMs)
         }
         guard operation.kind == .identityRepair, let replacement = operation.identity else {
-            return try owner.execute(operation)
+            let result = try owner.execute(operation)
+            if let identity = result.identity {
+                let matchesValidatedCandidate = candidate.map {
+                    identity.createdAtMs == $0.createdAtMs &&
+                        identity.deviceID.utf8.elementsEqual($0.deviceID.utf8) &&
+                        identity.publicKeyPEM.utf8.elementsEqual($0.publicKeyPEM.utf8) &&
+                        identity.privateKeyPEM.utf8.elementsEqual($0.privateKeyPEM.utf8)
+                } ?? false
+                if !matchesValidatedCandidate {
+                    do {
+                        _ = try DeviceIdentityStore.material(
+                            deviceId: identity.deviceID,
+                            publicKeyPEM: identity.publicKeyPEM,
+                            privateKeyPEM: identity.privateKeyPEM,
+                            createdAtMs: identity.createdAtMs)
+                    } catch {
+                        throw DeviceIdentityStore.storageError(
+                            "Local device identity row \"\(identity.key)\": \(error.localizedDescription). " +
+                                "Run openclaw doctor --fix")
+                    }
+                }
+            }
+            return result
         }
         let current = try owner.readIdentity(key: replacement.key)
         var result = ClientCredentialResult(kind: .identityRepair)

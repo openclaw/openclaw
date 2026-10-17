@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildDeviceAuthPayload } from "../../packages/gateway-client/src/device-auth.js";
@@ -49,8 +48,10 @@ async function withConnection(scopes: string[], run: (ws: GatewaySocket) => Prom
     expect(String(nonce).length).toBeGreaterThan(0);
     const identity = loadOrCreateDeviceIdentity({
       path: path.join(
-        os.tmpdir(),
-        `openclaw-talk-config-device-${process.pid}-${deviceSeq++}.sqlite`,
+        process.env.OPENCLAW_STATE_DIR!,
+        `talk-config-device-${deviceSeq++}`,
+        "client",
+        "credentials.sqlite",
       ),
     });
     const signedAt = Date.now();

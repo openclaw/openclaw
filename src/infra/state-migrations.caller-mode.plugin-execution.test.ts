@@ -466,7 +466,10 @@ module.exports = { stateMigrations: [{
         delete env.OPENCLAW_CONFIG_PATH;
       }
       if (historicalSchema) {
-        const databasePath = resolveOpenClawStateSqlitePath(env);
+        const databasePath = resolveOpenClawStateSqlitePath({
+          ...env,
+          OPENCLAW_STATE_DIR: legacyStateDir,
+        });
         fs.mkdirSync(path.dirname(databasePath), { recursive: true });
         const database = new DatabaseSync(databasePath);
         try {

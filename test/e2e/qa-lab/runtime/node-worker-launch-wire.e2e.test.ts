@@ -494,6 +494,7 @@ describe("node worker launch wire", () => {
               }
             },
           });
+          expect(legacyWorkerNode.identity.deviceId).not.toBe(workerNode.identity.deviceId);
           markPhase("legacy workspace dispatch");
           const legacySessionKey = `${SESSION_KEY}-legacy-node`;
           await operator.request("sessions.create", {

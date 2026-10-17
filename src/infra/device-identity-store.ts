@@ -6,6 +6,7 @@ import {
   type ClientCredentialResult,
 } from "./client-credential-store.js";
 import {
+  DeviceIdentityStorageError,
   normalizeIdentityKey,
   storedDeviceIdentityToRow,
   type StoredDeviceIdentity,
@@ -30,10 +31,19 @@ export function resolveDeviceIdentityStore(options: DeviceIdentityStoreOptions =
   databasePath: string;
   identityKey: string;
 } {
+  const databasePath = path.resolve(
+    options.path ?? resolveClientCredentialStorePath(options.env ?? process.env),
+  );
+  if (
+    path.basename(databasePath) !== "credentials.sqlite" ||
+    path.basename(path.dirname(databasePath)) !== "client"
+  ) {
+    throw new DeviceIdentityStorageError(
+      "Device identity path must be <client-root>/client/credentials.sqlite; pass env.OPENCLAW_STATE_DIR to select the client root.",
+    );
+  }
   return {
-    databasePath: path.resolve(
-      options.path ?? resolveClientCredentialStorePath(options.env ?? process.env),
-    ),
+    databasePath,
     identityKey: normalizeIdentityKey(options.identityKey),
   };
 }

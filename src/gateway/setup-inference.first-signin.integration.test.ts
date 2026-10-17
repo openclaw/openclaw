@@ -154,7 +154,9 @@ it(
         let owner: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
         try {
           await server.startupSettled;
-          const identity = loadOrCreateDeviceIdentity({ path: state.path("setup-owner.sqlite") });
+          const identity = loadOrCreateDeviceIdentity({
+            path: state.path("setup-owner", "client", "credentials.sqlite"),
+          });
           const device = { deviceId: identity.deviceId, role: "operator", scopes };
           const pending = await requestDevicePairing({
             ...device,

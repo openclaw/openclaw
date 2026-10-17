@@ -11,6 +11,36 @@ afterEach(() => {
 });
 
 describe("device identity state dir defaults", () => {
+  it.each(["writer-identity.sqlite", "state/openclaw.sqlite"])(
+    "refuses unsupported identity path %s before creating state",
+    async (relativePath) => {
+      await withTempDir("openclaw-identity-path-", async (rootDir) => {
+        const databasePath = path.join(rootDir, "fixtures", relativePath);
+        expect(() => loadDeviceIdentityIfPresent({ path: databasePath })).toThrow(
+          "client/credentials.sqlite",
+        );
+        expect(() => loadOrCreateDeviceIdentity({ path: databasePath })).toThrow(
+          "client/credentials.sqlite",
+        );
+        expect(fs.readdirSync(rootDir)).toEqual([]);
+      });
+    },
+  );
+
+  it("keeps explicit canonical client roots independent", async () => {
+    await withTempDir("openclaw-identity-roots-", async (rootDir) => {
+      const firstPath = path.join(rootDir, "first", "client", "credentials.sqlite");
+      const secondPath = path.join(rootDir, "second", "client", "credentials.sqlite");
+      const first = loadOrCreateDeviceIdentity({ path: firstPath });
+      const second = loadOrCreateDeviceIdentity({ path: secondPath });
+
+      expect(first.deviceId).not.toBe(second.deviceId);
+      expect(loadDeviceIdentityIfPresent({ path: firstPath })).toEqual(first);
+      expect(loadDeviceIdentityIfPresent({ path: secondPath })).toEqual(second);
+      expect(fs.readdirSync(rootDir).toSorted()).toEqual(["first", "second"]);
+    });
+  });
+
   it("writes the default identity to the local credential database", async () => {
     await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
       const identity = loadOrCreateDeviceIdentity();
