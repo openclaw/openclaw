@@ -10,9 +10,12 @@ import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { isRetainedSessionTranscriptArchiveName } from "./artifacts.js";
 import { setCleanupDeleteFault } from "./cleanup-service.delete-fault.test-support.js";
 import { runSessionsCleanup, type SessionsCleanupOptions } from "./cleanup-service.js";
-import { afterCleanupRead } from "./cleanup-service.test-support.js";
 import {
-  appendTranscriptMessageSync,
+  afterCleanupRead,
+  appendUserMessage,
+  sessionScope,
+} from "./cleanup-service.test-support.js";
+import {
   inspectTranscriptEventsSync,
   loadSessionEntry,
   replaceSessionEntry,
@@ -59,18 +62,8 @@ const pruneArchives = () =>
     rules: [{ reason: "deleted", olderThanMs: 10 }],
     nowMs: 100,
   });
-function appendUserMessage(
-  scope: Parameters<typeof appendTranscriptMessageSync>[0],
-  eventId: string,
-  text: string,
-) {
-  appendTranscriptMessageSync(scope, {
-    eventId,
-    message: { role: "user", content: [{ type: "text", text }] },
-  });
-}
 const seed = async (sessionId: string) => {
-  const scope = { sessionKey: `agent:main:${sessionId}`, sessionId, storePath };
+  const scope = sessionScope(storePath, sessionId);
   await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
   return scope;
 };
@@ -277,11 +270,7 @@ it("reclassifies a rewritten generation after a warmed message-bearing inspectio
 it.each([false, true])(
   "refuses physical replacement after cleanup classification (initially absent=%s)",
   async (initiallyAbsent) => {
-    const scope = {
-      sessionKey: "agent:main:replaced-cleanup",
-      sessionId: "replaced-cleanup",
-      storePath,
-    };
+    const scope = sessionScope(storePath, "replaced-cleanup");
     const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
       agentId: "main",
     }).path;

@@ -43,11 +43,28 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 import type { SessionEntry } from "./types.js";
 
 function seed(
-  scope: Parameters<typeof replaceSessionEntrySync>[0],
+  agentId: string,
+  sessionKey: string,
   sessionId: string,
   fields: Partial<SessionEntry> = {},
+  storePath?: string,
 ) {
-  replaceSessionEntrySync(scope, { sessionId, updatedAt: 1, ...fields });
+  replaceSessionEntrySync(
+    { agentId, sessionKey, storePath },
+    { sessionId, updatedAt: 1, ...fields },
+  );
+}
+function fleet(agentIds = ["main"], session?: OpenClawConfig["session"]): OpenClawConfig {
+  return { agents: { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) }, session };
+}
+function seedAgents(
+  agentIds: string[],
+  fields: (id: string) => Partial<SessionEntry> = () => ({}),
+  storePath?: string,
+) {
+  for (const id of agentIds) {
+    seed(id, `agent:${id}:main`, `${id}-session`, fields(id), storePath);
+  }
 }
 function selection(
   agentId: string,
@@ -121,13 +138,13 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
 });
 
 it.each([
-  { layout: "separate", when: "before-read" },
-  { layout: "shared", when: "before-read" },
-  { layout: "legacy-partitioned", when: "before-read" },
-  { layout: "separate", when: "during-topology" },
+  ["separate", "before-read"],
+  ["shared", "before-read"],
+  ["legacy-partitioned", "before-read"],
+  ["separate", "during-topology"],
 ])(
-  "keeps $layout aggregate reads available while another agent's resources close ($when)",
-  async ({ layout, when }) => {
+  "keeps %s aggregate reads available while another agent's resources close (%s)",
+  async (layout, when) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath =
         layout === "shared"
@@ -135,20 +152,12 @@ it.each([
           : layout === "legacy-partitioned"
             ? state.statePath("sessions.json")
             : undefined;
-      const cfg: OpenClawConfig = {
-        agents: { entries: { main: {}, retiring: {} } },
-        ...(storePath ? { session: { store: storePath } } : {}),
-      };
-      for (const agentId of ["main", "retiring"]) {
-        replaceSessionEntrySync(
-          { agentId, storePath, sessionKey: `agent:${agentId}:main` },
-          {
-            sessionId: `${agentId}-session`,
-            updatedAt: 1,
-            ...(agentId === "main" ? { parentSessionKey: "agent:retiring:main" } : {}),
-          },
-        );
-      }
+      const cfg = fleet(["main", "retiring"], storePath ? { store: storePath } : undefined);
+      seedAgents(
+        ["main", "retiring"],
+        (id) => (id === "main" ? { parentSessionKey: "agent:retiring:main" } : {}),
+        storePath,
+      );
       const retiringPath =
         layout === "legacy-partitioned"
           ? resolveSqliteTargetFromSessionStorePath(storePath!, { agentId: "retiring" }).path
@@ -188,13 +197,11 @@ it.each([
           const asyncResult = await loadCombinedStoreAsync(cfg, { agentId });
           const syncResult = loadCombinedStore(cfg, { agentId });
           for (const result of [asyncResult, syncResult]) {
-            expect(Object.keys(result.store)).toEqual(["agent:main:main"]);
-            expect(result.store["agent:main:main"]?.sessionId).toBe("main-session");
-            expect(
-              result.targetsBySessionKey
-                .get("agent:main:main")
-                ?.readSourceEntry("agent:retiring:main"),
-            ).toBeUndefined();
+            expect(result.store).toEqual({
+              "agent:main:main": expect.objectContaining({ sessionId: "main-session" }),
+            });
+            const target = result.targetsBySessionKey.get("agent:main:main");
+            expect(target?.readSourceEntry("agent:retiring:main")).toBeUndefined();
           }
         }
         expect(closed).toBeDefined();
@@ -210,37 +217,28 @@ it.each([
 
 it("retains later stores while an earlier context read settles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {}, other: {} } } };
-    for (const agentId of ["main", "other"]) {
-      seed({ agentId, sessionKey: `agent:${agentId}:main` }, `${agentId}-before-close`);
-    }
+    const cfg = fleet(["main", "other"]);
+    seedAgents(["main", "other"], (id) => ({ sessionId: `${id}-before-close` }));
     const other = openOpenClawAgentDatabase({ agentId: "other" });
     const selected = ["main", "other"].map((agentId) =>
       selection(agentId, `${agentId}-before-close`),
     );
-    const requestKind = "session-exact-entries";
     let replaced = false;
-    const completedKeys: unknown[] = [];
     boundary.afterReply = async (reply) => {
       if (
         isRecord(reply) &&
         reply.ok === true &&
         isRecord(reply.value) &&
-        reply.value.kind === requestKind &&
-        Array.isArray(reply.value.entries)
+        reply.value.kind === "session-exact-entries" &&
+        Array.isArray(reply.value.entries) &&
+        !replaced
       ) {
-        completedKeys.push(
-          ...reply.value.entries.map((row) => (isRecord(row) ? row.sessionKey : undefined)),
-        );
-        if (!replaced) {
-          expect(completedKeys).toEqual(["agent:main:main"]);
-          replaced = true;
-          await closeOpenClawAgentDatabaseByPathAsync(other.path, "other");
-          replaceSessionEntrySync(
-            { agentId: "other", sessionKey: "agent:other:main" },
-            { sessionId: "other-successor", updatedAt: 2 },
-          );
-        }
+        expect(
+          reply.value.entries.map((row) => (isRecord(row) ? row.sessionKey : undefined)),
+        ).toEqual(["agent:main:main"]);
+        replaced = true;
+        await closeOpenClawAgentDatabaseByPathAsync(other.path, "other");
+        seed("other", "agent:other:main", "other-successor", { updatedAt: 2 });
       }
     };
     try {
@@ -258,7 +256,7 @@ it("retains later stores while an earlier context read settles", async () => {
 it("refuses physical context replacement even when the original file is restored before consumption", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const scope = { agentId: "main", sessionKey: "agent:main:physical-listing" };
-    replaceSessionEntrySync(scope, { sessionId: "original", updatedAt: 1 });
+    seed(scope.agentId, scope.sessionKey, "original");
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     await closeOpenClawAgentDatabasesAsync();
     const replacement = state.statePath("replacement.sqlite");
@@ -284,17 +282,12 @@ it("refuses physical context replacement even when the original file is restored
         replace();
       }
     };
-    boundary.afterReply = async () => {
-      if (replaced) {
-        restore();
-      }
-    };
+    boundary.afterReply = async () => restore();
     try {
       await expect(
         loadUsageSessionContext([selection(scope.agentId, "original", scope.sessionKey)]),
       ).rejects.toThrow(/physical owner|database.*changed|file identity changed/i);
-      expect(replaced).toBe(true);
-      expect(restored).toBe(true);
+      expect({ replaced, restored }).toEqual({ replaced: true, restored: true });
     } finally {
       boundary.beforeRequest = undefined;
       boundary.afterReply = undefined;
@@ -305,18 +298,18 @@ it("refuses physical context replacement even when the original file is restored
 
 it("reuses committed deletion facts for the synchronous SDK loader", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {}, work: {} } } };
-    for (const agentId of ["main", "work"]) {
-      seed({ agentId, sessionKey: `agent:${agentId}:main` }, `${agentId}-session`);
-    }
+    const cfg = fleet(["main", "work"]);
+    seedAgents(["main", "work"]);
     await loadCombinedStoreAsync(cfg);
     const observed = observeHostDataSql();
-    try {
-      expect(Object.keys(loadSdkStore(cfg).store).toSorted()).toEqual([
-        "agent:main:main",
-        "agent:work:main",
-      ]);
+    const keys = (options?: Parameters<typeof loadSdkStore>[1]) =>
+      Object.keys(loadSdkStore(cfg, options).store).toSorted();
+    const both = ["agent:main:main", "agent:work:main"];
+    const noDiscoverySql = () =>
       expect(observed.queries.filter((sql) => /agent_deletion_journal/i.test(sql))).toEqual([]);
+    try {
+      expect(keys()).toEqual(both);
+      noDiscoverySql();
       const journal = {
         agentId: "work",
         operationId: "sync-discovery-delete",
@@ -335,16 +328,13 @@ it("reuses committed deletion facts for the synchronous SDK loader", async () =>
           { env: state.env },
         ),
       ).toThrow("roll back discovery");
-      expect(Object.keys(loadSdkStore(cfg).store).toSorted()).toEqual([
-        "agent:main:main",
-        "agent:work:main",
-      ]);
+      expect(keys()).toEqual(both);
       beginAgentDeletionJournal(journal, { env: state.env });
       observed.queries.length = 0;
       for (const options of [{}, { configuredAgentsOnly: true }, { agentId: "main" }]) {
-        expect(Object.keys(loadSdkStore(cfg, options).store)).toEqual(["agent:main:main"]);
+        expect(keys(options)).toEqual(["agent:main:main"]);
       }
-      expect(observed.queries.filter((sql) => /agent_deletion_journal/i.test(sql))).toEqual([]);
+      noDiscoverySql();
       runOpenClawStateWriteTransaction(
         (database) => {
           expect(
@@ -353,13 +343,11 @@ it("reuses committed deletion facts for the synchronous SDK loader", async () =>
         },
         { env: state.env },
       );
-      expect(Object.keys(loadSdkStore(cfg).store)).toEqual(["agent:main:main"]);
+      expect(keys()).toEqual(["agent:main:main"]);
       removeAgentDeletionJournal("work", journal.operationId, { env: state.env });
       observed.queries.length = 0;
-      expect(
-        Object.keys(loadSdkStore(cfg, { configuredAgentsOnly: true }).store).toSorted(),
-      ).toEqual(["agent:main:main", "agent:work:main"]);
-      expect(observed.queries.filter((sql) => /agent_deletion_journal/i.test(sql))).toEqual([]);
+      expect(keys({ configuredAgentsOnly: true })).toEqual(both);
+      noDiscoverySql();
     } finally {
       observed.restore();
     }
@@ -369,16 +357,10 @@ it("reuses committed deletion facts for the synchronous SDK loader", async () =>
 it("reads committed shared-store changes without running discovery SQL on the host", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = state.statePath("shared.sqlite");
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {}, work: {} } },
-      session: { store: storePath },
-    };
-    seed({ agentId: "main", storePath, sessionKey: "agent:main:main" }, "main-session");
+    const cfg = fleet(["main", "work"], { store: storePath });
+    seed("main", "agent:main:main", "main-session", {}, storePath);
     await loadCombinedStoreAsync(cfg);
-    replaceSessionEntrySync(
-      { agentId: "work", storePath, sessionKey: "agent:work:new" },
-      { sessionId: "new-session", updatedAt: 2 },
-    );
+    seed("work", "agent:work:new", "new-session", { updatedAt: 2 }, storePath);
     await withoutHostSql(async () => {
       const result = await loadCombinedStoreAsync(cfg);
       expect(result.store["agent:work:new"]).toMatchObject({ sessionId: "new-session" });
@@ -388,8 +370,8 @@ it("reads committed shared-store changes without running discovery SQL on the ho
 
 it("retains selection and sentinel options while the worker read is queued", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    seed({ agentId: "main", sessionKey: "global" }, "captured-options");
+    const cfg = fleet();
+    seed("main", "global", "captured-options");
     const options = { agentId: "main", preserveSentinelOwners: true };
     const expected = loadCombinedStore(cfg, options).store;
     const pending = loadCombinedStoreAsync(cfg, options);
@@ -404,88 +386,71 @@ it("prepares foreign lineage without host SQL after main-alias changes", async (
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const parents = ["agent:main:main", "agent:main:home", "agent:main:global"];
     for (const [index, parent] of [...parents, "global"].entries()) {
-      seed({ agentId: "main", sessionKey: parent }, `parent-${index}`);
+      seed("main", parent, `parent-${index}`);
       if (index < parents.length) {
-        replaceSessionEntrySync(
-          { agentId: "work", sessionKey: `agent:work:child-${index}` },
-          {
-            sessionId: `child-${index}`,
-            updatedAt: 2,
-            parentSessionKey: parent,
-            spawnedBy: parent,
-          },
-        );
+        seed("work", `agent:work:child-${index}`, `child-${index}`, {
+          updatedAt: 2,
+          parentSessionKey: parent,
+          spawnedBy: parent,
+        });
       }
     }
     for (const scope of ["per-sender", "global"] as const) {
-      const cfg: OpenClawConfig = {
-        agents: { entries: { main: {}, work: {} } },
-        session: { mainKey: "home", scope },
-      };
+      const cfg = fleet(["main", "work"], { mainKey: "home", scope });
       for (const options of [{}, { agentId: "work" }]) {
         const expected = loadCombinedStore(cfg, options);
         await withoutHostSql(async () => {
-          const result = await loadCombinedStoreAsync(cfg, options);
-          expect(result.store).toEqual(expected.store);
+          const { store, targetsBySessionKey: targets } = await loadCombinedStoreAsync(
+            cfg,
+            options,
+          );
+          expect(store).toEqual(expected.store);
           for (const [index, parent] of parents.entries()) {
             const key = `agent:work:child-${index}`;
-            expect(result.store[key]).toMatchObject({
+            expect(store[key]).toMatchObject({
               parentSessionKey: parent,
               spawnedBy: parent,
             });
-            expect(result.targetsBySessionKey.get(key)?.readSourceEntry(parent)).toMatchObject({
+            expect(targets.get(key)?.readSourceEntry(parent)).toMatchObject({
               sessionId: `parent-${index}`,
             });
             if (!options.agentId) {
-              expect(result.store[parent]?.sessionId).toBe(`parent-${index}`);
+              expect(store[parent]?.sessionId).toBe(`parent-${index}`);
             }
           }
         });
       }
     }
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: parents[0]! },
-      { sessionId: "parent-after-write", updatedAt: 3 },
-    );
+    seed("main", parents[0]!, "parent-after-write", { updatedAt: 3 });
     await withoutHostSql(async () => {
-      const result = await loadCombinedStoreAsync(
-        { agents: { entries: { main: {}, work: {} } } },
+      const { targetsBySessionKey: targets } = await loadCombinedStoreAsync(
+        fleet(["main", "work"]),
         { agentId: "work" },
       );
-      expect(
-        result.targetsBySessionKey.get("agent:work:child-0")?.readSourceEntry(parents[0]!)
-          ?.sessionId,
-      ).toBe("parent-after-write");
+      expect(targets.get("agent:work:child-0")?.readSourceEntry(parents[0]!)).toMatchObject({
+        sessionId: "parent-after-write",
+      });
     });
   });
 });
 
 it("refreshes foreign parent aliases after committed writes without host SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {}, work: {} } },
-      session: { scope: "global" },
-    };
+    const cfg = fleet(["main", "work"], { scope: "global" });
     const parent = "agent:main:main";
     const key = "agent:work:child";
-    replaceSessionEntrySync(
-      { agentId: "work", sessionKey: key },
-      { sessionId: "child", updatedAt: 1, parentSessionKey: parent, spawnedBy: parent },
-    );
+    seed("work", key, "child", { parentSessionKey: parent, spawnedBy: parent });
     for (const model of ["before", "after"]) {
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: "global" },
-        { sessionId: "parent", updatedAt: 2, modelOverride: model },
-      );
+      seed("main", "global", "parent", { updatedAt: 2, modelOverride: model });
       await withoutHostSql(async () => {
-        const result = await loadCombinedStoreAsync(cfg, { agentId: "work" });
-        expect(result.store[key]).toMatchObject({
+        const { store, targetsBySessionKey: targets } = await loadCombinedStoreAsync(cfg, {
+          agentId: "work",
+        });
+        expect(store[key]).toMatchObject({
           parentSessionKey: "global",
           spawnedBy: "global",
         });
-        expect(result.targetsBySessionKey.get(key)?.readSourceEntry(parent)?.modelOverride).toBe(
-          model,
-        );
+        expect(targets.get(key)?.readSourceEntry(parent)).toMatchObject({ modelOverride: model });
       });
     }
   });
@@ -493,8 +458,8 @@ it("refreshes foreign parent aliases after committed writes without host SQL", a
 
 it("transfers a Windows-normalized environment through the real worker transport", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    seed({ agentId: "main", sessionKey: "agent:main:main" }, "windows-transfer");
+    const cfg = fleet();
+    seed("main", "agent:main:main", "windows-transfer");
     const { OPENCLAW_STATE_DIR, ...otherEnv } = process.env;
     const normalized = withMockedPlatform("win32", () =>
       configEnv.cloneEnvWithPlatformSemantics({
@@ -524,16 +489,7 @@ it("federates worker rows under the same physical owners and keeps incognito pro
       session: { store: storePath },
     };
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-    for (const agentId of ["main", "ops"]) {
-      replaceSessionEntrySync(
-        { agentId, storePath, sessionKey: `agent:${agentId}:main` },
-        {
-          sessionId: `${agentId}-session`,
-          updatedAt: 1,
-          spawnedCwd: `/project/${agentId}`,
-        },
-      );
-    }
+    seedAgents(["main", "ops"], (id) => ({ spawnedCwd: `/project/${id}` }), storePath);
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:dashboard:incognito-list" },
       { sessionId: "private", incognito: true, updatedAt: 2, spawnedCwd: "/private/project" },
@@ -554,7 +510,7 @@ it("federates worker rows under the same physical owners and keeps incognito pro
 
 it("lists current memory entries and owner changes alongside durable targets", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    const cfg = fleet();
     const key = "agent:main:dashboard:incognito-listing";
     const read = () => loadCombinedStoreAsync(cfg, { configuredAgentsOnly: true });
     expect((await read()).store[key]).toBeUndefined();
