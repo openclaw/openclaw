@@ -8,7 +8,10 @@ import {
   expandSessionRowFacts,
   SESSION_ROWS_DELTA_PREFIX,
 } from "../../packages/gateway-protocol/src/session-row-fields.js";
-import { requestSessionListParams } from "../../ui/src/lib/sessions/session-requests.js";
+import {
+  buildSessionListParams,
+  requestSessionListParams,
+} from "../../ui/src/lib/sessions/session-requests.js";
 import { createTestGatewayClient } from "../../ui/src/test-helpers/gateway-client.js";
 import {
   assignSessionOwner,
@@ -16,6 +19,12 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  releaseAgentRunContext,
+  rotateAgentRunRegistryLifecycleGeneration,
+} from "../infra/agent-run-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -29,6 +38,132 @@ import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("keeps unrelated sidebar views across session-ID-only run start, finish, abort and recovery", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const now = 1_800_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const context = requestContext({
+      ...rolePolicyConfig(),
+      agents: { entries: { main: {}, other: {} } },
+    });
+    const client = roleClient("view", "run-reader");
+    const other = roleClient("view", "run-owner");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    prepareGatewayRecipientProfile(other);
+    for (const [index, name] of ["alias-a", "alias-b", "unrelated"].entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: `agent:main:${name}` },
+        {
+          sessionId: name === "unrelated" ? name : "run-session",
+          updatedAt: now - index,
+          lastActivityAt: now - index - 10,
+          visibility: "shared",
+          label: name,
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: (name === "unrelated" ? client : other).authenticatedUserProfile!.profileId,
+          },
+        },
+      );
+    }
+    replaceSessionEntrySync(
+      { agentId: "other", sessionKey: "agent:other:same-id" },
+      { sessionId: "run-session", updatedAt: now, label: "Other agent", visibility: "shared" },
+    );
+    const primary = buildSessionListParams({
+      agentId: "main",
+      rowMode: "sidebar",
+      source: "sidebar",
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      ownerFirst: true,
+    });
+    const personal = { ...primary, ownerFirst: undefined, involvingMe: true };
+    const read = (request: SessionsListParams, base?: SessionsListResult) =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: {
+          ...request,
+          ...(base ? { ifRowsRevision: `delta:${base.rowsRevision}` } : {}),
+        },
+      });
+    const release = retainSessionListForegroundWork();
+    try {
+      const initial = await read(primary);
+      const initialPersonal = await read(personal);
+      const otherQuery = { ...primary, agentId: "other" };
+      const initialOther = await read(otherQuery);
+      expect(initialOther.count).toBe(1);
+      expect(
+        expandSessionRowFacts(initial.sessions, initial.sharedFacts).map((row) => row.key),
+      ).toEqual(["agent:main:unrelated", "agent:main:alias-a", "agent:main:alias-b"]);
+      expect(initialPersonal.count).toBe(1);
+      const changes = vi.fn();
+      getSessionRowProjection(context)!.onFactsChange(changes);
+      for (const ending of ["finish", "abort", "restart"] as const) {
+        changes.mockClear();
+        const claim = claimAgentRunContext(
+          "sidebar-run",
+          { agentId: "MAIN", sessionId: "run-session", projectSessionActive: true },
+          { trackOwner: true, ownsContext: true },
+        );
+        expect(changes.mock.calls).toEqual([
+          [{ kind: "row", key: "agent:main:alias-a" }],
+          [{ kind: "row", key: "agent:main:alias-b" }],
+        ]);
+        const active = await read(primary, initial);
+        expect(active.rowsDelta).toEqual({ baseRevision: initial.rowsRevision, order: [0, 3, 4] });
+        expect(expandSessionRowFacts(active.sessions, active.sharedFacts)).toEqual([
+          expect.objectContaining({
+            key: "agent:main:alias-a",
+            hasActiveRun: true,
+            lastActivityAt: now - 10,
+          }),
+          expect.objectContaining({
+            key: "agent:main:alias-b",
+            hasActiveRun: true,
+            lastActivityAt: now - 11,
+          }),
+        ]);
+        expect(await read(personal, initialPersonal)).toMatchObject({ rowsUnchanged: true });
+        expect(await read(otherQuery, initialOther)).toMatchObject({ rowsUnchanged: true });
+        if (ending === "restart") {
+          rotateAgentRunRegistryLifecycleGeneration();
+          expect(changes).toHaveBeenLastCalledWith({ kind: "reset" });
+        } else {
+          if (ending === "abort") {
+            clearAgentRunContext("sidebar-run");
+          }
+          releaseAgentRunContext("sidebar-run", claim);
+        }
+        const settled = await read(primary);
+        expect(expandSessionRowFacts(settled.sessions, settled.sharedFacts)).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              key: "agent:main:alias-a",
+              hasActiveRun: false,
+              lastActivityAt: now - 10,
+            }),
+            expect.objectContaining({
+              key: "agent:main:alias-b",
+              hasActiveRun: false,
+              lastActivityAt: now - 11,
+            }),
+          ]),
+        );
+      }
+    } finally {
+      clearAgentRunContext("sidebar-run");
+      getSessionRowProjection(context)?.dispose();
+      release();
+    }
+  });
+});
 
 it("encodes insertions, replacements, reorders and removals against an exact immutable base", () => {
   const a: GatewaySessionRow = {
