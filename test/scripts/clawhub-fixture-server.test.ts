@@ -213,6 +213,20 @@ describe("ClawHub fixture server", () => {
       [manifestPath],
       isolatedCwd,
     );
+    const assertRequests = (
+      attempts?: number | "complete",
+      minimumAttempts?: number,
+      url = baseUrl,
+    ) =>
+      runPrepublishAssertion(
+        url,
+        "@openclaw/whatsapp",
+        version,
+        "required",
+        isolatedCwd,
+        attempts,
+        minimumAttempts,
+      );
     expect(runNoRequestsAssertion(baseUrl, isolatedCwd).status).toBe(0);
     const stateDir = path.join(isolatedCwd, "state");
     const installPath = path.join(
@@ -379,16 +393,7 @@ ${runner.slice(boundary)}
     const unrelatedPending = runAutomaticChecks(null, "discord");
     expect(unrelatedPending.status).toBe(1);
     expect(unrelatedPending.stderr).toContain("whatsapp plugin install record missing");
-    expect(
-      runPrepublishAssertion(
-        baseUrl,
-        "@openclaw/whatsapp",
-        version,
-        "required",
-        isolatedCwd,
-        "complete",
-      ).status,
-    ).toBe(1);
+    expect(assertRequests("complete").status).toBe(1);
     const whatsappPath = `/api/v1/packages/${encodeURIComponent("@openclaw/whatsapp")}`;
     const detail = await fetchJson(baseUrl, whatsappPath);
     expect(detail.package).toMatchObject({
@@ -450,11 +455,15 @@ ${runner.slice(boundary)}
       },
     });
     expect(auditMessages).toHaveLength(1);
-    expect(auditMessages[0]).toContain("ClawHub Security Audit");
-    expect(auditMessages[0]).toContain("Outcome: Safe");
-    expect(auditMessages[0]).toContain("No security concerns found in the fixture release.");
-    expect(auditMessages[0]).toContain("Details:");
-    expect(auditMessages[0]).toContain(securityUrl);
+    for (const fragment of [
+      "ClawHub Security Audit",
+      "Outcome: Safe",
+      "No security concerns found in the fixture release.",
+      "Details:",
+      securityUrl,
+    ]) {
+      expect(auditMessages[0]).toContain(fragment);
+    }
     expect(trust).toEqual({
       ok: true,
       trustInstallRecordFields: {
@@ -472,18 +481,8 @@ ${runner.slice(boundary)}
       `GET ${whatsappPath}/versions/${version}/security`,
       `GET ${whatsappPath}/versions/${version}/artifact/download`,
     ]);
-    expect(
-      runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version, undefined, isolatedCwd).status,
-    ).toBe(0);
-    const completeWithMinimum = runPrepublishAssertion(
-      baseUrl,
-      "@openclaw/whatsapp",
-      version,
-      "required",
-      isolatedCwd,
-      "complete",
-      2,
-    );
+    expect(assertRequests().status).toBe(0);
+    const completeWithMinimum = assertRequests("complete", 2);
     expect(completeWithMinimum.status).toBe(1);
     expect(completeWithMinimum.stderr).toContain(
       "expected 2-16 complete ClawHub artifact audit sequences",
@@ -500,60 +499,32 @@ ${runner.slice(boundary)}
       `${whatsappPath}/versions/${version}/security`,
       `${whatsappPath}/versions/${version}/artifact/download`,
     ];
-    for (const requestPath of completeRequestPaths) {
-      const response = await fetch(`${baseUrl}${requestPath}`);
-      expect(response.status).toBe(200);
-      await response.arrayBuffer();
-    }
-    expect(
-      runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version, "required", isolatedCwd, 2)
-        .status,
-    ).toBe(0);
-    for (let attempt = 2; attempt < 4; attempt += 1) {
+    const requestSequence = async (url = baseUrl) => {
       for (const requestPath of completeRequestPaths) {
-        const response = await fetch(`${baseUrl}${requestPath}`);
+        const response = await fetch(`${url}${requestPath}`);
         expect(response.status).toBe(200);
         await response.arrayBuffer();
       }
+    };
+    await requestSequence();
+    expect(assertRequests(2).status).toBe(0);
+    for (let attempt = 2; attempt < 4; attempt += 1) {
+      await requestSequence();
     }
-    expect(runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version).status).toBe(1);
-    const complete = runPrepublishAssertion(
-      baseUrl,
-      "@openclaw/whatsapp",
-      version,
-      "required",
-      isolatedCwd,
-      "complete",
-      2,
-    );
+    expect(assertRequests().status).toBe(1);
+    const complete = assertRequests("complete", 2);
     expect(complete.status, complete.stderr).toBe(0);
     expect(complete.stdout).toContain("Verified 4 complete ClawHub artifact audit sequence(s).");
 
     expect((await fetch(`${baseUrl}${whatsappPath}`)).status).toBe(200);
-    const partial = runPrepublishAssertion(
-      baseUrl,
-      "@openclaw/whatsapp",
-      version,
-      "required",
-      isolatedCwd,
-      "complete",
-      2,
-    );
+    const partial = assertRequests("complete", 2);
     expect(partial.status).toBe(1);
 
     expect((await fetch(`${baseUrl}/api/v1/packages/%40openclaw%2Fforeign`)).status).toBe(404);
     for (const requestPath of completeRequestPaths.slice(1, 3)) {
       expect((await fetch(`${baseUrl}${requestPath}`)).status).toBe(200);
     }
-    const foreign = runPrepublishAssertion(
-      baseUrl,
-      "@openclaw/whatsapp",
-      version,
-      "required",
-      isolatedCwd,
-      "complete",
-      2,
-    );
+    const foreign = assertRequests("complete", 2);
     expect(foreign.status).toBe(1);
     expect(foreign.stderr).toContain("unexpected ClawHub fixture requests");
 
@@ -564,21 +535,9 @@ ${runner.slice(boundary)}
       isolatedCwd,
     );
     for (let attempt = 0; attempt < 17; attempt += 1) {
-      for (const requestPath of completeRequestPaths) {
-        const response = await fetch(`${maximumBaseUrl}${requestPath}`);
-        expect(response.status).toBe(200);
-        await response.arrayBuffer();
-      }
+      await requestSequence(maximumBaseUrl);
     }
-    const aboveMaximum = runPrepublishAssertion(
-      maximumBaseUrl,
-      "@openclaw/whatsapp",
-      version,
-      "required",
-      isolatedCwd,
-      "complete",
-      2,
-    );
+    const aboveMaximum = assertRequests("complete", 2, maximumBaseUrl);
     expect(aboveMaximum.status).toBe(1);
     expect(aboveMaximum.stderr).toContain(
       "expected 2-16 complete ClawHub artifact audit sequences",
@@ -597,10 +556,7 @@ ${runner.slice(boundary)}
       expect.arrayContaining([
         expect.objectContaining({
           score: 4,
-          package: expect.objectContaining({
-            name: "@acme/calendar",
-            family: "code-plugin",
-          }),
+          package: expect.objectContaining({ name: "@acme/calendar", family: "code-plugin" }),
         }),
       ]),
     );
@@ -613,10 +569,7 @@ ${runner.slice(boundary)}
       expect.arrayContaining([
         expect.objectContaining({
           score: 12,
-          package: expect.objectContaining({
-            name: "@acme/calendar",
-            family: "bundle-plugin",
-          }),
+          package: expect.objectContaining({ name: "@acme/calendar", family: "bundle-plugin" }),
         }),
       ]),
     );

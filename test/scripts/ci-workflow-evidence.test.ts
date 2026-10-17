@@ -3,13 +3,11 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -47,6 +45,18 @@ const MATURITY_GENERATED_PR_PATHS = [
   "docs/maturity/scorecard.md",
   "docs/maturity/taxonomy.md",
 ];
+
+function step<T extends { steps: WorkflowStep[] }>(job: T, name: string): T["steps"][number];
+function step(job: { steps: WorkflowStep[] }, name: string) {
+  return expectDefined(
+    job.steps.find((entry) => entry.name === name),
+    name,
+  );
+}
+
+function expectSuccess(result: { status: number | null; stdout: string; stderr: string }) {
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+}
 
 function workflowOccurrenceEvidence(
   instances: {
@@ -133,6 +143,12 @@ function writeWorkflowEvidenceApi(root: string, accessors = true) {
   );
 }
 
+function mantisScenarioId(kind: "status-reactions" | "thread-attachment") {
+  return kind === "status-reactions"
+    ? "discord-status-reactions-tool-only"
+    : "discord-thread-reply-filepath-attachment";
+}
+
 function runMantisEvidenceReader(
   kind: "status-reactions" | "thread-attachment",
   evidence: unknown,
@@ -157,10 +173,7 @@ function runMantisEvidenceReader(
       typeof evidence === "string" ? evidence : JSON.stringify(evidence),
     );
   }
-  const scenarioId =
-    kind === "status-reactions"
-      ? "discord-status-reactions-tool-only"
-      : "discord-thread-reply-filepath-attachment";
+  const scenarioId = mantisScenarioId(kind);
   writeFileSync(
     path.join(outputDir, "discord-qa-summary.json"),
     JSON.stringify({ scenarios: [{ id: scenarioId, status: "pass" }] }),
@@ -168,7 +181,7 @@ function runMantisEvidenceReader(
   const workflow = readWorkflow(`.github/workflows/mantis-discord-${kind}.yml`);
   const job = kind === "status-reactions" ? "run_status_reactions" : "run_thread_attachment";
   const script = expectDefined(
-    workflow.jobs[job].steps.find((step: WorkflowStep) => step.id === "run_mantis")?.run,
+    workflow.jobs[job].steps.find((entry: WorkflowStep) => entry.id === "run_mantis")?.run,
     "Mantis run script",
   );
   const functionName =
@@ -196,9 +209,7 @@ function runMaturityInvocationScenario(options: {
   publishPullRequest: boolean;
 }) {
   const workflow = readMaturityScorecardWorkflow();
-  const authorizeStep = workflow.jobs.validate_selected_ref.steps.find(
-    (step: { name?: string }) => step.name === "Authorize workflow invocation",
-  );
+  const authorizeStep = step(workflow.jobs.validate_selected_ref, "Authorize workflow invocation");
   const authorizeRun = spawnSync("bash", ["-c", authorizeStep.run], {
     encoding: "utf8",
     env: {
@@ -221,55 +232,49 @@ function runMaturityArtifactCopyScenario(
   options: { destinationSymlink?: boolean; extraFile?: boolean; sourceSymlink?: boolean } = {},
 ) {
   const workflow = readMaturityScorecardWorkflow();
-  const copyStep = workflow.jobs.publish_generated_pr.steps.find(
-    (step: { name?: string }) => step.name === "Validate and copy generated PR files",
-  );
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-maturity-copy-"));
+  const copyStep = step(workflow.jobs.publish_generated_pr, "Validate and copy generated PR files");
+  const root = tempDirs.make("openclaw-maturity-copy-");
   const staging = path.join(root, "staging");
-  try {
-    for (const generatedPath of MATURITY_GENERATED_PR_PATHS) {
-      const staged = path.join(staging, generatedPath);
-      const selected = path.join(root, "selected", generatedPath);
-      mkdirSync(path.dirname(staged), { recursive: true });
-      mkdirSync(path.dirname(selected), { recursive: true });
-      writeFileSync(staged, `new ${generatedPath}\n`, "utf8");
-      writeFileSync(selected, `old ${generatedPath}\n`, "utf8");
-    }
-    if (options.extraFile) {
-      writeFileSync(path.join(staging, "unexpected.txt"), "unexpected\n", "utf8");
-    }
-    const firstGeneratedPath = expectDefined(
-      MATURITY_GENERATED_PR_PATHS[0],
-      "first maturity generated PR path",
-    );
-    if (options.sourceSymlink) {
-      const staged = path.join(staging, firstGeneratedPath);
-      rmSync(staged);
-      symlinkSync("missing-score-source", staged);
-    }
-    const escaped = path.join(root, "escaped.txt");
-    if (options.destinationSymlink) {
-      const selected = path.join(root, "selected", firstGeneratedPath);
-      writeFileSync(escaped, "outside\n", "utf8");
-      rmSync(selected);
-      symlinkSync(escaped, selected);
-    }
-    const run = spawnSync("bash", ["-c", copyStep.run], {
-      cwd: root,
-      encoding: "utf8",
-      env: { PATH: process.env.PATH ?? "", STAGING_DIR: staging },
-    });
-    return {
-      copied: MATURITY_GENERATED_PR_PATHS.map((generatedPath) =>
-        readFileSync(path.join(root, "selected", generatedPath), "utf8"),
-      ),
-      escaped: existsSync(escaped) ? readFileSync(escaped, "utf8") : "",
-      output: `${run.stdout}${run.stderr}`,
-      status: run.status,
-    };
-  } finally {
-    rmSync(root, { force: true, recursive: true });
+  for (const generatedPath of MATURITY_GENERATED_PR_PATHS) {
+    const staged = path.join(staging, generatedPath);
+    const selected = path.join(root, "selected", generatedPath);
+    mkdirSync(path.dirname(staged), { recursive: true });
+    mkdirSync(path.dirname(selected), { recursive: true });
+    writeFileSync(staged, `new ${generatedPath}\n`, "utf8");
+    writeFileSync(selected, `old ${generatedPath}\n`, "utf8");
   }
+  if (options.extraFile) {
+    writeFileSync(path.join(staging, "unexpected.txt"), "unexpected\n", "utf8");
+  }
+  const firstGeneratedPath = expectDefined(
+    MATURITY_GENERATED_PR_PATHS[0],
+    "first maturity generated PR path",
+  );
+  if (options.sourceSymlink) {
+    const staged = path.join(staging, firstGeneratedPath);
+    rmSync(staged);
+    symlinkSync("missing-score-source", staged);
+  }
+  const escaped = path.join(root, "escaped.txt");
+  if (options.destinationSymlink) {
+    const selected = path.join(root, "selected", firstGeneratedPath);
+    writeFileSync(escaped, "outside\n", "utf8");
+    rmSync(selected);
+    symlinkSync(escaped, selected);
+  }
+  const run = spawnSync("bash", ["-c", copyStep.run], {
+    cwd: root,
+    encoding: "utf8",
+    env: { PATH: process.env.PATH ?? "", STAGING_DIR: staging },
+  });
+  return {
+    copied: MATURITY_GENERATED_PR_PATHS.map((generatedPath) =>
+      readFileSync(path.join(root, "selected", generatedPath), "utf8"),
+    ),
+    escaped: existsSync(escaped) ? readFileSync(escaped, "utf8") : "",
+    output: `${run.stdout}${run.stderr}`,
+    status: run.status,
+  };
 }
 
 function readQaProfileEvidenceWorkflow() {
@@ -279,16 +284,15 @@ function readQaProfileEvidenceWorkflow() {
 type QaProfileTimeoutFixtureMode = "natural-124" | "self-kill" | "term" | "kill";
 
 function runQaProfileTimeoutFixture(mode: QaProfileTimeoutFixtureMode) {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-qa-profile-timeout-"));
-  try {
-    const selectedRoot = path.join(root, "selected");
-    mkdirSync(selectedRoot);
-    const binDir = path.join(root, "bin");
-    mkdirSync(binDir);
-    const fakePnpm = path.join(binDir, "pnpm");
-    writeFileSync(
-      fakePnpm,
-      `#!/usr/bin/env bash
+  const root = tempDirs.make("openclaw-qa-profile-timeout-");
+  const selectedRoot = path.join(root, "selected");
+  mkdirSync(selectedRoot);
+  const binDir = path.join(root, "bin");
+  mkdirSync(binDir);
+  const fakePnpm = path.join(binDir, "pnpm");
+  writeFileSync(
+    fakePnpm,
+    `#!/usr/bin/env bash
 set -u
 echo "child-stderr-sentinel:\${FAKE_PNPM_MODE}" >&2
 echo "child-locale:\${LC_ALL-unset}" >&2
@@ -310,104 +314,88 @@ case "\${FAKE_PNPM_MODE}" in
     ;;
 esac
 `,
-      "utf8",
+    "utf8",
+  );
+  chmodSync(fakePnpm, 0o755);
+  const fixturePath = `${binDir}:${process.env.PATH ?? ""}`;
+  const timeoutVersion = spawnSync("timeout", ["--version"], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: fixturePath },
+  });
+  if (timeoutVersion.status !== 0) {
+    throw new Error(
+      `QA timeout fixture requires timeout --version: ${timeoutVersion.stdout}${timeoutVersion.stderr}`,
     );
-    chmodSync(fakePnpm, 0o755);
-    const fixturePath = `${binDir}:${process.env.PATH ?? ""}`;
-    const timeoutVersion = spawnSync("timeout", ["--version"], {
-      encoding: "utf8",
-      env: { ...process.env, PATH: fixturePath },
-    });
-    if (timeoutVersion.status !== 0) {
-      throw new Error(
-        `QA timeout fixture requires timeout --version: ${timeoutVersion.stdout}${timeoutVersion.stderr}`,
-      );
-    }
+  }
 
-    const workflow = readQaProfileEvidenceWorkflow();
-    const runProfileStep = expectDefined(
-      workflow.jobs.run_qa_profile_shard.steps.find(
-        (step: WorkflowStep) => step.name === "Run QA profile shard",
-      ),
-      "Run QA profile shard step",
-    );
-    let script = runProfileStep.run
-      .replace("--kill-after=30s 110m", "--kill-after=0.05s 0.4s")
-      .replaceAll("110 minutes", "0.4 seconds")
-      .replaceAll("30-second", "0.05-second");
-    const timeoutSupervisorCapture = path.join(root, "timeout-supervisor.log");
-    const timeoutClassificationStart = `supervisor_tee_pid=""
+  const workflow = readQaProfileEvidenceWorkflow();
+  const runProfileStep = step(workflow.jobs.run_qa_profile_shard, "Run QA profile shard");
+  let script = runProfileStep.run
+    .replace("--kill-after=30s 110m", "--kill-after=0.05s 0.4s")
+    .replaceAll("110 minutes", "0.4 seconds")
+    .replaceAll("30-second", "0.05-second");
+  const timeoutSupervisorCapture = path.join(root, "timeout-supervisor.log");
+  const timeoutClassificationStart = `supervisor_tee_pid=""
 
 timeout_outcome="none"`;
-    // Bash writes killed-job diagnostics outside timeout's redirected stream. Capture the
-    // authoritative supervisor log before the workflow's EXIT trap removes it.
-    const capturedScript = script.replace(
-      timeoutClassificationStart,
-      `supervisor_tee_pid=""
+  // Bash writes killed-job diagnostics outside timeout's redirected stream. Capture the
+  // authoritative supervisor log before the workflow's EXIT trap removes it.
+  const capturedScript = script.replace(
+    timeoutClassificationStart,
+    `supervisor_tee_pid=""
 cp "$timeout_supervisor_log" "$TIMEOUT_SUPERVISOR_CAPTURE"
 
 timeout_outcome="none"`,
-    );
-    if (capturedScript === script) {
-      throw new Error("QA timeout fixture could not capture the timeout supervisor log");
-    }
-    script = capturedScript;
-    const githubOutput = path.join(root, "github-output");
-    const run = runWorkflowShellScript(script, {
-      cwd: selectedRoot,
-      env: {
-        ...process.env,
-        FAKE_PNPM_MODE: mode,
-        GITHUB_OUTPUT: githubOutput,
-        GITHUB_RUN_ATTEMPT: "1",
-        GITHUB_RUN_ID: "42",
-        GITHUB_WORKSPACE: root,
-        LC_ALL: "POSIX",
-        PATH: fixturePath,
-        CATEGORY_IDS_JSON: '["fixture.category"]',
-        PROTOCOL_SINCE_BASE_SHA: "b".repeat(40),
-        QA_PROFILE: "all",
-        QA_SHARD_ID: "shard-01",
-        REQUESTED_REF: "fixture",
-        SCENARIO_IDS_JSON: '["fixture-scenario"]',
-        TARGET_SHA: "a".repeat(40),
-        TIMEOUT_SUPERVISOR_CAPTURE: timeoutSupervisorCapture,
-      },
-    });
-    const outputDir = path.join(
-      selectedRoot,
-      ".artifacts",
-      "qa-e2e",
-      "profile-all-42-1",
-      "shard-01",
-    );
-    const status = JSON.parse(
-      readFileSync(path.join(outputDir, "qa-profile-run-status.json"), "utf8"),
-    ) as {
-      exitCode: number;
-      target: { protocolBaseSha: string };
-      timedOut: boolean;
-      timeoutOutcome: "none" | "term" | "kill";
-    };
-    return {
-      commandStatus: run.status,
-      githubOutput: readFileSync(githubOutput, "utf8"),
-      status,
-      stderr: run.stderr,
-      stdout: run.stdout,
-      timeoutSupervisorLog: readFileSync(timeoutSupervisorCapture, "utf8"),
-      timeoutVersion: `${timeoutVersion.stdout}${timeoutVersion.stderr}`.trim(),
-    };
-  } finally {
-    rmSync(root, { force: true, recursive: true });
+  );
+  if (capturedScript === script) {
+    throw new Error("QA timeout fixture could not capture the timeout supervisor log");
   }
+  script = capturedScript;
+  const githubOutput = path.join(root, "github-output");
+  const run = runWorkflowShellScript(script, {
+    cwd: selectedRoot,
+    env: {
+      ...process.env,
+      FAKE_PNPM_MODE: mode,
+      GITHUB_OUTPUT: githubOutput,
+      GITHUB_RUN_ATTEMPT: "1",
+      GITHUB_RUN_ID: "42",
+      GITHUB_WORKSPACE: root,
+      LC_ALL: "POSIX",
+      PATH: fixturePath,
+      CATEGORY_IDS_JSON: '["fixture.category"]',
+      PROTOCOL_SINCE_BASE_SHA: "b".repeat(40),
+      QA_PROFILE: "all",
+      QA_SHARD_ID: "shard-01",
+      REQUESTED_REF: "fixture",
+      SCENARIO_IDS_JSON: '["fixture-scenario"]',
+      TARGET_SHA: "a".repeat(40),
+      TIMEOUT_SUPERVISOR_CAPTURE: timeoutSupervisorCapture,
+    },
+  });
+  const outputDir = path.join(selectedRoot, ".artifacts", "qa-e2e", "profile-all-42-1", "shard-01");
+  const status = JSON.parse(
+    readFileSync(path.join(outputDir, "qa-profile-run-status.json"), "utf8"),
+  ) as {
+    exitCode: number;
+    target: { protocolBaseSha: string };
+    timedOut: boolean;
+    timeoutOutcome: "none" | "term" | "kill";
+  };
+  return {
+    commandStatus: run.status,
+    githubOutput: readFileSync(githubOutput, "utf8"),
+    status,
+    stderr: run.stderr,
+    stdout: run.stdout,
+    timeoutSupervisorLog: readFileSync(timeoutSupervisorCapture, "utf8"),
+    timeoutVersion: `${timeoutVersion.stdout}${timeoutVersion.stderr}`.trim(),
+  };
 }
 
 function runQaProfileFailureGate(options: { allowFailures: boolean; qaExitCode?: string }) {
   const workflow = readQaProfileEvidenceWorkflow();
-  const failStep = workflow.jobs.aggregate_qa_profile.steps.find(
-    (step: WorkflowStep) => step.name === "Fail if QA profile failed",
-  );
+  const failStep = step(workflow.jobs.aggregate_qa_profile, "Fail if QA profile failed");
   return spawnSync("bash", ["-c", failStep.run], {
     encoding: "utf8",
     env: {
@@ -540,11 +528,9 @@ function runQaSelectedRefValidation(
   runGit(topology.checkout, ["checkout", "-q", "--detach", revision]);
   const githubOutput = path.join(topology.checkout, "github-output");
   rmSync(githubOutput, { force: true });
-  const validateStep = expectDefined(
-    readQaProfileEvidenceWorkflow().jobs.validate_selected_ref.steps.find(
-      (step: WorkflowStep) => step.name === "Validate selected ref",
-    ),
-    "QA profile selected-ref validation step",
+  const validateStep = step(
+    readQaProfileEvidenceWorkflow().jobs.validate_selected_ref,
+    "Validate selected ref",
   );
   const result = runWorkflowShellScript(expectDefined(validateStep.run, "validation script"), {
     cwd: topology.checkout,
@@ -611,7 +597,7 @@ describe("ci workflow guards", () => {
 
       for (const [inputRef, revision, trustedReason, protocolBase] of cases) {
         const result = runQaSelectedRefValidation(topology, inputRef, revision);
-        expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+        expectSuccess(result);
         expect(result.outputs).toEqual({
           protocol_base_revision: protocolBase,
           selected_revision: revision,
@@ -621,15 +607,12 @@ describe("ci workflow guards", () => {
 
       runGit(topology.checkout, ["checkout", "-q", "--detach", topology.mainHead]);
       const mainCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
-      expect(mainCheck.status, `${mainCheck.stdout}${mainCheck.stderr}`).toBe(0);
+      expectSuccess(mainCheck);
       expect(mainCheck.stdout).toContain("1 new core method");
 
       runGit(topology.checkout, ["checkout", "-q", "--detach", topology.compatibilityHead]);
       const compatibilityCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
-      expect(
-        compatibilityCheck.status,
-        `${compatibilityCheck.stdout}${compatibilityCheck.stderr}`,
-      ).toBe(0);
+      expectSuccess(compatibilityCheck);
       expect(compatibilityCheck.stdout).toContain("1 restored compatibility method");
 
       runGit(topology.checkout, ["checkout", "-q", "--detach", topology.invalidCompatibilityHead]);
@@ -667,25 +650,11 @@ describe("ci workflow guards", () => {
       const validateJob = qaWorkflow.jobs.validate_selected_ref;
       const runJob = qaWorkflow.jobs.run_qa_profile_shard;
       const aggregateJob = qaWorkflow.jobs.aggregate_qa_profile;
-      const stepNames = runJob.steps.map((step: WorkflowStep) => step.name);
-      const buildStep = expectDefined(
-        runJob.steps.find((step: WorkflowStep) => step.name === "Build private QA runtime"),
-        "private QA runtime build",
-      );
-      const fetchStep = expectDefined(
-        runJob.steps.find((step: WorkflowStep) => step.name === "Fetch protocol comparison base"),
-        "protocol comparison base fetch",
-      );
-      const runStep = expectDefined(
-        runJob.steps.find((step: WorkflowStep) => step.name === "Run QA profile shard"),
-        "QA profile shard run",
-      );
-      const evidenceStep = expectDefined(
-        aggregateJob.steps.find(
-          (step: WorkflowStep) => step.name === "Finalize QA profile evidence",
-        ),
-        "QA profile evidence finalization",
-      );
+      const stepNames = runJob.steps.map((entry: WorkflowStep) => entry.name);
+      const buildStep = step(runJob, "Build private QA runtime");
+      const fetchStep = step(runJob, "Fetch protocol comparison base");
+      const runStep = step(runJob, "Run QA profile shard");
+      const evidenceStep = step(aggregateJob, "Finalize QA profile evidence");
       const protocolOutput = "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}";
       const trustedInput = "${{ inputs.trusted_ref || inputs.ref }}";
 
@@ -700,10 +669,7 @@ describe("ci workflow guards", () => {
       expect(validateJob.outputs.protocol_base_revision).toBe(
         "${{ steps.validate.outputs.protocol_base_revision }}",
       );
-      const validateStep = expectDefined(
-        validateJob.steps.find((step: WorkflowStep) => step.name === "Validate selected ref"),
-        "QA selected-ref validation",
-      );
+      const validateStep = step(validateJob, "Validate selected ref");
       expect(validateStep.env.INPUT_REF).toBe(trustedInput);
       const ordered = [
         "Checkout trusted QA harness",
@@ -754,7 +720,7 @@ describe("ci workflow guards", () => {
         );
 
       const success = runFetch(topology.mainBase);
-      expect(success.status, `${success.stdout}${success.stderr}`).toBe(0);
+      expectSuccess(success);
       expect(runGit(checkout, ["rev-parse", "refs/remotes/origin/qa-protocol-base"])).toBe(
         topology.mainBase,
       );
@@ -770,36 +736,20 @@ describe("ci workflow guards", () => {
   it.skipIf(process.platform !== "linux")(
     "classifies QA timeouts only from isolated supervisor diagnostics",
     () => {
-      const scenarios = [
-        {
-          exitCode: 124,
-          mode: "natural-124",
-          supervisorSignals: [],
-          timedOut: false,
-          timeoutOutcome: "none",
-        },
-        {
-          exitCode: 137,
-          mode: "self-kill",
-          supervisorSignals: [],
-          timedOut: false,
-          timeoutOutcome: "none",
-        },
-        {
-          exitCode: 124,
-          mode: "term",
-          supervisorSignals: ["TERM"],
-          timedOut: true,
-          timeoutOutcome: "term",
-        },
-        {
-          exitCode: 137,
-          mode: "kill",
-          supervisorSignals: ["TERM", "KILL"],
-          timedOut: true,
-          timeoutOutcome: "kill",
-        },
-      ] as const;
+      const scenarios = (
+        [
+          ["natural-124", 124, [], false, "none"],
+          ["self-kill", 137, [], false, "none"],
+          ["term", 124, ["TERM"], true, "term"],
+          ["kill", 137, ["TERM", "KILL"], true, "kill"],
+        ] as const
+      ).map(([mode, exitCode, supervisorSignals, timedOut, timeoutOutcome]) => ({
+        mode,
+        exitCode,
+        supervisorSignals,
+        timedOut,
+        timeoutOutcome,
+      }));
 
       for (const scenario of scenarios) {
         const result = runQaProfileTimeoutFixture(scenario.mode);
@@ -849,11 +799,6 @@ describe("ci workflow guards", () => {
   it("isolates trusted QA and publication authority across the evidence handoff", () => {
     const maturity = readMaturityScorecardWorkflow();
     const qa = readQaProfileEvidenceWorkflow();
-    const step = (job: { steps: WorkflowStep[] }, name: string) =>
-      expectDefined(
-        job.steps.find((entry) => entry.name === name),
-        name,
-      );
     const selectedJobs = [
       qa.jobs.plan_qa_profile,
       qa.jobs.run_qa_profile_shard,
@@ -1170,12 +1115,9 @@ describe("ci workflow guards", () => {
     },
   ])("Mantis evidence readers retain $name", ({ evidence, expected, accessors = true }) => {
     for (const [index, kind] of (["status-reactions", "thread-attachment"] as const).entries()) {
-      const scenarioId =
-        kind === "status-reactions"
-          ? "discord-status-reactions-tool-only"
-          : "discord-thread-reply-filepath-attachment";
+      const scenarioId = mantisScenarioId(kind);
       const result = runMantisEvidenceReader(kind, evidence(scenarioId), accessors);
-      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      expectSuccess(result);
       expect(result.stdout.trim()).toBe(expected[index]);
     }
   });
@@ -1186,10 +1128,7 @@ describe("ci workflow guards", () => {
     "Mantis evidence readers reject %s without legacy fallback",
     (invalid) => {
       for (const kind of ["status-reactions", "thread-attachment"] as const) {
-        const scenarioId =
-          kind === "status-reactions"
-            ? "discord-status-reactions-tool-only"
-            : "discord-thread-reply-filepath-attachment";
+        const scenarioId = mantisScenarioId(kind);
         const evidence = workflowOccurrenceEvidence([
           { scenarioId, attempts: ["pass"], selected: 0 },
         ]);
@@ -1215,12 +1154,11 @@ describe("ci workflow guards", () => {
     () => {
       const qaWorkflow = readQaProfileEvidenceWorkflow();
       const maturityWorkflow = readMaturityScorecardWorkflow();
-      const producerStep = qaWorkflow.jobs.aggregate_qa_profile.steps.find(
-        (step: WorkflowStep) => step.name === "Finalize QA profile evidence",
+      const producerStep = step(
+        qaWorkflow.jobs.aggregate_qa_profile,
+        "Finalize QA profile evidence",
       );
-      const consumerStep = maturityWorkflow.jobs.publish.steps.find(
-        (step: WorkflowStep) => step.name === "Validate QA evidence manifest",
-      );
+      const consumerStep = step(maturityWorkflow.jobs.publish, "Validate QA evidence manifest");
       const producerScript = expectDefined(producerStep?.run, "QA evidence producer script");
       const consumerScript = expectDefined(consumerStep?.run, "QA evidence consumer script");
       const root = tempDirs.make("openclaw-qa-profile-artifact-");
@@ -1240,37 +1178,27 @@ describe("ci workflow guards", () => {
         executionKind: "flow",
         channel: null,
       };
+      const fulfillment = {
+        total: 1,
+        fulfilled: 1,
+        missing: 0,
+        fulfillmentPercent: 100,
+      };
+      const features = { ...fulfillment, partial: 0 };
       const scorecard = {
         filters: { surface: null, category: null },
         run: { evidenceEntryCount: 0 },
-        categories: { total: 1, fulfilled: 1, partial: 0, missing: 0, fulfillmentPercent: 100 },
-        features: { total: 1, fulfilled: 1, partial: 0, missing: 0, fulfillmentPercent: 100 },
-        coverageIds: {
-          total: 1,
-          fulfilled: 1,
-          missing: 0,
-          fulfillmentPercent: 100,
-        },
+        categories: features,
+        features,
+        coverageIds: fulfillment,
         categoryReports: [
           {
             id: "surface.category",
             surfaceId: "surface",
             name: "Category",
             status: "fulfilled",
-            features: {
-              total: 1,
-              fulfilled: 1,
-              partial: 0,
-              missing: 0,
-              fulfillmentPercent: 100,
-            },
-            coverageIds: {
-              total: 1,
-              fulfilled: 1,
-              missing: 0,
-              fulfillmentPercent: 100,
-              secondaryOnly: 0,
-            },
+            features,
+            coverageIds: { ...fulfillment, secondaryOnly: 0 },
             missingCoverageIds: [],
           },
         ],
@@ -1345,171 +1273,154 @@ describe("ci workflow guards", () => {
           },
         });
 
-      try {
-        writeEvidence();
-        const completeProducer = runProducer("0");
-        expect(
-          completeProducer.status,
-          `${completeProducer.stdout}${completeProducer.stderr}`,
-        ).toBe(0);
-        const completeManifest = readFileSync(manifestPath, "utf8");
-        expect(JSON.parse(completeManifest)).toMatchObject({
-          protocolBaseSha,
-          targetSha,
-        });
-        const completeConsumer = runConsumer();
-        expect(
-          completeConsumer.status,
-          `${completeConsumer.stdout}${completeConsumer.stderr}`,
-        ).toBe(0);
-        expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
-          "scorecard_passed=true",
+      writeEvidence();
+      const completeProducer = runProducer("0");
+      expectSuccess(completeProducer);
+      const completeManifest = readFileSync(manifestPath, "utf8");
+      expect(JSON.parse(completeManifest)).toMatchObject({
+        protocolBaseSha,
+        targetSha,
+      });
+      const completeConsumer = runConsumer();
+      expectSuccess(completeConsumer);
+      expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
+        "scorecard_passed=true",
+      );
+
+      const originalEvidence = JSON.parse(readFileSync(evidencePath, "utf8"));
+      writeFileSync(evidencePath, JSON.stringify({ ...originalEvidence, evidenceMode: "slim" }));
+      const oldApiSlim = runConsumer();
+      expectSuccess(oldApiSlim);
+      expect(readFileSync(manifestPath, "utf8")).toBe(completeManifest);
+
+      const retryEvidence = {
+        ...originalEvidence,
+        ...workflowOccurrenceEvidence([
+          { scenarioId: "scenario-one", attempts: ["fail", "pass"], selected: 1 },
+        ]),
+        profile: originalEvidence.profile,
+        profilePlan: originalEvidence.profilePlan,
+        scorecard,
+      };
+      writeFileSync(evidencePath, JSON.stringify(retryEvidence));
+      const missingReader = runConsumer();
+      expect(missingReader.status).toBe(1);
+      expect(`${missingReader.stdout}${missingReader.stderr}`).toContain(
+        "requires the selected checkout's effective-entry reader",
+      );
+      writeWorkflowEvidenceApi(selectedRoot);
+
+      for (const evidenceMode of ["full", "slim"] as const) {
+        writeFileSync(evidencePath, JSON.stringify({ ...retryEvidence, evidenceMode }));
+        const producer = runProducer("0");
+        expectSuccess(producer);
+        expect(JSON.parse(readFileSync(manifestPath, "utf8")).profilePlanSha256).toBe(
+          JSON.parse(completeManifest).profilePlanSha256,
         );
+        writeFileSync(path.join(root, "consumer-output"), "");
+        const consumer = runConsumer();
+        expectSuccess(consumer);
+        const output = readFileSync(path.join(root, "consumer-output"), "utf8");
+        expect(output).toContain("scorecard_passed=true");
+        expect(output).toContain("passed_count=1");
+        expect(output).toContain("failed_count=0");
+      }
 
-        const originalEvidence = JSON.parse(readFileSync(evidencePath, "utf8"));
-        writeFileSync(evidencePath, JSON.stringify({ ...originalEvidence, evidenceMode: "slim" }));
-        const oldApiSlim = runConsumer();
-        expect(oldApiSlim.status, `${oldApiSlim.stdout}${oldApiSlim.stderr}`).toBe(0);
-        expect(readFileSync(manifestPath, "utf8")).toBe(completeManifest);
+      for (const obligation of ["required", "advisory"] as const) {
+        const declared = {
+          ...retryEvidence,
+          profilePlan: {
+            ...retryEvidence.profilePlan,
+            proofRequirements: [
+              {
+                id: "observed-protocol",
+                coverageId: "qa.reporting",
+                obligation,
+                owner: "fixture-owner",
+                acceptedRef: "qa/fixtures/acceptance",
+                retryAcceptance: "selected-attempt",
+                alternatives: [{ protocol: "gateway:3" }],
+              },
+            ],
+          },
+        };
+        writeFileSync(evidencePath, JSON.stringify(declared));
+        const producer = runProducer("0");
+        expectSuccess(producer);
+        const consumer = runConsumer();
+        expect(consumer.status, `${consumer.stdout}${consumer.stderr}`).toBe(
+          obligation === "required" ? 1 : 0,
+        );
+        if (obligation === "required") {
+          expect(`${consumer.stdout}${consumer.stderr}`).toContain(
+            "observed-protocol (insufficient)",
+          );
+        }
+      }
+      writeFileSync(manifestPath, completeManifest);
 
-        const retryEvidence = {
+      for (const status of ["fail", "blocked"] as const) {
+        const parentFailure = {
           ...originalEvidence,
           ...workflowOccurrenceEvidence([
-            { scenarioId: "scenario-one", attempts: ["fail", "pass"], selected: 1 },
+            // Parent failure is independent of the child, not a retry of its pass.
+            { scenarioId: "scenario-one", attempts: ["pass", status], selected: 1, retry: false },
           ]),
           profile: originalEvidence.profile,
           profilePlan: originalEvidence.profilePlan,
           scorecard,
         };
-        writeFileSync(evidencePath, JSON.stringify(retryEvidence));
-        const missingReader = runConsumer();
-        expect(missingReader.status).toBe(1);
-        expect(`${missingReader.stdout}${missingReader.stderr}`).toContain(
-          "requires the selected checkout's effective-entry reader",
-        );
-        writeWorkflowEvidenceApi(selectedRoot);
-
-        for (const evidenceMode of ["full", "slim"] as const) {
-          writeFileSync(evidencePath, JSON.stringify({ ...retryEvidence, evidenceMode }));
-          const producer = runProducer("0");
-          expect(producer.status, `${producer.stdout}${producer.stderr}`).toBe(0);
-          expect(JSON.parse(readFileSync(manifestPath, "utf8")).profilePlanSha256).toBe(
-            JSON.parse(completeManifest).profilePlanSha256,
-          );
-          writeFileSync(path.join(root, "consumer-output"), "");
-          const consumer = runConsumer();
-          expect(consumer.status, `${consumer.stdout}${consumer.stderr}`).toBe(0);
-          const output = readFileSync(path.join(root, "consumer-output"), "utf8");
-          expect(output).toContain("scorecard_passed=true");
-          expect(output).toContain("passed_count=1");
-          expect(output).toContain("failed_count=0");
-        }
-
-        for (const obligation of ["required", "advisory"] as const) {
-          const declared = {
-            ...retryEvidence,
-            profilePlan: {
-              ...retryEvidence.profilePlan,
-              proofRequirements: [
-                {
-                  id: "observed-protocol",
-                  coverageId: "qa.reporting",
-                  obligation,
-                  owner: "fixture-owner",
-                  acceptedRef: "qa/fixtures/acceptance",
-                  retryAcceptance: "selected-attempt",
-                  alternatives: [{ protocol: "gateway:3" }],
-                },
-              ],
-            },
-          };
-          writeFileSync(evidencePath, JSON.stringify(declared));
-          const producer = runProducer("0");
-          expect(producer.status, `${producer.stdout}${producer.stderr}`).toBe(0);
-          const consumer = runConsumer();
-          expect(consumer.status, `${consumer.stdout}${consumer.stderr}`).toBe(
-            obligation === "required" ? 1 : 0,
-          );
-          if (obligation === "required") {
-            expect(`${consumer.stdout}${consumer.stderr}`).toContain(
-              "observed-protocol (insufficient)",
-            );
-          }
-        }
-        writeFileSync(manifestPath, completeManifest);
-
-        for (const status of ["fail", "blocked"] as const) {
-          const parentFailure = {
-            ...originalEvidence,
-            ...workflowOccurrenceEvidence([
-              // Parent failure is independent of the child, not a retry of its pass.
-              { scenarioId: "scenario-one", attempts: ["pass", status], selected: 1, retry: false },
-            ]),
-            profile: originalEvidence.profile,
-            profilePlan: originalEvidence.profilePlan,
-            scorecard,
-          };
-          writeFileSync(evidencePath, JSON.stringify(parentFailure));
-          writeFileSync(path.join(root, "consumer-output"), "");
-          const consumer = runConsumer();
-          expect(consumer.status, `${consumer.stdout}${consumer.stderr}`).toBe(0);
-          const output = readFileSync(path.join(root, "consumer-output"), "utf8");
-          expect(output).toContain("scorecard_passed=false");
-          expect(output).toContain("passed_count=1");
-          expect(output).toContain(`${status === "fail" ? "failed" : "blocked"}_count=1`);
-        }
-
-        writeFileSync(evidencePath, JSON.stringify(retryEvidence));
-        writeFileSync(
-          manifestPath,
-          JSON.stringify({ ...JSON.parse(completeManifest), qaPassed: false }),
-        );
+        writeFileSync(evidencePath, JSON.stringify(parentFailure));
         writeFileSync(path.join(root, "consumer-output"), "");
-        const failedProducer = runConsumer();
-        expect(failedProducer.status, `${failedProducer.stdout}${failedProducer.stderr}`).toBe(0);
-        expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
-          "scorecard_passed=false",
-        );
-        writeFileSync(
-          manifestPath,
-          JSON.stringify({ ...JSON.parse(completeManifest), targetSha: protocolBaseSha }),
-        );
-        const wrongSource = runConsumer();
-        expect(wrongSource.status).toBe(1);
-        expect(`${wrongSource.stdout}${wrongSource.stderr}`).toContain(
-          "does not match selected ref",
-        );
-        writeFileSync(manifestPath, completeManifest);
-        const invalidBinding = structuredClone(retryEvidence);
-        invalidBinding.entries[0]!.binding.occurrenceId = "foreign";
-        writeFileSync(evidencePath, JSON.stringify(invalidBinding));
-        expect(runConsumer().status).toBe(1);
-
-        writeEvidence("fail");
-        writeFileSync(path.join(root, "consumer-output"), "", "utf8");
-        const failedEvidenceConsumer = runConsumer();
-        expect(
-          failedEvidenceConsumer.status,
-          `${failedEvidenceConsumer.stdout}${failedEvidenceConsumer.stderr}`,
-        ).toBe(0);
-        expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
-          "scorecard_passed=false",
-        );
-        expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
-          "failed_count=1",
-        );
-
-        const manifest = JSON.parse(completeManifest) as Record<string, unknown>;
-        manifest.profilePlanSha256 = "0".repeat(64);
-        writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, "utf8");
-        const mismatched = runConsumer();
-        expect(mismatched.status).toBe(1);
-        expect(`${mismatched.stdout}${mismatched.stderr}`).toContain(
-          "QA evidence profilePlan digest does not match the manifest",
-        );
-      } finally {
-        rmSync(root, { force: true, recursive: true });
+        const consumer = runConsumer();
+        expectSuccess(consumer);
+        const output = readFileSync(path.join(root, "consumer-output"), "utf8");
+        expect(output).toContain("scorecard_passed=false");
+        expect(output).toContain("passed_count=1");
+        expect(output).toContain(`${status === "fail" ? "failed" : "blocked"}_count=1`);
       }
+
+      writeFileSync(evidencePath, JSON.stringify(retryEvidence));
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({ ...JSON.parse(completeManifest), qaPassed: false }),
+      );
+      writeFileSync(path.join(root, "consumer-output"), "");
+      const failedProducer = runConsumer();
+      expectSuccess(failedProducer);
+      expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
+        "scorecard_passed=false",
+      );
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({ ...JSON.parse(completeManifest), targetSha: protocolBaseSha }),
+      );
+      const wrongSource = runConsumer();
+      expect(wrongSource.status).toBe(1);
+      expect(`${wrongSource.stdout}${wrongSource.stderr}`).toContain("does not match selected ref");
+      writeFileSync(manifestPath, completeManifest);
+      const invalidBinding = structuredClone(retryEvidence);
+      invalidBinding.entries[0]!.binding.occurrenceId = "foreign";
+      writeFileSync(evidencePath, JSON.stringify(invalidBinding));
+      expect(runConsumer().status).toBe(1);
+
+      writeEvidence("fail");
+      writeFileSync(path.join(root, "consumer-output"), "", "utf8");
+      const failedEvidenceConsumer = runConsumer();
+      expectSuccess(failedEvidenceConsumer);
+      expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
+        "scorecard_passed=false",
+      );
+      expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain("failed_count=1");
+
+      const manifest = JSON.parse(completeManifest) as Record<string, unknown>;
+      manifest.profilePlanSha256 = "0".repeat(64);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, "utf8");
+      const mismatched = runConsumer();
+      expect(mismatched.status).toBe(1);
+      expect(`${mismatched.stdout}${mismatched.stderr}`).toContain(
+        "QA evidence profilePlan digest does not match the manifest",
+      );
     },
   );
 
@@ -1517,8 +1428,9 @@ describe("ci workflow guards", () => {
     "fails the maturity workflow result gate when evidence is not passing",
     () => {
       const maturityWorkflow = readMaturityScorecardWorkflow();
-      const gateStep = maturityWorkflow.jobs.maturity_result.steps.find(
-        (step: WorkflowStep) => step.name === "Fail incomplete maturity evidence",
+      const gateStep = step(
+        maturityWorkflow.jobs.maturity_result,
+        "Fail incomplete maturity evidence",
       );
       const gateScript = expectDefined(gateStep?.run, "maturity result gate");
       const failed = runWorkflowShellScript(gateScript, {
@@ -1627,22 +1539,21 @@ describe("ci workflow guards", () => {
     const fullReleaseWorkflow = readWorkflow(".github/workflows/full-release-validation.yml");
     const releaseWorkflow = readReleaseChecksWorkflow();
     const telegramWorkflow = readWorkflow(".github/workflows/openclaw-release-telegram-qa.yml");
-    const fullReleaseDispatchStep = fullReleaseWorkflow.jobs.release_checks_candidate.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch release checks candidate phase",
+    const fullReleaseDispatchStep = step(
+      fullReleaseWorkflow.jobs.release_checks_candidate,
+      "Dispatch release checks candidate phase",
     );
-    const dispatchStep = releaseWorkflow.jobs.qa_live_telegram_release_checks.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch and await trusted Telegram QA",
+    const dispatchStep = step(
+      releaseWorkflow.jobs.qa_live_telegram_release_checks,
+      "Dispatch and await trusted Telegram QA",
     );
-    const identityStep = telegramWorkflow.jobs.trusted_identity.steps.find(
-      (step: WorkflowStep) => step.name === "Verify dispatched workflow identity",
+    const identityStep = step(
+      telegramWorkflow.jobs.trusted_identity,
+      "Verify dispatched workflow identity",
     );
     const provenanceSteps = [
-      telegramWorkflow.jobs.build_candidate.steps.find(
-        (step: WorkflowStep) => step.name === "Validate candidate release provenance",
-      ),
-      telegramWorkflow.jobs.run_telegram.steps.find(
-        (step: WorkflowStep) => step.name === "Revalidate candidate release provenance",
-      ),
+      step(telegramWorkflow.jobs.build_candidate, "Validate candidate release provenance"),
+      step(telegramWorkflow.jobs.run_telegram, "Revalidate candidate release provenance"),
     ];
 
     expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.target_context_ref).toMatchObject({
@@ -1686,9 +1597,7 @@ describe("ci workflow guards", () => {
 
   it("checks out the complete trusted Release Decision scripts tree", () => {
     const workflow = readWorkflow(".github/workflows/full-release-validation.yml");
-    const checkout = workflow.jobs.release_decision.steps.find(
-      (step: WorkflowStep) => step.name === "Checkout release decision tooling",
-    );
+    const checkout = step(workflow.jobs.release_decision, "Checkout release decision tooling");
 
     expect(checkout?.with).toMatchObject({
       ref: "${{ github.sha }}",
