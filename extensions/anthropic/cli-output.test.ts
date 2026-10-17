@@ -25,6 +25,14 @@ function parseResult(result: string) {
 }
 
 describe("Claude CLI output validation", () => {
+  it.each([
+    "Failed to authenticate: OAuth session expired and could not be refreshed",
+    "OAuth refresh token is no longer valid; run /login to re-authenticate",
+    "Failed to refresh OAuth token: request failed",
+  ])("does not classify an authentication or transport failure as contention: %s", (message) => {
+    expect(buildAnthropicCliBackend().classifyErrorCode?.(message)).toBeUndefined();
+  });
+
   it("projects Claude CLI compaction status lifecycle without inferring from the boundary", () => {
     const backend = buildAnthropicCliBackend();
     const parseLifecycle = (event: unknown) =>
