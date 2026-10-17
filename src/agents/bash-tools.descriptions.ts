@@ -1,10 +1,32 @@
 export const EXEC_AUTO_REVIEW_GUIDANCE =
   "An automatic reviewer may deny a command and explain why; if denied, choose a materially safer alternative or ask the user, never work around the denial.";
 
+/** Dedicated file tools that can author multiline content without shell quoting. */
+export const DEDICATED_FILE_WRITE_TOOLS = ["write", "edit", "apply_patch"] as const;
+
+/** Names from the canonical file-tool set that are present in the callable catalog. */
+export function dedicatedFileWriteTools(available: { has(name: string): boolean }): string[] {
+  return DEDICATED_FILE_WRITE_TOOLS.filter((name) => available.has(name));
+}
+
+function fileWriteGuidance(tools: readonly string[] | undefined): string | undefined {
+  if (!tools || tools.length === 0) {
+    return undefined;
+  }
+  const available = new Set(tools);
+  const named = DEDICATED_FILE_WRITE_TOOLS.filter((name) => available.has(name));
+  if (named.length === 0) {
+    return undefined;
+  }
+  return `File writes: prefer dedicated file-writing tools (${named.join("/")}) over shell heredocs or bash -c for multi-line content.`;
+}
+
 /** Builds the model-facing exec tool description for the current platform and capabilities. */
 export function describeExecTool(params?: {
   hasCronTool?: boolean;
   hasProcessTool?: boolean;
+  /** Dedicated file-writing tools that survived filtering. Names only these. */
+  fileWriteTools?: readonly string[];
   autoReview?: boolean;
 }): string {
   const continuation =
@@ -20,6 +42,7 @@ export function describeExecTool(params?: {
     "Omit host/node to use the session's configured host.",
     params?.hasCronTool ? "No sleep loops for reminders/follow-ups; use automations." : undefined,
     "TTY CLI/UI/coding agent: pty=true.",
+    fileWriteGuidance(params?.fileWriteTools),
   ]
     .filter(Boolean)
     .join(" ");

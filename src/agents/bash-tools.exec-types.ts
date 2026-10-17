@@ -112,6 +112,8 @@ export type ExecToolDefaults = {
   allowBackground?: boolean;
   /** Final run-local availability of the process continuation tool. */
   processToolAvailabilityRef?: { value?: boolean };
+  /** Dedicated file-writing tools that survived filtering, in caller order. */
+  fileWriteToolAvailabilityRef?: { value?: readonly string[] };
   scopeKey?: string;
   sessionKey?: string;
   /** Executing session when tool policy is borrowed from a different session. */
