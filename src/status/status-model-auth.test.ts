@@ -112,7 +112,10 @@ beforeEach(() => {
   vi.stubEnv("OPENAI_API_KEY", undefined);
   vi.spyOn(openaiRoutes, "resolveOpenAIModelRoutes").mockReturnValue(dualRoutes);
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 it.each([
   ["api_key", undefined, "api-key (codex)", "https://api.openai.com/v1"],

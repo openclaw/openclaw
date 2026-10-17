@@ -185,7 +185,7 @@ it("starts memory expiry with Gateway sidecars and preserves replacement deadlin
   await time.advanceBy(60_000);
   const deletedIds = cleanup.mock.calls
     .map(([call]) => call.params.expectedSessionId)
-    .toSorted((a, b) => a.localeCompare(b));
+    .toSorted((a, b) => String(a).localeCompare(String(b)));
   expect(deletedIds).toEqual(["other-agent", "replacement"]);
   expect(logWarning).not.toHaveBeenCalled();
 });
