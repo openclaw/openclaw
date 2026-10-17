@@ -58,6 +58,8 @@ type RecordInboundSessionAndDispatchReplyParams = Parameters<
 };
 type AdvanceSessionDeliveryAgentRunMock =
   typeof import("../infra/session-delivery-queue-storage.js").advanceSessionDeliveryAgentRun;
+type MarkSessionDeliveryAttemptStartedMock =
+  typeof import("../infra/session-delivery-queue-storage.js").markSessionDeliveryAttemptStarted;
 type DeferSessionDeliveryMock =
   typeof import("../infra/session-delivery-queue-storage.js").deferSessionDelivery;
 type FailSessionDeliveryMock =
@@ -181,7 +183,7 @@ const mocks = vi.hoisted(() => {
     mergeSessionDeliveryPreparedMediaBlocks: vi.fn<MergeSessionDeliveryPreparedMediaBlocksMock>(
       async (_id, _mediaUrl, blocks) => blocks,
     ),
-    markSessionDeliveryAttemptStarted: vi.fn(async () => {}),
+    markSessionDeliveryAttemptStarted: vi.fn<MarkSessionDeliveryAttemptStartedMock>(async () => {}),
     markSessionDeliverySettlement: vi.fn(async () => {}),
     appendAssistantMessageToSessionTranscript: vi.fn<AppendAssistantMessageToSessionTranscriptMock>(
       async (params) => {
@@ -1433,21 +1435,48 @@ describe("scheduleRestartSentinelWake", () => {
     expect(request).not.toHaveProperty("forceRestartSafeTools");
   });
 
+  it("keeps a rearmed internal media row clear of the retired transcript identity", async () => {
+    const entry = await enqueueGeneratedMedia({
+      messageId: "image:task-internal-upgrade:agent-loop",
+      route: { channel: "webchat", to: "agent:main:main", chatType: "direct" },
+      expectedMediaUrls: ["/tmp/two.png"],
+    });
+    // An older release already wrote one.png under the base key, then rearmed.
+    await mocks.advanceSessionDeliveryAgentRun(entry.id, undefined, queueContext);
+
+    await deliverGeneratedMediaThenCompletion(
+      await mocks.loadPendingSessionDelivery(entry.id, queueContext),
+    );
+
+    const keys = mocks.appendAssistantMessageToSessionTranscript.mock.calls.map(
+      ([params]) => params.idempotencyKey,
+    );
+    expect(keys).toEqual([
+      "image:task-internal-upgrade:agent-loop:attempt:1:generated-media-host-transcript",
+    ]);
+    expect(keys).not.toContain("image:task-internal-upgrade:agent-loop:generated-media-transcript");
+  });
+
   it("does not resend media after a crash between the send and the completion turn", async () => {
     const entry = await enqueueGeneratedMedia({
       messageId: "image:task-crash:agent-loop",
       expectedMediaUrls: ["/tmp/proof.png"],
     });
+    const queueStorageActual = await vi.importActual<
+      typeof import("../infra/session-delivery-queue-storage.js")
+    >("../infra/session-delivery-queue-storage.js");
+    mocks.markSessionDeliveryAttemptStarted.mockImplementationOnce(
+      queueStorageActual.markSessionDeliveryAttemptStarted,
+    );
     mocks.advanceSessionDeliveryAgentRun.mockRejectedValueOnce(new Error("crash after send"));
 
     await expect(deliverGeneratedMedia(entry)).rejects.toThrow("crash after send");
     expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+    expect(await mocks.loadPendingSessionDelivery(entry.id, queueContext)).toMatchObject({
+      deliveryStartedAt: expect.any(Number),
+    });
 
-    // A replayed intent sends nothing; its completed outbound receipt proves the first send.
-    mocks.sendDurableMessageBatchCore.mockResolvedValueOnce({
-      status: "suppressed",
-      reason: "no_visible_result",
-    } as never);
+    // The fenced replay never sends; its completed outbound receipt proves the first send.
     mocks.inspectDeliveryQueueReceipt.mockResolvedValueOnce({
       status: "completed",
       pendingEntry: null,
@@ -1456,10 +1485,7 @@ describe("scheduleRestartSentinelWake", () => {
       await mocks.loadPendingSessionDelivery(entry.id, queueContext),
     );
 
-    expect(mocks.sendDurableMessageBatchCore.mock.calls[1]?.[0]).toMatchObject({
-      deliveryIntentId: `generated-media-delivery:v1:${entry.id}`,
-    });
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(mocks.sendDurableMessageBatchCore).toHaveBeenCalledTimes(1);
     expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledTimes(1);
   });
 
@@ -1627,10 +1653,22 @@ describe("scheduleRestartSentinelWake", () => {
       deliverGeneratedMedia({
         id: "session-delivery-media-interrupted",
         messageId: "image:task-interrupted:agent-loop",
-        expectedMediaUrls: ["/tmp/proof.png"],
         deliveryStartedAt: 1,
       }),
     ).rejects.toThrow("dead-lettered after an interrupted unproven attempt");
+
+    expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+  });
+
+  it("never resends a started host media send whose receipt is gone", async () => {
+    const entry = await enqueueGeneratedMedia({
+      messageId: "image:task-expired-receipt:agent-loop",
+      expectedMediaUrls: ["/tmp/proof.png"],
+    });
+
+    await expect(deliverGeneratedMedia({ ...entry, deliveryStartedAt: 1 })).rejects.toThrow(
+      "dead-lettered after ambiguous side effects",
+    );
 
     expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
     expect(mocks.dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
@@ -1696,7 +1734,7 @@ describe("scheduleRestartSentinelWake", () => {
       expect.objectContaining({
         content: [],
         displayContent: [expect.objectContaining({ type: attachment.type })],
-        idempotencyKey: "audio:task-internal:agent-loop:generated-media-transcript",
+        idempotencyKey: "audio:task-internal:agent-loop:generated-media-host-transcript",
       }),
     );
     expect(mocks.attachManagedOutgoingMediaToMessage).toHaveBeenCalledWith(

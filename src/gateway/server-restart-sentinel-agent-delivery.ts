@@ -98,6 +98,43 @@ async function sendQueuedGeneratedMedia(params: {
     stateDir: resolveStateDir(params.queueContext.environment),
     workerContext: params.queueContext,
   };
+  const inspectReceipt = () =>
+    inspectDeliveryQueueReceipt(
+      outboundDeliveryQueueName({ sessionGeneration }),
+      deliveryIntentId,
+      false,
+      deliveryQueueContext,
+    );
+  const deferToOutboundOwner = async (): Promise<never> => {
+    await deferSessionDelivery(entry.id, AGENT_DELIVERY_OWNERSHIP_RETRY_MS, params.queueContext);
+    throw new SessionDeliveryDeferredError(
+      "queued generated-media send is still owned by outbound delivery recovery",
+    );
+  };
+  const deadLetterAmbiguous = async (facts: Record<string, unknown>): Promise<never> => {
+    log.warn("queued generated-media send has ambiguous attachment side effects", {
+      queueId: entry.id,
+      ...facts,
+    });
+    return await deadLetterSessionDelivery(
+      entry,
+      "queued generated-media delivery dead-lettered after ambiguous side effects",
+      params.queueContext,
+    );
+  };
+  if (entry.deliveryStartedAt !== undefined) {
+    // A started send settles only from its outbound receipt. An expired,
+    // failed or missing receipt cannot prove the media is absent, so never resend.
+    const receipt = await inspectReceipt();
+    if (receipt.status === "completed") {
+      return;
+    }
+    if (receipt.status === "pending") {
+      return await deferToOutboundOwner();
+    }
+    return await deadLetterAmbiguous({ receipt: receipt.status ?? "missing" });
+  }
+  await markSessionDeliveryAttemptStarted(entry, params.queueContext);
   const result = await sendDurableMessageBatchCore(
     {
       cfg,
@@ -130,35 +167,19 @@ async function sendQueuedGeneratedMedia(params: {
     return;
   }
   // A replayed intent sends nothing new; its durable receipt owns the outcome.
-  const receipt = await inspectDeliveryQueueReceipt(
-    outboundDeliveryQueueName({ sessionGeneration }),
-    deliveryIntentId,
-    false,
-    deliveryQueueContext,
-  );
+  const receipt = await inspectReceipt();
   if (receipt.status === "completed") {
     return;
   }
   if (receipt.status === "pending") {
-    await deferSessionDelivery(entry.id, AGENT_DELIVERY_OWNERSHIP_RETRY_MS, params.queueContext);
-    throw new SessionDeliveryDeferredError(
-      "queued generated-media send is still owned by outbound delivery recovery",
-    );
+    return await deferToOutboundOwner();
   }
   // A terminally failed intent may have sent before failing; a fresh intent
   // attempt would bypass the outbound owner and could duplicate the media.
   if (receipt.status === "failed" || durableMessageBatchMayHaveReachedRecipient(result)) {
-    log.warn("queued generated-media send has ambiguous attachment side effects", {
-      queueId: entry.id,
-      status: result.status,
-      receipt: receipt.status,
-    });
-    return await deadLetterSessionDelivery(
-      entry,
-      "queued generated-media delivery dead-lettered after ambiguous side effects",
-      params.queueContext,
-    );
+    return await deadLetterAmbiguous({ status: result.status, receipt: receipt.status });
   }
+  // Proven unsent: the queue releases this attempt's fence before the retry.
   throw new SessionDeliverySafeRetryError("queued generated-media send did not reach the chat", {
     cause: result.status === "failed" ? result.error : undefined,
   });
@@ -240,7 +261,9 @@ async function persistQueuedGeneratedMedia(params: {
         null),
     content: [],
     displayContent: content,
-    idempotencyKey: `${entry.idempotencyKey ?? entry.messageId}:generated-media-transcript`,
+    // Distinct from the retired agent-turn key so a legacy partial delivery
+    // cannot collide; stable across retries of this attempt's host stage.
+    idempotencyKey: `${resolveQueuedAgentRunId(entry)}:generated-media-host-transcript`,
     updateMode: "inline",
     onMessageCommitted: (receipt, acceptCompletion) => {
       acceptCompletion(async () => {
@@ -388,8 +411,10 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
     throw error;
   }
   // A started attempt may already have produced effects: an interrupted
-  // completion turn, or an agent turn persisted by an older release.
-  if (entry.deliveryStartedAt !== undefined) {
+  // completion turn, or an agent turn persisted by an older release. A started
+  // external media send instead settles from its outbound receipt below.
+  const externalMediaStage = mediaUrls.length > 0 && route.channel !== INTERNAL_MESSAGE_CHANNEL;
+  if (entry.deliveryStartedAt !== undefined && !externalMediaStage) {
     return await abandonCompletion(
       "queued generated-media completion dead-lettered after an interrupted unproven attempt",
     );
