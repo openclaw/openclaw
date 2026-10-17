@@ -814,6 +814,9 @@ const config = {
     "packages/*/dist/**",
     // Declaration companions describe executable JavaScript modules; they are not standalone roots.
     "scripts/**/*.d.{mts,ts}",
+    // MCP compatibility tests launch these subprocess fixtures by path; the full-tree scan owns them.
+    "extensions/browser/src/browser/chrome-mcp.v1-peer.fixture.mjs",
+    "extensions/qa-lab/src/suite-runtime-agent-tools.v1-peer.fixture.mjs",
     "**/live-*.ts",
     // This worker-thread proof entry is loaded from its test with new URL(),
     // which Knip cannot discover as a static import.

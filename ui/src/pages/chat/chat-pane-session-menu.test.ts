@@ -318,7 +318,7 @@ describe("chat pane session menu boundary", () => {
 
     context.agentSelection.set("main");
     await sessions.refresh({ agentId: "main", force: true });
-    const redraw = vi.spyOn(verifier, "requestUpdate");
+    const redraw = vi.spyOn(verifier, "invalidate");
     emitGatewayEvent("sessions.changed", {
       sessionKey: retained.key,
       agentId: "research",
@@ -423,7 +423,7 @@ describe("chat pane session menu boundary", () => {
       "openclaw-chat-header-session-menu",
     );
     expect(menu?.session.label).toBe("Retained conversation");
-    pane.catalogSession = {
+    pane.history.catalogSession = {
       threadId: "catalog",
       name: "Imported conversation",
       status: "idle",

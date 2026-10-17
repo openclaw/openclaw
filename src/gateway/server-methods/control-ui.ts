@@ -385,11 +385,7 @@ const loadSessionCheckDetails: LoadSessionCheckDetails = async (params, deps) =>
   const { loadControlUiSessionPullRequests } = await import("../control-ui-session-prs.js");
   return loadControlUiSessionPullRequestChecks(params, {
     ...deps,
-    loadPullRequests: (request, options) =>
-      loadControlUiSessionPullRequests(request, {
-        ...options,
-        read: deps.read,
-      }),
+    loadPullRequests: (request) => loadControlUiSessionPullRequests(request, { read: deps.read }),
   });
 };
 

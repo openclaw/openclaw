@@ -17,6 +17,7 @@ import {
 import {
   ASYNC_DIAGNOSTIC_EVENT_NAMES,
   PRIORITY_ASYNC_DIAGNOSTIC_EVENT_NAMES,
+  PUBLIC_EXCLUDED_DIAGNOSTIC_EVENT_NAMES,
 } from "./diagnostic-event-queue-policy.js";
 import {
   cloneDiagnosticValueForListener,
@@ -39,11 +40,7 @@ import type {
   DiagnosticRuntimeMeasurementFields,
   DiagnosticWorkerRequestFields,
 } from "./diagnostic-process-types.js";
-import type {
-  DiagnosticGatewayRpcFields,
-  DiagnosticGatewayWsFields,
-  DiagnosticSessionsListBaselineRetiredFields,
-} from "./diagnostic-rpc-types.js";
+import type { DiagnosticGatewayFields } from "./diagnostic-rpc-types.js";
 import type {
   DiagnosticAgentCommentaryFields,
   DiagnosticRunScopeFields,
@@ -86,8 +83,6 @@ type DiagnosticBaseEvent = {
 
 type DiagnosticSessionEvent = DiagnosticBaseEvent &
   Pick<DiagnosticRunScopeFields, "sessionKey" | "sessionId">;
-
-type DiagnosticGatewayRpcEvent = DiagnosticBaseEvent & DiagnosticGatewayRpcFields;
 
 type DiagnosticUsageEvent = DiagnosticSessionEvent & {
   type: "model.usage";
@@ -785,9 +780,7 @@ type DiagnosticTelemetryExporterEvent = DiagnosticBaseEvent & {
 };
 
 export type DiagnosticEventPayload =
-  | DiagnosticGatewayRpcEvent
-  | (DiagnosticBaseEvent & DiagnosticSessionsListBaselineRetiredFields)
-  | (DiagnosticBaseEvent & DiagnosticGatewayWsFields)
+  | (DiagnosticBaseEvent & DiagnosticGatewayFields)
   | (DiagnosticBaseEvent & DiagnosticRuntimeMeasurementFields)
   | (DiagnosticBaseEvent & DiagnosticWorkerRequestFields)
   | DiagnosticUsageEvent
@@ -1597,16 +1590,7 @@ export function hasPendingInternalDiagnosticEvent(
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
   return onInternalDiagnosticEvent((event) => listener(event), {
     includeTrusted: [],
-    exclude: [
-      "log.record",
-      "gateway.rpc",
-      "gateway.ws.event",
-      "gateway.ws.connections",
-      "gateway.event_loop.sample",
-      "gateway.main_thread.stall",
-      "gateway.http.cancelled",
-      "diagnostic.gc",
-    ],
+    exclude: PUBLIC_EXCLUDED_DIAGNOSTIC_EVENT_NAMES,
   });
 }
 

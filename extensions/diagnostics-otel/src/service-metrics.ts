@@ -76,6 +76,32 @@ export function createDiagnosticsMetrics(
       `${metricNamePrefix}gateway.ws.operator_connections`,
       { unit: "1", description: "Connected authenticated Gateway operator WebSockets" },
     ),
+    sessionsListRetainedViewsGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_views`,
+      { unit: "1", description: "Retained session-list views across all publications" },
+    ),
+    sessionsListRetainedRefsGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_refs`,
+      {
+        unit: "1",
+        description: "Row references and selection entries retained by session-list views",
+      },
+    ),
+    sessionsListRetainedBytesGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_bytes`,
+      { unit: "By", description: "Estimated memory retained by session-list views" },
+    ),
+    sessionEventRowsRetainedEntriesGauge: meter.createGauge(
+      `${metricNamePrefix}session_event_rows_retained_entries`,
+      {
+        unit: "1",
+        description: "Session-event field-hash vectors retained across all connections",
+      },
+    ),
+    sessionEventRowsRetainedBytesGauge: meter.createGauge(
+      `${metricNamePrefix}session_event_rows_retained_bytes`,
+      { unit: "By", description: "Estimated memory retained by session-event field-hash vectors" },
+    ),
     gatewayRpcOutcomesCounter: createCounter(
       "gateway.rpc.outcomes",
       "Gateway RPC observations by phase and outcome",

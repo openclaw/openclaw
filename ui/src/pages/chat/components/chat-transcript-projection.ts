@@ -25,15 +25,11 @@ import {
 } from "../chat-thread.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
 import * as groups from "./chat-message-group-view.tsx";
-import { assistantMediaPolicyKey, getChatMediaRenderVersion } from "./chat-message-media.ts";
+import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
 import { projectRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
-import {
-  closeTranscriptSearch,
-  getTranscriptState,
-  type ChatThreadProps,
-} from "./chat-thread-interactions.ts";
+import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
@@ -62,10 +58,13 @@ import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
 type ChatRenderItem = SystemEventRenderItem;
 
-export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTranscriptSession) {
+export function projectChatTranscript(
+  props: ChatThreadProps,
+  transcript: ChatTranscriptSession,
+  search = getTranscriptState(props.paneId).search.snapshot,
+) {
   const state = getTranscriptState(props.paneId);
   const { asyncQuestions, selectedSession: activeSession } = props;
-  const requestUpdate = props.onRequestUpdate ?? (() => {});
   const { showOwnSenderName, sessionPeople } = resolveTranscriptParticipants(props);
   const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
   const isGlobalAliasKey = isTranscriptGlobalAlias(props);
@@ -84,7 +83,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     textAvatar: assistantAvatar.textAvatar,
   };
   const locale = i18n.getLocale();
-  const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
+  const searchFiltering = search.open && Boolean(search.query.trim());
   const expandedAssistantMessages = transcript.expandedAssistantMessages;
   const recoveryKey = (id: string) => messageRecoveryKey(props.fullMessageAgentId, id);
   pruneTranscriptExpansions(expandedAssistantMessages, props);
@@ -126,8 +125,8 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     loading: props.loading,
     replyPeople: [...sessionPeople].toSorted(),
     replyLocalPerson: localParticipantIdentityKey(props.userId),
-    searchOpen: state.searchOpen,
-    searchQuery: state.searchQuery,
+    searchOpen: search.open,
+    searchQuery: search.query,
     messageRecovery:
       searchFiltering && props.loadFullAssistantMessage
         ? {
@@ -179,7 +178,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       toolCardId,
       !(expanded ?? expandedToolCards.get(toolCardId) ?? false),
     );
-    state.transcriptRenderContext.onRequestUpdate?.();
   };
   const toggleAssistantMessageExpanded = (messageId: string) => {
     const key = recoveryKey(messageId);
@@ -191,7 +189,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     const revision = (current?.revision ?? 0) + 1;
     const pending = { status: "loading", revision } as const;
     setExpansionState(expandedAssistantMessages, key, pending);
-    requestUpdate();
     const completeLoad = (result: Awaited<ReturnType<typeof loader>>) => {
       // A reset or source replacement can reuse both message id and revision.
       // Only the exact pending entry may publish into this presentation.
@@ -209,7 +206,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
           ? { status: "error", revision: revision + 1 }
           : { status: "loaded", markdown, message: result?.message, revision: revision + 1 },
       );
-      requestUpdate();
     };
     void loader({
       sessionKey: props.sessionKey,
@@ -233,7 +229,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     transcriptItems.length === 0 &&
     !props.loading &&
     !hasLiveContent &&
-    (!props.historyPagination?.hasMore || state.searchOpen);
+    (!props.historyPagination?.hasMore || search.open);
   transcript.setContentReady(!props.loading);
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(
     props,
@@ -303,7 +299,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     asyncQuestions,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onPermissionRetry: props.onPermissionRetry,
-    onRequestUpdate: requestUpdate,
+    mediaOwner: props.mediaOwner,
     resourceBasePath: props.resourceBasePath,
     mediaPolicyKey,
     connectionEpoch: props.connectionEpoch,
@@ -365,7 +361,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       isUserMessageExpanded: (messageId: string) => expandedUserMessages.get(messageId) ?? false,
       onToggleUserMessageExpanded: (messageId: string) => {
         setExpansionState(expandedUserMessages, messageId, !expandedUserMessages.get(messageId));
-        requestUpdate();
       },
       loadFullAssistantMessage: props.loadFullAssistantMessage ?? undefined,
       getAssistantMessageExpansion: (messageId: string) =>
@@ -573,7 +568,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     getExpansionStateVersion(expandedUserMessages),
     expandedAssistantMessages,
     getExpansionStateVersion(expandedAssistantMessages),
-    getChatMediaRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
     latestBrowserTabsKey,
@@ -626,6 +620,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     props.sessionPublicOrigin,
     mediaPolicyKey,
     props.assistantAttachmentAuthToken,
+    props.mediaOwner,
     props.connectionEpoch,
     props.canvasPluginSurfaceUrl,
     props.embedSandboxMode ?? "scripts",
@@ -650,8 +645,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     props.replyMessageAccess?.navigationId ?? "",
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
-  // Rebind disclosures to the current pane without repainting unchanged rows.
-  state.transcriptRenderContext.onRequestUpdate = props.onRequestUpdate;
   const unfilteredItems = () =>
     buildCachedChatItems(
       { ...chatItemsInput, searchOpen: false, searchQuery: "", messageRecovery: undefined },
@@ -688,7 +681,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       expandReplyTargetWork(targetChain.transcriptItems, expandedToolCards, replyToId);
     }
     if (searchFiltering) {
-      closeTranscriptSearch(state, requestUpdate);
+      state.search.close();
     }
     if (loaded) {
       // Closing search must commit the original's row before reveal can find it.
@@ -709,13 +702,13 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       : positionIndex,
     isEmpty,
     showLoadingSkeleton,
-    searchOpen: state.searchOpen,
+    searchOpen: search.open,
     renderRows: (overlay: JSX.Element = null, header: TranscriptHeader | null = null) =>
       transcript.render(
         transcriptRows,
         (row) => (row.kind === "item" ? renderItem(row.item) : row.content),
         latestTranscriptAnnouncement(collapsedItems),
-        props.announceTranscript !== false && !state.searchOpen && !props.loading,
+        props.announceTranscript !== false && !search.open && !props.loading,
         overlay,
         header,
         props.transcriptVisible ?? true,

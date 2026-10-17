@@ -25,6 +25,7 @@ import { recordChildProcessSpawn } from "./service-child-process.js";
 import { recordMemorySample } from "./service-memory.js";
 import { recordModelUsage } from "./service-model-usage.js";
 import { recordOperationTimingEvent } from "./service-operation-timing.js";
+import { recordSessionRetention } from "./service-retention.js";
 import {
   createGatewayWorkMetricsRecorder,
   recordSessionDiagnosticEvent,
@@ -111,6 +112,12 @@ function recordDiagnosticEvent(
           {},
           evt.operators,
         );
+      }
+      return;
+    case "sessions.list.retention":
+    case "sessions.event.retention":
+      if (metadata.trusted) {
+        recordSessionRetention(store, evt);
       }
       return;
     case "worker.request":

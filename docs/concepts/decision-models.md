@@ -161,8 +161,28 @@ answer. The tool collects no ambient conversation. Its trusted calling-agent
 binding selects the provider and model; input cannot override that identity or
 selection.
 
-The tool keeps this bounded Boolean/Choice/Score input contract and executes it
-through V2. Results preserve explicit Boolean answers separately from probabilities,
+The tool preserves this input format and also accepts `contractVersion: 2` with
+tagged state: `text`, `json`, `image`, or `list`. This explicit discriminator keeps
+existing JSON state from being mistaken for image or list instructions. For example:
+
+```json
+{
+  "contractVersion": 2,
+  "state": { "type": "image", "dataUri": "data:image/png;base64,...", "text": "Listing photo" },
+  "questions": {
+    "present": { "type": "boolean", "instructions": "Is the product visible?" },
+    "region": { "type": "box", "instructions": "the product in the listing photo" }
+  }
+}
+```
+
+The selected provider must declare support for the input and question types.
+Images use inline PNG, JPEG, or WebP data, up to 4 MiB decoded; provider limits can
+be stricter. Box questions require image state and return normalized edges, not
+proof that the target exists. V2 also supports `sort` over list item IDs and
+`tags` over named criteria when the provider declares those operations.
+
+Results preserve explicit Boolean answers separately from probabilities,
 abstention (`null`), per-question errors, fractional scores, original distributions,
 optional confidence, provider metadata and usage, including reported USD cost and
 native units. Missing fields stay absent; estimates are not normalized or derived.
@@ -311,7 +331,8 @@ Provider limits differ:
 | ONNX        | 2–64                | 2–64         | Up to 32 questions; 512 tokens per encoded input; one MiB of compiled batch inputs |
 | TypeSafe AI | 2–255               | 2–10         | Subject to the host's batch limits and the vendor input contract                   |
 
-The host bounds requests to one MiB, 20,000 JSON nodes, depth 32, and 256 questions. It admits at most four
+The host bounds JSON evidence to one MiB, 20,000 nodes, depth 32, and 256 questions.
+Version 2 image state has a separate four-MiB decoded image limit. It admits at most four
 requests per provider and caps each deadline at 30 seconds. Optional assistance
 leaves the fourth slot for requested evaluations; under contention, the tool
 prefilter skips evaluation and retains tools. Provider-specific limits can be

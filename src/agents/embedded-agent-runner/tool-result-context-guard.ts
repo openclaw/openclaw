@@ -13,7 +13,6 @@ import {
   TOOL_IMAGE_CHARS,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
-  createMessageCharEstimateCache,
   estimateMessageChars,
   estimateMessageCharsCached,
   getToolResultText,
@@ -328,7 +327,7 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    const estimateCache = createMessageCharEstimateCache();
+    const estimateCache = new WeakMap<AgentMessage, number>();
     return projectMessages(sourceMessages, (message) =>
       truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache),
     );

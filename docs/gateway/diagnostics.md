@@ -903,7 +903,9 @@ view-cache clear or eviction that retires sidebar rows or history, not rows or
 views removed. Selection-only and non-sidebar views do not count; an empty
 sidebar row list is still a baseline. Its bounded
 causes are `projection-revision`, `config`, `identity`, `selection-reset`,
-`view-evicted`, and `history-evicted`. View and history limits are both 32.
+`view-evicted`, and `history-evicted`. Views are evicted in least-recently-used
+order at 512 cache slots or 32 MiB estimated retention per projection; each view
+retains at most 32 prior row generations.
 For invalidations observed together on a read, config wins over identity, then
 projection revision; selection resets count where they clear the cache.
 
@@ -917,6 +919,14 @@ shared responses, without adding wire fields or inspecting rows again. Both
 counters use the existing bounded asynchronous diagnostics path. OpenTelemetry
 names are `openclaw.sessions.list.baseline_retirements` and
 `openclaw.sessions.list.base_misses`, with the same labels.
+
+`openclaw_session_event_rows_retained_entries` and
+`openclaw_session_event_rows_retained_bytes` report aggregate count and estimated
+memory for the field-hash vectors retained by session-event connections. Both
+gauges have no labels and return to zero when the last retained connection state
+is cleared. OpenTelemetry names are `openclaw.session_event_rows_retained_entries`
+and `openclaw.session_event_rows_retained_bytes`. Charges cover vectors and their
+identities; they do not retain or charge copies of the presented session rows.
 
 `openclaw_chat_history_requests_total` and
 `openclaw_chat_history_response_bytes_total` attribute successful `chat.history`

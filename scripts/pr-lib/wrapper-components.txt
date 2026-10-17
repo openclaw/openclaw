@@ -17,6 +17,7 @@ packages/agent-core/package.json
 packages/agent-core/src/harness/env/kill-tree.ts
 packages/agent-core/src/harness/messages.ts
 packages/agent-core/src/harness/session/tool-result-pairing.ts
+packages/agent-core/src/harness/session/transcript-model.ts
 packages/agent-core/src/operator-messages.ts
 packages/gateway-client/package.json
 packages/gateway-client/src/timeouts.ts
@@ -940,7 +941,6 @@ src/infra/dotenv-global-core.ts
 src/infra/dotenv-global.ts
 src/infra/dotenv.ts
 src/infra/ed25519-signature.ts
-src/infra/env-log.runtime.ts
 src/infra/env.ts
 src/infra/errno.ts
 src/infra/child-runtime-viability.ts
@@ -1861,6 +1861,7 @@ src/state/openclaw-agent-db-registry.read.ts
 src/state/openclaw-agent-db-registry.ts
 src/state/openclaw-agent-db-registry.worker.ts
 src/state/openclaw-agent-db-resources.ts
+src/state/openclaw-agent-db-schema-admission.ts
 src/state/openclaw-agent-db-schema-compatibility.ts
 src/state/openclaw-agent-db-schema-helpers.ts
 src/state/openclaw-agent-db-schema-read.ts

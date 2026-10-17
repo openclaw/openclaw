@@ -34,6 +34,8 @@ const mock = vi.hoisted(() => ({
   prepareNative: vi.fn(),
   prepareSource: vi.fn(),
   prepareSourceAsync: vi.fn(),
+  closePreparation: vi.fn<() => void>(),
+  constructTransport: vi.fn<() => void>(),
 }));
 
 vi.mock("./openclaw-state-db-cache.js", async (importOriginal) => ({
@@ -46,7 +48,22 @@ vi.mock("../infra/sqlite-readonly-location.js", async (importOriginal) => ({
   prepareSqliteReadOnlyLocationFromOwnedDatabase: mock.prepareNative,
 }));
 let finishProducer: (() => void) | undefined;
-vi.mock("./openclaw-state-read-worker.js", () => createReadWorkerFixture(mock.read, mock.close));
+// mock-isolation: Exercise read cleanup with a controlled transport instead of native workers.
+vi.mock("./openclaw-state-read-worker.js", () => {
+  const fixture = createReadWorkerFixture(mock.read, mock.close);
+  return {
+    captureOpenClawStateReadSource() {
+      const capturedSource = fixture.captureOpenClawStateReadSource();
+      return {
+        ...capturedSource,
+        createTransport() {
+          mock.constructTransport();
+          return capturedSource.createTransport();
+        },
+      };
+    },
+  };
+});
 vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-snapshot-source.js")>()),
   prepareSqliteReadOnlyLocation: mock.prepareSource,
@@ -54,8 +71,8 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => ({
     ...args: Parameters<
       typeof import("../infra/sqlite-snapshot-source.js").startSqliteReadOnlyLocationAsync
     >
-  ) =>
-    retainFixturePreparation(
+  ) => {
+    const retained = retainFixturePreparation(
       observeAsyncFixture(async () => {
         const prepared: AsyncPreparedSqliteReadOnlyLocation = await mock.prepareSourceAsync(
           ...args,
@@ -65,7 +82,15 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => ({
           startCleanup: () => observeAsyncFixture(() => prepared.cleanupAsync()),
         };
       }),
-    ),
+    );
+    return {
+      ...retained,
+      startClose() {
+        mock.closePreparation();
+        return retained.startClose();
+      },
+    };
+  },
 }));
 vi.mock("../infra/sqlite-readonly-location-cleanup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-readonly-location-cleanup.js")>()),
@@ -100,6 +125,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 beforeEach(() => {
+  mock.constructTransport.mockReset();
+  mock.closePreparation.mockReset();
   mock.borrow.mockReset();
   mock.independent.mockReset();
   mock.prepareNative.mockReset().mockImplementation(async () => ({
@@ -131,6 +158,42 @@ function source() {
   fs.writeFileSync(pathname, "mock read transport source");
   return { path: pathname, env: { OPENCLAW_STATE_DIR: root } };
 }
+
+it("closes pending snapshot preparation before joining the read at shutdown", async () => {
+  const options = source();
+  const started = createDeferredCore();
+  const preparation = createDeferredCore<AsyncPreparedSqliteReadOnlyLocation>();
+  const failure = new Error("snapshot preparation closed");
+  mock.prepareSourceAsync.mockImplementation(() => {
+    started.resolve();
+    return preparation.promise;
+  });
+  mock.closePreparation.mockImplementation(() => preparation.reject(failure));
+  finishProducer = () => preparation.reject(failure);
+  const result = withArtifactPreservingStateReads(() =>
+    executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
+  ).catch((error: unknown) => error);
+  await started.promise;
+  await closeOpenClawStateDatabaseByPathAsync(options.path);
+  expect(await result).toBe(failure);
+  expect(mock.read).not.toHaveBeenCalled();
+});
+
+it("releases read ownership when transport construction fails", async () => {
+  const options = source();
+  const failure = new Error("transport construction failed");
+  mock.constructTransport.mockImplementation(() => {
+    throw failure;
+  });
+  await expect(
+    withOpenClawStateDatabaseReadSnapshot(
+      () => executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
+      options,
+    ),
+  ).rejects.toBe(failure);
+  expect(mock.cleanup).toHaveBeenCalledOnce();
+  await closeOpenClawStateDatabaseByPathAsync(options.path);
+});
 
 it("retains the borrowed source through pending preparation and failed published cleanup", async () => {
   const options = source();
@@ -168,6 +231,31 @@ it("retains the borrowed source through pending preparation and failed published
   expect(mock.cleanup).toHaveBeenCalledTimes(2);
   expect(release).toHaveBeenCalledOnce();
 });
+
+it.each(["failure", "success"] as const)(
+  "preserves read errors and checks successful reads before returning data (%s)",
+  async (outcome) => {
+    const options = source();
+    const readFailure = new Error("worker query failed");
+    const observationFailure = new Error("native read owner retired");
+    const release = vi.fn();
+    mock.independent.mockReturnValue({
+      database: { db: {} },
+      assertCurrent() {},
+      observe() {
+        throw observationFailure;
+      },
+      release,
+    });
+    if (outcome === "failure") {
+      mock.read.mockResolvedValue({ error: readFailure, sourceAdmitted: true });
+    }
+    await expect(executeExistingOpenClawStateRead(options, { type: "backup.runs" })).rejects.toBe(
+      outcome === "failure" ? readFailure : observationFailure,
+    );
+    expect(release).toHaveBeenCalledOnce();
+  },
+);
 
 it("retains ordered cleanup for canonical retry after a read failure", async () => {
   const options = source();
@@ -228,7 +316,7 @@ it("keeps a composite snapshot alive when its callback closes the live writer", 
   expect(mock.cleanup).toHaveBeenCalledTimes(1);
 });
 
-it("retries transport stop before waiting for a still-pending producer", async () => {
+it("retries transport stop and settles the already-selected query", async () => {
   const options = source();
   const started = createDeferredCore();
   const reply = createDeferredCore<OpenClawStateReadOutcome>();
@@ -254,40 +342,9 @@ it("retries transport stop before waiting for a still-pending producer", async (
   await expect(closeOpenClawStateDatabaseByPathAsync(options.path)).resolves.toBe(false);
   expect(mock.close).toHaveBeenCalledTimes(2);
   expect(mock.cleanup).toHaveBeenCalledTimes(1);
-  expect(await observed).toMatchObject({
-    error: expect.objectContaining({ message: expect.stringMatching(/closed/) }),
+  expect(await observed).toEqual({
+    value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
   });
-});
-
-it("does not observe an independent source retired during an admitted read failure", async () => {
-  const options = source();
-  const failure = new Error("query failed");
-  const retired = new Error("original source retired");
-  const assertCurrent = vi.fn();
-  const observe = vi.fn();
-  const release = vi.fn();
-  mock.borrow.mockImplementation(() => {
-    throw new Error("Asynchronous shared-state reads cannot run inside a native transaction");
-  });
-  mock.independent.mockReturnValue({ assertCurrent, observe, release });
-  mock.read.mockImplementation(async () => {
-    assertCurrent.mockImplementation(() => {
-      throw retired;
-    });
-    return { error: failure, sourceAdmitted: true };
-  });
-  await expect(
-    executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
-  ).rejects.toMatchObject({
-    cause: failure,
-    errors: [failure, retired],
-  });
-  expect(observe).not.toHaveBeenCalled();
-  expect(release).toHaveBeenCalledOnce();
-  expect(mock.borrow).not.toHaveBeenCalled();
-  expect(mock.prepareNative).not.toHaveBeenCalled();
-  expect(mock.prepareSource).not.toHaveBeenCalled();
-  expect(mock.prepareSourceAsync).not.toHaveBeenCalled();
 });
 
 it("joins maintenance reads and retries their transport before closing scoped handles", async () => {

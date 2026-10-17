@@ -15,6 +15,7 @@ import {
   asFiniteNumberInRange,
   floorPositiveFiniteNumber as readPositiveFiniteTimeoutMs,
   parseStrictNonNegativeInteger,
+  MAX_TIMER_TIMEOUT_MS,
 } from "openclaw/plugin-sdk/number-runtime";
 import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import {
@@ -143,7 +144,8 @@ type DynamicToolCallExecutionParams = {
   toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall" | "consumeToolExecutionSnapshot"> &
     Partial<Pick<CodexDynamicToolBridge, "sideEffectOwnerKeyForTool">>;
   signal: AbortSignal;
-  timeoutMs: number;
+  /** Null retains an admitted unlimited parent wait, still subject to cancellation. */
+  timeoutMs: number | null;
   toolMeta?: string;
   toolCallOrdinal?: number;
   onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
@@ -290,6 +292,9 @@ export async function handleDynamicToolCallWithTimeout(
     });
     const timeoutPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
       const { timeoutMs } = params;
+      if (timeoutMs === null) {
+        return;
+      }
       timeout = setTimeout(() => {
         timedOut = true;
         const timeoutDetails = formatDynamicToolTimeoutDetails({ call: params.call, timeoutMs });
@@ -398,7 +403,18 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   call: CodexDynamicToolCallParams;
   config: EmbeddedRunAttemptParams["config"];
   toolBridge?: Pick<CodexDynamicToolBridge, "availableTools">;
-}): number {
+  parentTimeoutMs?: number;
+}): number | null {
+  if (params.call.tool === "autoreview" && params.parentTimeoutMs !== undefined) {
+    // The canonical helper plans passes after preparation. The admitted parent
+    // owns their total lifetime; its original deadline and abort signal stay live.
+    return params.parentTimeoutMs >= MAX_TIMER_TIMEOUT_MS
+      ? null
+      : addSafeTimeoutDelayGraceMs(
+          params.parentTimeoutMs,
+          CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
+        );
+  }
   const args = isJsonObject(params.call.arguments) ? params.call.arguments : undefined;
   if (params.call.tool === "node_exec") {
     const executionTimeoutMs = params.toolBridge?.availableTools
@@ -456,7 +472,7 @@ export function resolveDynamicToolServerRequestTimeoutMs(
   return (
     Math.max(
       CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
-      call ? resolveDynamicToolCallTimeoutMs({ call, config: undefined }) : 0,
+      call ? (resolveDynamicToolCallTimeoutMs({ call, config: undefined }) ?? 0) : 0,
     ) + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS
   );
 }

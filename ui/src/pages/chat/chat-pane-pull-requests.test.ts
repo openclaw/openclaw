@@ -258,7 +258,7 @@ describe("chat pane pushed pull request state", () => {
       status: "ready" as const,
     };
     emitSnapshot(emitGatewayEvent, state.sessionKey, snapshot);
-    const redraw = vi.spyOn(pane, "requestUpdate");
+    const redraw = vi.spyOn(pane, "invalidate");
     notified.mockClear();
 
     emitSnapshot(emitGatewayEvent, "agent:main:unwatched", snapshot);
