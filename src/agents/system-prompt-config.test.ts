@@ -4,7 +4,6 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import * as ttsSettings from "../tts/tts-settings.js";
 import * as preparedModelCatalog from "./prepared-model-catalog.js";
 import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configured-completion.js";
-import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 import * as systemPrompt from "./system-prompt.js";
@@ -19,12 +18,16 @@ vi.mock("../tts/tts-settings.js", () => ({
 afterEach(() => vi.restoreAllMocks());
 
 function modelConfig(
-  models: Record<string, { alias: string }>,
-  config: OpenClawConfig = {},
+  aliases: Record<string, string>,
+  defaults: NonNullable<OpenClawConfig["agents"]>["defaults"] = {},
+  config: OpenClawConfig = { plugins: { enabled: false } },
 ): OpenClawConfig {
+  const models = Object.fromEntries(
+    Object.entries(aliases).map(([ref, alias]) => [ref, { alias }]),
+  );
   return {
     ...config,
-    agents: { ...config.agents, defaults: { ...config.agents?.defaults, models } },
+    agents: { ...config.agents, defaults: { ...defaults, models } },
   };
 }
 
@@ -77,30 +80,15 @@ function preparedOwner(
     ModelRegistry.inMemory(templateAuthStorage),
     configuredRuntimeModels,
   );
-  const owner = {
-    config,
-    observationConfig: config,
-    catalogOwner: { agentId, workspaceDir: "/tmp/openclaw" },
-    agentId,
-    agentDir: `/tmp/openclaw/${agentId}/agent`,
-    workspaceDir: "/tmp/openclaw",
-    activeProjectKeys: [],
-    authModes: {},
-    metadataSnapshot,
+  return {
     isCurrent: vi.fn(() => true),
-    allowGatewaySubagentBinding: false,
     modelCatalog: { entries, routeVariants: entries },
     configuredRuntimeModels,
     configuredModelAliases,
     findConfiguredRuntimeModel: unexpectedRuntimeWork,
-    inlineProviderModels: [],
-    createStores: vi.fn<PreparedModelRuntimeSnapshot["createStores"]>(unexpectedRuntimeWork),
-    loadFullModelCatalog:
-      vi.fn<NonNullable<PreparedModelRuntimeSnapshot["loadFullModelCatalog"]>>(
-        unexpectedRuntimeWork,
-      ),
-  } satisfies PreparedModelRuntimeSnapshot;
-  return owner;
+    createStores: vi.fn(unexpectedRuntimeWork),
+    loadFullModelCatalog: vi.fn(unexpectedRuntimeWork),
+  };
 }
 
 function buildPrompt(config: OpenClawConfig, agentId = "main", sessionKey?: string): string {
@@ -120,10 +108,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       const hint = vi
         .spyOn(ttsSettings, "buildTtsSystemPromptHint")
         .mockReturnValue("Fixture first voice guidance.");
-      const config = modelConfig(
-        { "fixture/model": { alias: "Before" } },
-        { plugins: { enabled: false } },
-      );
+      const config = modelConfig({ "fixture/model": "Before" });
       const owner = preparedOwner(config, ["model"]);
       const params = {
         config,
@@ -144,7 +129,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       expect(buildConfiguredAgentSystemPrompt(params)).toBe(full);
 
       owner.isCurrent.mockReturnValue(false);
-      const nextConfig = modelConfig({ "fixture/model": { alias: "After" } }, config);
+      const nextConfig = modelConfig({ "fixture/model": "After" });
       params.config = nextConfig;
       params.preparedModelRuntime = preparedOwner(nextConfig, ["model"]);
       hint.mockReturnValue("Fixture current voice guidance.");
@@ -164,13 +149,13 @@ describe("buildConfiguredAgentSystemPrompt", () => {
   it.each<{
     name: string;
     config: OpenClawConfig;
-    modelIds: string[];
+    modelIds?: string[];
     agentId?: string;
     provider?: string;
     metadata?: ReturnType<typeof createPluginMetadataSnapshotFixture>;
     alias: string;
-    model: string;
-    excluded: string[];
+    model?: string;
+    excluded?: string[];
   }>([
     ...(["model", "provider"] as const).map((kind) => {
       const provider = kind === "model" ? "fixture" : "legacy-fixture";
@@ -178,7 +163,6 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       return {
         name: `authored ${kind} alias`,
         provider,
-        modelIds: ["current"],
         metadata: createPluginMetadataSnapshotFixture({
           plugins: [
             {
@@ -195,16 +179,11 @@ describe("buildConfiguredAgentSystemPrompt", () => {
           ],
         }),
         config: modelConfig(
-          { [authoredRef]: { alias: "Friendly" } },
-          {
-            agents: {
-              defaults: { model: `${provider}/current`, modelPolicy: { allow: ["Friendly"] } },
-            },
-          },
+          { [authoredRef]: "Friendly" },
+          { model: `${provider}/current`, modelPolicy: { allow: ["Friendly"] } },
+          {},
         ),
         alias: "Friendly",
-        model: "current",
-        excluded: [],
       };
     }),
     {
@@ -212,9 +191,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       modelIds: [],
       alias: "Custom",
       model: "unlisted",
-      excluded: [],
       config: modelConfig(
-        { "fixture/unlisted": { alias: "Custom" } },
+        { "fixture/unlisted": "Custom" },
+        {},
         {
           plugins: { enabled: false },
           models: {
@@ -234,28 +213,29 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       agentId: "writer",
       modelIds: ["current", "other"],
       alias: "Writer",
-      model: "current",
       excluded: ["- Shared:", "- Other:"],
-      config: {
-        plugins: { enabled: false },
-        agents: {
-          defaults: {
-            model: "fixture/current",
-            modelPolicy: policyOwner === "inherited" ? { allow: ["Shared"] } : undefined,
-            models: { "fixture/current": { alias: "Shared" }, "fixture/other": { alias: "Other" } },
-          },
-          entries: {
-            writer: {
-              modelPolicy:
-                policyOwner === "agent-owned" ? { allow: ["fixture/current"] } : undefined,
-              models: {
-                "fixture/current": { alias: "Writer" },
-                ...(policyOwner === "inherited" ? { "fixture/other": { alias: "Shared" } } : {}),
+      config: modelConfig(
+        { "fixture/current": "Shared", "fixture/other": "Other" },
+        {
+          model: "fixture/current",
+          modelPolicy: policyOwner === "inherited" ? { allow: ["Shared"] } : undefined,
+        },
+        {
+          plugins: { enabled: false },
+          agents: {
+            entries: {
+              writer: {
+                modelPolicy:
+                  policyOwner === "agent-owned" ? { allow: ["fixture/current"] } : undefined,
+                models: {
+                  "fixture/current": { alias: "Writer" },
+                  ...(policyOwner === "inherited" ? { "fixture/other": { alias: "Shared" } } : {}),
+                },
               },
             },
           },
         },
-      },
+      ),
     })),
     {
       name: "shared bare alias",
@@ -264,24 +244,21 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       model: "other",
       excluded: ["- Shared: fixture/current"],
       config: modelConfig(
-        { "fixture/current": { alias: "Shared" }, "fixture/other": { alias: "Shared" } },
-        {
-          plugins: { enabled: false },
-          agents: { defaults: { model: "fixture/current" } },
-        },
+        { "fixture/current": "Shared", "fixture/other": "Shared" },
+        { model: "fixture/current" },
       ),
     },
   ])(
     "publishes only the supported target for $name",
     ({
       config,
-      modelIds,
+      modelIds = ["current"],
       agentId = "main",
       provider = "fixture",
       metadata,
       alias,
-      model,
-      excluded,
+      model = "current",
+      excluded = [],
     }) => {
       const owner = preparedOwner(config, modelIds, agentId, metadata, provider);
       const prompt = buildConfiguredAgentSystemPrompt({
@@ -306,15 +283,15 @@ describe("buildConfiguredAgentSystemPrompt", () => {
   it("renders only current supplied aliases without ambient lookup or repeated discovery", () => {
     const config = modelConfig(
       {
-        "fixture/current": { alias: "Current" },
-        "fixture/unsupported": { alias: "Unavailable" },
+        "fixture/current": "Current",
+        "fixture/unsupported": "Unavailable",
       },
-      { plugins: { enabled: false }, agents: { defaults: { model: "fixture/current" } } },
+      { model: "fixture/current" },
     );
     const owner = preparedOwner(config, ["current"], "writer");
     const lookup = vi
       .spyOn(preparedModelCatalog, "getPreparedModelCatalogOwnerSnapshot")
-      .mockReturnValue(owner);
+      .mockImplementation(unexpectedRuntimeWork);
     const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected network"));
     const params = { config, agentId: "writer", workspaceDir: "/tmp/openclaw" };
     expect(buildConfiguredAgentSystemPrompt(params)).not.toContain("## Model Aliases");
@@ -328,10 +305,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(
       buildConfiguredAgentSystemPrompt({ ...params, preparedModelRuntime: owner }),
     ).not.toContain("## Model Aliases");
-    const replacementConfig: OpenClawConfig = {
-      ...config,
-      agents: { defaults: { models: { "fixture/current": { alias: "Replacement" } } } },
-    };
+    const replacementConfig = modelConfig({ "fixture/current": "Replacement" });
     expect(
       buildConfiguredAgentSystemPrompt({
         ...params,
@@ -371,34 +345,22 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     );
   });
 
+  const prefer = { subagents: { delegationMode: "prefer" as const } };
+  const suggest = { subagents: { delegationMode: "suggest" as const } };
   it.each<[string, OpenClawConfig, string | undefined, boolean, string?]>([
     ["canonical main", {}, "agent:main:main", true],
     ["channel session", {}, "agent:main:slack:channel:C01234567", false],
     ["custom main key", { session: { mainKey: "inbox" } }, "agent:main:inbox", true],
     ["global main key", { session: { scope: "global" } }, "global", true],
     ["no session key", {}, undefined, false],
-    [
-      "explicit prefer",
-      {
-        agents: { defaults: { subagents: { delegationMode: "prefer" } } },
-      },
-      "agent:main:dashboard:project",
-      true,
-    ],
-    [
-      "explicit suggest",
-      {
-        agents: { defaults: { subagents: { delegationMode: "suggest" } } },
-      },
-      "agent:main:main",
-      false,
-    ],
+    ["explicit prefer", { agents: { defaults: prefer } }, "agent:main:dashboard:project", true],
+    ["explicit suggest", { agents: { defaults: suggest } }, "agent:main:main", false],
     [
       "per-agent override",
       {
         agents: {
-          defaults: { subagents: { delegationMode: "suggest" } },
-          entries: { coordinator: { subagents: { delegationMode: "prefer" } } },
+          defaults: suggest,
+          entries: { coordinator: prefer },
         },
       },
       undefined,

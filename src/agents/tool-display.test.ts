@@ -13,24 +13,22 @@ import {
   resolveToolDisplay,
 } from "./tool-display.js";
 
-function detailFor(params: Parameters<typeof resolveToolDisplay>[0]) {
-  return formatToolDetail(resolveToolDisplay(params));
+function detailFor(name: string, args: unknown) {
+  return formatToolDetail(resolveToolDisplay({ name, args }));
 }
 
 function execDetail(command: string, detailMode?: "explain", workdir?: string, name = "exec") {
-  return detailFor({ name, args: { command, workdir }, detailMode });
+  return formatToolDetail(resolveToolDisplay({ name, args: { command, workdir }, detailMode }));
 }
 
-describe("isShellToolDisplayName", () => {
-  it("matches shell tools whatever case the backend spells them in", () => {
-    // The Claude CLI sends "Bash"; embedded runs send "bash"/"exec".
-    for (const name of ["Bash", "bash", "BASH", "Exec", "exec", "shell"]) {
-      expect(isShellToolDisplayName(name)).toBe(true);
-    }
-    for (const name of ["Read", "web_search", undefined, ""]) {
-      expect(isShellToolDisplayName(name)).toBe(false);
-    }
-  });
+it("matches shell tools whatever case the backend spells them in", () => {
+  // The Claude CLI sends "Bash"; embedded runs send "bash"/"exec".
+  for (const name of ["Bash", "bash", "BASH", "Exec", "exec", "shell"]) {
+    expect(isShellToolDisplayName(name)).toBe(true);
+  }
+  for (const name of ["Read", "web_search", undefined, ""]) {
+    expect(isShellToolDisplayName(name)).toBe(false);
+  }
 });
 
 describe("tool display details", () => {
@@ -63,14 +61,11 @@ describe("tool display details", () => {
 
   it("puts the camera PTZ operation before its node and device", () => {
     expect(
-      detailFor({
-        name: "nodes",
-        args: {
-          action: "camera_ptz",
-          ptzOperation: "status",
-          node: "Mac",
-          deviceId: "camera-id",
-        },
+      detailFor("nodes", {
+        action: "camera_ptz",
+        ptzOperation: "status",
+        node: "Mac",
+        deviceId: "camera-id",
       }),
     ).toBe("ptz operation status, node Mac, device id camera-id");
   });
@@ -88,13 +83,10 @@ describe("tool display details", () => {
   });
 
   it("keeps positive numbers and true booleans", () => {
-    const detail = detailFor({
-      name: "sessions_history",
-      args: {
-        sessionKey: "agent:main:main",
-        limit: 20,
-        includeTools: true,
-      },
+    const detail = detailFor("sessions_history", {
+      sessionKey: "agent:main:main",
+      limit: 20,
+      includeTools: true,
     });
 
     expect(detail).toContain("session agent:main:main");
@@ -102,50 +94,37 @@ describe("tool display details", () => {
     expect(detail).toContain("tools true");
   });
 
-  it("formats read/write/edit with intent-first file detail", () => {
-    expect(
-      detailFor({ name: "read", args: { file_path: "/tmp/a.txt", offset: 2, limit: 2 } }),
-    ).toBe("lines 2-3 from /tmp/a.txt");
-    expect(detailFor({ name: "write", args: { file_path: "/tmp/a.txt", content: "abc" } })).toBe(
-      "to /tmp/a.txt (3 chars)",
-    );
-    expect(detailFor({ name: "edit", args: { path: "/tmp/a.txt", newText: "abcd" } })).toBe(
-      "in /tmp/a.txt (4 chars)",
-    );
+  it.each([
+    ["read", { file_path: "/tmp/a.txt", offset: 2, limit: 2 }, "lines 2-3 from /tmp/a.txt"],
+    ["write", { file_path: "/tmp/a.txt", content: "abc" }, "to /tmp/a.txt (3 chars)"],
+    ["edit", { path: "/tmp/a.txt", newText: "abcd" }, "in /tmp/a.txt (4 chars)"],
+  ] as const)("formats %s with intent-first file detail", (name, args, expected) => {
+    expect(detailFor(name, args)).toBe(expected);
   });
 
   it("formats web_search provider query shapes", () => {
-    expect(
-      detailFor({
-        name: "web_search",
-        args: { q: "Codex OAuth API key", max_results: 5 },
-      }),
-    ).toBe('for "Codex OAuth API key" (top 5)');
+    expect(detailFor("web_search", { q: "Codex OAuth API key", max_results: 5 })).toBe(
+      'for "Codex OAuth API key" (top 5)',
+    );
 
     expect(
-      detailFor({
-        name: "web_search",
-        args: {
-          search_query: [
-            { q: "latest Kimi model" },
-            { q: "latest Gemini model" },
-            { q: "latest Claude model" },
-            { q: "latest OpenAI model" },
-          ],
-        },
+      detailFor("web_search", {
+        search_query: [
+          { q: "latest Kimi model" },
+          { q: "latest Gemini model" },
+          { q: "latest Claude model" },
+          { q: "latest OpenAI model" },
+        ],
       }),
     ).toBe('for "latest Kimi model", "latest Gemini model", "latest Claude model"…');
   });
 
   it("formats Parallel's native objective + search_queries shape", () => {
     expect(
-      detailFor({
-        name: "web_search",
-        args: {
-          objective: "Find the OpenClaw repository on GitHub",
-          search_queries: ["openclaw github", "openclaw repository"],
-          count: 5,
-        },
+      detailFor("web_search", {
+        objective: "Find the OpenClaw repository on GitHub",
+        search_queries: ["openclaw github", "openclaw repository"],
+        count: 5,
       }),
     ).toBe(
       'for "Find the OpenClaw repository on GitHub", "openclaw github", "openclaw repository" (top 5)',
@@ -322,24 +301,19 @@ describe("tool display details", () => {
   });
 
   it("omits bash and exec names from compact tool summaries", () => {
+    const summary = (params: Parameters<typeof resolveToolDisplay>[0]) =>
+      formatToolSummary(resolveToolDisplay(params));
     expect(
-      formatToolSummary(
-        resolveToolDisplay({
-          name: "Bash",
-          args: { command: "git fetch", workdir: "/Users/peter/mantis-workspace/openclaw" },
-          detailMode: "explain",
-        }),
-      ),
+      summary({
+        name: "Bash",
+        args: { command: "git fetch", workdir: "/Users/peter/mantis-workspace/openclaw" },
+        detailMode: "explain",
+      }),
     ).toBe("fetch git changes (agent)");
 
-    expect(
-      formatToolSummary(
-        resolveToolDisplay({
-          name: "web_search",
-          args: { query: "OpenClaw docs" },
-        }),
-      ),
-    ).toBe('Web Search: for "OpenClaw docs"');
+    expect(summary({ name: "web_search", args: { query: "OpenClaw docs" } })).toBe(
+      'Web Search: for "OpenClaw docs"',
+    );
   });
 
   it("recognizes heredoc/inline script exec details", () => {
@@ -361,16 +335,19 @@ describe("tool display details", () => {
     expect(execDetail(command, "explain")).toBe("run python3 inline script (heredoc) → run tests");
   });
 
-  it("does not treat the overlapping end of a here-string as a heredoc", () => {
-    const command = ["cat <<<true", "npm test && npm build", "true", "pnpm test"].join("\n");
+  it.each(["cat <<<true", "echo $((flags << true ))", "((flags << true ))"])(
+    "does not treat %s as a heredoc",
+    (firstLine) => {
+      const command = [firstLine, "npm test && npm build", "true", "pnpm test"].join("\n");
 
-    expect(splitTopLevelStages(command)).toEqual([
-      ["cat <<<true", "npm test"].join("\n"),
-      ["npm build", "true", "pnpm test"].join("\n"),
-    ]);
+      expect(splitTopLevelStages(command)).toEqual([
+        [firstLine, "npm test"].join("\n"),
+        ["npm build", "true", "pnpm test"].join("\n"),
+      ]);
 
-    expect(execDetail(command, "explain")).toContain("run build");
-  });
+      expect(execDetail(command, "explain")).toContain("run build");
+    },
+  );
 
   it("ignores heredoc-looking tokens inside shell comments", () => {
     const command = [
@@ -415,19 +392,6 @@ describe("tool display details", () => {
     expect(bodies).toEqual(["body\nSTOP", "body\nSTOP", "body\nSTOP"]);
   });
 
-  it("does not treat arithmetic bitshifts as heredocs", () => {
-    for (const firstLine of ["echo $((flags << true ))", "((flags << true ))"]) {
-      const command = [firstLine, "npm test && npm build", "true", "pnpm test"].join("\n");
-
-      expect(splitTopLevelStages(command)).toEqual([
-        [firstLine, "npm test"].join("\n"),
-        ["npm build", "true", "pnpm test"].join("\n"),
-      ]);
-
-      expect(execDetail(command, "explain")).toContain("run build");
-    }
-  });
-
   it("keeps heredoc body pipes out of top-level stage summaries", () => {
     const command = [
       "cat > .openclaw/tmp/farm-notices/ventura.txt <<-'EOF'",
@@ -457,34 +421,25 @@ describe("tool display details", () => {
   });
 });
 
-describe("compactRawCommand middle truncation", () => {
-  it("does not split a surrogate pair when the head boundary lands on an emoji", () => {
-    // Default head ends at index 59, inside the emoji at UTF-16 indices 58–59.
-    const emoji = String.fromCodePoint(0x1f600);
-    const longCommand = `/opt/custom/bin/run ${"a".repeat(38)}${emoji}${"b".repeat(80)}`;
-    const result = resolveExecDetail({ command: longCommand });
+it("does not split a surrogate pair when the head boundary lands on an emoji", () => {
+  // Default head ends at index 59, inside the emoji at UTF-16 indices 58–59.
+  const emoji = String.fromCodePoint(0x1f600);
+  const longCommand = `/opt/custom/bin/run ${"a".repeat(38)}${emoji}${"b".repeat(80)}`;
+  const result = resolveExecDetail({ command: longCommand });
 
-    expect(result).toBeDefined();
-    expect(result).not.toContain(emoji);
-    expect(result).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
-    expect(result).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
-    expect(result).toContain("/opt/custom/bin/run");
-    expect(result).toContain("…");
-    expect(result).toMatch(/b{4}$/);
-  });
+  expect(result).toBeDefined();
+  expect(result).not.toContain(emoji);
+  expect(result).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  expect(result).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+  expect(result).toContain("/opt/custom/bin/run");
+  expect(result).toContain("…");
+  expect(result).toMatch(/b{4}$/);
 });
 
-describe("coerceDisplayValue middle truncation", () => {
-  it("preserves string details before compacting", () => {
-    const longValue =
-      "Deploying with AWS key AKIDABCDEFGHIJKLMNOP1234567890 and " +
-      "x".repeat(200) +
-      " final-step";
-    const detail = detailFor({
-      name: "sessions_spawn",
-      args: { label: longValue },
-    });
+it("preserves string details before compacting", () => {
+  const longValue =
+    "Deploying with AWS key AKIDABCDEFGHIJKLMNOP1234567890 and " + "x".repeat(200) + " final-step";
+  const detail = detailFor("sessions_spawn", { label: longValue });
 
-    expect(detail).toContain("AKIDABCDEFGHIJKLMNOP1234567890");
-  });
+  expect(detail).toContain("AKIDABCDEFGHIJKLMNOP1234567890");
 });
