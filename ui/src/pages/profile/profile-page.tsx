@@ -13,7 +13,7 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
-import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { hasOperatorSelfReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { invalidateUserPreferences, saveUserPreferences } from "../../app/user-prefs-cache.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
@@ -91,7 +91,7 @@ class ProfileState {
     const nextConnected = snapshot.phase === "connected";
     // Hello can precede users.self; unresolved identity is not a sign-out.
     const identityReady = nextConnected && snapshot.selfUser !== undefined;
-    const nextCanRead = hasOperatorReadAccess(snapshot.hello?.auth ?? null);
+    const nextCanRead = hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null);
     const nextCanWrite = nextConnected && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
     const connectionChanged =
       nextConnected !== this.connected ||

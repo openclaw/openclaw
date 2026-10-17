@@ -15,8 +15,14 @@ import {
   snapshotListFixture,
 } from "./cloud-worker-snapshots.test-support.ts";
 
-vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
-vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
+vi.mock("../../components/confirm-dialog.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/confirm-dialog.ts")>()),
+  showConfirmDialog: vi.fn(),
+}));
+vi.mock("../../lib/toast.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/toast.ts")>()),
+  showToast: vi.fn(),
+}));
 setupSnapshotsDomSuite();
 const methods = ["environments.list", "crabbox.images.list", "config.patch"];
 
