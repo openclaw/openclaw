@@ -19,7 +19,10 @@ import {
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendSessionTranscriptReport,
@@ -63,6 +66,30 @@ const assistant = {
   timestamp: 1,
 } satisfies AssistantMessage;
 const selected = { customType: "status", content: body, details: { selected: true } };
+
+const withReportState = (run: (state: OpenClawTestState) => Promise<void>) =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    await run(state);
+  });
+const custom = (
+  selectReport: Extract<
+    Parameters<typeof appendSessionTranscriptReport>[1],
+    { kind: "custom" }
+  >["selectReport"],
+) => ({ kind: "custom", customTypes: ["status"], selectReport }) as const;
+const appendAssistant = (message: AssistantMessage) =>
+  appendSessionTranscriptReport(scope, { kind: "assistant", message });
+async function blockWriter() {
+  const release = createDeferredCore();
+  const admitted = createDeferredCore();
+  const blocker = runOpenClawAgentWriteAdmission({ agentId: scope.agentId }, async () => {
+    admitted.resolve();
+    await release.promise;
+  });
+  await admitted.promise;
+  return { release, blocker };
+}
 
 async function seedReports(stopReason: AssistantMessage["stopReason"] = assistant.stopReason) {
   setRuntimeConfigSnapshot({});
@@ -116,17 +143,10 @@ function transcriptSnapshot(db: DatabaseSync) {
 
 describe("SQLite report payload selection", () => {
   it("reserves a report with its original identity and environment before later writes", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot({});
+    await withReportState(async (state) => {
       await seedReports();
       const options = { agentId: scope.agentId };
-      const release = createDeferredCore();
-      const admitted = createDeferredCore();
-      const blocker = runOpenClawAgentWriteAdmission(options, async () => {
-        admitted.resolve();
-        await release.promise;
-      });
-      await admitted.promise;
+      const { release, blocker } = await blockWriter();
       const order: string[] = [];
       const target = { ...scope, env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR } };
       const report = appendSessionTranscriptReport(target, {
@@ -154,8 +174,7 @@ describe("SQLite report payload selection", () => {
   });
 
   it("rejects a queued report after the original file is replaced with identical bytes", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot({});
+    await withReportState(async (state) => {
       const db = await seedReports();
       db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       const { path: databasePath } = openOpenClawAgentDatabase({ agentId: scope.agentId });
@@ -164,19 +183,9 @@ describe("SQLite report payload selection", () => {
       const retired = state.path("retired-report.sqlite");
       copyFileSync(databasePath, replacement);
       expect(readFileSync(replacement)).toEqual(readFileSync(databasePath));
-      const release = createDeferredCore();
-      const admitted = createDeferredCore();
-      const blocker = runOpenClawAgentWriteAdmission({ agentId: scope.agentId }, async () => {
-        admitted.resolve();
-        await release.promise;
-      });
-      await admitted.promise;
+      const { release, blocker } = await blockWriter();
       const selectReport = vi.fn(() => ({ customType: "status", content: "stale", display: true }));
-      const report = appendSessionTranscriptReport(scope, {
-        kind: "custom",
-        customTypes: ["status"],
-        selectReport,
-      });
+      const report = appendSessionTranscriptReport(scope, custom(selectReport));
       const rejected = expect(report).rejects.toThrow(/target changed|identity|physical file/i);
       renameSync(databasePath, retired);
       renameSync(replacement, databasePath);
@@ -193,8 +202,7 @@ describe("SQLite report payload selection", () => {
   });
 
   it("cannot redirect a report to another store containing the same session key", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot({});
+    await withReportState(async (state) => {
       const requested = { ...scope, storePath: state.path("requested.sqlite") };
       const other = { ...scope, storePath: state.path("other.sqlite") };
       for (const target of [requested, other]) {
@@ -247,8 +255,7 @@ describe("SQLite report payload selection", () => {
   });
 
   it("fences worker abort fallbacks and preserves each run's authoritative answer", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withReportState(async () => {
       const db = await seedReports();
       await upsertSessionEntryCore(scope, {
         sessionId: scope.sessionId,
@@ -404,9 +411,7 @@ describe("SQLite report payload selection", () => {
             ...(partition.terminal !== false ? { runTerminal: true } : {}),
           },
         };
-        await expect(
-          appendSessionTranscriptReport(scope, { kind: "assistant", message: nativeMessage }),
-        ).resolves.toMatchObject({ ok: true });
+        await expect(appendAssistant(nativeMessage)).resolves.toMatchObject({ ok: true });
         const committed = transcriptSnapshot(db);
         onUpdate.mockClear();
         const settled = await appendAbortedSessionTranscriptPartial(scope, {
@@ -466,8 +471,7 @@ describe("SQLite report payload selection", () => {
   it.each(["custom", "response"] as const)(
     "keeps %s reporting independent of unselected compressed bodies",
     async (kind) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot({});
+      await withReportState(async () => {
         const db = await seedReports();
         // Unselected bodies are unavailable; their recorded navigation still supports report decisions.
         const changed = db
@@ -479,13 +483,7 @@ describe("SQLite report payload selection", () => {
         const before = transcriptSnapshot(db);
         const selectReport = vi.fn(() => undefined);
         const report: Parameters<typeof appendSessionTranscriptReport>[1] =
-          kind === "response"
-            ? { kind: "assistant", message: assistant }
-            : {
-                kind: "custom",
-                customTypes: ["status"],
-                selectReport,
-              };
+          kind === "response" ? { kind: "assistant", message: assistant } : custom(selectReport);
         await expect(appendSessionTranscriptReport(scope, report)).resolves.toMatchObject({
           ok: true,
         });
@@ -500,8 +498,7 @@ describe("SQLite report payload selection", () => {
   );
 
   it("reselects through an alias after another connection changes the report branch before commit", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      setRuntimeConfigSnapshot({});
+    await withReportState(async (state) => {
       const db = await seedReports();
       const hostTransactions = vi.spyOn(db, "exec");
       const { path: databasePath } = openOpenClawAgentDatabase({ agentId: scope.agentId });
@@ -537,11 +534,7 @@ describe("SQLite report payload selection", () => {
       });
       try {
         await expect(
-          appendSessionTranscriptReport(aliasedScope, {
-            kind: "custom",
-            customTypes: ["status"],
-            selectReport,
-          }),
+          appendSessionTranscriptReport(aliasedScope, custom(selectReport)),
         ).resolves.toEqual({ ok: true, value: undefined });
       } finally {
         other.close();
@@ -563,8 +556,7 @@ describe("SQLite report payload selection", () => {
   });
 
   it("preserves custom report JSON serialization before worker transfer", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withReportState(async () => {
       await seedReports();
       const serializedKeys: string[] = [];
       class NestedDetails {
@@ -610,13 +602,12 @@ describe("SQLite report payload selection", () => {
   it.each(["compressed facts", "later header"] as const)(
     "refuses malformed %s before selecting or appending a report",
     async (kind) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot({});
+      await withReportState(async () => {
         const db = await seedReports();
         const selectReport = vi.fn(() =>
           kind === "compressed facts" ? { ...selected, display: true } : undefined,
         );
-        const report = { kind: "custom", customTypes: ["status"], selectReport } as const;
+        const report = custom(selectReport);
         if (kind === "compressed facts") {
           db.prepare(`UPDATE transcript_events SET navigation_json = json_set(navigation_json, '$.report', json(?))
             WHERE session_id = ? AND seq = 1`).run(
@@ -656,8 +647,7 @@ describe("SQLite report payload selection", () => {
   );
 
   it("does not let an unreadable compressed assistant suppress a real response", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withReportState(async () => {
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const unreadable = {
         type: "message",
@@ -686,9 +676,7 @@ describe("SQLite report payload selection", () => {
         ...assistant,
         content: [{ type: "text" as const, text: `${body}${secret}` }],
       };
-      await expect(
-        appendSessionTranscriptReport(scope, { kind: "assistant", message: reportMessage }),
-      ).resolves.toMatchObject({ ok: true });
+      await expect(appendAssistant(reportMessage)).resolves.toMatchObject({ ok: true });
       const events = await loadTranscriptEvents(scope);
       expect(events).toHaveLength(3);
       expect(events[1]).toEqual(unreadable);
@@ -704,8 +692,7 @@ describe("SQLite report payload selection", () => {
   });
 
   it("uses the last original duplicate member for response suppression", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withReportState(async () => {
       const raw = `{"type":"message","id":"duplicate","parentId":null,
         "message":{"role":"assistant","content":${JSON.stringify(body)},"responseId":"first"},
         "message":{"role":"assistant","content":${JSON.stringify(body)},"responseId":"discarded","responseId":"last"}}`;
@@ -721,19 +708,13 @@ describe("SQLite report payload selection", () => {
       expect(payload.event_zstd).not.toBeNull();
       createTranscriptPayloadUpdater(db, scope.sessionId)({ ...payload, seq: 1 });
       const before = transcriptSnapshot(db);
-      await expect(
-        appendSessionTranscriptReport(scope, {
-          kind: "assistant",
-          message: { ...assistant, responseId: "last" },
-        }),
-      ).resolves.toMatchObject({ ok: true });
+      await expect(appendAssistant({ ...assistant, responseId: "last" })).resolves.toMatchObject({
+        ok: true,
+      });
       expect(transcriptSnapshot(db)).toEqual(before);
-      await expect(
-        appendSessionTranscriptReport(scope, {
-          kind: "assistant",
-          message: { ...assistant, responseId: "first" },
-        }),
-      ).resolves.toMatchObject({ ok: true });
+      await expect(appendAssistant({ ...assistant, responseId: "first" })).resolves.toMatchObject({
+        ok: true,
+      });
       const events = await loadTranscriptEvents(scope);
       expect(events).toHaveLength(3);
       expect(events[1]).toEqual(JSON.parse(raw));

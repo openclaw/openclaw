@@ -89,6 +89,37 @@ function createPlannerStore(entryCount: number, updatedAt?: number) {
   return { database, storePath };
 }
 
+function applyMaintenance(
+  database: ReturnType<typeof openOpenClawAgentDatabase>,
+  storePath: string,
+  options: Pick<Parameters<typeof maintenance.applySessionEntryMaintenance>[1], "preservation"> &
+    Partial<Parameters<typeof maintenance.applySessionEntryMaintenance>[1]>,
+) {
+  return runOpenClawAgentWriteTransaction(
+    (owner) =>
+      maintenance.applySessionEntryMaintenance(owner, {
+        archiveDirectory: path.join(path.dirname(database.path), "archives"),
+        maintenanceConfig: resolveMaintenanceConfigFromInput(),
+        storePath,
+        ...options,
+      }),
+    { agentId: "main", path: database.path },
+  );
+}
+
+function trackProtection(database: ReturnType<typeof openOpenClawAgentDatabase>) {
+  return trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["protection"],
+    (sql) =>
+      sql.includes(
+        'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
+      )
+        ? "protection"
+        : null,
+  );
+}
+
 it("returns bounded finalization outcomes while preserving conflicts and duplicate plan entries", async () => {
   const { database, storePath } = createPlannerStore(0);
   const options = { agentId: "main", path: database.path, env: process.env };
@@ -159,32 +190,16 @@ it("avoids inventory projection for sequential writes with no retention candidat
   const target = { sessionKey: "agent:main:planner-0", storePath };
   const preservation = await prepareSessionMaintenancePreservation(storePath);
   onTestFinished(preservation.dispose);
-  const inventory = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(database.db),
-    ["protection"],
-    (sql) =>
-      sql.includes(
-        'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
-      )
-        ? "protection"
-        : null,
-  );
+  const inventory = trackProtection(database);
   try {
     for (let index = 0; index < 3; index += 1) {
       await patchSessionEntryCore(target, () => ({ label: `updated-${index}` }), {
         skipMaintenance: true,
       });
-      const plan = runOpenClawAgentWriteTransaction(
-        (owner) =>
-          maintenance.applySessionEntryMaintenance(owner, {
-            preservation: preservation.capture,
-            activeSessionKey: target.sessionKey,
-            archiveDirectory: path.join(path.dirname(database.path), "archives"),
-            maintenanceConfig: resolveMaintenanceConfigFromInput(),
-            storePath,
-          }),
-        { agentId: "main", path: database.path },
-      );
+      const plan = applyMaintenance(database, storePath, {
+        preservation: preservation.capture,
+        activeSessionKey: target.sessionKey,
+      });
       expect(plan).toMatchObject({ archived: 0, capped: 0, pruned: 0, entryRemovals: [] });
     }
     expect(loadSessionEntry(target)?.label).toBe("updated-2");
@@ -209,28 +224,12 @@ it("preserves current provider keys without loading unrelated protection rows", 
   onTestFinished(unregister);
   const preservation = await prepareSessionMaintenancePreservation(storePath);
   onTestFinished(preservation.dispose);
-  const inventory = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(database.db),
-    ["protection"],
-    (sql) =>
-      sql.includes(
-        'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
-      )
-        ? "protection"
-        : null,
-  );
+  const inventory = trackProtection(database);
   const maintain = () =>
-    runOpenClawAgentWriteTransaction(
-      (owner) =>
-        maintenance.applySessionEntryMaintenance(owner, {
-          preservation: preservation.capture,
-          forceMaintenance: true,
-          archiveDirectory: path.join(path.dirname(database.path), "archives"),
-          maintenanceConfig: resolveMaintenanceConfigFromInput(),
-          storePath,
-        }),
-      { agentId: "main", path: database.path },
-    );
+    applyMaintenance(database, storePath, {
+      preservation: preservation.capture,
+      forceMaintenance: true,
+    });
   try {
     expect(maintain().archivedEntries).toEqual([
       { sessionKey: scope(1).sessionKey, sessionId: "planner-1" },
@@ -288,20 +287,14 @@ it.each([false, true])(
         sql.includes("json_group_object") && sql.includes('"session_nodes"') ? "candidates" : null,
     );
     try {
-      const plan = runOpenClawAgentWriteTransaction(
-        (owner) =>
-          maintenance.applySessionEntryMaintenance(owner, {
-            preservation: preservation.capture,
-            forceMaintenance,
-            archiveDirectory: path.join(path.dirname(database.path), "archives"),
-            maintenanceConfig: {
-              ...resolveMaintenanceConfigFromInput(),
-              maxEntries: forceMaintenance ? 5 : 5_000,
-            },
-            storePath,
-          }),
-        { agentId: "main", path: database.path },
-      );
+      const plan = applyMaintenance(database, storePath, {
+        preservation: preservation.capture,
+        forceMaintenance,
+        maintenanceConfig: {
+          ...resolveMaintenanceConfigFromInput(),
+          maxEntries: forceMaintenance ? 5 : 5_000,
+        },
+      });
       expect(plan.archivedEntries.map(({ sessionKey }) => sessionKey).toSorted()).toEqual([
         key("dashboard:expired"),
         key("normal-expired"),
@@ -344,28 +337,12 @@ it("limits protection reads to active ancestry and preserves cyclic or missing p
   }
   const preservation = await prepareSessionMaintenancePreservation(storePath);
   onTestFinished(preservation.dispose);
-  const inventory = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(database.db),
-    ["protection"],
-    (sql) =>
-      sql.includes(
-        'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
-      )
-        ? "protection"
-        : null,
-  );
+  const inventory = trackProtection(database);
   try {
-    const plan = runOpenClawAgentWriteTransaction(
-      (owner) =>
-        maintenance.applySessionEntryMaintenance(owner, {
-          preservation: preservation.capture,
-          activeSessionKeys: [key(0), key(1), key(3), key(5)],
-          archiveDirectory: path.join(path.dirname(database.path), "archives"),
-          maintenanceConfig: resolveMaintenanceConfigFromInput(),
-          storePath,
-        }),
-      { agentId: "main", path: database.path },
-    );
+    const plan = applyMaintenance(database, storePath, {
+      preservation: preservation.capture,
+      activeSessionKeys: [key(0), key(1), key(3), key(5)],
+    });
     expect(plan.archivedEntries).toEqual([{ sessionKey: key(6), sessionId: "planner-6" }]);
     for (const index of [0, 1, 2, 3, 4, 5]) {
       const entry = loadSessionEntry({ sessionKey: key(index), storePath });
@@ -408,20 +385,14 @@ it("resolves protection once before capping aged candidates", async () => {
       run: async () => {
         const preservation = await prepareSessionMaintenancePreservation(storePath);
         onTestFinished(preservation.dispose);
-        const plan = runOpenClawAgentWriteTransaction(
-          (owner) =>
-            maintenance.applySessionEntryMaintenance(owner, {
-              preservation: preservation.capture,
-              activeSessionKey: key(3),
-              archiveDirectory: path.join(path.dirname(database.path), "archives"),
-              maintenanceConfig: {
-                ...resolveMaintenanceConfigFromInput(),
-                maxEntries: 1,
-              },
-              storePath,
-            }),
-          { agentId: "main", path: database.path },
-        );
+        const plan = applyMaintenance(database, storePath, {
+          preservation: preservation.capture,
+          activeSessionKey: key(3),
+          maintenanceConfig: {
+            ...resolveMaintenanceConfigFromInput(),
+            maxEntries: 1,
+          },
+        });
         expect(plan).toMatchObject({ archived: 1, capArchived: 1, capped: 1 });
         expect(loadSessionEntry(scope(4))).toMatchObject({
           archivedAt: expect.any(Number),
@@ -488,21 +459,15 @@ it("caps only the oldest eligible activity ties without decoding unrelated paylo
   onTestFinished(preservation.dispose);
   const parse = vi.spyOn(JSON, "parse");
   try {
-    const plan = runOpenClawAgentWriteTransaction(
-      (owner) =>
-        maintenance.applySessionEntryMaintenance(owner, {
-          preservation: preservation.capture,
-          archiveDirectory: path.join(path.dirname(database.path), "archives"),
-          maintenanceConfig: {
-            ...resolveMaintenanceConfigFromInput(),
-            archiveDashboardAfterMs: null,
-            preserveRecentMs: 1_000,
-            maxEntries: fixtures.length - victims.length,
-          },
-          storePath,
-        }),
-      { agentId: "main", path: database.path },
-    );
+    const plan = applyMaintenance(database, storePath, {
+      preservation: preservation.capture,
+      maintenanceConfig: {
+        ...resolveMaintenanceConfigFromInput(),
+        archiveDashboardAfterMs: null,
+        preserveRecentMs: 1_000,
+        maxEntries: fixtures.length - victims.length,
+      },
+    });
     expect(plan.archivedEntries).toEqual([
       { sessionKey: key("oldest"), sessionId: "bounded-0" },
       { sessionKey: key("tie-\u{10000}"), sessionId: "bounded-2" },
@@ -534,17 +499,10 @@ it.each(["session-key", "session-id"] as const)(
     const preservation = await prepareSessionMaintenancePreservation(storePath);
     onTestFinished(preservation.dispose);
     const maintain = (forceMaintenance = false) =>
-      runOpenClawAgentWriteTransaction(
-        (owner) =>
-          maintenance.applySessionEntryMaintenance(owner, {
-            preservation: preservation.capture,
-            forceMaintenance,
-            archiveDirectory: path.join(path.dirname(database.path), "archives"),
-            maintenanceConfig: resolveMaintenanceConfigFromInput(),
-            storePath,
-          }),
-        { agentId: "main", path: database.path },
-      );
+      applyMaintenance(database, storePath, {
+        preservation: preservation.capture,
+        forceMaintenance,
+      });
     const identity = identityKind === "session-key" ? target.sessionKey : target.sessionId;
 
     await runExclusiveSessionLifecycleMutation("archive", {

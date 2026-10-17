@@ -1,4 +1,3 @@
-// Behavior tests for the accessor parent-fork transcript boundary.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
@@ -35,8 +34,33 @@ afterEach(() => cliBackendsTesting.resetDepsForTest());
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-parent-fork-");
 
-// Seeds the parent transcript rows into the SQLite-backed accessor so the fork
-// can read the parent branch by session id, mirroring the old raw-.jsonl setup.
+async function createStore() {
+  const root = sessionDirs.make();
+  const sessionsDir = path.join(root, "sessions");
+  await fs.mkdir(sessionsDir);
+  return { root, storePath: path.join(sessionsDir, "sessions.json") };
+}
+
+const header = (id: string, cwd: string, timestamp = "2026-06-15T00:00:00.000Z") => ({
+  type: "session",
+  version: 3,
+  id,
+  timestamp,
+  cwd,
+});
+const event = (type: string, id: string, fields: Record<string, unknown>) => ({
+  type,
+  id,
+  ...fields,
+});
+const childEvents = async (storePath: string, sessionId: string) =>
+  (await loadTranscriptEvents({
+    agentId: "main",
+    sessionId,
+    sessionKey: "agent:main:child",
+    storePath,
+  })) as Record<string, unknown>[];
+
 async function seedParentTranscript(params: {
   storePath: string;
   parentSessionId: string;
@@ -98,20 +122,12 @@ describe("forkSessionFromParentTranscript", () => {
       storePath,
       parentSessionId,
       events: [
-        {
-          type: "session",
-          version: 3,
-          id: parentSessionId,
-          timestamp: "2026-08-18T00:00:00.000Z",
-          cwd: root,
-        },
-        {
-          type: "message",
-          id: "private-message",
+        header(parentSessionId, root, "2026-08-18T00:00:00.000Z"),
+        event("message", "private-message", {
           parentId: null,
           timestamp: "2026-08-18T00:00:01.000Z",
           message: { role: "user", content: "private context" },
-        },
+        }),
       ],
     });
 
@@ -156,10 +172,7 @@ describe("forkSessionFromParentTranscript", () => {
   });
 
   it("forks the active branch across stores without caller-thread SQL", async () => {
-    const root = sessionDirs.make();
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
-    const storePath = path.join(sessionsDir, "sessions.json");
+    const { root, storePath } = await createStore();
     const targetStorePath = path.join(root, "target-sessions.json");
     const cwd = path.join(root, "workspace");
     await fs.mkdir(cwd);
@@ -172,16 +185,12 @@ describe("forkSessionFromParentTranscript", () => {
         timestamp: "2026-05-01T00:00:00.000Z",
         cwd,
       },
-      {
-        type: "message",
-        id: "user-1",
+      event("message", "user-1", {
         parentId: null,
         timestamp: "2026-05-01T00:00:01.000Z",
         message: { role: "user", content: "hello" },
-      },
-      {
-        type: "message",
-        id: "assistant-1",
+      }),
+      event("message", "assistant-1", {
         parentId: "user-1",
         timestamp: "2026-05-01T00:00:02.000Z",
         message: {
@@ -193,29 +202,23 @@ describe("forkSessionFromParentTranscript", () => {
           stopReason: "stop",
           timestamp: 2,
         },
-      },
-      {
-        type: "label",
-        id: "label-1",
+      }),
+      event("label", "label-1", {
         parentId: "assistant-1",
         timestamp: "2026-05-01T00:00:03.000Z",
         targetId: "user-1",
         label: "start",
-      },
-      {
-        type: "message",
-        id: "delivery-side-branch",
+      }),
+      event("message", "delivery-side-branch", {
         parentId: "label-1",
         timestamp: "2026-05-01T00:00:04.000Z",
         message: { role: "assistant", content: "side delivery" },
-      },
-      {
-        type: "leaf",
-        id: "active-leaf",
+      }),
+      event("leaf", "active-leaf", {
         parentId: "delivery-side-branch",
         timestamp: "2026-05-01T00:00:05.000Z",
         targetId: "label-1",
-      },
+      }),
     ];
     await seedParentTranscript({ storePath, parentSessionId, events: lines });
 
@@ -229,17 +232,9 @@ describe("forkSessionFromParentTranscript", () => {
     }
     expect(fork.sessionFile).toBe("agent:main:child");
     expect(fork.sessionId).not.toBe(parentSessionId);
-    const forkedEntries = (await loadTranscriptEvents({
-      agentId: "main",
-      sessionId: fork.sessionId,
-      sessionKey: "agent:main:child",
-      storePath: targetStorePath,
-    })) as Record<string, unknown>[];
+    const forkedEntries = await childEvents(targetStorePath, fork.sessionId);
     const forkedHeader = forkedEntries[0];
-    expect(forkedHeader?.type).toBe("session");
-    expect(forkedHeader?.version).toBe(3);
-    expect(forkedHeader?.id).toBe(fork.sessionId);
-    expect(forkedHeader?.cwd).toBe(cwd);
+    expect(forkedHeader).toMatchObject({ type: "session", version: 3, id: fork.sessionId, cwd });
     expect(
       parseSqliteSessionFileMarker(
         typeof forkedHeader?.parentSession === "string" ? forkedHeader.parentSession : undefined,
@@ -256,9 +251,7 @@ describe("forkSessionFromParentTranscript", () => {
       "leaf",
     ]);
     const forkedLabel = forkedEntries.find((entry) => entry.type === "label");
-    expect(forkedLabel?.type).toBe("label");
-    expect(forkedLabel?.targetId).toBe("user-1");
-    expect(forkedLabel?.label).toBe("start");
+    expect(forkedLabel).toMatchObject({ type: "label", targetId: "user-1", label: "start" });
     expect(forkedEntries.at(-1)).toMatchObject({
       type: "leaf",
       targetId: "label-1",
@@ -268,69 +261,42 @@ describe("forkSessionFromParentTranscript", () => {
   });
 
   it("keeps opaque append-parent metadata on the active fork branch", async () => {
-    const root = sessionDirs.make();
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
-    const storePath = path.join(sessionsDir, "sessions.json");
+    const { root, storePath } = await createStore();
     const parentSessionId = "parent-opaque";
     const entries: Record<string, unknown>[] = [
-      {
-        type: "session",
-        version: 3,
-        id: parentSessionId,
-        timestamp: "2026-06-15T00:00:00.000Z",
-        cwd: root,
-      },
-      {
-        type: "message",
-        id: "active-root",
+      header(parentSessionId, root),
+      event("message", "active-root", {
         parentId: null,
         timestamp: "2026-06-15T00:00:01.000Z",
-        // Canonical assistant content is a block array; the SQLite transcript
-        // store round-trips it verbatim (the file-era string->text-block repair
-        // in normalizeLoadedFileEntry only runs on the JSONL read path).
         message: { role: "assistant", content: [{ type: "text", text: "active root" }] },
-      },
-      {
-        type: "label",
-        id: "active-label",
+      }),
+      event("label", "active-label", {
         parentId: "active-root",
         timestamp: "2026-06-15T00:00:01.500Z",
         targetId: "active-root",
         label: "selected",
-      },
-      {
-        type: "message",
-        id: "side-delivery",
+      }),
+      event("message", "side-delivery", {
         parentId: "active-root",
         timestamp: "2026-06-15T00:00:02.000Z",
         message: { role: "assistant", content: "side delivery" },
-      },
-      {
-        type: "metadata",
-        id: "plugin-metadata",
+      }),
+      event("metadata", "plugin-metadata", {
         parentId: "side-delivery",
         payload: { source: "plugin" },
-      },
-      {
-        type: "leaf",
-        id: "active-leaf",
+      }),
+      event("leaf", "active-leaf", {
         parentId: "side-delivery",
         timestamp: "2026-06-15T00:00:03.000Z",
         targetId: "active-root",
         appendParentId: "plugin-metadata",
         appendMode: "side",
-      },
+      }),
     ];
     await seedParentTranscript({ storePath, parentSessionId, events: entries });
 
     const fork = await forkChildTranscript(storePath, parentSessionId);
-    const forkedRecords = (await loadTranscriptEvents({
-      agentId: "main",
-      sessionId: fork.sessionId,
-      sessionKey: "agent:main:child",
-      storePath,
-    })) as Record<string, unknown>[];
+    const forkedRecords = await childEvents(storePath, fork.sessionId);
     const serialized = JSON.stringify(forkedRecords);
     expect(serialized).toContain('"id":"active-root"');
     expect(serialized).toContain('"id":"plugin-metadata"');
@@ -354,12 +320,7 @@ describe("forkSessionFromParentTranscript", () => {
       content: "continued",
       timestamp: Date.now(),
     });
-    const records = (await loadTranscriptEvents({
-      agentId: "main",
-      sessionId: fork.sessionId,
-      sessionKey: "agent:main:child",
-      storePath,
-    })) as Record<string, unknown>[];
+    const records = await childEvents(storePath, fork.sessionId);
     expect(records.at(-1)).toMatchObject({ type: "message", parentId: "plugin-metadata" });
     expect(records.at(-1)).not.toHaveProperty("appendMode");
     expect(reopened.buildSessionContext().messages).toMatchObject([
@@ -369,42 +330,27 @@ describe("forkSessionFromParentTranscript", () => {
   });
 
   it("keeps an explicit empty visible branch separate from its opaque append parent", async () => {
-    const root = sessionDirs.make();
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
-    const storePath = path.join(sessionsDir, "sessions.json");
+    const { root, storePath } = await createStore();
     await seedParentTranscript({
       storePath,
       parentSessionId: "parent-empty-opaque",
       events: [
-        {
-          type: "session",
-          version: 3,
-          id: "parent-empty-opaque",
-          timestamp: "2026-06-15T00:00:00.000Z",
-          cwd: root,
-        },
-        {
-          type: "message",
-          id: "inactive-root",
+        header("parent-empty-opaque", root),
+        event("message", "inactive-root", {
           parentId: null,
           timestamp: "2026-06-15T00:00:01.000Z",
           message: { role: "user", content: "inactive history" },
-        },
-        {
-          type: "leaf",
-          id: "empty-leaf",
+        }),
+        event("leaf", "empty-leaf", {
           parentId: "inactive-root",
           timestamp: "2026-06-15T00:00:02.000Z",
           targetId: null,
           appendParentId: null,
-        },
-        {
-          type: "metadata",
-          id: "plugin-metadata",
+        }),
+        event("metadata", "plugin-metadata", {
           parentId: "inactive-root",
           payload: { source: "plugin" },
-        },
+        }),
       ],
     });
 
@@ -424,12 +370,7 @@ describe("forkSessionFromParentTranscript", () => {
       model: "gpt-test",
       timestamp: Date.now(),
     } as unknown as AssistantMessage);
-    const records = (await loadTranscriptEvents({
-      agentId: "main",
-      sessionId: fork.sessionId,
-      sessionKey: "agent:main:child",
-      storePath,
-    })) as Record<string, unknown>[];
+    const records = await childEvents(storePath, fork.sessionId);
     expect(records.some((record) => record.id === "inactive-root")).toBe(false);
     expect(records.find((record) => record.id === continuedId)).toMatchObject({
       type: "message",
@@ -438,74 +379,45 @@ describe("forkSessionFromParentTranscript", () => {
   });
 
   it("keeps a reachable branch suffix when an older parent is missing", async () => {
-    const root = sessionDirs.make();
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
-    const storePath = path.join(sessionsDir, "sessions.json");
+    const { root, storePath } = await createStore();
     await seedParentTranscript({
       storePath,
       parentSessionId: "parent-missing-ancestor",
       events: [
-        {
-          type: "session",
-          version: 3,
-          id: "parent-missing-ancestor",
-          timestamp: "2026-06-15T00:00:00.000Z",
-          cwd: root,
-        },
-        {
-          type: "message",
-          id: "reachable-tail",
+        header("parent-missing-ancestor", root),
+        event("message", "reachable-tail", {
           parentId: "missing-parent",
           timestamp: "2026-06-15T00:00:01.000Z",
           message: { role: "assistant", content: "reachable tail" },
-        },
+        }),
       ],
     });
 
     const fork = await forkChildTranscript(storePath, "parent-missing-ancestor");
-    const records = (await loadTranscriptEvents({
-      agentId: "main",
-      sessionId: fork.sessionId,
-      sessionKey: "agent:main:child",
-      storePath,
-    })) as Record<string, unknown>[];
+    const records = await childEvents(storePath, fork.sessionId);
     const serialized = JSON.stringify(records);
     expect(serialized).toContain("reachable tail");
     expect(serialized).not.toContain("missing-parent");
   });
 
   it("keeps visible history when the next append explicitly starts a root branch", async () => {
-    const root = sessionDirs.make();
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
-    const storePath = path.join(sessionsDir, "sessions.json");
+    const { root, storePath } = await createStore();
     await seedParentTranscript({
       storePath,
       parentSessionId: "parent-root-append",
       events: [
-        {
-          type: "session",
-          version: 3,
-          id: "parent-root-append",
-          timestamp: "2026-06-15T00:00:00.000Z",
-          cwd: root,
-        },
-        {
-          type: "message",
-          id: "visible-root",
+        header("parent-root-append", root),
+        event("message", "visible-root", {
           parentId: null,
           timestamp: "2026-06-15T00:00:01.000Z",
           message: { role: "assistant", content: "visible history" },
-        },
-        {
-          type: "leaf",
-          id: "root-append-control",
+        }),
+        event("leaf", "root-append-control", {
           parentId: "inactive-tail",
           timestamp: "2026-06-15T00:00:02.000Z",
           targetId: "visible-root",
           appendParentId: null,
-        },
+        }),
       ],
     });
 
@@ -513,64 +425,39 @@ describe("forkSessionFromParentTranscript", () => {
     const reopened = await openForkedChildSession(storePath, fork);
     expect(reopened.buildSessionContext().messages).toHaveLength(1);
     await reopened.appendMessageAsync({ role: "user", content: "new root", timestamp: Date.now() });
-    const records = (await loadTranscriptEvents({
-      agentId: "main",
-      sessionId: fork.sessionId,
-      sessionKey: "agent:main:child",
-      storePath,
-    })) as Record<string, unknown>[];
+    const records = await childEvents(storePath, fork.sessionId);
     expect(records.at(-1)).toMatchObject({ type: "message", parentId: null });
   });
 
   it("preserves supported current-version linear transcripts", async ({ onTestFailed }) => {
     let phase = "create-fixture";
     onTestFailed(() => console.error(JSON.stringify({ test: "parent-linear", phase })));
-    const root = sessionDirs.make();
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
-    const storePath = path.join(sessionsDir, "sessions.json");
+    const { root, storePath } = await createStore();
     phase = "seed-parent";
     await seedParentTranscript({
       storePath,
       parentSessionId: "parent-linear",
       events: [
-        {
-          type: "session",
-          version: 3,
-          id: "parent-linear",
-          timestamp: "2026-06-15T00:00:00.000Z",
-          cwd: root,
-        },
-        {
-          type: "message",
-          id: "linear-user",
+        header("parent-linear", root),
+        event("message", "linear-user", {
           timestamp: "2026-06-15T00:00:01.000Z",
           message: { role: "user", content: "hello" },
-        },
-        {
-          type: "message",
-          id: "linear-assistant",
+        }),
+        event("message", "linear-assistant", {
           timestamp: "2026-06-15T00:00:02.000Z",
           message: { role: "assistant", content: "hi" },
-        },
-        {
-          type: "metadata",
-          id: "linear-metadata",
+        }),
+        event("metadata", "linear-metadata", {
           parentId: "linear-assistant",
           payload: { source: "plugin" },
-        },
+        }),
       ],
     });
 
     phase = "fork";
     const fork = await forkChildTranscript(storePath, "parent-linear");
     phase = "read-child";
-    const records = (await loadTranscriptEvents({
-      agentId: "main",
-      sessionId: fork.sessionId,
-      sessionKey: "agent:main:child",
-      storePath,
-    })) as Record<string, unknown>[];
+    const records = await childEvents(storePath, fork.sessionId);
     expect(records.slice(1)).toMatchObject([
       { id: "linear-user", parentId: null },
       { id: "linear-assistant", parentId: "linear-user" },
@@ -586,12 +473,7 @@ describe("forkSessionFromParentTranscript", () => {
       timestamp: Date.now(),
     });
     phase = "read-continued";
-    const continuedRecords = (await loadTranscriptEvents({
-      agentId: "main",
-      sessionId: fork.sessionId,
-      sessionKey: "agent:main:child",
-      storePath,
-    })) as Record<string, unknown>[];
+    const continuedRecords = await childEvents(storePath, fork.sessionId);
     expect(continuedRecords.at(-1)).toMatchObject({
       type: "message",
       parentId: "linear-metadata",
@@ -670,12 +552,10 @@ describe("forkSessionFromParentTranscript", () => {
         parentSessionId,
         events: [
           { type: "session", version: 3, id: parentSessionId, timestamp: "2026-05-01T00:00:00Z" },
-          {
-            type: "message",
-            id: "parent-user",
+          event("message", "parent-user", {
             parentId: null,
             message: { role: "user", content: "fork me" },
-          },
+          }),
         ],
       });
 

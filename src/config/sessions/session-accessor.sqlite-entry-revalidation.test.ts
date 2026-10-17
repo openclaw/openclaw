@@ -78,6 +78,34 @@ describe("SQLite session entry patch commit revalidation", () => {
     database = openOpenClawAgentDatabase({ agentId: "main", env });
   });
 
+  const storedEntry = () => loadExactSessionEntry(scope)?.entry;
+  const row = (projection = "*") =>
+    database.db
+      .prepare(`SELECT ${projection} FROM session_nodes WHERE session_key = ?`)
+      .get(sessionKey);
+  const seedMain = () =>
+    upsertSessionEntryCore(
+      { ...scope, sessionKey: "agent:main:main" },
+      { sessionId: "main-session", updatedAt: 10 },
+    );
+  const invalidateLineage = () => {
+    setCanonicalSqliteSessionMainKey(database, "work");
+    setUnrelatedParent(requireNativeSqliteDatabase(database.db), "agent:main:unrecorded-parent");
+  };
+  function sourceFor(native: OpenClawAgentReadOnlyDatabase): SessionEntryCurrentSource {
+    const identity = readOpenClawAgentDatabaseIdentity(native);
+    if (typeof identity.identity !== "string") {
+      throw new Error("Expected the fixture's durable database identity");
+    }
+    return {
+      agentId: native.agentId,
+      path: native.path,
+      databaseIdentity: identity.identity,
+      databaseBirthtime: identity.birthtime,
+      sessionKey,
+    };
+  }
+
   it.each(["native", "worker"] as const)(
     "publishes the %s patch's exact transcript predicate and rereads a sibling generation next time",
     async (route) => {
@@ -125,7 +153,7 @@ describe("SQLite session entry patch commit revalidation", () => {
         patchSessionEntryCore(scope, () => ({ label: "must not commit" }), options),
       ).resolves.toBeNull();
       expect(onCommitted).toHaveBeenCalledOnce();
-      expect(loadExactSessionEntry(scope)?.entry.label).toBe("committed");
+      expect(storedEntry()?.label).toBe("committed");
       onCommitted.mockClear();
       await patchSessionEntryCore(scope, () => ({ sessionId: "rotated-session" }), {
         ...options,
@@ -178,7 +206,7 @@ describe("SQLite session entry patch commit revalidation", () => {
         return { label: "after contention" };
       });
       expect(result?.label).toBe("after contention");
-      expect(loadExactSessionEntry(scope)?.entry.label).toBe("after contention");
+      expect(storedEntry()?.label).toBe("after contention");
     } finally {
       await release;
       other.close();
@@ -273,9 +301,7 @@ describe("SQLite session entry patch commit revalidation", () => {
         if (changed === "connection") {
           await closeOpenClawAgentDatabaseByPathAsync(database.path);
         }
-        expect(loadExactSessionEntry(scope)?.entry.label).toBe(
-          changed === "row" ? "foreign" : "original",
-        );
+        expect(storedEntry()?.label).toBe(changed === "row" ? "foreign" : "original");
       } finally {
         await release;
         other.close();
@@ -285,17 +311,7 @@ describe("SQLite session entry patch commit revalidation", () => {
 
   describe("compact session currency facts", () => {
     function readCurrentEntryThroughAdmission(native: OpenClawAgentReadOnlyDatabase) {
-      const identity = readOpenClawAgentDatabaseIdentity(native);
-      if (typeof identity.identity !== "string") {
-        throw new Error("Expected the fixture's durable database identity");
-      }
-      const source: SessionEntryCurrentSource = {
-        agentId: native.agentId,
-        path: native.path,
-        databaseIdentity: identity.identity,
-        databaseBirthtime: identity.birthtime,
-        sessionKey,
-      };
+      const source = sourceFor(native);
       let entry: SessionEntryCurrentFacts | undefined;
       requestSessionEntryCurrentAdmission(
         source,
@@ -416,17 +432,7 @@ describe("SQLite session entry patch commit revalidation", () => {
         subagentRecovery: { lastRunId: 23, sessionLifecycleRunId: null },
       };
       expect(entry).toEqual(expected);
-      const identity = readOpenClawAgentDatabaseIdentity(database);
-      if (typeof identity.identity !== "string") {
-        throw new Error("Expected the fixture's durable database identity");
-      }
-      const source: SessionEntryCurrentSource = {
-        agentId: database.agentId,
-        path: database.path,
-        databaseIdentity: identity.identity,
-        databaseBirthtime: identity.birthtime,
-        sessionKey,
-      };
+      const source = sourceFor(database);
       let observed: unknown;
       expect(
         assertSessionEntryCurrentAdmission(
@@ -442,17 +448,7 @@ describe("SQLite session entry patch commit revalidation", () => {
 
     it("refuses a captured source replaced by identical database bytes", async () => {
       const original = readCurrentEntryThroughAdmission(database);
-      const identity = readOpenClawAgentDatabaseIdentity(database);
-      if (typeof identity.identity !== "string") {
-        throw new Error("Expected the fixture's durable database identity");
-      }
-      const source: SessionEntryCurrentSource = {
-        agentId: database.agentId,
-        path: database.path,
-        databaseIdentity: identity.identity,
-        databaseBirthtime: identity.birthtime,
-        sessionKey,
-      };
+      const source = sourceFor(database);
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
       const bytes = fs.readFileSync(database.path);
       fs.renameSync(database.path, `${database.path}.original`);
@@ -475,7 +471,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       return { label: "renamed" };
     });
     expect(persisted).toMatchObject({ label: "renamed", sessionId: "session-1" });
-    expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
+    expect(storedEntry()).toMatchObject({
       label: "renamed",
       sessionId: "session-1",
     });
@@ -487,28 +483,15 @@ describe("SQLite session entry patch commit revalidation", () => {
   ] as const)(
     "revalidates unrelated lineage for $route patches (replacement: $replaceEntry)",
     async ({ route, replaceEntry }) => {
-      await upsertSessionEntryCore(
-        { ...scope, sessionKey: "agent:main:main" },
-        { sessionId: "main-session", updatedAt: 10 },
-      );
-      const before = database.db
-        .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
-        .get(sessionKey);
+      await seedMain();
+      const before = row();
 
       await expect(
         patchEntry(
           route,
           (entry) => {
-            setCanonicalSqliteSessionMainKey(database, "work");
-            setUnrelatedParent(
-              requireNativeSqliteDatabase(database.db),
-              "agent:main:unrecorded-parent",
-            );
-            expect(
-              database.db
-                .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
-                .get(sessionKey),
-            ).toEqual(before);
+            invalidateLineage();
+            expect(row()).toEqual(before);
             return { ...entry, label: "must not commit" };
           },
           replaceEntry,
@@ -516,44 +499,30 @@ describe("SQLite session entry patch commit revalidation", () => {
       ).rejects.toThrow("openclaw doctor --fix");
 
       setUnrelatedParent(requireNativeSqliteDatabase(database.db), null);
-      expect(loadExactSessionEntry(scope)?.entry.label).toBe("original");
+      expect(storedEntry()?.label).toBe("original");
     },
   );
 
   it("keeps the exact-replacement reader exception after unrelated lineage invalidation", async () => {
-    await upsertSessionEntryCore(
-      { ...scope, sessionKey: "agent:main:main" },
-      { sessionId: "main-session", updatedAt: 10 },
-    );
+    await seedMain();
     const result = await patchEntry(
       "ordinary",
       (entry) => {
-        setCanonicalSqliteSessionMainKey(database, "work");
-        setUnrelatedParent(
-          requireNativeSqliteDatabase(database.db),
-          "agent:main:unrecorded-parent",
-        );
+        invalidateLineage();
         return { ...entry, label: "exact replacement" };
       },
       true,
     );
     expect(result?.label).toBe("exact replacement");
     setUnrelatedParent(requireNativeSqliteDatabase(database.db), null);
-    expect(loadExactSessionEntry(scope)?.entry.label).toBe("exact replacement");
+    expect(storedEntry()?.label).toBe("exact replacement");
   });
 
   it("rejects a no-op lifecycle patch after host eviction with invalidated unrelated lineage", async () => {
-    await upsertSessionEntryCore(
-      { ...scope, sessionKey: "agent:main:main" },
-      { sessionId: "main-session", updatedAt: 10 },
-    );
+    await seedMain();
     await expect(
       patchEntry("lifecycle", () => {
-        setCanonicalSqliteSessionMainKey(database, "work");
-        setUnrelatedParent(
-          requireNativeSqliteDatabase(database.db),
-          "agent:main:unrecorded-parent",
-        );
+        invalidateLineage();
         closeCachedOpenClawAgentDatabase(database);
         expect(database.db.isOpen).toBe(false);
         return null;
@@ -567,7 +536,7 @@ describe("SQLite session entry patch commit revalidation", () => {
     } finally {
       cleanup.close();
     }
-    expect(loadExactSessionEntry(scope)?.entry.label).toBe("original");
+    expect(storedEntry()?.label).toBe("original");
   });
 
   it("rejects an intervening owner assignment even when entry JSON is unchanged", async () => {
@@ -576,9 +545,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       assignedBy: { type: "human", id: "assigner" },
       assignedAt: 10,
     });
-    const before = database.db
-      .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-      .get(sessionKey);
+    const before = row("entry_json");
     await expect(
       patchEntry("ordinary", () => {
         expect(
@@ -588,15 +555,11 @@ describe("SQLite session entry patch commit revalidation", () => {
             assignedAt: 20,
           }),
         ).not.toBeNull();
-        expect(
-          database.db
-            .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-            .get(sessionKey),
-        ).toEqual(before);
+        expect(row("entry_json")).toEqual(before);
         return { label: "must not commit" };
       }),
     ).rejects.toMatchObject({ name: "SqliteSessionMutationConflictError" });
-    expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
+    expect(storedEntry()).toMatchObject({
       label: "original",
       owner: { actor: { type: "agent", id: "new-owner" }, assignedAt: 20 },
     });
@@ -608,24 +571,20 @@ describe("SQLite session entry patch commit revalidation", () => {
       promptedAt: 10,
     });
     const persisted = await patchEntry("ordinary", () => {
-      const before = database.db
-        .prepare("SELECT * FROM session_nodes WHERE session_key = ?")
-        .get(sessionKey);
+      const before = row();
       expect(
         recordSessionParticipant(scope, {
           identity: { type: "agent", id: "new-participant" },
           promptedAt: 20,
         }),
       ).toBe("inserted");
-      expect(
-        database.db.prepare("SELECT * FROM session_nodes WHERE session_key = ?").get(sessionKey),
-      ).toEqual(before);
-      expect(loadExactSessionEntry(scope)?.entry.label).toBe("original");
+      expect(row()).toEqual(before);
+      expect(storedEntry()?.label).toBe("original");
       return { label: "with participants" };
     });
     expect(persisted).toMatchObject({ sessionId: "session-1", label: "with participants" });
     expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
-    expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
+    expect(storedEntry()).toMatchObject({
       label: "with participants",
       participantCount: 2,
       participants: expect.arrayContaining([
@@ -672,7 +631,7 @@ describe("SQLite session entry patch commit revalidation", () => {
     ).rejects.toThrow(
       "non-canonical persisted row resolves to session key agent:main:different-target",
     );
-    expect(loadExactSessionEntry(scope)?.entry.label).toBe("original");
+    expect(storedEntry()?.label).toBe("original");
     expect(
       loadExactSessionEntry({ ...scope, sessionKey: "agent:main:different-target" }),
     ).toBeUndefined();
@@ -691,7 +650,7 @@ describe("SQLite session entry patch commit revalidation", () => {
       updatedAt: 10,
       ...stamp,
     });
-    const previousEntry = loadExactSessionEntry(scope)?.entry;
+    const previousEntry = storedEntry();
     expect(previousEntry?.sessionId).toBe("session-1");
     runOpenClawAgentWriteTransaction(
       (writeDatabase) => {
