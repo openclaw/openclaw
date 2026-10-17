@@ -171,6 +171,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_session_turn_created_total`                     | counter   | `agent`, `channel`, `trigger`                                                             |
 | `openclaw_session_stuck_total`                            | counter   | `reason`, `state`                                                                         |
 | `openclaw_session_stuck_age_seconds`                      | histogram | `reason`, `state`                                                                         |
+| `openclaw_session_stalled_total`                          | counter   | `active_work_kind`, `classification`, `reason`, `state`                                   |
+| `openclaw_session_long_running_total`                     | counter   | `active_work_kind`, `reason`, `state`                                                     |
 | `openclaw_session_recovery_total`                         | counter   | `action`, `active_work_kind`, `state`, `status`                                           |
 | `openclaw_session_recovery_age_seconds`                   | histogram | `action`, `active_work_kind`, `state`, `status`                                           |
 | `openclaw_gateway_event_loop_delay_max_seconds`           | histogram | none                                                                                      |
@@ -532,6 +534,25 @@ individual session queue depth per diagnostic state, not total queued work.
 ```promql
 sum(openclaw_sessions_active)
 openclaw_gateway_active_work{kind="queuedTurns"}
+```
+
+### Session attention
+
+`openclaw_session_stalled_total` counts observations of blocked tool calls and
+agent runs without progress. Its `classification` label distinguishes
+`blocked_tool_call` from `stalled_agent_run`. `openclaw_session_long_running_total`
+counts the existing long-running classification, including permitted model,
+provider retry, and tool execution waits. An increment does not guarantee recent
+progress. Both use the existing diagnostic classifications;
+`openclaw_session_stuck_total` remains the separate counter for stale bookkeeping
+with no active work.
+
+These counters count repeated observations, not unique sessions or current
+stalls. They reset when the exporter restarts. Session identifiers and tool names
+are not labels. For example, alert on newly observed blocked tool calls with:
+
+```promql
+sum(increase(openclaw_session_stalled_total{classification="blocked_tool_call"}[5m])) > 0
 ```
 
 ### Runtime identity

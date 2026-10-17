@@ -47,6 +47,8 @@ export function recordSessionDiagnosticEvent(
         | "session.recovery.completed"
         | "session.state"
         | "session.stuck"
+        | "session.stalled"
+        | "session.long_running"
         | "session.turn.created";
     }
   >,
@@ -114,6 +116,29 @@ export function recordSessionDiagnosticEvent(
         labels,
         seconds(evt.ageMs),
       );
+      return;
+    }
+    case "session.stalled":
+    case "session.long_running": {
+      // Repeated health observations are events, not a count of unique sessions.
+      const labels = {
+        active_work_kind: normalizeDiagnosticValue(evt.activeWorkKind, "none"),
+        reason: normalizeDiagnosticValue(evt.reason, "none"),
+        state: evt.state,
+      };
+      if (evt.type === "session.stalled") {
+        store.counter(
+          "openclaw_session_stalled_total",
+          "Session stall observations by classification and active work kind.",
+          { ...labels, classification: evt.classification },
+        );
+      } else {
+        store.counter(
+          "openclaw_session_long_running_total",
+          "Long-running session observations, including permitted waits, by active work kind.",
+          labels,
+        );
+      }
       return;
     }
     case "session.turn.created":
