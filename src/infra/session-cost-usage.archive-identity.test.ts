@@ -162,6 +162,28 @@ describe("usage archive identity", () => {
     }
   });
 
+  const scopeFor = (
+    sessionId: string,
+    storePath = path.join(state.sessionsDir(), "sessions.json"),
+  ) => ({
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath,
+  });
+  const seed = async (
+    scope: ReturnType<typeof scopeFor>,
+    tokens: number,
+    touchSessionEntry?: boolean,
+  ) => {
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: archiveTime });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ message: assistant(tokens) }],
+      touchSessionEntry,
+    });
+  };
+  const usageLookup = (sessionFile: string) => ({ agentId: "main", sessionFile, config });
+
   it("uses explicit usage artifacts and validates canonical targets in the worker", async () => {
     const root = state.statePath();
     const sessionsDir = state.sessionsDir();
@@ -278,10 +300,7 @@ describe("usage archive identity", () => {
         sessionKey: `agent:${fixture.agentId}:usage`,
         storePath,
       };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: archiveTime });
-      await persistSessionTranscriptTurn(scope, {
-        messages: [{ message: assistant(fixture.tokens) }],
-      });
+      await seed(scope, fixture.tokens);
     }
     for (const archived of [false, true]) {
       if (archived) {
@@ -329,14 +348,8 @@ describe("usage archive identity", () => {
   it("refreshes retained rollups in a request-configured store", async () => {
     const storePath = state.statePath("custom.sqlite");
     const scopedConfig = { ...config, session: { store: storePath } };
-    const scope = {
-      agentId: "main",
-      sessionId: "refresh-usage",
-      sessionKey: "agent:main:refresh-usage",
-      storePath,
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: archiveTime });
-    await persistSessionTranscriptTurn(scope, { messages: [{ message: assistant(17) }] });
+    const scope = scopeFor("refresh-usage", storePath);
+    await seed(scope, 17);
     const params = { agentId: "main", config: scopedConfig, startMs: 0, endMs: Date.now() };
     expect(await loadCostUsageSummary(params)).toMatchObject({
       totals: { totalTokens: 17 },
@@ -357,12 +370,7 @@ describe("usage archive identity", () => {
   });
 
   it("keeps cold usage inventory cheap, restores for scanning, and reports a missing archive", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "cold-usage",
-      sessionKey: "agent:main:cold-usage",
-      storePath: path.join(state.sessionsDir(), "sessions.json"),
-    };
+    const scope = scopeFor("cold-usage");
     const coldConfig = {
       ...config,
       agents: { entries: { [scope.agentId]: {} } },
@@ -391,11 +399,7 @@ describe("usage archive identity", () => {
         { agentId: "main", env: state.env },
       );
     };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: archiveTime });
-    await persistSessionTranscriptTurn(scope, {
-      messages: [{ message: assistant(17) }],
-      touchSessionEntry: false,
-    });
+    await seed(scope, 17, false);
     const hotScope = { ...scope, sessionId: "hot-usage", sessionKey: "agent:main:hot-usage" };
     await upsertSessionEntryCore(hotScope, {
       sessionId: hotScope.sessionId,
@@ -404,11 +408,7 @@ describe("usage archive identity", () => {
     await persistSessionTranscriptTurn(hotScope, { messages: [{ message: assistant(19) }] });
     await replaceSessionEntry(scope, { sessionId: "current-usage", updatedAt: Date.now() });
     await ageTranscript(scope);
-    await loadSessionCostSummary({
-      agentId: "main",
-      config,
-      sessionFile: formatSqliteSessionFileMarker(hotScope),
-    });
+    await loadSessionCostSummary(usageLookup(formatSqliteSessionFileMarker(hotScope)));
     const before = (await listUsageCountedTranscriptStats("main")).find(
       (file) => file.sessionId === scope.sessionId,
     )!;
@@ -444,19 +444,8 @@ describe("usage archive identity", () => {
     expect(await totalUsage("main")).toMatchObject({ totals: { totalTokens: 36 } });
     expect(readSessionColdTranscript(database.db, scope.sessionId)).toBeUndefined();
     const rollups = readSessionCostUsageRollupRows("main");
-    const missingScope = {
-      ...scope,
-      sessionKey: "agent:main:missing-usage",
-      sessionId: "missing-usage",
-    };
-    await upsertSessionEntryCore(missingScope, {
-      sessionId: missingScope.sessionId,
-      updatedAt: archiveTime,
-    });
-    await persistSessionTranscriptTurn(missingScope, {
-      messages: [{ message: assistant(19) }],
-      touchSessionEntry: false,
-    });
+    const missingScope = scopeFor("missing-usage", scope.storePath);
+    await seed(missingScope, 19, false);
     await ageTranscript(missingScope);
     const missingFile = expectDefined(
       (await listUsageCountedTranscriptStats("main")).find(
@@ -665,10 +654,11 @@ describe("usage archive identity", () => {
       rows.find((row) => row.key === replacement.filePath),
       "replacement archive rollup",
     );
+    const size = Buffer.byteLength(serialize(manager));
     expect(decodeUsageCostRollupEnvelope(rollup.valueJson, fingerprint)?.checkpoint).toMatchObject({
       kind: "jsonl",
-      parsedOffset: Buffer.byteLength(serialize(manager)),
-      observedSize: Buffer.byteLength(serialize(manager)),
+      parsedOffset: size,
+      observedSize: size,
       observedMtimeMs: archiveTime + 2000,
     });
     expect(await loadSessionUsageTimeSeries(lookup)).toMatchObject({
@@ -685,7 +675,7 @@ describe("usage archive identity", () => {
   it("preserves rollups when a compressed source becomes unreadable", async () => {
     const manager = transcript();
     const sessionFile = await writeArchive({ state, manager });
-    await loadSessionCostSummary({ agentId: "main", sessionFile, config });
+    await loadSessionCostSummary(usageLookup(sessionFile));
     const rows = readSessionCostUsageRollupRows("main");
     expect(rows).toHaveLength(1);
     await fs.writeFile(sessionFile, "not a zstd frame");

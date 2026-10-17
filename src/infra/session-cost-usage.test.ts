@@ -61,8 +61,16 @@ const transcriptEntry = (timestamp: string | undefined, message: Record<string, 
   message,
 });
 
-async function writeEntries(file: string, entries: unknown[]): Promise<void> {
-  await fs.writeFile(file, entries.map((entry) => JSON.stringify(entry)).join("\n"), "utf-8");
+async function writeEntries(
+  file: string,
+  entries: unknown[],
+  trailingNewline = false,
+): Promise<void> {
+  await fs.writeFile(
+    file,
+    entries.map((entry) => JSON.stringify(entry)).join("\n") + (trailingNewline ? "\n" : ""),
+    "utf-8",
+  );
 }
 
 describe("session cost usage", () => {
@@ -76,16 +84,23 @@ describe("session cost usage", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
   });
   afterEach(() => vi.unstubAllEnvs());
+  const readSummary = (
+    params: Omit<Parameters<typeof loadSessionCostSummary>[0], "config" | "agentId">,
+  ) => loadSessionCostSummary({ config: defaultConfig, agentId: "main", ...params });
+  const readCached = (
+    params: Omit<Parameters<typeof loadSessionCostSummariesFromCache>[0], "config" | "agentId">,
+  ) => loadSessionCostSummariesFromCache({ config: defaultConfig, agentId: "main", ...params });
+  const readAggregate = (
+    params: Omit<Parameters<typeof loadCostUsageSummary>[0], "config" | "agentId"> = {},
+  ) => loadCostUsageSummary({ config: defaultConfig, agentId: "main", ...params });
+  const readCachedAggregate = (
+    params: Omit<Parameters<typeof loadCostUsageSummaryFromCache>[0], "config" | "agentId">,
+  ) => loadCostUsageSummaryFromCache({ config: defaultConfig, agentId: "main", ...params });
+  const assistant = (timestamp: string | undefined, usage: unknown) =>
+    transcriptEntry(timestamp, { role: "assistant", usage });
+
   const writeTranscript = (file: string, sessionId: string, entry: unknown) =>
-    fs.writeFile(
-      file,
-      [
-        JSON.stringify({ type: "session", version: 1, id: sessionId }),
-        JSON.stringify(entry),
-        "",
-      ].join("\n"),
-      "utf-8",
-    );
+    writeEntries(file, [{ type: "session", version: 1, id: sessionId }, entry], true);
 
   it("prices and aggregates usage with each row's agent-local registry", async () => {
     const provider = "demo-agent-scope";
@@ -169,21 +184,15 @@ describe("session cost usage", () => {
     const userEntry = (timestamp: string) =>
       transcriptEntry(timestamp, { role: "user", content: "hello" });
 
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify(assistantEntry(undefined, 1_000, "glm-5")),
-        JSON.stringify(assistantEntry("2026-02-05T12:00:00.001Z", 10)),
-        JSON.stringify(userEntry("2026-02-05T12:00:00.025Z")),
-        JSON.stringify(assistantEntry("2026-02-05T12:00:00.050Z", 20)),
-      ].join("\n"),
-      "utf-8",
-    );
+    await writeEntries(sessionFile, [
+      assistantEntry(undefined, 1_000, "glm-5"),
+      assistantEntry("2026-02-05T12:00:00.001Z", 10),
+      userEntry("2026-02-05T12:00:00.025Z"),
+      assistantEntry("2026-02-05T12:00:00.050Z", 20),
+    ]);
 
     const rangeEndMs = Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1;
-    const ranged = await loadSessionCostSummary({
-      config: defaultConfig,
-      agentId: "main",
+    const ranged = await readSummary({
       sessionFile,
       startMs: Date.UTC(2026, 1, 5, 12, 0, 0, 30),
       endMs: rangeEndMs,
@@ -195,18 +204,14 @@ describe("session cost usage", () => {
     ]);
     expect(ranged?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
 
-    const upperBounded = await loadSessionCostSummary({
-      config: defaultConfig,
-      agentId: "main",
+    const upperBounded = await readSummary({
       sessionFile,
       endMs: rangeEndMs,
     });
     expect(upperBounded?.totalTokens).toBe(30);
     expect(upperBounded?.modelUsage?.some((entry) => entry.model === "glm-5")).toBe(false);
 
-    const allRange = await loadSessionCostSummary({
-      config: defaultConfig,
-      agentId: "main",
+    const allRange = await readSummary({
       sessionFile,
       startMs: 0,
       endMs: rangeEndMs,
@@ -230,22 +235,16 @@ describe("session cost usage", () => {
         ],
         usage: billed(totalTokens, 0, totalTokens, totalTokens / 1000),
       });
-    await fs.writeFile(
+    await writeEntries(
       sessionFile,
-      [
-        JSON.stringify(assistantEntry(undefined, 1_000)),
-        JSON.stringify(assistantEntry("2026-02-05T12:00:00.000Z", 20)),
-        "",
-      ].join("\n"),
-      "utf-8",
+      [assistantEntry(undefined, 1_000), assistantEntry("2026-02-05T12:00:00.000Z", 20)],
+      true,
     );
 
     const session = { sessionId: "sess-v8-upgrade", sessionFile };
     await refreshSessionCostUsageForTest(sessionFile);
-    const current = await loadSessionCostSummariesFromCache({
-      config: defaultConfig,
+    const current = await readCached({
       sessions: [session],
-      agentId: "main",
       requestRefresh: false,
     });
     expect(current.cacheStatus.status).toBe("fresh");
@@ -269,10 +268,8 @@ describe("session cost usage", () => {
     ] as const) {
       await prepare();
       await refreshSessionCostUsageForTest(sessionFile);
-      const result = await loadSessionCostSummariesFromCache({
-        config: defaultConfig,
+      const result = await readCached({
         sessions: [session],
-        agentId: "main",
         startMs: Date.UTC(2026, 1, 5),
         endMs: rangeEndMs,
         requestRefresh: false,
@@ -298,10 +295,8 @@ describe("session cost usage", () => {
     );
     expect(appendedRollup.rollup.untimestamped.totals.totalTokens).toBe(1_000);
 
-    const allTime = await loadSessionCostSummariesFromCache({
-      config: defaultConfig,
+    const allTime = await readCached({
       sessions: [session],
-      agentId: "main",
       startMs: 0,
       endMs: rangeEndMs,
       includeUntimestamped: true,
@@ -321,17 +316,12 @@ describe("session cost usage", () => {
     await writeTranscript(
       path.join(sessionsDir, "sess-offset.jsonl"),
       "sess-offset",
-      transcriptEntry("2026-02-12T00:30:00.000Z", {
-        role: "assistant",
-        usage: billed(10, 5, 15, 0.00001),
-      }),
+      assistant("2026-02-12T00:30:00.000Z", billed(10, 5, 15, 0.00001)),
     );
 
     const startMs = Date.UTC(2026, 1, 11, 2);
     const endMs = Date.UTC(2026, 1, 12, 1, 59, 59, 999);
-    const summary = await loadCostUsageSummary({
-      config: defaultConfig,
-      agentId: "main",
+    const summary = await readAggregate({
       startMs,
       endMs,
       dayBucket: { mode: "utc-offset", utcOffsetMinutes: -120 },
@@ -343,9 +333,7 @@ describe("session cost usage", () => {
   });
 
   it("fills every calendar day across a spring-forward DST transition", async () => {
-    const summary = await loadCostUsageSummary({
-      config: defaultConfig,
-      agentId: "main",
+    const summary = await readAggregate({
       startMs: Date.UTC(2026, 2, 8, 6, 30),
       endMs: Date.UTC(2026, 2, 14, 5, 30),
       dayBucket: { mode: "time-zone", timeZone: "America/Denver" },
@@ -409,21 +397,16 @@ describe("session cost usage", () => {
     await writeTranscript(
       path.join(sessionsDir, "sess-readdir-error.jsonl"),
       "sess-readdir-error",
-      transcriptEntry("2026-02-05T12:00:00.000Z", {
-        role: "assistant",
-        usage: billed(4, 6, 10, 0.01),
-      }),
+      assistant("2026-02-05T12:00:00.000Z", billed(4, 6, 10, 0.01)),
     );
 
-    await loadCostUsageSummary({ config: defaultConfig, agentId: "main" });
+    await readAggregate();
     const rowsBefore = readSessionCostUsageRollupRows("main");
     const movedSessionsDir = path.join(root, "saved-sessions");
     await fs.rename(sessionsDir, movedSessionsDir);
     try {
       await fs.writeFile(sessionsDir, "not a directory");
-      await expect(
-        loadCostUsageSummary({ config: defaultConfig, agentId: "main" }),
-      ).rejects.toMatchObject({
+      await expect(readAggregate()).rejects.toMatchObject({
         code: "ENOTDIR",
       });
     } finally {
@@ -439,18 +422,12 @@ describe("session cost usage", () => {
     await writeTranscript(
       oldSessionFile,
       "sess-cache-cold-sync-old",
-      transcriptEntry("2026-02-05T12:00:00.000Z", {
-        role: "assistant",
-        usage: billed(100, 100, 200, 0.2),
-      }),
+      assistant("2026-02-05T12:00:00.000Z", billed(100, 100, 200, 0.2)),
     );
     await writeTranscript(
       currentSessionFile,
       "sess-cache-cold-sync-current",
-      transcriptEntry("2026-02-05T12:00:00.000Z", {
-        role: "assistant",
-        usage: billed(10, 20, 30, 0.03),
-      }),
+      assistant("2026-02-05T12:00:00.000Z", billed(10, 20, 30, 0.03)),
     );
     await fs.utimes(
       oldSessionFile,
@@ -463,9 +440,7 @@ describe("session cost usage", () => {
       agentId: "main",
       startMs: Date.UTC(2026, 1, 5),
     });
-    const summary = await loadCostUsageSummaryFromCache({
-      config: defaultConfig,
-      agentId: "main",
+    const summary = await readCachedAggregate({
       startMs: Date.UTC(2026, 1, 5),
       endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
     });
@@ -473,9 +448,7 @@ describe("session cost usage", () => {
     expect(summary.totals.totalTokens).toBe(30);
     await vi.waitFor(
       async () => {
-        const refreshed = await loadCostUsageSummaryFromCache({
-          config: defaultConfig,
-          agentId: "main",
+        const refreshed = await readCachedAggregate({
           startMs: Date.UTC(2026, 1, 5),
           endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
           requestRefresh: false,
@@ -491,10 +464,7 @@ describe("session cost usage", () => {
     await writeTranscript(
       sessionFile,
       "cost-session-busy-refresh",
-      transcriptEntry("2026-02-01T10:00:00.000Z", {
-        role: "assistant",
-        usage: billed(7, 5, 12, 0.012),
-      }),
+      assistant("2026-02-01T10:00:00.000Z", billed(7, 5, 12, 0.012)),
     );
 
     const lock = prepareSessionCostUsageRefreshLock("main");
@@ -502,10 +472,7 @@ describe("session cost usage", () => {
     try {
       expect(await lock.acquire()).toBe(true);
       released = delay(40).then(lock.release);
-      const [summary] = await Promise.all([
-        loadSessionCostSummary({ config: defaultConfig, agentId: "main", sessionFile }),
-        released,
-      ]);
+      const [summary] = await Promise.all([readSummary({ sessionFile }), released]);
       expect(summary?.totalTokens).toBe(12);
     } finally {
       await released;
@@ -541,11 +508,7 @@ describe("session cost usage", () => {
 
     await writeEntries(sessionFile, entries);
 
-    const summary = await loadSessionCostSummary({
-      config: defaultConfig,
-      agentId: "main",
-      sessionFile,
-    });
+    const summary = await readSummary({ sessionFile });
     expect(summary?.messageCounts).toEqual({
       total: 2,
       user: 1,
@@ -586,11 +549,7 @@ describe("session cost usage", () => {
       }),
     );
 
-    const summary = await loadSessionCostSummary({
-      config: defaultConfig,
-      agentId: "main",
-      sessionFile,
-    });
+    const summary = await readSummary({ sessionFile });
     expect(summary?.messageCounts).toEqual({
       total: 0,
       user: 0,
@@ -611,11 +570,7 @@ describe("session cost usage", () => {
       transcriptEntry(new Date(startedAt).toISOString(), { role: "user", content: "go" }),
     );
 
-    const first = await loadSessionCostSummary({
-      config: defaultConfig,
-      agentId: "main",
-      sessionFile,
-    });
+    const first = await readSummary({ sessionFile });
     expect(first?.latency).toBeUndefined();
     expect(readSessionCostUsageRollupRows()[0]?.valueJson).not.toContain('"min":null');
 
@@ -629,15 +584,9 @@ describe("session cost usage", () => {
         }),
       )}\n`,
     );
-    const appended = await loadSessionCostSummary({
-      config: defaultConfig,
-      agentId: "main",
-      sessionFile,
-    });
+    const appended = await readSummary({ sessionFile });
 
-    expect(appended?.latency?.count).toBe(1);
-    expect(appended?.latency?.minMs).toBe(5_000);
-    expect(appended?.latency?.maxMs).toBe(5_000);
+    expect(appended?.latency).toMatchObject({ count: 1, minMs: 5_000, maxMs: 5_000 });
   });
 
   it("resolves the newest archive in the candidate session directory", async () => {
@@ -668,39 +617,33 @@ describe("session cost usage", () => {
   it("strips inbound and untrusted metadata blocks from session usage logs", async () => {
     const sessionFile = path.join(sessionsDir, "sess-sanitize.jsonl");
 
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify(
-          transcriptEntry("2026-02-21T17:47:00.000Z", {
-            role: "user",
-            content: [
-              "    [message_id: literal]",
-              markInboundContextLabel("Conversation info:"),
-              "```json",
-              '{"message_id":"abc123"}',
-              "```",
-              "",
-              "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-              "private runtime context",
-              "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-              "hello there",
-              "[message_id: abc123]",
-              "",
-              markInboundContextLabel("Context:"),
-              '<<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>',
-              "Source: Channel metadata",
-              "---",
-              "Channel metadata (guildchat)",
-              "Sender labels:",
-              "example",
-              '<<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>',
-            ].join("\n"),
-          }),
-        ),
-      ].join("\n"),
-      "utf-8",
-    );
+    await writeEntries(sessionFile, [
+      transcriptEntry("2026-02-21T17:47:00.000Z", {
+        role: "user",
+        content: [
+          "    [message_id: literal]",
+          markInboundContextLabel("Conversation info:"),
+          "```json",
+          '{"message_id":"abc123"}',
+          "```",
+          "",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "private runtime context",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "hello there",
+          "[message_id: abc123]",
+          "",
+          markInboundContextLabel("Context:"),
+          '<<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>',
+          "Source: Channel metadata",
+          "---",
+          "Channel metadata (guildchat)",
+          "Sender labels:",
+          "example",
+          '<<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>',
+        ].join("\n"),
+      }),
+    ]);
 
     const logs = await loadSessionLogs({ agentId: "main", sessionFile });
     expect(logs).toHaveLength(1);
@@ -787,11 +730,7 @@ describe("session cost usage", () => {
 
     await writeEntries(sessionFile, entries);
 
-    const summary = await loadSessionCostSummary({
-      config: defaultConfig,
-      agentId: "main",
-      sessionFile,
-    });
+    const summary = await readSummary({ sessionFile });
     expect(summary?.utcQuarterHourTokenUsage).toEqual([
       {
         date: "2026-03-15",

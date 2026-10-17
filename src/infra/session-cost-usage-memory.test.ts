@@ -37,6 +37,13 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   }),
 }));
 
+const dayBucket = { mode: "utc-offset", utcOffsetMinutes: 0 } as const;
+const runUsage = (
+  binding: Parameters<typeof runSessionActorUsage>[0],
+  operation: Parameters<typeof runSessionActorUsage>[1],
+) => runSessionActorUsage(binding, operation, () => undefined);
+const refreshUsage = (binding: Parameters<typeof runSessionActorUsage>[0]) =>
+  runUsage(binding, { kind: "refresh", pricingFingerprint: "fixture" });
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const sessionKey = "agent:main:dashboard:incognito-usage";
 const sessionId = "usage-1";
@@ -191,19 +198,15 @@ async function writeRollup(
 }
 
 function memoryReport(
-  cached: Awaited<ReturnType<typeof fixture>>,
+  cached: Pick<Awaited<ReturnType<typeof fixture>>, "binding" | "sessionFile">,
   sessionFiles = [cached.sessionFile],
 ) {
-  return runSessionActorUsage(
-    cached.binding,
-    {
-      kind: "sessions",
-      pricingFingerprint: "fixture",
-      sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
-      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-    },
-    () => undefined,
-  );
+  return runUsage(cached.binding, {
+    kind: "sessions",
+    pricingFingerprint: "fixture",
+    sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
+    dayBucket,
+  });
 }
 
 describe("actor memory usage", () => {
@@ -224,9 +227,6 @@ describe("actor memory usage", () => {
       }
       await writeRollup(cached, encoded);
       const report = await memoryReport(cached);
-      if (mode === "valid") {
-        expect(report.kind === "sessions" && report.summaries[0] === null).toBe(true);
-      }
       expect(report).toMatchObject({
         kind: "sessions",
         summaries: [null],
@@ -244,16 +244,12 @@ describe("actor memory usage", () => {
         mode === "valid" || mode === "oversized-header" ? 0 : 1,
       );
       expect(
-        await runSessionActorUsage(
-          cached.binding,
-          {
-            kind: "refresh",
-            pricingFingerprint: "fixture",
-            sessionFiles: [cached.sessionFile],
-            rebuildRows: report.invalidRows,
-          },
-          () => undefined,
-        ),
+        await runUsage(cached.binding, {
+          kind: "refresh",
+          pricingFingerprint: "fixture",
+          sessionFiles: [cached.sessionFile],
+          rebuildRows: report.invalidRows,
+        }),
       ).toEqual({ kind: "refresh", changed: mode !== "valid" });
       if (mode !== "valid") {
         expect(await memoryReport(cached)).toMatchObject({
@@ -324,7 +320,6 @@ describe("actor memory usage", () => {
       expect(encoded.blob.byteLength).toBeLessThan(1024 * 1024);
       await writeRollup(cached, encoded);
       const report = await memoryReport(cached);
-      expect(report.kind === "sessions" && report.summaries[0] === null).toBe(true);
       expect(report).toMatchObject({
         kind: "sessions",
         summaries: [null],
@@ -366,13 +361,10 @@ describe("actor memory usage", () => {
         expect(snapshot[0]?.deferredRollupMetadata).toBeUndefined();
       }
       expect(snapshot[0]?.rollup).toBeUndefined();
-      expect(
-        await runSessionActorUsage(
-          cached.binding,
-          { kind: "refresh", pricingFingerprint: "fixture" },
-          () => undefined,
-        ),
-      ).toEqual({ kind: "refresh", changed: mode !== "valid" });
+      expect(await refreshUsage(cached.binding)).toEqual({
+        kind: "refresh",
+        changed: mode !== "valid",
+      });
       if (mode === "valid") {
         const scope = new AsyncWorkScope();
         scope.beginClose(new Error("report cancelled"));
@@ -385,12 +377,7 @@ describe("actor memory usage", () => {
   it("reports publication failure while keeping the refreshed usage rollup", async () => {
     const { binding, append, sessionFile } = await fixture();
     await append(5);
-    const refresh = () =>
-      runSessionActorUsage(
-        binding,
-        { kind: "refresh", pricingFingerprint: "fixture" },
-        () => undefined,
-      );
+    const refresh = () => refreshUsage(binding);
     const stop = failSessionActorMemoryPublication(sessionKey);
     try {
       await expect(refresh()).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
@@ -399,16 +386,12 @@ describe("actor memory usage", () => {
     }
     expect(await refresh()).toEqual({ kind: "refresh", changed: false });
     expect(
-      await runSessionActorUsage(
-        binding,
-        {
-          kind: "sessions",
-          pricingFingerprint: "fixture",
-          sessions: [{ sessionFile }],
-          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-        },
-        () => undefined,
-      ),
+      await runUsage(binding, {
+        kind: "sessions",
+        pricingFingerprint: "fixture",
+        sessions: [{ sessionFile }],
+        dayBucket,
+      }),
     ).toMatchObject({ kind: "sessions", summaries: [{ input: 5, output: 2 }] });
   });
 
@@ -431,23 +414,8 @@ describe("actor memory usage", () => {
         { role: "assistant", content: "answer", tokens: 7, cost: 0.03 },
       ]);
     }
-    const refresh = () =>
-      runSessionActorUsage(
-        binding,
-        { kind: "refresh", pricingFingerprint: "fixture" },
-        () => undefined,
-      );
-    const report = () =>
-      runSessionActorUsage(
-        binding,
-        {
-          kind: "sessions",
-          pricingFingerprint: "fixture",
-          sessions: [{ sessionFile }],
-          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-        },
-        () => undefined,
-      );
+    const refresh = () => refreshUsage(binding);
+    const report = () => memoryReport({ binding, sessionFile });
     expect(await refresh()).toEqual({ kind: "refresh", changed: true });
     expect(await report()).toMatchObject({
       kind: "sessions",
@@ -493,7 +461,7 @@ describe("actor memory usage", () => {
       kind: "sessions",
       pricingFingerprint,
       sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
-      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+      dayBucket,
     });
     expect(cached).toMatchObject({
       kind: "sessions",
@@ -515,7 +483,7 @@ describe("actor memory usage", () => {
           usage: cached.summaries[index] ?? null,
         })),
         options: { limit: 1 },
-        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+        dayBucket,
       }),
     ).toMatchObject({
       totals: { totalTokens: 20, totalCost: 2 },
@@ -545,7 +513,7 @@ describe("actor memory usage", () => {
             }),
           },
         ],
-        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+        dayBucket,
       }),
     ).toMatchObject({ kind: "sessions", summaries: [null] });
     expect(memorySessionActorOwners.list()).toEqual([]);
@@ -554,12 +522,7 @@ describe("actor memory usage", () => {
   it("keeps captured corpus and usage bytes detached while later writes update new reads", async () => {
     const { actor, binding, append } = await fixture();
     await append(5);
-    const refresh = () =>
-      runSessionActorUsage(
-        binding,
-        { kind: "refresh", pricingFingerprint: "fixture" },
-        () => undefined,
-      );
+    const refresh = () => refreshUsage(binding);
     await refresh();
     const store = actor.storage!;
     const snapshotInput = {
@@ -606,16 +569,12 @@ describe("actor memory usage", () => {
         .contentRevision,
     ).not.toBe(corpus[0]!.contentRevision);
     await expect(
-      runSessionActorUsage(
-        binding,
-        {
-          kind: "inventory",
-          sessionFiles: [
-            formatSqliteSessionFileMarker({ agentId: "other", storePath: "/other", sessionId }),
-          ],
-        },
-        () => undefined,
-      ),
+      runUsage(binding, {
+        kind: "inventory",
+        sessionFiles: [
+          formatSqliteSessionFileMarker({ agentId: "other", storePath: "/other", sessionId }),
+        ],
+      }),
     ).rejects.toThrow("another session owner");
   });
 
