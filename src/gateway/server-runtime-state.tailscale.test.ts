@@ -1,78 +1,55 @@
 import { request as httpRequest, type RequestOptions } from "node:http";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 
-type Runtime = Awaited<ReturnType<typeof createGatewayRuntimeStateForTest>>;
-const getReadiness = () => ({ ready: true, failing: [], uptimeMs: 1 });
-const forwardedHeaders = {
-  "x-forwarded-for": "203.0.113.10",
-  "x-forwarded-proto": "https",
-  "x-forwarded-host": "gateway.example",
-};
-
-async function createRuntime(...args: Parameters<typeof createGatewayRuntimeStateForTest>) {
-  const runtime = await createGatewayRuntimeStateForTest(...args);
-  onTestFinished(() => {
-    runtime.wss.close();
+async function requestStatus(options: RequestOptions): Promise<{ status: number; body: string }> {
+  return await new Promise((resolve, reject) => {
+    const req = httpRequest(options, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      res.on("end", () =>
+        resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }),
+      );
+    });
+    req.once("error", reject);
+    req.end();
   });
-  return runtime;
 }
 
-async function createReadyRuntime(tailscaleMode: "serve" | "funnel", registry?: PluginRegistry) {
-  const runtime = await createRuntime(registry, { tailscaleMode, getReadiness });
-  await runtime.startListening();
-  return runtime;
-}
-
-function ordinaryEndpoint(runtime: Runtime) {
-  const address = runtime.httpServer.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected ordinary gateway listener");
+async function requestUpgrade(options: RequestOptions): Promise<{
+  status: number;
+  body: string;
+}> {
+  const requestHeaders = options.headers;
+  if (Array.isArray(requestHeaders)) {
+    throw new Error("upgrade test headers must use object form");
   }
-  return { host: "127.0.0.1", port: address.port };
-}
-
-function managedEndpoint(runtime: Runtime) {
-  const endpoint = runtime.getTailscaleIngressEndpoint();
-  if (!endpoint) {
-    throw new Error("expected managed gateway listener");
-  }
-  return endpoint;
-}
-
-type Endpoint = Pick<RequestOptions, "host" | "port">;
-type Response = { status: number; body: string };
-async function requestStatus(
-  endpoint: Endpoint,
-  path: string,
-  headers?: Record<string, string>,
-  upgrade = false,
-): Promise<Response> {
-  const requestHeaders = upgrade
-    ? {
-        ...headers,
+  return await new Promise((resolve, reject) => {
+    const req = httpRequest({
+      ...options,
+      headers: Object.assign({}, requestHeaders, {
         connection: "Upgrade",
         upgrade: "websocket",
         "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
         "sec-websocket-version": "13",
-      }
-    : headers;
-  return await new Promise((resolve, reject) => {
-    const req = httpRequest({ ...endpoint, path, headers: requestHeaders }, (res) => {
+      }),
+    });
+    req.setTimeout(2_000, () => req.destroy(new Error("upgrade rejection timed out")));
+    req.once("response", (res) => {
       const chunks: Buffer[] = [];
       res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-      res.once("end", () =>
-        resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }),
-      );
+      res.once("end", () => {
+        resolve({
+          status: res.statusCode ?? 0,
+          body: Buffer.concat(chunks).toString("utf8"),
+        });
+      });
     });
-    if (upgrade) {
-      req.setTimeout(2_000, () => req.destroy(new Error("upgrade rejection timed out")));
-    }
     req.once("upgrade", (res, socket, head) => {
       socket.destroy();
       resolve({ status: res.statusCode ?? 0, body: head.toString("utf8") });
@@ -83,13 +60,34 @@ async function requestStatus(
 }
 
 describe("managed Tailscale gateway ingress", () => {
+  const openServers: Array<Awaited<ReturnType<typeof createGatewayRuntimeStateForTest>>> = [];
+
+  afterEach(async () => {
+    for (const runtime of openServers.splice(0)) {
+      await Promise.all(
+        runtime.httpServers.map(
+          (server) =>
+            new Promise<void>((resolve) => {
+              if (!server.listening) {
+                resolve();
+                return;
+              }
+              server.close(() => resolve());
+            }),
+        ),
+      );
+      runtime.wss.close();
+    }
+  });
+
   it("keeps ordinary ingress closed until the managed route is claimed", async () => {
     const { promise: routeClaim, resolve: releaseRouteClaim } = createDeferred();
     const prepareManagedTailscaleIngress = vi.fn(async () => await routeClaim);
-    const runtime = await createRuntime(undefined, {
+    const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "serve",
       prepareManagedTailscaleIngress,
     });
+    openServers.push(runtime);
 
     const starting = runtime.startListening();
     await vi.waitFor(() => expect(prepareManagedTailscaleIngress).toHaveBeenCalledOnce());
@@ -103,9 +101,17 @@ describe("managed Tailscale gateway ingress", () => {
   });
 
   it("binds a distinct private listener and rejects the same headers on the ordinary listener", async () => {
-    const runtime = await createReadyRuntime("serve");
-    const ordinaryAddress = ordinaryEndpoint(runtime);
-    const tailscaleAddress = managedEndpoint(runtime);
+    const runtime = await createGatewayRuntimeStateForTest(undefined, {
+      tailscaleMode: "serve",
+      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
+    });
+    openServers.push(runtime);
+    await runtime.startListening();
+    const ordinaryAddress = runtime.httpServer.address();
+    const tailscaleAddress = runtime.getTailscaleIngressEndpoint();
+    if (!ordinaryAddress || typeof ordinaryAddress === "string" || !tailscaleAddress) {
+      throw new Error("expected both gateway listeners");
+    }
     expect(tailscaleAddress.host).toBe("127.0.0.1");
     expect(tailscaleAddress.port).not.toBe(ordinaryAddress.port);
 
@@ -116,10 +122,20 @@ describe("managed Tailscale gateway ingress", () => {
     };
     const ordinaryResponses = await Promise.all(
       ["/ready", "/v1/models", "/api/users/profile-1/avatar"].map((path) =>
-        requestStatus(ordinaryAddress, path, headers),
+        requestStatus({
+          host: "127.0.0.1",
+          port: ordinaryAddress.port,
+          path,
+          headers,
+        }),
       ),
     );
-    const managed = await requestStatus(tailscaleAddress, "/ready", headers);
+    const managed = await requestStatus({
+      host: tailscaleAddress.host,
+      port: tailscaleAddress.port,
+      path: "/ready",
+      headers,
+    });
 
     for (const ordinary of ordinaryResponses) {
       expect(ordinary).toMatchObject({ status: 403 });
@@ -129,42 +145,77 @@ describe("managed Tailscale gateway ingress", () => {
   });
 
   it("accepts tailnet and public ingress on the dedicated Funnel listener", async () => {
-    const runtime = await createReadyRuntime("funnel");
-    const endpoint = managedEndpoint(runtime);
-
-    const missingMarker = await requestStatus(endpoint, "/ready", forwardedHeaders);
-    const marked = await requestStatus(endpoint, "/ready", {
-      ...forwardedHeaders,
-      "tailscale-funnel-request": "?1",
+    const runtime = await createGatewayRuntimeStateForTest(undefined, {
+      tailscaleMode: "funnel",
+      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
     });
-    const malformedMarker = await requestStatus(endpoint, "/ready", {
-      ...forwardedHeaders,
-      "tailscale-funnel-request": "true",
+    openServers.push(runtime);
+    await runtime.startListening();
+    const endpoint = runtime.getTailscaleIngressEndpoint();
+    if (!endpoint) {
+      throw new Error("expected Funnel listener");
+    }
+    const baseHeaders = {
+      "x-forwarded-for": "203.0.113.10",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "gateway.example",
+    };
+
+    const missingMarker = await requestStatus({
+      host: endpoint.host,
+      port: endpoint.port,
+      path: "/ready",
+      headers: baseHeaders,
+    });
+    const marked = await requestStatus({
+      host: endpoint.host,
+      port: endpoint.port,
+      path: "/ready",
+      headers: { ...baseHeaders, "tailscale-funnel-request": "?1" },
+    });
+    const malformedMarker = await requestStatus({
+      host: endpoint.host,
+      port: endpoint.port,
+      path: "/ready",
+      headers: { ...baseHeaders, "tailscale-funnel-request": "true" },
     });
 
-    expect([missingMarker.status, marked.status, malformedMarker.status]).toEqual([200, 200, 403]);
+    expect(missingMarker.status).toBe(200);
+    expect(marked.status).toBe(200);
+    expect(malformedMarker.status).toBe(403);
   });
 
   it("rejects external Funnel ingress when gateway auth is disabled", async () => {
     const auth = { mode: "none" as const, allowTailscale: false };
-    const runtime = await createRuntime(undefined, {
+    const runtime = await createGatewayRuntimeStateForTest(undefined, {
       cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
       openAiChatCompletionsEnabled: true,
       resolvedAuth: auth,
       getResolvedAuth: () => auth,
     });
+    openServers.push(runtime);
     await runtime.startListening();
-    const endpoint = ordinaryEndpoint(runtime);
+    const address = runtime.httpServer.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected ordinary gateway listener");
+    }
 
     await expect(
-      requestStatus(endpoint, "/v1/models", {
-        ...forwardedHeaders,
-        "tailscale-funnel-request": "?1",
+      requestStatus({
+        host: "127.0.0.1",
+        port: address.port,
+        path: "/v1/models",
+        headers: {
+          "x-forwarded-for": "203.0.113.10",
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "gateway.example",
+          "tailscale-funnel-request": "?1",
+        },
       }),
     ).resolves.toMatchObject({ status: 401 });
-    await expect(requestStatus(endpoint, "/v1/models")).resolves.toMatchObject({
-      status: 200,
-    });
+    await expect(
+      requestStatus({ host: "127.0.0.1", port: address.port, path: "/v1/models" }),
+    ).resolves.toMatchObject({ status: 200 });
   });
 
   it("isolates protected Funnel auth lockout by the validated source", async () => {
@@ -177,32 +228,50 @@ describe("managed Tailscale gateway ingress", () => {
       },
       { scheduler: createTestGatewayScheduler() },
     );
-    onTestFinished(() => limiter.dispose());
     const auth = { mode: "token" as const, token: "secret", allowTailscale: false };
-    const runtime = await createRuntime(undefined, {
+    const runtime = await createGatewayRuntimeStateForTest(undefined, {
       tailscaleMode: "funnel",
       openAiChatCompletionsEnabled: true,
       resolvedAuth: auth,
       getResolvedAuth: () => auth,
       rateLimiter: limiter,
     });
-    await runtime.startListening();
-    const ordinaryAddress = ordinaryEndpoint(runtime);
-    const endpoint = managedEndpoint(runtime);
-    const requestFrom = (clientIp: string, token: string) =>
-      requestStatus(endpoint, "/v1/models", {
-        authorization: `Bearer ${token}`,
-        ...forwardedHeaders,
-        "x-forwarded-for": clientIp,
-        "tailscale-funnel-request": "?1",
-      });
+    openServers.push(runtime);
+    try {
+      await runtime.startListening();
+      const ordinaryAddress = runtime.httpServer.address();
+      const endpoint = runtime.getTailscaleIngressEndpoint();
+      if (!ordinaryAddress || typeof ordinaryAddress === "string" || !endpoint) {
+        throw new Error("expected both gateway listeners");
+      }
+      const requestFrom = (clientIp: string, token: string) =>
+        requestStatus({
+          host: endpoint.host,
+          port: endpoint.port,
+          path: "/v1/models",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "x-forwarded-for": clientIp,
+            "x-forwarded-proto": "https",
+            "x-forwarded-host": "gateway.example",
+            "tailscale-funnel-request": "?1",
+          },
+        });
 
-    await expect(requestFrom("203.0.113.10", "wrong")).resolves.toMatchObject({ status: 401 });
-    await expect(requestFrom("203.0.113.10", "secret")).resolves.toMatchObject({ status: 429 });
-    await expect(requestFrom("203.0.113.11", "secret")).resolves.toMatchObject({ status: 200 });
-    await expect(
-      requestStatus(ordinaryAddress, "/v1/models", { authorization: "Bearer secret" }),
-    ).resolves.toMatchObject({ status: 200 });
+      await expect(requestFrom("203.0.113.10", "wrong")).resolves.toMatchObject({ status: 401 });
+      await expect(requestFrom("203.0.113.10", "secret")).resolves.toMatchObject({ status: 429 });
+      await expect(requestFrom("203.0.113.11", "secret")).resolves.toMatchObject({ status: 200 });
+      await expect(
+        requestStatus({
+          host: "127.0.0.1",
+          port: ordinaryAddress.port,
+          path: "/v1/models",
+          headers: { authorization: "Bearer secret" },
+        }),
+      ).resolves.toMatchObject({ status: 200 });
+    } finally {
+      limiter.dispose();
+    }
   });
 
   it("routes proxy-shaped WebSocket upgrades only to plugin-authenticated routes", async () => {
@@ -226,12 +295,29 @@ describe("managed Tailscale gateway ingress", () => {
       pluginId: "plugin-ws",
       source: "test",
     });
-    const runtime = await createReadyRuntime("serve", registry);
-    const ordinaryAddress = ordinaryEndpoint(runtime);
-    const proxyHeaders = { ...forwardedHeaders, "x-forwarded-for": "198.51.100.20" };
+    const runtime = await createGatewayRuntimeStateForTest(registry, {
+      tailscaleMode: "serve",
+      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
+    });
+    openServers.push(runtime);
+    await runtime.startListening();
+    const ordinaryAddress = runtime.httpServer.address();
+    if (!ordinaryAddress || typeof ordinaryAddress === "string") {
+      throw new Error("expected ordinary gateway listener");
+    }
+    const proxyHeaders = {
+      "x-forwarded-for": "198.51.100.20",
+      "x-forwarded-proto": "https",
+      "x-forwarded-host": "gateway.example",
+    };
 
     await expect(
-      requestStatus(ordinaryAddress, "/plugin-ws", proxyHeaders, true),
+      requestUpgrade({
+        host: "127.0.0.1",
+        port: ordinaryAddress.port,
+        path: "/plugin-ws",
+        headers: proxyHeaders,
+      }),
     ).resolves.toMatchObject({ status: 101 });
     expect(observedClient).toHaveBeenCalledWith({
       remoteAddress: "127.0.0.1",
@@ -241,12 +327,12 @@ describe("managed Tailscale gateway ingress", () => {
       expect.objectContaining({ clientIp: "198.51.100.20" }),
     );
 
-    const rejectedGatewayUpgrade = await requestStatus(
-      ordinaryAddress,
-      "/ready",
-      proxyHeaders,
-      true,
-    );
+    const rejectedGatewayUpgrade = await requestUpgrade({
+      host: "127.0.0.1",
+      port: ordinaryAddress.port,
+      path: "/ready",
+      headers: proxyHeaders,
+    });
     expect(rejectedGatewayUpgrade.status).toBe(403);
     expect(rejectedGatewayUpgrade.body).toContain("proxy_attribution_required");
   });

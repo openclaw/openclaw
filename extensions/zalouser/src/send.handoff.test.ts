@@ -70,36 +70,43 @@ describe("Zalouser registered send handoff", () => {
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
-      await Promise.race([
-        preparation.entered.promise,
-        response.entered.promise.then(() => {
-          throw new Error("dispatched before preparation");
-        }),
-        sending.then(() => {
-          throw new Error("settled before preparation");
-        }),
-      ]);
-      expect(harness.requests).toEqual([]);
-      if (retired) {
-        caller.abort(new Error("caller retired during effect preparation"));
-      }
-      preparation.release.resolve();
-      if (!retired) {
-        await response.entered.promise;
-        caller.abort(new Error("caller retired after dispatch"));
-      }
-      response.release.resolve();
-      expect(await sending).toMatchObject(
-        retired
-          ? { error: { message: "caller retired during effect preparation" } }
-          : {
-              value: {
-                messageId: "prepared-send",
-                receipt: { platformMessageIds: ["prepared-send"] },
+      try {
+        await Promise.race([
+          preparation.entered.promise,
+          response.entered.promise.then(() => {
+            throw new Error("dispatched before preparation");
+          }),
+          sending.then(() => {
+            throw new Error("settled before preparation");
+          }),
+        ]);
+        expect(harness.requests).toEqual([]);
+        if (retired) {
+          caller.abort(new Error("caller retired during effect preparation"));
+        }
+        preparation.release.resolve();
+        if (!retired) {
+          await response.entered.promise;
+          caller.abort(new Error("caller retired after dispatch"));
+        }
+        response.release.resolve();
+        expect(await sending).toMatchObject(
+          retired
+            ? { error: { message: "caller retired during effect preparation" } }
+            : {
+                value: {
+                  messageId: "prepared-send",
+                  receipt: { platformMessageIds: ["prepared-send"] },
+                },
               },
-            },
-      );
-      expect(harness.requests).toHaveLength(retired ? 0 : 1);
+        );
+        expect(harness.requests).toHaveLength(retired ? 0 : 1);
+      } finally {
+        preparation.release.resolve();
+        response.release.resolve();
+        await sending;
+        effectGate.prepare = undefined;
+      }
     },
   );
 
