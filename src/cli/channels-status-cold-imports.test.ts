@@ -81,6 +81,7 @@ describe("routed channels status cold imports", () => {
         params: { probe, timeoutMs },
         timeoutMs,
         sharedStateMode: "read-only",
+        beforeDeviceIdentityLoad: expect.any(Function),
       });
       expect(runtime.writeJson).toHaveBeenCalledWith({ channelAccounts: {} }, 2);
       expect(loaded.modules).not.toContain("config-guard");

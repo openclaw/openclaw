@@ -125,6 +125,94 @@ describe("database-only config repair without a PostgreSQL connection", () => {
     await expect(fs.access(statePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it.each(["set", "patch", "unset"])(
+    "requires PostgreSQL selection for a %s preview without writing local state",
+    async (command) => {
+      const { configPath, statePath, env } = await fixture();
+      const originalConfig = await fs.readFile(configPath, "utf8");
+      const args =
+        command === "set"
+          ? ["config", "set", "gateway.port", "19002"]
+          : command === "patch"
+            ? ["config", "patch", "--stdin"]
+            : ["config", "unset", "gateway.mode"];
+      const result = await runCliProcessChild({
+        nodeArgs: [...entrypoint, ...args, "--dry-run"],
+        env,
+        ...(command === "patch" ? { input: '{"gateway":{"port":19002}}' } : {}),
+      });
+      expect(result.code, result.stderr).toBe(1);
+      expect(result.stderr).toContain("SecretRef is unresolved");
+      expect(await fs.readFile(configPath, "utf8")).toBe(originalConfig);
+      await expect(fs.access(statePath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.each(["set", "patch", "unset"])(
+    "previews a database-only %s without credentials or database access",
+    async (command) => {
+      const { configPath, statePath, env } = await fixture();
+      const originalConfig = await fs.readFile(configPath, "utf8");
+      const originalState = Buffer.from("unavailable shared state\n");
+      await fs.mkdir(path.dirname(statePath));
+      await fs.writeFile(statePath, originalState);
+      const args =
+        command === "set"
+          ? ["config", "set", "database.postgres.schemaPrefix", '"repaired"']
+          : command === "patch"
+            ? ["config", "patch", "--stdin"]
+            : ["config", "unset", "database"];
+      const result = await runCliProcessChild({
+        nodeArgs: [...entrypoint, ...args, "--dry-run", "--json"],
+        env,
+        ...(command === "patch"
+          ? { input: '{"database":{"postgres":{"schemaPrefix":"repaired"}}}' }
+          : {}),
+      });
+      expect(result.code, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, operations: 1 });
+      expect(await fs.readFile(configPath, "utf8")).toBe(originalConfig);
+      expect(await fs.readFile(statePath)).toEqual(originalState);
+      expect(await fs.readdir(path.dirname(statePath))).toEqual(["openclaw.sqlite"]);
+    },
+  );
+
+  it("reports malformed PostgreSQL config before resolving its missing credentials", async () => {
+    const { configPath, statePath, env } = await fixture();
+    const malformed = (await fs.readFile(configPath, "utf8")).slice(0, -1);
+    await fs.writeFile(configPath, malformed);
+    const result = await runCliProcessChild({
+      nodeArgs: [...entrypoint, "config", "validate", "--json"],
+      env,
+    });
+    expect(result.code, result.stderr).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      valid: false,
+      path: configPath,
+      issues: expect.arrayContaining([
+        expect.objectContaining({ message: expect.stringContaining("JSON5") }),
+      ]),
+    });
+    expect(await fs.readFile(configPath, "utf8")).toBe(malformed);
+    await expect(fs.access(statePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("requires PostgreSQL selection to validate a readable config", async () => {
+    const { configPath, statePath, env } = await fixture();
+    const originalConfig = await fs.readFile(configPath, "utf8");
+    const result = await runCliProcessChild({
+      nodeArgs: [...entrypoint, "config", "validate", "--json"],
+      env,
+    });
+    expect(result.code, result.stderr).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      valid: false,
+      error: { message: expect.stringContaining("SecretRef is unresolved") },
+    });
+    expect(await fs.readFile(configPath, "utf8")).toBe(originalConfig);
+    await expect(fs.access(statePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("retains live-owner refusal for database-only repairs", async () => {
     const { configPath, env } = await fixture();
     const originalConfig = await fs.readFile(configPath, "utf8");

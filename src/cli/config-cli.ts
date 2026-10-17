@@ -1,9 +1,11 @@
 import type { Command } from "commander";
+import { isConfigReadFailure } from "../config/io.invalid-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
 import { danger, success, warn } from "../globals.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   ExitError,
@@ -74,6 +76,17 @@ async function runConfigMutation(
       opts.localStateOwner !== undefined &&
       prepared.operations.length > 0 &&
       prepared.operations.every(({ setPath }) => setPath[0] === "database");
+    // Previews inspect installed plugin state without acquiring write custody.
+    if (
+      opts.localStateOwner &&
+      opts.cliOptions.dryRun &&
+      !databaseOnly &&
+      !getDatabaseEngineSelection()
+    ) {
+      const { readConfigSnapshotForEngineSelection } =
+        await import("../commands/config-preflight-snapshot.js");
+      await readConfigSnapshotForEngineSelection();
+    }
     const runLocal = () =>
       runConfigOperations({
         runtime,
@@ -290,15 +303,23 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
   try {
+    const { readConfigSnapshotForEngineSelection } =
+      await import("../commands/config-preflight-snapshot.js");
     const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
     const { formatInvalidConfigRepairHint, finishConfigValidationForCli } =
       await import("./config-cli-validation.js");
-    const read = await readConfigFileSnapshotWithPluginMetadata({
-      observe: false,
-      prepareValidation: "strict",
-      completePluginMetadata: false,
-    });
-    const snapshot = await finishConfigValidationForCli(read);
+    const selected = await readConfigSnapshotForEngineSelection();
+    const snapshot =
+      isConfigReadFailure(selected) ||
+      selected.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
+        ? selected
+        : await finishConfigValidationForCli(
+            await readConfigFileSnapshotWithPluginMetadata({
+              observe: false,
+              prepareValidation: "strict",
+              completePluginMetadata: false,
+            }),
+          );
     outputPath = snapshot.path;
     const shortPath = shortenHomePath(outputPath);
     if (!snapshot.exists) {

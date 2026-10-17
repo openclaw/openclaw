@@ -12,6 +12,20 @@ const OWNED_DATABASE_SELECTION = new Set([
   "logs *",
   "channels logs",
   "config file",
+  // Source validation owns its parse report before selecting installed-plugin state.
+  "config validate",
+  // RPC owners defer local state until device auth or config fallback needs it.
+  "gateway call",
+  "gateway health",
+  "gateway suspend",
+  "gateway resume",
+  "gateway usage-cost",
+  "gateway stability",
+  "channels status",
+  // Discovery and runtime-intent status inspect configuration/services without state.
+  "gateway discover",
+  "gateway runtime-intent",
+  "daemon runtime-intent",
   // QA and database tooling select explicit fixtures or storage paths.
   "qa *",
   "database *",
@@ -46,6 +60,12 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
     : resolveCliDatabaseProcessRole(argv) === "gateway"
       ? "gateway"
       : invocation.commandPath.slice(0, 2).join(" ");
+  if (
+    ["gateway status", "daemon status"].includes(command) &&
+    hasFlag(argv, "--runtime-intent-only")
+  ) {
+    command = `${invocation.primary} runtime-intent`;
+  }
   if (invocation.primary === "doctor" && !invocation.hasHelpOrVersion) {
     if (hasFlag(argv, "--session-sqlite-store")) {
       command = "doctor explicit-store";
@@ -73,24 +93,21 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
     invocation.primary === "doctor" &&
     snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
   ) {
-    const { parseConfigJson5 } = await import("../config/io.js");
-    if (typeof snapshot.raw === "string" && !parseConfigJson5(snapshot.raw).ok) {
-      doctorRecovery = true;
-      const { prepareDoctorEngineSelection, reportDoctorUnresolvedEngine } =
-        await import("../commands/doctor-engine-selection.js");
-      try {
-        snapshot = await prepareDoctorEngineSelection({ argv, snapshot, readSnapshot });
-      } catch (error) {
-        reportDoctorUnresolvedEngine(snapshot, argv, error);
-        return true;
-      }
-      if (
-        isConfigReadFailure(snapshot) ||
-        snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
-      ) {
-        reportDoctorUnresolvedEngine(snapshot, argv);
-        return true;
-      }
+    doctorRecovery = true;
+    const { prepareDoctorEngineSelection, reportDoctorUnresolvedEngine } =
+      await import("../commands/doctor-engine-selection.js");
+    try {
+      snapshot = await prepareDoctorEngineSelection({ argv, snapshot, readSnapshot });
+    } catch (error) {
+      reportDoctorUnresolvedEngine(snapshot, argv, error);
+      return true;
+    }
+    if (
+      isConfigReadFailure(snapshot) ||
+      snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
+    ) {
+      reportDoctorUnresolvedEngine(snapshot, argv);
+      return true;
     }
   }
   if (

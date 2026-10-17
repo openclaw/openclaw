@@ -55,6 +55,17 @@ describe("one-shot CLI engine selection", () => {
       ["logs"],
       ["channels", "logs"],
       ["config", "file"],
+      ["config", "validate", "--json"],
+      ["gateway", "status", "--runtime-intent-only", "--json"],
+      ["daemon", "status", "--runtime-intent-only", "--json"],
+      ["gateway", "discover"],
+      ["gateway", "call", "health"],
+      ["gateway", "health"],
+      ["gateway", "suspend"],
+      ["gateway", "resume", "synthetic-suspension"],
+      ["gateway", "usage-cost"],
+      ["gateway", "stability"],
+      ["channels", "status"],
       ["plugins", "build"],
       ["completion"],
       ["config", "set", "database.postgres.connection.id", "REPAIRED_DSN"],
@@ -84,11 +95,24 @@ describe("one-shot CLI engine selection", () => {
     });
   });
 
-  it.each(["sqlite", "postgres"])(
-    "does not open existing storage while Doctor cannot parse %s config",
-    async (engine) => {
+  it.each([
+    { engine: "sqlite", source: "root" },
+    { engine: "postgres", source: "root" },
+    { engine: "sqlite", source: "include" },
+    { engine: "postgres", source: "include" },
+  ])(
+    "does not open existing storage while Doctor cannot parse $engine $source config",
+    async ({ engine, source }) => {
       await withOpenClawTestState({ label: "doctor-unresolved-engine" }, async (state) => {
-        await fs.writeFile(state.configPath, `{"database":{"engine":"${engine}"}, broken`);
+        if (source === "include") {
+          await fs.writeFile(
+            state.configPath,
+            JSON.stringify({ database: { engine }, $include: "broken.json" }),
+          );
+          await fs.writeFile(state.statePath("broken.json"), "{broken json");
+        } else {
+          await fs.writeFile(state.configPath, `{"database":{"engine":"${engine}"}, broken`);
+        }
         const databasePath = state.statePath("state", "openclaw.sqlite");
         await fs.mkdir(state.statePath("state"), { recursive: true });
         await fs.writeFile(databasePath, "unopened synthetic store");

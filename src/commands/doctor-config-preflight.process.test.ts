@@ -290,15 +290,17 @@ describe("doctor invalid config process exit", () => {
   );
 
   it.each([
-    { engine: "sqlite", fix: false },
-    { engine: "sqlite", fix: true },
-    { engine: "postgres", fix: false },
-    { engine: "postgres", fix: true },
+    { engine: "sqlite", fix: false, source: "root" },
+    { engine: "sqlite", fix: true, source: "root" },
+    { engine: "postgres", fix: false, source: "root" },
+    { engine: "postgres", fix: true, source: "root" },
+    { engine: "sqlite", fix: true, source: "include" },
+    { engine: "postgres", fix: true, source: "include" },
   ])(
-    "reports unknown storage without creating databases for unparseable $engine config (fix: $fix)",
-    async ({ engine, fix }) => {
+    "reports unknown storage without creating databases for unparseable $engine $source config (fix: $fix)",
+    async ({ engine, fix, source }) => {
       const { stateDir, configPath, env, run } = createDoctorFixture(
-        `doctor-invalid-${engine}-${fix ? "fix" : "report"}`,
+        `doctor-invalid-${engine}-${source}-${fix ? "fix" : "report"}`,
         true,
       );
       Object.assign(env, { OPENCLAW_NO_RESPAWN: "1", OPENCLAW_SKIP_CHANNELS: "1" });
@@ -328,9 +330,15 @@ describe("doctor invalid config process exit", () => {
             }
           : {}),
       };
-      const raw = `{"database":${JSON.stringify(database)},"agents":{broken json`;
+      const raw =
+        source === "include"
+          ? JSON.stringify({ database, $include: "broken.json" })
+          : `{"database":${JSON.stringify(database)},"agents":{broken json`;
       fs.mkdirSync(path.dirname(configPath), { recursive: true });
       fs.writeFileSync(configPath, raw);
+      if (source === "include") {
+        fs.writeFileSync(path.join(path.dirname(configPath), "broken.json"), "{broken json");
+      }
 
       const result = await run(doctorArgs(fix ? "fix" : undefined), DOCTOR_CHILD_TIMEOUT_MS);
       const output = `${result.stderr}\n${result.stdout}`;

@@ -628,6 +628,14 @@ Updater admission and recovery commands retain their context, receipt, or explic
 path selection. QA fixtures, database tooling, and agent execution likewise keep
 their existing target owners.
 
+Gateway RPC commands defer local engine selection until paired-device authentication
+needs state. Loopback calls with shared credentials do not require database credentials.
+Runtime-intent service status and Gateway discovery also run without a database.
+Config validation reports source parse and include errors before selecting storage;
+valid config validation and config mutation previews still select the engine before
+reading installed-plugin metadata. A channel status config fallback follows the same
+metadata requirement.
+
 When Doctor cannot parse config, it attempts the requested file-only config repair
 before selecting an engine. If the target remains unresolved, Doctor completes a
 best-effort report with database checks marked **unknown**, a config repair next

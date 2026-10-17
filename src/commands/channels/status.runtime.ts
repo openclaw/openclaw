@@ -10,6 +10,7 @@ import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getConfiguredChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import { prepareCliGatewayStateAccess } from "../../cli/gateway-rpc.runtime.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
@@ -201,6 +202,7 @@ export async function renderChannelsStatusFallback(params: {
         `${gatewayAuthUnavailable ? "Gateway auth unavailable" : "Gateway not reachable"}: ${safeError}`,
     );
   }
+  await prepareCliGatewayStateAccess();
   const snapshot = await requireValidConfigFileSnapshot(runtime, { observe: false });
   if (!snapshot) {
     return;
