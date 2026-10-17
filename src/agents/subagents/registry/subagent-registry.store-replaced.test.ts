@@ -582,31 +582,21 @@ it.each([false, true])(
         });
       };
       onTestFinished(() => publishSystemEventStoreResolver(undefined));
-      let rejected = false;
       if (failWrite) {
-        const writeProbe = probe.command(stateWorker, async (command, options, scope) => {
-          if (
-            !rejected &&
-            command.type === "sessionDelivery.mutateSubagentCompletion" &&
-            command.input.mutation.kind === "block" &&
-            command.input.mutation.params.subagent.runId === "legacy-state-0"
-          ) {
-            rejected = true;
-            throw new Error("temporary completion settlement failure");
-          }
-          return scope.execute(command, options);
-        });
-        onTestFinished(() => writeProbe.mockRestore());
+        await admitCompletionFixtureDatabase();
+        openOpenClawStateDatabase().db.exec(`CREATE TRIGGER reject_missing_source_settlement
+          BEFORE UPDATE ON subagent_runs WHEN NEW.run_id = 'legacy-state-0'
+          BEGIN SELECT RAISE(ABORT, 'temporary completion settlement failure'); END`);
       }
       recoveryWarn.mockClear();
       await restart();
       expect(recoveryWarn).toHaveBeenCalledTimes(entries.length);
       if (failWrite) {
-        expect(rejected).toBe(true);
         const unsettled = [...loadSubagentRegistryFromSqlite().values()].filter(
           (entry) => !entry.suppressCompletionDelivery,
         );
-        expect(unsettled).toHaveLength(1);
+        expect(unsettled.map((entry) => entry.runId)).toEqual(["legacy-state-0"]);
+        openOpenClawStateDatabase().db.exec("DROP TRIGGER reject_missing_source_settlement");
         await retryDeferredSubagentCompletionSource(
           expectDefined(subagentRuns.get(unsettled[0]!.runId), "retryable completion"),
         );

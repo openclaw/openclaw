@@ -129,19 +129,21 @@ async function restoreSubagentCompletionSource(
       ) {
         return;
       }
-      const { blockSubagentCompletionDelivery } =
-        await import("../completion/subagent-completion-admission.store.js");
-      if (
-        await blockSubagentCompletionDelivery({
-          subagent: entry,
-          reason: missingSourceReason,
-          disposition: "permanent_failure",
-          operatorAuthorityUnavailable: true,
-          context,
-          assertCurrent,
-        })
-      ) {
-        deferredCompletionSources.delete(runtimeKey);
+      if (entry.execution.status === "terminal" || entry.cleanupCompletedAt !== undefined) {
+        const { blockSubagentCompletionDelivery } =
+          await import("../completion/subagent-completion-admission.store.js");
+        if (
+          await blockSubagentCompletionDelivery({
+            subagent: entry,
+            reason: missingSourceReason,
+            disposition: "permanent_failure",
+            operatorAuthorityUnavailable: true,
+            context,
+            assertCurrent,
+          })
+        ) {
+          deferredCompletionSources.delete(runtimeKey);
+        }
       }
     }
     if (!gateway || !source || !storePath || unrestorableCompletionSources.has(runtimeKey)) {
