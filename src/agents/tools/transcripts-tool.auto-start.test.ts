@@ -3,17 +3,16 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { hasTerminalControl } from "../../../packages/terminal-core/src/safe-text.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
 import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
 } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
-import { createTranscriptsTool } from "./transcripts-tool.js";
+import {
+  captureFixture,
+  type CaptureStop,
+} from "./transcripts-tool.capture-fixture.test-support.js";
 import { useTranscriptTestState } from "./transcripts-tool.test-support.js";
 
 const testState = useTranscriptTestState();
@@ -21,42 +20,13 @@ const capturedText = "Private captured decision: keep these notes out of operato
 const obstruction = "existing file; do not overwrite\n";
 const credential = "fixture-secret-value-1234567890";
 const providerError = `fixture stop failure\n\u001b[31mred\u001b[0m\u0085 token=${credential} ${"🦞".repeat(2_000)}`;
-async function fixture(
-  providers: TranscriptSourceProvider[],
-  autoStart: NonNullable<NonNullable<OpenClawConfig["transcripts"]>["autoStart"]>,
-) {
+async function fixture(provider: Pick<TranscriptSourceProvider, "start" | "stop">, ids?: string[]) {
   const stateDir = await fs.realpath(testState().stateDir);
-  const options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-  const exportRoot = path.join(stateDir, "transcripts");
-  const logger = { warn: vi.fn<(message: string) => void>() };
-  const scoped = createEmptyPluginRegistry();
-  for (const provider of providers) {
-    scoped.transcriptSourceProviders.push({
-      pluginId: provider.id,
-      provider,
-      source: import.meta.url,
-    });
-  }
-  const ctx = {
-    config: { transcripts: { autoStart } },
-    stateDir,
-    logger,
-    caller: { kind: "operator" as const, source: "local" as const },
-  };
-  const service = createTranscriptsAutoStartService(ctx);
-  const tool = createTranscriptsTool(ctx);
-  const store = () => new TranscriptsStore(exportRoot, options);
+  const autoStart = (ids ?? [undefined]).map((sessionId) => ({ providerId: "capture", sessionId }));
+  const f = captureFixture({ stateDir }, provider, { config: { transcripts: { autoStart } } });
   const execute = (action: string, sessionId?: string) =>
-    tool.execute("auto-start", { action, providerId: providers[0]!.id, sessionId });
-  return {
-    service,
-    logger,
-    store,
-    execute,
-    status: (active: unknown) =>
-      expect(execute("status")).resolves.toMatchObject({ details: { active } }),
-    scope: (run: () => Promise<void>) => withPluginRuntimeRegistryScope(scoped, run),
-  };
+    f.execute({ action, providerId: f.provider.id, sessionId });
+  return { ...f, service: f.service(autoStart), store: f.newStore, execute };
 }
 
 it.each(["terminal warning", "manual export"] as const)(
@@ -66,26 +36,22 @@ it.each(["terminal warning", "manual export"] as const)(
     const ids = ["subject", "healthy-sibling"];
     const requests = new Map<string, TranscriptStartRequest>();
     let cleanupFails = !manual;
-    const stop = vi.fn<NonNullable<TranscriptSourceProvider["stop"]>>(async ({ sessionId }) => {
+    const stop = vi.fn<CaptureStop>(async ({ sessionId }) => {
       if (sessionId === "subject" && cleanupFails) {
         await requests.get(sessionId)!.onStatus?.({ active: false });
         return { ok: false, error: providerError };
       }
       return { ok: true, sessionId };
     });
-    const provider: TranscriptSourceProvider = {
-      id: "stop-reporting-fixture",
-      name: "Stop reporting fixture",
-      sourceKinds: ["live-caption"],
-      start: async (request) => {
-        requests.set(request.session.sessionId, request);
-        return { ok: true, session: request.session };
-      },
-      stop,
-    };
     const f = await fixture(
-      [provider],
-      ids.map((sessionId) => ({ providerId: provider.id, sessionId })),
+      {
+        start: async (request) => {
+          requests.set(request.session.sessionId, request);
+          return { ok: true, session: request.session };
+        },
+        stop,
+      },
+      ids,
     );
     await f.scope(async () => {
       try {
@@ -135,7 +101,6 @@ it.each(["terminal warning", "manual export"] as const)(
         if (manual) {
           expect(warnings).toEqual([]);
         } else {
-          expect(warnings.length).toBeGreaterThan(0);
           const logged = warnings.join(" ");
           expect(logged).toContain("subject");
           expect(logged).toMatch(/summary saved.*export failed/i);
@@ -163,9 +128,6 @@ it.each(["terminal warning", "manual export"] as const)(
       } finally {
         cleanupFails = false;
         await f.service.stop();
-        for (const id of requests.keys()) {
-          await f.execute("stop", id);
-        }
       }
     });
   },
@@ -177,14 +139,11 @@ it.each(["replacement abort", "title write failure"] as const)(
     const release = createDeferred();
     const entered = createDeferred();
     const requests: TranscriptStartRequest[] = [];
-    const stop = vi.fn<NonNullable<TranscriptSourceProvider["stop"]>>(async () => ({
+    const stop = vi.fn<CaptureStop>(async () => ({
       ok: false,
       error: "fixture capture still owns resources",
     }));
-    const provider: TranscriptSourceProvider = {
-      id: "continuous-fixture",
-      name: "Continuous fixture",
-      sourceKinds: ["live-caption"],
+    const f = await fixture({
       start: async (request) => {
         requests.push(request);
         entered.resolve();
@@ -192,8 +151,7 @@ it.each(["replacement abort", "title write failure"] as const)(
         return { ok: true, session: { ...request.session, title: "Provider title" } };
       },
       stop,
-    };
-    const f = await fixture([provider], [{ providerId: provider.id }]);
+    });
     const store = f.store();
     const originalWrite = store.writeSession.bind(store);
     let rejectedTitle = false;
@@ -206,7 +164,7 @@ it.each(["replacement abort", "title write failure"] as const)(
         }
         return originalWrite(session);
       });
-    const affected = new Set([provider.id]);
+    const affected = new Set([f.provider.id]);
     let pendingStop: Promise<void> | undefined;
     await f.scope(async () => {
       try {
@@ -241,7 +199,7 @@ it.each(["replacement abort", "title write failure"] as const)(
         await original.onUtterance({ text: "late failed capture", final: true });
         expect(await store.readUtterancesForSession(original.session)).toEqual([]);
         const previousStops = stop.mock.calls.length;
-        stop.mockImplementation(async (request) => ({ ok: true, sessionId: request.sessionId }));
+        stop.mockImplementation(f.successfulStop);
         await f.service.stop(affected);
         expect(stop).toHaveBeenCalledTimes(previousStops + 1);
         await f.status([]);
@@ -258,12 +216,9 @@ it.each(["replacement abort", "title write failure"] as const)(
       } finally {
         release.resolve();
         writeSession.mockRestore();
-        stop.mockImplementation(async (request) => ({ ok: true, sessionId: request.sessionId }));
+        stop.mockImplementation(f.successfulStop);
         await pendingStop?.catch(() => {});
         await f.service.stop();
-        for (const request of requests) {
-          await f.execute("stop", request.session.sessionId);
-        }
       }
     });
   },
