@@ -216,6 +216,7 @@ it("accepts alias publications while another physical store keeps its own row", 
       process.platform === "win32" ? "junction" : "dir",
     );
     const alias = path.join(aliasDirectory, path.basename(query.storePath));
+    openOpenClawAgentDatabase({ agentId: query.agentId, path: alias });
     registerOpenClawAgentDatabase({ agentId: query.agentId, path: alias });
     using projection = await createTestProjection({ cfg: globalConfig, modelCatalog: [] });
 
@@ -243,7 +244,7 @@ it("accepts alias publications while another physical store keeps its own row", 
     );
     // Observe the committed postimage before any asynchronous row refill.
     expect(projection.capture(query)?.entry?.label).toBe("Alias publication");
-    expect(projection.capture(query)?.publishedSource?.filename).toBe(alias);
+    expect(projection.capture(query)?.publishedSource?.canonicalPath).toBe(query.storePath);
     expect(projection.describe({ ...query, storePath: otherPath })?.entry.lifecycleRevision).toBe(
       "other-store-reset",
     );

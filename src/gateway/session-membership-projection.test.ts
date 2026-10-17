@@ -312,10 +312,12 @@ it("accepts committed alias membership only for the admitted physical store", as
         ...snapshot(otherIdentity.identity, []),
         birthtime: otherIdentity.birthtime,
       });
-    using projection = membershipProjection([{ agentId: "main", storePath: alias, ...identity }]);
+    using projection = membershipProjection([
+      { agentId: "main", storePath: database.path, ...identity },
+    ]);
     // A stale locator binding cannot install another physical store's publication.
     using otherProjection = membershipProjection([
-      { agentId: "main", storePath: alias, ...otherIdentity },
+      { agentId: "main", storePath: database.path, ...otherIdentity },
     ]);
     await projection.prepare();
     await otherProjection.prepare();
