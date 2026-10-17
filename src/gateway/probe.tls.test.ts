@@ -27,6 +27,15 @@ const wrongPin = "00".repeat(32);
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-probe-tls-" });
 const edgeAuthValue = "synthetic-probe-edge-auth";
 
+function remoteConfig(url: string, tlsFingerprint?: string, token?: string): OpenClawConfig {
+  return {
+    gateway: {
+      mode: "remote",
+      remote: { url, token, tlsFingerprint, edgeAuth: { "X-Test-Edge-Auth": edgeAuthValue } },
+    },
+  };
+}
+
 async function startTlsProbeGateway() {
   const server = createServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM });
   const wss = new WebSocketServer({ server });
@@ -102,17 +111,7 @@ describe("probeGateway TLS", () => {
       const gateway = await startTlsProbeGateway();
       try {
         const env = { OPENCLAW_STATE_DIR: stateDir };
-        const config: OpenClawConfig = {
-          gateway: {
-            mode: "remote",
-            remote: {
-              url: gateway.url,
-              token: "synthetic-probe-token",
-              tlsFingerprint: savedPin,
-              edgeAuth: { "X-Test-Edge-Auth": edgeAuthValue },
-            },
-          },
-        };
+        const config = remoteConfig(gateway.url, savedPin, "synthetic-probe-token");
         const bootstrap = await resolveGatewayClientBootstrap({
           config,
           authPolicy: "probe",
@@ -132,15 +131,13 @@ describe("probeGateway TLS", () => {
         await gateway.drain();
 
         if (outcome === "connected") {
-          expect(result.ok).toBe(true);
-          expect(result.error).toBeNull();
+          expect(result).toMatchObject({ ok: true, error: null });
           expect(gateway.observed.receivedBytes).toBeGreaterThan(0);
           expect(gateway.observed.edgeAuthHeaders).toEqual([edgeAuthValue]);
           expect(gateway.observed.connectFrames).toBe(1);
           return;
         }
-        expect(result.ok).toBe(false);
-        expect(result.connectLatencyMs).toBeNull();
+        expect(result).toMatchObject({ ok: false, connectLatencyMs: null });
         expect(result.error).toMatch(
           outcome === "mismatch" ? /fingerprint mismatch/i : /certificate|self.signed/i,
         );
@@ -170,23 +167,12 @@ describe("Gateway probe TLS trust", () => {
   });
 
   it.each([
-    { name: "malformed saved pin", savedPin: "invalid", ok: false, error: "SHA-256 fingerprint" },
-    {
-      name: "changed endpoint",
-      savedPin: fingerprint,
-      changed: true,
-      ok: false,
-      error: "certificate",
-    },
-    {
-      name: "explicit pin override",
-      savedPin: wrongPin,
-      explicitPin: fingerprint,
-      ok: true,
-    },
-  ])(
-    "enforces $name before sending Gateway credentials",
-    async ({ savedPin, explicitPin, changed, ok, error }) => {
+    ["malformed saved pin", "invalid", undefined, false, false, "SHA-256 fingerprint"],
+    ["changed endpoint", fingerprint, undefined, true, false, "certificate"],
+    ["explicit pin override", wrongPin, fingerprint, false, true, undefined],
+  ] as const)(
+    "enforces %s before sending Gateway credentials",
+    async (_name, savedPin, explicitPin, changed, ok, error) => {
       const before = {
         receivedBytes: gateway.observed.receivedBytes,
         edgeAuthHeaders: gateway.observed.edgeAuthHeaders.length,
@@ -194,16 +180,7 @@ describe("Gateway probe TLS trust", () => {
       };
       const result = await probeGateway({
         url,
-        config: {
-          gateway: {
-            mode: "remote",
-            remote: {
-              url: changed ? `${url}/other` : ` ${url} `,
-              tlsFingerprint: savedPin,
-              edgeAuth: { "X-Test-Edge-Auth": edgeAuthValue },
-            },
-          },
-        },
+        config: remoteConfig(changed ? `${url}/other` : ` ${url} `, savedPin),
         tlsFingerprint: explicitPin,
         auth: { token: "test-probe-token" },
         timeoutMs: 2_000,

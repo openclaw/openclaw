@@ -26,18 +26,24 @@ import { SessionMutationAuthorizationChangedError } from "./session-mutation-aut
 const sessionKey = "agent:main:progress-worker";
 afterEach(() => vi.restoreAllMocks());
 
+function withCardSession(custom: boolean, run: (cfg: OpenClawConfig) => Promise<void>) {
+  return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg: OpenClawConfig = custom
+      ? { session: { store: path.join(state.stateDir, "cards.sqlite") } }
+      : {};
+    setRuntimeConfigSnapshot(cfg, cfg);
+    await replaceSessionEntry(
+      { sessionKey, agentId: "main", storePath: cfg.session?.store },
+      { sessionId: "card-session", updatedAt: 1 },
+    );
+    await run(cfg);
+  });
+}
+
 it.each([false, true])(
   "persists tool and conditional RPC clears without caller SQL (custom=%s)",
   async (custom) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg: OpenClawConfig = custom
-        ? { session: { store: path.join(state.stateDir, "cards.sqlite") } }
-        : {};
-      setRuntimeConfigSnapshot(cfg, cfg);
-      await replaceSessionEntry(
-        { sessionKey, agentId: "main", storePath: cfg.session?.store },
-        { sessionId: "card-session", updatedAt: 1 },
-      );
+    await withCardSession(custom, async (cfg) => {
       const target = { agentId: "main", path: cfg.session?.store };
       const db = openOpenClawAgentDatabase(target).db;
       const handlers = createProgressCardHandlers();
@@ -82,13 +88,7 @@ it.each([false, true])(
 );
 
 it("keeps queued inputs, FIFO revisions, and the captured store through a config change", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = {};
-    setRuntimeConfigSnapshot(cfg, cfg);
-    await replaceSessionEntry(
-      { sessionKey, agentId: "main" },
-      { sessionId: "queued-session", updatedAt: 1 },
-    );
+  await withCardSession(false, async (cfg) => {
     const target = { agentId: "main" };
     const release = createDeferredCore();
     const holding = runOpenClawAgentWriteAdmission(target, () => release.promise);
@@ -120,12 +120,7 @@ it("keeps queued inputs, FIFO revisions, and the captured store through a config
 it("settles card discovery cleanup while history waits for the same database writer", async ({
   signal,
 }) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    setRuntimeConfigSnapshot({}, {});
-    await replaceSessionEntry(
-      { sessionKey, agentId: "main" },
-      { sessionId: "concurrent-history-session", updatedAt: 1 },
-    );
+  await withCardSession(false, async () => {
     const target = { agentId: "main" };
     const committed = createDeferredCore();
     const statusRequested = createDeferredCore();
@@ -182,12 +177,7 @@ it("settles card discovery cleanup while history waits for the same database wri
 it.each(["transaction", "commit"] as const)(
   "preserves authorization error identity and rolls back %s refusal",
   async (stage) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({}, {});
-      await replaceSessionEntry(
-        { sessionKey, agentId: "main" },
-        { sessionId: "refusal-session", updatedAt: 1 },
-      );
+    await withCardSession(false, async () => {
       await progressCardStore.put(sessionKey, { markdown: "Before" });
       const denied = new SessionMutationAuthorizationChangedError({
         code: "INVALID_REQUEST",
@@ -227,12 +217,7 @@ it.each(["transaction", "commit"] as const)(
 );
 
 it("never replays a lost committed reply", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    setRuntimeConfigSnapshot({}, {});
-    await replaceSessionEntry(
-      { sessionKey, agentId: "main" },
-      { sessionId: "uncertain-session", updatedAt: 1 },
-    );
+  await withCardSession(false, async () => {
     await progressCardStore.put(sessionKey, { markdown: "Before" });
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     const unknown = new SqliteWorkerError("Synthetic lost commit reply", "outcome-unknown");

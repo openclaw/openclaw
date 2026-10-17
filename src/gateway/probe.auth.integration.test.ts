@@ -1,5 +1,3 @@
-// Probe auth integration tests verify cached operator device tokens and pairing
-// state work with call/probe flows against a real local gateway harness.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -11,6 +9,7 @@ import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/con
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createStatusGatewayProbeBudget } from "../commands/status.gateway-probe-budget.js";
 import { resolveGatewayProbeSnapshot } from "../commands/status.scan.shared.js";
+import type { OpenClawConfig } from "../config/config.js";
 import * as deviceAuthStore from "../infra/device-auth-store.js";
 import { listDevicePairing, removePairedDevice } from "../infra/device-pairing.js";
 import { resolveGatewayDeviceAuthRoute } from "./connection-details.js";
@@ -61,11 +60,8 @@ afterAll(async () => {
 });
 
 function requireGatewayToken(): string {
-  const token =
-    typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
-      ? ((testState.gatewayAuth as { token?: string }).token ?? "")
-      : "";
-  if (!token) {
+  const token = testState.gatewayAuth?.token;
+  if (typeof token !== "string" || !token) {
     throw new Error("expected gateway auth token");
   }
   return token;
@@ -79,14 +75,33 @@ function statePath(...parts: string[]): string {
   return path.join(stateDir, ...parts);
 }
 
-function expectRecord(value: unknown, label: string): Record<string, unknown> {
+function expectRecord(value: unknown, label: string) {
   if (typeof value !== "object" || value === null) {
     throw new Error(`expected ${label}`);
   }
-  return value as Record<string, unknown>;
 }
 
-async function seedCachedOperatorToken(scopes: string[]) {
+const gatewayUrl = () => `ws://127.0.0.1:${gatewayHarness.port}`;
+const probe = (auth?: { token: string }, timeoutMs = 10_000) =>
+  probeGateway({ url: gatewayUrl(), auth, timeoutMs });
+async function snapshot(cfg: OpenClawConfig) {
+  const { gatewayProbe } = await resolveGatewayProbeSnapshot({
+    cfg,
+    configPath: statePath("openclaw.json"),
+    env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR },
+    opts: { ...createStatusGatewayProbeBudget(10_000), detailLevel: "full" },
+  });
+  return gatewayProbe;
+}
+function expectRead(result: Awaited<ReturnType<typeof probe>> | null | undefined) {
+  expect(result).toMatchObject({ error: null, ok: true, auth: { capability: "read_only" } });
+  expectRecord(result?.health, "probe health");
+  expectRecord(result?.status, "probe status");
+  expectRecord(result?.configSnapshot, "probe config snapshot");
+}
+
+async function seedCachedOperatorToken() {
+  const scopes = ["operator.read"];
   const identity = loadOrCreateDeviceIdentity();
   const pairing = await requestDevicePairing({
     deviceId: identity.deviceId,
@@ -99,33 +114,23 @@ async function seedCachedOperatorToken(scopes: string[]) {
     scopes,
     silent: true,
   });
-  const approved = await approveDevicePairing(pairing.request.requestId, {
-    callerScopes: scopes,
-  });
+  const approved = await approveDevicePairing(pairing.request.requestId, { callerScopes: scopes });
   expect(approved?.status).toBe("approved");
   const token =
     approved?.status === "approved" ? (approved.device.tokens?.operator?.token ?? "") : "";
   if (!token) {
     throw new Error("expected approved operator token");
   }
-  const auth = {
-    deviceId: identity.deviceId,
-    role: "operator",
-    token,
-    scopes,
-  };
-  seedOriginDeviceToken({
-    gatewayScope: `ws://127.0.0.1:${gatewayHarness.port}`,
-    ...auth,
-  });
+  const auth = { deviceId: identity.deviceId, role: "operator", token, scopes };
+  seedOriginDeviceToken({ gatewayScope: gatewayUrl(), ...auth });
   return auth;
 }
 
 describe("probeGateway auth integration", () => {
   it("reuses enrolled SSH route auth across local ports without sending it to another route", async () => {
     const token = requireGatewayToken();
-    const localAuth = await seedCachedOperatorToken(["operator.read"]);
-    const url = `ws://127.0.0.1:${gatewayHarness.port}`;
+    const localAuth = await seedCachedOperatorToken();
+    const url = gatewayUrl();
     const remote = {
       url,
       transport: "ssh" as const,
@@ -145,38 +150,24 @@ describe("probeGateway auth integration", () => {
       });
       expectRecord(enrolled, "SSH enrollment status");
 
-      // The owner chooses the real allocated port. This configured local port is
-      // intentionally different; neither lookup nor persistence may key on it.
+      // Lookup/persistence must use the SSH route, not this different local port.
       const movedUrl = "ws://127.0.0.1:18999";
       const moved = { gateway: { ...config.gateway, remote: { ...remote, url: movedUrl } } };
-      const { gatewayProbe: result } = await resolveGatewayProbeSnapshot({
-        cfg: moved,
-        configPath: statePath("openclaw.json"),
-        env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR },
-        opts: { ...createStatusGatewayProbeBudget(10_000), detailLevel: "full" },
-      });
-      expect(result?.error).toBeNull();
-      expect(result?.ok).toBe(true);
-      expect(result?.auth.capability).toBe("read_only");
+      const result = await snapshot(moved);
+      expect(result).toMatchObject({ error: null, ok: true, auth: { capability: "read_only" } });
       expectRecord(result?.status, "SSH route paired read without shared credentials");
 
       // The fixture server would accept A's token even on this second route;
       // rejecting anonymously proves B did not inherit A's valid bearer.
-      const { gatewayProbe: foreign } = await resolveGatewayProbeSnapshot({
-        cfg: {
-          gateway: { ...config.gateway, remote: { ...remote, sshTarget: "fixture@gateway-b" } },
-        },
-        configPath: statePath("openclaw.json"),
-        env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR },
-        opts: { ...createStatusGatewayProbeBudget(10_000), detailLevel: "full" },
+      const foreign = await snapshot({
+        gateway: { ...config.gateway, remote: { ...remote, sshTarget: "fixture@gateway-b" } },
       });
       expect(foreign?.ok).toBe(false);
       expect(foreign?.connectErrorDetails).toMatchObject({
         code: ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
       });
     } finally {
-      // The suite shares its Gateway. Return this case's pairing and caches to
-      // their empty baseline before the first-time diagnostic case runs.
+      // Restore shared state before the first-time diagnostic case.
       await removePairedDevice(localAuth.deviceId);
       await deviceAuthStore.clearDeviceAuthToken(localAuth);
       await deviceAuthStore.clearOriginDeviceToken({ ...localAuth, gatewayScope: url });
@@ -196,11 +187,9 @@ describe("probeGateway auth integration", () => {
   });
 
   it("keeps direct local authenticated status RPCs device-bound", async () => {
-    const token = requireGatewayToken();
-
     const status = await callGateway({
-      url: `ws://127.0.0.1:${gatewayHarness.port}`,
-      token,
+      url: gatewayUrl(),
+      token: requireGatewayToken(),
       method: "status",
       timeoutMs: 5_000,
     });
@@ -209,65 +198,27 @@ describe("probeGateway auth integration", () => {
   });
 
   it("keeps first-time local authenticated probes non-mutating", async () => {
-    const token = requireGatewayToken();
-
-    const result = await probeGateway({
-      url: `ws://127.0.0.1:${gatewayHarness.port}`,
-      auth: { token },
-      timeoutMs: 5_000,
+    const result = await probe({ token: requireGatewayToken() }, 5_000);
+    expect(result).toMatchObject({
+      ok: false,
+      health: null,
+      status: null,
+      configSnapshot: null,
+      auth: { capability: "connected_no_operator_scope" },
     });
-
-    expect(result.ok).toBe(false);
-    expect(result.health).toBeNull();
-    expect(result.status).toBeNull();
-    expect(result.configSnapshot).toBeNull();
-    expect(result.auth.capability).toBe("connected_no_operator_scope");
-    const pairing = await listDevicePairing();
-    expect(pairing.paired).toEqual([]);
-    expect(pairing.pending).toEqual([]);
+    expect(await listDevicePairing()).toMatchObject({ paired: [], pending: [] });
     expect(fs.existsSync(statePath("identity", "device-auth.json"))).toBe(false);
   });
 
   it("keeps paired local reads and restores remote loopback reads with explicit credentials", async () => {
     const token = requireGatewayToken();
-    const localAuth = await seedCachedOperatorToken(["operator.read"]);
-    const result = await probeGateway({
-      url: `ws://127.0.0.1:${gatewayHarness.port}`,
-      auth: { token },
-      timeoutMs: 10_000,
-    });
-
-    expect(result.error).toBeNull();
-    expect(result.ok).toBe(true);
-    expect(result.auth.capability).toBe("read_only");
-    expectRecord(result.health, "probe health");
-    expectRecord(result.status, "probe status");
-    expectRecord(result.configSnapshot, "probe config snapshot");
-
-    const url = `ws://127.0.0.1:${gatewayHarness.port}`;
-    const paired = await probeGateway({ url, timeoutMs: 10_000 });
-    expect(paired.ok).toBe(true);
-    expect(paired.auth.capability).toBe("read_only");
-    const remote = await resolveGatewayProbeSnapshot({
-      cfg: { gateway: { mode: "remote", remote: { url } } },
-      configPath: statePath("openclaw.json"),
-      env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR },
-      opts: { ...createStatusGatewayProbeBudget(10_000), detailLevel: "full" },
-    });
-    expect(remote.gatewayProbe?.ok).toBe(false);
-
-    const recovered = await resolveGatewayProbeSnapshot({
-      cfg: { gateway: { mode: "remote", remote: { url, token } } },
-      configPath: statePath("openclaw.json"),
-      env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR },
-      opts: { ...createStatusGatewayProbeBudget(10_000), detailLevel: "full" },
-    });
-    expect(recovered.gatewayProbe?.error).toBeNull();
-    expect(recovered.gatewayProbe?.ok).toBe(true);
-    expect(recovered.gatewayProbe?.auth.capability).toBe("read_only");
-    expectRecord(recovered.gatewayProbe?.health, "remote probe health");
-    expectRecord(recovered.gatewayProbe?.status, "remote probe status");
-    expectRecord(recovered.gatewayProbe?.configSnapshot, "remote probe config snapshot");
+    const localAuth = await seedCachedOperatorToken();
+    expectRead(await probe({ token }));
+    const url = gatewayUrl();
+    expect(await probe()).toMatchObject({ ok: true, auth: { capability: "read_only" } });
+    const remote = await snapshot({ gateway: { mode: "remote", remote: { url } } });
+    expect(remote?.ok).toBe(false);
+    expectRead(await snapshot({ gateway: { mode: "remote", remote: { url, token } } }));
 
     // A retired SSH tunnel can leave another Gateway's token at the local URL.
     seedOriginDeviceToken({
@@ -275,34 +226,27 @@ describe("probeGateway auth integration", () => {
       gatewayScope: url,
       token: "retired-tunnel-device-token",
     });
-    const unbound = await probeGateway({ url, timeoutMs: 10_000 });
+    const unbound = await probe();
     expect(unbound.ok).toBe(false);
     expect(unbound.connectErrorDetails).toMatchObject({
       code: ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
     });
 
-    const explicit = await probeGateway({ url, auth: { token }, timeoutMs: 10_000 });
-    expect(explicit.error).toBeNull();
-    expect(explicit.ok).toBe(true);
+    const explicit = await probe({ token });
+    expect(explicit).toMatchObject({ error: null, ok: true });
     expectRecord(explicit.status, "explicit local auth with stale origin cache");
 
     seedDeviceAuthToken(localAuth);
-    const local = await probeGateway({ url, timeoutMs: 10_000 });
-    expect(local.error).toBeNull();
-    expect(local.ok).toBe(true);
-    expect(local.auth.capability).toBe("read_only");
-    expectRecord(local.health, "local probe health after tunnel");
-    expectRecord(local.status, "local probe status after tunnel");
-    expectRecord(local.configSnapshot, "local probe config after tunnel");
+    expectRead(await probe());
   });
 
   it("keeps a locally verified origin token when the client cache changes", async () => {
-    const localAuth = await seedCachedOperatorToken(["operator.read"]);
+    const localAuth = await seedCachedOperatorToken();
     await deviceAuthStore.clearDeviceAuthToken({
       deviceId: localAuth.deviceId,
       role: "operator",
     });
-    const url = `ws://127.0.0.1:${gatewayHarness.port}`;
+    const url = gatewayUrl();
     const load = deviceAuthStore.loadOriginDeviceTokenReadOnly;
     const read = vi
       .spyOn(deviceAuthStore, "loadOriginDeviceTokenReadOnly")
@@ -316,9 +260,8 @@ describe("probeGateway auth integration", () => {
         return entry;
       });
     try {
-      const result = await probeGateway({ url, timeoutMs: 10_000 });
-      expect(result.error).toBeNull();
-      expect(result.ok).toBe(true);
+      const result = await probe();
+      expect(result).toMatchObject({ error: null, ok: true });
       expectRecord(result.status, "status after origin cache replacement");
     } finally {
       read.mockRestore();
