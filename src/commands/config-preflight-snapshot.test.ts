@@ -316,19 +316,14 @@ it("overlaps config discovery with schema admission and drains both before repor
       },
       beforeStatePreparation: guard,
     });
+    const waitFor = (gate: Promise<void>, message: string) =>
+      withinTest(awaitGateBeforeSettlement(gate, admission, message), signal);
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(schemaEntered.promise, admission, "Schema admission never began"),
-        signal,
-      );
+      await waitFor(schemaEntered.promise, "Schema admission never began");
       releaseSchema.resolve();
-      await withinTest(
-        awaitGateBeforeSettlement(
-          configEntered.promise,
-          admission,
-          "Config discovery did not start while schema admission was pending",
-        ),
-        signal,
+      await waitFor(
+        configEntered.promise,
+        "Config discovery did not start while schema admission was pending",
       );
       await withinTest(schemaRefused.promise, signal);
       const retainedLocation = expectDefined(snapshotLocation, "Expected the admitted snapshot");
@@ -357,11 +352,12 @@ it("shares startup validation and discovery reads, then releases them before rea
     const readIndex = () =>
       readPersistedInstalledPluginIndexRowSync({ env: process.env })?.value_json;
     try {
-      const insert = writer.prepare(
-        "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES (?, ?, 1)",
+      const setMetadata = writer.prepare(
+        `INSERT INTO config_machine_state(state_key, value_json, updated_at_ms)
+           VALUES ('plugins.bundledDiscovery', ?, 1), ('plugins.installedIndex', ?, 1)
+           ON CONFLICT(state_key) DO UPDATE SET value_json = excluded.value_json`,
       );
-      insert.run("plugins.bundledDiscovery", '"compat"');
-      insert.run("plugins.installedIndex", '{"generation":"before"}');
+      setMetadata.run('"compat"', '{"generation":"before"}');
       const before = family();
       let afterWrite: ReturnType<typeof family> | undefined;
       const validations: Array<string | undefined> = [];
@@ -379,12 +375,7 @@ it("shares startup validation and discovery reads, then releases them before rea
           expect(readBundledDiscoveryMode(options)).toBe("compat");
           expect(family()).toEqual(before);
           // A different owner commits between the two metadata reads.
-          writer.exec(
-            `BEGIN;
-             UPDATE config_machine_state SET value_json = '"allowlist"' WHERE state_key = 'plugins.bundledDiscovery';
-             UPDATE config_machine_state SET value_json = '{"generation":"after"}' WHERE state_key = 'plugins.installedIndex';
-             COMMIT;`,
-          );
+          setMetadata.run('"allowlist"', '{"generation":"after"}');
           afterWrite = family();
           expect(readIndex()).toBe('{"generation":"before"}');
           expect(family()).toEqual(afterWrite);

@@ -68,6 +68,23 @@ async function expectFirst(expected: string, pending: Record<string, Promise<unk
   expect(await Promise.race(settled)).toBe(expected);
 }
 
+function pauseRemoval(configPath: string, databasePath: string, afterRemove?: () => Promise<void>) {
+  const started = createDeferred(),
+    resume = createDeferred();
+  const realRm = fsPromises.rm;
+  const remove = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, settings) => {
+    if (String(target) === configPath || String(target) === path.dirname(databasePath)) {
+      started.resolve();
+      await resume.promise;
+    }
+    await realRm(target, settings);
+    if (String(target) === path.dirname(databasePath)) {
+      await afterRemove?.();
+    }
+  });
+  return { started: started.promise, resume: resume.resolve, restore: () => remove.mockRestore() };
+}
+
 it.skipIf(process.platform === "win32")(
   "retains native SQLite exclusion through removal against a legacy rollback-mode writer",
   async ({ signal }) => {
@@ -100,16 +117,7 @@ it.skipIf(process.platform === "win32")(
     `,
       [databasePath],
     );
-    const started = createDeferred();
-    const resumeRemoval = createDeferred();
-    const realRm = fsPromises.rm;
-    const remove = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, settings) => {
-      if (String(target) === configPath || String(target) === path.dirname(databasePath)) {
-        started.resolve();
-        await resumeRemoval.promise;
-      }
-      return realRm(target, settings);
-    });
+    const removal = pauseRemoval(configPath, databasePath);
     const attemptWrite = async () => {
       const reply = receive(signal, "replying");
       child.send("write");
@@ -121,10 +129,10 @@ it.skipIf(process.platform === "win32")(
       const [ready] = await receive(signal, "readiness");
       expect(ready).toEqual({ ready: true });
       deleting = removeState();
-      await expectFirst("removing", { removing: started.promise, removed: deleting });
+      await expectFirst("removing", { removing: removal.started, removed: deleting });
       expect(fs.existsSync(databasePath)).toBe(true);
       await expect(attemptWrite()).resolves.toEqual({ committed: false, errcode: 5 });
-      resumeRemoval.resolve();
+      removal.resume();
       await expect(deleting).resolves.toBe(true);
       // Apple's SQLite VFS reports an unlinked vnode; bundled SQLite reports a moved database.
       const removedFileCode = process.versions.bun && process.platform === "darwin" ? 6922 : 1032;
@@ -133,11 +141,11 @@ it.skipIf(process.platform === "win32")(
       child.send("close");
       await withinTest(closed, signal);
     } finally {
-      resumeRemoval.resolve();
+      removal.resume();
       try {
         await deleting;
       } finally {
-        remove.mockRestore();
+        removal.restore();
         await stopChildProcess(child, 5_000);
       }
     }
@@ -185,8 +193,6 @@ it("drains the local cache and excludes reopening throughout awaited removal", a
   const database = openOpenClawStateDatabase(options);
   const retainedStatement = database.db.prepare("PRAGMA data_version");
   retainedStatement.get();
-  const started = createDeferred();
-  const resumeRemoval = createDeferred();
   const unlinked = createDeferred();
   const resumeFinalization = createDeferred();
   const entryName = (entry: string | Buffer | fs.Dirent<string | Buffer>) =>
@@ -204,22 +210,14 @@ it("drains the local cache and excludes reopening throughout awaited removal", a
           )
         : entries;
     });
-  const realRm = fsPromises.rm;
-  const remove = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, settings) => {
-    if (String(target) === configPath || String(target) === path.dirname(database.path)) {
-      started.resolve();
-      await resumeRemoval.promise;
-    }
-    await realRm(target, settings);
-    if (String(target) === path.dirname(database.path)) {
-      unlinked.resolve();
-      await resumeFinalization.promise;
-    }
+  const removal = pauseRemoval(configPath, database.path, async () => {
+    unlinked.resolve();
+    await resumeFinalization.promise;
   });
   const deleting = removeState();
   try {
     await expectFirst("removing", {
-      removing: started.promise,
+      removing: removal.started,
       unlinked: unlinked.promise,
       removed: deleting,
     });
@@ -228,18 +226,16 @@ it("drains the local cache and excludes reopening throughout awaited removal", a
     const before = fs.statSync(database.path, { bigint: true });
     expect(() => openOpenClawStateDatabase(options)).toThrow("offline maintenance");
     expect(fs.statSync(database.path, { bigint: true })).toEqual(before);
-    resumeRemoval.resolve();
+    removal.resume();
     await expectFirst("unlinked", { unlinked: unlinked.promise, removed: deleting });
-    expect(fs.existsSync(database.path)).toBe(false);
-    expect(fs.existsSync(path.dirname(database.path))).toBe(false);
+    expect([database.path, path.dirname(database.path)].map(fs.existsSync)).toEqual([false, false]);
     expect(() => openOpenClawStateDatabase(options)).toThrow("offline maintenance");
-    expect(fs.existsSync(database.path)).toBe(false);
-    expect(fs.existsSync(path.dirname(database.path))).toBe(false);
+    expect([database.path, path.dirname(database.path)].map(fs.existsSync)).toEqual([false, false]);
   } finally {
-    resumeRemoval.resolve();
+    removal.resume();
     resumeFinalization.resolve();
     await deleting.finally(() => {
-      remove.mockRestore();
+      removal.restore();
       discovery.mockRestore();
       closeOpenClawStateDatabaseForTest();
     });

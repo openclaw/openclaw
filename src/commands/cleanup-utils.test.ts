@@ -71,15 +71,9 @@ const fsSafeMocks = vi.hoisted(() => ({
   movePathToTrash: vi.fn(async (targetPath: string) => `${targetPath}.trashed`),
 }));
 
-const processMocks = vi.hoisted(() => ({ runCommandWithTimeout: vi.fn() }));
-
 vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/fs-safe.js")>()),
   movePathToTrash: fsSafeMocks.movePathToTrash,
-}));
-
-vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: processMocks.runCommandWithTimeout,
 }));
 
 vi.mock("../agents/workspace-state-store.js", async () => ({
@@ -156,10 +150,6 @@ function createRuntimeMock() {
   };
 }
 
-function expectedTrashSourcePath(targetPath: string): string {
-  return path.join(fsSync.realpathSync(path.dirname(targetPath)), path.basename(targetPath));
-}
-
 describe("moveToTrash", () => {
   it("retains the target when ownership expires during asynchronous preparation", async () => {
     const targetPath = path.join(tempDirs.make("openclaw-trash-expired-"), "target");
@@ -202,7 +192,7 @@ describe("moveToTrash", () => {
     const targetPath = path.join(testRoot, "workspace-link");
     fsSync.symlinkSync(path.join(testRoot, "missing-target"), targetPath, "dir");
     const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-    const sourcePath = expectedTrashSourcePath(targetPath);
+    const sourcePath = path.join(fsSync.realpathSync(testRoot), "workspace-link");
 
     await expect(moveToTrash(targetPath, runtime)).resolves.toBe(true);
 

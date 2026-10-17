@@ -191,8 +191,10 @@ describe("promptGatewayConfig", () => {
         allowUsers: ["nick@example.com"],
       },
     });
-    expect(result.config.gateway?.bind).toBe("lan");
-    expect(result.config.gateway?.trustedProxies).toEqual(["10.0.1.10", "192.168.1.5"]);
+    expect(result.config.gateway).toMatchObject({
+      bind: "lan",
+      trustedProxies: ["10.0.1.10", "192.168.1.5"],
+    });
     expect(result.config.gateway?.tailscale).toEqual({ mode: "off" });
   });
 
@@ -258,66 +260,44 @@ describe("promptGatewayConfig", () => {
     async (previous) => {
       vi.stubEnv("OPENCLAW_LOCALE", "en");
       const sameMode = previous === "rerun";
-      const baseConfig: OpenClawConfig =
-        previous === "fresh"
-          ? {}
-          : {
-              gateway: {
-                auth: {
-                  mode: sameMode ? "trusted-proxy" : "password",
-                  ...(sameMode ? {} : { password: "old-password" }),
-                  trustedProxy: {
-                    userHeader: "x-old-user",
-                    allowLoopback: true,
-                    deviceAutoApprove: sameMode
-                      ? { enabled: false, scopes: [] }
-                      : { enabled: true },
-                  },
-                },
-              },
-            };
+      const auth: NonNullable<OpenClawConfig["gateway"]>["auth"] = {
+        mode: sameMode ? "trusted-proxy" : "password",
+        ...(sameMode ? {} : { password: "old-password" }),
+        trustedProxy: {
+          userHeader: "x-old-user",
+          allowLoopback: true,
+          deviceAutoApprove: sameMode ? { enabled: false, scopes: [] } : { enabled: true },
+        },
+      };
+      const baseConfig = previous === "fresh" ? {} : { gateway: { auth } };
       const original = structuredClone(baseConfig);
-      const result = await runTrustedProxyPrompt({
-        baseConfig,
-        proxies: "127.0.0.1",
-        ...(previous === "password" ? {} : { confirmResult: false }),
-      });
-      expect(mocks.confirm).toHaveBeenCalledWith(
-        expect.objectContaining({ initialValue: sameMode }),
-      );
-      if (sameMode) {
-        expect(result.config.gateway?.auth?.trustedProxy).toEqual({
+      const result = await runTrustedProxyPrompt({ baseConfig, confirmResult: false });
+      expect(result.config.gateway?.auth).toEqual({
+        mode: "trusted-proxy",
+        trustedProxy: {
           userHeader: "x-forwarded-user",
-          allowLoopback: undefined,
-          deviceAutoApprove: { enabled: false, scopes: [] },
-        });
-        expect(baseConfig).toEqual(original);
-      } else if (previous === "password") {
-        expect(result.config.gateway?.auth).toEqual({
-          mode: "trusted-proxy",
-          trustedProxy: { userHeader: "x-forwarded-user" },
-        });
-      } else {
-        expect(result.config.gateway?.auth?.trustedProxy?.allowLoopback).toBeUndefined();
-        expect(mocks.note).toHaveBeenCalledWith(
-          expect.stringContaining("Any local process"),
-          expect.any(String),
-        );
-        expect(mocks.confirm).toHaveBeenCalledWith(
-          expect.objectContaining({
-            message: expect.stringContaining("Allow loopback"),
-            initialValue: false,
-          }),
-        );
-        const refusalMessage = mocks.note.mock.calls.at(-1)?.[0];
-        expect(refusalMessage).toContain("will be rejected");
-        expect(refusalMessage).toContain("trusted_proxy_loopback_source");
-        expect(refusalMessage).toContain("https://docs.openclaw.ai/gateway/trusted-proxy-auth");
-        expect(await authorizeConfiguredProxy(result.config)).toMatchObject({
-          ok: false,
-          reason: "trusted_proxy_loopback_source",
-        });
-      }
+          ...(sameMode ? { deviceAutoApprove: { enabled: false, scopes: [] } } : {}),
+        },
+      });
+      expect(baseConfig).toEqual(original);
+      expect(mocks.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("Allow loopback"),
+          initialValue: sameMode,
+        }),
+      );
+      expect(mocks.note).toHaveBeenCalledWith(
+        expect.stringContaining("Any local process"),
+        expect.any(String),
+      );
+      const refusalMessage = mocks.note.mock.calls.at(-1)?.[0];
+      expect(refusalMessage).toContain("will be rejected");
+      expect(refusalMessage).toContain("trusted_proxy_loopback_source");
+      expect(refusalMessage).toContain("https://docs.openclaw.ai/gateway/trusted-proxy-auth");
+      expect(await authorizeConfiguredProxy(result.config)).toMatchObject({
+        ok: false,
+        reason: "trusted_proxy_loopback_source",
+      });
     },
   );
 

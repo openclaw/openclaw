@@ -1,4 +1,3 @@
-// Destructive cleanup must not remove state owned by an independently running Gateway.
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -91,10 +90,9 @@ async function startLiveStateOwner(state: OpenClawTestState): Promise<ChildProce
     setInterval(() => {}, 1_000);
   `;
   const env = { ...state.env };
-  delete env.NODE_ENV;
-  delete env.VITEST;
-  delete env.VITEST_POOL_ID;
-  delete env.VITEST_WORKER_ID;
+  for (const key of ["NODE_ENV", "VITEST", "VITEST_POOL_ID", "VITEST_WORKER_ID"]) {
+    delete env[key];
+  }
   const child = spawn(
     process.execPath,
     ["--import", "tsx", "--input-type=module", "--eval", script, "openclaw", "gateway"],
@@ -130,8 +128,7 @@ async function makeState(env?: NodeJS.ProcessEnv) {
   return state;
 }
 
-function quietRuntime() {
-  const runtime = createNonExitingRuntime();
+function quietRuntime(runtime = createNonExitingRuntime()) {
   vi.spyOn(runtime, "log").mockImplementation(() => {});
   vi.spyOn(runtime, "error").mockImplementation(() => {});
   return runtime;
@@ -145,148 +142,138 @@ function runCleanup(uninstall: boolean, runtime: ReturnType<typeof createNonExit
 }
 
 async function readFiles(paths: readonly string[]): Promise<Buffer[]> {
-  return await Promise.all(paths.map((filePath) => fs.readFile(filePath)));
+  return Promise.all(paths.map((filePath) => fs.readFile(filePath)));
 }
 
-describe("destructive cleanup with a live unmanaged state owner", () => {
-  describe.each([
-    ["reset", "--scope", "full"],
-    ["uninstall", "--state", "--workspace"],
-  ])("registered %s workspace guard", (...args) => {
-    it.each([
-      { agentId: "123", warningPath: 'agents.entries["123"].workspace' },
-      { agentId: "constructor", warningPath: "agents.entries.constructor.workspace" },
-      { agentId: "123", warningPath: undefined },
-    ])("handles workspace warning $warningPath for $agentId", async ({ agentId, warningPath }) => {
-      const state = await makeState({
-        OPENCLAW_TEST_MISSING_WORKSPACE: undefined,
-      });
-      await state.writeConfig({
-        ...(!warningPath
-          ? { env: { vars: { constructor: "${OPENCLAW_TEST_MISSING_WORKSPACE}" } } }
-          : {}),
-        agents: {
-          ownership: "explicit",
-          defaults: { heartbeat: { agentId: "main" }, systemAgent: { agentId: "main" } },
-          entries: {
-            [agentId]: {
-              workspace: warningPath ? "${OPENCLAW_TEST_MISSING_WORKSPACE}" : state.workspaceDir,
-            },
-            main: { workspace: state.workspaceDir },
-          },
-        },
-        talk: { agentId: "main" },
-      });
-      const removeState = vi
-        .spyOn(cleanupUtils, "removeStateAndLinkedPaths")
-        .mockResolvedValue(true);
-      const removeWorkspaces = vi.spyOn(cleanupUtils, "removeWorkspaceDirs").mockResolvedValue([]);
-      const removePath = vi.spyOn(cleanupUtils, "removePath").mockResolvedValue({ ok: true });
-      vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-      vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-      vi.spyOn(defaultRuntime, "exit").mockImplementation(createNonExitingRuntime().exit);
-      const program = new Command();
-      registerMaintenanceCommands(program);
-      const run = program.parseAsync([...args, "--yes", "--non-interactive"], { from: "user" });
-
-      if (warningPath) {
-        await expect(run).rejects.toMatchObject({ name: "ExitError", code: 1 });
-        expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(warningPath));
-        expect(defaultRuntime.error).toHaveBeenCalledWith(
-          expect.stringContaining("workspace configuration could not be resolved"),
-        );
-        expect(removeState).not.toHaveBeenCalled();
-        expect(removeWorkspaces).not.toHaveBeenCalled();
-      } else {
-        await expect(run).resolves.toBe(program);
-        expect(removeState).toHaveBeenCalledOnce();
-        expect(removeWorkspaces).toHaveBeenCalledWith([state.workspaceDir], defaultRuntime, {
-          dryRun: false,
-          removeStateRows: false,
-        });
-      }
-      expect(removePath).not.toHaveBeenCalled();
-    });
-  });
-
+describe.each([
+  ["reset", "--scope", "full"],
+  ["uninstall", "--state", "--workspace"],
+])("registered %s workspace guard", (...args) => {
   it.each([
-    { command: "unmanaged reset --scope full", nixMode: false, serviceChecks: 1, uninstall: false },
-    { command: "Nix reset --scope full", nixMode: true, serviceChecks: 0, uninstall: false },
-    { command: "uninstall --state", nixMode: false, serviceChecks: 0, uninstall: true },
-  ])(
-    "refuses $command until the SQLite owner exits",
-    async ({ nixMode, uninstall, serviceChecks }) => {
-      const state = await makeState();
-      configState.isNixMode = nixMode;
-      const workspacePath = path.join(state.workspaceDir, "project.bin");
-      await state.writeConfig({ agents: { entries: { main: { workspace: state.workspaceDir } } } });
-      const markerPath = await state.writeText("keep.txt", "preserved");
-      await fs.mkdir(path.dirname(workspacePath), { recursive: true });
-      await fs.writeFile(workspacePath, Buffer.from([0, 1, 2, 3, 255]));
+    { agentId: "123", warningPath: 'agents.entries["123"].workspace' },
+    { agentId: "constructor", warningPath: "agents.entries.constructor.workspace" },
+    { agentId: "123", warningPath: undefined },
+  ])("handles workspace warning $warningPath for $agentId", async ({ agentId, warningPath }) => {
+    const state = await makeState({ OPENCLAW_TEST_MISSING_WORKSPACE: undefined });
+    await state.writeConfig({
+      ...(!warningPath
+        ? { env: { vars: { constructor: "${OPENCLAW_TEST_MISSING_WORKSPACE}" } } }
+        : {}),
+      agents: {
+        ownership: "explicit",
+        defaults: { heartbeat: { agentId: "main" }, systemAgent: { agentId: "main" } },
+        entries: {
+          [agentId]: {
+            workspace: warningPath ? "${OPENCLAW_TEST_MISSING_WORKSPACE}" : state.workspaceDir,
+          },
+          main: { workspace: state.workspaceDir },
+        },
+      },
+      talk: { agentId: "main" },
+    });
+    const removeState = vi.spyOn(cleanupUtils, "removeStateAndLinkedPaths").mockResolvedValue(true);
+    const removeWorkspaces = vi.spyOn(cleanupUtils, "removeWorkspaceDirs").mockResolvedValue([]);
+    const removePath = vi.spyOn(cleanupUtils, "removePath").mockResolvedValue({ ok: true });
+    quietRuntime(defaultRuntime);
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(createNonExitingRuntime().exit);
+    const program = new Command();
+    registerMaintenanceCommands(program);
+    const run = program.parseAsync([...args, "--yes", "--non-interactive"], { from: "user" });
 
-      const databasePath = state.statePath("state", "openclaw.sqlite");
-      await fs.mkdir(path.dirname(databasePath), { recursive: true });
-      const owner = await startLiveStateOwner(state);
-      const livePaths = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
-      const liveBytes = await readFiles([...livePaths, state.configPath]);
-
-      const blockedRuntime = quietRuntime();
-      if (uninstall) {
-        await expect(runCleanup(uninstall, blockedRuntime)).rejects.toMatchObject({
-          name: "ExitError",
-          code: 1,
-        });
-        expect(blockedRuntime.error).toHaveBeenCalledWith(
-          expect.stringMatching(/Gateway|state directory/i),
-        );
-      } else {
-        await expect(runCleanup(uninstall, blockedRuntime)).rejects.toThrow(
-          /Gateway|state directory/i,
-        );
-      }
-      expect(gatewayService.isLoaded).toHaveBeenCalledTimes(serviceChecks);
-      expect(owner.exitCode).toBeNull();
-      await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("preserved");
-      await expect(readFiles([...livePaths, state.configPath])).resolves.toEqual(liveBytes);
-
-      await stopLiveStateOwner(owner);
-      const offlineRuntime = quietRuntime();
-      await expect(runCleanup(uninstall, offlineRuntime)).resolves.toBeUndefined();
-
-      if (uninstall) {
-        await expect(fs.readFile(workspacePath)).resolves.toEqual(Buffer.from([0, 1, 2, 3, 255]));
-        await expect(fs.access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
-        for (const filePath of livePaths) {
-          await expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
-        }
-      } else {
-        await expect(fs.access(state.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
-      }
-      await expect(fs.access(state.configPath)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
-
-  it("preserves state when workspace configuration is invalid", async () => {
-    const state = await makeState();
-    const workspaceDir = state.statePath("nested-workspace");
-    const workspacePath = path.join(workspaceDir, "project.bin");
-    const markerPath = await state.writeText("keep.txt", "preserved");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(workspacePath, Buffer.from([9, 8, 7, 6]));
-    await fs.writeFile(
-      state.configPath,
-      `{"agents":{"entries":{"main":{"workspace":${JSON.stringify(workspaceDir)}}}`,
-    );
-    const configBytes = await fs.readFile(state.configPath);
-    const runtime = quietRuntime();
-
-    await expect(runCleanup(true, runtime)).rejects.toMatchObject({ name: "ExitError", code: 1 });
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("workspace configuration could not be resolved"),
-    );
-    await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("preserved");
-    await expect(fs.readFile(workspacePath)).resolves.toEqual(Buffer.from([9, 8, 7, 6]));
-    await expect(fs.readFile(state.configPath)).resolves.toEqual(configBytes);
+    if (warningPath) {
+      await expect(run).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(warningPath));
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("workspace configuration could not be resolved"),
+      );
+      expect(removeState).not.toHaveBeenCalled();
+      expect(removeWorkspaces).not.toHaveBeenCalled();
+    } else {
+      await expect(run).resolves.toBe(program);
+      expect(removeState).toHaveBeenCalledOnce();
+      expect(removeWorkspaces).toHaveBeenCalledWith([state.workspaceDir], defaultRuntime, {
+        dryRun: false,
+        removeStateRows: false,
+      });
+    }
+    expect(removePath).not.toHaveBeenCalled();
   });
+});
+
+it.each([
+  ["unmanaged reset --scope full", false, 1, false],
+  ["Nix reset --scope full", true, 0, false],
+  ["uninstall --state", false, 0, true],
+] as const)(
+  "refuses %s until the SQLite owner exits",
+  async (_command, nixMode, serviceChecks, uninstall) => {
+    const state = await makeState();
+    configState.isNixMode = nixMode;
+    const workspacePath = path.join(state.workspaceDir, "project.bin");
+    await state.writeConfig({ agents: { entries: { main: { workspace: state.workspaceDir } } } });
+    const markerPath = await state.writeText("keep.txt", "preserved");
+    await fs.mkdir(path.dirname(workspacePath), { recursive: true });
+    await fs.writeFile(workspacePath, Buffer.from([0, 1, 2, 3, 255]));
+
+    const databasePath = state.statePath("state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    const owner = await startLiveStateOwner(state);
+    const livePaths = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
+    const preservedPaths = [...livePaths, state.configPath, markerPath];
+    const liveBytes = await readFiles(preservedPaths);
+
+    const blockedRuntime = quietRuntime();
+    if (uninstall) {
+      await expect(runCleanup(uninstall, blockedRuntime)).rejects.toMatchObject({
+        name: "ExitError",
+        code: 1,
+      });
+      expect(blockedRuntime.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Gateway|state directory/i),
+      );
+    } else {
+      await expect(runCleanup(uninstall, blockedRuntime)).rejects.toThrow(
+        /Gateway|state directory/i,
+      );
+    }
+    expect(gatewayService.isLoaded).toHaveBeenCalledTimes(serviceChecks);
+    expect(owner.exitCode).toBeNull();
+    await expect(readFiles(preservedPaths)).resolves.toEqual(liveBytes);
+
+    await stopLiveStateOwner(owner);
+    await expect(runCleanup(uninstall, quietRuntime())).resolves.toBeUndefined();
+
+    if (uninstall) {
+      await expect(fs.readFile(workspacePath)).resolves.toEqual(Buffer.from([0, 1, 2, 3, 255]));
+      for (const filePath of [markerPath, ...livePaths]) {
+        await expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    } else {
+      await expect(fs.access(state.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    await expect(fs.access(state.configPath)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
+it("preserves state when workspace configuration is invalid", async () => {
+  const state = await makeState();
+  const workspaceDir = state.statePath("nested-workspace");
+  const workspacePath = path.join(workspaceDir, "project.bin");
+  const markerPath = await state.writeText("keep.txt", "preserved");
+  await fs.mkdir(workspaceDir, { recursive: true });
+  await fs.writeFile(workspacePath, Buffer.from([9, 8, 7, 6]));
+  await fs.writeFile(
+    state.configPath,
+    `{"agents":{"entries":{"main":{"workspace":${JSON.stringify(workspaceDir)}}}`,
+  );
+  const preservedPaths = [markerPath, workspacePath, state.configPath];
+  const preservedBytes = await readFiles(preservedPaths);
+  const runtime = quietRuntime();
+
+  await expect(runCleanup(true, runtime)).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+  expect(runtime.error).toHaveBeenCalledWith(
+    expect.stringContaining("workspace configuration could not be resolved"),
+  );
+  await expect(readFiles(preservedPaths)).resolves.toEqual(preservedBytes);
 });
