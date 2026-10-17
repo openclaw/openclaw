@@ -15,6 +15,7 @@ export type SessionsProps = {
   error: string | null;
   basePath: string;
   agentId: string;
+  allAgentsScope: boolean;
   mainKey: string;
   searchQuery: string;
   agentIdentityById: Record<string, AgentIdentityResult>;

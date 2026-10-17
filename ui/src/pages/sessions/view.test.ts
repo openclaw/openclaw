@@ -32,7 +32,7 @@ function sessionTableHeaders(container: HTMLElement): Array<string | undefined> 
   return Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim());
 }
 
-const SESSION_TABLE_HEADERS = ["", "Session", "Updated", "Actions"];
+const SESSION_TABLE_HEADERS = ["", "Session", "Agent", "Updated", "Actions"];
 
 afterEach(disposeSessionViews);
 
@@ -50,15 +50,87 @@ describe("sessions view", () => {
     );
     document.body.append(container);
     try {
+      expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
       expect(
-        [...container.querySelectorAll(".session-data-row .agent-row-chip")].map((chip) =>
-          chip.getAttribute("data-agent-id"),
+        [...container.querySelectorAll(".session-data-row .session-agent-col .agent-row-chip")].map(
+          (chip) => chip.getAttribute("data-agent-id"),
         ),
       ).toEqual(["main", "research", "research"]);
+      expect(container.querySelectorAll(".session-key-cell .agent-row-chip")).toHaveLength(0);
     } finally {
       container.remove();
     }
   });
+
+  it.each([false, true])(
+    "shows the Agent column only in all-agent scope with category grouping %s",
+    (categoryGrouping) => {
+      const container = document.createElement("div");
+      const result = buildResult({
+        key: "agent:research:chat-two",
+        agentId: "research",
+        kind: "direct",
+        category: "Work",
+      });
+      const groupBy = categoryGrouping ? "category" : "none";
+      const sharedProps = {
+        groupBy,
+        knownCategories: ["Work"],
+        expandedSessionKey: "agent:research:chat-two",
+      } as const;
+      try {
+        renderView(result, { ...sharedProps, allAgentsScope: true }, container);
+        const allHeaders = sessionTableHeaders(container);
+        expect(allHeaders).toEqual(
+          categoryGrouping
+            ? ["", "Session", "Agent", "Group", "Updated", "Actions"]
+            : SESSION_TABLE_HEADERS,
+        );
+        expect(container.querySelectorAll(".session-data-row .session-agent-col")).toHaveLength(1);
+        expect(container.querySelector(".session-details-row td")?.getAttribute("colspan")).toBe(
+          String(allHeaders.length),
+        );
+        if (categoryGrouping) {
+          expect(container.querySelector(".session-group-row td")?.getAttribute("colspan")).toBe(
+            String(allHeaders.length),
+          );
+        }
+
+        renderView(result, { ...sharedProps, allAgentsScope: false }, container);
+        const scopedHeaders = sessionTableHeaders(container);
+        expect(scopedHeaders).toEqual(
+          categoryGrouping
+            ? ["", "Session", "Group", "Updated", "Actions"]
+            : ["", "Session", "Updated", "Actions"],
+        );
+        expect(container.querySelector(".session-data-row .session-agent-col")).toBeNull();
+        expect(container.querySelector(".session-data-row .agent-row-chip")).toBeNull();
+        expect(container.querySelector(".session-details-row td")?.getAttribute("colspan")).toBe(
+          String(scopedHeaders.length),
+        );
+        if (categoryGrouping) {
+          expect(container.querySelector(".session-group-row td")?.getAttribute("colspan")).toBe(
+            String(scopedHeaders.length),
+          );
+        }
+
+        renderView(
+          buildMultiResult([]),
+          { ...sharedProps, allAgentsScope: false, result: null, loading: true },
+          container,
+        );
+        expect(container.querySelectorAll(".session-skeleton-row:first-child td")).toHaveLength(
+          scopedHeaders.length,
+        );
+        renderView(buildMultiResult([]), { ...sharedProps, allAgentsScope: false }, container);
+        expect(container.querySelector(".data-table-empty-cell")?.getAttribute("colspan")).toBe(
+          String(scopedHeaders.length),
+        );
+      } finally {
+        disposeSessionView(container);
+      }
+    },
+  );
 
   it("renders local calendar date headings with their session rows", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 2, 9, 12).getTime());

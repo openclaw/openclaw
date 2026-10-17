@@ -888,6 +888,7 @@ export const en: TranslationMap & {
     selectSession: "Select session",
     optionalPlaceholder: "(optional)",
     session: "Session",
+    agent: "Agent",
     key: "Key",
     label: "Label",
     kind: "Kind",

@@ -531,6 +531,15 @@
   min-width: 0;
 }
 
+.sessions-table .session-agent-col {
+  width: 170px;
+  max-width: 170px;
+}
+
+.session-agent-col openclaw-agent-row-chip {
+  width: 100%;
+}
+
 .session-actions .icon-btn svg,
 .session-details-toggle svg {
   width: 14px;

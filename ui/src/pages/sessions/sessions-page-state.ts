@@ -1374,6 +1374,7 @@ export function createSessionsPage(
       statusFilter: state.statusFilter,
       basePath: context.basePath,
       agentId: resolveSessionNavigationAgentId(context),
+      allAgentsScope: context.agentSelection.state.scopeId === null,
       mainKey: resolveUiConfiguredMainKey({
         agentsList: context.agents.state.agentsList,
         hello: context.gateway.snapshot.hello,

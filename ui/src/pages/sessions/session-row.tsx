@@ -143,7 +143,7 @@ function sessionDetailItems(
 }
 
 export function sessionsTableColumnCount(options: SessionsProps): number {
-  return options.groupBy === "category" ? 5 : 4;
+  return 4 + Number(options.allAgentsScope) + Number(options.groupBy === "category");
 }
 
 function isRowControlTarget(target: EventTarget | null): boolean {
@@ -304,11 +304,6 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                     </span>
                   ) : undefined}
                 </span>
-                {row().kind === "global" && !row().agentId ? undefined : (
-                  <AgentRowChip
-                    agentId={parseAgentSessionKey(row().key)?.agentId ?? row().agentId}
-                  />
-                )}
                 {showDisplayName() ? (
                   <span class="muted session-key-display-name">{displayName()}</span>
                 ) : undefined}
@@ -316,6 +311,13 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
             </div>
           </openclaw-tooltip>
         </td>
+        {props.allAgentsScope ? (
+          <td class="session-agent-col">
+            {row().kind === "global" && !row().agentId ? undefined : (
+              <AgentRowChip agentId={parseAgentSessionKey(row().key)?.agentId ?? row().agentId} />
+            )}
+          </td>
+        ) : undefined}
         {categoryMode() ? <CategoryCell {...props} row={row()} /> : undefined}
         <td>{updated()}</td>
         <td class="session-actions-cell">

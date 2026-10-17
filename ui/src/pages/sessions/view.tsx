@@ -359,6 +359,9 @@ function SessionsTable(props: SessionsProps) {
                 label={t("sessionsView.session")}
                 extraClass="data-table-key-col"
               />
+              {props.allAgentsScope ? (
+                <th class="session-agent-col">{t("sessionsView.agent")}</th>
+              ) : undefined}
               {props.groupBy === "category" ? <th>{t("sessionsView.group")}</th> : undefined}
               <SortHeader {...props} column="updated" label={t("sessionsView.updated")} />
               <th class="session-actions-col">
