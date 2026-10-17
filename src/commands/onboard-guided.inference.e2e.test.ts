@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -256,22 +256,8 @@ it.each(["configured", "before-provision", "after-members", "after-provision"] a
 
 async function startMockOpenAiServer() {
   const requestBodies: string[] = [];
-  const server = createServer(async (request, response) => {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (request.method !== "POST" || url.pathname !== "/v1/responses") {
-      response.writeHead(404).end();
-      return;
-    }
-    let body = "";
-    for await (const chunk of request) {
-      body += String(chunk);
-    }
-    requestBodies.push(body);
-    writeOpenAiResponsesText(response, {
-      text: "OK",
-      messageId: "guided-inference-message",
-      responseId: "guided-inference-response",
-    });
+  const server = createServer((request, response) => {
+    void handleMockOpenAiRequest(request, response, requestBodies);
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -291,4 +277,26 @@ async function startMockOpenAiServer() {
       });
     },
   };
+}
+
+async function handleMockOpenAiRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestBodies: string[],
+): Promise<void> {
+  const url = new URL(request.url ?? "/", "http://127.0.0.1");
+  if (request.method !== "POST" || url.pathname !== "/v1/responses") {
+    response.writeHead(404).end();
+    return;
+  }
+  let body = "";
+  for await (const chunk of request) {
+    body += String(chunk);
+  }
+  requestBodies.push(body);
+  writeOpenAiResponsesText(response, {
+    text: "OK",
+    messageId: "guided-inference-message",
+    responseId: "guided-inference-response",
+  });
 }

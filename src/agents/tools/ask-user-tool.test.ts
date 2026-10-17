@@ -396,9 +396,9 @@ describe("ask_user", () => {
       timeoutSeconds: normalized.timeoutSeconds,
     });
     const sent: SentPrompt[] = [];
-    const gateway = gatewayStub(async (method, _opts, params) =>
-      method === "question.request" ? { id: params.id } : { status: "expired" },
-    );
+    const gateway = registeredGateway({
+      "question.waitAnswer": async () => ({ status: "expired" }),
+    });
 
     const result = await createAskUserTool({
       sessionKey,
@@ -420,9 +420,10 @@ describe("ask_user", () => {
     ["pending", "No answer arrived"],
     ["cancelled", "question was cancelled"],
   ] as const)("maps %s to no_answer", async (status, text) => {
-    const gateway = gatewayStub(async (method, _opts, params) =>
-      method === "question.request" ? { id: params.id } : { status },
-    );
+    const gateway = registeredGateway({
+      "question.waitAnswer": async () => ({ status }),
+      "question.resolve": async () => ({ status }),
+    });
     const result = await createAskUserTool({
       sessionKey: `agent:main:${status}`,
       gatewayCall: gateway.call,
@@ -648,21 +649,17 @@ describe("ask_user", () => {
 
   it("claims unmatched plain text as free text without steering it into the run", async () => {
     let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
+    const gateway = registeredGateway({
+      "question.waitAnswer": async () => {
         return await new Promise((resolve) => {
           finishWait = resolve;
         });
-      }
-      if (method === "question.resolve") {
+      },
+      "question.resolve": async (params) => {
         const answers = params.answers;
         finishWait?.({ status: "answered", answers });
         return { status: "answered", answers };
-      }
-      throw new Error(`unexpected method ${method}`);
+      },
     });
     const pending = createAskUserTool({
       sessionKey: "agent:main:claim",

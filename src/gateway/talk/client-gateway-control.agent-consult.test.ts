@@ -12,6 +12,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureClientVoiceSessionSource } from "../../talk/client-voice-session-source.js";
@@ -124,7 +125,7 @@ describe("Talk client agent consult admission", () => {
       return { payloads: [] };
     });
     const runner = createOwnedRunner({
-      context: { chatAbortControllers, logGateway: { warn: vi.fn() } },
+      context: { chatAbortControllers, logGateway: createSubsystemLogger("test/talk-consult") },
       authority,
     });
     runner.runPrompt.adoptCompletionClaims();

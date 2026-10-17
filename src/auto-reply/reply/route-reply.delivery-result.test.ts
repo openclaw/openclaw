@@ -1,8 +1,10 @@
+// Tests routeReply delivery evidence and editable message identity.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
@@ -21,56 +23,53 @@ import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../dispatch.j
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { attachReplyDispatchUndeliveredFallback } from "./reply-dispatcher.js";
 
-const deliver = vi.hoisted(() => vi.fn());
+const mocks = vi.hoisted(() => ({
+  deliverOutboundPayloads: vi.fn(),
+}));
 
 vi.mock("../../infra/outbound/deliver-runtime.js", () => ({
-  deliverOutboundPayloads: deliver,
-  deliverOutboundPayloadsInternal: deliver,
+  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
 }));
 
 vi.mock("../../infra/outbound/deliver.js", () => ({
-  deliverOutboundPayloads: deliver,
-  deliverOutboundPayloadsInternal: deliver,
+  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
 }));
 
 const { routeReply: routeReplyRuntime } = await import("./route-reply.js");
 type RouteReplyParams = Parameters<typeof routeReplyRuntime>[0];
 const routeReply = (
-  params: Omit<RouteReplyParams, "replyKind" | "channel" | "to" | "cfg"> &
-    Partial<Pick<RouteReplyParams, "replyKind" | "channel" | "to" | "cfg">>,
-) =>
-  routeReplyRuntime({ replyKind: "final", channel: "telegram", to: "chat-1", cfg: {}, ...params });
+  params: Omit<RouteReplyParams, "replyKind"> & { replyKind?: RouteReplyParams["replyKind"] },
+) => routeReplyRuntime({ replyKind: "final", ...params });
 
-function createChannelPlugin(): ChannelPlugin {
+function createChannelPlugin(id: ChannelPlugin["id"], label: string): ChannelPlugin {
   return createChannelTestPluginBase({
-    id: "telegram",
-    label: "Telegram",
+    id,
+    label,
     config: { listAccountIds: () => [], resolveAccount: () => ({}) },
   });
-}
-
-function installPlugin(plugin = createChannelPlugin()) {
-  setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", plugin, source: "test" }]));
-}
-
-function suppressDelivery(reason: string) {
-  deliver.mockImplementationOnce(
-    async ({
-      onPayloadDeliveryOutcome,
-    }: {
-      onPayloadDeliveryOutcome?: (outcome: unknown) => void;
-    }) => {
-      onPayloadDeliveryOutcome?.({ index: 0, status: "suppressed", reason });
-      return [];
-    },
-  );
 }
 
 describe("routeReply delivery result", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   beforeEach(() => {
-    installPlugin();
-    deliver.mockReset().mockResolvedValue([]);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: createChannelPlugin("telegram", "Telegram"),
+          source: "test",
+        },
+        {
+          pluginId: "whatsapp",
+          plugin: createChannelPlugin("whatsapp", "WhatsApp"),
+          source: "test",
+        },
+      ]),
+    );
+    mocks.deliverOutboundPayloads.mockReset();
+    mocks.deliverOutboundPayloads.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -111,27 +110,44 @@ describe("routeReply delivery result", () => {
           },
         });
       }
+      const plugin = createChannelPlugin("telegram", "Telegram");
       if (outcome === "channel_transform") {
-        const plugin = createChannelPlugin();
         plugin.messaging = {
           transformReplyPayload: ({ payload }) => (payload.mediaUrl ? null : payload),
         };
-        installPlugin(plugin);
+        setActivePluginRegistry(
+          createTestRegistry([{ pluginId: "telegram", plugin, source: "test" }]),
+        );
       }
-      deliver.mockResolvedValue([{ channel: "telegram", messageId: "caption-sent" }]);
+      mocks.deliverOutboundPayloads.mockResolvedValue([
+        { channel: "telegram", messageId: "caption-sent" },
+      ]);
       const notDispatched = new PlatformMessageNotDispatchedError("before platform dispatch", {
         cause: new Error("offline"),
       });
       if (outcome === "invisible") {
-        deliver.mockResolvedValueOnce([]);
+        mocks.deliverOutboundPayloads.mockResolvedValueOnce([]);
       } else if (outcome === "no-identity") {
-        suppressDelivery("adapter_returned_no_identity");
+        mocks.deliverOutboundPayloads.mockImplementationOnce(
+          async ({
+            onPayloadDeliveryOutcome,
+          }: {
+            onPayloadDeliveryOutcome?: (outcome: unknown) => void;
+          }) => {
+            onPayloadDeliveryOutcome?.({
+              index: 0,
+              status: "suppressed",
+              reason: "adapter_returned_no_identity",
+            });
+            return [];
+          },
+        );
       } else if (outcome === "not-dispatched") {
-        deliver.mockRejectedValueOnce(notDispatched);
+        mocks.deliverOutboundPayloads.mockRejectedValueOnce(notDispatched);
       } else if (outcome === "unknown") {
-        deliver.mockRejectedValueOnce(new Error("transport outcome unknown"));
+        mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("transport outcome unknown"));
       } else if (outcome === "partial") {
-        deliver.mockRejectedValueOnce(
+        mocks.deliverOutboundPayloads.mockRejectedValueOnce(
           new OutboundDeliveryError("later payload failed", {
             cause: notDispatched,
             results: [{ channel: "telegram", messageId: "already-sent" }],
@@ -139,13 +155,6 @@ describe("routeReply delivery result", () => {
           }),
         );
       }
-      const closeStore = async () => {
-        if (!custody) {
-          return;
-        }
-        await closeOpenClawAgentDatabasesAsync(path.dirname(custody.storePath));
-        closeOpenClawAgentDatabasesForTest(path.dirname(custody.storePath));
-      };
       let deliveryError: string | undefined;
       try {
         const cfg = custody ? { session: { store: custody.storePath } } : {};
@@ -208,16 +217,20 @@ describe("routeReply delivery result", () => {
           counts: { final: { [count]: 1 } },
           anyVisibleDelivered: visible,
         });
-        expect(deliver).toHaveBeenCalledTimes(calls);
+        expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(calls);
         if (custody) {
           expect(deliveryError).toContain("later payload failed");
-          await closeStore();
-          expect(loadSessionEntry(custody)?.pendingFinalDelivery?.deliveries).toEqual([
-            { id: custody.deliveryId, state: "delivered" },
-          ]);
+          await closeOpenClawAgentDatabasesAsync(path.dirname(custody.storePath));
+          closeOpenClawAgentDatabasesForTest(path.dirname(custody.storePath));
+          expect(
+            (loadSessionEntry(custody) as InternalSessionEntry)?.pendingFinalDelivery?.deliveries,
+          ).toEqual([{ id: custody.deliveryId, state: "delivered" }]);
         }
       } finally {
-        await closeStore();
+        if (custody) {
+          await closeOpenClawAgentDatabasesAsync(path.dirname(custody.storePath));
+          closeOpenClawAgentDatabasesForTest(path.dirname(custody.storePath));
+        }
       }
     },
   );
@@ -229,8 +242,27 @@ describe("routeReply delivery result", () => {
   ] as const)(
     "returns intentional suppression reason %s without claiming delivery",
     async (reason) => {
-      suppressDelivery(reason);
-      const res = await routeReply({ payload: { text: "hello" } });
+      mocks.deliverOutboundPayloads.mockImplementationOnce(
+        async ({
+          onPayloadDeliveryOutcome,
+        }: {
+          onPayloadDeliveryOutcome?: (outcome: unknown) => void;
+        }) => {
+          onPayloadDeliveryOutcome?.({
+            index: 0,
+            status: "suppressed",
+            reason,
+          });
+          return [];
+        },
+      );
+
+      const res = await routeReply({
+        payload: { text: "hello" },
+        channel: "telegram",
+        to: "chat-1",
+        cfg: {} as never,
+      });
 
       expect(res).toEqual({
         ok: true,
@@ -273,7 +305,9 @@ describe("routeReply delivery result", () => {
   });
 
   it("preserves session writer authority through route normalization", async () => {
-    deliver.mockResolvedValueOnce([{ channel: "telegram", messageId: "message-1" }]);
+    mocks.deliverOutboundPayloads.mockResolvedValueOnce([
+      { channel: "telegram", messageId: "message-1" },
+    ]);
     const authority = {
       expectedLifecycleRevision: "revision-a",
       expectedSessionId: "session-1",
@@ -287,9 +321,12 @@ describe("routeReply delivery result", () => {
         { text: "hello" },
         { sessionWriterDeliveryAuthority: authority },
       ),
+      channel: "telegram",
+      to: "chat-1",
+      cfg: {} as never,
     });
 
-    const call = deliver.mock.calls[0];
+    const call = mocks.deliverOutboundPayloads.mock.calls[0];
     if (!call) {
       throw new Error("expected routed delivery");
     }
@@ -309,9 +346,14 @@ describe("routeReply delivery result", () => {
       results: [{ channel: "telegram", messageId: "msg-1" }, trailingResult],
       stage: "platform_send",
     });
-    deliver.mockRejectedValueOnce(failure);
+    mocks.deliverOutboundPayloads.mockRejectedValueOnce(failure);
 
-    const res = await routeReply({ payload: { text: "hello" } });
+    const res = await routeReply({
+      payload: { text: "hello" },
+      channel: "telegram",
+      to: "chat-1",
+      cfg: {} as never,
+    });
 
     expect(res).toEqual({
       ok: false,

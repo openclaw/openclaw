@@ -35,7 +35,10 @@ export function createControlFixture<T extends Parameters<typeof controlOptions>
   };
 }
 
-export async function activate(owner: ControlOwner, closeProvider = vi.fn(async () => undefined)) {
+export async function activate(
+  owner: ControlOwner,
+  closeProvider: () => Promise<void> = vi.fn(async () => undefined),
+) {
   await owner.adoptProvider(closeProvider);
   owner.activate();
 }

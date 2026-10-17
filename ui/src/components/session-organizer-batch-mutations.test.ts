@@ -73,7 +73,11 @@ describe("patchSessionRows", () => {
 
   it("rejects a hidden worker as a tree root before reading or changing descendants", async () => {
     const h = createHarness();
-    const root = makeRow(0, { key: "agent:main:subagent:hidden", hasArchiveDescendants: true });
+    const root = {
+      ...sessionRow(0),
+      key: "agent:main:subagent:hidden",
+      hasArchiveDescendants: true,
+    };
     h.scope.sessions.describe = vi.fn(async () => ({
       session: {
         key: root.key,

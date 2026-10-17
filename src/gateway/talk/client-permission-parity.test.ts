@@ -10,6 +10,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import {
   createOrResumeClientVoiceSession,
@@ -57,7 +58,10 @@ describe("authenticated Talk permission parity", () => {
     return createTalkClientAgentConsultRunner({
       config,
       sessionTarget,
-      context: { chatAbortControllers: new Map(), logGateway: { warn: vi.fn() } },
+      context: {
+        chatAbortControllers: new Map(),
+        logGateway: createSubsystemLogger("test/talk-permission-parity"),
+      },
       authority: resolveTalkAgentConsultAuthority(client.connect.scopes, client),
       getVoiceSessionId: () => voiceSessionId,
       initialItems: [],

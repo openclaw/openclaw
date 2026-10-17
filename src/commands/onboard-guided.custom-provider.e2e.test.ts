@@ -223,7 +223,7 @@ async function runCustomSetup(scenario: Scenario) {
         }
         return await prepare(params);
       });
-    cleanupTasks.push(() => void spy.mockRestore());
+    cleanupTasks.push(() => spy.mockRestore());
   }
   const resultPromise = runManualStage({
     detection: {

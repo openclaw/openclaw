@@ -8,7 +8,6 @@ import {
   expectWorktreeName,
   holdPreferenceClear,
   acceptIdlePlacement,
-  chooseModel,
   resetWorktreeMocks,
   startAcceptedWorktree,
   acceptedNameWarning,
@@ -54,7 +53,16 @@ it.each([
     const { admitted, submitting } = await submitPendingWorktree(first);
     const next = await readyPreferenceDraft(prefs, first.context.gateway);
     const control = next.place.modelControl;
-    await chooseModel(next);
+    await vi.waitFor(() =>
+      expect(
+        renderControl(control, next.context).querySelector(
+          '[data-chat-model-option="openai/gpt-5.6-sol"]',
+        ),
+      ).not.toBeNull(),
+    );
+    renderControl(control, next.context)
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')!
+      .click();
     const thinking = renderControl(control, next.context).querySelector<HTMLInputElement>(
       '[data-chat-thinking-slider="true"]',
     )!;

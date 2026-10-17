@@ -26,9 +26,11 @@ const detectAvailableSetupProviderIds = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
 
+// mock-isolation: exercise onboarding orchestration without loading the authentication UI.
 vi.mock("./auth-choice-prompt.js", () => ({ promptAuthChoiceGrouped }));
 
 vi.mock("../agents/auth-profiles.runtime.js", () => ({ ensureAuthProfileStore }));
+// mock-isolation: provider discovery is supplied by this orchestration fixture.
 vi.mock("../plugins/provider-setup-availability.js", () => ({ detectAvailableSetupProviderIds }));
 
 vi.mock("./onboard-interactive-runner.js", async (importActual) => {

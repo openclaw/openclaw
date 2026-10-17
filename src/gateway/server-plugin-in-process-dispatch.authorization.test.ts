@@ -40,6 +40,7 @@ import {
 const startTurn = vi.hoisted(() => vi.fn());
 const waitForTurn = vi.hoisted(() => vi.fn());
 
+// mock-isolation: observe dispatch authority without starting a real agent turn.
 vi.mock("./agent-turn/agent-turn-service.js", () => ({
   createAgentTurnService: () => ({ startTurn, waitForTurn }),
 }));

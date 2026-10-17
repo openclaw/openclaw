@@ -79,11 +79,11 @@ it.each([
   const controller = new AbortController();
   const attempt = vi
     .fn<() => Promise<string>>()
-    .mockImplementationOnce(async () => {
+    .mockImplementationOnce(() => {
       if (abort) {
         controller.abort();
       }
-      throw error;
+      return Promise.reject(error);
     })
     .mockResolvedValue("ok");
   const result = runWithSessionInitConflictRetry(attempt, {

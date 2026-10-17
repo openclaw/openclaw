@@ -344,6 +344,7 @@ it.each(["before snapshot", "during acknowledgement"])(
         }
         onboarding.persisted.config = config;
         onboarding.states.set(competing.configPath, competing);
+        return undefined;
       },
     });
     await expect(run(deps)).rejects.toThrow("already owns this installation");

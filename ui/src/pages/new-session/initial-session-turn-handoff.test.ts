@@ -94,7 +94,6 @@ it.each([
     expect(instant.isCurrent()).toBe(true);
     const auth = context.gateway.snapshot.hello!.auth!;
     const retainRejected = vi.spyOn(rejected, "retainRejectedInitialTurn");
-    const navigate = vi.mocked(navigation.navigate);
     const text = "private incognito first turn";
     const initialRun =
       status === "started"
@@ -116,7 +115,7 @@ it.each([
     });
     await completion;
     if (change === "unchanged") {
-      expect(navigate).toHaveBeenCalledOnce();
+      expect(navigation.navigate).toHaveBeenCalledOnce();
       expect(clearDraft).toHaveBeenCalledOnce();
       if (status === "started") {
         expect(context.chatSubmissions.readInitial(key, client)?.message?.content).toContainEqual({
@@ -127,7 +126,7 @@ it.each([
         expect(retainRejected).toHaveBeenCalledOnce();
       }
     } else {
-      expect(navigate).not.toHaveBeenCalled();
+      expect(navigation.navigate).not.toHaveBeenCalled();
       expect(context.chatSubmissions.readInitial(key, client)).toBeNull();
       expect(retainRejected).not.toHaveBeenCalled();
       expect(JSON.stringify(localStorage)).not.toContain(text);
