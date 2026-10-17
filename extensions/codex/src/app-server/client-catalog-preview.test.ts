@@ -3,6 +3,8 @@ import * as messageDecoder from "./client-message-decoder.js";
 import { createClientHarness } from "./test-support.js";
 
 const harnesses: Array<ReturnType<typeof createClientHarness>> = [];
+const prefix = "x".repeat(499);
+const tail = "y".repeat(4096);
 
 function createHarness() {
   const harness = createClientHarness({ autoEmitExit: false });
@@ -174,67 +176,35 @@ describe("Codex catalog preview decoding", () => {
   );
 
   it.each([
-    {
-      name: "leading whitespace beyond the input prefix",
-      preview: " \t\n".repeat(4096) + "visible",
-      expected: "visible",
-    },
-    {
-      name: "whitespace before ANSI removal",
-      preview: "a \u001b[0m b",
-      expected: "a  b",
-    },
-    {
-      name: "space at the output boundary",
-      preview: "x".repeat(499) + " " + "y".repeat(4096),
-      expected: "x".repeat(499) + " ",
-    },
-    {
-      name: "trailing whitespace beyond the input prefix",
-      preview: "x".repeat(499) + " \n\t".repeat(4096),
-      expected: "x".repeat(499),
-    },
-    {
-      name: "surrogate pair across the output boundary",
-      preview: "x".repeat(499) + "😀" + "y".repeat(4096),
-      expected: "x".repeat(499),
-    },
-    {
-      name: "surrogate pair fitting the output boundary",
-      preview: "x".repeat(498) + "😀" + "y".repeat(4096),
-      expected: "x".repeat(498) + "😀",
-    },
-    {
-      name: "surrogate lookahead after whitespace normalization",
-      preview: " ".repeat(1548) + "x".repeat(499) + "😀tail",
-      expected: "x".repeat(499),
-    },
-    {
-      name: "lone surrogate at the output boundary",
-      preview: "x".repeat(499) + "\ud800" + "y".repeat(4096),
-      expected: "x".repeat(499) + "\ufffd",
-    },
-    {
-      name: "C0 removal after whitespace normalization",
-      preview: "a\u0000b \u007f c".repeat(400),
-      expected: "ab  c".repeat(100),
-    },
-    {
-      name: "OSC terminator beyond the input prefix",
-      preview: "\u001b]0;" + "p".repeat(3000) + "\u0007visible",
-      expected: "visible",
-    },
-    {
-      name: "unterminated OSC payload",
-      preview: "\u001b]0;" + "p".repeat(3000),
-      expected: "]0;" + "p".repeat(497),
-    },
-    {
-      name: "C1 CSI crossing the input prefix",
-      preview: "\u009b" + "1;".repeat(1500) + "31mvisible",
-      expected: "visible",
-    },
-  ])("preserves $name in catalog previews", async ({ preview, expected }) => {
+    ["leading whitespace beyond the input prefix", " \t\n".repeat(4096) + "visible", "visible"],
+    ["whitespace before ANSI removal", "a \u001b[0m b", "a  b"],
+    ["space at the output boundary", prefix + " " + tail, prefix + " "],
+    ["trailing whitespace beyond the input prefix", prefix + " \n\t".repeat(4096), prefix],
+    ["surrogate pair across the output boundary", prefix + "😀" + tail, prefix],
+    [
+      "surrogate pair fitting the output boundary",
+      "x".repeat(498) + "😀" + tail,
+      "x".repeat(498) + "😀",
+    ],
+    [
+      "surrogate lookahead after whitespace normalization",
+      " ".repeat(1548) + prefix + "😀tail",
+      prefix,
+    ],
+    ["lone surrogate at the output boundary", prefix + "\ud800" + tail, prefix + "\ufffd"],
+    [
+      "C0 removal after whitespace normalization",
+      "a\u0000b \u007f c".repeat(400),
+      "ab  c".repeat(100),
+    ],
+    [
+      "OSC terminator beyond the input prefix",
+      "\u001b]0;" + "p".repeat(3000) + "\u0007visible",
+      "visible",
+    ],
+    ["unterminated OSC payload", "\u001b]0;" + "p".repeat(3000), "]0;" + "p".repeat(497)],
+    ["C1 CSI crossing the input prefix", "\u009b" + "1;".repeat(1500) + "31mvisible", "visible"],
+  ])("preserves %s in catalog previews", async (_name, preview, expected) => {
     const harness = createHarness();
     const request = harness.client.request<{ data: Array<{ id: string; preview: string }> }>(
       "thread/list",

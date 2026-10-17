@@ -388,34 +388,28 @@ export function createFakeCodexCompactionClient(
       handler(notification);
     }
   };
-  const completeCompaction = (): void => {
+  const completeCompaction = (threadId = "thread-1"): void => {
     emit({
       method: "turn/started",
       params: {
-        threadId: "thread-1",
-        turn: { id: "compact-turn-1", threadId: "thread-1", status: "inProgress" },
+        threadId,
+        turn: { id: "compact-turn-1", threadId, status: "inProgress" },
       },
     });
-    emit({
-      method: "item/started",
-      params: {
-        threadId: "thread-1",
-        turnId: "compact-turn-1",
-        item: { id: "compact-item-1", type: "contextCompaction" },
-      },
-    });
-    emit({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "compact-turn-1",
-        item: { id: "compact-item-1", type: "contextCompaction" },
-      },
-    });
+    for (const method of ["item/started", "item/completed"]) {
+      emit({
+        method,
+        params: {
+          threadId,
+          turnId: "compact-turn-1",
+          item: { id: "compact-item-1", type: "contextCompaction" },
+        },
+      });
+    }
     emit({
       method: "turn/completed",
       params: {
-        threadId: "thread-1",
+        threadId,
         turn: { id: "compact-turn-1", status: "completed", items: [] },
       },
     });
@@ -474,36 +468,7 @@ export function createFakeCodexCompactionClient(
           throw new Error("thread/compact/start requires threadId");
         }
         // Codex may emit item notifications before acknowledging the start RPC.
-        emit({
-          method: "turn/started",
-          params: {
-            threadId,
-            turn: { id: "compact-turn-1", threadId, status: "inProgress" },
-          },
-        });
-        emit({
-          method: "item/started",
-          params: {
-            threadId,
-            turnId: "compact-turn-1",
-            item: { id: "compact-item-1", type: "contextCompaction" },
-          },
-        });
-        emit({
-          method: "item/completed",
-          params: {
-            threadId,
-            turnId: "compact-turn-1",
-            item: { id: "compact-item-1", type: "contextCompaction" },
-          },
-        });
-        emit({
-          method: "turn/completed",
-          params: {
-            threadId,
-            turn: { id: "compact-turn-1", status: "completed", items: [] },
-          },
-        });
+        completeCompaction(threadId);
       }
       return {};
     },
@@ -588,7 +553,7 @@ export function createFakeCodexCompactionClient(
     close,
     closeAndWait,
     emit,
-    completeCompaction,
+    completeCompaction: () => completeCompaction(),
   };
 }
 

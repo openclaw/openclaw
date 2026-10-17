@@ -244,7 +244,14 @@ describe("CodexAppServerClient", () => {
 
   it("surfaces relogin details from Codex app-server RPC errors", async () => {
     const harness = createHarness();
-
+    const data = {
+      reason: "cloudRequirements",
+      errorCode: "Auth",
+      action: "relogin",
+      statusCode: 401,
+      detail:
+        "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+    };
     const request = harness.client.request("thread/start", {});
     const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
@@ -252,14 +259,7 @@ describe("CodexAppServerClient", () => {
       error: {
         code: -32602,
         message: "failed to load configuration",
-        data: {
-          reason: "cloudRequirements",
-          errorCode: "Auth",
-          action: "relogin",
-          statusCode: 401,
-          detail:
-            "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
-        },
+        data,
       },
     });
 
@@ -267,19 +267,9 @@ describe("CodexAppServerClient", () => {
       name: "CodexAppServerRpcError",
       code: -32602,
       method: "thread/start",
+      message: `failed to load configuration: ${data.detail}`,
     });
-    await expect(request).rejects.toHaveProperty(
-      "message",
-      "failed to load configuration: Your authentication session could not be refreshed automatically. Please log out and sign in again.",
-    );
-    await expect(request).rejects.toHaveProperty("data", {
-      reason: "cloudRequirements",
-      errorCode: "Auth",
-      action: "relogin",
-      statusCode: 401,
-      detail:
-        "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
-    });
+    await expect(request).rejects.toHaveProperty("data", data);
   });
 
   it("accepts a newer app-server version for normal startup validation", async () => {
