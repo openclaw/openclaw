@@ -331,124 +331,106 @@ describe("queued ingress acceptance", () => {
     vi.unstubAllEnvs();
   });
 
-  it("lets ingress bound delivery-group preparation failures before queued execution", async () => {
-    await withOpenClawTestState({ label: "queued-ingress-group-retry" }, async (testState) => {
-      const preparation = vi
-        .spyOn(sandboxRuntime, "withSandboxRuntimeStatusesInWorker")
-        .mockRejectedValue(new Error("ENOSPC: sandbox status read failed"));
+  it.each([
+    ["collect", true],
+    ["followup", false],
+    ["collect", false],
+  ] as const)("bounds %s preparation failures (grouped: %s)", async (mode, grouped) => {
+    await withOpenClawTestState({ label: "queued-ingress-retry" }, async (testState) => {
+      const preparation = grouped
+        ? vi
+            .spyOn(sandboxRuntime, "withSandboxRuntimeStatusesInWorker")
+            .mockRejectedValue(new Error("ENOSPC: sandbox status read failed"))
+        : undefined;
       const queue = createTestIngressQueue(testState.stateDir);
-      const failed = observeChannelIngressQueueWrite(queue, "fail", "second-input");
-      const key = "agent:main:ingress-group-retry";
-      const ingressSignals: AbortSignal[] = [];
-      const runFollowup = vi.fn(async () => {});
+      const failed = observeChannelIngressQueueWrite(
+        queue,
+        "fail",
+        grouped ? "second-input" : undefined,
+      );
+      const key = grouped ? "agent:main:ingress-group-retry" : `agent:main:ingress-retry-${mode}`;
+      const signals: AbortSignal[] = [];
+      const runFollowup = vi.fn(async (run: Parameters<typeof isFollowupRunAborted>[0]) => {
+        if (!grouped && !isFollowupRunAborted(run)) {
+          throw new Error("ENOSPC: queued preparation failed");
+        }
+      });
       const drain = createChannelIngressDrain({
         queue,
         adoptionStallTimeoutMs: 90,
         retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
         dispatchClaimedEvent: (event, lifecycle) => {
-          ingressSignals.push(lifecycle.abortSignal);
+          signals.push(lifecycle.abortSignal);
           const run = createQueueTestRun({
-            prompt: event.payload.text,
-            messageId: event.id,
-            originatingChannel: "discord",
-            originatingTo: "channel:synthetic-group",
+            prompt: grouped ? event.payload.text : "Please answer",
+            messageId: grouped ? event.id : "failed-input",
+            ...(grouped
+              ? { originatingChannel: "discord", originatingTo: "channel:synthetic-group" }
+              : {}),
           });
-          run.run.agentId = "main";
-          run.run.sessionKey = key;
-          run.run.gatewayUiCommandTarget = { connId: "synthetic-browser", profileId: "viewer" };
+          if (grouped) {
+            run.run.agentId = "main";
+            run.run.sessionKey = key;
+            run.run.gatewayUiCommandTarget = { connId: "synthetic-browser", profileId: "viewer" };
+          }
           run.turnAdoptionLifecycle =
             bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle;
           enqueueFollowupRun(
             key,
             run,
-            { mode: "collect", debounceMs: 10, cap: 2, dropPolicy: "summarize" },
+            { mode, debounceMs: 10, cap: 2, dropPolicy: "summarize" },
             "message-id",
             runFollowup,
             false,
           );
+          if (!grouped) {
+            scheduleFollowupDrain(key, runFollowup);
+          }
           return { kind: "deferred" };
         },
       });
       try {
-        await queue.enqueue("first-input", { text: "First request" }, { laneKey: "first" });
-        await queue.enqueue("second-input", { text: "Second request" }, { laneKey: "second" });
-        expect(await drain.drainOnce()).toEqual({ started: 2 });
+        if (grouped) {
+          await queue.enqueue("first-input", { text: "First request" }, { laneKey: "first" });
+          await queue.enqueue("second-input", { text: "Second request" }, { laneKey: "second" });
+        } else {
+          await queue.enqueue("failed-input", { text: "Please answer" });
+        }
+        expect(await drain.drainOnce()).toEqual({ started: grouped ? 2 : 1 });
         await drain.waitForIdle();
-        scheduleFollowupDrain(key, runFollowup);
-        await vi.advanceTimersByTimeAsync(50);
-        expect(preparation).toHaveBeenCalled();
-        expect(preparation.mock.calls[0]?.[0]).toHaveLength(2);
-        expect(runFollowup).not.toHaveBeenCalled();
-        expect(ingressSignals.map((signal) => signal.aborted)).toEqual([false, false]);
-        await vi.advanceTimersByTimeAsync(60);
-        expect(ingressSignals.map((signal) => signal.aborted)).toEqual([true, true]);
+        if (grouped) {
+          scheduleFollowupDrain(key, runFollowup);
+          await vi.advanceTimersByTimeAsync(50);
+          expect(preparation).toHaveBeenCalled();
+          expect(preparation?.mock.calls[0]?.[0]).toHaveLength(2);
+          expect(runFollowup).not.toHaveBeenCalled();
+          expect(signals.map((signal) => signal.aborted)).toEqual([false, false]);
+          await vi.advanceTimersByTimeAsync(60);
+          expect(signals.map((signal) => signal.aborted)).toEqual([true, true]);
+        } else {
+          await vi.advanceTimersByTimeAsync(110);
+          expect(runFollowup).toHaveBeenCalled();
+          expect(signals[0]?.aborted).toBe(true);
+        }
         await expect(failed).resolves.toBe(true);
-        expect(await queue.listFailed?.()).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ id: "first-input", reason: "retry-limit-exceeded" }),
-            expect.objectContaining({ id: "second-input", reason: "retry-limit-exceeded" }),
-          ]),
-        );
+        const failures = await queue.listFailed?.();
+        if (grouped) {
+          expect(failures).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ id: "first-input", reason: "retry-limit-exceeded" }),
+              expect.objectContaining({ id: "second-input", reason: "retry-limit-exceeded" }),
+            ]),
+          );
+        } else {
+          expect(failures).toMatchObject([{ id: "failed-input", reason: "retry-limit-exceeded" }]);
+        }
       } finally {
         drain.dispose();
         clearFollowupQueueForTest(key);
-        preparation.mockRestore();
+        preparation?.mockRestore();
       }
     });
   });
-
-  it.each(["followup", "collect"] as const)(
-    "lets ingress bound repeated preparation failures in %s mode",
-    async (mode) => {
-      await withOpenClawTestState({ label: "queued-ingress-retry" }, async (testState) => {
-        const queue = createTestIngressQueue(testState.stateDir);
-        const failed = observeChannelIngressQueueWrite(queue, "fail");
-        const key = `agent:main:ingress-retry-${mode}`;
-        let ingressSignal: AbortSignal | undefined;
-        const runFollowup = vi.fn(async (run: Parameters<typeof isFollowupRunAborted>[0]) => {
-          if (!isFollowupRunAborted(run)) {
-            throw new Error("ENOSPC: queued preparation failed");
-          }
-        });
-        const drain = createChannelIngressDrain({
-          queue,
-          adoptionStallTimeoutMs: 90,
-          retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
-          dispatchClaimedEvent: (_event, lifecycle) => {
-            ingressSignal = lifecycle.abortSignal;
-            const run = createQueueTestRun({ prompt: "Please answer", messageId: "failed-input" });
-            run.turnAdoptionLifecycle =
-              bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle;
-            enqueueFollowupRun(
-              key,
-              run,
-              { mode, debounceMs: 10, cap: 2, dropPolicy: "summarize" },
-              "message-id",
-              runFollowup,
-              false,
-            );
-            scheduleFollowupDrain(key, runFollowup);
-            return { kind: "deferred" };
-          },
-        });
-        try {
-          await queue.enqueue("failed-input", { text: "Please answer" });
-          await drain.drainOnce();
-          await drain.waitForIdle();
-          await vi.advanceTimersByTimeAsync(110);
-          expect(runFollowup).toHaveBeenCalled();
-          expect(ingressSignal?.aborted).toBe(true);
-          await expect(failed).resolves.toBe(true);
-          expect(await queue.listFailed?.()).toMatchObject([
-            { id: "failed-input", reason: "retry-limit-exceeded" },
-          ]);
-        } finally {
-          drain.dispose();
-          clearFollowupQueueForTest(key);
-        }
-      });
-    },
-  );
 
   it.each(
     ["followup-collect", "followup-overflow"].flatMap((sourceKind) =>

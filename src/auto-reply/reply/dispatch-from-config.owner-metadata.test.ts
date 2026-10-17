@@ -57,6 +57,8 @@ it.each([
     spawnedBy: scenario === "parent-added" ? undefined : "agent:work:parent",
   };
   replaceSessionEntrySync(scope, entry);
+  const replace = (patch: Partial<typeof entry>) =>
+    replaceSessionEntrySync(scope, { ...entry, ...patch });
   const meta = {
     backend: "acpx",
     agent: "synthetic",
@@ -81,11 +83,10 @@ it.each([
   vi.spyOn(runtimeLoaders, "loadRuntimePlugins").mockImplementationOnce(async () => {
     await Promise.resolve();
     if (scenario === "lifecycle-change") {
-      replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "after-gather" });
+      replace({ lifecycleRevision: "after-gather" });
     }
     if (scenario === "replacement-parent") {
-      replaceSessionEntrySync(scope, {
-        ...entry,
+      replace({
         sessionId: "replacement-child",
         lifecycleRevision: "after-gather",
         spawnedBy: "agent:work:new-parent",
@@ -101,7 +102,7 @@ it.each([
       cfg.agents!.defaults = { ...cfg.agents!.defaults, sessionStore: { agentId: "main" } };
     }
     if (scenario === "parent-change") {
-      replaceSessionEntrySync(scope, { ...entry, spawnedBy: undefined });
+      replace({ spawnedBy: undefined });
     }
     if (scenario === "parent-added") {
       replaceSessionEntrySync(scope, { ...entry, parentSessionKey: "agent:work:parent" });
@@ -144,10 +145,11 @@ it.each([
       throw new Error("dispatch gather did not prepare the turn");
     }
     // Canonical ACP metadata is deliberately absent from the captured session row.
-    expect(gathered.state.sessionStoreEntry.entry?.acp).toBeUndefined();
-    expect(gathered.state.sessionStoreEntry.entry?.lifecycleRevision).toBe(
+    const captured = gathered.state.sessionStoreEntry.entry;
+    expect([captured?.acp, captured?.lifecycleRevision]).toEqual([
+      undefined,
       scenario === "read-recovery" ? undefined : "before-gather",
-    );
+    ]);
     if (scenario === "owner-error") {
       await expect(prepareDispatchDelivery(gathered.state)).rejects.toThrow("fixed-store");
       return;
@@ -188,22 +190,17 @@ it("reads the command target in a worker and preserves missing-target lookup fac
   });
   const sql = observeHostDataSql();
   try {
-    expect(await resolveSessionStoreLookup(ctx, cfg)).toMatchObject({
-      agentId: "work",
-      sessionKey: targetKey,
-      entry: { sessionId: "target" },
-    });
-    expect(
-      await resolveSessionStoreLookup(
-        { ...ctx, CommandTargetSessionKey: "agent:work:missing" },
-        cfg,
-      ),
-    ).toMatchObject({
-      agentId: "work",
-      sessionKey: "agent:work:missing",
-      entry: undefined,
-      store: undefined,
-    });
+    for (const sessionKey of [targetKey, "agent:work:missing"]) {
+      expect(
+        await resolveSessionStoreLookup({ ...ctx, CommandTargetSessionKey: sessionKey }, cfg),
+      ).toMatchObject({
+        agentId: "work",
+        sessionKey,
+        ...(sessionKey === targetKey
+          ? { entry: { sessionId: "target" } }
+          : { entry: undefined, store: undefined }),
+      });
+    }
     expect(
       sql.queries.filter((query) => /\bsession_(?:nodes|windows|participants)\b/.test(query)),
     ).toEqual([]);

@@ -1,10 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveModelRefFromString } from "../../agents/model-selection-shared.js";
@@ -17,15 +13,16 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
 import {
-  buildGetReplyCtx,
+  buildGetReplyCtx as buildCtx,
   createGetReplyContinueDirectivesResult,
-  createGetReplySessionState,
+  createGetReplySessionState as sessionState,
   expectResolvedTelegramTimezone,
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import "./get-reply.test-runtime-mocks.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+import { beforeSettlement, expectCallCounts } from "./reply-contract.test-support.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -44,13 +41,16 @@ const mocks = vi.hoisted(() => ({
 }));
 registerGetReplyRuntimeOverrides(mocks);
 const { getReplyFromConfig } = await import("../../plugin-sdk/reply-runtime.js");
-const { getRuntimeConfig: loadConfigMock } = await import("../../config/config.js");
-const { runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js");
-const { resolveDefaultModel: resolveDefaultModelMock } =
-  await import("./directive-handling.defaults.js");
-const { resolveModelRefFromString: resolveModelRefFromStringMock } =
+const { getRuntimeConfig } = await import("../../config/config.js");
+const loadConfig = vi.mocked(getRuntimeConfig);
+const { runPreparedReply } = await import("./get-reply-run.js");
+const runReply = vi.mocked(runPreparedReply);
+const { resolveDefaultModel } = await import("./directive-handling.defaults.js");
+const defaultModel = vi.mocked(resolveDefaultModel);
+const { resolveModelRefFromString: modelResolver } =
   await import("../../agents/model-selection.js");
-const defaultImplementation = vi.mocked(resolveDefaultModelMock).getMockImplementation();
+const resolveModel = vi.mocked(modelResolver);
+const defaultImplementation = defaultModel.getMockImplementation();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const defaultSessionKey = "agent:main:telegram:123";
 const resolvedConfig: OpenClawConfig = {
@@ -63,12 +63,12 @@ beforeEach(() => {
   for (const mock of Object.values(mocks)) {
     mock.mockReset();
   }
-  vi.mocked(loadConfigMock).mockReset().mockReturnValue({});
-  vi.mocked(runPreparedReplyMock).mockReset();
-  vi.mocked(resolveModelRefFromStringMock).mockReset().mockReturnValue(null);
-  vi.mocked(resolveDefaultModelMock).mockReset();
+  loadConfig.mockReset().mockReturnValue({});
+  runReply.mockReset();
+  resolveModel.mockReset().mockReturnValue(null);
+  defaultModel.mockReset();
   if (defaultImplementation) {
-    vi.mocked(resolveDefaultModelMock).mockImplementation(defaultImplementation);
+    defaultModel.mockImplementation(defaultImplementation);
   }
 });
 afterEach(() => {
@@ -87,7 +87,7 @@ async function seedSession(
   const storePath = path.join(tempDirs.make("get-reply-session-"), "sessions.json");
   await replaceSessionEntry({ sessionKey, storePath }, entry);
   const sessionEntryHandle = createReplySessionEntryHandle({ sessionEntry: entry, sessionKey });
-  const fixture = createGetReplySessionState({
+  const fixture = sessionState({
     sessionKey,
     sessionEntry: entry,
     sessionStore: { [sessionKey]: entry },
@@ -123,7 +123,7 @@ async function prepareBaselineClaimSession(sessionId: string) {
     { sessionKey: `agent:main:telegram:${sessionId}`, snapshot: true },
   );
   mocks.initSessionState.mockResolvedValueOnce(session.fixture);
-  const ctx = buildGetReplyCtx({ SessionKey: session.sessionKey });
+  const ctx = buildCtx({ SessionKey: session.sessionKey });
   return { ...session, ctx };
 }
 function createPreparedDispatchRuntime(
@@ -172,14 +172,11 @@ describe("getReplyFromConfig configOverride", () => {
     const issued = createAdmittedRunOperatorAuthority(plain);
     for (const operatorAuthority of [plain, { ...issued }]) {
       const options = { runId: "forged-operator", operatorAuthority };
-      await expect(getReplyFromConfig(buildGetReplyCtx(), options, {})).rejects.toThrow(
+      await expect(getReplyFromConfig(buildCtx(), options, {})).rejects.toThrow(
         "operator run authority must be issued by the host",
       );
     }
-    expect(assertCurrent).not.toHaveBeenCalled();
-    expect(loadConfigMock).not.toHaveBeenCalled();
-    expect(mocks.initSessionState).not.toHaveBeenCalled();
-    expect(runPreparedReplyMock).not.toHaveBeenCalled();
+    expectCallCounts(0, assertCurrent, loadConfig, mocks.initSessionState, runReply);
   });
   it("pins the issued operator source once through public reply option copies", async () => {
     const issued = createAdmittedRunOperatorAuthority({
@@ -195,7 +192,7 @@ describe("getReplyFromConfig configOverride", () => {
         return reads === 1 ? issued : { ...issued, scopes: ["operator.admin"] };
       },
     };
-    await expect(getReplyFromConfig(buildGetReplyCtx(), options, {})).resolves.toEqual({
+    await expect(getReplyFromConfig(buildCtx(), options, {})).resolves.toEqual({
       text: "ok",
     });
     expect(reads).toBe(1);
@@ -204,11 +201,11 @@ describe("getReplyFromConfig configOverride", () => {
     );
   });
   it("merges configOverride over fresh getRuntimeConfig()", async () => {
-    vi.mocked(loadConfigMock).mockReturnValue({
+    loadConfig.mockReturnValue({
       ...resolvedConfig,
       agents: { defaults: { userTimezone: "UTC" } },
     });
-    await getReplyFromConfig(buildGetReplyCtx(), undefined, {
+    await getReplyFromConfig(buildCtx(), undefined, {
       agents: { defaults: { userTimezone: "America/New_York" } },
     });
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
@@ -218,11 +215,11 @@ describe("getReplyFromConfig configOverride", () => {
     mocks.initSessionState.mockRejectedValueOnce(new SessionResetCleanupError(message));
     const runState: ReplyOperationRunState = {};
     const opts: InternalGetReplyOptions = { [REPLY_OPERATION_RUN_STATE]: runState };
-    await expect(getReplyFromConfig(buildGetReplyCtx(), opts, {})).resolves.toEqual({
+    await expect(getReplyFromConfig(buildCtx(), opts, {})).resolves.toEqual({
       text: message,
     });
     expect(runState.preRunRejection).toBe("session-directive-rejected");
-    expect(runPreparedReplyMock).not.toHaveBeenCalled();
+    expect(runReply).not.toHaveBeenCalled();
   });
   it("rethrows baseline work-start invalidation before reply execution", async () => {
     const { ctx } = await prepareBaselineClaimSession("invalidated-get-reply");
@@ -232,11 +229,11 @@ describe("getReplyFromConfig configOverride", () => {
     await expect(getReplyFromConfig(ctx, undefined, {})).rejects.toBeInstanceOf(
       SessionWorkStartInvalidatedError,
     );
-    expect(runPreparedReplyMock).not.toHaveBeenCalled();
+    expect(runReply).not.toHaveBeenCalled();
   });
   it("uses the admitted catalog through the native SDK resolver", async () => {
     const preparedRuntime = createPreparedDispatchRuntime();
-    vi.mocked(loadConfigMock).mockImplementation(() => {
+    loadConfig.mockImplementation(() => {
       throw new Error("getRuntimeConfig should not be called for a prepared Gateway dispatch");
     });
     const body = "/model ollama/picker-secondary -s";
@@ -244,7 +241,7 @@ describe("getReplyFromConfig configOverride", () => {
       preparedRuntime,
       getReplyFromConfig,
     )(
-      buildGetReplyCtx({
+      buildCtx({
         Body: body,
         RawBody: body,
         CommandBody: body,
@@ -253,7 +250,7 @@ describe("getReplyFromConfig configOverride", () => {
         CommandTargetSessionKey: defaultSessionKey,
       }),
     );
-    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(loadConfig).not.toHaveBeenCalled();
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
     expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -270,7 +267,7 @@ describe("getReplyFromConfig configOverride", () => {
       config: { agents: { entries: { worker: {} } } },
     });
     await expect(
-      bindPreparedReplyDispatchRuntime(preparedRuntime, getReplyFromConfig)(buildGetReplyCtx()),
+      bindPreparedReplyDispatchRuntime(preparedRuntime, getReplyFromConfig)(buildCtx()),
     ).rejects.toThrow("reply model catalog owner changed from main to worker");
   });
 });
@@ -342,13 +339,13 @@ function mockFallbackDirectiveResult(sessionKey: string, overrides: DirectiveOve
   );
 }
 function runParams() {
-  return vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
+  return runReply.mock.calls[0]?.[0];
 }
 async function expectPreparedReply(cfg: OpenClawConfig, options?: InternalGetReplyOptions) {
-  await expect(getReplyFromConfig(buildGetReplyCtx(), options, cfg)).resolves.toEqual({
+  await expect(getReplyFromConfig(buildCtx(), options, cfg)).resolves.toEqual({
     text: "ok",
   });
-  expect(runPreparedReplyMock).toHaveBeenCalledOnce();
+  expect(runReply).toHaveBeenCalledOnce();
   return runParams();
 }
 
@@ -362,12 +359,12 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       routeVariants: [],
       authoritative: true,
     });
-    vi.mocked(resolveDefaultModelMock).mockReturnValue({
+    defaultModel.mockReturnValue({
       defaultProvider: "openai",
       defaultModel: "gpt-5.5",
       aliasIndex: { byAlias: new Map(), byKey: new Map() },
     });
-    vi.mocked(resolveModelRefFromStringMock).mockImplementation(resolveModelRefFromString);
+    resolveModel.mockImplementation(resolveModelRefFromString);
     mocks.handleInlineActions.mockImplementation(
       async (params: { directives?: unknown; cleanedBody?: string }) => ({
         kind: "continue",
@@ -376,7 +373,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
         abortedLastRun: false,
       }),
     );
-    vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
+    runReply.mockResolvedValue({ text: "ok" });
   });
   it("starts the model before baseline capture and settles it before tools and cleanup", async ({
     signal,
@@ -389,7 +386,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     const sessionDiff = await import("../../sessions/session-diff.js");
     vi.spyOn(sessionDiff, "captureSessionDiffBaseline").mockReturnValueOnce(capture.promise);
     mockFallbackDirectiveResult(sessionKey);
-    vi.mocked(runPreparedReplyMock).mockImplementationOnce(async (params) => {
+    runReply.mockImplementationOnce(async (params) => {
       events.push("model");
       const updated = {
         ...sessionEntryHandle.getCurrent()!,
@@ -404,10 +401,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     });
     const reply = getReplyFromConfig(ctx, undefined, makeReasoningModelConfig());
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(modelStarted.promise, reply, "model did not start"),
-        signal,
-      );
+      await beforeSettlement(modelStarted.promise, reply, signal, "model did not start");
       expect(events).toEqual(["model"]);
     } finally {
       capture.resolve({
@@ -438,7 +432,10 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       model: "claude-fallback",
       hasResolvedHeartbeatModelOverride: false,
     });
-    expect(runParams()).toMatchObject({ provider: "anthropic", model: "claude-fallback" });
+    expect(runParams()).toMatchObject({
+      provider: "anthropic",
+      model: "claude-fallback",
+    });
     expect(runParams()?.autoFallbackPrimaryProbe).toBeUndefined();
     expect(runParams()).not.toHaveProperty("configuredProfileId", "openai:metered");
   });
@@ -447,7 +444,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     mockFallbackDirectiveResult(sessionKey, { provider: "openai", model: "gpt-5.5" });
     const cfg = makeReasoningModelConfig();
     await getReplyFromConfig(
-      buildGetReplyCtx(),
+      buildCtx(),
       { isHeartbeat: true, heartbeatModelOverride: "openai/gpt-5.5@openai:metered" },
       cfg,
     );
@@ -457,11 +454,8 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       configuredProfileId: "openai:metered",
     });
     expect(loadSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBeUndefined();
-    await getReplyFromConfig(buildGetReplyCtx(), undefined, cfg);
-    expect(vi.mocked(runPreparedReplyMock).mock.calls[1]?.[0]).not.toHaveProperty(
-      "configuredProfileId",
-      "openai:metered",
-    );
+    await getReplyFromConfig(buildCtx(), undefined, cfg);
+    expect(runReply.mock.calls[1]?.[0]).not.toHaveProperty("configuredProfileId", "openai:metered");
   });
   it("honors turn overrides and clears fallback reasoning during primary probes", async () => {
     const { sessionKey } = await mockAutoFallbackSession();
@@ -493,11 +487,8 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       authoritative: true,
     });
     const prepared = await expectPreparedReply(makeReasoningModelConfig("high", true));
-    expect(prepared?.modelState).toMatchObject({
-      provider: "anthropic",
-      model: "claude-fallback",
-    });
     expect(prepared).toMatchObject({
+      modelState: { provider: "anthropic", model: "claude-fallback" },
       provider: "openai",
       model: "gpt-5.5",
       resolvedThinkLevel: "off",

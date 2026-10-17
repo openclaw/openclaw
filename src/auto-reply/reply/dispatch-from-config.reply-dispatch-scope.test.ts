@@ -20,10 +20,30 @@ import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
 
+const handledReply = { handled: true, queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+function discordCtx(SessionKey: string, overrides: Parameters<typeof buildTestCtx>[0] = {}) {
+  return buildTestCtx({
+    Body: "hello",
+    BodyForAgent: "hello",
+    SessionKey,
+    Provider: "discord",
+    Surface: "discord",
+    To: "C1",
+    AccountId: "default",
+    ...overrides,
+  });
+}
+
 describe("dispatchReplyFromConfig reply hook scope", () => {
   beforeEach(() => {
     describe0BeforeEach0();
     setNoAbort();
+    const readEntry = (...args: unknown[]) => {
+      const { sessionKey } = args[0] as { sessionKey: string };
+      return sessionStoreMocks.entriesBySessionKey.get(sessionKey);
+    };
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(readEntry);
+    sessionStoreMocks.loadSessionEntry.mockImplementation(readEntry);
   });
 
   it.each([
@@ -53,12 +73,6 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     const targetEntry = { sessionId: "target-session", updatedAt: Date.now() };
     sessionStoreMocks.entriesBySessionKey.set(sourceKey, sourceEntry);
     sessionStoreMocks.entriesBySessionKey.set(targetKey, targetEntry);
-    const readEntry = (...args: unknown[]) => {
-      const { sessionKey } = args[0] as { sessionKey: string };
-      return sessionStoreMocks.entriesBySessionKey.get(sessionKey);
-    };
-    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(readEntry);
-    sessionStoreMocks.loadSessionEntry.mockImplementation(readEntry);
     if (bound) {
       sessionBindingMocks.resolveByConversation.mockReturnValue({
         bindingId: "bound-dispatch-kind",
@@ -85,13 +99,7 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
         ).toBe("reply-dispatch");
         context.userTurnTranscriptRecorder?.replaceTextBeforePersistence?.("accepted user turn");
       }
-      return !event.isTailDispatch
-        ? undefined
-        : {
-            handled: true,
-            queuedFinal: true,
-            counts: { tool: 0, block: 0, final: 1 },
-          };
+      return event.isTailDispatch ? handledReply : undefined;
     });
     const replyResolver = vi.fn<InternalGetReplyFromConfig>(async (ctx, options) => {
       if (bound) {
@@ -103,16 +111,10 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
       );
       return { text: "local reply" };
     });
-    const ctx = buildTestCtx({
-      Body: "hello",
-      BodyForAgent: "hello",
-      SessionKey: sourceKey,
-      Provider: "discord",
-      Surface: "discord",
-      To: "C1",
-      AccountId: "default",
-      ...(!bound ? { CommandSource: "native", CommandTargetSessionKey: targetKey } : {}),
-    });
+    const ctx = discordCtx(
+      sourceKey,
+      !bound ? { CommandSource: "native", CommandTargetSessionKey: targetKey } : {},
+    );
     const result = await dispatchReplyFromConfig({
       ctx,
       cfg: emptyConfig,
@@ -152,28 +154,15 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
       acp: { backend: "acpx" },
     };
     sessionStoreMocks.entriesBySessionKey.set(sessionKey, entry);
-    const readEntry = () => entry;
-    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(readEntry);
-    sessionStoreMocks.loadSessionEntry.mockImplementation(readEntry);
+    sessionStoreMocks.loadSessionStoreEntry.mockReturnValue(entry);
+    sessionStoreMocks.loadSessionEntry.mockReturnValue(entry);
     hookMocks.runner.hasHooks.mockReturnValue(true);
-    hookMocks.runner.runReplyDispatch.mockResolvedValue({
-      handled: true,
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-    });
+    hookMocks.runner.runReplyDispatch.mockResolvedValue(handledReply);
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn<InternalGetReplyFromConfig>();
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Body: "hello",
-        BodyForAgent: "hello",
-        SessionKey: sessionKey,
-        Provider: "discord",
-        Surface: "discord",
-        To: "C1",
-        AccountId: "default",
-      }),
+      ctx: discordCtx(sessionKey),
       cfg: emptyConfig,
       dispatcher,
       replyResolver,
