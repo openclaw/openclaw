@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { stringify } from "yaml";
+import { expectExit, applyFault } from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
@@ -98,18 +99,14 @@ function secondaryCandidate(fault = "") {
     `build-artifacts\t${uploadName}\t/home/runner/_work/_temp/discord-component-attachments.log. No artifacts will be uploaded.`,
     line("Complete job", "20:49.420", "Cleaning up orphan processes"),
   ];
-  if (fault === "transport failure") {
-    lines[7] = line(uploadName, "20:49.092", "##[error]Artifact transport failed: ECONNRESET");
-  }
-  if (fault === "extra error") {
-    lines.splice(-1, 0, line(uploadName, "20:49.200", "##[error]Another failure"));
-  }
-  if (fault === "foreign continuation") {
-    lines[8] = lines[8]!.replace(uploadName, "Unrelated cleanup");
-  }
-  if (fault === "truncated log") {
-    lines.pop();
-  }
+  applyFault(fault, {
+    "transport failure": () =>
+      (lines[7] = line(uploadName, "20:49.092", "##[error]Artifact transport failed: ECONNRESET")),
+    "extra error": () =>
+      lines.splice(-1, 0, line(uploadName, "20:49.200", "##[error]Another failure")),
+    "foreign continuation": () => (lines[8] = lines[8]!.replace(uploadName, "Unrelated cleanup")),
+    "truncated log": () => lines.pop(),
+  });
   writeFileSync(log, lines.join("\n") + "\n");
   const evidence = {
     ...f.evidence,
@@ -153,35 +150,23 @@ function secondaryCandidate(fault = "") {
   if (["success", "failure", "cancelled"].includes(fault)) {
     job.steps[2]!.conclusion = fault;
   }
-  if (fault === "missing producer") {
-    job.steps.splice(2, 1);
-  }
-  if (fault === "earlier upload") {
-    job.steps[3]!.started_at = "2026-09-28T07:20:35Z";
-  }
-  if (fault === "missing time") {
-    delete state.priorCi.jobs![2]!.steps![0]!.completed_at;
-  }
-  if (fault === "failed monitor") {
-    state.priorCi.jobs![2]!.steps![0]!.conclusion = "failure";
-  }
-  if (fault === "wrong step") {
-    evidence.cancellation.secondaryFailures[0]!.step = 12;
-  }
+  applyFault(fault, {
+    "missing producer": () => job.steps.splice(2, 1),
+    "earlier upload": () => (job.steps[3]!.started_at = "2026-09-28T07:20:35Z"),
+    "missing time": () => delete state.priorCi.jobs![2]!.steps![0]!.completed_at,
+    "failed monitor": () => (state.priorCi.jobs![2]!.steps![0]!.conclusion = "failure"),
+    "wrong step": () => (evidence.cancellation.secondaryFailures[0]!.step = 12),
+  });
   if (fault === "duplicate secondary") {
     evidence.cancellation.secondaryFailures.push({
       ...evidence.cancellation.secondaryFailures[0]!,
     });
   }
-  if (fault === "relabel root") {
-    evidence.cancellation.causedBy.push(job.id);
-  }
-  if (fault === "unbound log") {
-    evidence.cancellation.secondaryFailures[0]!.evidence = ["qualification"];
-  }
-  if (fault === "changed log") {
-    writeFileSync(log, "changed\n");
-  }
+  applyFault(fault, {
+    "relabel root": () => evidence.cancellation.causedBy.push(job.id),
+    "unbound log": () => (evidence.cancellation.secondaryFailures[0]!.evidence = ["qualification"]),
+    "changed log": () => writeFileSync(log, "changed\n"),
+  });
   f.save(state);
   writeFileSync(f.path, JSON.stringify(evidence));
   return { ...f, evidence };
@@ -190,8 +175,7 @@ function secondaryCandidate(fault = "") {
 describePosix("prior-CI skipped-producer secondary failure", () => {
   it("lands only the qualified secondary upload while preserving roots and cancelled coverage", () => {
     const f = secondaryCandidate();
-    const result = f.adminPriorCi(f.path);
-    expect(result.status, result.output).toBe(0);
+    expectExit(f.adminPriorCi(f.path), 0);
     expect(f.state().mutations).toBe(1);
     const proof = f.record().priorCiAdmin;
     expect(proof.failures.map((failure: { jobId: number }) => failure.jobId)).toEqual([601]);

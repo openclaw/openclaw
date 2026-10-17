@@ -2,6 +2,12 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import {
+  configuredFixture,
+  expectExit,
+  configureMerge,
+  expectCapturedFiles,
+} from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
 const { fixture, outcomeRef, describePosix, unknownProjection } =
@@ -10,21 +16,18 @@ const { fixture, outcomeRef, describePosix, unknownProjection } =
 describePosix("native merge with exhausted GraphQL quota", () => {
   function restFixture(...args: Parameters<typeof fixture>) {
     const f = fixture(...args);
-    f.save({ ...f.state(), restPolicy: "supported" });
+    configureMerge(f, { restPolicy: "supported" });
     return f;
   }
 
   it.each([false, true])(
     "reconciles an async UUID without another PUT (REST commit omitted=%s)",
     (omitCommit) => {
-      const f = restFixture();
-      f.save({
-        ...f.state(),
+      const f = configuredFixture(restFixture, {
         asyncMergeStatus: "pending",
         restMergeCommit: omitCommit ? "missing" : "",
       });
-      const submitted = f.run();
-      expect(submitted.status, submitted.output).toBe(0);
+      const submitted = expectExit(f.run(), 0);
       expect(submitted.output).toContain("ASYNC MERGE PENDING");
       expect(f.record()).toMatchObject({
         phase: "intent",
@@ -47,24 +50,20 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       expect(f.state().posts).toBe(0);
       expect(existsSync(f.worktree)).toBe(true);
 
-      const waiting = f.run();
-      expect(waiting.status, waiting.output).toBe(0);
+      expectExit(f.run(), 0);
       expect(f.state().asyncPolls).toBe(2);
       const landed = f.advance("after\n", "stable\n");
-      f.save({
-        ...f.state(),
+      configureMerge(f, {
         asyncMergeStatus: "merged",
-        pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
+        pr: { state: "MERGED", mergeCommit: { oid: landed } },
       });
-      const completed = f.run();
-      expect(completed.status, completed.output).toBe(0);
+      expectExit(f.run(), 0);
       expect(f.record()).toMatchObject({
         phase: "merged",
         landed,
         asyncMerge: { status: "merged", sha: landed },
       });
-      expect(f.state().mutations).toBe(1);
-      expect(f.state().posts).toBe(0);
+      expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
       expect(f.state().graphqlMergePayloads).toEqual([]);
       expect(f.state().observationReads > 0).toBe(omitCommit);
     },
@@ -73,25 +72,19 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   it.each(["null", "empty", "malformed"])(
     "rejects a present %s REST merge commit instead of hiding it with GraphQL",
     (restMergeCommit) => {
-      const f = restFixture();
-      f.save({ ...f.state(), asyncMergeStatus: "pending" });
+      const f = configuredFixture(restFixture, { asyncMergeStatus: "pending" });
       expect(f.run().status).toBe(0);
       const landed = f.advance("after\n", "stable\n");
-      f.save({
-        ...f.state(),
+      configureMerge(f, {
         restMergeCommit,
         asyncMergeStatus: "merged",
-        pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
+        pr: { state: "MERGED", mergeCommit: { oid: landed } },
       });
 
-      const run = f.run();
-
-      expect(run.status, run.output).toBe(1);
+      const run = expectExit(f.run(), 1);
       expect(run.output).toContain("merged PR has no valid merge commit");
       expect(f.record()).toMatchObject({ phase: "intent", accepted: true });
-      expect(f.state().observationReads).toBe(0);
-      expect(f.state().mutations).toBe(1);
-      expect(f.state().posts).toBe(0);
+      expect(f.state()).toMatchObject({ observationReads: 0, mutations: 1, posts: 0 });
       expect(existsSync(f.worktree)).toBe(true);
     },
   );
@@ -99,25 +92,20 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   it.each(["unavailable", "head-changed"])(
     "keeps an accepted merge unresolved when the required GraphQL receipt is %s",
     (fault) => {
-      const f = restFixture();
-      f.save({ ...f.state(), asyncMergeStatus: "pending" });
+      const f = configuredFixture(restFixture, { asyncMergeStatus: "pending" });
       expect(f.run().status).toBe(0);
       const landed = f.advance("after\n", "stable\n");
-      f.save({
-        ...f.state(),
+      configureMerge(f, {
         restMergeCommit: "missing",
         asyncMergeStatus: "merged",
         unavailable: fault === "unavailable",
         observations: fault === "head-changed" ? [{ pr: { headRefOid: f.base } }] : [],
-        pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
+        pr: { state: "MERGED", mergeCommit: { oid: landed } },
       });
 
-      const run = f.run();
-
-      expect(run.status, run.output).toBe(1);
+      expectExit(f.run(), 1);
       expect(f.record()).toMatchObject({ phase: "intent", accepted: true });
-      expect(f.state().mutations).toBe(1);
-      expect(f.state().posts).toBe(0);
+      expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
       expect(existsSync(f.worktree)).toBe(true);
     },
   );
@@ -125,10 +113,8 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   it.each(["failed", "enqueued", "expired", "unknown"])(
     "keeps async %s results from triggering resubmission or cleanup",
     (asyncMergeStatus) => {
-      const f = restFixture();
-      f.save({ ...f.state(), asyncMergeStatus });
-      const run = f.run();
-      expect(run.status, run.output).toBe(1);
+      const f = configuredFixture(restFixture, { asyncMergeStatus });
+      expectExit(f.run(), 1);
       expect(f.record()).toMatchObject({ phase: "intent", accepted: true });
       expect(f.state().posts).toBe(0);
       expect(existsSync(f.worktree)).toBe(true);
@@ -146,41 +132,31 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   );
 
   it("retains complete async captures when an operator authorizes recovery", () => {
-    const f = restFixture();
-    f.save({ ...f.state(), mode: "unapplied" });
+    const f = configuredFixture(restFixture, { mode: "unapplied" });
     expect(f.run().status).toBe(1);
     const previous = f.git(["rev-parse", outcomeRef]);
     f.recover();
     // Recovery starts with GraphQL; exhausted quota selects REST before dispatch.
-    f.save({ ...f.state(), mode: "success", asyncMergeStatus: "pending", quotaAt: "checks" });
+    configureMerge(f, { mode: "success", asyncMergeStatus: "pending", quotaAt: "checks" });
 
-    const run = f.run(false, f.repo, "squash", previous);
-
-    expect(run.status, run.output).toBe(0);
+    expectExit(f.run(false, f.repo, "squash", previous), 0);
     expect(f.record()).toMatchObject({ accepted: true, asyncMerge: { status: "pending" } });
     expect(f.captures()).toHaveLength(2);
-    for (const [name, contents] of f.captures()) {
-      expect(f.git(["rev-parse", `${outcomeRef}:${name}`])).toBe(
-        f.git(["hash-object", "--stdin"], contents),
-      );
-    }
+    expectCapturedFiles(f, f.captures(), outcomeRef);
     expect(f.run().status).toBe(0);
     expect(f.state().mutations).toBe(2);
     expect(f.state().graphqlMergePayloads).toEqual([]);
   });
 
   it("recovers an authoritatively failed async merge and retains its ancestry", () => {
-    const f = restFixture();
-    f.save({ ...f.state(), asyncMergeStatus: "failed" });
+    const f = configuredFixture(restFixture, { asyncMergeStatus: "failed" });
     expect(f.run().status).toBe(1);
     const previous = f.git(["rev-parse", outcomeRef]);
     const original = f.record();
     expect(original).toMatchObject({ accepted: true, asyncMerge: { status: "failed", sha: null } });
     expect(f.recover()).toBe(false);
 
-    const run = f.run(false, f.repo, "squash", previous);
-
-    expect(run.status, run.output).toBe(0);
+    expectExit(f.run(false, f.repo, "squash", previous), 0);
     expect(f.state().asyncPolls).toBe(2);
     expect(f.state().mutations).toBe(2);
     expect(f.record()).toMatchObject({
@@ -202,13 +178,11 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   it.each(["pending", "enqueued", "expired", "unknown", "sha", "head", "closed", "checks"])(
     "refuses async failure recovery after %s drift without consuming the intent",
     (fault) => {
-      const f = restFixture();
-      f.save({ ...f.state(), asyncMergeStatus: "failed" });
+      const f = configuredFixture(restFixture, { asyncMergeStatus: "failed" });
       expect(f.run().status).toBe(1);
       const previous = f.git(["rev-parse", outcomeRef]);
       expect(f.recover()).toBe(false);
-      f.save({
-        ...f.state(),
+      configureMerge(f, {
         asyncMergeStatus: ["pending", "enqueued", "expired", "unknown"].includes(fault)
           ? fault
           : "failed",
@@ -221,9 +195,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
         },
       });
 
-      const run = f.run(false, f.repo, "squash", previous);
-
-      expect(run.status, run.output).toBe(1);
+      expectExit(f.run(false, f.repo, "squash", previous), 1);
       if (!["head", "closed", "checks"].includes(fault)) {
         expect(f.state().asyncPolls).toBe(2);
       }
@@ -235,13 +207,10 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   it.each(["uuid", "head", "conflict"])(
     "preserves an uncertain async %s response without fallback",
     (asyncMergeFault) => {
-      const f = restFixture();
-      f.save({ ...f.state(), asyncMergeStatus: "pending", asyncMergeFault });
-      const run = f.run();
-      expect(run.status, run.output).toBe(1);
+      const f = configuredFixture(restFixture, { asyncMergeStatus: "pending", asyncMergeFault });
+      const run = expectExit(f.run(), 1);
       expect(run.output).not.toContain("use GraphQL");
-      expect(f.state().mutations).toBe(1);
-      expect(f.state().posts).toBe(0);
+      expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
       f.recover();
       expect(f.run().status).toBe(1);
       expect(f.state().mutations).toBe(1);
@@ -249,55 +218,44 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   );
 
   it("still verifies the PR tree after the async result expires", () => {
-    const f = restFixture();
-    f.save({ ...f.state(), asyncMergeStatus: "pending" });
+    const f = configuredFixture(restFixture, { asyncMergeStatus: "pending" });
     expect(f.run().status).toBe(0);
     const landed = f.advance("after\n", "stable\n");
-    f.save({
-      ...f.state(),
+    configureMerge(f, {
       asyncMergeStatus: "expired",
-      pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
+      pr: { state: "MERGED", mergeCommit: { oid: landed } },
     });
-    const run = f.run();
-    expect(run.status, run.output).toBe(0);
+    expectExit(f.run(), 0);
     expect(f.record()).toMatchObject({ phase: "merged", landed });
     expect(f.state().mutations).toBe(1);
   });
 
   it("rejects an async commit that differs from the authoritative PR receipt", () => {
-    const f = restFixture();
-    f.save({ ...f.state(), asyncMergeStatus: "pending" });
+    const f = configuredFixture(restFixture, { asyncMergeStatus: "pending" });
     expect(f.run().status).toBe(0);
     const landed = f.advance("after\n", "stable\n");
-    f.save({
-      ...f.state(),
+    configureMerge(f, {
       asyncMergeStatus: "merged",
       asyncMergeFault: "sha",
-      pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
+      pr: { state: "MERGED", mergeCommit: { oid: landed } },
     });
-    const run = f.run();
-    expect(run.status, run.output).toBe(1);
+    const run = expectExit(f.run(), 1);
     expect(run.output).toContain("async merge commit differs");
     expect(f.record().phase).toBe("intent");
     expect(f.state().posts).toBe(0);
   });
 
   it("refuses a stack before the single-PR async submission", () => {
-    const f = restFixture();
-    f.save({ ...f.state(), stack: { number: 7 } });
-    const run = f.run();
-    expect(run.status, run.output).toBe(1);
+    const f = configuredFixture(restFixture, { stack: { number: 7 } });
+    const run = expectExit(f.run(), 1);
     expect(run.output).toContain("stacked PRs require review");
     expect(f.state().mutations).toBe(0);
   });
 
   it("uses one pinned REST PUT without GraphQL reads when only the pooled viewer is blocked", () => {
-    const f = restFixture();
-    f.save({ ...f.state(), pooledMergeBlocked: true });
+    const f = configuredFixture(restFixture, { pooledMergeBlocked: true });
 
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(0);
+    expectExit(f.run(), 0);
     expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
     expect(f.state().mutations).toBe(1);
     expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
@@ -312,12 +270,12 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   });
 
   it("switches exhausted REST reads to one pinned GraphQL merge", () => {
-    const f = restFixture();
-    f.save({ ...f.state(), restReadFailure: "core", restReadFailuresRemaining: 1 });
+    const f = configuredFixture(restFixture, {
+      restReadFailure: "core",
+      restReadFailuresRemaining: 1,
+    });
 
-    const run = f.run();
-
-    expect(run.status, run.output).toBe(0);
+    expectExit(f.run(), 0);
     expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
     expect(f.record()).not.toHaveProperty("transport");
     expect(f.state().mutations).toBe(1);
@@ -336,16 +294,12 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   it.each([unknownProjection, { mergeable: "UNKNOWN" }, { mergeStateStatus: "UNKNOWN" }])(
     "resolves UNKNOWN REST admission %j through GraphQL before one pinned merge",
     (projection) => {
-      const f = restFixture();
-      f.save({
-        ...f.state(),
-        pr: { ...f.state().pr, ...projection },
+      const f = configuredFixture(restFixture, {
+        pr: { ...projection },
         observations: [{ pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" } }],
       });
 
-      const run = f.run();
-
-      expect(run.status, run.output).toBe(0);
+      expectExit(f.run(), 0);
       expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
       expect(f.record()).not.toHaveProperty("transport");
       expect(f.state().restMergePayload).toBeNull();
@@ -365,9 +319,8 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     "refuses UNKNOWN REST admission when GraphQL is %s",
     (fault) => {
       const f = restFixture();
-      f.save({
-        ...f.state(),
-        pr: { ...f.state().pr, ...unknownProjection },
+      configureMerge(f, {
+        pr: { ...unknownProjection },
         quotaAt: fault === "unavailable" ? "observe" : "",
         observations: [
           { pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", headRefOid: f.base } },
@@ -377,8 +330,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       const run = f.run();
 
       expect(run.status, run.output).not.toBe(0);
-      expect(f.state().mutations).toBe(0);
-      expect(f.state().posts).toBe(0);
+      expect(f.state()).toMatchObject({ mutations: 0, posts: 0 });
       expect(() => f.record()).toThrow();
       expect(f.captures()).toEqual([]);
     },
@@ -387,15 +339,11 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   it.each(["identity", "policy"])(
     "refuses final REST %s changes after intent without dispatching a mutation",
     (restDispatchChange) => {
-      const f = restFixture();
-      f.save({ ...f.state(), restDispatchChange });
+      const f = configuredFixture(restFixture, { restDispatchChange });
 
-      const run = f.run();
-
-      expect(run.status, run.output).toBe(1);
+      const run = expectExit(f.run(), 1);
       expect(f.state().restDispatchChange).toBe("");
-      expect(f.state().mutations).toBe(0);
-      expect(f.state().posts).toBe(0);
+      expect(f.state()).toMatchObject({ mutations: 0, posts: 0 });
       expect(f.record()).toMatchObject({
         phase: "intent",
         accepted: false,
@@ -414,9 +362,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   it.each(["core", "secondary", "access"])(
     "does not dispatch after REST %s failure without an available alternate",
     (failure) => {
-      const f = restFixture();
-      f.save({
-        ...f.state(),
+      const f = configuredFixture(restFixture, {
         restReadFailure: failure,
         restReadFailuresRemaining: 1,
         quotaAt: "checks",
@@ -446,11 +392,9 @@ describePosix("native merge with exhausted GraphQL quota", () => {
         false,
         { name: "Contributor", email: "contributor@example.com" },
       );
-      f.save({ ...f.state(), quotaAt, restReadFailure: "core", restReadFailuresRemaining: 1 });
+      configureMerge(f, { quotaAt, restReadFailure: "core", restReadFailuresRemaining: 1 });
 
-      const run = f.run();
-
-      expect(run.status, run.output).toBe(0);
+      expectExit(f.run(), 0);
       expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
       expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
       expect(f.state().mergeBody).toContain(
@@ -458,8 +402,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       );
       expect(f.state().mergeBody).toContain("Co-authored-by: Source <source@example.com>");
       expect(f.state().mergeBody).not.toContain("codex@openai.com");
-      expect(f.state().mutations).toBe(1);
-      expect(f.state().posts).toBe(1);
+      expect(f.state()).toMatchObject({ mutations: 1, posts: 1 });
       expect(f.state().calls.some((call) => call[1] === "pr" && call[2] === "merge")).toBe(false);
       expect(f.git(["show", `${f.record().landed}:owner.txt`])).toBe("after");
       expect(existsSync(f.worktree)).toBe(false);
@@ -470,8 +413,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     "settles UNKNOWN GraphQL mergeability through REST without hiding %s drift",
     (drift) => {
       const f = restFixture();
-      f.save({
-        ...f.state(),
+      configureMerge(f, {
         quotaAt: "observe",
         quotaAfterObservations: 1,
         restReadFailure: "core",
@@ -488,11 +430,11 @@ describePosix("native merge with exhausted GraphQL quota", () => {
         },
       });
 
-      const run = f.run();
-
-      expect(run.status, run.output).toBe(["none", "main"].includes(drift) ? 0 : 1);
-      expect(f.state().observationReads).toBe(1);
-      expect(f.state().mutations).toBe(["none", "main"].includes(drift) ? 1 : 0);
+      expectExit(f.run(), ["none", "main"].includes(drift) ? 0 : 1);
+      expect(f.state()).toMatchObject({
+        observationReads: 1,
+        mutations: ["none", "main"].includes(drift) ? 1 : 0,
+      });
       if (["none", "main"].includes(drift)) {
         expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
       } else {
@@ -506,15 +448,12 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     (boundary) => {
       const f = restFixture();
       const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
-      f.save({
-        ...f.state(),
+      configureMerge(f, {
         quotaAt: "checks",
         restMainAdvance: { boundary, observed: false, main },
       });
 
-      const run = f.run();
-
-      expect(run.status, run.output).toBe(0);
+      expectExit(f.run(), 0);
       expect(f.record()).toMatchObject({
         phase: "complete",
         transport: "rest",
@@ -522,8 +461,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
         main: f.base,
       });
       expect(f.state().restMainAdvance).toBeNull();
-      expect(f.state().mutations).toBe(1);
-      expect(f.state().posts).toBe(1);
+      expect(f.state()).toMatchObject({ mutations: 1, posts: 1 });
       expect(f.git(["show", `${f.record().landed}:owner.txt`])).toBe("after");
       expect(f.git(["show", `${f.record().landed}:sibling.txt`])).toBe("advanced");
     },
@@ -533,16 +471,14 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     (roundTrip) => {
       const credit = "Co-authored-by: Contributor <contributor@example.com>";
       const f = restFixture(`Repair\n\n${credit}`);
-      f.save({
-        ...f.state(),
+      configureMerge(f, {
         quotaAt: "observe",
         restReadFailure: "core",
         ...(roundTrip
           ? { quotaFailuresRemaining: 1, restReadFailureAtMainReads: [1, 6] }
           : { quotaAfterObservations: 1, restReadFailuresRemaining: 1 }),
       });
-      const run = f.run();
-      expect(run.status, run.output).toBe(0);
+      expectExit(f.run(), 0);
       expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
       expect(f.state().mergeBody).toBe(`Fixture body\n\n${credit}\n`);
       expect(f.state().mutations).toBe(1);
@@ -565,8 +501,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   )("rejects $route routing when GraphQL depletes during $quotaAt", ({ route, quotaAt }) => {
     const f = restFixture();
     const observationsBeforeFinal = quotaAt === "checks" ? 0 : route === "auto" ? 1 : 2;
-    f.save({
-      ...f.state(),
+    configureMerge(f, {
       quotaAt,
       quotaAfterObservations: observationsBeforeFinal,
       admin: route === "admin",
@@ -581,13 +516,10 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       );
     }
 
-    const run = f.run(
-      route === "auto",
-      f.repo,
-      route === "merge" || route === "rebase" ? route : "squash",
+    expectExit(
+      f.run(route === "auto", f.repo, route === "merge" || route === "rebase" ? route : "squash"),
+      1,
     );
-
-    expect(run.status, run.output).toBe(1);
     if (quotaAt === "observe") {
       expect(f.state().observationReads).toBe(observationsBeforeFinal);
     }
@@ -614,8 +546,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       expect(
         f.state().calls.filter((call) => call[1] === "pr" && call[2] === "checks"),
       ).toHaveLength(restPolicy === "missing" ? 0 : 1);
-      expect(f.state().mutations).toBe(0);
-      expect(f.state().posts).toBe(0);
+      expect(f.state()).toMatchObject({ mutations: 0, posts: 0 });
       expect(() => f.record()).toThrow();
     },
   );
@@ -628,17 +559,13 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   ])(
     "rejects $fault main reference evidence after $afterReads valid reads",
     ({ fault, afterReads }) => {
-      const f = restFixture();
-      f.save({
-        ...f.state(),
+      const f = configuredFixture(restFixture, {
         quotaAt: "checks",
         restMainFault: fault,
         restMainFaultAfterReads: afterReads,
       });
 
-      const run = f.run();
-
-      expect(run.status, run.output).toBe(1);
+      const run = expectExit(f.run(), 1);
       expect(run.output).toContain("REST merge fallback: main is unavailable");
       expect(f.state().mutations).toBe(0);
       expect(() => f.record()).toThrow();
@@ -652,17 +579,13 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   ])(
     "preserves all required contexts $contexts with failing context '$failedContext'",
     ({ contexts, failedContext, admitted }) => {
-      const f = restFixture();
-      f.save({
-        ...f.state(),
+      const f = configuredFixture(restFixture, {
         quotaAt: "checks",
         restContexts: contexts,
         restFailedContext: failedContext,
       });
 
-      const run = f.run();
-
-      expect(run.status, run.output).toBe(admitted ? 0 : 1);
+      expectExit(f.run(), admitted ? 0 : 1);
       expect(f.state().mutations).toBe(admitted ? 1 : 0);
       const requests = f
         .state()
@@ -759,10 +682,8 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       admitted,
     })),
   ])("admits REST merge only with complete check evidence: $name", ({ state, admitted }) => {
-    const f = restFixture();
-    f.save({ ...f.state(), quotaAt: "checks", ...state });
-    const run = f.run();
-    expect(run.status, run.output).toBe(admitted ? 0 : 1);
+    const f = configuredFixture(restFixture, { quotaAt: "checks", ...state });
+    expectExit(f.run(), admitted ? 0 : 1);
     expect(f.state().mutations).toBe(admitted ? 1 : 0);
     if (admitted) {
       expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
@@ -774,10 +695,12 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   it.each(["queued-empty-custom", "labeler"])(
     "bounds complete REST evidence reads for 173 %s suites",
     (restUnseenSuite) => {
-      const f = restFixture();
-      f.save({ ...f.state(), quotaAt: "checks", restUnseenSuite, restUnseenSuiteCount: 173 });
-      const run = f.run();
-      expect(run.status, run.output).toBe(0);
+      const f = configuredFixture(restFixture, {
+        quotaAt: "checks",
+        restUnseenSuite,
+        restUnseenSuiteCount: 173,
+      });
+      expectExit(f.run(), 0);
       expect(f.state().mutations).toBe(1);
       const checkCalls = f
         .state()
@@ -799,16 +722,13 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     "removed-suite",
     "duplicate-suite",
   ])("rejects contradictory bulk check evidence: %s", (restBulkFault) => {
-    const f = restFixture();
-    f.save({
-      ...f.state(),
+    const f = configuredFixture(restFixture, {
       quotaAt: "checks",
       restUnseenSuite: "labeler",
       restUnseenSuiteCount: 173,
       restBulkFault,
     });
-    const run = f.run();
-    expect(run.status, run.output).toBe(1);
+    const run = expectExit(f.run(), 1);
     expect(run.output).toContain("REST merge fallback:");
     expect(f.state().mutations).toBe(0);
     expect(() => f.record()).toThrow();
@@ -826,10 +746,8 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   ])(
     "reconciles a lost REST merge reply after policy changes to %s without submitting another mutation",
     (restPolicy) => {
-      const f = restFixture();
-      f.save({ ...f.state(), quotaAt: "checks", mode: "applied-open" });
-      const first = f.run();
-      expect(first.status, first.output).toBe(1);
+      const f = configuredFixture(restFixture, { quotaAt: "checks", mode: "applied-open" });
+      expectExit(f.run(), 1);
       expect(f.record()).toMatchObject({ phase: "intent", transport: "rest", accepted: false });
       expect(f.state().mutations).toBe(1);
       const intent = f.git(["rev-parse", outcomeRef]);
@@ -856,8 +774,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       }
       f.save({ ...state, restPolicy });
 
-      const unresolved = f.run();
-      expect(unresolved.status, unresolved.output).toBe(1);
+      const unresolved = expectExit(f.run(), 1);
       expect(f.git(["rev-parse", outcomeRef])).toBe(intent);
       expect(f.captures()).toEqual(captures);
       expect(f.state().mutations).toBe(1);
@@ -866,42 +783,34 @@ describePosix("native merge with exhausted GraphQL quota", () => {
         expect(unresolved.output).toContain("main changed while reading evidence");
       }
       f.recover();
-      f.save({
-        ...f.state(),
+      configureMerge(f, {
         gates: "fail",
         restAdvanceMain: restPolicy === "main-advance",
-        pr: { ...f.state().pr, state: "MERGED", mergeCommit: { oid: landed } },
+        pr: { state: "MERGED", mergeCommit: { oid: landed } },
       });
 
-      const resumed = f.run();
-
-      expect(resumed.status, resumed.output).toBe(0);
+      expectExit(f.run(), 0);
       expect(f.record()).toMatchObject({
         phase: "merged",
         transport: "rest",
         landed,
         head: f.head,
       });
-      expect(f.state().mutations).toBe(1);
-      expect(f.state().posts).toBe(0);
+      expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
       expect(f.state().mainAdvances).toHaveLength(restPolicy === "main-advance" ? 1 : 0);
     },
   );
 
   it("never replays an exhausted GraphQL mutation through REST", () => {
-    const f = fixture();
-    f.save({ ...f.state(), quotaAt: "mutation" });
-    const first = f.run();
-    expect(first.status, first.output).toBe(1);
+    const f = configuredFixture(fixture, { quotaAt: "mutation" });
+    expectExit(f.run(), 1);
     const intent = f.git(["rev-parse", outcomeRef]);
     expect(f.record()).toMatchObject({ phase: "intent", accepted: false });
     expect(f.state().mutations).toBe(1);
     expect(f.state().restMergePayload).toBeNull();
     f.recover();
 
-    const resumed = f.run();
-
-    expect(resumed.status, resumed.output).toBe(1);
+    expectExit(f.run(), 1);
     expect(f.git(["rev-parse", outcomeRef])).toBe(intent);
     expect(f.state().mutations).toBe(1);
     expect(f.state().restMergePayload).toBeNull();

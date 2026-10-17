@@ -1,6 +1,13 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import {
+  configuredFixture,
+  expectExit,
+  applyFault,
+  configureMerge,
+  expectCapturedFiles,
+} from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
 const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness();
@@ -14,9 +21,8 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
         join(f.worktree, ".local/gates.env"),
         `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
       );
-      f.save({ ...f.state(), mode: "unapplied", requiredCheckName: "openclaw/ci-gate" });
-      const first = f.run(true);
-      expect(first.status, first.output).toBe(1);
+      configureMerge(f, { mode: "unapplied", requiredCheckName: "openclaw/ci-gate" });
+      expectExit(f.run(true), 1);
       const previous = f.git(["rev-parse", outcomeRef]);
       const previousRecord = f.record();
       const captures = f.captures();
@@ -27,11 +33,12 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
         head: f.head,
       });
       f.recover();
-      f.save({ ...f.state(), mode: "success", gates: checks });
+      configureMerge(f, { mode: "success", gates: checks });
 
-      const recovered = f.run(false, f.repo, "squash", previous);
-
-      expect(recovered.status, recovered.output).toBe(checks === "pass" ? 0 : 1);
+      const recovered = expectExit(
+        f.run(false, f.repo, "squash", previous),
+        checks === "pass" ? 0 : 1,
+      );
       expect(f.state().mutations).toBe(checks === "pass" ? 2 : 1);
       expect(JSON.parse(f.git(["show", `${previous}:outcome.json`]))).toEqual(previousRecord);
       if (checks === "pass") {
@@ -42,11 +49,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
           recovery: { outcome: previous, attempt: previousRecord.attempt },
         });
         f.git(["merge-base", "--is-ancestor", previous, outcomeRef]);
-        for (const [name, contents] of captures) {
-          expect(f.git(["rev-parse", `${outcomeRef}:${name}`])).toBe(
-            f.git(["hash-object", "--stdin"], contents),
-          );
-        }
+        expectCapturedFiles(f, captures, outcomeRef);
         expect(f.state().graphqlMergePayloads[1]?.expectedHeadOid).toBe(f.head);
       } else {
         expect(recovered.output).toContain(
@@ -68,7 +71,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
         join(f.worktree, ".local/gates.env"),
         `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
       );
-      f.save({ ...f.state(), mode: "unapplied", requiredCheckName: "openclaw/ci-gate" });
+      configureMerge(f, { mode: "unapplied", requiredCheckName: "openclaw/ci-gate" });
       expect(f.run(true).status).toBe(1);
       const previous = f.git(["rev-parse", outcomeRef]);
       const captures = f.captures();
@@ -88,26 +91,20 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       }
       f.save(next);
 
-      const recovered = f.run(false, f.repo, "squash", previous);
-
-      expect(recovered.status, recovered.output).toBe(1);
-      expect(f.state().mutations).toBe(1);
-      expect(f.state().posts).toBe(0);
+      expectExit(f.run(false, f.repo, "squash", previous), 1);
+      expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
       expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
       expect(f.captures()).toEqual(captures);
     },
   );
 
   it("recovers a REST projection refusal through one pinned GraphQL squash", () => {
-    const f = fixture();
-    f.save({
-      ...f.state(),
+    const f = configuredFixture(fixture, {
       restPolicy: "supported",
       restDispatchChange: "projection",
     });
 
-    const refused = f.run();
-    expect(refused.status, refused.output).toBe(1);
+    expectExit(f.run(), 1);
     const previous = f.git(["rev-parse", outcomeRef]);
     const previousRecord = f.record();
     expect(previousRecord).toMatchObject({
@@ -123,9 +120,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     );
     f.recover();
 
-    const recovered = f.run(false, f.repo, "squash", previous);
-
-    expect(recovered.status, recovered.output).toBe(0);
+    expectExit(f.run(false, f.repo, "squash", previous), 0);
     expect(f.record()).toMatchObject({
       phase: "complete",
       route: "immediate",
@@ -150,7 +145,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     const f = fixture();
     const body = join(f.repo, "body.md");
     writeFileSync(body, "First message");
-    f.save({ ...f.state(), mode: "unapplied" });
+    configureMerge(f, { mode: "unapplied" });
     const first = f.run(false, f.repo, "squash", "", "", body);
     expect(first.status, first.output).not.toBe(0);
     const previous = f.git(["rev-parse", outcomeRef]);
@@ -163,9 +158,8 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
     f.recover();
     writeFileSync(body, "Corrected retry message");
-    f.save({ ...f.state(), mode: "success" });
-    const recovered = f.run(false, f.repo, "squash", previous, "", body);
-    expect(recovered.status, recovered.output).toBe(0);
+    configureMerge(f, { mode: "success" });
+    expectExit(f.run(false, f.repo, "squash", previous, "", body), 0);
     expect(f.state().mergeBody).toBe("Corrected retry message");
     expect(f.state().mutations).toBe(2);
   });
@@ -177,8 +171,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   ])(
     "operator recovery preserves retained evidence and consumes one exact attempt (replacement=$replacement, forward main=$forwardMain)",
     ({ replacement, forwardMain }) => {
-      const f = fixture();
-      f.save({ ...f.state(), mode: "unapplied" });
+      const f = configuredFixture(fixture, { mode: "unapplied" });
       expect(f.run().status).toBe(1);
       const previous = f.git(["rev-parse", outcomeRef]);
       const previousRecord = f.record();
@@ -209,8 +202,10 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
         next.observations = [{}, { main }, {}, { advanceMain: true, advanceAfterRead: true }];
       }
       f.save(next);
-      const recovered = f.run(false, f.repo, "squash", previous, replacement ? approvedHead : "");
-      expect(recovered.status, recovered.output).toBe(replacement ? 0 : 1);
+      const recovered = expectExit(
+        f.run(false, f.repo, "squash", previous, replacement ? approvedHead : ""),
+        replacement ? 0 : 1,
+      );
       expect(f.state().mutations, recovered.output).toBe(2);
       expect(f.state().mainAdvances).toHaveLength(forwardMain ? 2 : 0);
       expect(f.record()).toMatchObject({
@@ -248,12 +243,9 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(dispatches).toHaveLength(2);
       expect(dispatches[1]!.expectedHeadOid).toBe(approvedHead);
       f.recover();
-      const resumed = f.run();
-      expect(resumed.status, resumed.output).toBe(0);
-      const replay = f.run(false, f.repo, "squash", previous, replacement ? approvedHead : "");
-      expect(replay.status, replay.output).toBe(1);
-      expect(f.state().mutations).toBe(2);
-      expect(f.state().posts).toBe(1);
+      expectExit(f.run(), 0);
+      expectExit(f.run(false, f.repo, "squash", previous, replacement ? approvedHead : ""), 1);
+      expect(f.state()).toMatchObject({ mutations: 2, posts: 1 });
       if (!replacement) {
         f.git(["worktree", "remove", "--force", f.worktree]);
       }
@@ -272,11 +264,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       }
       expect(JSON.parse(f.git(["show", `${previous}:outcome.json`]))).toEqual(previousRecord);
       if (replacement) {
-        for (const [name, contents] of captures) {
-          expect(f.git(["rev-parse", `${successor}:${name}`])).toBe(
-            f.git(["hash-object", "--stdin"], contents),
-          );
-        }
+        expectCapturedFiles(f, captures, successor);
       }
     },
   );
@@ -322,19 +310,16 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       const f = fixture();
       const initial = f.state();
       initial.mode = fault === "accepted" ? "pending" : "unapplied";
-      if (fault === "auto-route") {
-        initial.pr.mergeStateStatus = "BEHIND";
-      }
-      if (fault === "queue-route") {
-        initial.pr.isMergeQueueEnabled = true;
-      }
+      applyFault(fault, {
+        "auto-route": () => (initial.pr.mergeStateStatus = "BEHIND"),
+        "queue-route": () => (initial.pr.isMergeQueueEnabled = true),
+      });
       if (fault === "admin-route") {
         initial.admin = true;
         initial.gates = "fail";
       }
       f.save(initial);
-      const first = f.run(fault === "auto-route");
-      expect(first.status, first.output).toBe(fault === "accepted" ? 0 : 1);
+      expectExit(f.run(fault === "auto-route"), fault === "accepted" ? 0 : 1);
       const previous = f.git(["rev-parse", outcomeRef]);
       const captures = f.captures();
       f.recover();
@@ -347,43 +332,26 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       next.pr.isInMergeQueue = false;
       next.pr.isMergeQueueEnabled = false;
       next.pr.mergeStateStatus = "CLEAN";
-      if (fault === "wrong-pr") {
-        next.pr.id = "other-pr";
-      }
-      if (fault === "wrong-repo") {
-        next.repoAuthority.node_id = "other-repo";
-      }
-      if (fault === "current-auto") {
-        next.pr.autoMergeRequest = { mergeMethod: "SQUASH" };
-      }
-      if (fault === "current-queued") {
-        next.pr.isInMergeQueue = true;
-      }
-      if (fault === "review") {
-        next.review = false;
-      }
-      if (fault === "checks") {
-        next.gates = "fail";
-      }
-      if (fault === "pending") {
-        next.gates = "pending";
-      }
-      if (fault === "current-queue") {
-        next.pr.isMergeQueueEnabled = true;
-      }
+      applyFault(fault, {
+        "wrong-pr": () => (next.pr.id = "other-pr"),
+        "wrong-repo": () => (next.repoAuthority.node_id = "other-repo"),
+        "current-auto": () => (next.pr.autoMergeRequest = { mergeMethod: "SQUASH" }),
+        "current-queued": () => (next.pr.isInMergeQueue = true),
+        review: () => (next.review = false),
+        checks: () => (next.gates = "fail"),
+        pending: () => (next.gates = "pending"),
+        "current-queue": () => (next.pr.isMergeQueueEnabled = true),
+      });
       if (fault === "current-admin") {
         next.admin = true;
         next.gates = "fail";
       }
-      if (fault === "operator") {
-        next.operator = "";
-      }
-      if (fault === "successor") {
-        next.crash = "successor";
-      }
-      if (fault === "no-net-change") {
-        f.advance(replacement ? "reviewed replacement\n" : "after\n", "stable\n");
-      }
+      applyFault(fault, {
+        operator: () => (next.operator = ""),
+        successor: () => (next.crash = "successor"),
+        "no-net-change": () =>
+          f.advance(replacement ? "reviewed replacement\n" : "after\n", "stable\n"),
+      });
       if (fault === "prepared-head") {
         next.pr.headRefOid = f.base;
         f.git(["-C", f.worktree, "checkout", "--detach", f.base]);
@@ -393,14 +361,16 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
         );
       }
       f.save(next);
-      const result = f.run(
-        false,
-        f.repo,
-        fault === "method" ? "merge" : "squash",
-        fault === "stale-outcome" ? f.base : previous,
-        approvedHead,
+      const result = expectExit(
+        f.run(
+          false,
+          f.repo,
+          fault === "method" ? "merge" : "squash",
+          fault === "stale-outcome" ? f.base : previous,
+          approvedHead,
+        ),
+        1,
       );
-      expect(result.status, result.output).toBe(1);
       if (retainedIntentFaults.has(fault)) {
         expect(result.output).toContain(
           "operator recovery requires an exact unaccepted immediate intent, confirmed auto cancellation, or explicitly auto-routed stale admin head; no attempt was authorized",
@@ -434,8 +404,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     "gates.env",
     "review.json",
   ])("replacement recovery refuses stale or unapproved evidence: %s", (fault) => {
-    const f = fixture();
-    f.save({ ...f.state(), mode: "unapplied" });
+    const f = configuredFixture(fixture, { mode: "unapplied" });
     expect(f.run().status).toBe(1);
     const previous = f.git(["rev-parse", outcomeRef]);
     const captures = f.captures();
@@ -443,12 +412,10 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     const approvedHead = f.replacePreparedHead();
     const next = f.state();
     next.mode = "success";
-    if (fault === "ci-proof") {
-      next.ciExit = 15;
-    }
-    if (fault === "head-during-checks") {
-      next.duringChecks = { head: f.head };
-    }
+    applyFault(fault, {
+      "ci-proof": () => (next.ciExit = 15),
+      "head-during-checks": () => (next.duringChecks = { head: f.head }),
+    });
     if (["prep.env", "gates.env", "review.json"].includes(fault)) {
       next.duringChecks = { artifact: fault };
     }
@@ -485,8 +452,10 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
           : fault === "malformed-approval"
             ? "HEAD"
             : approvedHead;
-    const run = f.run(false, f.repo, "squash", previous, approval);
-    expect(run.status, run.output).toBe(fault === "malformed-approval" ? 2 : 1);
+    const run = expectExit(
+      f.run(false, f.repo, "squash", previous, approval),
+      fault === "malformed-approval" ? 2 : 1,
+    );
     expect(f.state().mutations, run.output).toBe(1);
     expect(f.state().posts).toBe(0);
     expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
@@ -501,11 +470,9 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       if (exists) {
         writeFileSync(target, "existing capture sentinel\n");
       }
-      f.save({ ...f.state(), crash: "capture" });
-      const run = f.run();
-      expect(run.status, run.output).toBe(1);
-      expect(f.state().mutations).toBe(0);
-      expect(f.state().posts).toBe(0);
+      configureMerge(f, { crash: "capture" });
+      const run = expectExit(f.run(), 1);
+      expect(f.state()).toMatchObject({ mutations: 0, posts: 0 });
       expect(f.record()).toMatchObject({ phase: "intent", accepted: false });
       expect(run.output).not.toContain("existing capture sentinel");
       expect(existsSync(target)).toBe(exists);

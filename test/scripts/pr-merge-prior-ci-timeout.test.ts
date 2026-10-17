@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import { stringify } from "yaml";
+import { expectExit, applyFault, completedStep } from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import { createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
@@ -17,9 +18,7 @@ function timeoutCandidate() {
     check_run_url: "https://api.github.com/repos/fixture/repo/check-runs/601",
     started_at: check.started_at,
     completed_at: check.completed_at,
-    steps: [
-      { number: 18, name: "Run Node test shard", status: "completed", conclusion: "cancelled" },
-    ],
+    steps: [completedStep(18, "Run Node test shard", "cancelled")],
   });
   state.priorCi.jobs = state.priorCi.jobs!.filter((job) => job.id !== 604);
   f.save(state);
@@ -62,30 +61,15 @@ function boundaryTimeoutCandidate(cancelled: boolean, sourceFault?: string) {
     started_at: check.started_at,
     completed_at: check.completed_at,
     steps: [
-      {
-        number: 1,
-        name: "Set up job",
-        status: "completed",
-        conclusion: "success",
-        started_at: check.started_at,
-        completed_at: "2026-09-20T00:00:05Z",
-      },
-      {
-        number: 10,
-        name: "Run additional check shard",
-        status: "completed",
-        conclusion: cancelled ? "cancelled" : "success",
-        started_at: "2026-09-20T00:01:00Z",
-        completed_at: "2026-09-20T00:20:25Z",
-      },
-      {
-        number: 27,
-        name: "Complete job",
-        status: "completed",
-        conclusion: "success",
-        started_at: "2026-09-20T00:20:29Z",
-        completed_at: check.completed_at,
-      },
+      completedStep(1, "Set up job", "success", check.started_at, "2026-09-20T00:00:05Z"),
+      completedStep(
+        10,
+        "Run additional check shard",
+        cancelled ? "cancelled" : "success",
+        "2026-09-20T00:01:00Z",
+        "2026-09-20T00:20:25Z",
+      ),
+      completedStep(27, "Complete job", "success", "2026-09-20T00:20:29Z", check.completed_at),
     ],
   });
   state.priorCi.jobs = state.priorCi.jobs!.filter((job) => job.id !== 604);
@@ -102,8 +86,7 @@ describePosix("pre-existing job deadline admission", () => {
       const boundary = kind !== "Node cancelled";
       const cancelled = kind === "boundary cancelled";
       const f = boundary ? boundaryTimeoutCandidate(cancelled) : timeoutCandidate();
-      const result = boundary ? f.verifyPriorCi(f.path) : f.adminPriorCi(f.path);
-      expect(result.status, result.output).toBe(0);
+      const result = expectExit(boundary ? f.verifyPriorCi(f.path) : f.adminPriorCi(f.path), 0);
       const proof = boundary ? JSON.parse(result.stdout) : f.record().priorCiAdmin;
       expect(proof.failures).toMatchObject([
         {
@@ -162,36 +145,21 @@ describePosix("pre-existing job deadline admission", () => {
       deadline.annotations.pop();
       deadline.check.output.annotations_count = 1;
     }
-    if (fault === "wrong job name") {
-      job.name = deadline.check.name = "unrelated-check";
-    }
-    if (fault === "wrong step ordinal") {
-      steps[1]!.number = 11;
-    }
-    if (fault === "duplicate step number") {
-      steps[2]!.number = 10;
-    }
-    if (fault === "another failed step") {
-      steps[0]!.conclusion = "failure";
-    }
-    if (fault === "another cancelled step") {
-      steps[0]!.conclusion = "cancelled";
-    }
-    if (fault === "missing cleanup") {
-      steps.pop();
-    }
-    if (fault === "missing step timestamp") {
-      steps[1]!.started_at = undefined;
-    }
-    if (fault === "reversed step times") {
-      steps[1]!.started_at = "2026-09-20T00:20:26Z";
-    }
-    if (fault === "step outside job") {
-      steps[2]!.completed_at = "2026-09-20T00:20:31Z";
-    }
-    if (fault === "shard ends before deadline") {
-      steps[1]!.completed_at = "2026-09-20T00:19:59Z";
-    }
+    applyFault(fault, {
+      "wrong job name": () => {
+        job.name = "unrelated-check";
+        deadline.check.name = "unrelated-check";
+      },
+      "wrong step ordinal": () => (steps[1]!.number = 11),
+      "duplicate step number": () => (steps[2]!.number = 10),
+      "another failed step": () => (steps[0]!.conclusion = "failure"),
+      "another cancelled step": () => (steps[0]!.conclusion = "cancelled"),
+      "missing cleanup": () => steps.pop(),
+      "missing step timestamp": () => (steps[1]!.started_at = undefined),
+      "reversed step times": () => (steps[1]!.started_at = "2026-09-20T00:20:26Z"),
+      "step outside job": () => (steps[2]!.completed_at = "2026-09-20T00:20:31Z"),
+      "shard ends before deadline": () => (steps[1]!.completed_at = "2026-09-20T00:19:59Z"),
+    });
     if (fault === "extra annotation") {
       deadline.annotations.push({ ...deadline.annotations[0]! });
       deadline.check.output.annotations_count = 2;
@@ -200,12 +168,10 @@ describePosix("pre-existing job deadline admission", () => {
       deadline.annotations[0]!.message = "The job has exceeded the maximum execution time of 19m0s";
     }
     const evidence = JSON.parse(readFileSync(f.path, "utf8"));
-    if (fault === "missing independent qualification") {
-      evidence.failures[0].evidence = [];
-    }
-    if (fault === "aggregate omits root") {
-      evidence.aggregate.causedBy = [];
-    }
+    applyFault(fault, {
+      "missing independent qualification": () => (evidence.failures[0].evidence = []),
+      "aggregate omits root": () => (evidence.aggregate.causedBy = []),
+    });
     writeFileSync(f.path, JSON.stringify(evidence));
     f.save(state);
     const result = f.verifyPriorCi(f.path);
@@ -226,32 +192,19 @@ describePosix("pre-existing job deadline admission", () => {
     const f = timeoutCandidate();
     const state = f.state();
     const deadline = state.priorCi.deadline;
-    if (fault === "manual cancellation") {
-      deadline.annotations[0]!.message = "Cancelled by user";
-    }
-    if (fault === "foreign publisher") {
-      deadline.check.app.id = 999;
-    }
-    if (fault === "stale head") {
-      deadline.check.head_sha = f.base;
-    }
-    if (fault === "foreign suite") {
-      deadline.check.check_suite.id = 999;
-    }
-    if (fault === "incomplete annotations") {
-      deadline.annotations.pop();
-    }
+    applyFault(fault, {
+      "manual cancellation": () => (deadline.annotations[0]!.message = "Cancelled by user"),
+      "foreign publisher": () => (deadline.check.app.id = 999),
+      "stale head": () => (deadline.check.head_sha = f.base),
+      "foreign suite": () => (deadline.check.check_suite.id = 999),
+      "incomplete annotations": () => deadline.annotations.pop(),
+    });
     if (fault === "short duration") {
       deadline.check.completed_at = "2026-09-20T00:30:00Z";
       state.priorCi.jobs![0]!.completed_at = deadline.check.completed_at;
     }
     if (fault === "additional failed step") {
-      state.priorCi.jobs![0]!.steps!.push({
-        number: 19,
-        name: "Other assertion",
-        status: "completed",
-        conclusion: "failure",
-      });
+      state.priorCi.jobs![0]!.steps!.push(completedStep(19, "Other assertion", "failure"));
     }
     f.save(state);
     const result = f.verifyPriorCi(f.path);
