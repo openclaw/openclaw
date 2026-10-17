@@ -2276,7 +2276,6 @@ describe("handleSendChat", () => {
     Object.assign(host, {
       connectionEpoch: 1,
       pendingSessionMessageReloadSessionKey: null,
-      requestUpdate: vi.fn(),
     });
     const selectedAdmission = captureChatOutboxAdmission(
       host,
@@ -2359,7 +2358,6 @@ describe("handleSendChat", () => {
         chatMessagesBySession: new Map(),
         connectionEpoch: 1,
         pendingSessionMessageReloadSessionKey: null,
-        requestUpdate: vi.fn(),
       });
     }
     cacheEmptyChatSnapshot(inactive, item.sessionKey);

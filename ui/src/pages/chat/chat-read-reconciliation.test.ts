@@ -13,6 +13,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import {
@@ -151,13 +152,17 @@ it.each(
     [false, true].map((matching) => ({ event, matching })),
   ),
 )(
-  "renders only its scoped $event change in a retained pane (matching: $matching)",
+  "publishes only its scoped $event change in a retained pane (matching: $matching)",
   ({ event, matching }) => {
     const host = pageHost(makeChatHost({ sessionKey: selected, requestHandlers: {} }));
     onTestFinished(() => host.sessions.dispose());
-    const requestUpdate = vi.fn();
-    const frame = vi.fn(() => 1);
-    host.requestUpdate = requestUpdate;
+    const published = vi.fn();
+    onTestFinished(chatRunPresentation(host).subscribe(published));
+    let commitFrame: FrameRequestCallback | undefined;
+    const frame = vi.fn((callback: FrameRequestCallback) => {
+      commitFrame = callback;
+      return 1;
+    });
     vi.stubGlobal("requestAnimationFrame", frame);
     handlePageGatewayEvent(
       host,
@@ -168,13 +173,24 @@ it.each(
           sessionKey: matching ? selected : foreign,
           runId: "event-run",
           ...(event === "chat"
-            ? { state: "delta", deltaText: "Streaming result" }
+            ? {
+                state: "delta",
+                deltaText: "Streaming result",
+                message: { role: "assistant", content: "Streaming result" },
+              }
             : { reason: "label" }),
         },
       },
       () => false,
     );
-    expect(frame.mock.calls.length + requestUpdate.mock.calls.length).toBe(matching ? 1 : 0);
+    expect(frame).toHaveBeenCalledTimes(matching ? 1 : 0);
+    expect(published).not.toHaveBeenCalled();
+    commitFrame?.(0);
+    expect(published).toHaveBeenCalledTimes(matching ? 1 : 0);
+    if (matching && event === "chat") {
+      expect(host.chatStream).toBe("Streaming result");
+      expect(host.chatRunId).toBe("event-run");
+    }
     if (!matching) {
       expect(host.chatMessages).toEqual([]);
       expect(host.chatRunId).toBeNull();
