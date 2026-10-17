@@ -4398,7 +4398,15 @@ export const en: TranslationMap & {
     stats: {},
     detail: {},
     actions: {},
-    runNotStarted: {},
+    // Shared cron actions report outcomes before the automation page loads.
+    runNotStarted: {
+      notDue: "This automation is not due yet.",
+      alreadyRunning: "This automation is already running.",
+      recoveryPending: "Scheduler recovery is still in progress.",
+      invalidSpec: "This automation has an invalid schedule or payload.",
+      stopped: "The scheduler is stopped.",
+      unknown: "This automation could not be started.",
+    },
     jobs: {},
     runs: {},
     form: {},

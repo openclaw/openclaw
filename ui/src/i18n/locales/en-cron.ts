@@ -40,14 +40,7 @@ const enCron = {
         "This permanently deletes the automation and stops all future runs. This action cannot be undone.",
       moreJob: "More actions for {name}",
     },
-    runNotStarted: {
-      notDue: "This automation is not due yet.",
-      alreadyRunning: "This automation is already running.",
-      recoveryPending: "Scheduler recovery is still in progress.",
-      invalidSpec: "This automation has an invalid schedule or payload.",
-      stopped: "The scheduler is stopped.",
-      unknown: "This automation could not be started.",
-    },
+
     jobs: {
       schedule: "Schedule",
       lastRun: "Last run",
