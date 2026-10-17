@@ -340,6 +340,21 @@ export function prepareReplyToolAuthority(
   };
   const projectInput = (overlay?: ReplyToolAuthorityOverlay) => {
     const incoming = overlay ? applyReplyToolAuthorityOverlay(snapshot, overlay) : snapshot;
+    if (
+      overlay?.operatorAuthority &&
+      snapshot.operatorAuthority?.profileId === overlay.operatorAuthority.profileId
+    ) {
+      // Steering can add client features without expanding this turn's frozen tools.
+      if ((snapshot.run.clientCaps ?? []).every((cap) => overlay.clientCaps?.includes(cap))) {
+        incoming.run.clientCaps = snapshot.run.clientCaps
+          ? [...snapshot.run.clientCaps]
+          : undefined;
+      }
+      // A newly connected UI cannot add a personal target to a headless turn.
+      if (!snapshot.run.gatewayUiCommandTarget) {
+        incoming.run.gatewayUiCommandTarget = undefined;
+      }
+    }
     return incoming;
   };
   const env = { ...process.env };
