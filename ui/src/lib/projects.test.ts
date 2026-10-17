@@ -1,11 +1,12 @@
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ProjectRecord,
   ProjectsListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
-import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { markdownGitHubAliases } from "../components/markdown-github-repositories.ts";
+import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { projectsForGateway } from "./projects.ts";
 
@@ -19,8 +20,6 @@ const project: ProjectRecord = {
 
 function harness() {
   const request = vi.fn(async (): Promise<ProjectsListResult> => ({ projects: [project] }));
-  const listeners = new Set<() => void>();
-  const eventListeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
   const snapshot: ApplicationGatewaySnapshot = {
     client: createTestGatewayClient(request),
     phase: "connected",
@@ -41,32 +40,16 @@ function harness() {
     lastError: null,
     lastErrorCode: null,
   };
-  const gateway: ApplicationGateway = {
-    snapshot,
-    connectionRevision: 0,
-    connection: { gatewayUrl: "ws://example.test", token: "", password: "", bootstrapToken: "" },
-    eventLog: [],
-    eventLogRevision: 0,
-    loadSelfProfile: async () => null,
-    connect: vi.fn(),
-    setSessionKey: vi.fn(),
-    start: vi.fn(),
-    stop: vi.fn(),
-    subscribe: (listener) => {
-      const notify = () => listener(snapshot);
-      listeners.add(notify);
-      return () => {
-        listeners.delete(notify);
-      };
-    },
-    subscribeEvents: (listener) => {
-      eventListeners.add(listener);
-      return () => {
-        eventListeners.delete(listener);
-      };
-    },
-    subscribeEventLog: () => () => {},
-  };
+  const { gateway, publish, publishEvent } = createApplicationGateway(snapshot);
+  const subscribe = gateway.subscribe.bind(gateway);
+  const unsubscribe = vi.fn();
+  vi.spyOn(gateway, "subscribe").mockImplementation((listener) => {
+    const detach = subscribe(listener);
+    return () => {
+      unsubscribe();
+      detach();
+    };
+  });
   const store = projectsForGateway(gateway);
   const detach = store.subscribe(vi.fn());
   onTestFinished(detach);
@@ -75,24 +58,23 @@ function harness() {
     snapshot,
     gateway,
     store,
-    listeners,
+    unsubscribe,
     detach,
-    emitConfigChanged: () => {
-      for (const listener of eventListeners) {
-        listener({ type: "event", event: "config.changed", payload: {} });
-      }
-    },
-    emit: () => {
-      for (const listener of listeners) {
-        listener();
-      }
+    emitConfigChanged: () => publishEvent({ type: "event", event: "config.changed", payload: {} }),
+    emit: () => publish(snapshot),
+    replace: async (projects: ProjectRecord[]) => {
+      request.mockResolvedValue({ projects });
+      await store.refresh(true);
     },
   };
 }
 
 describe("registered project catalog", () => {
+  let h: ReturnType<typeof harness>;
+  beforeEach(() => {
+    h = harness();
+  });
   it("retires project facts on config publication and reads the current GitHub host", async () => {
-    const h = harness();
     await h.store.refresh();
     expect(h.store.snapshot.ready).toBe(true);
     h.request.mockResolvedValueOnce({ projects: [], githubHost: "new.ghe.example.test" });
@@ -104,7 +86,6 @@ describe("registered project catalog", () => {
   });
 
   it("shares one cold read across chat and the picker, preserving recents", async () => {
-    const h = harness();
     const picker = projectsForGateway(h.gateway);
     const detach = picker.subscribe(vi.fn());
     onTestFinished(detach);
@@ -126,7 +107,6 @@ describe("registered project catalog", () => {
   });
 
   it("retires aliases for every consumer before an invalidating refresh can fail", async () => {
-    const h = harness();
     await h.store.refresh();
     const listener = vi.fn();
     onTestFinished(h.store.subscribe(listener));
@@ -139,10 +119,7 @@ describe("registered project catalog", () => {
     expect(invalidated).toEqual({ result: null, repositories: [], ready: false });
     expect(listener).toHaveBeenCalledTimes(2);
     expect(h.store.snapshot).toEqual({ result: null, repositories: [], ready: false });
-    h.request.mockResolvedValue({
-      projects: [{ ...project, originUrl: "https://github.com/replacement/clawsweeper.git" }],
-    });
-    await h.store.refresh(true);
+    await h.replace([{ ...project, originUrl: "https://github.com/replacement/clawsweeper.git" }]);
     expect(h.store.snapshot.repositories).toEqual([
       { owner: "replacement", repo: "clawsweeper", aliases: ["ClawSweeper"] },
     ]);
@@ -151,7 +128,6 @@ describe("registered project catalog", () => {
   it.each(["client", "reconnect", "principal", "scope", "connection"])(
     "rejects a late %s result and loads the current projection",
     async (change) => {
-      const h = harness();
       await h.store.refresh();
       const old = createDeferred<ProjectsListResult>();
       h.request.mockReturnValueOnce(old.promise);
@@ -192,7 +168,6 @@ describe("registered project catalog", () => {
   );
 
   it("clears aliases on read permission loss without requesting wider access", async () => {
-    const h = harness();
     await h.store.refresh();
     h.snapshot.hello!.auth!.scopes = [];
     h.emit();
@@ -201,14 +176,13 @@ describe("registered project catalog", () => {
   });
 
   it("retires pending work and its listener when the final consumer leaves", async () => {
-    const h = harness();
     const pending = createDeferred<ProjectsListResult>();
     h.request.mockReturnValueOnce(pending.promise);
     const request = h.store.refresh(true);
-    // The fixture's first subscription also represents a mounted consumer.
-    expect(h.listeners.size).toBe(1);
+    expect(h.gateway.subscribe).toHaveBeenCalledOnce();
+    expect(h.unsubscribe).not.toHaveBeenCalled();
     h.detach();
-    expect(h.listeners.size).toBe(0);
+    expect(h.unsubscribe).toHaveBeenCalledOnce();
     pending.resolve({ projects: [project] });
     await request;
     expect(h.store.snapshot.repositories).toEqual([]);
@@ -220,19 +194,15 @@ describe("registered project catalog", () => {
     "ssh://internal/shared.git",
     "https://gitlab.com/team/%73hared.git",
   ])("keeps authorized non-GitHub basename collisions unresolved: %s", async (originUrl) => {
-    const h = harness();
     await h.store.refresh();
-    h.request.mockResolvedValue({
-      projects: [
-        {
-          ...project,
-          displayName: "Public Project",
-          originUrl: "https://github.com/acme/shared.git",
-        },
-        { ...project, id: "internal", displayName: "Internal Service", originUrl },
-      ],
-    });
-    await h.store.refresh(true);
+    await h.replace([
+      {
+        ...project,
+        displayName: "Public Project",
+        originUrl: "https://github.com/acme/shared.git",
+      },
+      { ...project, id: "internal", displayName: "Internal Service", originUrl },
+    ]);
     expect(
       markdownGitHubAliases(h.store.snapshot.repositories).find(([alias]) => alias === "shared"),
     ).toEqual(["shared", null]);
@@ -248,10 +218,8 @@ describe("registered project catalog", () => {
     ["git@evil.test:openclaw/clawsweeper.git", false],
     ["/workspace/clawsweeper", false],
   ])("binds only verified GitHub clone coordinates: %s", async (originUrl, resolves) => {
-    const h = harness();
     await h.store.refresh();
-    h.request.mockResolvedValue({ projects: [{ ...project, originUrl }] });
-    await h.store.refresh(true);
+    await h.replace([{ ...project, originUrl }]);
     expect(h.store.snapshot.repositories).toEqual([
       resolves
         ? { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] }

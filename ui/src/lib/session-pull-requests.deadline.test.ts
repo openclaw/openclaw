@@ -8,7 +8,11 @@ import {
 } from "./session-pull-requests.test-support.ts";
 import { sessionPullRequestsForGateway } from "./session-pull-requests.ts";
 
+const cleanups: Array<() => Promise<void>> = [];
+const key = "agent:main:demo";
+
 function createPendingHarness() {
+  vi.useFakeTimers();
   const harness = createGatewayHarness();
   const ids: string[] = [];
   const retired: string[] = [];
@@ -27,17 +31,36 @@ function createPendingHarness() {
       onSent: (id) => ids.push(id),
     }),
   );
+  const store = sessionPullRequestsForGateway(harness.gateway);
+  const owner = {};
+  cleanups.push(async () => {
+    harness.setSnapshot({ ...harness.gateway.snapshot, phase: "stopped", hello: null });
+    store.unwatch(owner);
+    pending.flush(new Error("test complete"));
+    await flushSync();
+  });
   return {
     ...harness,
+    store,
+    owner,
     pending,
     retired,
+    hello(hello = createHello()) {
+      harness.setSnapshot({ ...harness.gateway.snapshot, hello });
+    },
+    params(index: number) {
+      return harness.request.mock.calls[index]?.[1];
+    },
     acknowledge(index: number) {
       pending.handleResponse({ type: "res", id: ids[index]!, ok: true, payload: {} });
     },
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) {
+    await cleanup();
+  }
   vi.restoreAllMocks();
   vi.useRealTimers();
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
@@ -45,218 +68,160 @@ afterEach(() => {
 
 describe("pull request subscription acknowledgment lifetime", () => {
   it("retains refresh and unsubscribe intent while the connected gateway omits the capability", async () => {
-    vi.useFakeTimers();
     const harness = createPendingHarness();
-    const store = sessionPullRequestsForGateway(harness.gateway);
-    const owner = {};
-    const key = "agent:main:demo";
-    try {
-      store.watch(owner, [key]);
-      await flushSync();
-      harness.acknowledge(0);
-      await flushSync();
-      store.refresh(key);
-      await flushSync();
-      expect(harness.request.mock.calls[1]?.[1]).toEqual({
-        sessionKeys: [key],
-        refreshSessionKeys: [key],
-      });
-      const refreshSignal = harness.request.mock.calls[1]?.[2]?.signal;
+    const { store, owner } = harness;
+    store.watch(owner, [key]);
+    await flushSync();
+    harness.acknowledge(0);
+    await flushSync();
+    store.refresh(key);
+    await flushSync();
+    expect(harness.params(1)).toEqual({ sessionKeys: [key], refreshSessionKeys: [key] });
+    const refreshSignal = harness.request.mock.calls[1]?.[2]?.signal;
 
-      harness.setSnapshot({
-        ...harness.gateway.snapshot,
-        hello: { ...createHello(), features: { methods: [] } },
-      });
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(refreshSignal?.aborted).toBe(true);
-      expect(harness.retired).toEqual(["CLIENT_ABORTED"]);
-      expect(harness.pending.hasPending).toBe(false);
-      expect(harness.request).toHaveBeenCalledTimes(2);
+    harness.hello({ ...createHello(), features: { methods: [] } });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refreshSignal?.aborted).toBe(true);
+    expect(harness.retired).toEqual(["CLIENT_ABORTED"]);
+    expect(harness.pending.hasPending).toBe(false);
+    expect(harness.request).toHaveBeenCalledTimes(2);
 
-      harness.setSnapshot({ ...harness.gateway.snapshot, hello: createHello() });
-      await flushSync();
-      expect(harness.request.mock.calls[2]?.[1]).toEqual({
-        sessionKeys: [key],
-        refreshSessionKeys: [key],
-      });
-      harness.acknowledge(1);
-      expect(harness.pending.hasPending).toBe(true);
-      harness.acknowledge(2);
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(harness.request).toHaveBeenCalledTimes(3);
-      expect(harness.pending.hasPending).toBe(false);
-      const passiveOwner = {};
-      store.watch(passiveOwner, [key], { passive: true });
-      harness.setSnapshot({
-        ...harness.gateway.snapshot,
-        hello: { ...createHello(), features: { methods: [] } },
-      });
-      await flushSync();
-      store.unwatch(owner);
-      harness.setSnapshot({ ...harness.gateway.snapshot, hello: createHello() });
-      await flushSync();
-      expect(harness.request.mock.calls[3]?.[1]).toEqual({ sessionKeys: [] });
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(harness.request).toHaveBeenCalledTimes(5);
-      expect(harness.request.mock.calls[4]?.[1]).toEqual({ sessionKeys: [] });
-      harness.acknowledge(4);
-      await flushSync();
-      harness.setSnapshot({
-        ...harness.gateway.snapshot,
-        hello: { ...createHello(), features: { methods: [] } },
-      });
-      await flushSync();
-      harness.setSnapshot({ ...harness.gateway.snapshot, hello: createHello() });
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(harness.request).toHaveBeenCalledTimes(5);
-      store.unwatch(passiveOwner);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      harness.setSnapshot({ ...harness.gateway.snapshot, phase: "stopped", hello: null });
-      store.unwatch(owner);
-      harness.pending.flush(new Error("test complete"));
-      await flushSync();
-    }
+    harness.hello();
+    await flushSync();
+    expect(harness.params(2)).toEqual({ sessionKeys: [key], refreshSessionKeys: [key] });
+    harness.acknowledge(1);
+    expect(harness.pending.hasPending).toBe(true);
+    harness.acknowledge(2);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(harness.request).toHaveBeenCalledTimes(3);
+    expect(harness.pending.hasPending).toBe(false);
+    const passiveOwner = {};
+    store.watch(passiveOwner, [key], { passive: true });
+    harness.hello({ ...createHello(), features: { methods: [] } });
+    await flushSync();
+    store.unwatch(owner);
+    harness.hello();
+    await flushSync();
+    expect(harness.params(3)).toEqual({ sessionKeys: [] });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(harness.request).toHaveBeenCalledTimes(5);
+    expect(harness.params(4)).toEqual({ sessionKeys: [] });
+    harness.acknowledge(4);
+    await flushSync();
+    harness.hello({ ...createHello(), features: { methods: [] } });
+    await flushSync();
+    harness.hello();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(harness.request).toHaveBeenCalledTimes(5);
+    store.unwatch(passiveOwner);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("retires a lost refresh acknowledgment and retries retained coalesced intent once", async () => {
-    vi.useFakeTimers();
     const harness = createPendingHarness();
-    const store = sessionPullRequestsForGateway(harness.gateway);
-    const owner = {};
-    const key = "agent:main:demo";
-    try {
-      store.watch(owner, [key]);
-      await flushSync();
-      harness.acknowledge(0);
-      await flushSync();
+    const { store, owner } = harness;
+    store.watch(owner, [key]);
+    await flushSync();
+    harness.acknowledge(0);
+    await flushSync();
+    store.refresh(key);
+    await flushSync();
+    for (let hint = 0; hint < 3; hint += 1) {
       store.refresh(key);
       await flushSync();
-      for (let hint = 0; hint < 3; hint += 1) {
-        store.refresh(key);
-        await flushSync();
-      }
-      expect(harness.request).toHaveBeenCalledTimes(2);
-
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(harness.pending.hasPending).toBe(false);
-      expect(harness.retired).toEqual(["CLIENT_TIMEOUT"]);
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(harness.request).toHaveBeenCalledTimes(3);
-      expect(harness.request.mock.calls[2]?.[1]).toEqual({
-        sessionKeys: [key],
-        refreshSessionKeys: [key],
-      });
-      harness.acknowledge(1);
-      expect(harness.pending.hasPending).toBe(true);
-      harness.acknowledge(2);
-      await flushSync();
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(harness.request).toHaveBeenCalledTimes(3);
-      expect(harness.pending.hasPending).toBe(false);
-
-      store.unwatch(owner);
-      expect(harness.request.mock.calls[3]?.[1]).toEqual({ sessionKeys: [] });
-      expect(harness.unsubscribeSnapshots).toHaveBeenCalledOnce();
-      expect(harness.unsubscribeEvents).toHaveBeenCalledOnce();
-      expect(harness.pending.hasPending).toBe(false);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      harness.setSnapshot({ ...harness.gateway.snapshot, phase: "stopped", hello: null });
-      store.unwatch(owner);
-      harness.pending.flush(new Error("test complete"));
-      await flushSync();
     }
+    expect(harness.request).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(harness.pending.hasPending).toBe(false);
+    expect(harness.retired).toEqual(["CLIENT_TIMEOUT"]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(harness.request).toHaveBeenCalledTimes(3);
+    expect(harness.params(2)).toEqual({ sessionKeys: [key], refreshSessionKeys: [key] });
+    harness.acknowledge(1);
+    expect(harness.pending.hasPending).toBe(true);
+    harness.acknowledge(2);
+    await flushSync();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(harness.request).toHaveBeenCalledTimes(3);
+    expect(harness.pending.hasPending).toBe(false);
+
+    store.unwatch(owner);
+    expect(harness.params(3)).toEqual({ sessionKeys: [] });
+    expect(harness.unsubscribeSnapshots).toHaveBeenCalledOnce();
+    expect(harness.unsubscribeEvents).toHaveBeenCalledOnce();
+    expect(harness.pending.hasPending).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("settles a one-shot load after a lost acknowledgment and sends its final empty set", async () => {
-    vi.useFakeTimers();
     const harness = createPendingHarness();
-    const store = sessionPullRequestsForGateway(harness.gateway);
-    const owner = {};
+    const { store, owner } = harness;
     const settled = vi.fn();
-    try {
-      void store.load(owner, "agent:main:demo").then(settled);
-      await flushSync();
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(settled).toHaveBeenCalledExactlyOnceWith(undefined);
-      expect(harness.request).toHaveBeenCalledTimes(2);
-      expect(harness.request.mock.calls[1]?.[1]).toEqual({ sessionKeys: [] });
-      expect(harness.retired).toEqual(["CLIENT_TIMEOUT", "CLIENT_ABORTED"]);
-      expect(harness.pending.hasPending).toBe(false);
-      expect(harness.unsubscribeSnapshots).toHaveBeenCalledOnce();
-      expect(harness.unsubscribeEvents).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      store.unwatch(owner);
-      harness.pending.flush(new Error("test complete"));
-      await flushSync();
-    }
+    void store.load(owner, key).then(settled);
+    await flushSync();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(settled).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(harness.request).toHaveBeenCalledTimes(2);
+    expect(harness.params(1)).toEqual({ sessionKeys: [] });
+    expect(harness.retired).toEqual(["CLIENT_TIMEOUT", "CLIENT_ABORTED"]);
+    expect(harness.pending.hasPending).toBe(false);
+    expect(harness.unsubscribeSnapshots).toHaveBeenCalledOnce();
+    expect(harness.unsubscribeEvents).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(["membership", "hello", "client", "unavailable", "hidden", "unwatch"] as const)(
     "retires a pending declaration on %s without reviving a stale retry",
     async (change) => {
-      vi.useFakeTimers();
       const harness = createPendingHarness();
-      const store = sessionPullRequestsForGateway(harness.gateway);
-      const owner = {};
-      try {
-        store.watch(owner, ["agent:main:demo"]);
-        await flushSync();
-        const firstSignal = harness.request.mock.calls[0]?.[2]?.signal;
-        harness.setSnapshot({ ...harness.gateway.snapshot });
-        document.dispatchEvent(new Event("visibilitychange"));
-        await flushSync();
-        expect(harness.request).toHaveBeenCalledOnce();
-        expect(firstSignal?.aborted).toBe(false);
+      const { store, owner } = harness;
+      store.watch(owner, [key]);
+      await flushSync();
+      const firstSignal = harness.request.mock.calls[0]?.[2]?.signal;
+      harness.setSnapshot({ ...harness.gateway.snapshot });
+      document.dispatchEvent(new Event("visibilitychange"));
+      await flushSync();
+      expect(harness.request).toHaveBeenCalledOnce();
+      expect(firstSignal?.aborted).toBe(false);
 
-        if (change === "membership") {
-          store.watch(owner, ["agent:main:replacement"]);
-        } else if (change === "hidden") {
-          Object.defineProperty(document, "visibilityState", {
-            configurable: true,
-            value: "hidden",
-          });
-          document.dispatchEvent(new Event("visibilitychange"));
-        } else if (change === "unwatch") {
-          store.unwatch(owner);
-        } else {
-          harness.setSnapshot({
-            ...harness.gateway.snapshot,
-            ...(change === "hello" ? { hello: createHello() } : {}),
-            ...(change === "client"
-              ? { client: { request: harness.request } as unknown as GatewayBrowserClient }
-              : {}),
-            ...(change === "unavailable" ? { phase: "reconnecting", hello: null } : {}),
-          });
-        }
-        await flushSync();
-        expect(firstSignal?.aborted).toBe(true);
-        expect(harness.retired).toEqual(
-          change === "unwatch" ? ["CLIENT_ABORTED", "CLIENT_ABORTED"] : ["CLIENT_ABORTED"],
-        );
-        if (change !== "unavailable") {
-          expect(harness.request).toHaveBeenCalledTimes(2);
-          if (change === "hidden" || change === "unwatch") {
-            expect(harness.request.mock.calls[1]?.[1]).toEqual({ sessionKeys: [] });
-          }
-          harness.acknowledge(1);
-        }
-        harness.acknowledge(0);
-        await flushSync();
-        await vi.advanceTimersByTimeAsync(60_000);
-        expect(harness.request).toHaveBeenCalledTimes(change === "unavailable" ? 1 : 2);
-        expect(harness.pending.hasPending).toBe(false);
+      if (change === "membership") {
+        store.watch(owner, ["agent:main:replacement"]);
+      } else if (change === "hidden") {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new Event("visibilitychange"));
+      } else if (change === "unwatch") {
         store.unwatch(owner);
-        expect(harness.pending.hasPending).toBe(false);
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
-        harness.setSnapshot({ ...harness.gateway.snapshot, phase: "stopped", hello: null });
-        store.unwatch(owner);
-        harness.pending.flush(new Error("test complete"));
-        await flushSync();
+      } else {
+        harness.setSnapshot({
+          ...harness.gateway.snapshot,
+          ...(change === "hello" ? { hello: createHello() } : {}),
+          ...(change === "client"
+            ? { client: { request: harness.request } as unknown as GatewayBrowserClient }
+            : {}),
+          ...(change === "unavailable" ? { phase: "reconnecting", hello: null } : {}),
+        });
       }
+      await flushSync();
+      expect(firstSignal?.aborted).toBe(true);
+      expect(harness.retired).toEqual(
+        change === "unwatch" ? ["CLIENT_ABORTED", "CLIENT_ABORTED"] : ["CLIENT_ABORTED"],
+      );
+      if (change !== "unavailable") {
+        expect(harness.request).toHaveBeenCalledTimes(2);
+        if (change === "hidden" || change === "unwatch") {
+          expect(harness.params(1)).toEqual({ sessionKeys: [] });
+        }
+        harness.acknowledge(1);
+      }
+      harness.acknowledge(0);
+      await flushSync();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(harness.request).toHaveBeenCalledTimes(change === "unavailable" ? 1 : 2);
+      expect(harness.pending.hasPending).toBe(false);
+      store.unwatch(owner);
+      expect(harness.pending.hasPending).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
     },
   );
 });
