@@ -3,12 +3,14 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
+  compatible,
+  agentConfig,
+  versionRow,
   closeDatabases,
   execSql,
   trackSettlement,
@@ -30,16 +32,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 function createFleet() {
-  const env = {
-    OPENCLAW_STATE_DIR: tempDirs.make("preflight-startup-prepared-"),
-  };
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("preflight-startup-prepared-") };
   const agentIds = ["first", "second", "third"];
-  const config: OpenClawConfig = {
-    agents: {
-      entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
-      defaults: { systemAgent: { agentId: "first" } },
-    },
-  };
+  const config = agentConfig(agentIds, "first");
   const paths = agentIds.map((agentId) => openOpenClawAgentDatabase({ agentId, env }).path);
   closeDatabases();
   for (const pathname of paths) {
@@ -51,6 +46,7 @@ function createFleet() {
     config,
     env,
     paths,
+    agentIds,
     onAgentInspection,
     onRegisteredAgentDatabases,
     expectInspections: (count: number) =>
@@ -67,13 +63,19 @@ function createFleet() {
         onAgentInspection,
         onRegisteredAgentDatabases,
       }),
-    inspect: (signal?: AbortSignal) =>
-      preflightOpenClawDatabaseSchemas({
-        env,
-        signal,
-        reuseStartupSchemaPreparation: true,
-        onAgentInspection,
-      }),
+    inspect: (
+      overrides: Partial<Parameters<typeof preflightOpenClawDatabaseSchemas>[0]> = {},
+      purpose?: Parameters<typeof preflightOpenClawDatabaseSchemas>[1],
+    ) =>
+      preflightOpenClawDatabaseSchemas(
+        {
+          env,
+          reuseStartupSchemaPreparation: true,
+          onAgentInspection,
+          ...overrides,
+        },
+        purpose,
+      ),
   };
 }
 
@@ -90,14 +92,9 @@ it("skips an unconfigured system-agent database across startup passes while keep
   await withImmediateAdmission(async () => {
     await expect(fleet.ready()).resolves.toBeUndefined();
     fleet.expectInspections(fleet.paths.length);
-    await expect(
-      preflightOpenClawDatabaseSchemas({
-        env: fleet.env,
-        agentAdmissionConfig: fleet.config,
-        reuseStartupSchemaPreparation: true,
-        onAgentInspection: fleet.onAgentInspection,
-      }),
-    ).resolves.toEqual({ incompatible: [], indeterminate: [] });
+    await expect(fleet.inspect({ agentAdmissionConfig: fleet.config })).resolves.toEqual(
+      compatible,
+    );
     fleet.expectInspections(0);
     expect(readAgentDatabaseAdmissionRefusal("openclaw", { env: fleet.env })).toBeUndefined();
   });
@@ -224,7 +221,7 @@ it("carries fleet compatibility once into bootstrap while readiness always inspe
     // Migration admission before and under its lease must remain independent.
     await fleet.ready();
     fleet.expectInspections(fleet.paths.length);
-    expect(await fleet.inspect()).toEqual({ incompatible: [], indeterminate: [] });
+    expect(await fleet.inspect()).toEqual(compatible);
     fleet.expectInspections(0);
     await fleet.inspect();
     fleet.expectInspections(fleet.paths.length);
@@ -237,19 +234,10 @@ it("preserves configured ownership when reusing an unchanged inspected database"
   const fleet = createFleet();
   await withImmediateAdmission(async () => {
     await fleet.ready();
-    const inspected = await preflightOpenClawDatabaseSchemas(
+    const inspected = await fleet.inspect(
       {
-        env: fleet.env,
-        agentAdmissionConfig: {
-          ...fleet.config,
-          agents: {
-            ...fleet.config.agents,
-            entries: { ...fleet.config.agents?.entries, alias: {} },
-          },
-        },
+        agentAdmissionConfig: agentConfig([...fleet.agentIds, "alias"], "first"),
         configuredAgentDatabaseTargets: [{ agentId: "alias", path: fleet.paths[0]! }],
-        reuseStartupSchemaPreparation: true,
-        onAgentInspection: fleet.onAgentInspection,
       },
       "runtime",
     );
@@ -284,13 +272,7 @@ it("reads newly registered stores without copying admitted state after startup w
     );
     const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
     expect(await fleet.inspect()).toMatchObject({
-      incompatible: [
-        {
-          kind: "agent",
-          path: changedPath,
-          foundVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
-        },
-      ],
+      incompatible: [versionRow("agent", changedPath, OPENCLAW_AGENT_SCHEMA_VERSION + 1)],
       indeterminate: [],
     });
     const statePath = fs.realpathSync.native(
@@ -313,10 +295,10 @@ it("does not let prepared compatibility bypass cancellation or survive startup r
     const cancellation = new Error("startup cancelled after fleet admission");
     controller.abort(cancellation);
     fleet.onAgentInspection.mockClear();
-    await expect(fleet.inspect(controller.signal)).rejects.toBe(cancellation);
+    await expect(fleet.inspect({ signal: controller.signal })).rejects.toBe(cancellation);
     expect(fleet.onAgentInspection).not.toHaveBeenCalled();
     await admission.stop();
-    expect(await fleet.inspect()).toEqual({ incompatible: [], indeterminate: [] });
+    expect(await fleet.inspect()).toEqual(compatible);
     fleet.expectInspections(fleet.paths.length);
   });
 });

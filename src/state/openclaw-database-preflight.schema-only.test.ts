@@ -5,6 +5,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
+  compatible,
+  supportedVersions,
+  versionRow,
+  failureRow,
   closeDatabases,
   openRawDatabase,
   rejectSnapshot,
@@ -39,27 +43,9 @@ it("upgrades the subagent authority format without rewriting rows and refuses sc
     runId: "interrupted-child",
     operatorRecoverySource: {
       version: 1,
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionId: "parent-session",
-      lifecycleRevision: "parent-lifecycle",
-      sourceRunId: "parent-turn",
       snapshot: {
         profileId: "original-operator",
         scopes: ["operator.write"],
-        assignedRole: null,
-        githubLogin: null,
-        grant: null,
-        aliasBindingIds: [],
-        authPolicy: {
-          generation: "",
-          grantGeneration: "original-grant",
-          role: "operator",
-          authMethod: "token",
-        },
-        controlUiAdmin: false,
-        localOperator: false,
-        sourceIngress: "internal",
       },
     },
   });
@@ -100,14 +86,7 @@ it("upgrades the subagent authority format without rewriting rows and refuses sc
       supportedVersions: { state: 24, agent: OPENCLAW_AGENT_SCHEMA_VERSION },
     }),
   ).toMatchObject({
-    incompatible: [
-      {
-        kind: "state",
-        path: pathname,
-        foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-        supportedVersion: 24,
-      },
-    ],
+    incompatible: [versionRow("state", pathname, OPENCLAW_STATE_SCHEMA_VERSION, 24)],
     indeterminate: [],
   });
 });
@@ -126,15 +105,13 @@ it("keeps readiness on the admitted shared-state snapshot and observes changes i
       withOpenClawStateDatabaseReadSnapshot(
         async () => {
           state.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
-          expect(await inspect()).toEqual({ incompatible: [], indeterminate: [] });
+          expect(await inspect()).toEqual(compatible);
         },
         { env },
       ),
     );
     expect(await inspect()).toMatchObject({
-      incompatible: [
-        { kind: "state", path: state.path, foundVersion: OPENCLAW_STATE_SCHEMA_VERSION + 1 },
-      ],
+      incompatible: [versionRow("state", state.path, OPENCLAW_STATE_SCHEMA_VERSION + 1)],
       indeterminate: [],
     });
   } finally {
@@ -158,10 +135,10 @@ it.each(["DELETE", "WAL"])(
         preserveSourceArtifacts: false,
         verifyCurrentSchemaShape: true,
       });
-    expect(await inspect()).toEqual({ incompatible: [], indeterminate: [] });
+    expect(await inspect()).toEqual(compatible);
     writer.exec("BEGIN IMMEDIATE; PRAGMA user_version=999;");
     try {
-      expect(await inspect()).toEqual({ incompatible: [], indeterminate: [] });
+      expect(await inspect()).toEqual(compatible);
       expect(writer.isTransaction).toBe(true);
       expect(writer.prepare("PRAGMA user_version").get()).toEqual({ user_version: 999 });
     } finally {
@@ -169,9 +146,7 @@ it.each(["DELETE", "WAL"])(
     }
     writer.exec(`PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
     expect(await inspect()).toMatchObject({
-      incompatible: [
-        { kind: "state", path: pathname, foundVersion: OPENCLAW_STATE_SCHEMA_VERSION + 1 },
-      ],
+      incompatible: [versionRow("state", pathname, OPENCLAW_STATE_SCHEMA_VERSION + 1)],
       indeterminate: [],
     });
     writer.exec(`PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION}; DROP TABLE schema_meta;`);
@@ -183,9 +158,7 @@ it.each(["DELETE", "WAL"])(
 );
 
 it("checks fresh metadata without space for an agent snapshot", async () => {
-  const env = {
-    OPENCLAW_STATE_DIR: tempDirs.make("schema-only-preflight-"),
-  };
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("schema-only-preflight-") };
   const agentPath = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
   closeDatabases();
   using writer = openRawDatabase(agentPath);
@@ -207,10 +180,7 @@ it("checks fresh metadata without space for an agent snapshot", async () => {
       env,
       verifyCurrentSchemaShape,
       agentAdmissionConfig: config,
-      supportedVersions: {
-        state: OPENCLAW_STATE_SCHEMA_VERSION,
-        agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-      },
+      supportedVersions,
     });
   await expect(ready("doctor")).resolves.toBeUndefined();
   await expect(ready("gateway-restart")).resolves.toBeUndefined();
@@ -237,9 +207,7 @@ it("checks fresh metadata without space for an agent snapshot", async () => {
     ).toMatchObject({
       incompatible: [
         {
-          kind: "agent",
-          path: agentPath,
-          foundVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+          ...versionRow("agent", agentPath, OPENCLAW_AGENT_SCHEMA_VERSION + 1),
           writerAppVersion: "inspection-fixture",
         },
       ],
@@ -271,13 +239,7 @@ it("checks fresh metadata without space for an agent snapshot", async () => {
     ).toMatchObject({
       incompatible: [],
       indeterminate: verifyCurrentSchemaShape
-        ? [
-            {
-              kind: "agent",
-              path: agentPath,
-              reason: expect.stringContaining("idx_agent_cache_expiry"),
-            },
-          ]
+        ? [failureRow("agent", agentPath, expect.stringContaining("idx_agent_cache_expiry"))]
         : [],
     });
   }
@@ -324,14 +286,11 @@ it.each([
           requireStartupMigrationReadiness: mode === "startup",
           signal: controller.signal,
           onAgentInspection,
-          supportedVersions: {
-            state: OPENCLAW_STATE_SCHEMA_VERSION,
-            agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-          },
+          supportedVersions,
         });
       return mode === "startup" ? withAgentDatabaseStartupAdmission(run) : run();
     };
-    expect(await inspect()).toEqual({ incompatible: [], indeterminate: [] });
+    expect(await inspect()).toEqual(compatible);
     if (cleanupFailure === "false") {
       cleanup.mockReturnValue(false);
     } else {
@@ -341,17 +300,7 @@ it.each([
     }
     onAgentInspection.mockClear();
     expect(await inspect()).toEqual({
-      incompatible: [],
-      indeterminate:
-        mode === "startup"
-          ? []
-          : [
-              {
-                kind: "agent",
-                path: agentPath,
-                reason: expect.stringContaining("snapshot cleanup failed"),
-              },
-            ],
+      ...compatible,
       ...(mode === "startup"
         ? {
             agentRefusals: [
@@ -363,7 +312,11 @@ it.each([
               }),
             ],
           }
-        : {}),
+        : {
+            indeterminate: [
+              failureRow("agent", agentPath, expect.stringContaining("snapshot cleanup failed")),
+            ],
+          }),
     });
     expect(onAgentInspection).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ schemaInspectionCount: 3 }),

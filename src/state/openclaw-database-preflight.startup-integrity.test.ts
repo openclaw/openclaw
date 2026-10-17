@@ -21,10 +21,16 @@ import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
   closeDatabases,
+  agentConfig,
+  expectFiles,
   openRawDatabase,
   rejectSnapshot,
 } from "./database-preflight-fixtures.test-support.js";
-import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
+import {
+  openOpenClawAgentDatabaseReadOnly,
+  withFreshOpenClawAgentDatabaseReadOnly,
+  type OpenClawAgentReadOnlyDatabase,
+} from "./openclaw-agent-db-readonly-open.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
@@ -47,14 +53,19 @@ afterEach(() => {
   closeDatabases();
 });
 
+function transcriptRows(reader: OpenClawAgentReadOnlyDatabase) {
+  return readSelectedSessionEntryRows(reader, ["synthetic"], "full", undefined, {
+    includeRowTranscriptProjection: true,
+  });
+}
+
 it("cold-loads a complete prior-build seal without validation SQL or snapshots", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-clean-startup-") };
   const { path: agentPath } = openOpenClawAgentDatabase({ agentId: "main", env });
   closeOpenClawAgentDatabaseByPath(agentPath);
   closeOpenClawStateDatabase();
   expect(readSqliteDatabaseCleanClose(agentPath)).toBe(true);
-  expect(fs.existsSync(`${agentPath}-wal`)).toBe(false);
-  expect(fs.existsSync(`${agentPath}-shm`)).toBe(false);
+  expectFiles([`${agentPath}-wal`, `${agentPath}-shm`], false);
   const file = fs.statSync(agentPath, { bigint: true });
   const seal = readSqliteCleanCloseSeal(agentPath, file)!;
   // Persist the predecessor's identity format independently of the current helper.
@@ -129,26 +140,12 @@ it("admits every previously sealed same-version agent before transcript readers 
         facts: JSON.stringify(facts),
       }),
     ).toBe(true);
-    expect(() => {
-      const reader = openOpenClawAgentDatabaseReadOnly({ ...agent, env });
-      if (reader.found) {
-        try {
-          readSelectedSessionEntryRows(reader.database, ["synthetic"], "full", undefined, {
-            includeRowTranscriptProjection: true,
-          });
-        } finally {
-          reader.database.close();
-        }
-      }
-    }).toThrow("requires writable startup admission before session reads");
+    expect(() => withFreshOpenClawAgentDatabaseReadOnly(transcriptRows, { ...agent, env })).toThrow(
+      "requires writable startup admission before session reads",
+    );
     expect(readSqliteDatabaseCleanClose(agent.path)).toBe(false);
   }
-  const config = {
-    agents: {
-      entries: Object.fromEntries(ids.map((id) => [id, {}])),
-      defaults: { systemAgent: { agentId: "claude" } },
-    },
-  };
+  const config = agentConfig(ids, "claude");
   await withAgentDatabaseStartupAdmission(async (admission) => {
     await expect(
       assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config }),
@@ -163,7 +160,7 @@ it("admits every previously sealed same-version agent before transcript readers 
       admission.activate({
         isCurrent: () => true,
         preparationReady: Promise.resolve(),
-        openOpenClawAgentDatabase: async ({ agentId, paths, assertCurrent }) => {
+        openAgent: async ({ agentId, paths, assertCurrent }) => {
           for (const pathname of paths) {
             await withOpenClawAgentDatabaseAsync(
               { agentId, path: pathname, env },
@@ -174,27 +171,19 @@ it("admits every previously sealed same-version agent before transcript readers 
         },
         migrateAgent: async ({ agentId, paths }) => {
           for (const pathname of paths) {
-            const reader = openOpenClawAgentDatabaseReadOnly({ agentId, path: pathname, env });
-            expect(reader.found).toBe(true);
-            if (reader.found) {
-              try {
-                expect(
-                  readSelectedSessionEntryRows(reader.database, ["synthetic"], "full", undefined, {
-                    includeRowTranscriptProjection: true,
-                  }),
-                ).toEqual([]);
-                expect(
-                  reader.database.db.prepare("PRAGMA table_info(session_windows)").all(),
-                ).toEqual(
+            const read = withFreshOpenClawAgentDatabaseReadOnly(
+              (reader) => {
+                expect(transcriptRows(reader)).toEqual([]);
+                expect(reader.db.prepare("PRAGMA table_info(session_windows)").all()).toEqual(
                   expect.arrayContaining([
                     expect.objectContaining({ name: "row_transcript_json" }),
                     expect.objectContaining({ name: "row_transcript_updated_at" }),
                   ]),
                 );
-              } finally {
-                reader.database.close();
-              }
-            }
+              },
+              { agentId, path: pathname, env },
+            );
+            expect(read.found).toBe(true);
           }
         },
         publishAgent: async () => {},
@@ -364,12 +353,7 @@ it("isolates a corrupt foreign secondary before reporting its integrity failure"
     assertOpenClawDatabasesReady({
       env,
       operation: "gateway-startup",
-      config: {
-        agents: {
-          entries: { main: {}, worker: {} },
-          defaults: { systemAgent: { agentId: "main" } },
-        },
-      },
+      config: agentConfig(["main", "worker"], "main"),
     }),
   ).resolves.toBeUndefined();
   expect(readAgentDatabaseAdmissionRefusal("worker", { env })).toMatchObject({

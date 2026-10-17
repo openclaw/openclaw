@@ -85,91 +85,61 @@ function listQuarantinePaths(sourcePath: string): string[] {
 }
 
 describe("orphan SQLite sidecar admission", () => {
-  const recoverableCases = [
-    [
-      "real WAL with committed frames",
-      "-wal",
-      walFixture.withFrames,
-      [
-        ["-shm", shmIndexContents],
-        ["-journal", emptySidecar],
-      ],
-    ],
-    [
-      "non-empty rollback journal",
-      "-journal",
-      rollbackJournalContents,
-      [
-        ["-wal", walFixture.header],
-        ["-shm", shmIndexContents],
-      ],
-    ],
+  const cases = [
+    ["real WAL with committed frames", "-wal", walFixture.withFrames, true],
+    ["non-empty rollback journal", "-journal", rollbackJournalContents, true],
+    ["lone SHM index", "-shm", shmIndexContents, false],
+    ["32-byte header-only WAL", "-wal", walFixture.header, false],
+    ["zero-byte rollback journal", "-journal", emptySidecar, false],
   ] as const;
-
-  for (const [label, suffix, contents, benignSidecars] of recoverableCases) {
+  for (const [label, suffix, contents, recoverable] of cases) {
     for (const kind of databaseKinds) {
-      const regression =
-        kind === "state" && suffix === "-wal" ? " (plugin lifecycle regression)" : "";
-      it(`opens a missing ${kind} database after copying a ${label}${regression}`, () => {
+      it(`opens a missing ${kind} database with a ${label}`, () => {
         const { databasePath, env } = prepareCase(kind);
-        for (const [sidecar, bytes] of [[suffix, contents], ...benignSidecars] as const) {
-          fs.writeFileSync(`${databasePath}${sidecar}`, bytes);
+        const sourcePath = databasePath + suffix;
+        fs.writeFileSync(sourcePath, contents);
+        if (recoverable) {
+          fs.writeFileSync(databasePath + "-shm", shmIndexContents);
+          fs.writeFileSync(
+            databasePath + (suffix === "-wal" ? "-journal" : "-wal"),
+            suffix === "-wal" ? emptySidecar : walFixture.header,
+          );
         }
-
         const database = openDatabase(kind, env);
-        const sourcePath = `${databasePath}${suffix}`;
-        const quarantinePaths = listQuarantinePaths(sourcePath);
-
-        expect(database.db.isOpen).toBe(true);
-        expect(fs.existsSync(databasePath)).toBe(true);
-        expect(quarantinePaths).toHaveLength(1);
-        const quarantinePath = quarantinePaths.at(0);
-        if (!quarantinePath) {
-          throw new Error(`missing quarantine for ${sourcePath}`);
+        expect({ open: database.db.isOpen, exists: fs.existsSync(databasePath) }).toEqual({
+          open: true,
+          exists: true,
+        });
+        const quarantines = listQuarantinePaths(sourcePath);
+        if (!recoverable) {
+          expect(database.db.prepare("PRAGMA integrity_check").get()).toEqual({
+            integrity_check: "ok",
+          });
+          expect(quarantines).toEqual([]);
+          expect(loggerMocks.warn).not.toHaveBeenCalled();
+          return;
         }
-        expect(fs.readFileSync(quarantinePath)).toEqual(contents);
+        expect(quarantines).toHaveLength(1);
+        const [quarantinePath] = quarantines;
+        expect(fs.readFileSync(quarantinePath!)).toEqual(contents);
+        // A successful WAL-mode open may create a new canonical sidecar.
         if (fs.existsSync(sourcePath)) {
-          // A successful WAL-mode open may create a new sidecar at the canonical path.
           expect(fs.readFileSync(sourcePath)).not.toEqual(contents);
         }
         expect(loggerMocks.warn).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining(quarantinePath),
+          expect.stringContaining(quarantinePath!),
           expect.objectContaining({
             databasePath,
             copiedSidecars: [{ quarantinePath, sourcePath }],
           }),
         );
-        expect(String(loggerMocks.warn.mock.calls[0]?.[0])).toContain(
+        const message = String(loggerMocks.warn.mock.calls[0]?.[0]);
+        expect(message).toContain(
           "Committed frames could not be applied because the main database is missing",
         );
-        expect(String(loggerMocks.warn.mock.calls[0]?.[0])).toContain(
+        expect(message).toContain(
           "Recovery requires restoring the main database and pairing it with the quarantined file",
         );
-      });
-    }
-  }
-
-  const nonBlockingCases = [
-    ["lone SHM index", "-shm", shmIndexContents],
-    ["32-byte header-only WAL", "-wal", walFixture.header],
-    ["zero-byte rollback journal", "-journal", emptySidecar],
-  ] as const;
-
-  for (const [label, suffix, contents] of nonBlockingCases) {
-    for (const kind of databaseKinds) {
-      it(`creates a missing ${kind} database with a ${label}`, () => {
-        const { databasePath, env } = prepareCase(kind);
-        fs.writeFileSync(`${databasePath}${suffix}`, contents);
-
-        const database = openDatabase(kind, env);
-
-        expect(database.db.isOpen).toBe(true);
-        expect(fs.existsSync(databasePath)).toBe(true);
-        expect(database.db.prepare("PRAGMA integrity_check").get()).toEqual({
-          integrity_check: "ok",
-        });
-        expect(listQuarantinePaths(`${databasePath}${suffix}`)).toEqual([]);
-        expect(loggerMocks.warn).not.toHaveBeenCalled();
       });
     }
   }

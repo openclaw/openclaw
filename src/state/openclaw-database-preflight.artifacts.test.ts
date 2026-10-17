@@ -10,25 +10,24 @@ import {
 } from "../cli/update-cli/schema-preflight.js";
 import { startSqliteConcurrentWriter } from "../infra/sqlite-concurrent-writer.test-support.js";
 import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
-import * as snapshots from "../infra/sqlite-snapshot-source.js";
-import { closeDatabases, openRawDatabase } from "./database-preflight-fixtures.test-support.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import {
+  compatible,
+  closeDatabases,
+  openRawDatabase,
+  rejectSnapshot,
+  supportedVersions,
+  failureRow,
+} from "./database-preflight-fixtures.test-support.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
 } from "./openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-
-const supportedVersions = {
-  state: OPENCLAW_STATE_SCHEMA_VERSION,
-  agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-};
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
@@ -120,7 +119,7 @@ describe("schema preflight source artifacts", () => {
         supportedVersions,
         configuredAgentDatabaseCandidatePaths: [pathname],
       });
-      expect(result).toEqual({ incompatible: [], indeterminate: [] });
+      expect(result).toEqual(compatible);
       expect(released).toBe(true);
     } finally {
       clearTimeout(release);
@@ -133,15 +132,12 @@ describe("schema preflight source artifacts", () => {
   it("unions native locators and aliases without dropping distinct stores", async () => {
     const fixture = createFixture();
     fixture.worker.db.exec(`PRAGMA user_version = ${supportedVersions.agent + 10};`);
-    unregisterOpenClawAgentDatabase({
-      agentId: "worker",
-      path: fixture.worker.path,
-      env: fixture.env,
-    });
+    const registration = { agentId: "worker", path: fixture.worker.path, env: fixture.env };
+    unregisterOpenClawAgentDatabase(registration);
     const link = path.join(fixture.env.OPENCLAW_STATE_DIR, "worker-link");
     fs.symlinkSync(path.dirname(fixture.worker.path), link, "dir");
     const locator = `${link}${path.sep}..${path.sep}agent${path.sep}openclaw-agent.sqlite`;
-    registerOpenClawAgentDatabase({ agentId: "worker", path: locator, env: fixture.env });
+    registerOpenClawAgentDatabase({ ...registration, path: locator });
     fixture.close();
     const lexicalPath = path.resolve(locator);
     fs.mkdirSync(path.dirname(lexicalPath), { recursive: true });
@@ -245,7 +241,7 @@ describe("schema preflight source artifacts", () => {
         await checkTargetDatabaseSchemasForContexts(supportedVersions, [
           await captureTargetDatabaseSchemaContext(fixture.env),
         ]),
-      ).toEqual({ incompatible: [], indeterminate: [] });
+      ).toEqual(compatible);
       expect(sourceArtifacts(fixture.paths, allowReadMarks)).toEqual(before);
       for (const opened of databases) {
         expect(opened.db.isTransaction).toBe(true);
@@ -267,27 +263,21 @@ describe("schema preflight source artifacts", () => {
       const fixture = createFixture();
       fixture.close();
       const before = sourceArtifacts(fixture.paths);
-      const prepare = snapshots.prepareSqliteReadOnlyLocation;
-      vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
-        async (pathname, options) => {
-          if (pathname === fixture[kind].path) {
-            throw new Error("inert snapshot admission failure");
-          }
-          return await prepare(pathname, options);
-        },
-      );
+      rejectSnapshot(fixture[kind].path, "inert snapshot admission failure");
       const result = await fixture.inspect({
         verifyCurrentSchemaShape: true,
         preserveSourceArtifacts: true,
       });
-      expect(result.incompatible).toEqual([]);
-      expect(result.indeterminate).toEqual([
-        {
-          kind: kind === "state" ? "state" : "agent",
-          path: fixture[kind].path,
-          reason: "inert snapshot admission failure",
-        },
-      ]);
+      expect(result).toMatchObject({
+        incompatible: [],
+        indeterminate: [
+          failureRow(
+            kind === "state" ? "state" : "agent",
+            fixture[kind].path,
+            "inert snapshot admission failure",
+          ),
+        ],
+      });
       expect(sourceArtifacts(fixture.paths)).toEqual(before);
     },
   );

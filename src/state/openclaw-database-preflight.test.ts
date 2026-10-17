@@ -9,6 +9,10 @@ import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-
 import { SQLITE_STAGING_TOKEN_FILES } from "../infra/sqlite-staging-token.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import {
+  compatible,
+  supportedVersions,
+  versionRow,
+  failureRow,
   closeDatabases,
   execSql,
   openRawDatabase,
@@ -91,10 +95,8 @@ describe("OpenClaw database schema preflight", () => {
           await expect(readiness).rejects.toMatchObject({
             incompatibleDatabases: [
               {
-                kind: "agent",
+                ...versionRow("agent", agent.path, OPENCLAW_AGENT_SCHEMA_VERSION + 1),
                 agentId: "retained",
-                path: agent.path,
-                foundVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
               },
             ],
           });
@@ -219,6 +221,14 @@ describe("OpenClaw database schema preflight", () => {
         env,
         verifyCurrentSchemaShape: true,
       });
+      const indeterminate = damaged
+        ? [
+            expect.objectContaining({
+              kind: "state",
+              reason: expect.stringContaining("column definitions differ for worktrees"),
+            }),
+          ]
+        : [];
       expect(result.pendingMigrations).toBeUndefined();
       expect(result.incompatible).toEqual([]);
       expect(result.deferredSchemaPublications).toEqual([
@@ -230,16 +240,7 @@ describe("OpenClaw database schema preflight", () => {
           runId: run.runId,
         }),
       ]);
-      expect(result.indeterminate).toEqual(
-        damaged
-          ? [
-              expect.objectContaining({
-                kind: "state",
-                reason: expect.stringContaining("column definitions differ for worktrees"),
-              }),
-            ]
-          : [],
-      );
+      expect(result.indeterminate).toEqual(indeterminate);
       const olderTarget = await preflightOpenClawDatabaseSchemas(
         {
           env,
@@ -254,16 +255,7 @@ describe("OpenClaw database schema preflight", () => {
       expect(olderTarget.incompatible).toEqual([
         expect.objectContaining({ foundVersion: OPENCLAW_STATE_SCHEMA_VERSION - 1 }),
       ]);
-      expect(olderTarget.indeterminate).toEqual(
-        damaged
-          ? [
-              expect.objectContaining({
-                kind: "state",
-                reason: expect.stringContaining("column definitions differ for worktrees"),
-              }),
-            ]
-          : [],
-      );
+      expect(olderTarget.indeterminate).toEqual(indeterminate);
       expect(snapshotSourceFamily(statePath)).toEqual(before);
       if (damaged) {
         await expect(
@@ -320,7 +312,7 @@ describe("OpenClaw database schema preflight", () => {
     const onAgentDatabaseDiscovery = vi.fn();
     await expect(
       preflightOpenClawDatabaseSchemas({ ...options, onAgentDatabaseDiscovery }),
-    ).resolves.toEqual({ incompatible: [], indeterminate: [] });
+    ).resolves.toEqual(compatible);
     expect(onAgentDatabaseDiscovery).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         discovery: expect.objectContaining({
@@ -375,11 +367,11 @@ describe("OpenClaw database schema preflight", () => {
     expect(await preflightOpenClawDatabaseSchemas({ env })).toEqual({
       incompatible: [],
       indeterminate: [
-        {
-          kind: "state",
-          path: statePath,
-          reason: expect.stringContaining("agent database registry query failed"),
-        },
+        failureRow(
+          "state",
+          statePath,
+          expect.stringContaining("agent database registry query failed"),
+        ),
       ],
     });
   });
@@ -413,19 +405,15 @@ describe("OpenClaw database schema preflight", () => {
 
       expect(result).toEqual({
         incompatible: [
-          {
-            kind: "agent",
-            path: visiblePath,
-            foundVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
-            supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-          },
+          versionRow(
+            "agent",
+            visiblePath,
+            OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+            OPENCLAW_AGENT_SCHEMA_VERSION,
+          ),
         ],
         indeterminate: [
-          {
-            kind: "agent",
-            path: deniedPath,
-            reason: expect.stringMatching(/EACCES|permission denied/iu),
-          },
+          failureRow("agent", deniedPath, expect.stringMatching(/EACCES|permission denied/iu)),
         ],
       });
     },
@@ -477,12 +465,9 @@ describe("OpenClaw database schema preflight", () => {
         env,
         scope: "state",
         openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
-        supportedVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
+        supportedVersions,
       }),
-    ).resolves.toEqual({ incompatible: [], indeterminate: [] });
+    ).resolves.toEqual(compatible);
     expect(snapshot()).toEqual(before);
   });
 });
