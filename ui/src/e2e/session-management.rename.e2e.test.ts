@@ -17,7 +17,7 @@ const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
   it.each([false, true])(
-    "keeps a duplicate rename in the dialog (concurrent failure: %s)",
+    "keeps rejected renames retryable in the dialog (concurrent failure: %s)",
     async (concurrent) => {
       const context = await suite.browser.newContext(createControlUiE2eContextOptions());
       const page = await context.newPage();
@@ -119,15 +119,15 @@ suite.define(() => {
         await gateway.deferNext("sessions.patch");
         await dialog.getByRole("textbox", { name: "Rename session" }).fill("Unavailable rename");
         await dialog.getByRole("button", { name: "Save" }).click();
-        const retry = await gateway.waitForRequest("sessions.patch", {
+        await gateway.waitForRequest("sessions.patch", {
           after: concurrent ? 2 : 1,
         });
-        await gateway.deliverLatest({
-          type: "res",
-          id: retry.id,
-          ok: false,
-          error: { code: "UNAVAILABLE", message: "sidebar rename rejected" },
-        });
+        const retryMatch = { key: "agent:main:rename-me", label: "Unavailable rename" };
+        await gateway.rejectDeferred(
+          "sessions.patch",
+          { code: "UNAVAILABLE", message: "sidebar rename rejected" },
+          { match: retryMatch },
+        );
 
         await error.waitFor({ state: "visible" });
         await expect.poll(() => error.textContent()).toContain("sidebar rename rejected");
@@ -136,6 +136,32 @@ suite.define(() => {
             .locator("xpath=ancestor::*[contains(@class, 'sidebar-recent-sessions')]")
             .count(),
         ).toBe(0);
+
+        await captureUiProof(
+          suite,
+          page,
+          concurrent
+            ? "sidebar-rename-unavailable-concurrent.png"
+            : "sidebar-rename-unavailable.png",
+        );
+        expect(await dialog.count()).toBe(1);
+        await expect
+          .poll(() => dialog.getByRole("alert").textContent())
+          .toContain("sidebar rename rejected");
+        expect(await dialog.getByRole("textbox", { name: "Rename session" }).inputValue()).toBe(
+          "Unavailable rename",
+        );
+        expect(await dialog.getByRole("button", { name: "Save" }).isEnabled()).toBe(true);
+
+        await gateway.deferNext("sessions.patch");
+        await dialog.getByRole("button", { name: "Save" }).click();
+        const recovered = await gateway.waitForRequest("sessions.patch", {
+          after: concurrent ? 3 : 2,
+        });
+        expect(recovered.params).toMatchObject(retryMatch);
+        await gateway.resolveDeferred("sessions.patch", {}, { match: retryMatch });
+        await dialog.waitFor({ state: "detached" });
+        await expect.poll(() => row.textContent()).toContain("Unavailable rename");
 
         await error.getByRole("button", { name: "Dismiss error" }).click();
         await expect.poll(() => error.count()).toBe(0);

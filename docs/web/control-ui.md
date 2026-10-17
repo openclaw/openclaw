@@ -221,6 +221,8 @@ Escape cancels the edit. While an input method is composing text, Enter and
 Escape stay with composition. Finish composing before saving or canceling.
 Once the Gateway confirms a rename, the saved name stays visible while the session
 list refreshes, even if an older snapshot arrives late.
+If saving a name from the sidebar's **Rename** dialog fails, the dialog keeps
+your entered name and shows the error so you can retry without typing it again.
 
 Open group rename and **New session defaults** dialogs close when the Gateway
 reconnects or you switch connections. Reopen the group’s menu to make changes
