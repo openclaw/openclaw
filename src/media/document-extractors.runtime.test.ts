@@ -9,6 +9,7 @@ import type { resolvePluginDocumentExtractors } from "../plugins/document-extrac
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 
 const resolveExtractors = vi.hoisted(() => vi.fn<typeof resolvePluginDocumentExtractors>());
+// mock-isolation: Use suite-owned extractors without loading the bundled plugin runtime.
 vi.mock("../plugins/document-extractors.runtime.js", () => ({
   resolvePluginDocumentExtractors: resolveExtractors,
 }));
