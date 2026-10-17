@@ -1,3 +1,4 @@
+// Commander registration for Claw authoring, inspection, and Add.
 import type { Command } from "commander";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 

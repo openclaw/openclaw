@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+// Minimal gateway CLI commands for durable user profile administration.
 import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";

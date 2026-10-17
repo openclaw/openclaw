@@ -1,3 +1,4 @@
+// Gateway run option resolution and local server startup command implementation.
 import { asOptionalObjectRecord } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {

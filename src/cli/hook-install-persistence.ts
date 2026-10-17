@@ -1,3 +1,4 @@
+// CLI persistence for hook-pack installs.
 import { replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { stageHookInstall } from "../hooks/install-record-transaction.js";

@@ -5,6 +5,7 @@ import type { PluginMarketplaceListOptions } from "./plugins-cli.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
 import { formatVersionLabel } from "./version-format.js";
 
+/** List plugins from a configured marketplace manifest. */
 export async function runPluginMarketplaceListCommand(
   source: string,
   opts: PluginMarketplaceListOptions,

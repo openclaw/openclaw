@@ -1,3 +1,4 @@
+// Shell completion runtime: cache paths, profile installation, and shell detection.
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -496,6 +497,7 @@ export async function isCompletionInstalled(
 }
 
 /**
+ * Check if the profile uses the slow dynamic completion pattern.
  * Returns true if profile has `source <(openclaw completion ...)` instead of cached file.
  */
 export async function usesSlowDynamicCompletion(

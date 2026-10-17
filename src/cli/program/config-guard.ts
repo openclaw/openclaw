@@ -1,3 +1,4 @@
+// CLI config readiness guard and invalid-config recovery.
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import type {
   StartupConfigPreflightOptions,

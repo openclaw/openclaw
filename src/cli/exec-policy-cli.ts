@@ -1,3 +1,4 @@
+// CLI for showing and applying exec policy presets across config and approvals.
 import type { Command } from "commander";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
