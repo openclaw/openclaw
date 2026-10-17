@@ -147,6 +147,7 @@ it("requests the configured default agent for the global workspace alias", async
       limit: 80,
       maxBytes: 256 * 1024,
       toolResultMaxChars: 2_000,
+      knownState: {},
     },
     { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
   );

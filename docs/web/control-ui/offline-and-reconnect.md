@@ -68,7 +68,14 @@ cached facts in place. Cached progress does not authorize offline actions. The
 first chat request uses the saved cursor if the cached transcript is ready when
 the live message subscription finishes connecting. Otherwise, the live read and
 cache restoration run in parallel. Agent switches and stale asynchronous reads
-retain their own identity checks. Agent pickers and the agent directory wait for a live roster;
+retain their own identity checks. When the cached conversation also has the exact
+pending-input page and session metadata, the Gateway confirms unchanged fields
+with receipts instead of sending them again. Changed or consumed inputs still
+refresh their display, and a missing cache or expired transcript cursor fetches
+complete state. These receipts do not grant access; the Gateway checks the current
+session and account before confirming any retained data.
+
+Agent pickers and the agent directory wait for a live roster;
 stored agent lists cannot establish the current role’s discovery permissions. Short
 conversation links use cached routing defaults and session rows before agent
 discovery; the Gateway revalidates the established session after connecting.

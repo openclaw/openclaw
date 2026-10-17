@@ -4,6 +4,7 @@ import { requestResult, transactionComplete } from "../../lib/chat/control-ui-da
 import { removePairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import {
   isChatTranscriptMetadata,
+  isChatHistoryState,
   isProgressCard,
 } from "../../lib/protocol-validators.generated/transcript.js";
 import * as json from "../../lib/snapshot-json.ts";
@@ -81,6 +82,7 @@ const snapshotSchema = json.object(
     transcriptMetadata: json.optional(json.checked(isChatTranscriptMetadata)),
     progressCard: json.optional(json.nullable(json.checked(isProgressCard))),
     deltaCursor: json.optional(json.text),
+    historyState: json.optional(json.checked(isChatHistoryState)),
     displayedLeafEntryId: json.optional(json.nullable(json.text)),
     // Message contents are opaque; only the array boundary needs validation.
     messages: json.checked<unknown[]>(Array.isArray),
@@ -177,6 +179,7 @@ function createSnapshotRecord(
       };
     }
     // Pairing credentials stay in the live projection, never the browser's disk cache.
+    let redacted = false;
     const serialized = JSON.stringify(projected, (_key, value: unknown) => {
       if (value === projected.messages) {
         return projected.messages.map((message) => {
@@ -188,9 +191,15 @@ function createSnapshotRecord(
           return display;
         });
       }
-      return removePairingQrContent(value);
+      const sanitized = removePairingQrContent(value);
+      redacted ||= sanitized !== value;
+      return sanitized;
     });
     snapshot = JSON.parse(serialized);
+    // A receipt cannot certify metadata changed by the disk privacy projection.
+    if (redacted) {
+      delete snapshot.historyState;
+    }
     weight = serialized.length;
   } catch {
     return null;

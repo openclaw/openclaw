@@ -7,7 +7,11 @@ import {
   SessionApprovalEventSchema,
   SessionApprovalReplaySchema,
 } from "../../../packages/gateway-protocol/src/schema/approvals.js";
-import { AgentActivityItemSchema } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  AgentActivityItemSchema,
+  ChatHistoryParamsSchema,
+  ChatPendingInputsPageSchema,
+} from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { ProgressCardSchema } from "../../../packages/gateway-protocol/src/schema/progress-card.js";
 import { SessionParticipantIdentitySchema } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { SessionsCreateParamsSchema } from "../../../packages/gateway-protocol/src/schema/sessions-create.js";
@@ -264,6 +268,27 @@ const fixtures: Array<{
     check: checks.isSessionToolOverrides,
     valid: { mcpToolsDeny: { server: ["tool"] } },
     invalid: { mcpToolsDeny: { server: [123] } },
+  },
+  {
+    name: "cached history metadata",
+    schema: Type.Object(
+      {
+        stateRevision: Type.Required(ChatHistoryParamsSchema).properties.knownState,
+        pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
+        sessionInfo: Type.Optional(SessionRowSchema),
+      },
+      { additionalProperties: false },
+    ),
+    check: checks.isChatHistoryState,
+    valid: {
+      stateRevision: { pendingInputs: "inputs-1", sessionInfo: "session-1" },
+      pendingInputs: { items: [], total: 0 },
+      sessionInfo: { key: "s", kind: "direct", sessionId: "session-1" },
+    },
+    invalid: {
+      stateRevision: { sessionInfo: "session-1" },
+      sessionInfo: { key: "s", kind: "direct", owner: { actor: { type: "unknown" } } },
+    },
   },
   {
     name: "transcript metadata",

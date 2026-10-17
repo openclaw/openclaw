@@ -145,6 +145,55 @@ describe("isSwarmEnabledInConfig", () => {
 });
 
 describe("SwarmRosterHydrator", () => {
+  it.each(["older group", "bounded members"] as const)(
+    "shares the boot descriptor when retained children exceed its %s window",
+    async (window) => {
+      vi.useFakeTimers();
+      const children =
+        window === "bounded members"
+          ? Array.from({ length: 65 }, (_, index) => row(index))
+          : [row(0), { ...row(1), swarmGroupId: "older-terminal-group", status: "done" as const }];
+      const parent = swarmParent(children.slice(0, window === "bounded members" ? 64 : 1));
+      if (window === "bounded members") {
+        parent.swarm!.groups[0]!.running = 65;
+      }
+      const described = vi.fn(async () => ({ session: parent }));
+      const childPage = createDeferred<SessionsListResult>();
+      const client = createTestGatewayClient(async (method, params) => {
+        if (method === "sessions.describe") {
+          return described();
+        }
+        if (method === "sessions.list") {
+          return isRecord(params) && params.spawnedBy ? childPage.promise : result([], 0, 0);
+        }
+        return { subscribed: true };
+      });
+      const { gateway } = createGatewayHarness(client);
+      const sessions = createTestSessionCapability(gateway);
+      // Resource discovery precedes the delayed Swarm roster on chat boot.
+      await sessions.describe({ key: parent.key });
+      const hydrator = new SwarmRosterHydrator();
+      onTestFinished(() => hydrator.dispose());
+      hydrator.update({
+        sessions,
+        parentKey: parent.key,
+        sourceEpoch: 1,
+        readParent: (refresh) =>
+          sessions
+            .describe({ key: parent.key }, { refresh })
+            .then(({ session }) => session ?? null),
+        currentRows: () => [],
+        onRows: () => undefined,
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      childPage.resolve(result(children, 0, children.length));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hydrator.hydrated).toBe(true);
+      expect(hydrator.rows).toHaveLength(children.length + 1);
+      expect(described).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("keeps child requests and parent reads independent of unrelated canonical roster publications", async () => {
     vi.useFakeTimers();
     let children = [row(0)];

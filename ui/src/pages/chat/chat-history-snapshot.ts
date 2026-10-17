@@ -25,10 +25,12 @@ import {
   readChatHistoryCursor,
   setChatHistoryCursor,
   projectChatTranscriptMetadata,
+  type ChatHistoryState,
 } from "./session-message-cache.ts";
 import type { AgentEventPayload } from "./tool-stream-contract.ts";
 
 export type ChatHistoryResult = {
+  stateRevision?: ChatHistoryState["stateRevision"];
   activity?: ChatHistoryActivity[];
   pendingInputs?: ChatPendingInputsPage;
   inputReceipts?: ChatInputReceipts;
@@ -45,6 +47,7 @@ export type ChatHistoryResult = {
   verboseLevel?: string;
   defaults?: GatewaySessionsDefaults;
   sessionInfo?: GatewaySessionRow;
+  sessionInfoSnapshotAt?: number;
   metadata?: ChatMetadataResult;
   inFlightRun?: {
     runId: string;
@@ -60,7 +63,7 @@ export type ChatHistoryDeltaResult = Omit<
   ProtocolChatHistoryDeltaResult,
   "sessionInfo" | "inFlightRun" | "metadata"
 > & {
-  sessionInfo: GatewaySessionRow;
+  sessionInfo?: GatewaySessionRow;
   inFlightRun?: ChatHistoryResult["inFlightRun"];
   metadata?: ChatMetadataResult;
 };
@@ -212,6 +215,7 @@ export function commitCurrentChatHistorySnapshot(
   state: ChatState,
   deltaCursor?: string | null,
   sessionInfo?: GatewaySessionRow,
+  historyState?: ChatHistoryState | null,
 ): void {
   if (deltaCursor !== undefined) {
     setChatHistoryCursor(state, deltaCursor ?? undefined);
@@ -242,6 +246,8 @@ export function commitCurrentChatHistorySnapshot(
         ? projectChatTranscriptMetadata(sessionInfo)
         : retained?.transcriptMetadata,
       progressCard: retained?.progressCard,
+      historyState:
+        historyState === undefined ? retained?.historyState : (historyState ?? undefined),
       messages: state.chatMessages,
       pagination: state.chatHistoryPagination,
       sessionId: state.currentSessionId ?? null,

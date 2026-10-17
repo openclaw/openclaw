@@ -401,6 +401,19 @@ export class SwarmRosterHydrator {
     // counts alone cannot prove unchanged membership outside the primary page.
     const missingDetail = changedMembers.some((row) => {
       const member = described.get(row.key);
+      if (!member && !this.childrenRead) {
+        const group = this.parentRow?.swarm?.groups.find(
+          (candidate) => candidate.groupId === row.swarmGroupId,
+        );
+        // Boot's retained child list extends beyond the descriptor's bounded groups/members.
+        // Only a complete displayed group can certify a missing member on the first page.
+        if (
+          !group ||
+          group.children?.length !== group.queued + group.running + group.done + group.failed
+        ) {
+          return false;
+        }
+      }
       return (
         row.swarmGroupId &&
         (member?.groupId !== row.swarmGroupId || (row.status && member?.status !== row.status))

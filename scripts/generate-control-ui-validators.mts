@@ -10,7 +10,11 @@ import {
   SessionApprovalEventSchema,
   SessionApprovalReplaySchema,
 } from "../packages/gateway-protocol/src/schema/approvals.js";
-import { AgentActivityItemSchema } from "../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  AgentActivityItemSchema,
+  ChatHistoryParamsSchema,
+  ChatPendingInputsPageSchema,
+} from "../packages/gateway-protocol/src/schema/logs-chat.js";
 import { ProgressCardSchema } from "../packages/gateway-protocol/src/schema/progress-card.js";
 import { SessionParticipantIdentitySchema } from "../packages/gateway-protocol/src/schema/session-participant.js";
 import { SessionsCreateParamsSchema } from "../packages/gateway-protocol/src/schema/sessions-create.js";
@@ -140,6 +144,19 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
     SessionToolOverridesSchema,
     'import("' + schemaRoot + 'sessions-row.js").SessionToolOverrides',
     "session-input",
+  ],
+  [
+    "ChatHistoryState",
+    Type.Object(
+      {
+        stateRevision: Type.Required(ChatHistoryParamsSchema).properties.knownState,
+        pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
+        sessionInfo: Type.Optional(SessionRowSchema),
+      },
+      { additionalProperties: false },
+    ),
+    'import("../../pages/chat/session-message-cache.ts").ChatHistoryState',
+    "transcript",
   ],
   [
     "ChatTranscriptMetadata",
