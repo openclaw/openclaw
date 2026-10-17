@@ -1,20 +1,18 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveClickClackAccount } from "../accounts.js";
 import { createClickClackClient } from "../http-client.js";
 import { handleClickClackInbound } from "../inbound.js";
+import {
+  createInboundAuthor,
+  createInboundMessage,
+  createInboundRuntime,
+} from "../inbound.test-support.js";
 import { setClickClackRuntime } from "../runtime.js";
 import type { ClickClackChannel, ClickClackMessage, CoreConfig } from "../types.js";
-import { asyncDiscussionTestStore, createDiscussionMemoryStore } from "./service-test-support.js";
+import { discussionChannel } from "./service-test-support.js";
 import { ClickClackDiscussionService } from "./service.js";
-
-type RemoteChannel = ClickClackChannel;
-type RemotePatch = Record<string, unknown>;
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
@@ -31,15 +29,13 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 }
 
 async function startMockClickClack() {
-  const patches: RemotePatch[] = [];
+  const patches: Record<string, unknown>[] = [];
   const messages: ClickClackMessage[] = [];
-  const channels: RemoteChannel[] = [
-    {
+  const channels: ClickClackChannel[] = [
+    discussionChannel({
       id: "chn_general",
       route_id: "general-route",
-      workspace_id: "wsp_team",
       name: "general",
-      kind: "public",
       external_managed: false,
       external_ref: "",
       external_url: "",
@@ -47,7 +43,7 @@ async function startMockClickClack() {
       archived: false,
       archived_at: null,
       created_at: "2026-08-04T00:00:00.000Z",
-    },
+    }),
   ];
   let createCount = 0;
   async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -86,7 +82,7 @@ async function startMockClickClack() {
         archived: false,
         archived_at: null,
         created_at: "2026-08-04T00:00:01.000Z",
-      } as RemoteChannel;
+      } as ClickClackChannel;
       channels.push(channel);
       sendJson(res, 200, { channel });
       return;
@@ -158,43 +154,12 @@ describe("ClickClack durable room real-behavior proof", () => {
         },
       },
     } satisfies CoreConfig;
-    const stores = new Map<string, PluginStateSyncKeyedStore<unknown>>();
-    const runtime = createPluginRuntimeMock({
-      config: { current: vi.fn(() => config) },
-      state: {
-        openSyncKeyedStore: vi.fn(({ namespace }: { namespace: string }) => {
-          const existing = stores.get(namespace);
-          if (existing) {
-            return existing;
-          }
-          const created = createDiscussionMemoryStore<unknown>();
-          stores.set(namespace, created);
-          return created;
-        }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"],
-      },
-      agent: {
-        session: {
-          getSessionEntry: vi.fn(() => sessionEntry),
-          getSessionEntryAsync: vi.fn(async () => sessionEntry),
-        },
-      },
-      channel: {
-        routing: {
-          resolveAgentRoute: vi.fn(
-            (params: Parameters<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>[0]) =>
-              resolveAgentRoute(params),
-          ),
-          buildAgentSessionKey: vi.fn(
-            (params: Parameters<PluginRuntime["channel"]["routing"]["buildAgentSessionKey"]>[0]) =>
-              buildAgentSessionKey(params),
-          ),
-        },
-      },
-    } as unknown as PluginRuntime);
-    runtime.state.openKeyedStoreV2 = <T>(
-      options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
-      authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
-    ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options, authority);
+    const runtime = createInboundRuntime(false);
+    vi.mocked(runtime.config.current).mockImplementation(() => config);
+    vi.mocked(runtime.agent.session.getSessionEntry).mockImplementation(() => sessionEntry);
+    vi.mocked(runtime.agent.session.getSessionEntryAsync).mockImplementation(
+      async () => sessionEntry,
+    );
     setClickClackRuntime(runtime);
     const service = new ClickClackDiscussionService(runtime, {
       clientFactory: (account) =>
@@ -206,24 +171,22 @@ describe("ClickClack durable room real-behavior proof", () => {
 
     await service.open(sessionKey);
     const originalExternalRef = remote.channels[1]?.external_ref;
-    remote.messages.push({
-      id: "msg_history",
-      workspace_id: "wsp_team",
-      channel_id: "chn_durable",
-      author_id: "usr_owner",
-      thread_root_id: "msg_history",
-      body: "durable history marker",
-      body_format: "markdown",
-      created_at: "2026-08-04T00:00:02.000Z",
-      author: {
-        id: "usr_owner",
-        kind: "human",
-        display_name: "Owner",
-        handle: "owner",
-        avatar_url: "",
-        created_at: "2026-08-04T00:00:00.000Z",
-      },
-    });
+    remote.messages.push(
+      createInboundMessage({
+        id: "msg_history",
+        workspace_id: "wsp_team",
+        channel_id: "chn_durable",
+        author_id: "usr_owner",
+        thread_root_id: "msg_history",
+        body: "durable history marker",
+        created_at: "2026-08-04T00:00:02.000Z",
+        author: createInboundAuthor({
+          display_name: "Owner",
+          handle: "owner",
+          created_at: "2026-08-04T00:00:00.000Z",
+        }),
+      }),
+    );
 
     sessionEntry = { ...sessionEntry!, archivedAt: 2 };
     await service.reconcile(sessionKey);
